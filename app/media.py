@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -97,8 +98,22 @@ def _storage_failed(user_id: int, e: OSError) -> StorageError:
     return StorageError()
 
 
-def save(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> str:
-    """Синхронно (Pillow и запись на шару): вызывающий запускает в asyncio.to_thread."""
+@dataclass(frozen=True)
+class Written:
+    """Файлы на шаре без строки media: итог write(), строку ставит insert()."""
+    id: str
+    user_id: int
+    rel: str
+    mime: str
+    size: int
+    has_thumb: bool
+    download_name: str
+    files: tuple[Path, ...]
+
+
+def write(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> Written:
+    """Файл и превью (Pillow и запись на шару) без базы — можно в asyncio.to_thread. База — нет:
+    одно соединение SQLite общее, вставка из потока попала бы в чужую транзакцию запроса."""
     media_id = uuid.uuid4().hex
     rel, full = _target(user_id, media_id, mime)
     small = _thumbnail(data) if thumb else None
@@ -111,9 +126,25 @@ def save(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: boo
     except OSError as e:
         _discard(*(p for target, _ in parts for p in (_tmp(target), target)))
         raise _storage_failed(user_id, e) from None
-    _insert(media_id, user_id, rel, mime, len(data), small is not None, download_name,
-            tuple(target for target, _ in parts))
-    return media_id
+    return Written(media_id, user_id, rel, mime, len(data), small is not None, download_name,
+                   tuple(target for target, _ in parts))
+
+
+def insert(written: Written) -> str:
+    """Строка media записанных файлов — с цикла событий (или из синхронного кода), не из потока."""
+    w = written
+    _insert(w.id, w.user_id, w.rel, w.mime, w.size, w.has_thumb, w.download_name, w.files)
+    return w.id
+
+
+def save(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> str:
+    """write и insert подряд — для синхронного кода; из async — save_async."""
+    return insert(write(user_id, data, mime, download_name, thumb=thumb))
+
+
+async def save_async(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> str:
+    """Как save: файлы — в потоке, строка — здесь, на цикле событий."""
+    return insert(await asyncio.to_thread(write, user_id, data, mime, download_name, thumb=thumb))
 
 
 async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, download_name: str,

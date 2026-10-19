@@ -38,6 +38,7 @@ def studio(env, monkeypatch):
 
     import auth
     import clock
+    import images
     import main
     import security
     import state
@@ -59,9 +60,11 @@ def studio(env, monkeypatch):
     monkeypatch.setattr(state, "make_http", lambda: httpx.AsyncClient(transport=httpx.MockTransport(gw.handler)))
     monkeypatch.setattr(state, "WATCHER", False)
     auth.FAILS.clear()
+    images.JOBS.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
+    images.JOBS.clear()
 
 
 def make_user(s, login, password="password-123", is_admin=False) -> int:

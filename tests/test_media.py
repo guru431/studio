@@ -68,6 +68,20 @@ def test_thumb_is_small_webp(studio, env):
     assert r.status_code == 200 and r.content == original and r.headers["content-type"] == "image/png"
 
 
+def test_file_part_needs_no_database(studio, env, monkeypatch):
+    """write() идёт в asyncio.to_thread и базы не касается; строку ставит insert() на цикле."""
+    uid = make_user(studio, "owner")
+    db = state.DB
+    monkeypatch.setattr(state, "DB", None)
+    written = media.write(uid, png(64, 64), "image/png", "p.png", thumb=True)
+    monkeypatch.setattr(state, "DB", db)
+    assert len(files(env.media_dir)) == 2 and db.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    mid = media.insert(written)
+    assert media.path(uid, mid).read_bytes() == png(64, 64)
+    assert asyncio.run(media.save_async(uid, DATA, "video/mp4", "c.mp4")) in {
+        r["id"] for r in db.execute("SELECT id FROM media")}
+
+
 def test_other_users_media_is_404(studio):
     bob = make_user(studio, "bob"); make_user(studio, "owner"); signin(studio, "owner")
     mid = media.save(bob, DATA, "video/mp4", "clip.mp4")

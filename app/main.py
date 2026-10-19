@@ -15,6 +15,7 @@ import auth
 import config
 import connections
 import db
+import images
 import media
 import profile
 import state
@@ -31,10 +32,12 @@ async def lifespan(_app):
     state.CFG = config.load()
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
+    images.recover()
     state.HTTP = state.make_http()
     try:
         yield
     finally:
+        await images.stop()
         await state.HTTP.aclose()
         state.DB.close()
 
@@ -46,6 +49,7 @@ app.include_router(profile.router)
 app.include_router(connections.router)
 app.include_router(admin.router)
 app.include_router(media.router)
+app.include_router(images.router)
 
 
 @app.exception_handler(RequestValidationError)
