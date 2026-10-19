@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Студия — вход</title>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Студия</h1>
+  <label for="login">Логин</label>
+  <input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required autofocus>
+  <label for="password">Пароль</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+  <button id="submit" type="submit">Войти</button>
+  <p class="error">{{error}}</p>
+</form>
+</body>
+</html>
