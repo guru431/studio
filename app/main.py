@@ -7,11 +7,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+import admin
 import auth
 import config
 import db
+import profile
 import state
 
 log = logging.getLogger("studio")
@@ -37,6 +40,14 @@ async def lifespan(_app):
 app = FastAPI(title="studio", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.middleware("http")(auth.guard)
 app.include_router(auth.router)
+app.include_router(profile.router)
+app.include_router(admin.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request: Request, _exc: RequestValidationError):
+    """Отказ в общем формате и без разбора полей: разбор FastAPI повторяет присланное, в том числе пароль."""
+    return JSONResponse({"detail": {"code": "invalid", "message": "неверные данные запроса"}}, status_code=422)
 
 
 @app.get("/health")

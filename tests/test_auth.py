@@ -151,8 +151,8 @@ def test_api_write_needs_the_csrf_header(studio):
     r = studio.c.post("/api/me/password", json={}, headers={auth.CSRF_HEADER: "пароль".encode()})   # не ASCII — не 500
     assert r.status_code == 403
     r = studio.c.post("/api/me/password", json={}, headers={auth.CSRF_HEADER: csrf_in_db(studio)})
-    assert r.status_code == 404                            # заслон пройден; маршрута ещё нет
-    assert studio.c.get("/api/me").status_code == 404      # GET без заголовка
+    assert r.status_code == 422                            # заслон пройден; отказ — уже за телом запроса
+    assert studio.c.get("/api/me").status_code == 200      # GET без заголовка
 
 
 def test_disabled_user_session_dies(studio):
@@ -170,12 +170,12 @@ def test_session_slides_and_expires(studio):
     make_user(studio, "owner"); login(studio, "owner", "password-123")
     studio.clock[0] = T0 + 2 * DAY
     r = studio.c.get("/api/me")
-    assert r.status_code == 404 and "studio_sid=" in r.headers.get("set-cookie", "")   # продлена — cookie заново
+    assert r.status_code == 200 and "studio_sid=" in r.headers.get("set-cookie", "")   # продлена — cookie заново
     expires = state.DB.execute("SELECT expires FROM sessions").fetchone()[0]
     assert expires == T0 + 2 * DAY + auth.SESSION_SEC
     assert "set-cookie" not in studio.c.get("/api/me").headers                         # в тот же день — нет
     studio.clock[0] = T0 + 31 * DAY                        # первый срок вышел, продлённый — нет
-    assert studio.c.get("/api/me").status_code == 404
+    assert studio.c.get("/api/me").status_code == 200
     studio.clock[0] += 31 * DAY
     assert studio.c.get("/api/me").status_code == 401
     assert state.DB.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
