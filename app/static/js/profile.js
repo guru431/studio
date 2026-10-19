@@ -8,7 +8,7 @@ import { connectionsBlock } from './connection-form.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const THEMES = [['auto', 'Авто'], ['dark', 'Графит'], ['light', 'Бумага']];
-const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
+export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 
 function block(title, ...children) {
   return el('section', { class: 'block' }, el('h2', {}, title), ...children);
@@ -55,7 +55,8 @@ async function directModels(conn) {
   return (Array.isArray(data) ? data : []).map((m) => m && m.id).filter((id) => typeof id === 'string');
 }
 
-async function modelsOf(conn) {
+/** Имена моделей подключения (его же берёт чип модели чата); отказ — Error со словами. */
+export async function modelsOf(conn) {
   if (conn.proxied) return (await api('GET', `/api/connections/${conn.id}/models`)).items.map((m) => m.id);
   return directModels(conn);
 }

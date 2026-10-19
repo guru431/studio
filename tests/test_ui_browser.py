@@ -3,6 +3,7 @@
 Студия — живая (`live_app.py`), шлюз подменён. Браузер — свой на каждый тест: cookie у
 браузера общие для всех портов localhost, и вход одного теста достался бы следующему.
 """
+import base64
 import socket
 
 import pytest
@@ -451,4 +452,258 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     assert v["made"] is True and v["before"] == [1, 1]
     assert v["confirmHidden"] is True and v["closed"] is True
     assert v["after"] == [0, 0] and v["conns"] == 1
+    assert not problems(r), problems(r)
+
+
+# ---- чат -----------------------------------------------------------------------
+
+CHAT_ID = "/^#\\/chat\\/[0-9a-f]{32}$/.test(location.hash)"
+#: ответ кончился: снова «Отправить», у ответа — кнопки
+ANSWERED = ("!document.querySelector('#send').hidden && document.querySelector('#stop').hidden"
+            " && document.querySelector('#messages .msg.assistant:last-child .msg-actions button')")
+LAST_ANSWER = "document.querySelector('#messages .msg.assistant:last-child')"
+SAVED = f"""(async () => {{ const m = {API};
+  const id = location.hash.split('/')[2];
+  const last = (await m.api('GET', '/api/chats/' + id)).messages.at(-1);
+  return [last.role, last.status, last.content]; }})()"""
+
+
+def open_new_chat(mobile=False):
+    """Раздел чата и «Новый чат»; на телефоне кнопка — в выдвижной панели."""
+    return [*go("chat"), ("wait", "document.querySelector('#chat-input') && document.querySelector('#model-chip')"),
+            *([("click", "#chats-toggle")] if mobile else []),
+            ("click", "#chat-new"), ("wait", "location.hash === '#/chat' && !document.querySelector('#messages .msg')")]
+
+
+def add_cloud(cloud, name="Облако"):
+    return ("eval", "cloud", f"""(async () => {{ const m = {API};
+      const c = await m.api('POST', '/api/connections', {{ name: {name!r}, kind: 'openai',
+        base_url: {cloud.base_url!r}, token: {cloud.TOKEN!r}, sections: ['chat'] }});
+      await m.loadMe(); return c.id; }})()""")
+
+
+def attach(js_files):
+    """Файлы в #attach, как из окна выбора: `js_files` — выражение JS со списком File."""
+    return ("eval", "attached", f"""(() => {{ const dt = new DataTransfer();
+      for (const f of {js_files}) dt.items.add(f);
+      const input = document.querySelector('#attach'); input.files = dt.files; const n = input.files.length;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return n; }})()""")
+
+
+def test_chat_streams_through_the_server_and_survives_reload(browser, live):
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("eval", "conn", "document.querySelector('.chat-conn').textContent"),
+        ("type", "#chat-input", "Привет, студия"), ("press", "Enter"),
+        ("wait", ANSWERED),
+        ("eval", "answer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+        ("eval", "id", CHAT_ID),
+        ("eval", "input", "document.querySelector('#chat-input').value"),
+        ("eval", "bubble", "document.querySelector('#messages .msg.user .bubble').textContent"),
+        ("wait", "document.querySelector('.chat-item [aria-current=page]')?.textContent === 'Привет, студия'"),
+        ("eval", "group", "document.querySelector('.chat-group').textContent"),
+        ("eval", "retry", f"!!{LAST_ANSWER}.querySelector('.msg-retry')"),
+        ("idle",),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", "document.querySelectorAll('#messages .msg').length === 2"),
+        ("eval", "after", "[...document.querySelectorAll('#messages .msg')]"
+                          ".map(m => m.querySelector('.bubble, .md').textContent.trim())")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["conn"] == "srvllm" and v["answer"] == "Здравствуйте!" and v["id"] is True
+    assert v["input"] == "" and v["bubble"] == "Привет, студия" and v["group"] == "Сегодня" and v["retry"]
+    assert v["after"] == ["Привет, студия", "Здравствуйте!"]
+    assert live.gw.chat_requests[-1]["messages"] == [{"role": "user", "content": "Привет, студия"}]
+    assert not problems(r), problems(r)
+
+
+def test_chat_with_a_pdf_attachment(browser, live):
+    from test_documents import pdf
+    data = base64.b64encode(pdf("Payment is due within five days")).decode()
+    file = f"[new File([Uint8Array.from(atob({data!r}), c => c.charCodeAt(0))], 'договор.pdf', {{ type: 'application/pdf' }})]"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        attach(file),
+        ("wait", "document.querySelector('#composer .att-chip')"),
+        ("eval", "chip", "document.querySelector('#composer .att-chip .att-name').textContent"),
+        ("type", "#chat-input", "Какой срок оплаты?"), ("click", "#send"),
+        ("wait", ANSWERED),
+        ("eval", "sent", "[document.querySelector('#messages .msg.user .att').textContent,"
+                         " document.querySelectorAll('#composer .att-chip').length]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["attached"] == 1 and v["chip"] == "договор.pdf"
+    assert "договор.pdf" in v["sent"][0] and v["sent"][1] == 0
+    content = live.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert content.startswith('<document name="договор.pdf">') and "Payment is due" in content
+    assert content.endswith("Какой срок оплаты?")
+    assert not problems(r), problems(r)
+
+
+def test_chat_context_refusal_keeps_the_text_and_the_attachments(browser, live):
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        attach("[new File(['а'.repeat(400000)], 'том.txt', { type: 'text/plain' })]"),
+        ("type", "#chat-input", "Перескажи"), ("click", "#send"),
+        ("wait", "document.querySelector('#chat-error').textContent.length > 0"),
+        ("eval", "error", "document.querySelector('#chat-error').textContent"),
+        ("eval", "kept", "[document.querySelector('#chat-input').value,"
+                         " document.querySelectorAll('#composer .att-chip').length,"
+                         " document.querySelectorAll('#messages .msg').length]"),
+        ("eval", "ready", "!document.querySelector('#send').hidden && !document.querySelector('#send').disabled")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["error"].startswith("Не помещается в контекст модели")
+    assert v["kept"] == ["Перескажи", 1, 0] and v["ready"]
+    assert not known_refusals(problems(r), 413), problems(r)
+
+
+def test_direct_cloud_chat_saves_the_answer(browser, live):
+    live.add_user("clouder")
+    # подключение появилось после входа: раздел чата открывается заново, уже не подсказкой
+    steps = [*signin("clouder"), ("wait", READY), add_cloud(live.cloud), *go("profile"),
+        ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+        ("click", "#model-chip"),
+        ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+        ("click", ".model-option[data-model=\"cloud-chat\"]"),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('cloud-chat')"),
+        ("eval", "conn", "document.querySelector('.chat-conn').textContent"),
+        ("type", "#chat-input", "Ты здесь?"), ("press", "Enter"),
+        ("wait", ANSWERED),
+        ("eval", "answer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+        ("eval", "saved", SAVED),
+        ("eval", "model", f"""(async () => {{ const m = {API};
+          return (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).chat.model; }})()"""),
+        # ответ прямого подключения, который никто не дочитал (вкладку закрыли), — «прервано»
+        ("eval", "left", f"""(async () => {{ const m = {API};
+          const c = await m.api('POST', '/api/chats', {{}});
+          await m.api('POST', '/api/chats/' + c.id + '/turns', {{ text: 'брошенный' }});
+          location.hash = '#/chat/' + c.id; return true; }})()"""),
+        ("wait", f"{LAST_ANSWER}?.querySelector('.msg-meta').textContent === 'прервано'"),
+        ("eval", "free", "!document.querySelector('#send').hidden")]
+    r = browser.drive(live.url + "/", steps)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["conn"] == "Облако" and v["answer"] == "Облако на связи." and v["model"] == "cloud-chat"
+    assert v["saved"] == ["assistant", "done", "Облако на связи."] and v["free"]
+    assert live.cloud.chat_requests[-1]["model"] == "cloud-chat"
+    assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "Ты здесь?"}]
+    assert live.cloud.chat_auth[-1] == f"Bearer {live.cloud.TOKEN}"
+    assert not problems(r), problems(r)
+
+
+def test_stop_keeps_partial_answer(browser, live):
+    live.gw.chat_hold = True
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+            ("type", "#chat-input", "Расскажи длинно"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.md').textContent.trim() === 'Здрав'"
+                     " && !document.querySelector('#stop').hidden"),
+            ("click", "#stop"),
+            ("wait", ANSWERED),
+            ("eval", "meta", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+            ("eval", "saved", SAVED)])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    assert r["values"]["meta"] == "остановлено"
+    assert r["values"]["saved"] == ["assistant", "stopped", "Здрав"]
+    assert "POST /api/chats/" in " ".join(r["sent"]) and any(s.endswith("/stop") for s in r["sent"])
+    assert not problems(r), problems(r)
+
+
+def test_direct_stop_aborts_and_saves_the_partial_answer(browser, live):
+    live.add_user("cloudstop")
+    live.cloud.chunk_pause = 3                     # после первого куска сервис «думает»
+    try:
+        r = browser.drive(live.url + "/", [*signin("cloudstop"), ("wait", READY), add_cloud(live.cloud), *go("profile"),
+            ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+            ("type", "#chat-input", "Подумай"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.md').textContent.trim() === 'Облако'"),
+            ("click", "#stop"),
+            ("wait", ANSWERED),
+            ("eval", "meta", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+            ("eval", "saved", SAVED)])
+    finally:
+        live.cloud.chunk_pause = 0.05
+    assert not r.get("failed"), r
+    assert r["values"]["meta"] == "остановлено"
+    assert r["values"]["saved"] == ["assistant", "stopped", "Облако "]
+    assert not any(s.endswith("/stop") for s in r["sent"])     # прямое — обрыв в браузере, не POST /stop
+    assert not problems(r), problems(r)
+
+
+def test_chat_list_renames_and_deletes(browser, live):
+    item = "document.querySelector('.chat-item[data-id=\"' + window.made + '\"]')"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        ("eval", "made", f"""(async () => {{ const m = {API};
+          const c = await m.api('POST', '/api/chats', {{}});
+          window.made = c.id; location.hash = '#/chat/' + c.id; return true; }})()"""),
+        ("wait", f"{item}?.querySelector('[aria-current=page]')"),
+        ("eval", "mark", "document.querySelector('.chat-item [aria-current=page]').closest('.chat-item')"
+                         ".classList.add('under-test')"),
+        ("click", ".under-test .chat-more"), ("click", ".under-test .chat-rename"),
+        ("wait", is_open("#rename-dialog")),
+        set_value("#rename-dialog [name=title]", "Мой план"), ("click", "#rename-save"),
+        ("wait", f"!{is_open('#rename-dialog')} && {item}?.textContent === 'Мой план'"),
+        ("eval", "mark2", f"{item}.classList.add('under-test')"),
+        ("click", ".under-test .chat-more"), ("click", ".under-test .chat-delete"),
+        ("wait", is_open("#chat-delete-dialog")),
+        ("click", "#chat-delete-confirm"),
+        ("wait", f"!{is_open('#chat-delete-dialog')} && !{item} && location.hash === '#/chat'"),
+        ("eval", "gone", f"""(async () => {{ const m = {API};
+          return !(await m.api('GET', '/api/chats')).items.some(c => c.id === window.made); }})()""")])
+    assert not r.get("failed"), r
+    assert r["values"]["gone"] is True
+    assert not problems(r), problems(r)
+
+
+CODE_REPLY = ["Вот код:\n\n```python\ndef hello():\n", "    return 'привет'\n```\n"]
+
+
+def test_markdown_code_has_copy_button(browser, live):
+    saved = live.gw.chat_reply
+    live.gw.chat_reply = CODE_REPLY
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+            ("type", "#chat-input", "Напиши функцию"), ("press", "Enter"),
+            ("wait", ANSWERED),
+            ("eval", "code", f"(() => {{ const a = {LAST_ANSWER};"
+                             " return [a.querySelector('pre code').textContent, !!a.querySelector('pre code .hljs-keyword'),"
+                             " a.querySelector('pre button.copy').textContent, a.querySelector('.md p').textContent]; })()")])
+    finally:
+        live.gw.chat_reply = saved
+    assert not r.get("failed"), r
+    assert r["values"]["code"] == ["def hello():\n    return 'привет'\n", True, "Копировать", "Вот код:"]
+    assert not problems(r), problems(r)
+
+
+LONG_CODE = ["```\n" + "x = " + "1234567890 " * 40 + "\n```\n"]
+
+
+def test_chat_layout_fits_390(browser, live):
+    saved = live.gw.chat_reply
+    live.gw.chat_reply = LONG_CODE
+    panel = "document.querySelector('#chats').getBoundingClientRect()"
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(mobile=True),
+            ("type", "#chat-input", "Длинная строка"), ("press", "Enter"),
+            ("wait", ANSWERED),
+            ("eval", "overflow", f"!({NO_OVERFLOW}) || document.querySelector('#view').scrollWidth"
+                                 " > document.querySelector('#view').clientWidth"),
+            # длинная строка кода прокручивается внутри блока (pre или его code), а не страница
+            ("eval", "codeScrolls", "[...document.querySelectorAll('#messages pre, #messages pre code')]"
+                                    ".some(e => e.scrollWidth > e.clientWidth)"),
+            ("eval", "hidden", f"{panel}.right <= 0"),
+            ("eval", "aboveTabs", "document.querySelector('#composer').getBoundingClientRect().bottom"
+                                  " <= document.querySelector('#rail').getBoundingClientRect().top"),
+            ("click", "#chats-toggle"),
+            ("wait", f"{panel}.left === 0 && {panel}.right <= innerWidth"),
+            ("click", ".chat-item a"),
+            ("wait", f"{panel}.right <= 0"),
+            ("eval", "overflow2", f"!({NO_OVERFLOW})")], width=390, mobile=True)
+    finally:
+        live.gw.chat_reply = saved
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert not v["overflow"] and v["codeScrolls"] and v["hidden"] and v["aboveTabs"] and not v["overflow2"]
     assert not problems(r), problems(r)

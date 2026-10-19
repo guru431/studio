@@ -31,7 +31,7 @@ function soon(title) {
 }
 
 const SECTIONS = {
-  chat: { title: 'Чат', load: soon('Чат') },
+  chat: { title: 'Чат', load: () => import('./chat.js') },
   photo: { title: 'Фото', load: soon('Фото') },
   video: { title: 'Видео', load: soon('Видео') },
   profile: { title: 'Профиль', load: () => import('./profile.js') },
