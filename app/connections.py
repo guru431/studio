@@ -4,6 +4,12 @@
 - `proxied` — адрес в списке администратора (upstream.is_allowed): такие подключения сервер
   зовёт сам, их токен браузеру не отдаётся никогда. Прочие (прямые) браузер зовёт сам: им
   нужен https (кроме localhost) — токен прямого подключения отдаётся только его владельцу.
+- `server_only` в базе липкий: ставится, когда токен сохранён при адресе через сервер, и
+  снимается, только когда новый токен сохранён при прямом. Пока он стоит, `/token` — отказ,
+  даже если адрес потом убрали из списка.
+- Смена вида, схемы, хоста, порта или пути адреса (или того, идёт ли подключение через сервер) —
+  только с новым токеном: иначе ключ шлюза ушёл бы на другой адрес или в браузер.
+- Через сервер путь адреса фиксирован: srvllm — без пути, openai — без пути или `/v1`.
 - srvllm — всегда через сервер: вне списка такое подключение не сохраняется.
 - Журнал — только id: имена, адреса и токены туда не пишутся.
 """
@@ -27,6 +33,7 @@ NAME_MAX = 64
 URL_MAX = 2048
 TOKEN_RE = r"[\x20-\x7e]{1,512}"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}   # их браузер считает безопасными и без https
+PROXIED_PATHS = {"srvllm": {"/"}, "openai": {"/", "/v1"}}   # httpx.URL: пустой путь — «/»
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/connections")
@@ -41,6 +48,7 @@ class Connection:
     base_url: str
     sections: frozenset[str]
     proxied: bool
+    server_only: bool = False
 
 
 class ConnIn(BaseModel):
@@ -66,10 +74,10 @@ def _gone() -> HTTPException:
 def _from_row(row) -> Connection:
     return Connection(id=row["id"], user_id=row["user_id"], name=row["name"], kind=row["kind"],
                       base_url=row["base_url"], sections=frozenset(json.loads(row["sections"])),
-                      proxied=upstream.is_allowed(row["base_url"]))
+                      proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]))
 
 
-_COLS = "id, user_id, name, kind, base_url, sections"
+_COLS = "id, user_id, name, kind, base_url, sections, server_only"
 
 
 def list_for(user_id: int) -> list[Connection]:
@@ -162,12 +170,16 @@ def check_base_url(kind: str, text: str) -> str:
     raw = text.strip().rstrip("/")
     try:
         url = httpx.URL(raw)
-    except httpx.InvalidURL:
+        url.host                     # имя IDNA httpx разбирает лениво: IDNAError — это UnicodeError
+    except (httpx.InvalidURL, UnicodeError, ValueError):
         url = None
     if (url is None or url.scheme not in upstream.DEFAULT_PORTS or not url.host or url.userinfo
             or "?" in raw or "#" in raw):
         raise _bad("url", "адрес — http(s)://хост[:порт][/путь], без логина, ? и #")
     if upstream.is_allowed(raw):
+        # ключ через сервер уходит только на известные пути, а не на любой префикс внутреннего хоста
+        if url.path not in PROXIED_PATHS.get(kind, {"/"}):
+            raise _bad("path", "адрес через сервер — без пути" + (" или с /v1" if kind == "openai" else ""))
         return raw
     if kind == "srvllm":
         raise _bad("srvllm", "подключение srvllm — только к адресу из списка администратора")
@@ -191,11 +203,18 @@ def create(user_id: int, body: ConnIn) -> dict:
     name, secret = check_name(body.name), check_token(body.token)
     base_url, sections = check(body.kind, body.base_url, body.sections)
     cid = state.DB.execute(
-        "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user_id, name, body.kind, base_url, security.encrypt(secret), json.dumps(sections), clock.NOW())).lastrowid
+        "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, name, body.kind, base_url, security.encrypt(secret), json.dumps(sections), clock.NOW(),
+         int(upstream.is_allowed(base_url)))).lastrowid
     log.info("пользователь %d: подключение %d создано", user_id, cid)
     return out(get(user_id, cid))
+
+
+def _address(base_url: str) -> tuple:
+    """Куда на самом деле идёт запрос: схема, хост, порт (с умолчанием) и путь."""
+    url = httpx.URL(base_url)
+    return url.scheme, url.host, url.port or upstream.DEFAULT_PORTS.get(url.scheme), url.path
 
 
 def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
@@ -209,8 +228,14 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     sections = body.sections if "sections" in sent and body.sections is not None else list(conn.sections)
     changes["base_url"], chosen = check(kind, base_url, sections)    # вид, адрес и разделы — вместе
     changes["kind"], changes["sections"] = kind, json.dumps(chosen)
+    proxied = upstream.is_allowed(changes["base_url"])
+    moved = (kind != conn.kind or proxied != conn.proxied
+             or _address(changes["base_url"]) != _address(conn.base_url))
     if "token" in sent and body.token is not None:
         changes["token_enc"] = security.encrypt(check_token(body.token))
+        changes["server_only"] = int(proxied)    # снимается только токеном, введённым для прямого
+    elif moved:                                  # прежний ключ — только прежнему адресу
+        raise _bad("token", "новый адрес — введите токен заново")
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
     state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id = ?", (*changes.values(), conn_id, user_id))
     log.info("пользователь %d: подключение %d изменено", user_id, conn_id)
@@ -283,8 +308,8 @@ async def models(conn_id: int, request: Request):
 @router.get("/{conn_id}/token")
 async def get_token(conn_id: int, request: Request):
     conn = get(_uid(request), conn_id)
-    # srvllm и адрес, который браузер сам не откроет, — тоже отказ: такое подключение было через
-    # сервер, пока адрес не убрали из списка, и его токен браузеру не предназначался
-    if conn.proxied or conn.kind == "srvllm" or not _direct_ok(conn.base_url):
+    # server_only, srvllm и адрес, который браузер сам не откроет, — тоже отказ: такое подключение
+    # было через сервер, пока адрес не убрали из списка, и его токен браузеру не предназначался
+    if conn.server_only or conn.proxied or conn.kind == "srvllm" or not _direct_ok(conn.base_url):
         raise HTTPException(403, {"code": "proxied", "message": "токен подключения через сервер не выдаётся"})
     return {"token": token(conn)}

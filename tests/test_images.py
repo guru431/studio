@@ -527,7 +527,7 @@ def test_restart_marks_running_images_interrupted(studio):
     assert studio.c.get(f"/api/images/{'a' * 32}").json()["detail"] == "прервано перезапуском студии"
 
 
-def test_running_image_cannot_be_deleted_and_done_one_can(studio, env):
+def test_running_image_cannot_be_deleted_and_done_one_can(studio, env, unlinks):
     studio.gw.hold = True
     add_gateway(studio)
     job = start(studio).json()["id"]
@@ -539,6 +539,7 @@ def test_running_image_cannot_be_deleted_and_done_one_can(studio, env):
     assert studio.c.get(f"/api/images/{job}").status_code == 404
     assert studio.c.get(f"/api/media/{done['media_id']}").status_code == 404
     assert [p for p in env.media_dir.rglob("*") if p.is_file()] == [] and media_rows() == 0
+    assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
 
 
 def test_feed_pages_by_created(studio):

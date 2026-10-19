@@ -299,7 +299,7 @@ async def create_job(request: Request):
             ensure_idle(uid)                     # запись на шару тоже уступала другим запросам
         except HTTPException:
             try:
-                media.delete(uid, source_id)
+                await media.delete_async(uid, source_id)
             except OSError:
                 log.warning("исходник пользователя %d: файл не удалился", uid)
             raise
@@ -430,7 +430,7 @@ async def delete_image(image_id: str, request: Request):
     for media_id in {row["media_id"], row["source_media_id"]} - {None}:
         if not _referenced(uid, media_id):
             try:
-                media.delete(uid, media_id)
+                await media.delete_async(uid, media_id)
             except OSError:
                 log.warning("картинка %s: файл media не удалился", image_id[:8])
     return Response(status_code=204)
@@ -585,7 +585,7 @@ async def run_job(job: Job) -> None:
             job.description = None
             if job.media_id is not None:
                 try:
-                    media.delete(job.user_id, job.media_id)
+                    await media.delete_async(job.user_id, job.media_id)
                 except OSError:
                     log.warning("задание %s: файл отменённой картинки не удалился", job.id[:8])
                 job.media_id = None

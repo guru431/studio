@@ -197,16 +197,34 @@ def path(user_id: int, media_id: str, thumb: bool = False) -> Path:
     return _file(_row(user_id, media_id), thumb)
 
 
-def delete(user_id: int, media_id: str) -> None:
-    """Файлы и строка; нет файла или строки — не ошибка. Прочая OSError — наружу, строка остаётся."""
+def _remove(media_id: str, rel_path: str) -> None:
+    """Файл и превью; нет файла — не ошибка, прочая OSError — наружу. Без базы — для asyncio.to_thread."""
+    full = state.CFG.media_dir / rel_path
+    full.unlink(missing_ok=True)
+    _thumb_of(full, media_id).unlink(missing_ok=True)
+
+
+def remove_files(rows) -> int:
+    """Файлы многих строк media `(id, rel_path)` одним вызовом в asyncio.to_thread (стирание
+    истории); базы не касается. Возвращает число строк, чьи файлы не удалились."""
+    failed = 0
+    for media_id, rel_path in rows:
+        try:
+            _remove(media_id, rel_path)
+        except OSError:
+            failed += 1
+    return failed
+
+
+async def delete_async(user_id: int, media_id: str) -> None:
+    """Файлы — в потоке (зависшая шара не останавливает службу), затем строка — здесь, на цикле.
+    Нет файла или строки — не ошибка. Прочая OSError — наружу, строка остаётся."""
     row = state.DB.execute("SELECT id, rel_path FROM media WHERE id = ? AND user_id = ?",
                            (media_id, user_id)).fetchone()
     if row is None:
         return
-    full = state.CFG.media_dir / row["rel_path"]
-    full.unlink(missing_ok=True)
-    _thumb_of(full, row["id"]).unlink(missing_ok=True)
-    state.DB.execute("DELETE FROM media WHERE id = ?", (media_id,))
+    await asyncio.to_thread(_remove, row["id"], row["rel_path"])
+    state.DB.execute("DELETE FROM media WHERE id = ? AND user_id = ?", (media_id, user_id))
 
 
 def byte_range(header: str, size: int) -> "tuple[int, int] | None":

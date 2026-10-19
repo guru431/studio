@@ -78,14 +78,15 @@ def _ensure_gateway(conn, login: str, key: str) -> None:
     try:
         if row is None:
             cid = conn.execute(
-                "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
-                " VALUES (?, ?, 'srvllm', ?, ?, ?, ?)",
+                "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
+                " VALUES (?, ?, 'srvllm', ?, ?, ?, ?, 1)",
                 (uid, GATEWAY_NAME, GATEWAY_URL, security.encrypt(key),
                  json.dumps(sorted(connections.KINDS["srvllm"])), clock.NOW())).lastrowid
             conn.execute("UPDATE users SET default_connection_id = ?, default_model = ? WHERE id = ?",
                          (cid, DEFAULT_MODEL, uid))
         else:
-            conn.execute("UPDATE connections SET token_enc = ? WHERE id = ?", (security.encrypt(key), row["id"]))
+            conn.execute("UPDATE connections SET token_enc = ?, server_only = 1 WHERE id = ?",
+                         (security.encrypt(key), row["id"]))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

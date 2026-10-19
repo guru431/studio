@@ -365,7 +365,7 @@ def test_users_see_only_their_videos(studio):
     assert studio.gw.video_deleted == []
 
 
-def test_cancel_and_delete(studio, env):
+def test_cancel_and_delete(studio, env, unlinks):
     add_gateway(studio)
     v = create_video(studio).json()
     gid = v_gateway_id(studio)
@@ -393,6 +393,7 @@ def test_cancel_and_delete(studio, env):
     assert studio.c.delete(f"/api/videos/{done['id']}").status_code == 204
     assert share_files(env) == [] and media_rows() == 0
     assert studio.c.get("/api/videos").json()["items"] == []
+    assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
 
 
 def test_history_wipe_cancels_running_videos_at_the_gateway(studio, env):

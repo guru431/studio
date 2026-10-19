@@ -181,6 +181,71 @@ def test_session_slides_and_expires(studio):
     assert state.DB.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
 
 
+def test_page_visit_does_not_eat_the_cookie_renewal(studio):
+    """Первый запрос дня в PWA — страница: она не продлевает сессию молча, иначе cookie браузера
+    так и не догнала бы срок на сервере и умерла бы через 30 дней после входа (A1-I1)."""
+    make_user(studio, "owner"); login(studio, "owner", "password-123")
+    studio.clock[0] = T0 + 2 * DAY
+    assert studio.c.get("/", follow_redirects=False).status_code == 200
+    assert studio.c.get("/login", follow_redirects=False).status_code == 303
+    r = studio.c.get("/api/me")
+    assert r.status_code == 200 and "studio_sid=" in r.headers.get("set-cookie", "")
+
+
+def test_login_drops_the_session_it_replaces(studio):
+    make_user(studio, "owner"); make_user(studio, "bob")
+    login(studio, "owner", "password-123"); old = cookie(studio)
+    assert login(studio, "bob", "password-123").status_code == 303
+    assert cookie(studio) != old
+    assert [r[0] for r in state.DB.execute("SELECT digest FROM sessions")] == [security.digest(cookie(studio))]
+    assert auth.session_user(old) is None
+
+
+def test_api_answers_are_not_cached(studio):
+    make_user(studio, "owner"); login(studio, "owner", "password-123")
+    assert studio.c.get("/api/me").headers["cache-control"] == "no-store"
+    assert studio.c.get("/api/connections").headers["cache-control"] == "no-store"
+
+
+ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html"}
+
+
+def test_every_route_but_the_anonymous_ones_needs_a_session(studio):
+    """Заслон — по пути: роутер без префикса /api стал бы открытым, и ни один тест не заметил бы."""
+    import re
+    from starlette.routing import Mount, Route
+    import main
+
+    def walk(items, prefix=""):
+        for route in items:
+            if hasattr(route, "original_router"):        # FastAPI 0.14x: include_router — обёртка роутера
+                yield from walk(route.original_router.routes, prefix + route.include_context.prefix)
+            else:
+                yield prefix, route
+
+    routes = []
+    for prefix, route in walk(main.app.routes):
+        if isinstance(route, Mount):
+            assert prefix + route.path == "/static", route.path            # статика — открыта, больше ничего
+            continue
+        assert isinstance(route, Route), route
+        full = prefix + route.path
+        if full in ANONYMOUS:
+            continue
+        assert full.startswith("/api/"), full
+        path = re.sub(r"\{[^}]+\}", "1", full)
+        routes += [(method, path) for method in sorted(route.methods - {"HEAD"})]
+    assert len(routes) > 30
+    for method, path in routes:
+        r = studio.c.request(method, path)
+        assert r.status_code == 401 and r.json()["detail"]["code"] == "login", (method, path)
+    make_user(studio, "owner", is_admin=True); login(studio, "owner", "password-123")
+    for method, path in routes:
+        if method != "GET":
+            r = studio.c.request(method, path)
+            assert r.status_code == 403 and r.json()["detail"]["code"] == "csrf", (method, path)
+
+
 def test_logout_ends_the_session_server_side(studio):
     make_user(studio, "owner"); login(studio, "owner", "password-123")
     old = cookie(studio)
@@ -194,6 +259,7 @@ def test_logout_ends_the_session_server_side(studio):
 def test_end_sessions_can_keep_the_current_one(studio):
     uid = make_user(studio, "owner")
     login(studio, "owner", "password-123"); first = cookie(studio)
+    studio.c.cookies.clear()                     # второй вход — с другого устройства: первая сессия живёт
     login(studio, "owner", "password-123"); second = cookie(studio)
     auth.end_sessions(uid, keep_digest=security.digest(second))
     assert auth.session_user(first) is None and auth.session_user(second)[0].login == "owner"

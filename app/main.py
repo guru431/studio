@@ -106,7 +106,8 @@ async def health():
 
 @app.get("/")
 async def index(request: Request):
-    if auth.session_user(request.cookies.get(auth.COOKIE)) is None:
+    # renew=False: страница cookie заново не ставит — продлит первый запрос /api/* вместе с cookie
+    if auth.session_user(request.cookies.get(auth.COOKIE), renew=False) is None:
         return RedirectResponse("/login", status_code=303)
     return HTMLResponse(auth.page("index.html"), headers={"Cache-Control": "no-store"})
 

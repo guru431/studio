@@ -95,8 +95,9 @@ def create_session(user_id: int) -> tuple[str, str]:
     return value, csrf
 
 
-def _live(value: str | None) -> tuple[User, str, bool] | None:
-    """(пользователь, csrf, продлена ли сейчас) живой сессии или None."""
+def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool] | None:
+    """(пользователь, csrf, продлена ли сейчас) живой сессии или None. renew=False — для ответов,
+    которые cookie заново не ставят (страницы): продлит следующий запрос /api/* вместе с cookie."""
     if not value:
         return None
     key = security.digest(value)
@@ -110,7 +111,7 @@ def _live(value: str | None) -> tuple[User, str, bool] | None:
     if row["disabled"] or row["expires"] <= now:
         state.DB.execute("DELETE FROM sessions WHERE digest = ?", (key,))
         return None
-    renewed = now - row["renewed"] > RENEW_SEC
+    renewed = renew and now - row["renewed"] > RENEW_SEC
     if renewed:
         state.DB.execute("UPDATE sessions SET expires = ?, renewed = ? WHERE digest = ?",
                          (now + SESSION_SEC, now, key))
@@ -120,8 +121,8 @@ def _live(value: str | None) -> tuple[User, str, bool] | None:
     return user, row["csrf"], renewed
 
 
-def session_user(value: str | None) -> tuple[User, str] | None:
-    live = _live(value)
+def session_user(value: str | None, renew: bool = True) -> tuple[User, str] | None:
+    live = _live(value, renew)
     return live[:2] if live else None
 
 
@@ -157,6 +158,9 @@ async def guard(request: Request, call_next):
     response = await call_next(request)
     if renewed:                      # срок в браузере догоняет продлённый на сервере
         _set_cookie(response, request.cookies[COOKIE])
+    # ответы API (токен прямого подключения, csrf в /api/me, чаты) — не в дисковый кеш браузера;
+    # свой заголовок (media: private, max-age) остаётся
+    response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 
@@ -170,14 +174,18 @@ def _keys(login: str, ip: str) -> list[tuple]:
 
 
 def locked(login: str, ip: str) -> bool:
-    """Заодно забывает неудачи старше LOCK_SEC: иначе каждый, кто хоть раз ошибся, оставался
-    бы в FAILS навсегда."""
+    return any(locked_key(key) for key in _keys(login, ip))
+
+
+def locked_key(key: tuple) -> bool:
+    """LOCK_FAILS неудач по ключу за LOCK_SEC. Заодно забывает неудачи старше LOCK_SEC: иначе
+    каждый, кто хоть раз ошибся, оставался бы в FAILS навсегда."""
     now = clock.NOW()
-    for key in list(FAILS):
-        FAILS[key] = [t for t in FAILS[key] if now - t < LOCK_SEC]
-        if not FAILS[key]:
-            del FAILS[key]
-    return any(len(FAILS.get(key, [])) >= LOCK_FAILS for key in _keys(login, ip))
+    for k in list(FAILS):
+        FAILS[k] = [t for t in FAILS[k] if now - t < LOCK_SEC]
+        if not FAILS[k]:
+            del FAILS[k]
+    return len(FAILS.get(key, [])) >= LOCK_FAILS
 
 
 def _login_fails(login: str) -> int:
@@ -221,7 +229,7 @@ async def small_body(request: Request, limit: int) -> bytes | None:
 
 @router.get("/login")
 async def login_page(request: Request):
-    if session_user(request.cookies.get(COOKIE)):
+    if session_user(request.cookies.get(COOKIE), renew=False):
         return RedirectResponse("/", status_code=303)
     return _login_page()
 
@@ -256,6 +264,9 @@ async def login(request: Request):
     if ok and row:
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса
+        replaced = request.cookies.get(COOKIE)
+        if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
+            state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
         value, _ = create_session(row["id"])
         log.info("вход с %s: успешно", ip)
         response = RedirectResponse("/", status_code=303)

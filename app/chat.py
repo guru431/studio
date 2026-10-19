@@ -425,7 +425,7 @@ async def delete_chat(chat_id: str, request: Request):
     for media_id in media_ids:
         if not images._referenced(uid, media_id):
             try:
-                media.delete(uid, media_id)
+                await media.delete_async(uid, media_id)
             except OSError:
                 log.warning("чат %s: файл вложения не удалился", chat_id[:8])
     log.info("чат %s: удалён", chat_id[:8])

@@ -18,6 +18,16 @@ def test_config_names_missing_variables_without_values(monkeypatch):
     assert all(k in str(e.value) for k in config.REQUIRED)
 
 
+def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
+    """Неверный ключ — отказ при старте, а не 500 на первом токене; значение в текст не попадает."""
+    for bad in ["not-a-fernet-key-but-a-secret", Fernet.generate_key().decode()[:-4]]:
+        monkeypatch.setenv("STUDIO_DATA_KEY", bad)
+        with pytest.raises(RuntimeError) as e:
+            config.load()
+        assert "STUDIO_DATA_KEY" in str(e.value) and bad not in str(e.value)
+        assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 1

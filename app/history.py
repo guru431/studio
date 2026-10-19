@@ -15,7 +15,7 @@ async def delete_all(user_id: int) -> None:
     rows = state.DB.execute("SELECT id FROM media WHERE user_id = ?", (user_id,)).fetchall()
     for row in rows:
         try:
-            media.delete(user_id, row["id"])
+            await media.delete_async(user_id, row["id"])
         except OSError:
             log.warning("история пользователя %d: файл media не удалился", user_id)
     state.DB.execute("BEGIN")

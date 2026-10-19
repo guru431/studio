@@ -276,6 +276,17 @@ def test_chats_are_private(studio):
     assert studio.c.get(f"/api/chats/{own}").status_code == 404
 
 
+def test_deleting_a_chat_removes_its_files_off_the_loop(studio, env, unlinks):
+    add_gateway(studio); cid = new_chat(studio)
+    pic = attach(studio, "photo.jpg", png(), "image/jpeg")
+    sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
+    assert [p for p in env.media_dir.rglob("*") if p.is_file()]
+    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
+    assert [p for p in env.media_dir.rglob("*") if p.is_file()] == []
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
+
+
 def test_restart_marks_server_streams_interrupted(studio):
     add_gateway(studio); cid = new_chat(studio)
     for mid, via in (("a" * 32, "server"), ("b" * 32, "browser")):

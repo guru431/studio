@@ -99,6 +99,20 @@ def test_password_change_needs_current_and_ends_other_sessions(studio):
     assert login(studio, "owner", "brand-new-pass").status_code == 303
 
 
+def test_wrong_current_password_is_limited(studio):
+    """Укравший сессию не переберёт текущий пароль: 5 неудач за 15 минут — пауза и с верным (A1-M1)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    for _ in range(5):
+        r = studio.c.post("/api/me/password", json={"current": "wrong-password", "new": "brand-new-pass"})
+        assert r.status_code == 403 and code(r) == "password"
+    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
+    assert r.status_code == 429 and code(r) == "locked"
+    assert ("pw", uid) in auth.FAILS
+    studio.clock[0] += 901
+    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
+    assert r.status_code == 204 and ("pw", uid) not in auth.FAILS
+
+
 def test_validation_errors_keep_the_error_format_and_do_not_echo_input(studio):
     make_user(studio, "owner"); signin(studio, "owner")
     r = studio.c.post("/api/me/password", json={"current": "password-123", "new": ["secret-in-a-list"]})
@@ -220,9 +234,9 @@ def test_panel_lists_no_history(studio, env):
 def test_allowlist_round_trip(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000"]}
-    r = studio.c.put("/api/admin/allowlist", json={"entries": ["10.77.1.15:4000", "LLM.lan:8080"]})
-    assert r.status_code == 200 and r.json() == {"entries": ["10.77.1.15:4000", "llm.lan:8080"]}
-    for bad in ["10.77.1.15", "a b:1", "host:0", "host:65536"]:
+    r = studio.c.put("/api/admin/allowlist", json={"entries": ["10.77.1.15:4000", "[FD00::5]:8080"]})
+    assert r.status_code == 200 and r.json() == {"entries": ["10.77.1.15:4000", "[fd00::5]:8080"]}
+    for bad in ["10.77.1.15", "a b:1", "10.0.0.1:0", "10.0.0.1:65536", "llm.lan:8080"]:
         r = studio.c.put("/api/admin/allowlist", json={"entries": [bad]})
         assert r.status_code == 422 and code(r) == "entry", bad
-    assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000", "llm.lan:8080"]}
+    assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000", "[fd00::5]:8080"]}

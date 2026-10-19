@@ -200,9 +200,9 @@ def _video_connection(user_id: int) -> Connection:
     return conn
 
 
-def _forget(user_id: int, media_id: str) -> None:
+async def _forget(user_id: int, media_id: str) -> None:
     try:
-        media.delete(user_id, media_id)
+        await media.delete_async(user_id, media_id)
     except OSError:
         log.warning("ролик пользователя %d: файл media не удалился", user_id)
 
@@ -253,7 +253,7 @@ async def create_video(request: Request):
     if failure is not None:
         log.warning("ролик пользователя %d не создан: %s", uid, failure.status_code)
         if upload is not None:
-            _forget(uid, source_id)
+            await _forget(uid, source_id)
         raise failure
     status = answer.get("status")
     video_id, now = uuid.uuid4().hex, clock.NOW()
@@ -314,7 +314,7 @@ async def delete_video(video_id: str, request: Request):
     for media_id in {row["media_id"], row["source_media_id"]} - {None}:
         if not images._referenced(uid, media_id):
             try:
-                media.delete(uid, media_id)
+                await media.delete_async(uid, media_id)
             except OSError:
                 log.warning("ролик %s: файл media не удалился", video_id[:8])
     return Response(status_code=204)
@@ -389,7 +389,7 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
         return
     await _drop_quietly(conn, gateway_id, row["id"])
     if not _settle(row["id"], "done", "готово", media_id):
-        _forget(uid, media_id)             # пока качали, ролик отменили или удалили
+        await _forget(uid, media_id)       # пока качали, ролик отменили или удалили
         return
     log.info("ролик %s: готов, в истории", row["id"][:8])
 

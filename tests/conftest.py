@@ -70,6 +70,25 @@ def studio(env, monkeypatch):
     chat.STREAMS.clear()
 
 
+@pytest.fixture
+def unlinks(monkeypatch):
+    """Удаления файлов по порядку: True — с цикла событий. Так нельзя: зависшая шара CIFS
+    остановила бы всю службу; удалять — в asyncio.to_thread."""
+    import pathlib
+    calls, real = [], pathlib.Path.unlink
+
+    def spy(self, missing_ok=False):
+        try:
+            asyncio.get_running_loop()
+            calls.append(True)
+        except RuntimeError:
+            calls.append(False)
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", spy)
+    return calls
+
+
 def make_user(s, login, password="password-123", is_admin=False) -> int:
     import clock
     import security

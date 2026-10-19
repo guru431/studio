@@ -50,12 +50,12 @@ def test_tricky_urls_are_not_allowlisted(studio):
 
 
 def test_default_ports_and_case_are_exact(studio):
-    state.DB.execute("""UPDATE settings SET value = '["llm.lan:80", "cloud.test:443", "[::1]:8080"]'"""
+    state.DB.execute("""UPDATE settings SET value = '["10.0.0.5:80", "10.0.0.6:443", "[::1]:8080"]'"""
                      " WHERE key = 'allowlist'")
-    assert upstream.is_allowed("http://LLM.lan/v1") and upstream.is_allowed("https://cloud.test/x")
+    assert upstream.is_allowed("http://10.0.0.5/v1") and upstream.is_allowed("HTTPS://10.0.0.6/x")
     assert upstream.is_allowed("http://[0:0::1]:8080/")
-    for url in ["https://llm.lan/v1", "http://cloud.test/x", "http://llm.lan:8080", "http://user@llm.lan/",
-                "http://llm.lan./v1", "http://[::1]/", "not a url", ""]:
+    for url in ["https://10.0.0.5/v1", "http://10.0.0.6/x", "http://10.0.0.5:8080", "http://user@10.0.0.5/",
+                "http://[::1]/", "not a url", ""]:
         assert not upstream.is_allowed(url), url
 
 
@@ -64,9 +64,41 @@ def test_allowlist_entries_are_validated(studio):
     for bad in ["10.77.1.15", "a b:1", "999.1.1.1:80", "[::g]:80", "host:", "user@host:80", "host:1:2"]:
         r = studio.c.put("/api/admin/allowlist", json={"entries": [bad]})
         assert r.status_code == 422 and code(r) == "entry", bad
-    r = studio.c.put("/api/admin/allowlist", json={"entries": [" Host:080 ", "[0:0::1]:8080", "10.0.0.1:1"]})
-    assert r.status_code == 200 and r.json() == {"entries": ["host:80", "[::1]:8080", "10.0.0.1:1"]}
-    assert upstream.allowlist() == ["host:80", "[::1]:8080", "10.0.0.1:1"]
+    r = studio.c.put("/api/admin/allowlist", json={"entries": [" 10.0.0.2:080 ", "[0:0::1]:8080", "10.0.0.1:1"]})
+    assert r.status_code == 200 and r.json() == {"entries": ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"]}
+    assert upstream.allowlist() == ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"]
+
+
+def test_allowlist_takes_ip_literals_only(studio):
+    """Имя в записи сверялось бы с DNS на каждом запросе: граница SSRF — у того, кто правит DNS."""
+    make_user(studio, "owner", is_admin=True); signin(studio, "owner")
+    for name in ["llm.lan:8080", "localhost:4000", "cloud.test:443"]:
+        r = studio.c.put("/api/admin/allowlist", json={"entries": [name]})
+        assert r.status_code == 422 and code(r) == "entry", name
+    with pytest.raises(ValueError):
+        upstream.parse_entry("llm.lan:80")
+    state.DB.execute("""UPDATE settings SET value = '["llm.lan:80"]' WHERE key = 'allowlist'""")   # из старой базы
+    assert not upstream.is_allowed("http://llm.lan/v1")
+
+
+def test_unparseable_hosts_are_refused_not_500(studio):
+    make_user(studio, "owner"); signin(studio, "owner")
+    for url in ["https://xn--zz.com/v1", "https://\u0000x.test"]:
+        assert not upstream.is_allowed(url), url
+        r = post(studio, base_url=url)
+        assert r.status_code == 422 and code(r) == "url", url
+        assert url not in r.text
+
+
+def test_http_client_ignores_proxy_environment(monkeypatch):
+    """HTTPS_PROXY в окружении юнита повёл бы ключи шлюза через чужой прокси."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.test:3128")
+    client = state.make_http()
+    try:
+        assert client.trust_env is False
+    finally:
+        asyncio.run(client.aclose())
 
 
 # ---- запросы сервера -----------------------------------------------------------
@@ -183,6 +215,70 @@ def test_token_of_a_connection_dropped_from_the_list_stays_on_the_server(studio)
     cid = add_connection(studio, base_url=GW + "/v1", token="internal-secret")
     state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
     assert studio.c.get(f"/api/connections/{cid}/token").status_code == 403
+
+
+def test_https_entry_dropped_from_the_list_keeps_its_token_on_the_server(studio):
+    """Запись https убрали из списка — адрес браузеру открыт, но токен вводили для сервера."""
+    state.DB.execute("""UPDATE settings SET value = '["203.0.113.10:443"]' WHERE key = 'allowlist'""")
+    cid = add_connection(studio, base_url="https://203.0.113.10/v1", token="internal-https-secret")
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    assert not conn_of(cid).proxied
+    r = studio.c.get(f"/api/connections/{cid}/token")
+    assert r.status_code == 403 and "internal-https-secret" not in r.text
+    # новый токен, введённый для прямого подключения, — уже браузерный
+    assert studio.c.patch(f"/api/connections/{cid}", json={"token": "direct-key-0001"}).status_code == 200
+    assert studio.c.get(f"/api/connections/{cid}/token").json() == {"token": "direct-key-0001"}
+
+
+def test_proxied_connection_turned_direct_needs_a_new_token(studio):
+    """Иначе: srvllm → openai на чужой адрес, и /token отдаёт ключ шлюза (A1-C1)."""
+    cid = add_connection(studio, kind="srvllm", base_url=GW, token="gw-secret-token")
+    evil = {"kind": "openai", "base_url": "https://evil.test", "sections": ["chat"]}
+    r = studio.c.patch(f"/api/connections/{cid}", json=evil)
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "token", "message": "новый адрес — введите токен заново"}
+    assert conn_of(cid).kind == "srvllm" and conn_of(cid).base_url == GW
+    r = studio.c.get(f"/api/connections/{cid}/token")
+    assert r.status_code == 403 and "gw-secret-token" not in r.text
+    r = studio.c.patch(f"/api/connections/{cid}", json=evil | {"token": "evil-own-key-1"})
+    assert r.status_code == 200 and not r.json()["proxied"]
+    assert studio.c.get(f"/api/connections/{cid}/token").json() == {"token": "evil-own-key-1"}
+
+
+def test_repointing_a_proxied_connection_needs_a_new_token(studio):
+    """Ключ одного внутреннего адреса не уходит другому: смена хоста, порта, схемы, пути или вида — с токеном."""
+    state.DB.execute("""UPDATE settings SET value = '["10.77.1.15:4000", "10.77.1.16:4000"]'"""
+                     " WHERE key = 'allowlist'")
+    cid = add_connection(studio, kind="openai", base_url=GW + "/v1", token="gw-secret-token", sections=["chat"])
+    for change in [{"base_url": "http://10.77.1.16:4000/v1"}, {"base_url": GW},
+                   {"kind": "srvllm", "base_url": GW}]:
+        r = studio.c.patch(f"/api/connections/{cid}", json=change)
+        assert r.status_code == 422 and code(r) == "token", change
+    assert conn_of(cid).base_url == GW + "/v1" and conn_of(cid).kind == "openai"
+    for same in [{"name": "Новое"}, {"base_url": GW + "/v1/"}, {"base_url": "HTTP://10.77.1.15:4000/v1"},
+                 {"sections": ["chat"]}]:
+        assert studio.c.patch(f"/api/connections/{cid}", json=same).status_code == 200, same
+    r = studio.c.patch(f"/api/connections/{cid}", json={"base_url": "http://10.77.1.16:4000/v1", "token": "k16-key"})
+    assert r.status_code == 200 and connections.token(conn_of(cid)) == "k16-key"
+    # так же — для подключений пользователя в панели администратора
+    bob = make_user(studio, "bob")
+    base = f"/api/admin/users/{bob}/connections"
+    bid = studio.c.post(base, json={"name": "srvllm", "kind": "srvllm", "base_url": GW, "token": "bob-gateway-key",
+                                    "sections": ["chat"]}).json()["id"]
+    r = studio.c.patch(f"{base}/{bid}", json={"kind": "openai", "base_url": "https://evil.test"})
+    assert r.status_code == 422 and code(r) == "token"
+    assert connections.token(conn_of(bid)) == "bob-gateway-key" and conn_of(bid).kind == "srvllm"
+
+
+def test_proxied_base_path_is_fixed(studio):
+    """Через сервер ключ уходит только на известные пути: srvllm — без пути, openai — без пути или /v1."""
+    make_user(studio, "owner"); signin(studio, "owner")
+    for kind, url in [("srvllm", GW + "/v1"), ("srvllm", GW + "/slot"), ("openai", GW + "/admin"),
+                      ("openai", GW + "/v1/x")]:
+        r = post(studio, kind=kind, base_url=url, sections=["chat"])
+        assert r.status_code == 422 and code(r) == "path", (kind, url)
+    for kind, url in [("srvllm", GW), ("srvllm", GW + "/"), ("openai", GW), ("openai", GW + "/v1")]:
+        assert post(studio, kind=kind, base_url=url, sections=["chat"]).status_code == 201, (kind, url)
+    assert post(studio, base_url="https://cloud.test/any/path").status_code == 201   # прямое — любой путь
 
 
 def test_token_is_encrypted_at_rest(studio):

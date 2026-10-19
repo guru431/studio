@@ -150,7 +150,7 @@ def test_download_name_is_attachment(studio):
     assert "filename*=UTF-8''%D0%BE%D1%82%D1%87%D1%91%D1%82%20%22q%22" in header
 
 
-def test_history_wipe_removes_files(studio, env):
+def test_history_wipe_removes_files(studio, env, unlinks):
     uid = make_user(studio, "owner"); bob = make_user(studio, "bob"); signin(studio, "owner")
     mine = media.save(uid, png(500, 300), "image/png", "a.png", thumb=True)
     theirs = media.save(bob, DATA, "video/mp4", "b.mp4")
@@ -158,7 +158,42 @@ def test_history_wipe_removes_files(studio, env):
     assert studio.c.delete("/api/history").status_code == 204
     assert files(env.media_dir) == [media.path(bob, theirs)]
     assert studio.c.get(f"/api/media/{mine}").status_code == 404
-    media.delete(uid, mine)                                     # уже нет — не ошибка
-    media.delete(bob, theirs)
+    asyncio.run(media.delete_async(uid, mine))                  # уже нет — не ошибка
+    asyncio.run(media.delete_async(bob, theirs))
     assert files(env.media_dir) == []
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert unlinks and not any(unlinks)                         # ни одного удаления с цикла событий
+
+
+def test_delete_keeps_the_row_when_the_share_fails(studio, env, monkeypatch, unlinks):
+    uid = make_user(studio, "owner")
+    mid = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
+    real = media._remove
+
+    def broken(*args):
+        raise OSError("share went away")
+
+    monkeypatch.setattr(media, "_remove", broken)
+    with pytest.raises(OSError):
+        asyncio.run(media.delete_async(uid, mid))
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 1   # строка — чтобы удалить заново
+    monkeypatch.setattr(media, "_remove", real)
+    asyncio.run(media.delete_async(uid, mid))
+    assert files(env.media_dir) == [] and state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert unlinks and not any(unlinks)
+
+
+def test_bulk_file_removal_needs_no_database(studio, env, monkeypatch):
+    """remove_files идёт в asyncio.to_thread (стирание истории): базы не касается, неудачи считает."""
+    uid = make_user(studio, "owner")
+    ids = [media.save(uid, png(64, 64), "image/png", f"{n}.png", thumb=True) for n in range(3)]
+    rows = [tuple(r) for r in state.DB.execute("SELECT id, rel_path FROM media ORDER BY id")]
+    rows.append(("gone", f"u{uid}/2027/01/gone.png"))                        # файла нет — не неудача
+    db = state.DB
+    monkeypatch.setattr(state, "DB", None)
+    assert media.remove_files(rows) == 0
+    monkeypatch.setattr(state, "DB", db)
+    assert files(env.media_dir) == [] and len(ids) == 3
+    blocker = env.media_dir / f"u{uid}" / "2027" / "01" / "dir.png"
+    blocker.mkdir(parents=True)                                              # каталог не удалить как файл
+    assert media.remove_files([("dir", blocker.relative_to(env.media_dir).as_posix())]) == 1

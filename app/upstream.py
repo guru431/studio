@@ -16,7 +16,6 @@ import connections
 import state
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
-NAME_RE = r"[a-z0-9.-]+"
 
 
 class UpstreamRefused(Exception):
@@ -24,14 +23,13 @@ class UpstreamRefused(Exception):
 
 
 def _host(host: str) -> str:
-    """Хост записи: IPv4, `[IPv6]` (сжатая форма) или имя `[a-z0-9.-]`; иначе ValueError."""
+    """Хост записи: IPv4 или `[IPv6]` (сжатая форма); иначе ValueError. Имён нет: имя сверялось
+    бы с DNS на каждом запросе, и граница SSRF была бы у того, кто правит DNS."""
     if host.startswith("[") and host.endswith("]"):
         return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]"
     if re.fullmatch(r"[0-9.]+", host):
         return str(ipaddress.IPv4Address(host))
-    if not re.fullmatch(NAME_RE, host):
-        raise ValueError(host)
-    return host
+    raise ValueError(host)
 
 
 def parse_entry(text: str) -> str:
@@ -59,8 +57,10 @@ def _entry(url: httpx.URL) -> str | None:
 
 def _parse(url) -> httpx.URL | None:
     try:
-        return httpx.URL(url)
-    except (httpx.InvalidURL, TypeError):
+        parsed = httpx.URL(url)
+        parsed.host                  # имя IDNA httpx разбирает лениво: отказ — здесь, а не дальше
+        return parsed
+    except (httpx.InvalidURL, UnicodeError, ValueError, TypeError):   # IDNAError — это UnicodeError
         return None
 
 
