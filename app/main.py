@@ -15,6 +15,7 @@ import auth
 import config
 import connections
 import db
+import media
 import profile
 import state
 
@@ -44,6 +45,7 @@ app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(connections.router)
 app.include_router(admin.router)
+app.include_router(media.router)
 
 
 @app.exception_handler(RequestValidationError)
