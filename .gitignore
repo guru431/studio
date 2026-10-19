@@ -4,8 +4,9 @@
 .claude/.env
 .claude/settings.local.json
 # Локальные копии клиентских скриптов с вписанным ключом шлюза
-# (client/studio-batch.ps1 -MakeLocal → studio-batch.local.ps1)
+# (client/studio-batch.ps1 -MakeLocal → studio-batch.local.ps1, studio-batch.py --make-local → .local.py)
 *.local.ps1
+*.local.py
 # Python
 .venv/
 __pycache__/

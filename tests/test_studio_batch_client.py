@@ -1,4 +1,4 @@
-"""Клиент пакетной генерации client/studio-batch.ps1 — без сети.
+"""Клиент пакетной генерации client/studio-batch.ps1 и его Python-версия studio-batch.py — без сети.
 
 Скрипт ходит в API картинок шлюза. Его интерфейс зафиксирован спекой
 2026-10-19-images-api-lustify-design.md (раздел 5) и описан в Manual: умолчания -Model и
@@ -14,9 +14,11 @@ import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email import policy
 from email.parser import BytesParser
+from types import SimpleNamespace
 
 import pytest
 
+from clients import RUNNERS, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-batch.ps1"
@@ -82,22 +84,30 @@ def test_powershell_parses_script_and_defaults_match_contract():
     assert d["VaultPath"] == r"C:\work\projects\local-config\secrets\vault.env"
 
 
-@pytest.mark.integration
-def test_powershell_photo_upload_uses_multipart_and_writes_result(tmp_path):
-    ps = shutil.which("powershell") or shutil.which("pwsh")
-    if not ps:
-        pytest.skip("PowerShell unavailable")
-    received = []
+@pytest.fixture
+def images():
+    """Подставной API картинок на 127.0.0.1: журнал (путь, Authorization, поля или JSON).
+    generations отдаёт «png-<номер>» без seed (так отвечает FLUX), edits — «result-png» и seed 7."""
+    log = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             raw = self.rfile.read(int(self.headers["Content-Length"]))
-            mime = BytesParser(policy=policy.default).parsebytes(
-                b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + raw)
-            fields = {p.get_param("name", header="content-disposition"): p.get_payload(decode=True)
-                      for p in mime.iter_parts()}
-            received.append((self.path, self.headers["Authorization"], fields))
-            body = json.dumps({"data": [{"b64_json": base64.b64encode(b"result-png").decode(), "seed": 7}]}).encode()
+            if self.headers["Content-Type"].startswith("multipart/form-data"):
+                mime = BytesParser(policy=policy.default).parsebytes(
+                    b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + raw)
+                payload = {p.get_param("name", header="content-disposition"): p.get_payload(decode=True)
+                           for p in mime.iter_parts()}
+            else:
+                payload = json.loads(raw)
+            log.append((self.path, self.headers["Authorization"], payload))
+            if self.path == "/slot/images/edits":
+                reply = {"data": [{"b64_json": base64.b64encode(b"result-png").decode(), "seed": 7}]}
+            elif self.path == "/slot/images/generations":
+                reply = {"data": [{"b64_json": base64.b64encode(b"png-%d" % len(log)).decode()}]}
+            else:
+                reply = {"ok": True}
+            body = json.dumps(reply).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -107,28 +117,63 @@ def test_powershell_photo_upload_uses_multipart_and_writes_result(tmp_path):
         def log_message(self, *_args):
             pass
 
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+    thread.start()
+    yield SimpleNamespace(log=log, url=f"http://127.0.0.1:{server.server_port}/slot")
+    server.shutdown()
+    server.server_close()
+    thread.join(1)
+
+
+def run_script(runner, images, *args):
+    r = run_client(runner, SCRIPT, [*args, "-Token", "test-key", "-Url", images.url])
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 0, out
+    assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
+    return out
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path):
     prompts = tmp_path / "prompts.txt"
     prompts.write_text("change background\n", encoding="utf-8")
     photo = tmp_path / "photo.png"
     photo.write_bytes(b"source-photo")
     out = tmp_path / "out"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
-    thread.start()
-    try:
-        result = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                                 "-File", str(SCRIPT), "-PromptsFile", str(prompts), "-ImagePath", str(photo),
-                                 "-Strength", "0.4", "-Seed", "7", "-Token", "test-key", "-KeepCard",
-                                 "-OutDir", str(out), "-Url", f"http://127.0.0.1:{server.server_port}/slot"],
-                                capture_output=True, timeout=25)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(1)
-    assert result.returncode == 0, result.stderr
-    assert len(received) == 1, result.stdout
-    path, auth, fields = received[0]
+
+    run_script(runner, images, "-PromptsFile", str(prompts), "-ImagePath", str(photo), "-Strength", "0.4",
+               "-Seed", "7", "-KeepCard", "-OutDir", str(out))
+
+    assert len(images.log) == 1
+    path, auth, fields = images.log[0]
     assert path == "/slot/images/edits" and auth == "Bearer test-key"
     assert fields["image"] == b"source-photo" and fields["strength"] == b"0.4"
     assert fields["model"] == b"lustify-v10-krea2-turbo" and fields["seed"] == b"7"
     assert [p.read_bytes() for p in out.glob("*.png")] == [b"result-png"]
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("﻿# заметка\n\n  first prompt \nsecond: a/b\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    run_script(runner, images, "-PromptsFile", str(prompts), "-Model", "flux", "-Size", "square",
+               "-Count", "2", "-Seed", "5", "-OutDir", str(out))
+
+    gens = [body for path, _, body in images.log if path == "/slot/images/generations"]
+    assert [(b["prompt"], b["seed"]) for b in gens] == [
+        ("first prompt", 5), ("first prompt", 6), ("second: a/b", 5), ("second: a/b", 6)]
+    assert all((b["model"], b["size"], b["n"], b["response_format"]) == ("flux.2-klein-4b", "1024x1024", 1, "b64_json")
+               and "strength" not in b for b in gens)
+    # Без seed в ответе (FLUX) — в имени и журнале запрошенный; из имени выпали «:» и «/»
+    names = ["001-01_first_prompt_s5.png", "001-02_first_prompt_s6.png",
+             "002-01_second_ab_s5.png", "002-02_second_ab_s6.png"]
+    assert sorted(p.name for p in out.glob("*.png")) == names
+    assert [(out / n).read_bytes() for n in names] == [b"png-1", b"png-2", b"png-3", b"png-4"]
+    assert (out / "manifest.tsv").read_text(encoding="utf-8-sig").splitlines() == [
+        "n\tfile\tseed\tsize\tmodel\tprompt",
+        f"1-1\t{names[0]}\t5\tsquare\tflux\tfirst prompt", f"1-2\t{names[1]}\t6\tsquare\tflux\tfirst prompt",
+        f"2-1\t{names[2]}\t5\tsquare\tflux\tsecond: a/b", f"2-2\t{names[3]}\t6\tsquare\tflux\tsecond: a/b"]
+    assert images.log[-1] == ("/slot/images/release", "Bearer test-key", {"model": "flux.2-klein-4b"})
