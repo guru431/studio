@@ -34,8 +34,8 @@ const SECTIONS = {
   chat: { title: 'Чат', load: soon('Чат') },
   photo: { title: 'Фото', load: soon('Фото') },
   video: { title: 'Видео', load: soon('Видео') },
-  profile: { title: 'Профиль', load: soon('Профиль') },
-  admin: { title: 'Панель', admin: true, load: soon('Панель') },
+  profile: { title: 'Профиль', load: () => import('./profile.js') },
+  admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
 };
 
 const view = document.getElementById('view');
