@@ -1,0 +1,13 @@
+# Секреты: значения — в vault local-config, на хосте — /etc/studio/studio.env
+.env
+.env.*
+.claude/.env
+.claude/settings.local.json
+# Локальные копии клиентских скриптов с вписанным ключом шлюза
+# (client/studio-batch.ps1 -MakeLocal → studio-batch.local.ps1)
+*.local.ps1
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

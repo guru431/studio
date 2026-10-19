@@ -1,0 +1,283 @@
+﻿<#
+.SYNOPSIS
+  Пакетная генерация картинок через API картинок шлюза srvllm (Lustify или FLUX).
+
+.DESCRIPTION
+  Скрипт ходит прямо в шлюз (POST <Url>/images/generations) ключом владельца для картинок;
+  студия в этом не участвует. Работает из домашней сети или через туннель.
+
+  Промпты берутся из текстового файла в UTF-8: одна строка — один промпт. Пустые строки и
+  строки, начинающиеся с #, пропускаются.
+
+  Картинки ложатся в -OutDir под именами вида 003-02_<начало промпта>_s<seed>.png, рядом —
+  manifest.tsv (номер, файл, seed, размер, модель, промпт), чтобы повторить удачную картинку
+  тем же seed.
+
+  Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
+    powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal
+  Рядом появится studio-batch.local.ps1 (в .gitignore) — дальше запускайте её; её можно
+  переносить на другие компьютеры как есть. Ключ на один запуск — параметром -Token.
+
+  Карта одна на всех: пока её держит другой потребитель, шлюз ждёт, и первая картинка выходит
+  позже. Lustify: первая картинка — около 40 с (подъём модели, gemma4 снимается), дальше ~11 с
+  на каждую. FLUX: ~50 с на картинку, тоже снимает gemma4. Шлюз ждёт ответ до 21 мин.
+  По окончании карта освобождается и возвращается gemma4; -KeepCard — оставить карту.
+  Ctrl+C обрывает текущий запрос и тоже освобождает карту.
+
+  Против дубля человека и лишних рук: одному человеку — начинать промпт с «solo, 1girl» (или
+  «1boy»), руки описывать явно («left hand on hip, right hand holding a glass»), и брать -Count 3–4,
+  чтобы выбрать удачную. Негатива у Turbo нет: без CFG он не работает (проверено 2026-10-17).
+
+.PARAMETER PromptsFile
+  Файл с промптами, одна строка — один промпт.
+.PARAMETER Model
+  lustify (по умолчанию, Lustify v10 Krea2 Turbo) или flux (FLUX.2 klein 4B).
+.PARAMETER ImagePath
+  Исходное фото PNG/JPEG/WebP до 10 МиБ. Одно фото для всех промптов; запрос /images/edits.
+.PARAMETER Strength
+  Сила изменения Lustify от 0.05 до 1 (по умолчанию 0.65). Меньше — ближе к исходнику.
+.PARAMETER OutDir
+  Куда класть картинки. По умолчанию — новая папка studio-<дата-время> в текущем каталоге.
+.PARAMETER Size
+  portrait (832x1216), square (1024x1024) или landscape (1216x832).
+.PARAMETER Count
+  Сколько картинок на каждый промпт.
+.PARAMETER Seed
+  Начальный seed. Пусто — случайный у каждой картинки; задан — seed, seed+1, … для -Count
+  картинок одного промпта (у всех промптов одинаковые — удобно сравнивать промпты).
+.PARAMETER KeepCard
+  Не освобождать карту в конце.
+.PARAMETER Url
+  База API картинок шлюза.
+.PARAMETER Token
+  Ключ шлюза. По умолчанию — вписанный командой -MakeLocal.
+.PARAMETER MakeLocal
+  Собрать рядом studio-batch.local.ps1 с ключом GATEWAY_KEY_OWNER_IMAGES из vault и выйти.
+.PARAMETER VaultPath
+  Файл vault для -MakeLocal.
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File studio-batch.local.ps1 -PromptsFile prompts.txt
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File studio-batch.local.ps1 -PromptsFile prompts.txt -Model flux -Size square -Count 3 -OutDir D:\studio
+#>
+[CmdletBinding(DefaultParameterSetName = 'Run')]
+param(
+    [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$PromptsFile,
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('lustify', 'flux')][string]$Model = 'lustify',
+    [Parameter(ParameterSetName = 'Run')][string]$ImagePath = '',
+    [Parameter(ParameterSetName = 'Run')][ValidateRange(0.05, 1.0)][double]$Strength = 0.65,
+    [Parameter(ParameterSetName = 'Run')]
+    [string]$OutDir = (Join-Path (Get-Location) ('studio-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))),
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('portrait', 'square', 'landscape')][string]$Size = 'portrait',
+    [Parameter(ParameterSetName = 'Run')][ValidateRange(1, 100)][int]$Count = 1,
+    [Parameter(ParameterSetName = 'Run')][Nullable[long]]$Seed = $null,
+    [Parameter(ParameterSetName = 'Run')][switch]$KeepCard,
+    [Parameter(ParameterSetName = 'Run')][string]$Url = 'http://10.77.1.15:4000/slot',
+    [Parameter(ParameterSetName = 'Run')][string]$Token = '',
+    [Parameter(ParameterSetName = 'MakeLocal', Mandatory = $true)][switch]$MakeLocal,
+    [Parameter(ParameterSetName = 'MakeLocal')][string]$VaultPath = 'C:\work\projects\local-config\secrets\vault.env'
+)
+# Строка-заглушка ключа: в репозитории пусто, -MakeLocal вписывает ключ в локальную копию.
+$EmbeddedKey = ''
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # прогресс-бар Invoke-WebRequest в 5.1 тормозит загрузку
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
+$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux.2-klein-4b' }
+$Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
+$TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
+$MaxPrompt = 24000                     # предел API картинок
+$MaxSeed = 4294967295
+
+if ($MakeLocal) {
+    if (-not (Test-Path -LiteralPath $VaultPath)) { throw "Нет файла vault: $VaultPath (путь — параметром -VaultPath)" }
+    $line = Select-String -LiteralPath $VaultPath -Pattern "^$VaultKey=" -CaseSensitive -Encoding UTF8 | Select-Object -First 1
+    $key = if ($line) { $line.Line.Substring($VaultKey.Length + 1).Trim().Trim('"', "'") } else { '' }
+    if (-not $key) { throw "В $VaultPath нет строки $VaultKey=<ключ>: ключ владельца для картинок не выпущен или не внесён в vault" }
+    $source = [IO.File]::ReadAllText($PSCommandPath)
+    $slot = [Regex]::Matches($source, "(?m)^\`$EmbeddedKey = '(?:[^']|'')*'")
+    if ($slot.Count -ne 1) { throw "В $PSCommandPath не найдена строка-заглушка ключа (`$EmbeddedKey = '')" }
+    $text = $source.Substring(0, $slot[0].Index) + "`$EmbeddedKey = '" + $key.Replace("'", "''") + "'" +
+        $source.Substring($slot[0].Index + $slot[0].Length)
+    $target = Join-Path $PSScriptRoot 'studio-batch.local.ps1'
+    [IO.File]::WriteAllText($target, $text, (New-Object Text.UTF8Encoding $true))
+    Write-Host "Готово: $target — ключ вписан (файл в .gitignore). Дальше запускайте его."
+    return
+}
+
+if (-not $Token) { $Token = $EmbeddedKey }
+if (-not $Token) {
+    throw ("Нет ключа шлюза. Соберите локальную копию с ключом из vault: " +
+        "powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal, " +
+        "затем запускайте studio-batch.local.ps1 (или передайте ключ параметром -Token)")
+}
+$Url = $Url.TrimEnd('/')
+$modelId = $Models[$Model]
+if ($ImagePath) {
+    $imageInfo = Get-Item -LiteralPath $ImagePath
+    if ($imageInfo.PSIsContainer -or $imageInfo.Length -eq 0 -or $imageInfo.Length -gt 10MB) {
+        throw 'Фото должно быть непустым файлом до 10 МиБ'
+    }
+    $ImagePath = $imageInfo.FullName
+}
+
+$prompts = @(Get-Content -LiteralPath $PromptsFile -Encoding UTF8 |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+if ($prompts.Count -eq 0) { throw "В файле $PromptsFile нет промптов" }
+if ($null -ne $Seed -and ($Seed -lt 0 -or $Seed + $Count - 1 -gt $MaxSeed)) { throw "Seed — от 0 до $MaxSeed" }
+
+# Запрос к шлюзу: код ответа и тело текстом (UTF-8 — Windows PowerShell сам читает
+# ответ без charset как Latin-1, и кириллица в сообщениях ломалась бы).
+function Invoke-Gateway([string]$Path, $Body, [int]$Timeout, [string]$ImageFile = '') {
+    if ($ImageFile) {
+        Add-Type -AssemblyName System.Net.Http
+        $client = New-Object Net.Http.HttpClient
+        $form = New-Object Net.Http.MultipartFormDataContent
+        $response = $null
+        try {
+            $client.Timeout = [TimeSpan]::FromSeconds($Timeout)
+            $client.DefaultRequestHeaders.Authorization = New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer', $Token)
+            foreach ($entry in $Body.GetEnumerator()) {
+                $value = [Convert]::ToString($entry.Value, [Globalization.CultureInfo]::InvariantCulture)
+                $form.Add((New-Object Net.Http.StringContent($value, [Text.Encoding]::UTF8)), $entry.Key)
+            }
+            $fileContent = New-Object Net.Http.ByteArrayContent -ArgumentList (,[IO.File]::ReadAllBytes($ImageFile))
+            $form.Add($fileContent, 'image', 'input.png')
+            $response = $client.PostAsync("$Url$Path", $form).GetAwaiter().GetResult()
+            return [pscustomobject]@{ Status = [int]$response.StatusCode
+                                      Text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
+        } finally {
+            if ($response) { $response.Dispose() }
+            $form.Dispose()
+            $client.Dispose()
+        }
+    }
+    $params = @{ Uri = "$Url$Path"; Method = 'POST'; UseBasicParsing = $true; TimeoutSec = $Timeout
+                 Headers = @{ Authorization = "Bearer $Token" }
+                 Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress))
+                 ContentType = 'application/json; charset=utf-8' }
+    try {
+        $r = Invoke-WebRequest @params
+        return [pscustomobject]@{ Status = [int]$r.StatusCode
+                                  Text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) }
+    } catch [System.Net.WebException] {
+        $e = $_.Exception
+        if ($e.Status -eq [Net.WebExceptionStatus]::Timeout) { throw "шлюз не ответил за $Timeout с" }
+        if ($null -eq $e.Response) { throw "шлюз недоступен ($Url): $($e.Message)" }
+        # Тело отказа Invoke-WebRequest уже вычитал в ErrorDetails: поток ответа к этому моменту пуст
+        $text = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { '' }
+        if (-not $text) {
+            $text = (New-Object IO.StreamReader($e.Response.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd()
+        }
+        return [pscustomobject]@{ Status = [int]$e.Response.StatusCode; Text = $text }
+    }
+}
+
+# Причина отказа: error.message (формат OpenAI), error строкой или detail; иначе — начало тела.
+function Get-Reason([string]$Text) {
+    try {
+        $j = $Text | ConvertFrom-Json
+        if ($j.error.message) { return "$($j.error.message)" }
+        if ($j.error) { return "$($j.error)" }
+        if ($j.detail) { return "$($j.detail)" }
+    } catch { }
+    if ($Text.Length -gt 300) { return $Text.Substring(0, 300) + '…' }
+    return $Text
+}
+
+function Get-FailText($Response) {
+    $reason = Get-Reason $Response.Text
+    switch ($Response.Status) {
+        400 { return "запрос отклонён (400): $reason" }
+        401 { return "шлюз не принял ключ (401): ключ неверный или отозван — пересоберите копию через -MakeLocal" }
+        403 { return "ключу не разрешена эта модель или маршрут (403): $reason" }
+        429 { return "превышен лимит запросов ключа (429): $reason" }
+        503 { return "карта или модель недоступна (503): $reason" }
+        default { return "шлюз ответил $($Response.Status): $reason" }
+    }
+}
+
+function New-Seed {
+    $bytes = New-Object byte[] 4
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return [long][BitConverter]::ToUInt32($bytes, 0)
+}
+
+function Get-Slug([string]$Text) {
+    $bad = [Regex]::Escape(-join [IO.Path]::GetInvalidFileNameChars())
+    $slug = ($Text -replace "[$bad]", '' -replace '\s+', '_').Trim('_', '.')
+    if ($slug.Length -gt 40) { $slug = $slug.Substring(0, 40).TrimEnd('_', '.') }
+    if (-not $slug) { $slug = 'prompt' }
+    return $slug
+}
+
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$manifest = Join-Path $OutDir 'manifest.tsv'
+if (-not (Test-Path -LiteralPath $manifest)) {
+    "n`tfile`tseed`tsize`tmodel`tprompt" | Out-File -LiteralPath $manifest -Encoding utf8
+}
+
+$total = $prompts.Count * $Count
+$done = 0
+$failed = 0
+$started = Get-Date
+Write-Host "Шлюз: $total картинок ($($prompts.Count) промптов × $Count), $Model, размер $Size → $OutDir"
+Write-Host 'Если карту держит другой потребитель, первая картинка ждёт её освобождения'
+try {
+    for ($p = 0; $p -lt $prompts.Count; $p++) {
+        $prompt = $prompts[$p]
+        $preview = if ($prompt.Length -gt 60) { $prompt.Substring(0, 60) + '…' } else { $prompt }
+        if ($prompt.Length -gt $MaxPrompt) {
+            Write-Warning "[$($p + 1)] промпт длиннее $MaxPrompt символов — пропущен: $preview"
+            $failed += $Count
+            continue
+        }
+        for ($k = 0; $k -lt $Count; $k++) {
+            $n = $done + $failed + 1
+            Write-Host "[$n/$total] $preview"
+            $seedValue = if ($null -ne $Seed) { $Seed + $k } else { New-Seed }
+            $t0 = Get-Date
+            try {
+                $body = @{ model = $modelId; prompt = $prompt; size = $Sizes[$Size]; n = 1
+                           seed = $seedValue; response_format = 'b64_json' }
+                if ($ImagePath) {
+                    if ($Model -eq 'lustify') { $body.strength = $Strength }
+                    $r = Invoke-Gateway '/images/edits' $body $TimeoutSec $ImagePath
+                } else {
+                    $r = Invoke-Gateway '/images/generations' $body $TimeoutSec
+                }
+                if ($r.Status -ne 200) { throw (Get-FailText $r) }
+                $item = @(($r.Text | ConvertFrom-Json).data)[0]
+                if (-not $item.b64_json) { throw 'в ответе шлюза нет картинки (data[0].b64_json)' }
+                # FLUX может не вернуть seed — тогда в manifest запрошенный
+                $seedOut = if ($null -ne $item.seed) { $item.seed } else { $seedValue }
+                $file = '{0:D3}-{1:D2}_{2}_s{3}.png' -f ($p + 1), ($k + 1), (Get-Slug $prompt), $seedOut
+                [IO.File]::WriteAllBytes((Join-Path $OutDir $file), [Convert]::FromBase64String($item.b64_json))
+                ("{0}-{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f ($p + 1), ($k + 1), $file, $seedOut, $Size, $Model,
+                    ($prompt -replace "`t", ' ')) | Out-File -LiteralPath $manifest -Encoding utf8 -Append
+                $done++
+                Write-Host ("  готово за {0:N0} с → {1}" -f ((Get-Date) - $t0).TotalSeconds, $file)
+            } catch {
+                $failed++
+                Write-Warning "  не вышло: $($_.Exception.Message)"
+            }
+        }
+    }
+} finally {
+    # Освобождение — в своём try: сетевой сбой не должен затереть исходную ошибку и итог
+    if (-not $KeepCard) {
+        try {
+            $r = Invoke-Gateway '/images/release' @{ model = $modelId } 60
+            if ($r.Status -eq 200) { Write-Host 'Карта освобождена — вернётся gemma4' }
+            elseif ($r.Status -eq 409) { Write-Warning 'Карта занята генерацией, освободится сама через 10 минут' }
+            else { Write-Warning "Карту освободить не удалось: $(Get-FailText $r)" }
+        } catch {
+            Write-Warning "Карту освободить не удалось: $($_.Exception.Message)"
+        }
+    }
+    Write-Host ("Итого: {0} готово, {1} не вышло, {2:N0} мин. Папка: {3}" -f $done, $failed,
+        ((Get-Date) - $started).TotalMinutes, $OutDir)
+}

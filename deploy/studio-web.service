@@ -1,0 +1,37 @@
+[Unit]
+Description=studio-web — страница студии https://llm.example.com/studio/ (клиент API картинок и видео шлюза srvllm)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=studio
+# Group=www-data + UMask=0007: каталог сокета открыт Apache и больше никому (как у teacher-web).
+# Свой порт TCP служба не слушает: адрес клиента она берёт из X-Forwarded-For и верит ему потому,
+# что путь к ней один — Apache этого хоста.
+Group=www-data
+UMask=0007
+RuntimeDirectory=studio
+RuntimeDirectoryMode=0750
+# Секрет (0600 root, из vault): STUDIO_SESSION_SECRET — подпись cookie сессии. Файл читает
+# systemd при старте, а не служба: самой учётке studio он недоступен.
+EnvironmentFile=/etc/studio/studio.env
+# Шлюз srvllm, маршруты slot-gate и прямые маршруты видео; ключ — у владельца, в cookie сессии
+Environment=STUDIO_GATEWAY_URL=http://10.77.1.15:4000/slot
+WorkingDirectory=/opt/services/studio
+# --no-proxy-headers: адрес клиента студия читает из X-Forwarded-For сама (server.client_ip),
+# подмена request.client и схемы uvicorn-ом ей не нужна — поведение то же, что было на srvllm.
+ExecStart=/opt/services/studio/.venv/bin/uvicorn server:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers
+# Кэш роликов для Range (до 3 mp4, server.VIDEO_CACHE_ITEMS) и загрузка картинки до 20 МБ
+MemoryMax=2G
+# Ключ шлюза владельца живёт в памяти запроса — дамп памяти не должен лечь на диск
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

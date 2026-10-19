@@ -1,0 +1,5 @@
+# Тесты на workstation: .venv/Scripts/python -m pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0
+# `timeout = 30` в pytest.ini: зависший тест падает с дампом стеков, а не держит прогон
+pytest-timeout>=2.3

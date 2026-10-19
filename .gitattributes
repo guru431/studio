@@ -1,0 +1,7 @@
+# Выкладка на debian — `git archive` из репозитория: \r на конце строки systemd принял бы за
+# часть пути в ExecStart, bash — за часть команды, Apache — за часть директивы.
+* text=auto eol=lf
+# Клиенты Windows: PowerShell 5.1 (UTF-8 с BOM, CRLF)
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.png binary

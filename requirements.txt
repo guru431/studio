@@ -1,0 +1,6 @@
+# Среда службы на debian (/opt/services/studio/.venv, deploy/install.sh) — точные пины.
+# fastapi и uvicorn — как у asr-lite на srvllm (замер 2026-10-13); Python debian — 3.13.
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+httpx==0.28.1
+Pillow==12.1.1

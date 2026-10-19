@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Студия</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f5; --fg: #18181b; --muted: #71717a; --card: #fff; --line: #d4d4d8; --accent: #2563eb; --bad: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #18181b; --fg: #f4f4f5; --muted: #a1a1aa; --card: #27272a; --line: #3f3f46; --accent: #60a5fa; --bad: #f87171; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; }
+  h1 { margin: 0; font-size: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+  textarea, select, input, button { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  textarea { width: 100%; min-height: 120px; resize: vertical; }
+  input[type="file"] { max-width: 100%; }
+  #input-preview { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; }
+  .tip { color: var(--muted); font-size: 14px; margin: 0; }
+  .tip code { font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .row > * { flex: 1 1 140px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border: 0; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: var(--muted); min-height: 1.4em; margin: 0; }
+  #status.bad { color: var(--bad); }
+  #gallery { display: grid; gap: 12px; align-items: start; grid-template-columns: repeat(auto-fill, minmax(min(220px, calc(50% - 6px)), 1fr)); }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  figure img { display: block; width: 100%; height: auto; cursor: zoom-in; }
+  figcaption { padding: 8px 12px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
+  figcaption a { color: var(--accent); justify-self: start; }
+  .link { background: none; border: 0; color: var(--muted); padding: 0; text-decoration: underline; }
+  /* просмотр: картинка по экрану, клик по ней — 1:1 с прокруткой, клик мимо или Esc — закрыть */
+  #viewer { margin: 0; padding: 0; border: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; background: transparent; }
+  #viewer::backdrop { background: rgb(0 0 0 / .85); }
+  #stage { width: 100%; height: 100%; overflow: auto; display: flex; }
+  #stage img { margin: auto; max-width: 100%; max-height: 100%; cursor: zoom-in; }
+  #viewer.full #stage img { max-width: none; max-height: none; cursor: zoom-out; }
+  .bar { position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; }
+  .bar a, .bar button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); text-decoration: none; font-size: 15px; }
+  #editor { width: min(900px, calc(100% - 24px)); max-height: calc(100% - 24px); padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); }
+  #editor::backdrop { background: rgb(0 0 0 / .7); }
+  #edit-form { display: grid; gap: 12px; min-width: 0; }
+  #edit-form h2 { font-size: 20px; margin: 0; }
+  #edit-stage { position: relative; justify-self: center; max-width: 100%; line-height: 0; }
+  #edit-photo { display: block; max-width: 100%; max-height: 42vh; }
+  #edit-mask { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #edit-form label { min-width: 0; }
+  #edit-form textarea { width: 100%; }
+  #edit-form input[type="checkbox"] { width: auto; }
+  #edit-error { color: var(--bad); margin: 0; }
+  #description-dialog { width: min(900px, calc(100% - 24px)); max-height: calc(100% - 24px); padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); }
+  #description-dialog::backdrop { background: rgb(0 0 0 / .7); }
+  #description-form { display: grid; gap: 12px; min-width: 0; }
+  #description-form h2 { font-size: 20px; margin: 0; }
+  #description-photo { max-width: 100%; max-height: 24vh; justify-self: center; }
+  #description-form textarea { width: 100%; }
+  #description-text { min-height: 260px; }
+  #description-error { color: var(--bad); margin: 0; }
+  #video h2 { font-size: 18px; margin: 0; }
+  .field { display: grid; gap: 4px; min-width: 0; }
+  .field input, .field select { width: 100%; }
+  #video input[type="checkbox"] { width: auto; }
+  #video-preview { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; justify-self: start; }
+  #video-status { color: var(--muted); min-height: 1.4em; margin: 0; }
+  #video-status.bad { color: var(--bad); }
+  #videos { display: grid; gap: 12px; }
+  .video-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 6px; min-width: 0; }
+  .video-item p { margin: 0; overflow-wrap: anywhere; }
+  .video-item .meta { color: var(--muted); font-size: 14px; }
+  .video-item .bad { color: var(--bad); }
+  .video-item video { display: block; width: 100%; max-height: 60vh; background: #000; border-radius: 8px; }
+  .video-item .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .video-item .actions a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Студия</h1>
+    <form method="post" action="logout"><button class="link" type="submit">Выйти</button></form>
+  </header>
+  <section class="card">
+    <textarea id="prompt" maxlength="24000" placeholder="Опишите картинку: кто, где, свет, ракурс, стиль"></textarea>
+    <p class="tip">Один человек — начните с <code>solo, 1girl</code> (или <code>1boy</code>): реже дубль. Пишите, где каждая рука («left hand on hip, right hand holding a glass»): реже лишняя рука. Не получилось — тот же промпт с другим seed.</p>
+    <div class="row">
+      <select id="model">
+        <option value="lustify" selected>Lustify (Krea 2 Turbo)</option>
+        <option value="flux">FLUX.2 klein</option>
+      </select>
+      <select id="size">
+        <option value="portrait">Портрет 832×1216</option>
+        <option value="square">Квадрат 1024×1024</option>
+        <option value="landscape">Альбом 1216×832</option>
+      </select>
+      <input id="seed" type="number" min="0" max="4294967295" placeholder="Seed (пусто — случайный)">
+    </div>
+    <div class="row">
+      <label>Исходное фото <input id="image" type="file" accept="image/png,image/jpeg,image/webp"></label>
+      <button id="clear-image" type="button">Убрать фото</button>
+      <button id="describe-input" type="button" disabled>Описать фото</button>
+      <label id="strength-label">Сила изменения (Lustify)
+        <input id="strength" type="number" min="0.05" max="1" step="0.05" value="0.25">
+      </label>
+    </div>
+    <p class="tip">Фото: PNG, JPEG или WebP до 10 МиБ и 16 Мп. Lustify: меньше сила — ближе к исходнику, больше — свободнее перерисовка. Фото обрезается под выбранный формат.</p>
+    <img id="input-preview" alt="Исходное фото" hidden>
+    <div class="row">
+      <button id="go" class="primary">Сгенерировать</button>
+      <button id="cancel" disabled>Отменить</button>
+      <button id="release">Освободить карту</button>
+    </div>
+    <p id="status"></p>
+  </section>
+  <section id="video" class="card">
+    <h2>Видео</h2>
+    <div class="row">
+      <label>Картинка <input id="video-image" type="file" accept="image/png,image/jpeg,image/webp"></label>
+      <button id="video-clear" type="button">Убрать картинку</button>
+    </div>
+    <img id="video-preview" alt="Картинка для ролика" hidden>
+    <textarea id="video-prompt" maxlength="4000" placeholder="Пусто — движение придумает gemma-abl по фото"></textarea>
+    <div class="row">
+      <label class="field">Длительность, с <input id="video-seconds" type="number" min="1" max="30" step="1" value="5"></label>
+      <label class="field">Качество
+        <select id="video-quality">
+          <option value="fast">Быстро 480p</option>
+          <option value="standard" selected>Обычно 576p</option>
+          <option value="high">Высокое 720p</option>
+        </select>
+      </label>
+      <label class="field">Seed <input id="video-seed" type="number" min="0" max="4294967295" placeholder="Пусто — случайный"></label>
+    </div>
+    <label><input id="video-smooth" type="checkbox" checked> Дорисовка до 32 кадров/с</label>
+    <p class="tip">Картинка — PNG, JPEG или WebP до 20 МБ, с устройства или кнопкой «Оживить» у картинки ленты. Ролик 5 с — несколько минут; первый ролик после картинок дольше (меняется модель). Пока идут ролики, gemma4 и прочие службы карты ждут.</p>
+    <div class="row"><button id="video-go" class="primary" type="button">Оживить</button></div>
+    <p id="video-status"></p>
+    <div id="videos"></div>
+  </section>
+  <section id="gallery"></section>
+</main>
+<dialog id="viewer">
+  <div id="stage"><img id="viewer-img" alt=""></div>
+  <div class="bar">
+    <a id="viewer-save" href="">Скачать</a>
+    <button id="viewer-close" type="button">Закрыть</button>
+  </div>
+</dialog>
+<dialog id="description-dialog" aria-labelledby="description-title">
+  <form id="description-form">
+    <header><h2 id="description-title">Описание картинки</h2><button id="description-close" type="button">Закрыть</button></header>
+    <img id="description-photo" alt="Фото для описания" hidden>
+    <p class="tip">gemma-abl описывает фото локально. Описание на английском подготовлено как промпт для генерации; его можно редактировать.</p>
+    <label>Подробное описание<textarea id="description-text" maxlength="24000" required></textarea></label>
+    <label>Ваш дополнительный текст<textarea id="description-extra" maxlength="8000" placeholder="Например: другое освещение, цвет одежды или дополнительные детали"></textarea></label>
+    <div class="row"><span id="description-model"></span><select id="description-size" aria-label="Размер нового изображения">
+      <option value="portrait">Портрет</option><option value="square">Квадрат</option><option value="landscape">Альбом</option>
+    </select></div>
+    <p id="description-counter" class="tip"></p>
+    <p id="description-error" role="alert"></p>
+    <button id="description-generate" class="primary" type="submit">Сгенерировать новое изображение</button>
+  </form>
+</dialog>
+<dialog id="editor" aria-labelledby="edit-title">
+  <form id="edit-form">
+    <header><h2 id="edit-title">Изменить фотографию</h2><button id="edit-close" type="button">Закрыть</button></header>
+    <div id="edit-stage"><img id="edit-photo" alt="Фото для изменения"><canvas id="edit-mask" hidden></canvas></div>
+    <label>Что изменить
+      <textarea id="edit-prompt" maxlength="3800" placeholder="Например: замени цвет куртки на синий, остальное оставь как есть" required></textarea>
+    </label>
+    <p id="edit-model-label"></p>
+    <p id="edit-mode-tip" class="tip">Изменения выполнит модель, выбранная в студии.</p>
+    <label id="edit-strength-label" hidden>Сила перерисовки
+      <input id="edit-strength" type="number" min="0.05" max="1" step="0.05" value="0.25">
+    </label>
+    <label><input id="edit-local" type="checkbox"> Изменить только выделенную область</label>
+    <div id="edit-brush-tools" hidden>
+      <label>Размер кисти <input id="edit-brush" type="range" min="8" max="120" value="40"></label>
+      <button id="edit-clear-mask" type="button">Очистить выделение</button>
+      <p class="tip">Закрасьте нужную часть фото пальцем или мышью. Пиксели вне выделения будут взяты из исходника без изменений.</p>
+    </div>
+    <p id="edit-error" role="alert"></p>
+    <button id="edit-submit" class="primary" type="submit">Применить изменения</button>
+  </form>
+</dialog>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const TEXT = { done: "Готово", cancelled: "Отменено" };
+  const MODEL = { lustify: "Lustify", flux: "FLUX", "gemma-abl": "gemma-abl" };
+  let job = null;          // id идущего задания; опрос сверяет с ним каждый ответ
+  let timer = null;
+  let inputUrl = null;
+  let submitting = false;
+  let editSource = null;
+  let drawing = null;
+  let hasSelection = false;
+  const selection = document.createElement("canvas");
+  let descriptionUrl = null;
+  let descriptionModel = null;
+  function previewInput() {
+    if (inputUrl) URL.revokeObjectURL(inputUrl);
+    const photo = $("image").files[0];
+    inputUrl = photo ? URL.createObjectURL(photo) : null;
+    $("input-preview").hidden = !photo;
+    $("describe-input").disabled = !photo || !!job || submitting;
+    if (inputUrl) $("input-preview").src = inputUrl;
+    else $("input-preview").removeAttribute("src");
+  }
+  $("image").onchange = previewInput;
+  $("clear-image").onclick = () => { $("image").value = ""; previewInput(); };
+  $("model").onchange = () => { $("strength-label").hidden = $("model").value !== "lustify"; };
+
+  function say(text, bad = false) {
+    $("status").textContent = text;
+    $("status").className = bad ? "bad" : "";
+  }
+
+  function busy(on) {
+    $("go").disabled = on;
+    $("cancel").disabled = !on;
+    $("release").disabled = on;      // посреди своей картинки шлюз ответил бы 409; отмена освобождает сама
+    $("edit-submit").disabled = on;
+    $("description-generate").disabled = on;
+    $("describe-input").disabled = on || !$("image").files[0];
+    document.querySelectorAll(".edit-photo, .describe-photo").forEach((button) => { button.disabled = on; });
+  }
+
+  async function api(method, url, body) {
+    const r = await fetch(url, {
+      method,
+      headers: body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {},
+      body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+      credentials: "same-origin",
+    });
+    if (r.status === 401) { location.reload(); throw new Error("login"); }
+    return r;
+  }
+
+  function clock(sec) {
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m + ":" + String(s).padStart(2, "0");
+  }
+
+  function cap(text) {
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  }
+
+  // Шлюз держит запрос, пока ждёт карту и пока считает: страница различить их не может.
+  // Отмена запрос не обрывает: студия ждёт его конца и сама освобождает карту — итог в detail.
+  function stateText(s) {
+    if (s.state === "working") return (s.kind === "description" ? "Жду карту или описываю фото… " : "Жду карту или генерирую… ") + clock(s.elapsed || 0);
+    if (s.state === "cancelling") return cap(s.detail) + " · " + clock(s.elapsed || 0);
+    if (s.state === "cancelled") return cap(s.detail) || TEXT.cancelled;
+    if (s.state === "error") return "Ошибка: " + s.detail;
+    return TEXT[s.state] || s.state;
+  }
+
+  // Картинку студия отдаёт один раз: blob живёт до закрытия вкладки — из него и превью, и
+  // просмотр, и «Скачать». Имя файла — с seed из ответа (шлюз мог поставить свой).
+  async function show(id, meta, model) {
+    const r = await api("GET", "api/jobs/" + id + "/image");
+    if (!r.ok) { say("Картинка не получена", true); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const name = "studio-" + (model || "image") + "-" + (r.headers.get("X-Seed") || id.slice(0, 8)) + ".png";
+    const fig = document.createElement("figure");
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = meta;
+    img.title = "Открыть крупно";
+    img.addEventListener("click", () => view(url, name));
+    const caption = document.createElement("figcaption");
+    const text = document.createElement("span");
+    text.textContent = meta;
+    const save = document.createElement("a");
+    save.href = url;
+    save.download = name;
+    save.textContent = "Скачать";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "edit-photo";
+    edit.textContent = "Изменить";
+    edit.disabled = !!job || submitting;
+    edit.addEventListener("click", () => openEditor({ blob, url, name }));
+    const describe = document.createElement("button");
+    describe.type = "button";
+    describe.className = "describe-photo";
+    describe.textContent = "Описать";
+    describe.disabled = !!job || submitting;
+    describe.onclick = () => startDescription(blob);
+    const animate = document.createElement("button");
+    animate.type = "button";
+    animate.className = "animate-photo";
+    animate.textContent = "Оживить";
+    animate.onclick = () => pickForVideo(blob);
+    caption.append(text, save, edit, describe, animate);
+    fig.append(img, caption);
+    $("gallery").prepend(fig);
+  }
+
+  function view(url, name) {
+    $("viewer").classList.remove("full");
+    $("viewer-img").src = url;
+    $("viewer-save").href = url;
+    $("viewer-save").download = name;
+    $("viewer").showModal();
+  }
+
+  function clearSelection() {
+    drawing = null;
+    hasSelection = false;
+    const mask = $("edit-mask");
+    mask.getContext("2d").clearRect(0, 0, mask.width, mask.height);
+    const ctx = selection.getContext("2d");
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, selection.width, selection.height);
+  }
+
+  async function openEditor(source) {
+    if (job || submitting) return;
+    editSource = { ...source, model: $("model").value };
+    $("edit-photo").src = source.url;
+    $("edit-form").reset();
+    $("edit-error").textContent = "";
+    $("edit-model-label").textContent = "Модель: " + MODEL[editSource.model] + " (выбрана в студии)";
+    const lustify = editSource.model === "lustify";
+    $("edit-strength-label").hidden = !lustify;
+    $("edit-mode-tip").textContent = lustify
+      ? "Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью."
+      : "FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.";
+    $("edit-brush-tools").hidden = $("edit-mask").hidden = true;
+    try {
+      await $("edit-photo").decode();
+      const mask = $("edit-mask");
+      selection.width = mask.width = $("edit-photo").naturalWidth;
+      selection.height = mask.height = $("edit-photo").naturalHeight;
+      clearSelection();
+      $("editor").showModal();
+      $("edit-prompt").focus();
+    } catch { say("Не удалось открыть фото для изменения", true); }
+  }
+
+  $("edit-close").onclick = () => $("editor").close();
+  $("editor").addEventListener("close", () => { editSource = null; drawing = null; });
+  $("edit-local").onchange = () => {
+    drawing = null;
+    $("edit-brush-tools").hidden = $("edit-mask").hidden = !$("edit-local").checked;
+  };
+  $("edit-clear-mask").onclick = clearSelection;
+
+  function drawMask(event) {
+    if (drawing === null) return;
+    const mask = $("edit-mask"), box = mask.getBoundingClientRect();
+    const point = { x: (event.clientX - box.left) * mask.width / box.width,
+                    y: (event.clientY - box.top) * mask.height / box.height };
+    for (const [canvas, color] of [[mask, "rgba(245,158,11,.6)"], [selection, "white"]]) {
+      const ctx = canvas.getContext("2d");
+      ctx.lineWidth = Number($("edit-brush").value) * mask.width / box.width;
+      ctx.strokeStyle = color;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(drawing.x ?? point.x, drawing.y ?? point.y);
+      ctx.lineTo(point.x + 0.01, point.y);
+      ctx.stroke();
+    }
+    drawing = point;
+    hasSelection = true;
+  }
+  $("edit-mask").onpointerdown = (event) => {
+    event.preventDefault();
+    $("edit-mask").setPointerCapture(event.pointerId);
+    drawing = {};
+    drawMask(event);
+  };
+  $("edit-mask").onpointermove = drawMask;
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    $("edit-mask").addEventListener(event, () => { drawing = null; });
+  }
+
+  $("edit-form").onsubmit = async (event) => {
+    event.preventDefault();
+    if (!editSource || job || submitting) return;
+    const prompt = $("edit-prompt").value.trim();
+    if (!prompt) { $("edit-error").textContent = "Опишите необходимые изменения"; return; }
+    if ($("edit-local").checked && !hasSelection) {
+      $("edit-error").textContent = "Выделите кистью область для изменения"; return;
+    }
+    const source = editSource;
+    const body = new FormData();
+    const model = source.model;
+    body.append("model", model);
+    body.append("size", "original");
+    body.append("prompt", prompt);
+    body.append("image", source.blob, "source.png");
+    if (model === "lustify") body.append("strength", $("edit-strength").value);
+    // Snapshot the mask before awaiting, so a later stroke cannot alter this request.
+    if ($("edit-local").checked) {
+      const snapshot = document.createElement("canvas");
+      snapshot.width = selection.width; snapshot.height = selection.height;
+      snapshot.getContext("2d").drawImage(selection, 0, 0);
+      const mask = await new Promise((resolve) => snapshot.toBlob(resolve, "image/png"));
+      if (!mask) { $("edit-error").textContent = "Не удалось подготовить выделение"; return; }
+      body.append("mask", mask, "mask.png");
+    }
+    if (await submitJob(body, model, "правка фото")) $("editor").close();
+  };
+
+  async function startDescription(blob) {
+    if (job || submitting) return;
+    if (descriptionUrl) URL.revokeObjectURL(descriptionUrl);
+    descriptionUrl = URL.createObjectURL(blob);
+    const body = new FormData();
+    body.append("image", blob, "source.png");
+    await submitJob(body, "gemma-abl", "описание", "api/descriptions");
+  }
+  $("describe-input").onclick = () => {
+    const photo = $("image").files[0];
+    if (photo) startDescription(photo);
+  };
+  $("description-close").onclick = () => $("description-dialog").close();
+
+  function combinedDescription() {
+    const text = $("description-text").value.trim();
+    const extra = $("description-extra").value.trim();
+    return text + (extra ? "\n\nAdditional instructions:\n" + extra : "");
+  }
+  function countDescription() {
+    $("description-counter").textContent = combinedDescription().length + " / 24000 символов. Генерация пойдёт по тексту, без исходного фото.";
+  }
+  $("description-text").oninput = $("description-extra").oninput = countDescription;
+
+  async function showDescription(id) {
+    const response = await api("GET", "api/jobs/" + id + "/description");
+    if (!response.ok) { say("Описание не получено", true); return; }
+    const result = await response.json();
+    $("description-text").value = result.text;
+    $("description-extra").value = "";
+    $("description-error").textContent = result.truncated ? "Достигнут лимит ответа модели; описание можно дополнить вручную." : "";
+    descriptionModel = $("model").value;
+    $("description-model").textContent = "Генерация: " + MODEL[descriptionModel];
+    $("description-size").value = $("size").value;
+    $("description-photo").hidden = !descriptionUrl;
+    if (descriptionUrl) $("description-photo").src = descriptionUrl;
+    countDescription();
+    $("description-dialog").showModal();
+  }
+
+  $("description-form").onsubmit = async (event) => {
+    event.preventDefault();
+    if (job || submitting) return;
+    const prompt = combinedDescription();
+    if (!$("description-text").value.trim() || prompt.length > 24000) {
+      $("description-error").textContent = "Нужно непустое описание; вместе с дополнением — не больше 24000 символов.";
+      return;
+    }
+    const body = { prompt, model: descriptionModel, size: $("description-size").value };
+    if (await submitJob(body, descriptionModel, "по описанию")) $("description-dialog").close();
+  };
+
+  // 1:1 — точка под пальцем или курсором остаётся на месте
+  $("viewer-img").addEventListener("click", (e) => {
+    const img = e.currentTarget, stage = $("stage");
+    const fx = e.offsetX / img.clientWidth, fy = e.offsetY / img.clientHeight;
+    if (!$("viewer").classList.toggle("full")) return;
+    stage.scrollLeft = fx * img.offsetWidth - e.clientX;
+    stage.scrollTop = fy * img.offsetHeight - e.clientY;
+  });
+  $("stage").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("viewer").close(); });
+  $("viewer-close").addEventListener("click", () => $("viewer").close());
+
+  // Опрос — цепочкой setTimeout, а не setInterval: следующий запрос уходит после ответа на
+  // предыдущий, и запоздалый ответ (медленный туннель) не перетирает итог.
+  async function poll(id, meta) {
+    timer = null;
+    if (id !== job) return;
+    try {
+      const r = await api("GET", "api/jobs/" + id);
+      if (id !== job) return;
+      if (!r.ok) { stop(); say("Задание потеряно", true); return; }
+      const s = await r.json();
+      say(stateText(s), s.state === "error");
+      if (s.state === "cancelling") $("cancel").disabled = true;
+      if (s.state === "done") {
+        stop();
+        if (s.kind === "description") await showDescription(id);
+        else await show(id, meta, s.model);
+        return;
+      }
+      if (s.state === "error" || s.state === "cancelled") { stop(); return; }
+    } catch (e) {
+      if (e.message === "login") return;
+      say("Нет связи со студией, повторяю…", true);
+    }
+    if (id === job) timer = setTimeout(() => poll(id, meta), 1000);
+  }
+
+  function follow(id, meta) {
+    job = id;
+    busy(true);
+    poll(id, meta);
+  }
+
+  function stop() {
+    clearTimeout(timer);
+    timer = null;
+    job = null;
+    busy(false);
+  }
+
+  // После перезагрузки вкладки (мобильный браузер) — подхватить идущее задание.
+  async function resume() {
+    const r = await api("GET", "api/jobs/current");
+    if (!r.ok) return;
+    const s = await r.json();
+    say(stateText(s));
+    follow(s.id, (MODEL[s.model] || s.model) + " · seed " + s.seed);
+  }
+
+  $("go").addEventListener("click", async () => {
+    const prompt = $("prompt").value.trim();
+    if (!prompt) { say("Напишите промпт", true); return; }
+    const seedText = $("seed").value.trim();
+    const size = $("size").value;
+    const model = $("model").value;
+    let body = { prompt, size, model, seed: seedText === "" ? null : Number(seedText) };
+    const photo = $("image").files[0];
+    if (photo) {
+      if (photo.size > 10 * 1024 * 1024) { busy(false); say("Фото больше 10 МиБ", true); return; }
+      body = new FormData();
+      for (const [k, v] of Object.entries({ prompt, size, model, seed: seedText,
+                                           strength: $("strength").value })) {
+        if (v !== "") body.append(k, v);
+      }
+      body.append("image", photo);
+    }
+    await submitJob(body, model, $("size").selectedOptions[0].textContent);
+  });
+
+  async function submitJob(body, model, label, endpoint = "api/jobs") {
+    if (job || submitting) return false;
+    submitting = true;
+    busy(true);
+    $("edit-error").textContent = "";
+    $("description-error").textContent = "";
+    try {
+      const r = await api("POST", endpoint, body);
+      if (r.status === 409) {
+        const active = await r.json();
+        const message = cap(active.detail?.message || "предыдущая картинка ещё делается");
+        say(message, true); $("edit-error").textContent = $("description-error").textContent = message;
+        if (active.detail?.id && !job) follow(active.detail.id, "предыдущее задание");
+        return false;
+      }
+      if (!r.ok) {
+        const failure = await r.json().catch(() => ({}));
+        throw new Error(failure.detail?.message || "Проверьте фото, промпт и параметры (" + r.status + ")");
+      }
+      const created = await r.json();
+      say("Жду карту или генерирую… 0:00");
+      follow(created.id, MODEL[model] + " · " + label + (created.kind === "description" ? "" : " · seed " + created.seed));
+      return true;
+    } catch (error) {
+      if (error.message !== "login") {
+        say(error.message || "Нет связи со студией", true);
+        $("edit-error").textContent = error.message || "Нет связи со студией";
+        $("description-error").textContent = error.message || "Нет связи со студией";
+      }
+      return false;
+    } finally {
+      submitting = false;
+      if (!job) busy(false);
+    }
+  }
+
+  // Отмена не обрывает запрос к шлюзу: студия дождётся его конца, выбросит картинку и
+  // освободит карту сама; опрос показывает это словами студии.
+  $("cancel").addEventListener("click", async () => {
+    if (!job) return;
+    $("cancel").disabled = true;
+    await api("DELETE", "api/jobs/" + job);
+  });
+
+  // Обе модели — двумя release; итог по каждой.
+  $("release").addEventListener("click", async () => {
+    const r = await api("POST", "api/release");
+    if (!r.ok) { say("Карта не освобождена: студия ответила " + r.status, true); return; }
+    const results = (await r.json()).results || {};
+    const names = Object.keys(results);
+    const parts = names.map((k) => (MODEL[k] || k) + " — " + results[k].message);
+    const freed = names.some((k) => results[k].state === "released");
+    say(parts.join("; ") + (freed ? ". gemma4 вернётся обходом" : ""),
+        names.some((k) => results[k].state === "error"));
+  });
+
+  // ---- видео: клиент API роликов шлюза через студию ----
+  // Очередь живёт у шлюза: список показывает и ролики пакетного скрипта.
+  const VIDEO_MAX = 20 * 1024 * 1024;
+  const VIDEO_STATE = { queued: "В очереди", in_progress: "Делается", completed: "Готов", failed: "Ошибка" };
+  const QUALITY = { fast: "480p", standard: "576p", high: "720p" };
+  const SOURCE = { given: "свой промпт", auto: "придуман по фото", fallback: "запасной промпт" };
+  let videoBlob = null;     // картинка раздела: файл с устройства или PNG из ленты
+  let videoUrl = null;
+  let videoTimer = null;
+  let videoPoll = 0;        // номер последнего опроса: запоздалый ответ старого не перетирает новый
+  const videoNodes = new Map();
+
+  function sayVideo(text, bad = false) {
+    $("video-status").textContent = text;
+    $("video-status").className = bad ? "bad" : "";
+  }
+
+  function setVideoImage(blob) {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    videoBlob = blob || null;
+    videoUrl = blob ? URL.createObjectURL(blob) : null;
+    $("video-preview").hidden = !blob;
+    if (videoUrl) $("video-preview").src = videoUrl;
+    else $("video-preview").removeAttribute("src");
+  }
+  $("video-image").onchange = () => setVideoImage($("video-image").files[0]);
+  $("video-clear").onclick = () => { $("video-image").value = ""; setVideoImage(null); sayVideo(""); };
+
+  function pickForVideo(blob) {
+    $("video-image").value = "";
+    setVideoImage(blob);
+    sayVideo("Картинка из ленты выбрана — нажмите «Оживить»");
+    $("video").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  $("video-go").addEventListener("click", async () => {
+    if (!videoBlob) { sayVideo("Выберите картинку", true); return; }
+    if (videoBlob.size > VIDEO_MAX) { sayVideo("Картинка больше 20 МБ", true); return; }
+    const seconds = Number($("video-seconds").value);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 30) { sayVideo("Длительность — целые 1–30 с", true); return; }
+    const seed = $("video-seed").value.trim();
+    const body = new FormData();
+    body.append("image", videoBlob, "source.png");
+    body.append("prompt", $("video-prompt").value.trim());
+    body.append("seconds", String(seconds));
+    body.append("quality", $("video-quality").value);
+    body.append("smooth", $("video-smooth").checked ? "true" : "false");
+    if (seed !== "") body.append("seed", seed);
+    $("video-go").disabled = true;
+    try {
+      const r = await api("POST", "api/videos", body);
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(result.detail?.message || "Студия ответила " + r.status);
+      sayVideo("Ролик отправлен" + (result.detail ? ": " + result.detail : ""));
+      pollVideos();
+    } catch (error) {
+      if (error.message !== "login") sayVideo(error.message || "Нет связи со студией", true);
+    } finally {
+      $("video-go").disabled = false;
+    }
+  });
+
+  function videoElapsed(v) {
+    const end = v.completed_at || Date.now() / 1000;
+    return v.created_at ? clock(Math.max(0, Math.round(end - v.created_at))) : "";
+  }
+
+  function videoNode(id) {
+    let node = videoNodes.get(id);
+    if (node) return node;
+    const root = document.createElement("article");
+    root.className = "video-item";
+    const state = document.createElement("p");
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    const error = document.createElement("p");
+    error.className = "bad";
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "video-delete";
+    remove.onclick = async () => {
+      remove.disabled = true;
+      try {
+        const r = await api("DELETE", "api/videos/" + id);
+        if (!r.ok && r.status !== 404) {
+          const failure = await r.json().catch(() => ({}));
+          sayVideo(failure.detail?.message || "Ролик не удалён: студия ответила " + r.status, true);
+        }
+      } catch (e) { if (e.message !== "login") sayVideo("Нет связи со студией", true); }
+      remove.disabled = false;
+      pollVideos();
+    };
+    actions.append(remove);
+    root.append(state, meta, error, actions);
+    node = { root, state, meta, error, actions, remove, player: null };
+    videoNodes.set(id, node);
+    return node;
+  }
+
+  function renderVideos(list) {
+    const box = $("videos");
+    const seen = new Set();
+    for (const v of list) {
+      if (!v || typeof v.id !== "string") continue;
+      const i = seen.size;
+      seen.add(v.id);
+      const node = videoNode(v.id);
+      const running = v.status === "queued" || v.status === "in_progress";
+      node.state.textContent = [VIDEO_STATE[v.status] || v.status,
+        v.status === "completed" ? "" : v.detail,
+        running ? (v.progress || 0) + "%" : "", videoElapsed(v)].filter(Boolean).join(" · ");
+      node.meta.textContent = [v.seconds ? v.seconds + " с" : "", QUALITY[v.quality] || v.quality,
+        v.smooth === false ? "16 кадров/с" : "", SOURCE[v.prompt_source] || "",
+        v.seed != null ? "seed " + v.seed : ""].filter(Boolean).join(" · ");
+      node.error.textContent = v.status === "failed" ? (v.error?.message || "ролик не сделан") : "";
+      node.error.hidden = v.status !== "failed";
+      node.remove.textContent = running ? "Отменить" : "Удалить";
+      if (v.status === "completed" && !node.player) {
+        const player = document.createElement("video");
+        player.controls = true;
+        player.playsInline = true;
+        player.preload = "metadata";
+        player.src = "api/videos/" + v.id + "/content";
+        const save = document.createElement("a");
+        save.href = "api/videos/" + v.id + "/content?download=1";
+        save.textContent = "Скачать";
+        node.root.insertBefore(player, node.actions);
+        node.actions.prepend(save);
+        node.player = player;
+      }
+      // порядок — как у шлюза; узел двигается, только если стоит не там (плеер не сбивается)
+      if (box.children[i] !== node.root) box.insertBefore(node.root, box.children[i] || null);
+    }
+    for (const [id, node] of videoNodes) {
+      if (!seen.has(id)) { node.root.remove(); videoNodes.delete(id); }
+    }
+  }
+
+  // Опрос — цепочкой setTimeout: раз в 3 с, пока ролики ждут или делаются, иначе раз в 15 с.
+  async function pollVideos() {
+    const mine = ++videoPoll;
+    clearTimeout(videoTimer);
+    videoTimer = null;
+    let running = false;
+    try {
+      const r = await api("GET", "api/videos");
+      if (mine !== videoPoll) return;
+      const body = await r.json().catch(() => ({}));
+      if (mine !== videoPoll) return;
+      if (r.ok) {
+        const list = Array.isArray(body.data) ? body.data : [];
+        renderVideos(list);
+        running = list.some((v) => v && (v.status === "queued" || v.status === "in_progress"));
+      } else {
+        sayVideo("Список роликов не получен: " + (body.detail?.message || "студия ответила " + r.status), true);
+      }
+    } catch (e) {
+      if (e.message === "login") return;
+      if (mine !== videoPoll) return;
+    }
+    videoTimer = setTimeout(pollVideos, running ? 3000 : 15000);
+  }
+
+  resume().catch(() => {});
+  pollVideos();
+})();
+</script>
+</body>
+</html>
