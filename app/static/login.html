@@ -2,19 +2,30 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
 <title>Студия — вход</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/css/app.css?v={{v}}">
+<script src="/static/theme.js?v={{v}}"></script>
 </head>
-<body>
-<form method="post" action="/login">
-  <h1>Студия</h1>
+<body class="solo">
+<form class="solo-card" method="post" action="/login">
+  <div class="brand">
+    <img src="/static/icons/icon.svg" alt="">
+    <h1>Студия</h1>
+    <p>Чат, фото и видео</p>
+  </div>
   <label for="login">Логин</label>
-  <input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required autofocus>
+  <input class="input" id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required autofocus>
   <label for="password">Пароль</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
-  <button id="submit" type="submit">Войти</button>
-  <p class="error">{{error}}</p>
+  <input class="input" id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+  <p class="error" role="alert">{{error}}</p>
+  <button class="btn btn-accent" id="submit" type="submit">Войти</button>
 </form>
 </body>
 </html>

@@ -5,12 +5,17 @@
 release моделей, описание gemma-abl; API роликов `/slot/videos` (перенос фикстуры `videos` из
 tests/test_studio.py): создание, статус, `content`, удаление; чат — `/v1/models` и
 `/v1/chat/completions` (поток OpenAI SSE). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
+
+`FakeCloud` — облачный сервис для браузерных тестов: настоящий HTTP на localhost с CORS.
 """
 import asyncio
 import base64
 import io
 import json
+import threading
+import time
 from collections.abc import Awaitable, Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 from PIL import Image
@@ -190,3 +195,91 @@ class FakeGateway:
             return httpx.Response(self.image_reply[0], json=self.image_reply[1])
         return httpx.Response(200, json={"created": 1, "data": [
             {"b64_json": base64.b64encode(PNG_REAL).decode(), "seed": seed}]})
+
+
+class FakeCloud:
+    """Облачный OpenAI-совместимый сервис для браузерных тестов: настоящий HTTP-сервер на `localhost`
+    с CORS — прямое подключение зовёт сам браузер. `/v1/models` и потоковый `/v1/chat/completions`
+    (строки `data:` SSE и `data: [DONE]`); чужой ключ — 401: верен только `TOKEN`."""
+    TOKEN = "cloud-key"
+
+    def __init__(self):
+        self.models = [{"id": "cloud-chat"}]
+        self.chat_reply = ["Облако ", "на связи."]
+        self.chat_requests = []          # тела запросов /v1/chat/completions
+        self.chat_auth = []              # их заголовки авторизации
+        self.chunk_pause = 0.05          # пауза между кусками: браузер видит поток, а не готовый ответ
+        cloud = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _cors(self):
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+            def _json(self, status, body):
+                raw = json.dumps(body, ensure_ascii=False).encode()
+                self.send_response(status)
+                self._cors()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def _authorized(self):
+                if self.headers.get("Authorization") == f"Bearer {cloud.TOKEN}":
+                    return True
+                self._json(401, {"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}})
+                return False
+
+            def do_OPTIONS(self):
+                self.send_response(204)
+                self._cors()
+                self.send_header("Access-Control-Max-Age", "600")
+                self.end_headers()
+
+            def do_GET(self):
+                if self.path != "/v1/models":
+                    return self._json(404, {"error": {"message": "not found"}})
+                if self._authorized():
+                    self._json(200, {"object": "list", "data": cloud.models})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path != "/v1/chat/completions":
+                    return self._json(404, {"error": {"message": "not found"}})
+                cloud.chat_auth.append(self.headers.get("Authorization"))
+                if not self._authorized():
+                    return
+                cloud.chat_requests.append(body)
+                if not body.get("stream"):
+                    return self._json(200, {"choices": [{"message": {"role": "assistant",
+                                                                     "content": "".join(cloud.chat_reply)},
+                                                         "finish_reason": "stop"}]})
+                # HTTP/1.0 без длины: конец потока — закрытие соединения
+                self.send_response(200)
+                self._cors()
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                for piece in cloud.chat_reply:
+                    delta = {"choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]}
+                    self.wfile.write(f"data: {json.dumps(delta, ensure_ascii=False)}\n\n".encode())
+                    self.wfile.flush()
+                    time.sleep(cloud.chunk_pause)
+                self.wfile.write(b'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\n')
+                self.wfile.write(b"data: [DONE]\n\n")
+
+            def log_message(self, *_args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://localhost:{self.server.server_port}"
+        self.base_url = self.url + "/v1"
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(2)

@@ -15,6 +15,7 @@
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся.
 """
 import asyncio
+import hashlib
 import hmac
 import html
 import logging
@@ -42,6 +43,19 @@ DELAY_MAX = 30
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
+
+
+def _static_version(root: Path) -> str:
+    """Первые 12 hex sha256 всех файлов каталога (путь и содержимое): новая выкладка — новые ссылки."""
+    digest = hashlib.sha256()
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            digest.update(p.relative_to(root).as_posix().encode() + b"\0" + p.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+#: версия статики при старте — `?v=` в ссылках страниц (`{{v}}`) и VERSION служебного работника
+STATIC_VERSION = _static_version(STATIC)
 
 #: ("pair", логин, адрес) и ("ip", адрес) → моменты неудач за последние LOCK_SEC.
 FAILS: dict[tuple, list[float]] = {}
@@ -181,7 +195,8 @@ def _forget(key: tuple, attempt: float) -> None:
 # ---- страницы --------------------------------------------------------------
 
 def page(name: str, error: str = "") -> str:
-    return (STATIC / name).read_text(encoding="utf-8").replace("{{error}}", html.escape(error))
+    return ((STATIC / name).read_text(encoding="utf-8")
+            .replace("{{error}}", html.escape(error)).replace("{{v}}", STATIC_VERSION))
 
 
 def _login_page(error: str = "", status: int = 200) -> HTMLResponse:

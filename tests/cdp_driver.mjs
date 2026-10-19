@@ -13,7 +13,8 @@
  *   ["eval", имя, выражение] — значение выражения в ответ под именем;
  *   ["click", селектор]    — нажатие мышью в середину элемента;
  *   ["type", селектор, текст] — нажатие на поле и ввод текста;
- *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab).
+ *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab);
+ *   ["screenshot", путь]   — снимок окна в PNG по пути (глазами проверить вёрстку).
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
  *
@@ -22,6 +23,7 @@
  * исключения и console.error. В `sent` — каждый запрос не GET, «МЕТОД путь»,
  * в том числе оборванный: отправку видно в миг запроса, а не по ответу.
  */
+import { writeFile } from 'node:fs/promises';
 import process from 'node:process';
 
 const POLL_MS = 50;
@@ -194,6 +196,10 @@ async function run(job) {
           await click(tab, args[0], timeout);
           await tab.send('Input.insertText', { text: args[1] });
         } else if (kind === 'press') await press(tab, args[0]);
+        else if (kind === 'screenshot') {
+          const { data } = await tab.send('Page.captureScreenshot', { format: 'png' });
+          await writeFile(args[0], Buffer.from(data, 'base64'));
+        }
         else throw new Error(`шаг ${kind} драйверу неизвестен`);
       }
     } catch (err) {
