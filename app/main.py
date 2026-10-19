@@ -3,6 +3,7 @@
 Служба слушает только unix-сокет за Apache. Анонимны `/health`, `/login` (страница и вход) и
 `/logout`; `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ import images
 import media
 import profile
 import state
+import videos
 
 log = logging.getLogger("studio")
 
@@ -34,9 +36,13 @@ async def lifespan(_app):
     db.migrate(state.DB)
     images.recover()
     state.HTTP = state.make_http()
+    watcher = videos.start_watcher() if state.WATCHER else None
     try:
         yield
     finally:
+        if watcher is not None:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
         await images.stop()
         await state.HTTP.aclose()
         state.DB.close()
@@ -50,6 +56,7 @@ app.include_router(connections.router)
 app.include_router(admin.router)
 app.include_router(media.router)
 app.include_router(images.router)
+app.include_router(videos.router)
 
 
 @app.exception_handler(RequestValidationError)

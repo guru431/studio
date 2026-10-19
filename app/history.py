@@ -3,13 +3,15 @@ import logging
 
 import media
 import state
+import videos
 
 log = logging.getLogger("studio")
 
 
 async def delete_all(user_id: int) -> None:
-    """Сперва файлы, затем строки. Файл, который не удалился, удаление строк не останавливает:
-    иначе история застряла бы в базе из-за одного битого файла."""
+    """Идущие ролики снимаются у шлюза, затем файлы, затем строки. Файл, который не удалился,
+    удаление строк не останавливает: иначе история застряла бы в базе из-за одного битого файла."""
+    await videos.cancel_at_gateway(user_id)
     rows = state.DB.execute("SELECT id FROM media WHERE user_id = ?", (user_id,)).fetchall()
     for row in rows:
         try:

@@ -2,7 +2,9 @@
 
 Встроенное поведение — API картинок шлюза srvllm (перенос `Gateway` из tests/test_studio.py с путями
 `/slot/...`): генерация и правка отдают настоящий PNG (`PNG_REAL`, Pillow — чтобы строилось превью),
-release моделей, описание gemma-abl. Чужой ключ — 401: верен только ключ подключения `TOKEN`.
+release моделей, описание gemma-abl; API роликов `/slot/videos` (перенос фикстуры `videos` из
+tests/test_studio.py): создание, статус, `content`, удаление. Чужой ключ — 401: верен только ключ
+подключения `TOKEN`.
 """
 import asyncio
 import base64
@@ -13,9 +15,19 @@ from collections.abc import Awaitable, Callable
 import httpx
 from PIL import Image
 
-from image_upload import decode_form
+from image_upload import VIDEO_FIELDS, VIDEO_UPLOAD, decode_form
 
 TOKEN = "owner-images-test-key"
+VIDEO_MODEL = "wan2.2-remix-i2v-v3"
+MP4 = bytes(range(256)) * 4
+
+
+def video_object(video_id, **extra):
+    """Объект ролика API шлюза (OpenAI videos + поля переводчика)."""
+    return {"id": video_id, "object": "video", "model": VIDEO_MODEL, "status": "queued",
+            "progress": 0, "created_at": 1_800_000_000, "completed_at": None, "expires_at": None,
+            "seconds": "5", "size": "576x1024", "error": None, "seed": 42, "prompt": None,
+            "prompt_source": "auto", "detail": "в очереди: перед ним 0", "queue_position": 0} | extra
 
 
 def _png() -> bytes:
@@ -48,6 +60,15 @@ class FakeGateway:
         self.release_replies = [(200, {"ok": True, "slot": "comfy"})]   # последний повторяется
         self.descriptions = []           # тела запросов описания
         self.description_reply = {"choices": [{"message": {"content": "A described photo."}, "finish_reason": "stop"}]}
+        self.video_calls = []            # {"method", "path", "auth", "timeout"} запросов /slot/videos…
+        self.video_forms = []            # (поля формы, картинка, сырое тело) созданий роликов
+        self.video_create_reply = None   # (код, тело) вместо нового ролика
+        self.video_ids = []              # id всех созданных роликов по порядку
+        self.videos = {}                 # ролики, которые шлюз помнит: id → seed
+        self.video_status = "queued"     # статус любого ролика в ответе шлюза
+        self.video_extra = {}            # прочие поля ответа статуса (progress, detail, error, prompt…)
+        self.video_content = MP4
+        self.video_deleted = []          # id роликов, снятых DELETE
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -70,6 +91,37 @@ class FakeGateway:
         if path == "/slot/images/descriptions":
             self.descriptions.append(json.loads(request.content))
             return httpx.Response(200, json=self.description_reply)
+        if path == "/slot/videos" or path.startswith("/slot/videos/"):
+            return self._video(request)
+        return httpx.Response(404)
+
+    def _video(self, request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        self.video_calls.append({"method": method, "path": path, "auth": request.headers.get("authorization"),
+                                 "timeout": request.extensions["timeout"]["read"]})
+        if path == "/slot/videos" and method == "POST":
+            fields, image = decode_form(request.content, request.headers["content-type"],
+                                        file_fields=VIDEO_FIELDS, max_upload=VIDEO_UPLOAD)
+            self.video_forms.append((fields, image, request.content))
+            if self.video_create_reply is not None:
+                code, body = self.video_create_reply
+                return httpx.Response(code, json=body)
+            video_id = f"video_{len(self.video_ids) + 1:024x}"
+            self.video_ids.append(video_id)
+            self.videos[video_id] = int(fields["seed"]) if "seed" in fields else 42
+            return httpx.Response(200, json=video_object(video_id, seed=self.videos[video_id]))
+        video_id, _, tail = path.removeprefix("/slot/videos/").partition("/")
+        if video_id not in self.videos:
+            return httpx.Response(404, json={"error": {"message": "нет такого ролика", "type": "not_found"}})
+        if method == "GET" and tail == "content":
+            return httpx.Response(200, content=self.video_content, headers={"content-type": "video/mp4"})
+        if method == "GET" and not tail:
+            return httpx.Response(200, json=video_object(video_id, status=self.video_status,
+                                                         seed=self.videos[video_id]) | self.video_extra)
+        if method == "DELETE" and not tail:
+            del self.videos[video_id]
+            self.video_deleted.append(video_id)
+            return httpx.Response(200, json={"id": video_id, "object": "video.deleted", "deleted": True})
         return httpx.Response(404)
 
     async def _image(self, request: httpx.Request) -> httpx.Response:
