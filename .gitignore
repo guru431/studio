@@ -11,3 +11,5 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# Макеты визуального брейншторма
+.superpowers/
