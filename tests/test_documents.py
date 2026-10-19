@@ -80,3 +80,29 @@ def test_unknown_or_broken_files_are_refused():
     assert refusal("x.docx", docx(xml="<w:document><unclosed")) == broken
     assert refusal("big.txt", b"a" * (documents.TEXT_MAX_CHARS + 1)) == "текст длиннее 2 млн знаков"
     assert len(documents.extract("edge.txt", b"a" * documents.TEXT_MAX_CHARS)) == documents.TEXT_MAX_CHARS
+
+
+def test_pdf_extraction_stops_once_the_text_is_too_long(monkeypatch):
+    """Гигабайты текста по многим страницам не копятся в памяти: страницы читаются до предела (ревью A2-M7)."""
+    from pypdf import PageObject
+    calls, real = [], PageObject.extract_text
+
+    def counted(self, *args, **kwargs):
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(PageObject, "extract_text", counted)
+    monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 30)
+    assert refusal("long.pdf", pdf(*["a" * 20] * 6)) == documents.TOO_LONG
+    assert len(calls) == 2
+    calls.clear()
+    assert documents.extract("fits.pdf", pdf("a" * 14, "b" * 14)) == "a" * 14 + "\n\n" + "b" * 14   # 30 — ровно предел
+
+
+def test_docx_xml_is_limited_to_sixteen_mebibytes():
+    """document.xml разворачивается в ElementTree примерно вдесятеро: 64 МиБ ×2 загрузки — у MemoryMax=2G."""
+    head = f'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body>'
+    tail = "<w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>"
+    fits = head + " " * (16 * 1024 * 1024 - len(head) - len(tail)) + tail
+    assert documents.extract("fits.docx", docx(xml=fits)) == "x"
+    assert refusal("over.docx", docx(xml=head + " " * (16 * 1024 * 1024) + tail)) == "документ повреждён"

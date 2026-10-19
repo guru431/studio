@@ -23,7 +23,9 @@ TEXT_MAX_CHARS = 2_000_000
 SUFFIXES = (".pdf", ".docx", ".txt", ".md")
 BODY_MAX = DOC_MAX + 128 * 1024
 NAME_MAX = 200
-XML_MAX = 64 * 1024 * 1024          # распакованный document.xml: дальше — zip-бомба, а не документ
+# распакованный document.xml: дальше — zip-бомба, а не документ; ElementTree берёт памяти примерно
+# вдесятеро, две загрузки по 64 МиБ подошли бы к MemoryMax=2G службы
+XML_MAX = 16 * 1024 * 1024
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 UNSUPPORTED = "поддерживаются PDF, DOCX, TXT и MD"
@@ -86,12 +88,21 @@ async def read_upload(request) -> tuple[str, bytes]:
 # ---- текст -------------------------------------------------------------------
 
 def _pdf(data: bytes) -> str:
+    """Страницы — до предела TEXT_MAX_CHARS: гигабайты текста по многим страницам в память не идут."""
+    pages, chars = [], 0
     try:
-        reader = PdfReader(io.BytesIO(data))
-        pages = [page.extract_text() or "" for page in reader.pages]
+        for page in PdfReader(io.BytesIO(data)).pages:
+            text = (page.extract_text() or "").strip()
+            if text:
+                pages.append(text)
+                chars += len(text)
+                if chars > TEXT_MAX_CHARS:
+                    break
     except Exception:                                 # noqa: BLE001 — pypdf падает на битом файле по-разному
         raise DocumentError(BROKEN) from None
-    text = "\n\n".join(p.strip() for p in pages if p.strip())
+    if chars > TEXT_MAX_CHARS:
+        raise DocumentError(TOO_LONG)
+    text = "\n\n".join(pages)
     if not text:
         raise DocumentError(SCAN)
     return text

@@ -216,6 +216,18 @@ def remove_files(rows) -> int:
     return failed
 
 
+#: id media, чьи файлы сейчас удаляет delete_async: пока удаление ждёт поток, новое задание взять их
+#: исходником не должно (иначе его строка сослалась бы на файл, которого не станет) — см. alive()
+DELETING: set[str] = set()
+
+
+def alive(user_id: int, media_id: str) -> bool:
+    """Строка media есть и её файлы не удаляются. С цикла событий — сразу перед INSERT строки,
+    которая на неё сошлётся, без await между ними."""
+    return media_id not in DELETING and state.DB.execute(
+        "SELECT 1 FROM media WHERE id = ? AND user_id = ?", (media_id, user_id)).fetchone() is not None
+
+
 async def delete_async(user_id: int, media_id: str) -> None:
     """Файлы — в потоке (зависшая шара не останавливает службу), затем строка — здесь, на цикле.
     Нет файла или строки — не ошибка. Прочая OSError — наружу, строка остаётся."""
@@ -223,8 +235,12 @@ async def delete_async(user_id: int, media_id: str) -> None:
                            (media_id, user_id)).fetchone()
     if row is None:
         return
-    await asyncio.to_thread(_remove, row["id"], row["rel_path"])
-    state.DB.execute("DELETE FROM media WHERE id = ? AND user_id = ?", (media_id, user_id))
+    DELETING.add(media_id)
+    try:
+        await asyncio.to_thread(_remove, row["id"], row["rel_path"])
+        state.DB.execute("DELETE FROM media WHERE id = ? AND user_id = ?", (media_id, user_id))
+    finally:
+        DELETING.discard(media_id)
 
 
 def byte_range(header: str, size: int) -> "tuple[int, int] | None":

@@ -287,6 +287,146 @@ def test_deleting_a_chat_removes_its_files_off_the_loop(studio, env, unlinks):
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
 
 
+def on_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def test_photos_are_read_off_the_loop(studio, monkeypatch):
+    """Каждый ход перечитывает фото диалога с шары: не на цикле событий (ревью A2-I3)."""
+    import pathlib
+    add_gateway(studio); cid = new_chat(studio)
+    pic = attach(studio, "photo.jpg", png(), "image/jpeg")
+    reads, real = [], pathlib.Path.read_bytes
+
+    def spy(self):
+        reads.append(on_loop())
+        return real(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", spy)
+    sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
+    assert reads and not any(reads)
+    url = studio.gw.chat_requests[0]["messages"][0]["content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+
+
+def test_missing_photo_becomes_a_note_not_a_broken_chat(studio, env):
+    """Фото, которого нет на шаре, не ломает диалог навсегда (ревью A2-M9)."""
+    add_gateway(studio); cid = new_chat(studio)
+    pic = attach(studio, "photo.jpg", png(), "image/jpeg")
+    sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
+    for p in env.media_dir.rglob("*"):
+        if p.is_file():
+            p.unlink()
+    assert sse(turn(studio, cid, "А теперь?"))[-1] == ("done", {"status": "done"})
+    first = studio.gw.chat_requests[1]["messages"][0]["content"]
+    assert [part["type"] for part in first] == ["text", "text"] and "фото" in first[1]["text"]
+
+
+def test_unreadable_share_marks_the_answer(studio, env, monkeypatch):
+    """Шара не отдаёт фото: ход — 503 «хранилище недоступно», ответ в диалоге — ошибка, а не вечная загрузка."""
+    import pathlib
+    add_gateway(studio); cid = new_chat(studio)
+    pic = attach(studio, "photo.jpg", png(), "image/jpeg")
+    real = pathlib.Path.read_bytes
+
+    def broken(self):
+        if env.media_dir in self.parents:
+            raise PermissionError("share went away")
+        return real(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", broken)
+    r = turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]])
+    assert r.status_code == 503 and r.json()["detail"] == {"code": "storage", "message": "хранилище недоступно"}
+    msgs = messages(studio, cid)
+    assert [(m["role"], m["status"]) for m in msgs] == [("user", "done"), ("assistant", "error")]
+    assert msgs[1]["content"] == "хранилище недоступно" and not studio.gw.chat_requests
+    assert not chat.STREAMS
+
+
+def _row(cid, mid, role, content, status, created):
+    state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                     " VALUES (?, ?, ?, ?, ?, 'server', 'm', ?)", (mid, cid, role, content, status, created))
+
+
+def test_compose_merges_user_messages_left_without_an_answer(studio):
+    """Q1 → (остановлен до первого слова) → Q2: модели — одно сообщение пользователя, роли чередуются
+    (шаблоны Gemma иначе отказывают; ревью A2-I5). Картинок в слитом — не больше MAX_IMAGES."""
+    import media
+    add_gateway(studio); cid = new_chat(studio)
+    uid = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (cid,)).fetchone()[0]
+    _row(cid, "u1", "user", "Первый", "done", 1)
+    _row(cid, "a1", "assistant", "", "stopped", 2)
+    _row(cid, "u2", "user", "Второй", "done", 3)
+    _row(cid, "a2", "assistant", "сбой", "error", 4)
+    _row(cid, "u3", "user", "Третий", "done", 5)
+    assert chat.compose(cid, "u3") == [{"role": "user", "content": "Первый\n\nВторой\n\nТретий"}]
+    _row(cid, "a3", "assistant", "Ответ", "done", 6)
+    _row(cid, "u4", "user", "", "done", 7)
+    _row(cid, "a4", "assistant", "", "stopped", 8)
+    _row(cid, "u5", "user", "Что на них?", "done", 9)
+    for n, mid in enumerate(["u4"] * 3 + ["u5"] * 3):
+        media_id = media.save(uid, png(), "image/png", f"{n}.png")
+        state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, created)"
+                         " VALUES (?, ?, ?, 'image', ?, ?, ?)", (f"att{n}", uid, mid, f"{n}.png", media_id, 10 + n))
+    out = chat.compose(cid, "u5")
+    assert [m["role"] for m in out] == ["user", "assistant", "user"]
+    last = out[2]["content"]
+    assert last[0] == {"type": "text", "text": "Что на них?"}
+    assert [p["type"] for p in last[1:]] == ["image_url"] * chat.MAX_IMAGES
+
+
+def test_new_turn_ends_a_browser_answer_nobody_saves(studio):
+    """Вкладка с прямым ответом закрылась: следующий ход помечает его ошибкой, а не вечной загрузкой
+    (ревью A2-M11); `via` в сообщении отличает ответ браузера от потока сервера."""
+    add_connection(studio); cid = new_chat(studio)
+    first = turn(studio, cid, "Привет").json()
+    assert {m["via"] for m in messages(studio, cid)} == {"browser"}
+    assert turn(studio, cid, "Ты тут?").status_code == 200
+    statuses = {m["id"]: m["status"] for m in messages(studio, cid)}
+    assert statuses[first["assistant_message_id"]] == "error"
+    late = studio.c.put(f"/api/chats/{cid}/messages/{first['assistant_message_id']}",
+                        json={"content": "поздно", "status": "done"})
+    assert late.status_code == 409
+
+
+def test_history_wipe_stops_the_users_streams(studio):
+    """Стирание истории посреди ответа: поток через сервер останавливается, карта свободна (ревью A2-M1)."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_hold = True
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(events)[0] == "turn"
+            assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+            (stream,) = chat.STREAMS.values()
+        assert studio.c.delete("/api/history").status_code == 204
+        assert stream.task.done() and not chat.STREAMS
+    finally:
+        studio.gw.chat_hold = False
+    assert studio.c.get("/api/chats").json() == {"items": []}
+
+
+def test_graceful_shutdown_saves_the_partial_answer_as_interrupted(studio):
+    """Остановка службы посреди ответа (stop_all): прочитанное сохраняется с пометкой о перезапуске."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_hold = True
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(events)[0] == "turn"
+            assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+        studio.c.__exit__(None, None, None)
+    finally:
+        studio.gw.chat_hold = False
+    studio.c.__enter__()
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("error", "Здрав\n\n[прервано перезапуском студии]")
+
+
 def test_restart_marks_server_streams_interrupted(studio):
     add_gateway(studio); cid = new_chat(studio)
     for mid, via in (("a" * 32, "server"), ("b" * 32, "browser")):

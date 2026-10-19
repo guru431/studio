@@ -542,6 +542,150 @@ def test_running_image_cannot_be_deleted_and_done_one_can(studio, env, unlinks):
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
 
 
+def share_files(env):
+    return [p for p in env.media_dir.rglob("*") if p.is_file()]
+
+
+def wait_job(job_id):
+    wait_for(lambda: images.JOBS[job_id].state in images.TERMINAL)
+    return images.JOBS[job_id]
+
+
+def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
+    """Стирание истории посреди генерации: картинка, пришедшая после, не ложится на шару (ревью A2-I1)."""
+    studio.gw.hold = True
+    add_gateway(studio)
+    job_id = start(studio).json()["id"]
+    wait_for(lambda: studio.gw.generations)
+    assert studio.c.delete("/api/history").status_code == 204
+    studio.gw.hold = False
+    job = wait_job(job_id)
+    assert job.state == "cancelled" and "карта освобождена" in job.detail
+    assert studio.gw.releases == [(LUSTIFY, f"Bearer {TOKEN}")]
+    assert media_rows() == 0 and share_files(env) == []
+
+
+def test_deleting_a_user_during_their_generation_ends_the_job(studio, env):
+    """Удаление учётки посреди генерации: ни IntegrityError, ни задания, вечно занятого (ревью A2-I1)."""
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    studio.gw.hold = True
+    job_id = start(studio).json()["id"]
+    wait_for(lambda: studio.gw.generations)
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 204
+    studio.gw.hold = False
+    job = wait_job(job_id)
+    assert job.state == "cancelled" and job.media_id is None
+    assert media_rows() == 0 and share_files(env) == []
+    assert make_user(studio, "carol") == bob and images._active(bob) is None   # новый id не наследует busy
+
+
+def test_unexpected_save_failure_ends_the_job_as_an_error(studio, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError(PROMPT)
+
+    monkeypatch.setattr(media, "write", broken)
+    add_gateway(studio)
+    result = wait_state(studio, start(studio).json()["id"], {"done", "error"})
+    assert (result["state"], result["detail"]) == ("error", "сбой службы: RuntimeError")
+
+
+def test_cancel_during_the_save_discards_the_saved_image(studio, env, monkeypatch):
+    """Отмена, пришедшая, пока картинка пишется на шару: записанное удаляется, карта освобождается."""
+    writing, go = threading.Event(), threading.Event()
+    real = media.write
+
+    def slow(*args, **kwargs):
+        writing.set()
+        go.wait(2)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(media, "write", slow)
+    add_gateway(studio)
+    job_id = start(studio, model="flux").json()["id"]
+    assert writing.wait(2)
+    assert studio.c.post(f"/api/images/{job_id}/cancel").json() == {"state": "cancelling"}
+    go.set()
+    result = wait_state(studio, job_id, {"cancelled", "done", "error"})
+    assert result["state"] == "cancelled" and result["media_id"] is None
+    assert media_rows() == 0 and share_files(env) == []
+    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]
+
+
+def test_graceful_restart_marks_a_running_image_interrupted(studio):
+    """Остановка службы (SIGTERM при выкладке) — тоже перезапуск, не отмена пользователем (ревью A2-I4)."""
+    studio.gw.hold = True
+    add_gateway(studio)
+    job_id = start(studio).json()["id"]
+    wait_for(lambda: studio.gw.generations)
+    studio.c.__exit__(None, None, None)
+    studio.gw.hold = False
+    studio.c.__enter__()
+    body = studio.c.get(f"/api/images/{job_id}").json()
+    assert (body["state"], body["detail"]) == ("error", "прервано перезапуском студии")
+
+
+def on_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def test_forms_are_decoded_off_the_loop(studio, monkeypatch):
+    """Разбор формы в 20 МиБ — доли секунды: не на цикле событий (ревью A2-M4)."""
+    calls, real = [], images.decode_form
+
+    def spy(*args, **kwargs):
+        calls.append(on_loop())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(images, "decode_form", spy)
+    add_gateway(studio)
+    r = studio.c.post("/api/images", data={"prompt": PROMPT, "size": "square"},
+                      files={"image": ("photo.png", photo(), "image/png")})
+    wait_state(studio, r.json()["id"], {"done"})
+    wait_description(studio, describe(studio).json()["id"])
+    assert len(calls) == 2 and not any(calls)
+
+
+@pytest.mark.parametrize("change, words", [
+    ("UPDATE settings SET value = '[]' WHERE key = 'allowlist'", "убран из списка администратора"),
+    ("DELETE FROM connections", "«srvllm» удалено из профиля"),
+], ids=["refused", "deleted"])
+def test_description_release_refusals_read_as_words(studio, change, words):
+    """Подготовка карты к описанию: адрес убрали из списка или подключение удалили — словами (ревью A2-M6)."""
+    async def release(request):
+        state.DB.execute(change)                  # между первым и вторым release
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/release"] = release
+    add_gateway(studio)
+    status = wait_description(studio, describe(studio).json()["id"])
+    assert status["state"] == "error" and words in status["detail"], status
+
+
+def test_a_source_being_deleted_cannot_start_a_job(studio, monkeypatch):
+    """Пока файл картинки удаляется, новое задание с ним как исходником — 404, а не строка без файла."""
+    add_gateway(studio)
+    first = wait_state(studio, start(studio).json()["id"], {"done"})
+    real, answers = media._remove, []
+
+    def racing(media_id, rel_path):               # поток удаления: файл ещё на месте
+        answers.append(start(studio, size="original", model="flux", source_media_id=first["media_id"]))
+        real(media_id, rel_path)
+
+    monkeypatch.setattr(media, "_remove", racing)
+    assert studio.c.delete(f"/api/images/{first['id']}").status_code == 204
+    (r,) = answers
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+    assert state.DB.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
+
+
 def test_feed_pages_by_created(studio):
     add_gateway(studio)
     ids = []

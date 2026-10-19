@@ -52,6 +52,8 @@ TEXT_MAX = 200_000
 ANSWER_MAX = 2_000_000
 MODEL_MAX = 200
 INTERRUPTED = "\n\n[прервано перезапуском студии]"
+STORAGE = "хранилище недоступно"
+NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
@@ -133,7 +135,7 @@ def _messages(chat_id: str):
 def _message_out(row, atts: list) -> dict:
     live = STREAMS.get(row["id"])
     return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
-            "status": row["status"], "model": row["model"], "created": row["created"],
+            "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "attachments": [{"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"],
                              "chars": a["chars"]} for a in atts]}
 
@@ -157,35 +159,85 @@ def recover() -> None:
 
 # ---- контекст ------------------------------------------------------------------
 
-def _content(text: str, atts: list, user_id: int):
-    """Текст пользователя с документами перед ним; с картинками — части OpenAI (не больше MAX_IMAGES)."""
+def _content(text: str, atts: list):
+    """Текст пользователя с документами перед ним; с картинками — части OpenAI (не больше MAX_IMAGES):
+    картинка — пока только id media, данные ставит fill_photos."""
     docs = "".join(f'<document name="{a["name"]}">\n{a["text"]}\n</document>\n\n'
                    for a in atts if a["kind"] == "document")
     pics = [a for a in atts if a["kind"] == "image"][:MAX_IMAGES]
     if not pics:
         return docs + text
-    parts = [{"type": "text", "text": docs + text}]
-    for a in pics:
-        data = media.path(user_id, a["media_id"]).read_bytes()
-        parts.append({"type": "image_url",
-                      "image_url": {"url": "data:image/png;base64," + base64.b64encode(data).decode("ascii")}})
-    return parts
+    return [{"type": "text", "text": docs + text}] + [{"type": "image_url", "media_id": a["media_id"]} for a in pics]
+
+
+def _merge(first, second):
+    """Два сообщения пользователя подряд (ответ между ними — ошибка или пустой): одно — тексты через
+    пустую строку, картинки — последние MAX_IMAGES. Шаблоны Gemma требуют чередования ролей."""
+    if isinstance(first, str) and isinstance(second, str):
+        return "\n\n".join(t for t in (first, second) if t)
+    parts = [p for c in (first, second) for p in ([{"type": "text", "text": c}] if isinstance(c, str) else c)]
+    text = "\n\n".join(p["text"] for p in parts if p["type"] == "text" and p["text"])
+    return [{"type": "text", "text": text}] + [p for p in parts if p["type"] != "text"][-MAX_IMAGES:]
 
 
 def compose(chat_id: str, upto: str) -> list[dict]:
-    """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`."""
-    user_id = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (chat_id,)).fetchone()["user_id"]
+    """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
+    пользователя подряд сливаются. Синхронно и без файлов (идёт в транзакции хода): картинки —
+    частями с id media, данные — fill_photos после COMMIT."""
     atts = _attachments(chat_id)
     out = []
     for row in _messages(chat_id):
         if row["status"] in ("done", "stopped"):
             if row["role"] == "user":
-                out.append({"role": "user", "content": _content(row["content"], atts.get(row["id"], []), user_id)})
+                content = _content(row["content"], atts.get(row["id"], []))
+                if out and out[-1]["role"] == "user":
+                    out[-1]["content"] = _merge(out[-1]["content"], content)
+                else:
+                    out.append({"role": "user", "content": content})
             elif row["content"]:
                 out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
             break
     return out
+
+
+def _read_photos(paths: dict) -> dict:
+    """id media → data: URL; файла (или строки) нет — None. Без базы — для asyncio.to_thread;
+    прочая OSError (шара недоступна) — наружу."""
+    urls = {}
+    for media_id, path in paths.items():
+        try:
+            data = path.read_bytes() if path is not None else None
+        except FileNotFoundError:
+            data = None
+        urls[media_id] = None if data is None else "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    return urls
+
+
+async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[dict]:
+    """Картинки сообщений compose — data: URL; файлы читаются в потоке. Фото, которого нет на
+    шаре, — короткая пометка текстом: иначе каждый следующий ход диалога падал бы."""
+    ids = {p["media_id"] for m in messages if isinstance(m["content"], list) for p in m["content"] if "media_id" in p}
+    if not ids:
+        return messages
+    paths = {}
+    for media_id in ids:
+        try:
+            paths[media_id] = media.path(user_id, media_id)
+        except HTTPException:                        # строки media нет
+            paths[media_id] = None
+    urls = await asyncio.to_thread(_read_photos, paths)
+    for media_id in sorted(m for m in ids if urls[m] is None):
+        log.warning("чат %s: фото %s нет в хранилище — вместо него пометка", chat_id[:8], media_id)
+
+    def part(p):
+        if "media_id" not in p:
+            return p
+        url = urls[p["media_id"]]
+        return {"type": "image_url", "image_url": {"url": url}} if url else {"type": "text", "text": NO_PHOTO}
+
+    return [{**m, "content": [part(p) for p in m["content"]]} if isinstance(m["content"], list) else m
+            for m in messages]
 
 
 def estimate_tokens(messages: list[dict]) -> int:
@@ -340,6 +392,13 @@ async def _cancel(streams: list[StreamTask]) -> None:
             del STREAMS[st.message_id]
 
 
+async def stop_user(user_id: int) -> None:
+    """Стирание истории или удаление учётки: идущие ответы пользователя останавливаются — модель не
+    держит карту ради ответа, который уже некуда сохранить."""
+    chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ?", (user_id,))}
+    await _cancel([st for st in STREAMS.values() if st.chat_id in chats])
+
+
 async def stop_all() -> None:
     """Остановка службы: идущие ответы сохраняются с пометкой о перезапуске."""
     streams = list(STREAMS.values())
@@ -482,7 +541,10 @@ def _free_attachments(user_id: int, ids: list[str]) -> list:
 
 
 def _busy(chat_id: str) -> None:
-    if _chat_streams(chat_id):
+    """Идёт ответ через сервер — его поток или строка `streaming` (поток ещё не запущен: ход читает фото)."""
+    if _chat_streams(chat_id) or state.DB.execute(
+            "SELECT 1 FROM messages WHERE chat_id = ? AND status = 'streaming' AND via = 'server' LIMIT 1",
+            (chat_id,)).fetchone():
         raise HTTPException(409, {"code": "busy", "message": "ответ ещё идёт — дождитесь или остановите"})
 
 
@@ -525,6 +587,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
     try:
+        # ответ прямого подключения, который так и не сохранили (вкладку закрыли), — не вечная загрузка
+        state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
+                         " AND status = 'streaming'", (chat_id,))
         if body.regenerate:
             user_mid = _drop_last_answer(chat_id)
         else:
@@ -545,11 +610,17 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         title = row["title"] or (None if body.regenerate else _title(body.text))
         state.DB.execute("UPDATE chats SET title = ?, updated = ? WHERE id = ?", (title, now, chat_id))
         state.DB.execute("COMMIT")
-    except BaseException as e:
+    except BaseException:
         state.DB.execute("ROLLBACK")
+        raise
+    try:
+        messages = await fill_photos(chat_id, uid, messages)    # файлы — после COMMIT и в потоке
+    except BaseException as e:
+        # строка ответа уже в базе: без итога диалог считался бы занятым (см. _busy)
+        _finish(answer_id, chat_id, STORAGE if isinstance(e, OSError) else "", "error")
         if isinstance(e, OSError):                   # картинка вложения не прочиталась с шары
             log.warning("чат %s: вложение не прочиталось (%s)", chat_id[:8], type(e).__name__)
-            raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
+            raise HTTPException(503, {"code": "storage", "message": STORAGE}) from None
         raise
     log.info("чат %s: ход %s, %s", chat_id[:8], answer_id[:8], via)
     if not conn.proxied:

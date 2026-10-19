@@ -49,6 +49,8 @@ BODY_MAX = VIDEO_UPLOAD + (MAX_BODY - MAX_UPLOAD)
 ACTIVE = ("queued", "in_progress")
 WHERE_ACTIVE = "state IN ('queued', 'in_progress')"
 FORGOTTEN = "шлюз забыл задание"
+RETRYING = "не удалось сохранить файл — повторяю"
+UNSAVED = "не удалось сохранить файл: хранилище недоступно"
 
 
 class VideoIn(BaseModel):
@@ -214,7 +216,9 @@ async def create_video(request: Request):
     uid = request.state.user.id
     conn = _video_connection(uid)
     try:
-        fields, upload = _decode(await images._body(request, BODY_MAX), request.headers.get("content-type", ""))
+        # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
+        fields, upload = await asyncio.to_thread(_decode, await images._body(request, BODY_MAX),
+                                                 request.headers.get("content-type", ""))
         source_id = fields.pop("source_media_id", None)
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
@@ -257,6 +261,9 @@ async def create_video(request: Request):
         raise failure
     status = answer.get("status")
     video_id, now = uuid.uuid4().hex, clock.NOW()
+    if not media.alive(uid, source_id):           # фото удалили, пока шлюз принимал ролик
+        await _drop_quietly(conn, answer["id"], video_id)
+        raise HTTPException(404, media.GONE)
     state.DB.execute(
         "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source, seconds,"
         " quality, smooth, seed, state, progress, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -359,6 +366,11 @@ def _failure_words(body: dict) -> str:
     return f"ролик не получился: {str(text)[:300]}" if text else "ролик не получился"
 
 
+def _forgotten(row) -> str:
+    """Шлюз ролика не знает: забыл сам — или готовый ролик не лёг на шару, пока шлюз его держал."""
+    return UNSAVED if row["detail"] == RETRYING else FORGOTTEN
+
+
 async def _fetch(row, conn: Connection, seed: "int | None") -> None:
     """Готовый mp4 — потоком со шлюза на шару, затем снять у шлюза и пометить готовым."""
     uid, gateway_id = row["user_id"], row["gateway_id"]
@@ -369,7 +381,7 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
             if r.status_code != 200:
                 await r.aread()
                 if r.status_code == 404:
-                    await _fail(row, FORGOTTEN)
+                    await _fail(row, _forgotten(row))
                 elif r.status_code in (401, 403):
                     await _fail(row, upstream.gateway_error(r, conn.name))
                 else:
@@ -383,15 +395,17 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
         return
     except media.StorageError:
         log.warning("ролик %s: шара недоступна — следующий проход", row["id"][:8])
+        state.DB.execute(f"UPDATE videos SET detail = ? WHERE id = ? AND {WHERE_ACTIVE}", (RETRYING, row["id"]))
         return
     except httpx.HTTPError as e:
         log.info("ролик %s: mp4 не скачан (%s) — следующий проход", row["id"][:8], type(e).__name__)
         return
-    await _drop_quietly(conn, gateway_id, row["id"])
+    # сначала «готово» в базе, потом снять у шлюза: обрыв между ними не теряет скачанный ролик
     if not _settle(row["id"], "done", "готово", media_id):
         await _forget(uid, media_id)       # пока качали, ролик отменили или удалили
-        return
-    log.info("ролик %s: готов, в истории", row["id"][:8])
+    else:
+        log.info("ролик %s: готов, в истории", row["id"][:8])
+    await _drop_quietly(conn, gateway_id, row["id"])
 
 
 async def _poll(row) -> None:
@@ -408,7 +422,7 @@ async def _poll(row) -> None:
         log.info("ролик %s: шлюз недоступен (%s) — следующий проход", row["id"][:8], type(e).__name__)
         return
     if r.status_code == 404:
-        await _fail(row, FORGOTTEN)
+        await _fail(row, _forgotten(row))
         return
     if r.status_code in (401, 403):
         await _fail(row, upstream.gateway_error(r, conn.name))

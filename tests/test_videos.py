@@ -120,7 +120,11 @@ def test_video_upload_limit_is_twenty_megabytes_and_json_jobs_keep_theirs(studio
     from image_upload import MAX_BODY, MAX_UPLOAD, VIDEO_UPLOAD
     add_gateway(studio)
     padded = photo()["image"][1]
-    padded += b"\0" * (VIDEO_UPLOAD - 1024 - len(padded))     # PNG с хвостом: ~20 МБ, декодируется быстро
+    # PNG с хвостом: ~20 МБ, декодируется быстро; хвост — строками по 1 КиБ: разбор multipart вдвое быстрее
+    # одной сплошной строки (тест укладывается в 1 с)
+    line = b"\0" * 1023 + b"\n"
+    padded += line * ((VIDEO_UPLOAD - 1024 - len(padded)) // len(line))
+    assert len(padded) > VIDEO_UPLOAD - 2048
     assert create_video(studio, files={"image": ("p.png", padded, "image/png")}).status_code == 201
     huge = b"\0" * (VIDEO_UPLOAD + (MAX_BODY - MAX_UPLOAD) + 1)
     r = create_video(studio, files={"image": ("p.png", huge, "image/png")})
@@ -331,6 +335,81 @@ def test_unreachable_share_keeps_the_job_for_the_next_pass(studio, monkeypatch):
     monkeypatch.setattr(media, "save_stream", real)
     poll(studio)
     assert item(studio, v["id"])["state"] == "done"
+
+
+def test_unsaved_clip_says_so_when_the_gateway_forgets_it(studio, monkeypatch):
+    """Шара лежит, пока шлюз не забыл ролик: итог — о хранилище, а не «шлюз забыл» (ревью A2-M3)."""
+    add_gateway(studio)
+    v = create_video(studio).json()
+    studio.gw.video_status = "completed"
+
+    async def broken(*args, **kwargs):
+        raise media.StorageError()
+
+    monkeypatch.setattr(media, "save_stream", broken)
+    for _ in range(2):
+        poll(studio)
+        got = item(studio, v["id"])
+        assert (got["state"], got["detail"]) == ("queued", "не удалось сохранить файл — повторяю")
+    del studio.gw.videos[v_gateway_id(studio)]                         # через 30 мин шлюз забыл ролик
+    poll(studio)
+    got = item(studio, v["id"])
+    assert got["state"] == "failed" and got["detail"].startswith("не удалось сохранить файл")
+
+
+def test_finished_clip_is_kept_before_the_gateway_drops_it(studio):
+    """Сначала строка «готово», потом снятие у шлюза: обрыв между ними не теряет ролик (ревью A2-M2)."""
+    add_gateway(studio)
+    v = create_video(studio).json()
+    seen = []
+
+    async def watch(request):
+        if request.method == "DELETE":
+            seen.append(state.DB.execute("SELECT state FROM videos WHERE id = ?", (v["id"],)).fetchone()["state"])
+        return await studio.gw.builtin(request)
+
+    studio.gw.on[f"/slot/videos/{v_gateway_id(studio)}"] = watch
+    studio.gw.video_status = "completed"
+    poll(studio)
+    assert seen == ["done"] and item(studio, v["id"])["state"] == "done"
+
+
+def test_video_form_is_decoded_off_the_loop(studio, monkeypatch):
+    """Форма ролика — до 20 МиБ: разбор не на цикле событий (ревью A2-M4)."""
+    calls, real = [], videos.decode_form
+
+    def spy(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+            calls.append(True)
+        except RuntimeError:
+            calls.append(False)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(videos, "decode_form", spy)
+    add_gateway(studio)
+    assert create_video(studio).status_code == 201
+    assert calls == [False]
+
+
+def test_a_source_being_deleted_cannot_start_a_video(studio, monkeypatch):
+    """Пока файл фото истории удаляется, ролик с ним — 404; задание у шлюза снимается."""
+    add_gateway(studio)
+    mid = media.save(owner_id(), normalize_image(PNG_REAL), "image/png", "studio-flux-1.png", thumb=True)
+    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, media_id, state, detail, created)"
+                     " VALUES (?, ?, 'generation', 'flux', 'p', '64x48', 1, ?, 'done', 'готово', ?)",
+                     ("a" * 32, owner_id(), mid, T0))
+    real, answers = media._remove, []
+
+    def racing(media_id, rel_path):               # поток удаления: файл ещё на месте
+        answers.append(studio.c.post("/api/videos", data={"prompt": "x"}, files={"source_media_id": (None, mid)}))
+        real(media_id, rel_path)
+
+    monkeypatch.setattr(media, "_remove", racing)
+    assert studio.c.delete(f"/api/images/{'a' * 32}").status_code == 204
+    (r,) = answers
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+    assert studio.c.get("/api/videos").json()["items"] == [] and studio.gw.videos == {}
 
 
 # ---- история и учётки --------------------------------------------------------

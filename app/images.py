@@ -192,6 +192,17 @@ def recover() -> None:
         log.warning("картинки: %d заданий прервано перезапуском", count)
 
 
+def forget_user(user_id: int) -> None:
+    """Стирание истории или удаление учётки: идущие задания пользователя отменяются — картинку,
+    пришедшую после, путь отмены run_job выбросит и освободит карту; невыданные описания забываются."""
+    for job in JOBS.values():
+        if job.user_id != user_id:
+            continue
+        job.description = None
+        if job.state == "working":
+            job.state, job.detail = "cancelling", CANCELLING
+
+
 async def stop() -> None:
     """Остановка службы: идущие задания отменяются и успевают записать итог до закрытия базы."""
     tasks = [j.task for j in JOBS.values() if j.task and not j.task.done()]
@@ -269,8 +280,9 @@ async def create_job(request: Request):
     upload, mask = None, None
     try:
         if _multipart(request):
-            fields, upload, mask = _decode(await _body(request, MAX_BODY + MAX_UPLOAD),
-                                           request.headers["content-type"], with_mask=True)
+            # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
+            fields, upload, mask = await asyncio.to_thread(_decode, await _body(request, MAX_BODY + MAX_UPLOAD),
+                                                           request.headers["content-type"], with_mask=True)
             if fields.get("seed") == "":
                 fields.pop("seed")
             body = JobIn.model_validate(fields)
@@ -303,6 +315,8 @@ async def create_job(request: Request):
             except OSError:
                 log.warning("исходник пользователя %d: файл не удалился", uid)
             raise
+    if source_id is not None and not media.alive(uid, source_id):
+        raise HTTPException(404, media.GONE)     # исходник удалили, пока задание его готовило
     now = clock.NOW()
     job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=body.model, prompt=body.prompt, size=size,
               seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
@@ -336,8 +350,8 @@ async def create_description(request: Request):
     conn = _photo_connection(uid)
     ensure_idle(uid)
     try:
-        fields, upload, _ = _decode(await _body(request, MAX_BODY), request.headers.get("content-type", ""),
-                                    with_mask=False)
+        fields, upload, _ = await asyncio.to_thread(_decode, await _body(request, MAX_BODY),
+                                                    request.headers.get("content-type", ""), with_mask=False)
         image = await _photo(uid, upload, fields.get("source_media_id"))
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
@@ -494,7 +508,16 @@ async def generate(job: Job) -> "tuple[bytes, int | None]":
 async def describe(job: Job):
     # Image slots hold leases for 600 s; release only idle image requests before switching.
     for model in MODELS.values():
-        response = await release(job.conn, model)
+        try:
+            response = await release(job.conn, model)
+        except httpx.HTTPError as e:
+            raise JobError("gateway", f"шлюз недоступен: {type(e).__name__}") from None
+        except upstream.UpstreamRefused:
+            raise _refused(job.conn) from None
+        except Exception:
+            if state.DB.execute("SELECT 1 FROM connections WHERE id = ?", (job.conn.id,)).fetchone() is not None:
+                raise
+            raise JobError("connection", f"подключение «{job.conn.name}» удалено из профиля") from None
         if response.status_code != 200:
             raise JobError("release", "не удалось подготовить карту: " + upstream.gateway_error(response, job.conn.name))
     image = "data:image/png;base64," + base64.b64encode(job.image).decode("ascii")
@@ -581,6 +604,9 @@ async def run_job(job: Job) -> None:
             except media.StorageError as e:
                 state_, detail = "error", str(e)
                 log.warning("задание %s: картинка не сохранена", job.id[:8])
+            except Exception as e:                    # noqa: BLE001 — и учётку удалили посреди записи: не висеть
+                state_, detail = "error", f"сбой службы: {type(e).__name__}"
+                log.warning("задание %s: картинка не сохранена — сбой %s", job.id[:8], type(e).__name__)
         if job.state == "cancelling":                 # и отмена во время записи картинки
             job.description = None
             if job.media_id is not None:
@@ -603,9 +629,12 @@ async def run_job(job: Job) -> None:
         job.state = state_                            # последним: страница берёт картинку по «done»
         if state_ == "done":
             log.info("задание %s: готово", job.id[:8])
-    except asyncio.CancelledError:                    # остановка службы
+    except asyncio.CancelledError:                    # остановка службы — для истории это перезапуск
         job.description = None
-        job.state, job.detail = "cancelled", "отменено остановкой студии"
+        if job.kind == "description":
+            job.state, job.detail = "cancelled", "отменено остановкой студии"
+        else:
+            job.state, job.detail = "error", INTERRUPTED
         raise
     finally:
         job.image = None

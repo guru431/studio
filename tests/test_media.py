@@ -165,6 +165,25 @@ def test_history_wipe_removes_files(studio, env, unlinks):
     assert unlinks and not any(unlinks)                         # ни одного удаления с цикла событий
 
 
+def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypatch):
+    """Тысячи файлов истории — одним вызовом в потоке, не по строке с возвратом на цикл (ревью A2-I2);
+    файл, который не удалился, строки не держит."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    ids = {media.save(uid, png(64, 64), "image/png", f"{n}.png", thumb=True) for n in range(3)}
+    calls, real = [], media.remove_files
+
+    def spy(rows):
+        rows = list(rows)
+        calls.append({media_id for media_id, _ in rows})
+        return real(rows[1:]) + 1                    # первая строка «не удалилась»
+
+    monkeypatch.setattr(media, "remove_files", spy)
+    assert studio.c.delete("/api/history").status_code == 204
+    assert calls == [ids]
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert len(files(env.media_dir)) == 2                       # файл и превью первой строки остались
+
+
 def test_delete_keeps_the_row_when_the_share_fails(studio, env, monkeypatch, unlinks):
     uid = make_user(studio, "owner")
     mid = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
