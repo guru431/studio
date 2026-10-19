@@ -88,3 +88,26 @@ def signin(s, login_name) -> str:
     csrf = s.c.get("/api/me").json()["csrf"]
     s.c.headers[auth.CSRF_HEADER] = csrf
     return csrf
+
+
+def add_connection(s, kind="openai", base_url="https://cloud.test/v1", token="cloud-key", sections=None,
+                   name=None) -> int:
+    """Подключение текущему пользователю через POST /api/connections (без входа — заводит
+    администратора «owner» и входит им). sections=None — все разделы вида."""
+    import auth
+    import connections
+    if auth.CSRF_HEADER not in s.c.headers:
+        make_user(s, "owner", is_admin=True)
+        signin(s, "owner")
+    body = {"name": name or kind, "kind": kind, "base_url": base_url, "token": token,
+            "sections": sorted(sections if sections is not None else connections.KINDS[kind])}
+    r = s.c.post("/api/connections", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def add_gateway(s) -> int:
+    """Шлюз srvllm со всеми разделами и ключом FakeGateway.TOKEN."""
+    from fakes import FakeGateway
+    return add_connection(s, kind="srvllm", base_url="http://10.77.1.15:4000", token=FakeGateway.TOKEN,
+                          name="srvllm")

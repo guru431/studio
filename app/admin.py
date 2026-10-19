@@ -1,4 +1,4 @@
-"""Панель администратора (спека, раздел 7.10): пользователи и список разрешённых адресов.
+"""Панель администратора (спека, раздел 7.10): пользователи, их подключения и список разрешённых адресов.
 
 Чужую историю панель не отдаёт: ответы о пользователях — только поля учётки и число подключений.
 Журнал — только id: логины, имена и пароли туда не пишутся.
@@ -15,13 +15,14 @@ from pydantic import BaseModel, Field
 
 import auth
 import clock
+import connections
 import history
 import profile
 import security
 import state
+import upstream
 
 NAME_MAX = 64
-ENTRY_RE = r"[a-z0-9.-]+:([0-9]{1,5})"
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
@@ -43,15 +44,6 @@ class UserPatch(BaseModel):
 
 class Allowlist(BaseModel):
     entries: list[str]
-
-
-def parse_entry(text: str) -> str:
-    """Заглушка до upstream.parse_entry (задача 4): `host:port` в нижнем регистре, порт 1–65535."""
-    entry = text.strip().lower()
-    m = re.fullmatch(ENTRY_RE, entry)
-    if not m or not 1 <= int(m.group(1)) <= 65535:
-        raise ValueError(text)
-    return entry
 
 
 def _user_out(uid: int) -> dict:
@@ -143,13 +135,9 @@ async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     return Response(status_code=204)
 
 
-def _allowlist() -> list[str]:
-    return json.loads(state.DB.execute("SELECT value FROM settings WHERE key = 'allowlist'").fetchone()["value"])
-
-
 @router.get("/allowlist")
 async def get_allowlist():
-    return {"entries": _allowlist()}
+    return {"entries": upstream.allowlist()}
 
 
 @router.put("/allowlist")
@@ -157,7 +145,7 @@ async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require
     entries = []
     for text in body.entries:
         try:
-            entry = parse_entry(text)
+            entry = upstream.parse_entry(text)
         except ValueError:
             raise HTTPException(422, {"code": "entry", "message": f"«{text[:100]}» — не хост:порт"}) from None
         if entry not in entries:
@@ -165,4 +153,37 @@ async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require
     state.DB.execute("INSERT INTO settings(key, value) VALUES ('allowlist', ?)"
                      " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(entries),))
     log.info("администратор %d: список разрешённых адресов — %d записей", admin.id, len(entries))
-    return {"entries": _allowlist()}
+    return {"entries": upstream.allowlist()}
+
+
+# ---- подключения пользователя: те же действия, что в профиле, но для `uid` ------
+
+@router.get("/users/{uid}/connections")
+async def list_user_connections(uid: int):
+    _user_out(uid)
+    return {"items": [connections.out(c) for c in connections.list_for(uid)]}
+
+
+@router.post("/users/{uid}/connections", status_code=201)
+async def create_user_connection(uid: int, body: connections.ConnIn, admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    conn = connections.create(uid, body)
+    log.info("администратор %d: пользователю %d добавлено подключение %d", admin.id, uid, conn["id"])
+    return conn
+
+
+@router.patch("/users/{uid}/connections/{conn_id}")
+async def patch_user_connection(uid: int, conn_id: int, body: connections.ConnPatch,
+                                admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    conn = connections.patch(uid, conn_id, body)
+    log.info("администратор %d: у пользователя %d изменено подключение %d", admin.id, uid, conn_id)
+    return conn
+
+
+@router.delete("/users/{uid}/connections/{conn_id}", status_code=204)
+async def delete_user_connection(uid: int, conn_id: int, admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    connections.delete(uid, conn_id)
+    log.info("администратор %d: у пользователя %d удалено подключение %d", admin.id, uid, conn_id)
+    return Response(status_code=204)

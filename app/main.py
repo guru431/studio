@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import admin
 import auth
 import config
+import connections
 import db
 import profile
 import state
@@ -41,6 +42,7 @@ app = FastAPI(title="studio", lifespan=lifespan, docs_url=None, redoc_url=None, 
 app.middleware("http")(auth.guard)
 app.include_router(auth.router)
 app.include_router(profile.router)
+app.include_router(connections.router)
 app.include_router(admin.router)
 
 

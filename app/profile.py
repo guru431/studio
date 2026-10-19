@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import auth
+import connections
 import history
 import security
 import state
@@ -31,11 +32,6 @@ class PasswordChange(BaseModel):
     new: str = Field(max_length=PASSWORD_MAX)
 
 
-def capabilities(user_id: int) -> dict[str, bool]:
-    """Разделы, для которых у пользователя есть подключение; до подключений (задача 4) — ни одного."""
-    return {"chat": False, "photo": False, "video": False}
-
-
 def check_password(password: str) -> None:
     if len(password) < security.PASSWORD_MIN:
         raise HTTPException(422, {"code": "short", "message": f"пароль короче {security.PASSWORD_MIN} символов"})
@@ -48,7 +44,7 @@ def _me(request: Request) -> dict:
                            " FROM users WHERE id = ?", (uid,)).fetchone()
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "theme": row["theme"], "default_connection_id": row["default_connection_id"],
-            "default_model": row["default_model"], "csrf": request.state.csrf, "capabilities": capabilities(uid)}
+            "default_model": row["default_model"], "csrf": request.state.csrf, "capabilities": connections.capabilities(uid)}
 
 
 @router.get("/me")
