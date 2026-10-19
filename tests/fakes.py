@@ -3,8 +3,8 @@
 Встроенное поведение — API картинок шлюза srvllm (перенос `Gateway` из tests/test_studio.py с путями
 `/slot/...`): генерация и правка отдают настоящий PNG (`PNG_REAL`, Pillow — чтобы строилось превью),
 release моделей, описание gemma-abl; API роликов `/slot/videos` (перенос фикстуры `videos` из
-tests/test_studio.py): создание, статус, `content`, удаление. Чужой ключ — 401: верен только ключ
-подключения `TOKEN`.
+tests/test_studio.py): создание, статус, `content`, удаление; чат — `/v1/models` и
+`/v1/chat/completions` (поток OpenAI SSE). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
 """
 import asyncio
 import base64
@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 from PIL import Image
 
+import clock
 from image_upload import VIDEO_FIELDS, VIDEO_UPLOAD, decode_form
 
 TOKEN = "owner-images-test-key"
@@ -69,6 +70,13 @@ class FakeGateway:
         self.video_extra = {}            # прочие поля ответа статуса (progress, detail, error, prompt…)
         self.video_content = MP4
         self.video_deleted = []          # id роликов, снятых DELETE
+        self.models = [{"id": "local-gemma-abl", "context_length": 131072}, {"id": "gemma4-abl"}]
+        self.chat_requests = []          # тела запросов /v1/chat/completions
+        self.chat_auth = []              # их заголовки авторизации
+        self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели
+        self.chat_error = None           # (код, тело) вместо ответа
+        self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
+        self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -93,7 +101,43 @@ class FakeGateway:
             return httpx.Response(200, json=self.description_reply)
         if path == "/slot/videos" or path.startswith("/slot/videos/"):
             return self._video(request)
+        if path == "/v1/models" and request.method == "GET":
+            return httpx.Response(200, json={"object": "list", "data": self.models})
+        if path == "/v1/chat/completions" and request.method == "POST":
+            return self._chat(request)
         return httpx.Response(404)
+
+    def _chat(self, request: httpx.Request) -> httpx.Response:
+        """OpenAI chat completions; `stream: true` — строки `data:` SSE и `data: [DONE]`."""
+        body = json.loads(request.content)
+        self.chat_requests.append(body)
+        self.chat_auth.append(request.headers.get("authorization"))
+        if self.chat_error is not None:
+            code, error = self.chat_error
+            return httpx.Response(code, json=error)
+        if not body.get("stream"):
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
+                                                                      "content": "".join(self.chat_reply)},
+                                                          "finish_reason": "stop"}]})
+
+        async def chunks():
+            # Молчание считается по часам студии, сам шлюз их не двигает: дальше его ведёт только
+            # тот, кто ждёт (пинги чата) — без гонки двух пауз за одни часы. Предел проходов: без
+            # пингов тест падает на счёте, а не висит до таймаута.
+            start = clock.NOW()
+            for _ in range(1000):
+                if clock.NOW() - start >= self.chat_delay:
+                    break
+                await asyncio.sleep(0.001)
+            for i, piece in enumerate(self.chat_reply):
+                delta = {"choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]}
+                yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n".encode()
+                while i == 0 and self.chat_hold:
+                    await asyncio.sleep(0.001)
+            yield b'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=chunks())
 
     def _video(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method

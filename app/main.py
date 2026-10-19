@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import admin
 import auth
+import chat
 import config
 import connections
 import db
@@ -35,6 +36,7 @@ async def lifespan(_app):
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
     images.recover()
+    chat.recover()
     state.HTTP = state.make_http()
     watcher = videos.start_watcher() if state.WATCHER else None
     try:
@@ -44,6 +46,7 @@ async def lifespan(_app):
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
         await images.stop()
+        await chat.stop_all()
         await state.HTTP.aclose()
         state.DB.close()
 
@@ -57,6 +60,7 @@ app.include_router(admin.router)
 app.include_router(media.router)
 app.include_router(images.router)
 app.include_router(videos.router)
+app.include_router(chat.router)
 
 
 @app.exception_handler(RequestValidationError)

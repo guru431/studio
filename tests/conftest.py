@@ -37,6 +37,7 @@ def studio(env, monkeypatch):
     from fastapi.testclient import TestClient
 
     import auth
+    import chat
     import clock
     import images
     import main
@@ -61,10 +62,12 @@ def studio(env, monkeypatch):
     monkeypatch.setattr(state, "WATCHER", False)
     auth.FAILS.clear()
     images.JOBS.clear()
+    chat.STREAMS.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
     images.JOBS.clear()
+    chat.STREAMS.clear()
 
 
 def make_user(s, login, password="password-123", is_admin=False) -> int:
