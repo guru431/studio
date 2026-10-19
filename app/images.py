@@ -610,11 +610,13 @@ async def run_job(job: Job) -> None:
         if job.state == "cancelling":                 # и отмена во время записи картинки
             job.description = None
             if job.media_id is not None:
+                # ссылка снимается до await: остановка службы посреди удаления не оставит строку
+                # images, указывающую на файл, которого уже нет
+                mid, job.media_id = job.media_id, None
                 try:
-                    await media.delete_async(job.user_id, job.media_id)
+                    await media.delete_async(job.user_id, mid)
                 except OSError:
                     log.warning("задание %s: файл отменённой картинки не удалился", job.id[:8])
-                job.media_id = None
             # запрос кончился (картинкой или ошибкой) — картинку не выдаём, карту освобождаем
             job.detail = "запрос завершён — освобождаю карту"
             _store(job)

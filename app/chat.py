@@ -392,10 +392,21 @@ async def _cancel(streams: list[StreamTask]) -> None:
             del STREAMS[st.message_id]
 
 
+def _stop_unstarted(chat_ids: set[str]) -> None:
+    """Ответы через сервер, чей поток ещё не запущен (ход читает фото), — сразу «остановлен»:
+    дочитав фото, ход модель уже не зовёт (см. create_turn)."""
+    for chat_id in chat_ids:
+        for row in state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND via = 'server'"
+                                    " AND status = 'streaming'", (chat_id,)).fetchall():
+            if row["id"] not in STREAMS:
+                _finish(row["id"], chat_id, "", "stopped")
+
+
 async def stop_user(user_id: int) -> None:
     """Стирание истории или удаление учётки: идущие ответы пользователя останавливаются — модель не
     держит карту ради ответа, который уже некуда сохранить."""
     chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ?", (user_id,))}
+    _stop_unstarted(chats)
     await _cancel([st for st in STREAMS.values() if st.chat_id in chats])
 
 
@@ -425,6 +436,12 @@ async def _events(st: StreamTask, user_message_id: str):
         else:
             yield _sse("error", {"message": data})
             return
+
+
+async def _ended(user_message_id: str, answer_id: str, status: str):
+    """Поток SSE хода, чей ответ кончился до запроса к модели (остановлен, пока ход читал фото)."""
+    yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": answer_id})
+    yield _sse("done", {"status": status})
 
 
 # ---- API: диалоги --------------------------------------------------------------
@@ -622,6 +639,14 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             log.warning("чат %s: вложение не прочиталось (%s)", chat_id[:8], type(e).__name__)
             raise HTTPException(503, {"code": "storage", "message": STORAGE}) from None
         raise
+    # пока читались фото, ответ могли остановить, а диалог — удалить (и стиранием истории)
+    answer = state.DB.execute("SELECT status FROM messages WHERE id = ?", (answer_id,)).fetchone()
+    if answer is None:
+        raise _gone()
+    if answer["status"] != "streaming":
+        log.info("чат %s: ход %s остановлен до запроса к модели", chat_id[:8], answer_id[:8])
+        return StreamingResponse(_ended(user_mid, answer_id, answer["status"]), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
     log.info("чат %s: ход %s, %s", chat_id[:8], answer_id[:8], via)
     if not conn.proxied:
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
@@ -651,5 +676,6 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
 @router.post("/chats/{chat_id}/stop", status_code=204)
 async def stop_turn(chat_id: str, request: Request):
     _chat_row(request.state.user.id, chat_id)
+    _stop_unstarted({chat_id})
     await _cancel(_chat_streams(chat_id))
     return Response(status_code=204)

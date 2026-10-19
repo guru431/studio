@@ -347,6 +347,44 @@ def test_unreadable_share_marks_the_answer(studio, env, monkeypatch):
     assert not chat.STREAMS
 
 
+def _during_photo_read(studio, monkeypatch, action):
+    """Ход с фото, а пока он читает фото в потоке (поток ответа ещё не запущен) — action(cid)."""
+    add_gateway(studio); cid = new_chat(studio)
+    pic = attach(studio, "photo.jpg", png(), "image/jpeg")
+    real, answers = chat._read_photos, []
+
+    def racing(paths):                               # поток чтения фото: цикл свободен
+        answers.append(action(cid).status_code)
+        return real(paths)
+
+    monkeypatch.setattr(chat, "_read_photos", racing)
+    return cid, turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]), answers
+
+
+def test_stop_while_the_turn_reads_its_photos_stops_the_answer(studio, monkeypatch):
+    """«Стоп», пока ход читает фото: ответ остановлен, модель не зовётся (ревью N2)."""
+    cid, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.post(f"/api/chats/{cid}/stop"))
+    assert answers == [204]
+    events = sse(r)
+    assert [e for e, _ in events] == ["turn", "done"] and events[-1] == ("done", {"status": "stopped"})
+    assert messages(studio, cid)[-1]["status"] == "stopped"
+    assert not studio.gw.chat_requests and not chat.STREAMS
+
+
+def test_chat_deleted_while_the_turn_reads_its_photos_gets_no_model_call(studio, monkeypatch):
+    """Диалог удалили, пока ход читает фото: модели ход уже не зовёт (ревью N2)."""
+    _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.delete(f"/api/chats/{cid}"))
+    assert answers == [204] and r.status_code == 404
+    assert not studio.gw.chat_requests and not chat.STREAMS
+
+
+def test_history_wipe_while_the_turn_reads_its_photos_gets_no_model_call(studio, monkeypatch):
+    """Стирание истории, пока ход читает фото: модели ход уже не зовёт (ревью N2)."""
+    _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.delete("/api/history"))
+    assert answers == [204] and r.status_code == 404
+    assert not studio.gw.chat_requests and not chat.STREAMS
+
+
 def _row(cid, mid, role, content, status, created):
     state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
                      " VALUES (?, ?, ?, ?, ?, 'server', 'm', ?)", (mid, cid, role, content, status, created))

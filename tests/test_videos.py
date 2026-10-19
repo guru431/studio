@@ -7,6 +7,7 @@ import io
 import json
 import logging
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -481,6 +482,34 @@ def test_history_wipe_cancels_running_videos_at_the_gateway(studio, env):
     assert studio.c.delete("/api/history").status_code == 204
     assert studio.gw.video_deleted == [v_gateway_id(studio)]
     assert studio.c.get("/api/videos").json()["items"] == [] and share_files(env) == []
+
+
+def test_clip_landing_during_the_wipe_leaves_no_orphan(studio, env, monkeypatch):
+    """Наблюдатель дописал ролик, пока стирание удаляет файлы (шлюз дочитывал уже идущую выдачу
+    после DELETE): mp4 не остаётся на шаре без строки (ревью N1)."""
+    add_gateway(studio)
+    create_video(studio)
+    gid = v_gateway_id(studio)
+    studio.gw.video_status = "completed"
+
+    async def keep(request):                      # DELETE шлюза не обрывает уже идущую выдачу
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"id": gid, "deleted": True})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on[f"/slot/videos/{gid}"] = keep
+    real, polls = media.remove_files, []
+
+    def racing(rows):                             # поток стирания: цикл свободен
+        if not polls:
+            polls.append(poll(studio))
+        return real(rows)
+
+    monkeypatch.setattr(media, "remove_files", racing)
+    assert studio.c.delete("/api/history").status_code == 204
+    assert polls and media_rows() == 0
+    assert state.DB.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 0
+    assert share_files(env) == []
 
 
 def test_feed_pages_by_created(studio):

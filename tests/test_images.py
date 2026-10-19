@@ -565,6 +565,29 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
     assert media_rows() == 0 and share_files(env) == []
 
 
+def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypatch):
+    """Задание, начатое из другой вкладки, пока стирание удаляет файлы (forget_user уже прошёл):
+    его картинка не остаётся на шаре без строки images (ревью N1)."""
+    add_gateway(studio)
+    studio.gw.hold = True
+    real, jobs = media.remove_files, []
+
+    def racing(rows):                             # поток стирания: цикл свободен
+        if not jobs:
+            jobs.append(start(studio).json()["id"])
+            wait_for(lambda: studio.gw.generations)
+        return real(rows)
+
+    monkeypatch.setattr(media, "remove_files", racing)
+    media.save(state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0],
+               photo(), "image/png", "old.png", thumb=True)
+    assert studio.c.delete("/api/history").status_code == 204
+    studio.gw.hold = False
+    job = wait_job(jobs[0])
+    assert job.state == "cancelled" and job.media_id is None
+    assert media_rows() == 0 and share_files(env) == []
+
+
 def test_deleting_a_user_during_their_generation_ends_the_job(studio, env):
     """Удаление учётки посреди генерации: ни IntegrityError, ни задания, вечно занятого (ревью A2-I1)."""
     make_user(studio, "owner", is_admin=True)
@@ -613,6 +636,43 @@ def test_cancel_during_the_save_discards_the_saved_image(studio, env, monkeypatc
     assert result["state"] == "cancelled" and result["media_id"] is None
     assert media_rows() == 0 and share_files(env) == []
     assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]
+
+
+def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env, monkeypatch):
+    """Остановка службы, пока путь отмены удаляет картинку: строка images не ссылается на файл,
+    которого уже нет (ревью N3)."""
+    writing, go_write = threading.Event(), threading.Event()
+    removing, go_remove = threading.Event(), threading.Event()
+    real_write, real_remove, real_stop = media.write, media._remove, images.stop
+
+    def slow_write(*args, **kwargs):
+        writing.set()
+        go_write.wait(2)
+        return real_write(*args, **kwargs)
+
+    def slow_remove(media_id, rel_path):          # файл удаляется, а строка media — уже после потока
+        real_remove(media_id, rel_path)
+        removing.set()
+        go_remove.wait(2)
+
+    async def stop_then_release():
+        await real_stop()
+        go_remove.set()
+
+    monkeypatch.setattr(media, "write", slow_write)
+    monkeypatch.setattr(media, "_remove", slow_remove)
+    monkeypatch.setattr(images, "stop", stop_then_release)
+    add_gateway(studio)
+    job_id = start(studio, model="flux").json()["id"]
+    assert writing.wait(2)
+    assert studio.c.post(f"/api/images/{job_id}/cancel").json() == {"state": "cancelling"}
+    go_write.set()
+    assert removing.wait(2)
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    body = studio.c.get(f"/api/images/{job_id}").json()
+    assert (body["state"], body["detail"]) == ("error", "прервано перезапуском студии")
+    assert body["media_id"] is None and share_files(env) == []
 
 
 def test_graceful_restart_marks_a_running_image_interrupted(studio):

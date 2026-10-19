@@ -184,6 +184,26 @@ def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypa
     assert len(files(env.media_dir)) == 2                       # файл и превью первой строки остались
 
 
+def test_attachment_uploaded_during_the_wipe_leaves_no_orphan(studio, env, monkeypatch):
+    """Вложение, загруженное из другой вкладки, пока стирание удаляет файлы: ни строки без файла,
+    ни файла без строки (ревью N1)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    media.save(uid, png(20, 10), "image/png", "old.png", thumb=True)
+    real, uploads = media.remove_files, []
+
+    def racing(rows):                                # поток стирания: цикл свободен
+        if not uploads:
+            uploads.append(studio.c.post("/api/attachments",
+                                         files={"file": ("p.png", png(20, 10), "image/png")}).status_code)
+        return real(rows)
+
+    monkeypatch.setattr(media, "remove_files", racing)
+    assert studio.c.delete("/api/history").status_code == 204
+    assert uploads == [201]
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert files(env.media_dir) == []
+
+
 def test_delete_keeps_the_row_when_the_share_fails(studio, env, monkeypatch, unlinks):
     uid = make_user(studio, "owner")
     mid = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
