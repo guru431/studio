@@ -124,10 +124,11 @@ def test_photo_without_gateway_shows_the_hint(browser, live, width):
         ("eval", "link", "document.querySelector('#view .hint a').getAttribute('href')"),
         ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
         ("click", "#view .hint a"),
-        ("wait", "location.hash === '#/profile'")], width=width, mobile=width == 390)
+        ("wait", "location.hash === '#/settings/photo' && document.querySelector('.section-panel[data-section=photo]')")],
+        width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert "Чтобы генерировать фото, добавьте в профиле подключение к шлюзу srvllm" in r["values"]["text"]
-    assert r["values"]["link"] == "#/profile" and r["values"]["current"] == "photo"
+    assert "Чтобы генерировать фото, выберите модель в настройках раздела «Фото»" in r["values"]["text"]
+    assert r["values"]["link"] == "#/settings/photo" and r["values"]["current"] == "photo"
     assert not problems(r), problems(r)
 
 
@@ -143,7 +144,7 @@ def test_avatar_menu_and_logout(browser, live, width):
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Профиль", "Панель", "Выход"] and r["values"]["inside"]
+    assert r["values"]["items"] == ["Настройки", "Панель", "Выход"] and r["values"]["inside"]
     assert not problems(r), problems(r)
 
 
@@ -255,7 +256,7 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
         ("eval", "items", "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.hidden).map(e => e.textContent.trim())"),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Профиль", "Выход"]
+    assert r["values"]["items"] == ["Настройки", "Выход"]
 
 
 # ---- профиль и панель ----------------------------------------------------------
@@ -318,81 +319,75 @@ def known_refusals(log, *codes):
     return [e for e in log if not any(f"status of {c}" in e for c in codes)]
 
 
-def test_profile_adds_a_cloud_connection(browser, live):
+def test_settings_add_a_cloud_address_to_chat(browser, live):
     live.add_user("cloudy")
-    dialog = "#conn-dialog"
-    r = browser.drive(live.url + "/", [*signin("cloudy"), ("wait", READY), *go("profile"),
-        ("wait", "document.querySelector('#conn-add')"),
-        ("click", "#conn-add"), ("wait", is_open(dialog)),
+    dialog, panel = "#link-dialog", ".section-panel[data-section=chat]"
+    r = browser.drive(live.url + "/", [*signin("cloudy"), ("wait", READY), *go("settings/chat"),
+        ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open(dialog)),
         ("eval", "kinds", f"[...document.querySelectorAll('{dialog} [name=kind] option')].map(o => o.textContent)"),
         ("eval", "placeholder", f"document.querySelector('{dialog} [name=base_url]').placeholder"),
         ("type", f"{dialog} [name=name]", "Облако"),
         ("type", f"{dialog} [name=base_url]", live.cloud.base_url),
         ("type", f"{dialog} [name=token]", live.cloud.TOKEN),
-        ("eval", "sections", f"[...document.querySelectorAll('{dialog} [name=section]')].map(c => c.value + ':' + c.checked)"),
-        ("click", "#conn-save"),
-        ("wait", f"!{is_open(dialog)}"),
-        ("wait", "document.querySelector('.conn')"),
-        ("eval", "conn", "(() => { const c = document.querySelector('.conn');"
-                         " return [c.querySelector('.conn-name').textContent, c.querySelector('.conn-url').textContent,"
-                         " c.querySelector('.conn-tag').textContent, c.querySelector('.conn-sections').textContent]; })()"),
-        ("eval", "chat", f"(async () => {API}.me.capabilities.chat)()"),
-        ("eval", "overflow", f"!({NO_OVERFLOW})"),
-        # чат по умолчанию: модели прямого подключения браузер берёт у сервиса сам
-        choose_first("#default-conn"),
-        ("wait", "[...document.querySelectorAll('#default-models option')].some(o => o.value === 'cloud-chat')"),
-        ("type", "#default-model", "cloud-chat"),
-        ("click", "#default-save"), ("wait", "document.querySelector('#default-status').textContent === 'Сохранено'"),
+        ("click", "#link-save"),
+        ("wait", f"!{is_open(dialog)} && document.querySelector('{panel} .link')"),
+        ("eval", "link", f"(() => {{ const c = document.querySelector('{panel} .link');"
+                         " return [c.querySelector('.link-name').textContent, c.querySelector('.link-url').textContent,"
+                         " c.querySelector('.link-hint .tag').textContent]; })()"),
+        ("eval", "chatBefore", f"(async () => {API}.me.capabilities.chat)()"),
+        # модели прямого подключения браузер берёт у сервиса сам; отмеченная — сразу по умолчанию
+        ("click", f"{panel} .link-refresh"),
+        ("wait", f"document.querySelector('{panel} input.model-check[value=cloud-chat]')"),
+        ("click", f"{panel} input.model-check[value=cloud-chat]"),
+        ("wait", f"document.querySelector('{panel} input.model-default[value=cloud-chat]')?.checked"),
         ("eval", "default", f"(async () => {{ const me = await {API}.loadMe();"
-                            " return [me.default_connection_id !== null, me.default_model]; })()"),
+                            " return [me.default_connection_id !== null, me.default_model, me.capabilities.chat]; })()"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
         # новый адрес без нового токена — отказ словами под токеном
-        ("click", ".conn .conn-edit"), ("wait", is_open(dialog)),
-        ("eval", "tokenEmpty", f"document.querySelector('{dialog} [name=token]').value === ''"
-                               f" && document.querySelector('{dialog} [name=token]').type === 'password'"),
-        set_value(f"{dialog} [name=base_url]", live.cloud.url + "/v2"),
+        ("click", f"{panel} .link-menu"), ("click", f"{panel} .link-edit"), ("wait", is_open("#conn-dialog")),
+        ("eval", "tokenEmpty", "document.querySelector('#conn-dialog [name=token]').value === ''"
+                               " && document.querySelector('#conn-dialog [name=token]').type === 'password'"),
+        set_value("#conn-dialog [name=base_url]", live.cloud.url + "/v2"),
         ("click", "#conn-save"),
-        ("wait", f"document.querySelector('{dialog} .error[data-for=token]').textContent.length > 0"),
-        ("eval", "tokenError", f"document.querySelector('{dialog} .error[data-for=token]').textContent"),
-        ("press", "Escape"), ("wait", f"!{is_open(dialog)}")],
+        ("wait", "document.querySelector('#conn-dialog .error[data-for=token]').textContent.length > 0"),
+        ("eval", "tokenError", "document.querySelector('#conn-dialog .error[data-for=token]').textContent"),
+        ("press", "Escape"), ("wait", f"!{is_open('#conn-dialog')}")],
         width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["kinds"] == ["OpenAI-совместимый", "Шлюз srvllm"]
     assert "/v1" in v["placeholder"]
-    assert v["sections"] == ["chat:true"]
-    assert v["conn"] == ["Облако", live.cloud.base_url, "из браузера", "Чат"]
-    assert v["chat"] is True and not v["overflow"]
-    assert v["default"] == [True, "cloud-chat"]
+    assert v["link"] == ["Облако", live.cloud.base_url, "из браузера"] and v["chatBefore"] is False
+    assert v["default"] == [True, "cloud-chat", True] and not v["overflow"]
     assert v["tokenEmpty"] and v["tokenError"] == "Новый адрес — введите токен заново"
     assert not known_refusals(problems(r), 422), problems(r)
 
 
-def test_profile_lists_gateway_models_and_changes_the_password(browser, live):
+def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
     live.add_user("pwuser")
     with socket.socket() as s:                 # порт, который никто не слушает
         s.bind(("127.0.0.1", 0))
         deaf = f"http://127.0.0.1:{s.getsockname()[1]}/v1"
+    panel = ".section-panel[data-section=chat]"
     r = browser.drive(live.url + "/", [*signin("pwuser"), ("wait", READY),
         ("eval", "added", f"""(async () => {{ const m = {API};
           await m.api('POST', '/api/connections', {{ name: 'Шлюз', kind: 'srvllm', base_url: {GATEWAY_URL!r},
             token: {live.gw.TOKEN!r}, sections: ['chat', 'photo'] }});
-          await m.loadMe(); return true; }})()"""),
-        *go("profile"), ("wait", "document.querySelector('.conn')"),
-        ("eval", "conn", "[document.querySelector('.conn-tag').textContent, document.querySelector('.conn-sections').textContent]"),
-        choose_first("#default-conn"),
-        ("wait", "[...document.querySelectorAll('#default-models option')].some(o => o.value === 'local-gemma-abl')"),
-        # прямой сервис, до которого браузер не достучался (fetch бросает TypeError, как при CORS)
-        ("eval", "deaf", f"""(async () => {{ const m = {API};
           await m.api('POST', '/api/connections', {{ name: 'Глухой', kind: 'openai',
             base_url: {deaf!r}, token: 'deaf-key-123', sections: ['chat'] }});
-          return true; }})()"""),
-        *go("chat"), ("wait", "location.hash === '#/chat'"), *go("profile"),
-        ("wait", "document.querySelectorAll('.conn').length === 2"),
-        ("eval", "pick", "(() => { const e = document.querySelector('#default-conn');"
-                         " e.value = [...e.options].find(o => o.textContent === 'Глухой').value;"
-                         " e.dispatchEvent(new Event('change')); })()"),
-        ("wait", "document.querySelector('#default-note').textContent.includes('CORS')"),
-        ("eval", "cors", "document.querySelector('#default-note').textContent"),
+          await m.loadMe(); return true; }})()"""),
+        *go("settings/chat"), ("wait", f"document.querySelectorAll('{panel} .link').length === 2"),
+        ("eval", "tag", f"document.querySelector('{panel} .link .link-hint .tag').textContent"),
+        ("click", f"{panel} .link:first-child .link-refresh"),
+        ("wait", f"document.querySelector('{panel} .link:first-child input.model-check[value=gemma4-abl]')"),
+        ("eval", "models", f"[...document.querySelectorAll('{panel} .link:first-child input.model-check')]"
+                           ".map(c => c.value + ':' + c.checked)"),
+        # прямой сервис, до которого браузер не достучался (fetch бросает TypeError, как при CORS)
+        ("click", f"{panel} .link:last-child .link-refresh"),
+        ("wait", "document.querySelector('.section-status').textContent.includes('CORS')"),
+        ("eval", "cors", "document.querySelector('.section-status').textContent"),
+        *go("settings/other"), ("wait", "document.querySelector('#pw-current')"),
         ("type", "#pw-current", "wrong-password"), ("type", "#pw-new", "new-password-1"),
         ("type", "#pw-repeat", "new-password-2"), ("click", "#password-save"),
         ("wait", "document.querySelector('#password-status').textContent.length > 0"),
@@ -405,11 +400,48 @@ def test_profile_lists_gateway_models_and_changes_the_password(browser, live):
         width=1280)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["conn"] == ["через сервер", "Чат, Фото"]
+    assert v["tag"] == "через сервер"
+    assert v["models"] == ["local-gemma-abl:true", "gemma4-abl:false"]
     assert v["cors"] == "Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер"
     assert v["mismatch"] == "Пароли не совпадают" and v["cleared"] == ""
     refused = [e for e in known_refusals(problems(r), 403) if "ERR_CONNECTION_REFUSED" not in e]
     assert not refused, problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_settings_photo_unchecks_flux(browser, live, width):
+    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в разделе остаётся Lustify."""
+    login = f"sect{width}"
+    live.add_user(login)
+    panel = ".section-panel[data-section=photo]"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("settings/photo"), ("wait", f"document.querySelector('{panel} .link')"),
+        ("click", f"{panel} .link-refresh"),
+        ("wait", f"document.querySelectorAll('{panel} input.model-check').length === 2"
+                 " && document.querySelector('.section-status').textContent.startsWith('Найдено')"),
+        ("click", f"{panel} input.model-check[value=flux]"),
+        ("wait", f"!document.querySelector('{panel} input.model-check[value=flux]').checked"
+                 f" && document.querySelector('{panel} input.model-check[value=flux]')"), ("idle",),
+        ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/sections')).sections[1].links[0].models)()"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    assert r["values"]["saved"] == ["lustify"] and not r["values"]["overflow"]
+    assert not problems(r), problems(r)
+
+
+def test_settings_menu_and_old_profile_route(browser, live):
+    live.add_user("menuer")
+    r = browser.drive(live.url + "/", [*signin("menuer"), ("wait", READY),
+        ("click", "#avatar"), ("eval", "item", "document.querySelector('#menu a[href=\"#/settings\"]').textContent"),
+        ("press", "Escape"),
+        ("eval", "go", "location.hash = '#/profile'"), ("wait", "location.hash.startsWith('#/settings')"),
+        ("wait", "document.querySelector('.settings-nav a')"),
+        ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => a.dataset.section)")])
+    assert not r.get("failed"), r
+    assert r["values"]["item"] == "Настройки"
+    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "dictation", "other"]
+    assert not problems(r), problems(r)
 
 
 def test_admin_creates_a_friend_who_sees_no_owner_history(browser, live):
@@ -463,22 +495,22 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("eval", "short", "document.querySelector('#user-dialog .error[data-for=password]').textContent"),
         ("type", "#user-dialog [name=password]", "-and-long"), ("click", "#user-save"),
         ("wait", f"document.querySelector('{rid}')"),
-        # подключения пользователя — та же форма
+        # подключения пользователя — те же разделы, что в его настройках
         ("click", f"{rid} .user-conns"), ("wait", is_open("#user-conns-dialog")),
-        ("click", "#conn-add"), ("wait", is_open("#conn-dialog")),
-        ("type", "#conn-dialog [name=name]", "Шлюз"),
-        set_value("#conn-dialog [name=kind]", "srvllm"),
-        ("eval", "srvSections", "[...document.querySelectorAll('#conn-dialog [name=section]')].map(c => c.value + ':' + c.checked)"),
-        ("type", "#conn-dialog [name=base_url]", GATEWAY_URL + "/v1"),
-        ("type", "#conn-dialog [name=token]", live.gw.TOKEN),
-        ("eval", "tokenType", "document.querySelector('#conn-dialog [name=token]').type"),
-        ("click", "#conn-save"),
-        ("wait", "document.querySelector('#conn-dialog .error[data-for=base_url]').textContent.length > 0"),
-        ("eval", "pathError", "document.querySelector('#conn-dialog .error[data-for=base_url]').textContent"),
-        set_value("#conn-dialog [name=base_url]", GATEWAY_URL), ("click", "#conn-save"),
-        ("wait", "document.querySelector('#user-conns-dialog .conn')"),
-        ("eval", "conn", "[document.querySelector('#user-conns-dialog .conn-tag').textContent,"
-                         " document.querySelector('#user-conns-dialog .conn-sections').textContent]"),
+        ("wait", "document.querySelector('#user-conns-dialog #link-add')"),
+        ("click", "#user-conns-dialog #link-add"), ("wait", is_open("#link-dialog")),
+        ("type", "#link-dialog [name=name]", "Шлюз"),
+        set_value("#link-dialog [name=kind]", "srvllm"),
+        ("type", "#link-dialog [name=base_url]", GATEWAY_URL + "/v1"),
+        ("type", "#link-dialog [name=token]", live.gw.TOKEN),
+        ("eval", "tokenType", "document.querySelector('#link-dialog [name=token]').type"),
+        ("click", "#link-save"),
+        ("wait", "document.querySelector('#link-dialog .error[data-for=base_url]').textContent.length > 0"),
+        ("eval", "pathError", "document.querySelector('#link-dialog .error[data-for=base_url]').textContent"),
+        set_value("#link-dialog [name=base_url]", GATEWAY_URL), ("click", "#link-save"),
+        ("wait", "document.querySelector('#user-conns-dialog .link')"),
+        ("eval", "conn", "[document.querySelector('#user-conns-dialog .link-hint .tag').textContent,"
+                         " [...document.querySelectorAll('#user-conns-dialog input.model-check')].map(c => c.value)]"),
         ("click", "#user-conns-dialog .dialog-close"), ("wait", "!" + is_open("#user-conns-dialog")),
         ("wait", f"document.querySelector('{rid} td[data-col=connections]').textContent === '1'"),
         # сброс пароля, отключение
@@ -512,9 +544,9 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["short"].startswith("Пароль короче")
-    assert v["srvSections"] == ["chat:true", "photo:true", "video:true"] and v["tokenType"] == "password"
+    assert v["tokenType"] == "password"
     assert v["pathError"] == "Адрес через сервер — без пути"
-    assert v["conn"] == ["через сервер", "Чат, Фото, Видео"]
+    assert v["conn"] == ["через сервер", ["local-gemma-abl"]]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
     assert v["saved"] == ["10.77.1.15:4000", entry]
@@ -535,10 +567,10 @@ def test_phone_avatar_never_covers_scrolled_profile_and_admin(browser, live):
     """B1-M8: на телефоне аватар закреплён, а шапка раздела уезжала с прокруткой — блоки
     профиля и панели проходили под аватаром. Шапка — на месте, с непрозрачным фоном."""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
-        *go("profile"), ("wait", "document.querySelector('#history-wipe')"),
+        *go("settings/other"), ("wait", "document.querySelector('#history-wipe')"),
         ("eval", "profile", HEAD_UNDER_AVATAR),
         *go("admin"), ("wait", "document.querySelector('#users tbody tr') && document.querySelector('#allow-list li')"),
-        ("eval", "admin", HEAD_UNDER_AVATAR)], width=390, height=500, mobile=True)
+        ("eval", "admin", HEAD_UNDER_AVATAR)], width=390, height=400, mobile=True)
     assert not r.get("failed"), r
     for name in ("profile", "admin"):
         assert r["values"][name] == {"scrolled": True, "top": 0, "covers": True, "opaque": True}, (name, r["values"])
@@ -553,7 +585,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
             token: {live.gw.TOKEN!r}, sections: ['chat', 'photo', 'video'] }});
           await m.loadMe(); return true; }})()"""),
         make_history(), history_of("before"),
-        *go("profile"), ("wait", "document.querySelector('#history-wipe')"),
+        *go("settings/other"), ("wait", "document.querySelector('#history-wipe')"),
         ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")),
         ("eval", "confirmHidden", "document.querySelector('#wipe-confirm').hidden"),
         ("click", "#wipe-next"), ("wait", "!document.querySelector('#wipe-confirm').hidden"),
@@ -592,9 +624,11 @@ def open_new_chat(mobile=False):
 
 
 def add_cloud(cloud, name="Облако"):
+    """Облако в разделе «Чат» с отмеченной моделью cloud-chat (у openai при подключении не отмечено ничего)."""
     return ("eval", "cloud", f"""(async () => {{ const m = {API};
       const c = await m.api('POST', '/api/connections', {{ name: {name!r}, kind: 'openai',
         base_url: {cloud.base_url!r}, token: {cloud.TOKEN!r}, sections: ['chat'] }});
+      await m.api('PUT', '/api/sections/chat/links/' + c.id, {{ models: ['cloud-chat'] }});
       await m.loadMe(); return c.id; }})()""")
 
 
@@ -700,8 +734,7 @@ def abandoned_answer(live, uid):
 def test_direct_cloud_chat_saves_the_answer(browser, live):
     abandoned = abandoned_answer(live, live.add_user("clouder"))
     # подключение появилось после входа: раздел чата открывается заново, уже не подсказкой
-    steps = [*signin("clouder"), ("wait", READY), add_cloud(live.cloud), *go("profile"),
-        ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+    steps = [*signin("clouder"), ("wait", READY), add_cloud(live.cloud), *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
         ("click", "#model-chip"),
         ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
         ("click", ".model-option[data-model=\"cloud-chat\"]"),
@@ -766,20 +799,21 @@ def test_direct_token_stays_in_tab_memory_and_goes_only_to_its_address(browser, 
             ("eval", "made", f"""(async () => {{ const m = {API};
               const c = await m.api('POST', '/api/connections', {{ name: 'Облако', kind: 'openai',
                 base_url: {live.cloud.base_url!r}, token: {live.cloud.TOKEN!r}, sections: ['chat'] }});
+              await m.api('PUT', '/api/sections/chat/links/' + c.id, {{ models: ['cloud-chat'] }});
               await m.loadMe(); window.connId = c.id; return true; }})()"""),
-            *go("profile"), ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+            *go("settings/chat"), ("wait", "document.querySelector('.link')"), *open_new_chat(),
             ("type", "#chat-input", "первый"), ("press", "Enter"), ("wait", ANSWERED),
             ("eval", "firstAnswer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
             ("eval", "traces1", f"({TOKEN_TRACES})({names!r})"),
-            # профиль открыт со старым списком; подключение тем временем переехало (другая вкладка)
-            *go("profile"), ("wait", "document.querySelector('.conn') && document.querySelector('#default-conn option[value]')"),
+            # настройки открыты со старым списком; подключение тем временем переехало (другая вкладка)
+            *go("settings/chat"), ("wait", "document.querySelector('.link .link-refresh')"),
             ("eval", "moved", f"""(async () => {{ const m = {API};
               const c = await m.api('PATCH', '/api/connections/' + window.connId,
                 {{ base_url: {second.base_url!r}, token: {second.TOKEN!r} }});
               return c.base_url; }})()"""),
-            choose_first("#default-conn"),
-            ("wait", "/^Моделей|\\(\\d{3}\\)/.test(document.querySelector('#default-note').textContent)"),
-            ("eval", "models", "document.querySelector('#default-note').textContent"),
+            ("click", ".link .link-refresh"),
+            ("wait", "/^Найдено моделей|\\(\\d{3}\\)/.test(document.querySelector('.section-status').textContent)"),
+            ("eval", "models", "document.querySelector('.section-status').textContent"),
             *open_new_chat(),
             ("type", "#chat-input", "второй"), ("press", "Enter"), ("wait", ANSWERED),
             ("eval", "secondAnswer", f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(),"
@@ -791,7 +825,7 @@ def test_direct_token_stays_in_tab_memory_and_goes_only_to_its_address(browser, 
     v = r["values"]
     assert v["firstAnswer"] == "Облако на связи." and v["moved"] == second.base_url
     assert v["traces1"] == [] and v["traces2"] == []
-    assert v["models"] == "Моделей: 1"
+    assert v["models"] == "Найдено моделей: 1"
     assert v["secondAnswer"] == ["Второе облако.", ""]
     assert live.cloud.chat_auth[first_chats:] == [f"Bearer {live.cloud.TOKEN}"]
     assert live.cloud.models_auth[first_models:] == []
@@ -823,8 +857,8 @@ def test_direct_stop_aborts_and_saves_the_partial_answer(browser, live):
     live.add_user("cloudstop")
     live.cloud.chunk_pause = 3                     # после первого куска сервис «думает»
     try:
-        r = browser.drive(live.url + "/", [*signin("cloudstop"), ("wait", READY), add_cloud(live.cloud), *go("profile"),
-            ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+        r = browser.drive(live.url + "/", [*signin("cloudstop"), ("wait", READY), add_cloud(live.cloud), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+            *open_new_chat(),
             ("type", "#chat-input", "Подумай"), ("press", "Enter"),
             ("wait", f"{LAST_ANSWER}?.querySelector('.md').textContent.trim() === 'Облако'"),
             ("click", "#stop"),
@@ -873,7 +907,7 @@ def test_chat_link_loads_the_list_once(browser, live):
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
         ("eval", "made", f"""(async () => {{ const m = {API};
           window.made = (await m.api('POST', '/api/chats', {{}})).id; return true; }})()"""),
-        *go("profile"), ("wait", "document.querySelector('.conn, #conn-add')"),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
         ("eval", "spy", spy),
         ("eval", "open", "location.hash = '#/chat/' + window.made"),
         ("wait", "document.querySelector('.chat-item[data-id=\"' + window.made + '\"] [aria-current=page]')"),

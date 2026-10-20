@@ -93,7 +93,7 @@ def test_root_icon_paths_answer_without_login(studio):
 def test_theme_toggle_lives_in_the_rail_not_the_profile():
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     assert index.index('id="theme-toggle"') < index.index('id="avatar"')
-    assert "themeBlock" not in (STATIC / "js" / "profile.js").read_text(encoding="utf-8")
+    assert "themeBlock" not in (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
 
 
 def test_service_worker_never_caches_api_or_media():
@@ -154,3 +154,8 @@ def test_sw_carries_the_static_version(studio):
     assert r.text.startswith(f'const VERSION = "{main.STATIC_VERSION}";')
     assert re.match(r'const VERSION = "[0-9a-f]{12}";', r.text)
     assert r.headers["cache-control"] == "no-cache" and r.headers["service-worker-allowed"] == "/"
+
+
+def test_profile_module_is_gone_and_the_menu_opens_settings():
+    assert not (STATIC / "js" / "profile.js").exists()
+    assert 'href="#/settings">Настройки</a>' in (STATIC / "index.html").read_text(encoding="utf-8")

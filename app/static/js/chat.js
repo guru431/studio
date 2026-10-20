@@ -16,7 +16,7 @@
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api, me } from './api.js';
 import { renderMarkdown } from './markdown.js';
-import { CORS, modelsOf } from './profile.js';
+import { CORS, modelsOf } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, openDialog, words } from './ui.js';
 

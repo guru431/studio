@@ -1,12 +1,13 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/profile, #/admin (только администратору);
- * прочее — #/chat. Раздел — модуль с `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id,
- * query }, id — хвост адреса (#/chat/<id>) или null, query — URLSearchParams после `?`
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/settings, #/settings/<раздел>, #/admin (только
+ * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
+ * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query }, id — хвост адреса
+ * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
  * (#/video?source=<media_id> — «Оживить» из раздела фото). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
- * Раздел без возможности (me.capabilities.photo === false) открывается подсказкой со ссылкой
- * на профиль. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты).
+ * Раздел без готовой модели (me.capabilities.photo === false) открывается подсказкой со ссылкой
+ * на настройки раздела. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты).
  *
  * Тема — кнопкой #theme-toggle над аватаром: из «auto» первое нажатие ставит противоположную видимой,
  * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. */
@@ -15,9 +16,9 @@ import { api, loadMe, me } from './api.js';
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
 const HINTS = {
-  chat: 'Чтобы писать в чат, добавьте в профиле подключение: шлюз srvllm или облачный сервис',
-  photo: 'Чтобы генерировать фото, добавьте в профиле подключение к шлюзу srvllm',
-  video: 'Чтобы делать видео, добавьте в профиле подключение к шлюзу srvllm',
+  chat: 'Чтобы писать в чат, выберите модель в настройках раздела «Чат»',
+  photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
+  video: 'Чтобы делать видео, выберите модель в настройках раздела «Видео»',
 };
 const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -35,7 +36,7 @@ const SECTIONS = {
   chat: { title: 'Чат', load: () => import('./chat.js') },
   photo: { title: 'Фото', load: () => import('./photo.js') },
   video: { title: 'Видео', load: () => import('./video.js') },
-  profile: { title: 'Профиль', load: () => import('./profile.js') },
+  settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
 };
 
@@ -74,7 +75,7 @@ function hintModule(section) {
   return {
     mount(node) {
       node.replaceChildren(head(SECTIONS[section].title),
-        notice(section, HINTS[section], 'hint', { href: '#/profile', text: 'Открыть профиль' }));
+        notice(section, HINTS[section], 'hint', { href: `#/settings/${section}`, text: 'Открыть настройки' }));
     },
     unmount() {},
   };
@@ -142,11 +143,15 @@ function parse(hash) {
 
 function allowed({ section, id }) {
   const def = SECTIONS[section];
-  return def && !(def.admin && !me.is_admin) && (id === null || section === 'chat');
+  return def && !(def.admin && !me.is_admin) && (id === null || section === 'chat' || section === 'settings');
 }
 
 async function render() {
   let route = parse(location.hash);
+  if (route.section === 'profile') {            // прежний адрес профиля — настройки
+    route = { section: 'settings', id: null, query: new URLSearchParams() };
+    history.replaceState(null, '', '#/settings');
+  }
   if (!allowed(route)) {
     route = { section: 'chat', id: null, query: new URLSearchParams() };
     history.replaceState(null, '', '#/chat');

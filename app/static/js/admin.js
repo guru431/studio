@@ -2,11 +2,11 @@
  *
  * Пользователи — таблица `#users` (логин, имя, админ, отключён, подключений) с действиями строки:
  * «Изменить» (логин и имя; себя тоже — тогда страница перезагружается за новым логином в меню),
- * «Подключения» (та же форма, что в профиле), «Сбросить пароль», «Отключить» / «Включить»,
+ * «Подключения» (те же разделы, что в настройках пользователя), «Сбросить пароль», «Отключить» / «Включить»,
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, me } from './api.js';
-import { connectionsBlock } from './connection-form.js';
+import { settingsView } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 const COLUMNS = [['login', 'Логин'], ['name', 'Имя'], ['admin', 'Админ'], ['disabled', 'Отключён'],
@@ -144,9 +144,10 @@ function usersBlock(host) {
     const dialog = openDialog(host, { id: 'user-conns-dialog', title: `Подключения: ${user.login}`, body: [box],
       cancelText: 'Закрыть' });
     dialog.addEventListener('close', reload);
-    const block = connectionsBlock(dialog, `/api/admin/users/${user.id}/connections`);
-    box.append(block.el);
-    block.reload();
+    const view = settingsView(dialog, { sections: `/api/admin/users/${user.id}/sections`,
+      connections: `/api/admin/users/${user.id}/connections`, section: 'chat' });
+    box.append(view.el);
+    view.reload();
   }
 
   function row(user) {

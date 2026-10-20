@@ -164,7 +164,7 @@ label { font-size: 13px; color: var(--muted); }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-bottom: 12px; }
 .field .label { font-size: 13px; color: var(--muted); }
 .field .error { margin: 0; font-size: 13px; }
-.field .error:empty, .dialog .error:empty, .conns .error:empty { display: none; }
+.field .error:empty, .dialog .error:empty, .settings .error:empty { display: none; }
 .grid2, .grid3 { display: grid; gap: 0 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .grid3 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
 .checks { display: flex; gap: 6px 16px; flex-wrap: wrap; }
@@ -176,16 +176,36 @@ label { font-size: 13px; color: var(--muted); }
 .dialog p { margin: 0 0 12px; }
 .dialog .error { margin: 4px 0 0; font-size: 13px; }
 
-/* подключения */
-.conns { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.conn-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; }
-.conn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; background: var(--bg);
+/* настройки: разделы слева, раздел справа (на телефоне — по очереди) */
+.settings { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.settings-nav a { padding: 8px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-size: 14px; }
+.settings-nav a:hover { background: var(--panel-2); }
+.settings-nav a[aria-current="page"] { background: var(--panel); font-weight: 600; }
+.settings-panel { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.settings-back { display: none; }
+.links { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.link { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--bg);
   border: 1px solid var(--border); border-radius: 12px; }
-.conn-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.conn-url { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-.conn-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
-.conn-actions { display: flex; gap: 6px; }
-.conn-empty { padding: 4px 0; }
+.link-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.link-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.link-url { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.link-hint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.link-buttons, .link-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.models { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.model { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 4px 0; }
+.model-name { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.model-default-label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.model-default-label input { accent-color: var(--accent); margin: 0; }
+.model-default-label input:disabled + span { opacity: .45; }
+.model-search { max-width: 320px; }
+@media (max-width: 760px) {
+  .settings { grid-template-columns: minmax(0, 1fr); }
+  .settings[data-view="nav"] .settings-panel, .settings[data-view="panel"] .settings-nav { display: none; }
+  .settings-nav { position: static; }
+  .settings-nav a { padding: 12px 14px; background: var(--panel); border: 1px solid var(--border); margin-bottom: 6px; }
+  .settings-back { display: inline-block; align-self: flex-start; font-size: 14px; }
+}
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--panel-2); color: var(--text);
   font-size: 12px; }
 .tag.server { background: color-mix(in srgb, var(--ok) 18%, transparent); }

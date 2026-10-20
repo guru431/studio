@@ -1,0 +1,383 @@
+/* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
+ *
+ * Слева — шесть разделов и «Прочее» (пароль, удаление истории), справа — выбранный раздел: его
+ * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
+ * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
+ * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
+ * сразу; отказ — словами в строке статуса раздела.
+ *
+ * Модели: у шлюза srvllm вне чата — его встроенный перечень (`catalog`), прочее — после «Обновить
+ * модели» (`GET …/found`, через сервер). Список прямого подключения берёт браузер (modelsOf: токен и
+ * адрес — из одного ответа /token, токен живёт только в памяти запроса; сервис без CORS — словами).
+ * Отмеченная модель, которой нет в найденном списке, остаётся отмеченной с пометкой «не найдена».
+ *
+ * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
+ * переключаются на месте, «Прочего» и прямого списка моделей нет). На телефоне без раздела в адресе —
+ * список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
+import { api, loadMe } from './api.js';
+import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
+import { button, el, field, openDialog, showError, words } from './ui.js';
+
+export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
+const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
+  gigaam: 'GigaAM' };
+const SEARCH_FROM = 8;
+
+/** Подпись модели: короткие имена шлюза — словами, прочие — как есть. */
+export function modelLabel(id) {
+  return LABELS[id] || id;
+}
+
+/* ---- модели прямого подключения ------------------------------------------------ */
+
+async function directModels(conn) {
+  let token;
+  let url;
+  try {
+    ({ token, models_url: url } = await api('GET', `/api/connections/${conn.id}/token`));
+  } catch (err) {
+    if (err.status === 403 || err.status === 404) throw new Error('Токен этого подключения браузеру не выдаётся');
+    throw err;
+  }
+  let response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` },
+      credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
+  } catch (err) {
+    if (err instanceof TypeError) throw new Error(CORS);
+    throw err;
+  }
+  if (response.status === 401 || response.status === 403) throw new Error(`Сервис не принял токен (${response.status})`);
+  if (!response.ok) throw new Error(`Сервис не отдал список моделей (${response.status})`);
+  let data;
+  try {
+    data = (await response.json()).data;
+  } catch {
+    throw new Error('Сервис ответил не списком моделей');
+  }
+  return (Array.isArray(data) ? data : []).map((m) => m && m.id).filter((id) => typeof id === 'string');
+}
+
+/** Имена моделей своего подключения: через сервер — GET /api/connections/<id>/models, прямое — браузер. */
+export async function modelsOf(conn) {
+  if (conn.proxied) return (await api('GET', `/api/connections/${conn.id}/models`)).items.map((m) => m.id);
+  return directModels(conn);
+}
+
+/* ---- «Прочее»: пароль и история -------------------------------------------------- */
+
+function say(node, text, kind) {
+  node.textContent = text;
+  node.classList.toggle('error', kind === 'error');
+  node.classList.toggle('ok', kind === 'ok');
+}
+
+function status(id) {
+  return el('p', { class: 'status', id, 'aria-live': 'polite' });
+}
+
+function passwordBlock() {
+  const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
+  const current = input('pw-current', 'current-password');
+  const fresh = input('pw-new', 'new-password');
+  const repeat = input('pw-repeat', 'new-password');
+  const note = status('password-status');
+  const save = button('Сменить пароль', { class: 'btn', id: 'password-save' });
+  save.addEventListener('click', async () => {
+    if (fresh.value !== repeat.value) {
+      say(note, 'Пароли не совпадают', 'error');
+      return;
+    }
+    save.disabled = true;
+    try {
+      await api('POST', '/api/me/password', { current: current.value, new: fresh.value });
+      current.value = fresh.value = repeat.value = '';
+      say(note, 'Пароль сменён, другие сессии закрыты', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return el('section', { class: 'block' }, el('h2', {}, 'Пароль'), el('div', { class: 'grid3' },
+    field('Текущий', current, 'current'), field('Новый', fresh, 'new'), field('Повтор нового', repeat, 'repeat')),
+  el('div', { class: 'row' }, save, note));
+}
+
+function wipeBlock(host) {
+  const note = status('wipe-status');
+  const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
+    say(note, '');
+    const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.');
+    const fail = el('p', { class: 'error' });
+    const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
+    const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
+    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, fail],
+      actions: [next, confirm] });
+    next.addEventListener('click', () => {
+      text.textContent = 'Точно? Отменить удаление нельзя.';
+      next.hidden = true;
+      confirm.hidden = false;
+      confirm.focus();
+    });
+    confirm.addEventListener('click', async () => {
+      confirm.disabled = true;
+      try {
+        await api('DELETE', '/api/history');
+        dialog.close();
+        say(note, 'История удалена', 'ok');
+      } catch (err) {
+        fail.textContent = words(err);
+        confirm.disabled = false;
+      }
+    });
+  });
+  return el('section', { class: 'block' }, el('h2', {}, 'История'),
+    el('p', { class: 'muted small' }, 'Чаты, фото и видео этого профиля. Подключения не удаляются.'),
+    el('div', { class: 'row' }, start, note));
+}
+
+/* ---- разделы ---------------------------------------------------------------------- */
+
+export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
+  other = false, direct = false, onChange = null }) {
+  const ids = [...Object.keys(SECTION_NAMES), ...(other ? ['other'] : [])];
+  const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
+  const panel = el('div', { class: 'settings-panel' });
+  const root = el('div', { class: 'settings' }, nav, panel);
+  const note = el('p', { class: 'status section-status', 'aria-live': 'polite' });
+  const found = new Map();        // `<раздел>:<подключение>` → найденные модели после «Обновить модели»
+  let data = [];
+  let current = ids.includes(section) ? section : null;
+
+  for (const id of ids) {
+    const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, id === 'other' ? 'Прочее' : SECTION_NAMES[id]);
+    if (!hash) {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        show(id);
+      });
+    }
+    nav.append(link);
+  }
+
+  async function changed() {
+    await reload();
+    if (onChange) await onChange();
+  }
+
+  function sectionOf(id) {
+    return data.find((s) => s.id === id);
+  }
+
+  async function saveModels(s, conn, names, box) {
+    const checked = names.filter((m) => box.querySelector(`input.model-check[value="${CSS.escape(m)}"]`).checked);
+    try {
+      await api('PUT', `${base}/${s.id}/links/${conn.id}`, { models: checked });
+      say(note, '');
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+    await changed();
+  }
+
+  async function saveDefault(s, conn, model) {
+    try {
+      await api('PUT', `${base}/${s.id}/default`, { connection_id: conn.id, model });
+      say(note, '');
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+    await changed();
+  }
+
+  async function refresh(s, conn) {
+    say(note, 'Загружаю список моделей…');
+    try {
+      // прямое подключение: список берёт браузер; через сервер (и в панели) — GET …/found
+      const items = direct && !conn.proxied ? await modelsOf(conn)
+        : (await api('GET', `${base}/${s.id}/links/${conn.id}/found`)).items;
+      found.set(`${s.id}:${conn.id}`, items);
+      say(note, items.length ? `Найдено моделей: ${items.length}` : 'Сервис не назвал ни одной модели');
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+    render();
+  }
+
+  function remove(conn) {
+    const yes = button('Удалить', { class: 'btn btn-danger', id: 'conn-delete-confirm' });
+    const fail = el('p', { class: 'error' });
+    const used = sectionsText(conn.sections);
+    const dialog = openDialog(host, { id: 'conn-delete-dialog', title: 'Удалить подключение?', actions: [yes], body: [
+      el('p', {}, `«${conn.name}» — ${conn.base_url}`),
+      el('p', { class: 'muted' }, used ? `Подключение участвует в разделах: ${used}. Оно уйдёт из всех.` : 'Подключение не участвует ни в одном разделе.'),
+      fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `${connBase}/${conn.id}`);
+        dialog.close();
+        await changed();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  function linkCard(s, link) {
+    const conn = link.connection;
+    const known = found.get(`${s.id}:${conn.id}`);
+    const offer = known || link.catalog || [];
+    const names = [...link.models, ...offer.filter((m) => !link.models.includes(m))];
+    const box = el('ul', { class: 'models' });
+    for (const m of names) {
+      const checked = link.models.includes(m);
+      const check = el('input', { type: 'checkbox', class: 'model-check', value: m, checked });
+      const radio = el('input', { type: 'radio', class: 'model-default', name: `default-${s.id}`, value: m,
+        'data-conn': String(conn.id), 'aria-label': `По умолчанию: ${modelLabel(m)}`, disabled: !checked,
+        checked: !!s.default && s.default.connection_id === conn.id && s.default.model === m });
+      check.addEventListener('change', () => saveModels(s, conn, names, box));
+      radio.addEventListener('change', () => saveDefault(s, conn, m));
+      box.append(el('li', { class: 'model', 'data-model': m },
+        el('label', { class: 'check model-name' }, check, modelLabel(m)),
+        known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, 'не найдена') : null,
+        el('label', { class: 'model-default-label', title: 'По умолчанию' }, radio, el('span', { class: 'small muted' }, 'по умолчанию'))));
+    }
+    let search = null;
+    if (names.length > SEARCH_FROM) {
+      search = el('input', { class: 'input model-search', type: 'search', placeholder: 'Поиск модели', 'aria-label': 'Поиск модели' });
+      search.addEventListener('input', () => {
+        const q = search.value.trim().toLowerCase();
+        for (const li of box.children) li.hidden = !!q && !li.dataset.model.toLowerCase().includes(q);
+      });
+    }
+    const actions = el('div', { class: 'link-actions', hidden: true },
+      button('Изменить', { class: 'btn btn-sm link-edit' }, () => editConnection(host, connBase, conn, changed)),
+      button('Убрать из раздела', { class: 'btn btn-sm link-remove' }, async () => {
+        try {
+          await api('DELETE', `${base}/${s.id}/links/${conn.id}`);
+          say(note, '');
+        } catch (err) {
+          say(note, words(err), 'error');
+        }
+        await changed();
+      }),
+      button('Удалить подключение', { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)));
+    const menu = button('⋯', { class: 'btn btn-sm link-menu', 'aria-label': 'Ещё', 'aria-expanded': 'false' }, () => {
+      actions.hidden = !actions.hidden;
+      menu.setAttribute('aria-expanded', String(!actions.hidden));
+    });
+    return el('li', { class: 'link', 'data-conn': String(conn.id) },
+      el('div', { class: 'link-head' },
+        el('div', { class: 'link-main' },
+          el('b', { class: 'link-name' }, conn.name),
+          el('span', { class: 'link-url' }, conn.base_url),
+          el('span', { class: 'link-hint' },
+            el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? 'через сервер' : 'из браузера'),
+            ` ключ ${conn.token_hint}`)),
+        el('div', { class: 'link-buttons' }, button('Обновить модели', { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
+      actions, search,
+      names.length ? box : el('p', { class: 'muted small' }, 'Нажмите «Обновить модели» и отметьте нужные'));
+  }
+
+  async function addLink(s) {
+    let conns = [];
+    try {
+      conns = (await api('GET', connBase)).items.filter((c) => !c.sections.includes(s.id));
+    } catch (err) {
+      say(note, words(err), 'error');
+      return;
+    }
+    const select = el('select', { class: 'input', name: 'existing' },
+      ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
+      el('option', { value: 'new' }, 'Новый адрес…'));
+    select.value = conns.length ? String(conns[0].id) : 'new';
+    const form = connectionForm(null);
+    form.el.hidden = select.value !== 'new';
+    select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
+    const box = el('div', {}, field('Подключение', select, 'existing'), form.el);
+    const save = button('Добавить', { class: 'btn btn-accent', id: 'link-save' });
+    const dialog = openDialog(host, { id: 'link-dialog', title: `Адрес для раздела «${s.name}»`, body: [box], actions: [save] });
+    save.addEventListener('click', async () => {
+      if (save.disabled) return;
+      save.disabled = true;
+      try {
+        if (select.value === 'new') await api('POST', connBase, { ...form.value(), sections: [s.id] });
+        else await api('POST', `${base}/${s.id}/links`, { connection_id: Number(select.value) });
+        dialog.close();
+        await changed();
+      } catch (err) {
+        if (select.value === 'new') form.showError(err);
+        else showError(box, err, {}, 'existing');
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+
+  function render() {
+    const shown = current || ids[0];
+    root.dataset.view = current ? 'panel' : 'nav';
+    for (const a of nav.children) {
+      if (a.dataset.section === shown) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+    const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
+      : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
+    if (shown === 'other') {
+      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(), wipeBlock(host)));
+      return;
+    }
+    const s = sectionOf(shown);
+    if (!s) {
+      panel.replaceChildren(back, note);
+      return;
+    }
+    const list = el('ul', { class: 'links' }, ...(s.links.length ? s.links.map((l) => linkCard(s, l))
+      : [el('li', { class: 'muted' }, 'В разделе пока нет подключений')]));
+    panel.replaceChildren(back, el('section', { class: 'block section-panel', 'data-section': s.id },
+      el('h2', {}, s.name), list,
+      el('div', { class: 'row' }, button('+ Адрес для раздела', { class: 'btn', id: 'link-add' }, () => addLink(s))),
+      note));
+  }
+
+  function show(id) {
+    const next = ids.includes(id) ? id : null;
+    if (next !== current) say(note, '');
+    current = next;
+    render();
+  }
+
+  async function reload() {
+    try {
+      data = (await api('GET', base)).sections;
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+    render();
+  }
+
+  render();
+  return { el: root, show, reload };
+}
+
+/* ---- маршрут ---------------------------------------------------------------------- */
+
+let screen = null;
+
+export function mount(view, ctx) {
+  screen = settingsView(view, { sections: '/api/sections', connections: '/api/connections', section: ctx.id,
+    hash: true, other: true, direct: true, onChange: () => loadMe().catch(() => null) });
+  view.append(el('header', { class: 'head' }, el('h1', {}, 'Настройки')), el('div', { class: 'page wide' }, screen.el));
+  screen.reload();
+}
+
+export function update(ctx) {
+  if (screen) screen.show(ctx.id);
+}
+
+export function unmount() {
+  screen = null;
+}
