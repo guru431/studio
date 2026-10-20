@@ -4,7 +4,9 @@
 `/slot/...`): генерация и правка отдают настоящий PNG (`PNG_REAL`, Pillow — чтобы строилось превью),
 release моделей, описание gemma-abl; API роликов `/slot/videos` (перенос фикстуры `videos` из
 tests/test_studio.py): создание, статус, `content`, удаление; чат — `/v1/models` и
-`/v1/chat/completions` (поток OpenAI SSE). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
+`/v1/chat/completions` (поток OpenAI SSE); речь — `/speech/asr`, `/speech/transcriptions`,
+`/speech/lite/transcriptions` (`asr_replies` — очередь ответов, затем `asr_reply`) и `/speech/tts-qwen`
+(`tts_replies`, последний повторяется). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
 
 `FakeCloud` — облачный сервис для браузерных тестов: настоящий HTTP на localhost с CORS.
 """
@@ -43,6 +45,8 @@ def _png() -> bytes:
 
 
 PNG_REAL = _png()
+WAV_FAKE = b"RIFF" + bytes(40) + b"fake-wav"
+SPEECH_ASR = ("/speech/asr", "/speech/transcriptions", "/speech/lite/transcriptions")
 RELEASES = ("/slot/images/release", "/slot/images/descriptions/release")
 
 
@@ -83,6 +87,13 @@ class FakeGateway:
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
+        self.asr_requests = []           # запросы распознавания (asr, transcriptions, lite)
+        self.asr_replies = []            # (код, тело) по очереди, затем — (200, asr_reply)
+        self.asr_reply = {"text": "распознано", "language": "ru", "segments": [
+            {"start": 0.0, "end": 2.5, "speaker": "SPEAKER_00", "text": "Здравствуйте."},
+            {"start": 3.0, "end": 5.0, "speaker": "SPEAKER_01", "text": "Добрый день."}]}
+        self.tts_requests = []           # запросы озвучки /speech/tts-qwen
+        self.tts_replies = [(200, WAV_FAKE)]   # (код, тело: bytes — звук, dict — JSON); последний повторяется
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -111,6 +122,16 @@ class FakeGateway:
             return httpx.Response(200, json={"object": "list", "data": self.models})
         if path == "/v1/chat/completions" and request.method == "POST":
             return self._chat(request)
+        if path in SPEECH_ASR and request.method == "POST":
+            self.asr_requests.append(request)
+            code, body = self.asr_replies.pop(0) if self.asr_replies else (200, self.asr_reply)
+            return httpx.Response(code, json=body)
+        if path == "/speech/tts-qwen" and request.method == "POST":
+            self.tts_requests.append(request)
+            code, body = self.tts_replies[min(len(self.tts_requests), len(self.tts_replies)) - 1]
+            if isinstance(body, bytes):
+                return httpx.Response(code, content=body, headers={"content-type": "audio/wav"})
+            return httpx.Response(code, json=body)
         return httpx.Response(404)
 
     def _chat(self, request: httpx.Request) -> httpx.Response:
