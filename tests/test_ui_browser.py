@@ -1312,7 +1312,7 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("eval", "spy", CLICKS),
         ("click", "#viewer .act-download"), ("wait", "window.clicked.length === 1"),
         ("eval", "download", "window.clicked[0]"),
-        ("eval", "meta", "document.querySelector('#viewer .viewer-meta').textContent"),
+        ("eval", "meta", "document.querySelector('#viewer .chain-step:last-child .chain-meta').textContent"),
         ("click", "#viewer .act-repeat"),
         ("wait", f"!document.querySelector('#viewer') && {done_cards(3)}"),
         # «Удалить» — через окно подтверждения
@@ -1390,6 +1390,31 @@ def test_too_big_for_the_phone_is_downloaded_not_shared(browser, live):
         ("eval", "shared", "window.shared.length")], width=390, mobile=True)
     assert not r.get("failed"), r
     assert r["values"]["shared"] == 0
+
+
+def test_viewer_shows_the_chain_and_opens_a_step(browser, live):
+    login = "chainer"
+    live.add_user(login)
+    make_chain = ("eval", "chain", f"""(async () => {{ const m = {API};
+      const wait = async (id) => {{ for (let t = 0; t < 200; t++) {{ const i = await m.api('GET', '/api/images/' + id);
+        if (i.state === 'done') return i; await new Promise(r => setTimeout(r, 30)); }} }};
+      const gen = await wait((await m.api('POST', '/api/images', {{ prompt: 'кот', size: 'square', seed: 5 }})).id);
+      await wait((await m.api('POST', '/api/images', {{ prompt: 'ярче', size: 'original', model: 'flux',
+        source_media_id: gen.media_id }})).id); return true; }})()""")
+    steps = "[...document.querySelectorAll('#viewer .chain-step')]"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make_chain, *go("photo"),
+        ("wait", FEED_READY), ("wait", done_cards(2)),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("eval", "prompts", f"{steps}.map(s => s.querySelector('.chain-prompt').textContent)"),
+        ("eval", "now", f"{steps}.map(s => s.getAttribute('aria-current'))"),
+        ("eval", "meta", f"{steps}[0].querySelector('.chain-meta').textContent"),
+        ("click", "#viewer .chain-step:first-child .chain-open"),
+        ("wait", "document.querySelectorAll('#viewer .chain-step').length === 1")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["prompts"] == ["кот", "ярче"] and v["now"] == [None, "true"]
+    assert v["meta"].startswith("1. Генерация · Lustify · 1024×1024 · seed 5")
+    assert not problems(r), problems(r)
 
 
 #: правка кистью через API страницы по первой картинке ленты: mask_media_id готовой правки
@@ -1536,7 +1561,11 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
         ("eval", "download", f"[window.clicked[0][0], document.querySelector('{CLIP} .card-download').textContent]"),
         ("eval", "card", f"document.querySelector('{CLIP}').textContent"),
         ("eval", "items", f"(async () => (await {API}.api('GET', '/api/videos')).items)()"),
-        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, height=900, mobile=width == 390)
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        # ролик из фото истории — «Промпты»: цепочка фото и промпт ролика последним
+        ("click", f"{CLIP} .card-chain"), ("wait", is_open("#chain-dialog")),
+        ("eval", "chain", "[...document.querySelectorAll('#chain-dialog .chain-step .chain-prompt')].map(p => p.textContent)")],
+        width=width, height=900, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
     forms = live.gw.video_forms[v0:]
@@ -1554,6 +1583,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", f"seed {seed}", "Удалить"):
         assert words in v["card"], words
     assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
+    assert v["chain"] == ["кот 0", "she slowly turns her head"]
     assert not problems(r), problems(r)
 
 

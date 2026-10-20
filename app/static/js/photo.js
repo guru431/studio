@@ -10,6 +10,7 @@
  * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
  * окно закрыли раньше — описание отменяется. Текст сервера — только textContent. */
 import { api } from './api.js';
+import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
 import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
@@ -396,10 +397,18 @@ function build(view, ctx) {
       act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
     syncBusy();
+    const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
+    const onOpen = async (id) => {
+      try {
+        const step = await api('GET', `/api/images/${encodeURIComponent(id)}`);
+        dialog.close();
+        openViewer(step);
+      } catch (err) {
+        missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err);
+      }
+    };
     dialog.append(el('div', { class: 'viewer-top' }, close), stage,
-      el('div', { class: 'viewer-bar' },
-        el('p', { class: 'viewer-meta' }, `${NAMES[item.model] || item.model} · ${String(item.size).replace('x', '×')} · seed ${item.seed}`),
-        el('p', { class: 'viewer-prompt' }, item.prompt), actions));
+      el('div', { class: 'viewer-bar' }, chainList(item.chain, { current: item.id, onOpen }), missing, actions));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       for (const b of starts) gated.delete(b);

@@ -1,5 +1,6 @@
 /* Раздел «Видео» (#/video): лента роликов по дням, поле промпта снизу с фото-источником и чипами
- * (длительность, качество, плавность, seed), карточка с ходом ролика и плеером.
+ * (длительность, качество, плавность, seed), карточка с ходом ролика и плеером; у ролика из фото
+ * истории — «Промпты» (цепочка, chain.js).
  *
  * Ролик: POST /api/videos (форма: файл `image` с устройства или `source_media_id` — фото, пришедшее
  * из раздела «Фото» адресом #/video?source=<media_id>). Ведёт ролик наблюдатель службы; идущие
@@ -7,6 +8,7 @@
  * найденные после перезагрузки тоже. Роликов может идти несколько: очередь — у шлюза.
  * Текст сервера — только textContent. */
 import { api } from './api.js';
+import { chainList } from './chain.js';
 import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
 import { button, el, openDialog, words } from './ui.js';
@@ -210,6 +212,11 @@ function build(view, ctx) {
     }
     body.append(el('p', { class: 'video-meta' }, metaText(item)));
     if (item.prompt) body.append(el('p', { class: 'video-prompt', title: item.prompt }, item.prompt));
+    if (item.chain.length > 1) {
+      acts.prepend(button('Промпты', { class: 'btn btn-sm card-chain' }, () => openDialog(root, { id: 'chain-dialog',
+        title: 'Как получен ролик', cancelText: 'Закрыть',
+        body: [chainList(item.chain, { current: null, onOpen: () => ctx.navigate('photo') })] })));
+    }
     body.append(acts);
     node.append(body);
     return node;
