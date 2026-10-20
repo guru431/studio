@@ -42,12 +42,52 @@ def test_manifest_makes_an_installable_app():
         assert (STATIC / icon["src"].removeprefix("/static/")).is_file(), icon["src"]
 
 
+def test_manifest_icons_are_png_only():
+    """SVG `sizes: any` iOS берёт первой и не читает — рисует букву на theme_color."""
+    m = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert m["icons"] and all(i["type"] == "image/png" and i["src"].endswith(".png") for i in m["icons"])
+
+
 def test_icons_have_the_sizes_they_claim():
     from PIL import Image
     for name, size in {"icon-192.png": 192, "icon-512.png": 512, "icon-maskable-512.png": 512,
                        "apple-touch-icon.png": 180}.items():
         with Image.open(STATIC / "icons" / name) as im:
             assert im.size == (size, size), name
+    for name in ("apple-touch-icon.png", "icon-maskable-512.png"):
+        with Image.open(STATIC / "icons" / name) as im:
+            assert im.mode == "RGB", name                   # без прозрачности: iOS залил бы её чёрным
+    with Image.open(STATIC / "icons" / "favicon.ico") as im:
+        assert {(16, 16), (32, 32), (48, 48)} <= set(im.info["sizes"])
+
+
+def test_icon_is_the_bubble_with_a_spark():
+    from PIL import Image
+    near = lambda a, b: all(abs(x - y) <= 30 for x, y in zip(a, b))
+    with Image.open(STATIC / "icons" / "apple-touch-icon.png") as im:
+        assert near(im.getpixel((6, 6)), (0xe2, 0x82, 0x5c))       # градиент у левого верхнего угла
+        assert near(im.getpixel((60, 60)), (255, 255, 255))         # облачко
+        assert near(im.getpixel((90, 86)), (0xc9, 0x64, 0x42))      # центр искры
+    with Image.open(STATIC / "icons" / "icon-512.png") as im:
+        assert im.getpixel((2, 2))[3] == 0                          # скруглённый угол прозрачен
+    svg = (STATIC / "icons" / "icon.svg").read_text(encoding="utf-8")
+    assert "#e2825c" in svg and "A84 84 0 0 1 428 192" in svg and "C266 222 286 236 340 246" in svg
+
+
+def test_pages_link_the_same_icon():
+    for page in ("index.html", "login.html"):
+        text = (STATIC / page).read_text(encoding="utf-8")
+        assert '<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">' in text, page
+    assert '<img class="logo" src="/static/icons/icon.svg" alt="">' in (STATIC / "index.html").read_text(encoding="utf-8")
+
+
+def test_root_icon_paths_answer_without_login(studio):
+    touch = (STATIC / "icons" / "apple-touch-icon.png").read_bytes()
+    for path in ("/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"):
+        r = studio.c.get(path)
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content == touch, path
+    r = studio.c.get("/favicon.ico")
+    assert r.status_code == 200 and r.headers["content-type"] in ("image/x-icon", "image/vnd.microsoft.icon")
 
 
 def test_service_worker_never_caches_api_or_media():

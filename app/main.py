@@ -2,7 +2,8 @@
 
 Служба слушает только unix-сокет за Apache. Анонимны `/health`, `/login` (страница и вход),
 `/logout`, `/robots.txt` (роботам — ничего) и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
-`/sw.js`, `/offline.html`; `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
+`/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
+`/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
 Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
 
 У HTML-ответов — CSP без inline-скриптов (`CSP`); у всех — nosniff и Referrer-Policy. Статика
@@ -130,6 +131,20 @@ async def service_worker():
 @app.api_route("/manifest.webmanifest", methods=PAGE)
 async def manifest():
     return FileResponse(auth.STATIC / "manifest.webmanifest", media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.api_route("/apple-touch-icon.png", methods=PAGE)
+@app.api_route("/apple-touch-icon-precomposed.png", methods=PAGE)
+async def apple_touch_icon():
+    """iOS спрашивает значок из корня сам, если не нашёл подходящий в странице."""
+    return FileResponse(auth.STATIC / "icons" / "apple-touch-icon.png", media_type="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.api_route("/favicon.ico", methods=PAGE)
+async def favicon():
+    return FileResponse(auth.STATIC / "icons" / "favicon.ico", media_type="image/x-icon",
                         headers={"Cache-Control": "no-cache"})
 
 

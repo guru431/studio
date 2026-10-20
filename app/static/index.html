@@ -9,8 +9,9 @@
 <meta name="apple-mobile-web-app-title" content="Студия">
 <title>Студия</title>
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
 <link rel="stylesheet" id="hl-paper" href="/static/vendor/hl-paper.css?v={{v}}" media="(prefers-color-scheme: light)">
 <link rel="stylesheet" id="hl-graphite" href="/static/vendor/hl-graphite.css?v={{v}}" media="(prefers-color-scheme: dark)">
@@ -22,7 +23,7 @@
 </head>
 <body class="shell">
 <nav id="rail" aria-label="Разделы">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 512 512"><path d="M236 120 Q255 257 392 276 Q255 295 236 432 Q217 295 80 276 Q217 257 236 120Z"/><path d="M370 94 Q377 139 422 146 Q377 153 370 198 Q363 153 318 146 Q363 139 370 94Z"/></svg></span>
+  <img class="logo" src="/static/icons/icon.svg" alt="">
   <a class="tab" href="#/chat" data-section="chat"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg><span>Чат</span></a>
   <a class="tab" href="#/photo" data-section="photo"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg><span>Фото</span></a>
   <a class="tab" href="#/video" data-section="video"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/></svg><span>Видео</span></a>

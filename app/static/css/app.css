@@ -44,9 +44,7 @@ svg.ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColo
 body.shell { display: flex; height: 100dvh; overflow: hidden; }
 #rail { width: var(--rail-w); flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 12px 0; background: var(--rail); border-right: 1px solid var(--border); }
-#rail .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: var(--accent-text);
-  display: grid; place-items: center; margin-bottom: 10px; }
-#rail .logo svg { width: 22px; height: 22px; fill: currentColor; }
+#rail .logo { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 10px; }
 #rail .tab { width: 50px; padding: 7px 0 5px; border-radius: 10px; display: flex; flex-direction: column; align-items: center;
   gap: 2px; color: var(--muted); font-size: 11px; text-decoration: none; }
 #rail .tab:hover { color: var(--text); }
