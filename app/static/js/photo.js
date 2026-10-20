@@ -1,5 +1,6 @@
 /* Раздел «Фото» (#/photo): лента картинок по дням, поле промпта снизу с чипами (исходное фото
- * и сила, модель, размер, seed), просмотр с действиями, правка кистью (editor.js) и «Описать».
+ * и сила, модель, размер, seed), «Скачать» на превью (save.js), просмотр с действиями, правка кистью
+ * (editor.js) и «Описать».
  *
  * Задание: POST /api/images (JSON; с файлом исходника — форма), запись ленты — GET /api/images/<id>.
  * Идущее задание (working, cancelling) ленту опрашивает раз в POLL_MS — и найденное в ленте после
@@ -11,6 +12,7 @@
 import { api } from './api.js';
 import { openEditor } from './editor.js';
 import { createFeed } from './feed.js';
+import { saveMedia } from './save.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const POLL_MS = 1500;
@@ -29,7 +31,8 @@ const ICONS = {
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
 };
 
 let screen = null;
@@ -244,7 +247,13 @@ function build(view, ctx) {
         el('img', { src: media(item.media_id, '?thumb=1'), alt: '', loading: 'lazy', decoding: 'async' }),
         el('span', { class: 'card-cap' }, NAMES[item.model] || item.model));
       open.addEventListener('click', () => openViewer(item));
-      node.append(open);
+      // рядом с .card-open, а не внутри: кнопка в кнопке недопустима
+      const save = el('button', { type: 'button', class: 'card-save', 'aria-label': 'Скачать', title: 'Скачать' }, icon('save'));
+      save.addEventListener('click', (event) => {
+        event.stopPropagation();
+        saveMedia(item.media_id, root);
+      });
+      node.append(open, save);
     } else if (RUNNING.has(item.state)) {
       const box = el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
         el('b', { class: 'card-time' }, busyText(running.get(item.id))));
@@ -383,7 +392,7 @@ function build(view, ctx) {
         ctx.navigate(`video?source=${encodeURIComponent(item.media_id)}`);
       }),
       starts[1], starts[2],
-      el('a', { class: 'btn btn-sm act-download', href: media(item.media_id, '?download=1'), download: '' }, 'Скачать'),
+      act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
       act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
     syncBusy();

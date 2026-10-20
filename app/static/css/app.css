@@ -375,6 +375,13 @@ label { font-size: 13px; color: var(--muted); }
 .card-open img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .card-cap { position: absolute; left: 6px; bottom: 6px; padding: 2px 7px; border-radius: 6px; background: rgba(0, 0, 0, .55);
   color: #fff; font-size: 11px; pointer-events: none; }
+.card-save { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: rgba(0, 0, 0, .38); color: #fff; backdrop-filter: blur(4px); }
+.card-save svg.ico { width: 18px; height: 18px; }
+@media (hover: hover) {
+  .card-save { opacity: 0; transition: opacity .15s; }
+  .photo-card:hover .card-save, .card-save:focus-visible { opacity: 1; }
+}
 .card-busy, .card-note { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; padding: 10px; color: var(--muted); font-size: 13px; text-align: center; }
 .card-busy p, .card-note p { margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5;

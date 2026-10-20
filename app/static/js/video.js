@@ -8,6 +8,7 @@
  * Текст сервера — только textContent. */
 import { api } from './api.js';
 import { createFeed } from './feed.js';
+import { saveMedia } from './save.js';
 import { button, el, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -184,7 +185,7 @@ function build(view, ctx) {
       node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata', poster,
         src: media(item.media_id) }));
       body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
-      acts.append(el('a', { class: 'btn btn-sm card-download', href: media(item.media_id, '?download=1'), download: '' }, 'Скачать'),
+      acts.append(button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
         button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
     } else {
       const over = el('div', { class: 'video-over' });

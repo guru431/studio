@@ -947,6 +947,23 @@ def done_cards(n):
     return f"document.querySelectorAll('#photo-feed .photo-card[data-state=done]').length === {n}"
 
 
+#: ссылки, которые страница «нажала» для загрузки: [href, есть ли download]; сама загрузка не идёт
+CLICKS = """(() => { window.clicked = []; const real = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { window.clicked.push([this.getAttribute('href'), this.hasAttribute('download')]); };
+  return true; })()"""
+
+
+def iphone(fail_first=False):
+    """Safari на iPhone: userAgent, canShare, share — записывает файлы; fail_first — первый вызов как «жест истёк»."""
+    return ("eval", "iphone", f"""(() => {{
+      Object.defineProperty(navigator, 'userAgent', {{ value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' }});
+      window.shared = []; let first = {str(fail_first).lower()};
+      navigator.canShare = () => true;
+      navigator.share = async (d) => {{ if (first) {{ first = false; throw new DOMException('gesture', 'NotAllowedError'); }}
+        window.shared.push(d.files.map(f => [f.name.slice(-4), f.type, f.size > 0])); }};
+      return true; }})()""")
+
+
 def png_of(w, h, color):
     out = io.BytesIO()
     Image.new("RGB", (w, h), color).save(out, "PNG")
@@ -1280,8 +1297,9 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
         ("wait", "document.querySelector('#photo-status').textContent.length > 0"),
         ("eval", "released", "document.querySelector('#photo-status').textContent"),
         # «Скачать», «Повторить с тем же seed»
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
-        ("eval", "download", "document.querySelector('#viewer .act-download').getAttribute('href')"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("eval", "spy", CLICKS),
+        ("click", "#viewer .act-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "download", "window.clicked[0]"),
         ("eval", "meta", "document.querySelector('#viewer .viewer-meta').textContent"),
         ("click", "#viewer .act-repeat"),
         ("wait", f"!document.querySelector('#viewer') && {done_cards(3)}"),
@@ -1307,13 +1325,59 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, lustify, flux, "gemma4-abl", flux]
     newest = v["items"][0]
     assert [i[:3] for i in v["items"]] == [["кот 1", 101, "1024x1024"], ["кот 0", 100, "832x1216"]]
-    assert v["download"].endswith("?download=1") and "seed 101" in v["meta"]
+    assert v["download"][0].endswith("?download=1") and v["download"][1] and "seed 101" in v["meta"]
     repeat = live.gw.generations[g0 + 2:]
     assert len(repeat) == 1 and repeat[0][0]["seed"] == 101 and repeat[0][0]["prompt"] == "кот 1"
     assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["lustify"]
     assert any(s.startswith("DELETE /api/images/") for s in r["sent"])
     assert v["hash"] == f"#/video?source={newest[3]}" and v["current"] == "video"
     assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_preview_save_downloads_without_opening_the_viewer(browser, live, width):
+    login = f"save{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)), ("eval", "spy", CLICKS),
+        ("eval", "visible", "getComputedStyle(document.querySelector('#photo-feed .card-save')).opacity !== '0'"
+                            " || matchMedia('(hover: hover)').matches"),
+        ("click", "#photo-feed .card-save"), ("wait", "window.clicked.length === 1"),
+        ("eval", "clicked", "window.clicked"), ("eval", "viewer", "!!document.querySelector('#viewer')")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    (href, download), = r["values"]["clicked"]
+    assert href.startswith("/api/media/") and href.endswith("?download=1") and download
+    assert r["values"]["viewer"] is False and r["values"]["visible"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_preview_save_on_iphone_goes_through_the_share_sheet(browser, live, fail_first):
+    login = f"ios{int(fail_first)}"
+    live.add_user(login)
+    steps = [*photo_screen(login, cards=1), ("wait", done_cards(1)), iphone(fail_first), ("eval", "spy", CLICKS),
+             ("click", "#photo-feed .card-save")]
+    if fail_first:
+        steps += [("wait", is_open("#save-dialog")), ("click", "#save-again"), ("wait", "!document.querySelector('#save-dialog')")]
+    r = browser.drive(live.url + "/", [*steps, ("wait", "window.shared.length === 1"),
+        ("eval", "shared", "window.shared"), ("eval", "clicked", "window.clicked.length")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["shared"] == [[[".png", "image/png", True]]] and r["values"]["clicked"] == 0
+    assert not problems(r), problems(r)
+
+
+def test_too_big_for_the_phone_is_downloaded_not_shared(browser, live):
+    live.add_user("iosbig")
+    big = ("eval", "big", """(() => { const real = window.fetch;
+      window.fetch = (url, opts) => String(url).startsWith('/api/media/') && !String(url).includes('?')
+        ? Promise.resolve(new Response(new Blob([new Uint8Array(8)], { type: 'image/png' }),
+            { headers: { 'Content-Type': 'image/png', 'Content-Length': String(200 * 1024 * 1024) } }))
+        : real(url, opts); return true; })()""")
+    r = browser.drive(live.url + "/", [*photo_screen("iosbig", cards=1), ("wait", done_cards(1)), iphone(), big,
+        ("eval", "spy", CLICKS), ("click", "#photo-feed .card-save"), ("wait", "window.clicked.length === 1"),
+        ("eval", "shared", "window.shared.length")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["shared"] == 0
 
 
 #: правка кистью через API страницы по первой картинке ленты: mask_media_id готовой правки
@@ -1456,8 +1520,8 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
                            " return [v.getAttribute('src'), v.getAttribute('poster'), v.controls, v.playsInline, v.preload]; })()"),
         ("eval", "range", f"fetch(document.querySelector('{player}').src, {{ headers: {{ Range: 'bytes=0-9' }} }})"
                           ".then(r => [r.status, r.headers.get('content-type')])"),
-        ("eval", "download", f"(() => {{ const a = document.querySelector('{CLIP} .card-download');"
-                             " return [a.getAttribute('href'), a.textContent]; })()"),
+        ("eval", "spy", CLICKS), ("click", f"{CLIP} .card-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "download", f"[window.clicked[0][0], document.querySelector('{CLIP} .card-download').textContent]"),
         ("eval", "card", f"document.querySelector('{CLIP}').textContent"),
         ("eval", "items", f"(async () => (await {API}.api('GET', '/api/videos')).items)()"),
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, height=900, mobile=width == 390)
