@@ -30,9 +30,12 @@
   CSRF, пауза после неудач), `profile`, `connections` (подключения, список разрешённых адресов,
   прокси к шлюзу), `admin`, `chat` (поток SSE), `documents`, `images`, `videos`, `media` (файлы на
   шаре, `Range`), `history`; формы фото и роликов (тело с пределом, фото файлом или из истории) —
-  `forms.py`; база — `db.py`, окружение — `config.py` (`REQUIRED`), часы — `clock.py`, команды
-  хоста — `manage.py` (`create-admin`, `backup`). Фронтенд без сборки — `app/static/` (модули ES,
-  сторонние библиотеки копией в `static/vendor/`, без CDN).
+  `forms.py`; цепочка промптов картинок и роликов (снимок шагов в `images.chain` / `videos.chain`,
+  у старых строк — по ссылкам) — `chains.py`; база — `db.py`, окружение — `config.py` (`REQUIRED`),
+  часы — `clock.py`, команды хоста — `manage.py` (`create-admin`, `backup`). Фронтенд без сборки —
+  `app/static/` (модули ES, сторонние библиотеки копией в `static/vendor/`, без CDN). Иконки (PNG и
+  `favicon.ico`) — `tools/make_icons.py` по геометрии `icons/icon.svg`: правка рисунка — в обоих,
+  PNG коммитятся.
 - Схема базы — `db.VERSION`; новая база получает `SCHEMA` сразу, база прода — шаги `db.STEPS`
   (только добавлять: откат `install.sh` на прежний код должен работать с новой базой).
 - Подключения: к адресам из списка разрешённых (панель администратора, по умолчанию
@@ -49,7 +52,8 @@
   не пишутся (uvicorn с `--no-access-log`, журнал — только события с id). Новый код это не ломает
   (сторожат тесты журналов разделов).
 - **Анонимны только** `/health`, `/login` (страница и вход), `/logout`, `/robots.txt` и оболочка
-  PWA: `/static/*`, `/manifest.webmanifest`, `/sw.js`, `/offline.html`; `/` без сессии уводит на
+  PWA: `/static/*`, `/manifest.webmanifest`, `/sw.js`, `/offline.html`, значки из корня
+  (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`, `/favicon.ico`); `/` без сессии уводит на
   вход, всё `/api/*` — через `auth.guard` (сессия + CSRF у изменяющих запросов). Страницы отвечают
   и на HEAD.
 - Защита входа от перебора — паузы (на пару «логин + адрес» и на адрес); растущая задержка ответа
