@@ -23,18 +23,10 @@ const ICONS = {
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
 
-/** Заглушка раздела до его задачи плана; задача заменит `load` на () => import('./<раздел>.js'). */
-function soon(title) {
-  return async () => ({
-    mount(el) { el.replaceChildren(head(title), notice('wait', 'Раздел скоро появится', 'empty')); },
-    unmount() {},
-  });
-}
-
 const SECTIONS = {
   chat: { title: 'Чат', load: () => import('./chat.js') },
   photo: { title: 'Фото', load: () => import('./photo.js') },
-  video: { title: 'Видео', load: soon('Видео') },
+  video: { title: 'Видео', load: () => import('./video.js') },
   profile: { title: 'Профиль', load: () => import('./profile.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
 };

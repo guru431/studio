@@ -6,14 +6,16 @@
 import asyncio
 import base64
 import io
+import re
 import socket
 import time
 
+import httpx
 import pytest
 from PIL import Image
 
 from browser import launch
-from fakes import PNG_REAL, TOKEN as GW_TOKEN
+from fakes import PNG_REAL, TOKEN as GW_TOKEN, VIDEO_MODEL, video_object
 from live_app import start_live_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -1074,4 +1076,175 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
     assert f["calls"][0] is None and len(f["calls"]) == 4    # три страницы и пустая
     assert f["after"] == {"first": "new", "updated": "i0*", "titles": ["Сегодня", f["titles"][2]], "count": 21}
     assert f["reloaded"]["count"] == 10 and f["reloaded"]["calls"] == 5
+    assert not problems(r), problems(r)
+
+
+# ---- видео ---------------------------------------------------------------------
+
+CLIP = "#video-feed .video-card"
+VIDEO_FEED_READY = ("document.querySelector('#video-feed')?.dataset.feed"
+                    " && document.querySelector('#video-feed').dataset.feed !== 'loading'")
+
+
+def clips(state, n):
+    return f"document.querySelectorAll('{CLIP}[data-state={state}]').length === {n}"
+
+
+def video_screen(login):
+    """Вход, подключение к шлюзу, раздел «Видео» с загруженной лентой."""
+    return [*signin(login), ("wait", READY), add_gateway(), *go("video"), ("wait", VIDEO_FEED_READY)]
+
+
+@pytest.fixture
+def ready_clips(live):
+    """Ролики шлюза в тесте готовы с первого опроса; прежнее поведение шлюза — после теста."""
+    gw = live.gw
+    saved = gw.video_status, dict(gw.video_extra), dict(gw.on)
+    gw.video_status = "completed"
+    yield gw
+    gw.video_status, gw.video_extra = saved[0], saved[1]
+    gw.on.clear()
+    gw.on.update(saved[2])
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, width):
+    """Перенос test_studio_upload_browser «Оживить» на новые разделы: «Оживить» в просмотре фото
+    открывает раздел видео с этим фото, «Оживить» раздела шлёт его в /api/videos, готовый ролик
+    в ленте — плеер с постером исходника, «Скачать», «Удалить»."""
+    login = f"anim{width}"
+    live.add_user(login)
+    v0 = len(live.gw.video_forms)
+    player = f"{CLIP}[data-state=done] video"
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth > 0"),
+        ("eval", "source", "location.hash.split('source=')[1]"),
+        set_value("#video-seconds", "7"),
+        ("click", "#chip-quality"), ("click", "#chip-quality-menu [data-value=high]"),
+        ("click", "#chip-smooth"),
+        ("eval", "smooth", "document.querySelector('#chip-smooth').getAttribute('aria-pressed')"),
+        ("type", "#video-prompt", "she slowly turns her head"),
+        ("click", "#video-go"),
+        ("wait", f"document.querySelector('{player}')"),
+        ("eval", "player", f"(() => {{ const v = document.querySelector('{player}');"
+                           " return [v.getAttribute('src'), v.getAttribute('poster'), v.controls, v.playsInline, v.preload]; })()"),
+        ("eval", "range", f"fetch(document.querySelector('{player}').src, {{ headers: {{ Range: 'bytes=0-9' }} }})"
+                          ".then(r => [r.status, r.headers.get('content-type')])"),
+        ("eval", "download", f"(() => {{ const a = document.querySelector('{CLIP} .card-download');"
+                             " return [a.getAttribute('href'), a.textContent]; })()"),
+        ("eval", "card", f"document.querySelector('{CLIP}').textContent"),
+        ("eval", "items", f"(async () => (await {API}.api('GET', '/api/videos')).items)()"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, height=900, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    forms = live.gw.video_forms[v0:]
+    assert len(forms) == 1
+    fields, image, _raw = forms[0]
+    assert fields == {"model": VIDEO_MODEL, "seconds": "7", "quality": "high", "smooth": "false",
+                      "prompt": "she slowly turns her head"}
+    assert picture(image) == picture(PNG_REAL)                  # фото истории, а не файл с устройства
+    item = v["items"][0]
+    assert item["state"] == "done" and item["source_media_id"] == v["source"] and v["smooth"] == "false"
+    assert v["player"] == [f"/api/media/{item['media_id']}", f"/api/media/{v['source']}?thumb=1", True, True, "metadata"]
+    assert v["range"] == [206, "video/mp4"]
+    assert v["download"] == [f"/api/media/{item['media_id']}?download=1", "Скачать"]
+    for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", "seed 42", "Удалить"):
+        assert words in v["card"], words
+    assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
+    assert not problems(r), problems(r)
+
+
+def test_video_feed_shows_progress_and_survives_reload(browser, live, ready_clips):
+    login = "vreload"
+    live.add_user(login)
+    v0 = len(live.gw.video_forms)
+    running_id = f"video_{len(live.gw.video_ids) + 2:024x}"     # второй ролик теста «делается»
+
+    async def running(request):
+        if request.method != "GET":
+            return await live.gw.builtin(request)
+        return httpx.Response(200, json=video_object(running_id, status="in_progress", progress=37,
+                                                     detail="делается: шаг 3 из 8", seed=7))
+
+    live.gw.on[f"/slot/videos/{running_id}"] = running
+    busy = f"{CLIP}[data-state=in_progress]"
+    r = browser.drive(live.url + "/", [*video_screen(login),
+        ("eval", "empty", "document.querySelector('#video-feed .feed-empty').textContent"),
+        ("click", "#video-go"),
+        ("wait", "document.querySelector('#video-error').textContent.length > 0"),
+        ("eval", "noSource", "document.querySelector('#video-error').textContent"),
+        put_file("#video-file", png_of(48, 64, "purple")),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48"),
+        ("click", "#video-go"), ("wait", clips("done", 1)),
+        ("type", "#video-prompt", "медленный наезд камеры"), ("click", "#video-go"),
+        ("wait", f"document.querySelector('{busy}')?.textContent.includes('37%')"),
+        ("eval", "bar", f"document.querySelector('{busy} .video-bar span').style.width"),
+        ("eval", "busyText", f"document.querySelector('{busy}').textContent"),
+        ("eval", "goFree", "!document.querySelector('#video-go').disabled"),
+        ("idle",),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", f"document.querySelector('{busy}')?.textContent.includes('37%')"),
+        ("eval", "after", f"[...document.querySelectorAll('{CLIP}')].map(c => c.dataset.state)"),
+        ("click", f"{busy} .card-cancel"),
+        ("wait", clips("cancelled", 1)),
+        ("eval", "final", f"document.querySelector('{CLIP}[data-state=cancelled]').textContent")], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "Здесь появятся ваши ролики" in v["empty"] and v["noSource"].startswith("Выберите фото")
+    assert v["bar"] == "37%" and "Делается: шаг 3 из 8" in v["busyText"] and v["goFree"]
+    assert v["after"] == ["in_progress", "done"]
+    assert "Отменено" in v["final"]
+    assert any(s.endswith("/cancel") for s in r["sent"]) and running_id in live.gw.video_deleted
+    first, second = (f[0] for f in live.gw.video_forms[v0:])
+    assert picture(live.gw.video_forms[v0][1]) == ((48, 64), (128, 0, 128))
+    assert "prompt" not in first and first["seconds"] == "5" and first["quality"] == "standard"
+    assert first["smooth"] == "true" and "seed" not in first
+    assert second["prompt"] == "медленный наезд камеры"
+    assert not problems(r), problems(r)
+
+
+def test_video_layout_fits_390(browser, live, ready_clips):
+    login = "vnarrow"
+    live.add_user(login)
+    grid = "document.querySelector('#video-feed .feed-grid')"
+    inside = """(sel) => [...document.querySelectorAll(sel)].every(e => { const b = e.getBoundingClientRect();
+      return b.width === 0 || (b.left >= 0 && b.right <= innerWidth); })"""
+    r = browser.drive(live.url + "/", [*video_screen(login),
+        ("eval", "defaults", "[document.querySelector('#video-seconds').value,"
+                             " document.querySelector('#chip-quality').textContent,"
+                             " document.querySelector('#chip-smooth').getAttribute('aria-pressed'),"
+                             " document.querySelector('#chip-smooth').textContent,"
+                             " document.querySelector('#video-prompt').placeholder,"
+                             " document.querySelector('#video-prompt').maxLength,"
+                             " document.querySelector('#video-go').textContent]"),
+        put_file("#video-file", png_of(40, 30, "teal")),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth === 40"),
+        ("click", "#video-go"), ("wait", clips("done", 1)),
+        ("eval", "overflow", f"!({NO_OVERFLOW}) || document.querySelector('#view').scrollWidth"
+                             " > document.querySelector('#view').clientWidth"),
+        ("eval", "cols", f"getComputedStyle({grid}).gridTemplateColumns.split(' ').length"),
+        ("eval", "aboveTabs", "document.querySelector('#video-composer').getBoundingClientRect().bottom"
+                              " <= document.querySelector('#rail').getBoundingClientRect().top"),
+        ("eval", "inside", f"({inside})('#video-composer .chip, #video-go, #video-source-clear, {CLIP}, {CLIP} .btn')"),
+        ("click", "#chip-quality"), ("wait", "!document.querySelector('#chip-quality-menu').hidden"),
+        ("eval", "menu", f"({inside})('#chip-quality-menu .chip-option')"),
+        ("eval", "qualities", "[...document.querySelectorAll('#chip-quality-menu .chip-option')].map(e => e.textContent)"),
+        ("press", "Escape"), ("wait", "document.querySelector('#chip-quality-menu').hidden"),
+        set_value("#video-seconds", "31"), ("click", "#video-go"),
+        ("wait", "document.querySelector('#video-error').textContent.length > 0"),
+        ("eval", "error", "document.querySelector('#video-error').textContent"),
+        ("click", "#video-source-clear"),
+        ("eval", "cleared", "!document.querySelector('#video-source img[src]')"
+                            " && document.querySelector('#video-file').files.length === 0")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    seconds, quality, smooth, smooth_text, placeholder, maxlength, go_text = v["defaults"]
+    assert (seconds, smooth, maxlength, go_text) == ("5", "true", 4000, "Оживить")
+    assert "Обычно 576p" in quality and "32 к/с" in smooth_text
+    assert "пусто — движение придумает gemma-abl" in placeholder
+    assert not v["overflow"] and v["cols"] == 2 and v["aboveTabs"] and v["inside"] and v["menu"]
+    assert v["qualities"] == ["Быстро 480p", "Обычно 576p", "Высоко 720p"]
+    assert v["error"].startswith("Длительность") and v["cleared"]
     assert not problems(r), problems(r)
