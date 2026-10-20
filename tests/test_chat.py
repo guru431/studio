@@ -169,7 +169,7 @@ def test_document_goes_in_full_before_the_question(studio):
 
 
 def test_too_big_document_is_refused_before_saving(studio):
-    add_gateway(studio); cid = new_chat(studio)
+    gw = add_gateway(studio); cid = new_chat(studio)
     doc = attach(studio, "book.txt", b"word " * 80_000, "text/plain")        # 400 тыс. знаков ≈ 133 тыс. токенов
     r = turn(studio, cid, QUESTION, attachment_ids=[doc["id"]])
     assert r.status_code == 413
@@ -181,7 +181,8 @@ def test_too_big_document_is_refused_before_saving(studio):
     unbound = state.DB.execute("SELECT message_id FROM attachments WHERE id = ?", (doc["id"],)).fetchone()
     assert unbound["message_id"] is None
     # предел модели вне CONTEXT — из списка моделей подключения
-    studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"})
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"}).json()["model"] == "tiny"
     studio.gw.models.append({"id": "tiny", "context_length": 8192})
     r = turn(studio, cid, "а" * 15_000)
     assert r.status_code == 413 and "при пределе 8 тыс." in r.json()["detail"]["message"]
@@ -581,3 +582,11 @@ def test_chat_text_never_reaches_the_log(studio, caplog):
                    "личное", TOKEN):
         assert secret not in caplog.text, secret
     assert caplog.records, "служба ничего не пишет в журнал"
+
+
+def test_new_chat_takes_the_sections_default(studio):
+    cid = add_gateway(studio)
+    studio.c.put(f"/api/sections/chat/links/{cid}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    studio.c.put("/api/sections/chat/default", json={"connection_id": cid, "model": "gemma4-abl"})
+    assert studio.c.post("/api/chats", json={}).json()["model"] == "gemma4-abl"
+    assert studio.c.post("/api/chats", json={"connection_id": cid, "model": "other"}).status_code == 422

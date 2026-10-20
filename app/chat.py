@@ -112,19 +112,10 @@ def _chat_out(row) -> dict:
             "updated": row["updated"]}
 
 
-def _chat_connection(user_id: int, conn_id: int) -> Connection:
-    conn = connections.get(user_id, conn_id)                # чужое и неизвестное — 404 gone
-    if "chat" not in conn.sections:
-        raise HTTPException(422, {"code": "connection", "message": "у подключения нет раздела «чат»"})
-    return conn
-
-
-def _default_connection(user) -> Connection:
-    """Подключение умолчания раздела «Чат»."""
-    chosen = sections.default(user.id, "chat")
-    if chosen is None:
-        raise HTTPException(409, {"code": "no_connection", "message": "выберите модель в настройках раздела «Чат»"})
-    return chosen[0]
+def _chat_pair(user_id: int, conn_id: "int | None", model: "str | None") -> tuple[Connection, str]:
+    """Подключение и модель диалога из раздела «Чат» (sections.resolve): чужое — 404 gone, не
+    отмеченная модель — 422, нет умолчания — 409 no_model."""
+    return sections.resolve(user_id, "chat", conn_id, (model or "").strip() or None)
 
 
 def _attachments(chat_id: str) -> dict[str, list]:
@@ -474,8 +465,7 @@ async def list_chats(request: Request):
 @router.post("/chats", status_code=201)
 async def create_chat(body: ChatIn, request: Request):
     user = request.state.user
-    conn = _chat_connection(user.id, body.connection_id) if body.connection_id is not None else _default_connection(user)
-    model = (body.model or "").strip() or user.default_model or manage.DEFAULT_MODEL
+    conn, model = _chat_pair(user.id, body.connection_id, body.model)
     chat_id, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
                      " VALUES (?, ?, NULL, ?, ?, ?, ?)", (chat_id, user.id, conn.id, model, now, now))
@@ -497,10 +487,11 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
     sent, changes = body.model_fields_set, {}
     if "title" in sent:
         changes["title"] = (body.title or "").strip() or None
-    if "connection_id" in sent and body.connection_id is not None:
-        changes["connection_id"] = _chat_connection(uid, body.connection_id).id
-    if "model" in sent and (body.model or "").strip():
-        changes["model"] = body.model.strip()
+    if ("connection_id" in sent and body.connection_id is not None) or ("model" in sent and (body.model or "").strip()):
+        row = _chat_row(uid, chat_id)
+        conn_id = body.connection_id if body.connection_id is not None else row["connection_id"]
+        conn, model = _chat_pair(uid, conn_id, body.model if (body.model or "").strip() else row["model"])
+        changes["connection_id"], changes["model"] = conn.id, model
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))

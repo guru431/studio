@@ -120,18 +120,6 @@ def slot_url(conn: Connection, path: str) -> str:
     return f"{conn.base_url}/slot{path}"
 
 
-def _section_connection(user_id: int, section: str) -> Connection | None:
-    return next((c for c in list_for(user_id) if c.kind == "srvllm" and section in c.sections and c.proxied), None)
-
-
-def photo_connection(user_id: int) -> Connection | None:
-    return _section_connection(user_id, "photo")
-
-
-def video_connection(user_id: int) -> Connection | None:
-    return _section_connection(user_id, "video")
-
-
 def _direct_ok(base_url: str) -> bool:
     """Прямое подключение браузер откроет: https или петля."""
     url = httpx.URL(base_url)

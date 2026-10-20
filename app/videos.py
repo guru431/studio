@@ -37,6 +37,7 @@ import clock
 import connections
 import forms
 import media
+import sections
 import state
 import upstream
 from connections import Connection
@@ -65,6 +66,8 @@ UNSAVED = "не удалось сохранить файл: хранилище �
 
 
 class VideoIn(BaseModel):
+    connection_id: "int | None" = None
+    model: "str | None" = Field(default=None, max_length=200)
     prompt: str = Field(default="", max_length=4000)
     seconds: int = Field(default=5, ge=1, le=30)
     quality: Literal["fast", "standard", "high"] = "standard"
@@ -191,10 +194,9 @@ async def cancel_user(user_id: int) -> None:
 
 # ---- ввод ------------------------------------------------------------------
 
-def _video_connection(user_id: int) -> Connection:
-    conn = connections.video_connection(user_id)
-    if conn is None:
-        raise HTTPException(409, {"code": "no_gateway", "message": "добавьте подключение к шлюзу srvllm в профиле"})
+def _video_connection(user_id: int, connection_id: "int | None" = None, model: "str | None" = None) -> Connection:
+    """Подключение раздела «Видео» (sections.resolve): модель — только `wan` шлюза srvllm."""
+    conn, _model = sections.resolve(user_id, "video", connection_id, model)
     return conn
 
 
@@ -227,7 +229,7 @@ async def _forget(user_id: int, media_id: str) -> None:
 @router.post("", status_code=201)
 async def create_video(request: Request):
     uid = request.state.user.id
-    conn = _video_connection(uid)
+    _video_connection(uid)                       # раздел без модели — отказ до чтения тела
     try:
         # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
         fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, BODY_MAX),
@@ -235,6 +237,7 @@ async def create_video(request: Request):
         source_id = fields.pop("source_media_id", None)
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
+        conn = _video_connection(uid, body.connection_id, body.model)
         image = await forms.photo(uid, upload, source_id, VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None

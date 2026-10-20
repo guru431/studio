@@ -151,7 +151,7 @@ def test_video_gateway_refusals_keep_their_code(studio, code, words):
 def test_video_without_gateway_connection_is_explained(studio):
     add_connection(studio, kind="srvllm", base_url="http://10.77.1.15:4000", token=TOKEN, sections=["photo"])
     r = create_video(studio)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_gateway"
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"
     assert studio.gw.video_calls == []
 
 
@@ -591,3 +591,10 @@ def test_feed_pages_by_created(studio):
     assert [x["id"] for x in older] == [ids[2], ids[1]]
     for bad in (0, 101):
         assert studio.c.get(f"/api/videos?limit={bad}").status_code == 422
+
+
+def test_video_needs_a_linked_gateway(studio):
+    cid = add_gateway(studio)
+    studio.c.delete(f"/api/sections/video/links/{cid}")
+    r = create_video(studio, prompt=PROMPT)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"

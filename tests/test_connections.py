@@ -348,8 +348,6 @@ def test_capabilities_follow_connections(studio):
     assert caps() == none
     cid = add_connection(studio, kind="srvllm", base_url=GW, sections=["chat", "photo"])
     assert caps() == none | {"chat": True, "photo": True}
-    uid = conn_of(cid).user_id
-    assert connections.photo_connection(uid).id == cid and connections.video_connection(uid) is None
     state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")   # не через сервер — не фото
     assert caps() == none | {"chat": True}
 

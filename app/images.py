@@ -42,6 +42,7 @@ import clock
 import connections
 import forms
 import media
+import sections
 import state
 import upstream
 from connections import Connection
@@ -111,6 +112,11 @@ class Job:
     media_id: str | None = None              # готовая картинка в media (вместо прежнего png в памяти)
     mask_media_id: str | None = None
 
+    @property
+    def gateway_model(self) -> str:
+        """Id модели в запросе: у шлюза — по короткому имени студии, у внешнего сервиса — как есть."""
+        return MODELS.get(self.model, self.model) if self.conn.kind == "srvllm" else self.model
+
 
 JOBS: dict[str, Job] = {}
 
@@ -124,7 +130,8 @@ class JobError(Exception):
 class JobIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=24000)
     size: Literal["portrait", "square", "landscape", "original"]
-    model: Literal["lustify", "flux"] = "lustify"
+    model: "str | None" = Field(default=None, max_length=200)      # короткое имя srvllm или id сервиса
+    connection_id: "int | None" = None
     seed: "int | None" = Field(default=None, ge=0, le=2**32 - 1)
     strength: float = Field(default=0.65, ge=0.05, le=1)
     source_media_id: "str | None" = Field(default=None, max_length=64)
@@ -153,10 +160,12 @@ def ensure_idle(user_id: int) -> None:
                                   "id": active.id})
 
 
-def _photo_connection(user_id: int) -> Connection:
-    conn = connections.photo_connection(user_id)
+def _srvllm_photo(user_id: int) -> Connection:
+    """Шлюз srvllm раздела «Фото» — для «Описать» и «Освободить карту» (их нет у внешних сервисов)."""
+    conn = next((l.connection for l in sections.links(user_id, "photo")
+                 if l.connection.kind == "srvllm" and l.connection.proxied), None)
     if conn is None:
-        raise HTTPException(409, {"code": "no_gateway", "message": "добавьте подключение к шлюзу srvllm в профиле"})
+        raise HTTPException(409, {"code": "no_gateway", "message": "добавьте шлюз srvllm в настройках раздела «Фото»"})
     return conn
 
 
@@ -251,7 +260,7 @@ async def _discard(user_id: int, media_ids: list[str]) -> None:
 @router.post("", status_code=202)
 async def create_job(request: Request):
     uid = request.state.user.id
-    conn = _photo_connection(uid)
+    sections.resolve(uid, "photo", None, None)  # раздел без модели — отказ до чтения тела
     ensure_idle(uid)
     upload, mask = None, None
     try:
@@ -278,6 +287,7 @@ async def create_job(request: Request):
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": "проверьте промпт, модель, размер, seed и силу изменения"}) from None
+    conn, model = sections.resolve(uid, "photo", body.connection_id, body.model)
     # Parsing uploads yields to other requests: recheck before inserting the job.
     ensure_idle(uid)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
@@ -302,7 +312,7 @@ async def create_job(request: Request):
         await _discard(uid, saved)
         raise
     now = clock.NOW()
-    job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=body.model, prompt=body.prompt, size=size,
+    job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=model, prompt=body.prompt, size=size,
               seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
               strength=body.strength, mask=mask, source_media_id=source_id, mask_media_id=mask_id)
     strength = body.strength if image is not None else None
@@ -315,7 +325,7 @@ async def create_job(request: Request):
                       job.state, job.detail, now, json.dumps(chain, ensure_ascii=False)))
     JOBS[job.id] = job
     job.task = asyncio.create_task(run_job(job))
-    log.info("задание %s: %s %s", job.id[:8], body.model, job.size)
+    log.info("задание %s: %s", job.id[:8], job.size)
     return {"id": job.id, "seed": seed}
 
 
@@ -335,7 +345,7 @@ async def list_images(request: Request, before: "float | None" = None, limit: in
 @router.post("/descriptions", status_code=202)
 async def create_description(request: Request):
     uid = request.state.user.id
-    conn = _photo_connection(uid)
+    conn = _srvllm_photo(uid)
     ensure_idle(uid)
     try:
         fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, MAX_BODY),
@@ -371,7 +381,7 @@ async def description_status(job_id: str, request: Request):
 @router.post("/release")
 async def release_card(request: Request):
     """Обе модели и gemma-abl — тремя release фото-подключения администратора: итог по каждой."""
-    conn = _photo_connection(auth.require_admin(request).id)
+    conn = _srvllm_photo(auth.require_admin(request).id)
     results = {}
     for name, model in (MODELS | {"gemma-abl": DESCRIPTION_MODEL}).items():
         try:
@@ -463,7 +473,7 @@ async def _release_others(job: Job) -> None:
     """Release другой модели картинок перед запросом (п. 4 шапки): итог не важен — занятую (409)
     запрос дождётся у шлюза, а недоступный шлюз и убранный адрес назовёт сам запрос."""
     for model in MODELS.values():
-        if model == MODELS[job.model]:
+        if model == job.gateway_model:
             continue
         try:
             r = await release(job.conn, model)
@@ -474,7 +484,7 @@ async def _release_others(job: Job) -> None:
 
 
 async def generate(job: Job) -> "tuple[bytes, int | None]":
-    payload = {"model": MODELS[job.model], "prompt": job.prompt, "n": 1, "size": job.size,
+    payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
     await _release_others(job)
     try:
@@ -548,7 +558,7 @@ async def release_after_cancel(job: Job, *, cancelled=True) -> str:
     prefix = "отменено" if cancelled else "описание готово"
     while True:
         try:
-            r = await release_description(job.conn) if job.kind == "description" else await release(job.conn, MODELS[job.model])
+            r = await release_description(job.conn) if job.kind == "description" else await release(job.conn, job.gateway_model)
         except httpx.HTTPError as e:
             log.warning("задание %s: release не прошёл (%s)", job.id[:8], type(e).__name__)
             return f"{prefix}; карту освободить не удалось — шлюз недоступен: {type(e).__name__}"

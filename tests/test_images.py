@@ -284,7 +284,7 @@ def test_release_is_for_admins_only(studio):
 def test_prompt_size_seed_and_model_are_validated(studio, payload):
     add_gateway(studio)
     r = studio.c.post("/api/images", json=payload)
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "input"
+    assert r.status_code == 422 and r.json()["detail"]["code"] == ("model" if "model" in payload else "input")
     assert studio.gw.generations == [] and not images.JOBS
 
 
@@ -292,8 +292,9 @@ def test_photo_without_gateway_connection_is_explained(studio):
     add_connection(studio)                                    # только чат: фото-подключения нет
     r = start(studio)
     assert r.status_code == 409 and r.json()["detail"] == {
-        "code": "no_gateway", "message": "добавьте подключение к шлюзу srvllm в профиле"}
-    assert describe(studio).json()["detail"]["code"] == "no_gateway"
+        "code": "no_model", "message": "выберите модель в настройках раздела «Фото»"}
+    assert describe(studio).json()["detail"] == {
+        "code": "no_gateway", "message": "добавьте шлюз srvllm в настройках раздела «Фото»"}
     assert studio.gw.requests == [] and not images.JOBS
 
 
@@ -895,3 +896,18 @@ def test_prompt_and_key_never_reach_the_log_or_the_answers(studio, caplog):
     answers = str(status) + studio.c.get("/api/images").text + studio.c.get("/api/connections").text
     assert TOKEN not in answers
     assert images.JOBS[job].prompt == ""
+
+
+def test_unchecked_model_is_refused_and_default_is_used(studio):
+    cid = add_gateway(studio)
+    studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["flux"]})
+    assert start(studio, model="lustify").status_code == 422
+    job = wait_state(studio, start(studio).json()["id"], {"done"})
+    assert job["model"] == "flux" and studio.gw.generations[-1][0]["model"] == FLUX
+
+
+def test_photo_without_a_checked_model_points_to_settings(studio):
+    cid = add_gateway(studio)
+    studio.c.delete(f"/api/sections/photo/links/{cid}")
+    r = start(studio)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"
