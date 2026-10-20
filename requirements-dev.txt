@@ -3,3 +3,5 @@
 pytest>=8.0
 # `timeout = 30` в pytest.ini: зависший тест падает с дампом стеков, а не держит прогон
 pytest-timeout>=2.3
+# `-n 4` в pytest.ini: набор — четырьмя процессами
+pytest-xdist>=3.6

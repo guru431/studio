@@ -26,6 +26,16 @@ def env(tmp_path, monkeypatch):
     return SimpleNamespace(db_path=db_path, media_dir=media_dir)
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Браузерные, PowerShell и живая приёмка — одной группой xdist: один процесс, по очереди
+    (браузер на тест и карта прода не делятся). Раньше хука xdist: он дописывает группу к id теста
+    в своём хуке того же имени, и метка, поставленная после, до раскладки не доходит."""
+    for item in items:
+        if item.get_closest_marker("integration") or item.get_closest_marker("manual"):
+            item.add_marker(pytest.mark.xdist_group("serial"))
+
+
 T0 = 1_800_000_000.0
 
 
