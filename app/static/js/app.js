@@ -2,7 +2,8 @@
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/profile, #/admin (только администратору);
  * прочее — #/chat. Раздел — модуль с `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id,
- * applyTheme }, id — хвост адреса (#/chat/<id>) или null. Смена id в том же разделе зовёт
+ * query, applyTheme }, id — хвост адреса (#/chat/<id>) или null, query — URLSearchParams после `?`
+ * (#/video?source=<media_id> — «Оживить» из раздела фото). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
  * Раздел без возможности (me.capabilities.photo === false) открывается подсказкой со ссылкой
  * на профиль. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты). */
@@ -32,7 +33,7 @@ function soon(title) {
 
 const SECTIONS = {
   chat: { title: 'Чат', load: () => import('./chat.js') },
-  photo: { title: 'Фото', load: soon('Фото') },
+  photo: { title: 'Фото', load: () => import('./photo.js') },
   video: { title: 'Видео', load: soon('Видео') },
   profile: { title: 'Профиль', load: () => import('./profile.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
@@ -101,12 +102,13 @@ function applyTheme(theme) {
 }
 
 function parse(hash) {
-  const match = /^#\/([a-z]+)(?:\/(.+))?$/.exec(hash);
-  if (!match) return { section: '', id: null };
+  const match = /^#\/([a-z]+)(?:\/([^?]+))?(?:\?(.*))?$/.exec(hash);
+  const query = new URLSearchParams(match ? match[3] || '' : '');
+  if (!match) return { section: '', id: null, query };
   try {
-    return { section: match[1], id: match[2] ? decodeURIComponent(match[2]) : null };
+    return { section: match[1], id: match[2] ? decodeURIComponent(match[2]) : null, query };
   } catch {
-    return { section: '', id: null };          // битый %-код в адресе — на раздел по умолчанию
+    return { section: '', id: null, query };   // битый %-код в адресе — на раздел по умолчанию
   }
 }
 
@@ -118,14 +120,14 @@ function allowed({ section, id }) {
 async function render() {
   let route = parse(location.hash);
   if (!allowed(route)) {
-    route = { section: 'chat', id: null };
+    route = { section: 'chat', id: null, query: new URLSearchParams() };
     history.replaceState(null, '', '#/chat');
   }
   for (const tab of document.querySelectorAll('#rail .tab')) {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
-  const ctx = { me, navigate, id: route.id, applyTheme };
+  const ctx = { me, navigate, id: route.id, query: route.query, applyTheme };
   if (current && current.section === route.section && current.module.update) {
     current.module.update(ctx);
     return;

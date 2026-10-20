@@ -3,12 +3,17 @@
 Студия — живая (`live_app.py`), шлюз подменён. Браузер — свой на каждый тест: cookie у
 браузера общие для всех портов localhost, и вход одного теста достался бы следующему.
 """
+import asyncio
 import base64
+import io
 import socket
+import time
 
 import pytest
+from PIL import Image
 
 from browser import launch
+from fakes import PNG_REAL, TOKEN as GW_TOKEN
 from live_app import start_live_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -706,4 +711,367 @@ def test_chat_layout_fits_390(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert not v["overflow"] and v["codeScrolls"] and v["hidden"] and v["aboveTabs"] and not v["overflow2"]
+    assert not problems(r), problems(r)
+
+
+# ---- фото ----------------------------------------------------------------------
+
+MODEL_IDS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
+FEED_READY = ("document.querySelector('#photo-feed')?.dataset.feed"
+              " && document.querySelector('#photo-feed').dataset.feed !== 'loading'")
+NEWEST_DONE = "#photo-feed .photo-card[data-state=done] .card-open"
+#: запросы POST /api/images… страницы: поля формы (файл — 'file:<размер>') или тело JSON
+SPY = """(() => { window.sentForms = []; const real = window.fetch;
+  window.fetch = (url, opts = {}) => {
+    if (opts.method === 'POST' && String(url).startsWith('/api/images')) {
+      const b = opts.body;
+      window.sentForms.push({ path: String(url), form: b instanceof FormData
+        ? Object.fromEntries([...b.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : 'file:' + v.size]))
+        : JSON.parse(b) });
+    }
+    return real(url, opts);
+  }; return true; })()"""
+
+
+def done_cards(n):
+    return f"document.querySelectorAll('#photo-feed .photo-card[data-state=done]').length === {n}"
+
+
+def png_of(w, h, color):
+    out = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(out, "PNG")
+    return out.getvalue()
+
+
+def picture(data):
+    with Image.open(io.BytesIO(data)) as im:
+        return im.size, im.convert("RGB").getpixel((0, 0))
+
+
+def described_picture(body):
+    url = body["messages"][0]["content"][1]["image_url"]["url"]
+    return picture(base64.b64decode(url.split(",", 1)[1]))
+
+
+def put_file(selector, data, name="photo.png"):
+    """Файл в поле, как из окна выбора, и событие change."""
+    b64 = base64.b64encode(data).decode()
+    return ("eval", "file", f"""(() => {{ const bytes = Uint8Array.from(atob('{b64}'), c => c.charCodeAt(0));
+      const dt = new DataTransfer(); dt.items.add(new File([bytes], '{name}', {{ type: 'image/png' }}));
+      const input = document.querySelector('{selector}'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.files.length; }})()""")
+
+
+def add_gateway():
+    return ("eval", "gateway", f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/connections', {{ name: 'Шлюз', kind: 'srvllm', base_url: {GATEWAY_URL!r},
+        token: {GW_TOKEN!r}, sections: ['chat', 'photo', 'video'] }});
+      await m.loadMe(); return true; }})()""")
+
+
+def make_images(n):
+    """n готовых картинок через API: промпт «кот i», размеры по кругу, seed 100+i."""
+    return ("eval", "images", f"""(async () => {{
+      const m = {API}; const sizes = ['portrait', 'square', 'landscape']; const out = [];
+      for (let i = 0; i < {n}; i++) {{
+        const job = await m.api('POST', '/api/images', {{ prompt: 'кот ' + i, size: sizes[i % 3], seed: 100 + i }});
+        for (let t = 0; t < 200; t++) {{
+          const item = await m.api('GET', '/api/images/' + job.id);
+          if (item.state === 'done') {{ out.push(item.media_id); break; }}
+          await new Promise(r => setTimeout(r, 30));
+        }}
+      }}
+      return out; }})()""")
+
+
+def photo_screen(login, cards=0):
+    """Вход, подключение к шлюзу, `cards` картинок в истории, раздел «Фото» с загруженной лентой."""
+    return [*signin(login), ("wait", READY), add_gateway(), *([make_images(cards)] if cards else []),
+            *go("photo"), ("wait", FEED_READY)]
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("model", ["lustify", "flux"])
+def test_photo_source_strength_mask_and_model_switch(browser, live, width, model):
+    nxt = "flux" if model == "lustify" else "lustify"
+    login = f"ph-{model}-{width}"
+    live.add_user(login)
+    start = len(live.gw.edits)
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+        put_file("#photo-file", png_of(40, 30, "blue")),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth === 40"),
+        ("eval", "strengthShown", "!document.querySelector('#photo-strength-label').hidden"),
+        set_value("#photo-strength", "0.4"),
+        ("type", "#photo-prompt", "watercolor landscape"),
+        ("click", "#photo-go"), ("wait", done_cards(1)),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        ("click", "#photo-source-clear"),
+        ("eval", "cleared", "document.querySelector('#photo-source').hidden"
+                            " && document.querySelector('#photo-file').files.length === 0"),
+        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={model}]"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", "#viewer .act-edit"),
+        ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
+        ("eval", "defaultModel", "document.querySelector('#edit-model-label').textContent"),
+        ("type", "#edit-prompt", "change only this patch to green"),
+        ("click", "#edit-local"), ("click", "#edit-submit"),
+        ("eval", "emptyMask", f"{is_open('#editor')} && document.querySelector('#edit-error').textContent.length > 0"),
+        ("click", "#edit-mask"), ("click", "#edit-submit"),
+        ("wait", f"!{is_open('#editor')} && {done_cards(2)}"),
+        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={nxt}]"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        ("eval", "reset", "!document.querySelector('#edit-local').checked && document.querySelector('#edit-prompt').value === ''"),
+        ("eval", "nextLabel", "document.querySelector('#edit-model-label').textContent"),
+        ("eval", "strengthVisible", "!document.querySelector('#edit-strength-label').hidden"),
+        ("eval", "editorOverflow", f"!({NO_OVERFLOW}) || document.querySelector('#editor').scrollWidth"
+                                   " > document.querySelector('#editor').clientWidth"),
+        ("type", "#edit-prompt", "make the landscape a watercolor"),
+        ("click", "#edit-submit"),
+        ("wait", f"!{is_open('#editor')} && {done_cards(3)}"),
+        ("eval", "forms", "window.sentForms"),
+        ("eval", "media", f"(async () => (await {API}.api('GET', '/api/images')).items.map(i => i.media_id))()")],
+        width=width, height=900, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    names = {"lustify": "Lustify", "flux": "FLUX"}
+    assert v["strengthShown"] and not v["overflow"] and v["cleared"]
+    assert names[model] in v["defaultModel"] and v["reset"] and names[nxt] in v["nextLabel"]
+    assert v["strengthVisible"] == (nxt == "lustify") and not v["editorOverflow"] and v["emptyMask"]
+    # страница: исходник файлом, затем фото истории с маской и без
+    _newest, middle, oldest = v["media"]
+    first, second, third = (f["form"] for f in v["forms"])
+    assert [f["path"] for f in v["forms"]] == ["/api/images"] * 3
+    assert first["model"] == "lustify" and first["strength"] == "0.4" and first["image"].startswith("file:")
+    assert "source_media_id" not in first and "mask" not in first
+    assert second["size"] == "original" and second["model"] == model and second["source_media_id"] == oldest
+    assert second["mask"].startswith("file:") and "image" not in second
+    assert third["size"] == "original" and third["model"] == nxt and third["source_media_id"] == middle
+    assert "mask" not in third
+    # шлюз: модель, сила только у Lustify, фото исходника
+    edits = live.gw.edits[start:]
+    assert len(edits) == 3
+    assert edits[0][0]["model"] == MODEL_IDS["lustify"] and edits[0][0]["strength"] == "0.4"
+    assert picture(edits[0][1]) == ((40, 30), (0, 0, 255))
+    assert edits[1][0]["model"] == MODEL_IDS[model] and edits[1][0]["size"] == "64x48"
+    assert edits[2][0]["model"] == MODEL_IDS[nxt]
+    assert edits[1 if model == "lustify" else 2][0]["strength"] == "0.25"
+    assert "strength" not in edits[2 if model == "lustify" else 1][0]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width,model", [(390, "lustify"), (1280, "flux")])
+def test_photo_description_is_edited_and_creates_without_a_source(browser, live, width, model):
+    login = f"desc-{width}"
+    live.add_user(login)
+    text = "An exceptionally detailed landscape with precise lighting and textures. " * 100
+    saved = live.gw.description_reply
+    live.gw.description_reply = {"choices": [{"message": {"content": text}, "finish_reason": "stop"}]}
+    d0, g0, e0 = len(live.gw.descriptions), len(live.gw.generations), len(live.gw.edits)
+    described = f"{is_open('#describe-dialog')} && document.querySelector('#describe-text').value.length > 0"
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+            ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={model}]"),
+            ("click", "#photo-menu-toggle"), ("wait", "!document.querySelector('#photo-menu').hidden"),
+            ("eval", "menu", "[...document.querySelectorAll('#photo-menu .menu-item')].map(e => e.textContent.trim())"),
+            ("press", "Escape"), ("wait", "document.querySelector('#photo-menu').hidden"),
+            put_file("#describe-file", png_of(64, 48, "blue"), "source.png"),
+            ("wait", described),
+            ("eval", "descriptionLength", "document.querySelector('#describe-text').value.length"),
+            ("eval", "append", "(() => { const t = document.querySelector('#describe-text'); t.value += ' Visible extra detail.';"
+                               " t.dispatchEvent(new Event('input')); return true; })()"),
+            ("type", "#describe-extra", "Добавь маленькую оранжевую лодку"),
+            ("eval", "counter", "document.querySelector('#describe-counter').textContent"),
+            ("click", "#describe-create"),
+            ("wait", f"!{is_open('#describe-dialog')} && {done_cards(1)}"),
+            ("eval", "prompt", "document.querySelector('#photo-prompt').value"),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+            ("click", "#viewer .act-describe"), ("wait", described),
+            ("eval", "fits", f"{NO_OVERFLOW} && document.querySelector('#describe-dialog').scrollWidth"
+                             " <= document.querySelector('#describe-dialog').clientWidth"),
+            ("eval", "forms", "window.sentForms")], width=width, height=900, mobile=width == 390)
+    finally:
+        live.gw.description_reply = saved
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["menu"] == ["Описать фото с устройства…"]                 # «Освободить карту» — только админу
+    assert v["descriptionLength"] == len(text.strip()) and v["fits"]
+    assert v["counter"].startswith(f"{len(v['prompt'])} / 24000")
+    assert v["prompt"].startswith(text.strip()) and "Visible extra detail." in v["prompt"]
+    assert "Добавь маленькую оранжевую лодку" in v["prompt"]
+    paths = [f["path"] for f in v["forms"]]
+    assert paths == ["/api/images/descriptions", "/api/images", "/api/images/descriptions"]
+    created = v["forms"][1]["form"]
+    assert created["model"] == model and created["prompt"] == v["prompt"]
+    assert not {"image", "mask", "source_media_id"} & created.keys()
+    assert v["forms"][0]["form"]["image"].startswith("file:") and v["forms"][2]["form"]["source_media_id"]
+    bodies = live.gw.descriptions[d0:]
+    assert [described_picture(b) for b in bodies] == [((64, 48), (0, 0, 255)), picture(PNG_REAL)]
+    gens = live.gw.generations[g0:]
+    assert len(gens) == 1 and len(live.gw.edits) == e0                  # по тексту, без исходного фото
+    assert gens[0][0]["model"] == MODEL_IDS[model] and gens[0][0]["prompt"] == v["prompt"]
+    assert not problems(r), problems(r)
+
+
+def test_photo_feed_survives_reload_with_a_running_job(browser, live):
+    import images
+    login = "runner"
+    live.add_user(login)
+
+    async def held(request):
+        """Генерация «идёт», пока задание не отменят (предел — 30 с)."""
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not any(j.state == "cancelling" for j in images.JOBS.values()):
+            await asyncio.sleep(0.01)
+        return await live.gw.builtin(request)
+
+    running = "#photo-feed .photo-card[data-state=working]"
+    live.gw.on["/slot/images/generations"] = held
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login),
+            ("type", "#photo-prompt", "долгий закат"), ("click", "#photo-go"),
+            ("wait", f"document.querySelector('{running} .card-cancel')"),
+            ("eval", "goBusy", "document.querySelector('#photo-go').disabled"),
+            ("idle",),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"document.querySelector('{running} .card-cancel')"),
+            ("wait", f"/Генерирую · \\d+:\\d\\d/.test(document.querySelector('{running}').textContent)"),
+            ("eval", "goBusyAfter", "document.querySelector('#photo-go').disabled"),
+            ("click", f"{running} .card-cancel"),
+            ("wait", "document.querySelector('#photo-feed .photo-card[data-state=cancelled]')"),
+            ("eval", "final", "document.querySelector('#photo-feed .photo-card').textContent"),
+            ("eval", "goFree", "!document.querySelector('#photo-go').disabled")], timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/generations", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["goBusy"] and v["goBusyAfter"] and v["goFree"]
+    assert "Отменено" in v["final"]
+    assert any(s.endswith("/cancel") for s in r["sent"])
+    assert not problems(r), problems(r)
+
+
+def test_photo_layout_fits_390(browser, live):
+    login = "narrow"
+    live.add_user(login)
+    grid = "document.querySelector('#photo-feed .feed-grid')"
+    inside = """(sel) => [...document.querySelectorAll(sel)].every(e => { const b = e.getBoundingClientRect();
+      return b.width === 0 || (b.left >= 0 && b.right <= innerWidth); })"""
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=3), ("wait", done_cards(3)),
+        ("eval", "overflow", f"!({NO_OVERFLOW}) || document.querySelector('#view').scrollWidth"
+                             " > document.querySelector('#view').clientWidth"),
+        ("eval", "cols", f"getComputedStyle({grid}).gridTemplateColumns.split(' ').length"),
+        ("eval", "day", "document.querySelector('#photo-feed .feed-day-title').textContent"),
+        ("eval", "aboveTabs", "document.querySelector('#photo-composer').getBoundingClientRect().bottom"
+                              " <= document.querySelector('#rail').getBoundingClientRect().top"),
+        ("eval", "chips", f"({inside})('#photo-composer .chip, #photo-go')"),
+        ("click", "#chip-size"), ("wait", "!document.querySelector('#chip-size-menu').hidden"),
+        ("eval", "sizeMenu", f"({inside})('#chip-size-menu .chip-option')"),
+        ("eval", "sizes", "[...document.querySelectorAll('#chip-size-menu .chip-option')].map(e => e.textContent)"),
+        ("click", "#chip-size-menu [data-value=landscape]"),
+        ("eval", "sizeChip", "document.querySelector('#chip-size').textContent"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("eval", "viewer", f"({inside})('#viewer button, #viewer a') && {NO_OVERFLOW}"),
+        ("eval", "actions", "[...document.querySelectorAll('#viewer [class*=act-]')].map(e => e.textContent)"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#viewer')")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert not v["overflow"] and v["cols"] == 2 and v["day"] == "Сегодня" and v["aboveTabs"]
+    assert v["chips"] and v["sizeMenu"] and v["viewer"]
+    assert v["sizes"] == ["Портрет 832×1216", "Квадрат 1024×1024", "Альбом 1216×832"]
+    assert "Альбом" in v["sizeChip"]
+    assert v["actions"] == ["Изменить", "Оживить", "Повторить с тем же seed", "Описать", "Скачать", "Удалить"]
+    assert not problems(r), problems(r)
+
+
+def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
+    login = "boss"
+    live.add_user(login, is_admin=True)
+    g0, rel0 = len(live.gw.generations), len(live.gw.releases)
+    grid = "document.querySelector('#photo-feed .feed-grid')"
+    cards = "document.querySelectorAll('#photo-feed .photo-card').length"
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=2), ("wait", done_cards(2)),
+        ("eval", "cols", f"getComputedStyle({grid}).gridTemplateColumns.split(' ').length"),
+        ("eval", "caption", "document.querySelector('#photo-feed .photo-card .card-cap').textContent"),
+        ("click", "#photo-menu-toggle"), ("click", "#photo-release"),
+        ("wait", "document.querySelector('#photo-status').textContent.length > 0"),
+        ("eval", "released", "document.querySelector('#photo-status').textContent"),
+        # «Скачать», «Повторить с тем же seed»
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("eval", "download", "document.querySelector('#viewer .act-download').getAttribute('href')"),
+        ("eval", "meta", "document.querySelector('#viewer .viewer-meta').textContent"),
+        ("click", "#viewer .act-repeat"),
+        ("wait", f"!document.querySelector('#viewer') && {done_cards(3)}"),
+        # «Удалить» — через окно подтверждения
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", "#viewer .act-delete"), ("wait", is_open("#photo-delete-dialog")),
+        ("click", "#photo-delete-confirm"),
+        ("wait", f"!document.querySelector('#viewer') && {cards} === 2"),
+        # «Оживить» — в раздел видео с картинкой
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", "#viewer .act-animate"),
+        ("wait", "location.hash.startsWith('#/video?source=')"),
+        ("eval", "hash", "location.hash"),
+        ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
+        ("eval", "items", f"(async () => (await {API}.api('GET', '/api/images')).items"
+                          ".map(i => [i.prompt, i.seed, i.size, i.media_id]))()")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["cols"] == 6 and v["caption"] == "Lustify"
+    assert v["released"] == "Lustify — освобождена; FLUX — освобождена; gemma-abl — освобождена"
+    assert len(live.gw.releases) - rel0 == 3
+    newest = v["items"][0]
+    assert [i[:3] for i in v["items"]] == [["кот 1", 101, "1024x1024"], ["кот 0", 100, "832x1216"]]
+    assert v["download"].endswith("?download=1") and "seed 101" in v["meta"]
+    repeat = live.gw.generations[g0 + 2:]
+    assert len(repeat) == 1 and repeat[0][0]["seed"] == 101 and repeat[0][0]["prompt"] == "кот 1"
+    assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["lustify"]
+    assert any(s.startswith("DELETE /api/images/") for s in r["sent"])
+    assert v["hash"] == f"#/video?source={newest[3]}" and v["current"] == "video"
+    assert not problems(r), problems(r)
+
+
+FEED_MODULE = """(async () => {
+  const { createFeed } = await import('/static/js/feed.js');
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;inset:0;overflow:auto;z-index:99;background:#fff';
+  document.body.append(box);
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  const today = day.getTime() / 1000;
+  const all = [];
+  for (let i = 0; i < 25; i++) all.push({ id: 'i' + i,
+    created: i < 5 ? today + 100 - i : i < 10 ? today - 3600 - i : today - 5 * 86400 - i });
+  const calls = [];
+  const card = (item) => { const n = document.createElement('div'); n.className = 'card';
+    n.style.height = '1000px'; n.textContent = item.id + (item.tag || ''); return n; };
+  const feed = createFeed(box, { key: (item) => item.id, render: card, load: async (before) => {
+    calls.push(before ?? null);
+    return all.filter(x => before === undefined || x.created < before).slice(0, 10); } });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  for (let i = 0; i < 100 && box.dataset.feed !== 'end'; i++) { box.scrollTop = box.scrollHeight; await sleep(30); }
+  const titles = () => [...box.querySelectorAll('.feed-day-title')].map(t => t.textContent);
+  const out = { end: box.dataset.feed, titles: titles(), count: box.querySelectorAll('.card').length, calls: calls.slice() };
+  feed.prepend({ id: 'new', created: today + 200 });
+  feed.update({ id: 'i0', created: today + 100, tag: '*' });
+  for (let i = 5; i < 10; i++) feed.remove('i' + i);
+  out.after = { first: box.querySelector('.card').textContent, updated: [...box.querySelectorAll('.card')][1].textContent,
+                titles: titles(), count: box.querySelectorAll('.card').length };
+  await feed.reload();
+  out.reloaded = { calls: calls.length, count: box.querySelectorAll('.card').length };
+  box.remove();
+  return out;
+})()"""
+
+
+def test_photo_feed_module_groups_days_and_pages(browser, live):
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("eval", "feed", FEED_MODULE)])
+    assert not r.get("failed"), r
+    f = r["values"]["feed"]
+    assert f["end"] == "end" and f["count"] == 25
+    assert f["titles"][:2] == ["Сегодня", "Вчера"] and len(f["titles"]) == 3
+    assert f["titles"][2][0].isdigit()                       # «15 октября»
+    assert f["calls"][0] is None and len(f["calls"]) == 4    # три страницы и пустая
+    assert f["after"] == {"first": "new", "updated": "i0*", "titles": ["Сегодня", f["titles"][2]], "count": 21}
+    assert f["reloaded"]["count"] == 10 and f["reloaded"]["calls"] == 5
     assert not problems(r), problems(r)
