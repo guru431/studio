@@ -1,7 +1,9 @@
 """Вход по логину и паролю, сессии на сервере, пауза после неудач, защита от CSRF
 (спека 2026-10-19-studio-pwa, раздел 7.2).
 
-- Сессия — cookie `studio_sid` со случайным токеном (HttpOnly, Secure, SameSite=Lax, 30 дней).
+- Сессия — cookie `__Host-studio_sid` со случайным токеном (HttpOnly, Secure, SameSite=Lax,
+  30 дней). Префикс `__Host-`: браузер примет её только с Secure, Path=/ и без Domain — соседний
+  хост `*.example.com` не подсунет свою cookie на весь домен.
   В базе лежит только sha256 токена: копия базы входа не даёт. Срок скользит — запрос позже суток
   после прошлого продления отодвигает его, а ответ API ставит cookie заново. Отключённая учётка
   и истёкший срок стирают сессию: включение учётки старую сессию не оживляет.
@@ -31,7 +33,7 @@ import clock
 import security
 import state
 
-COOKIE = "studio_sid"
+COOKIE = "__Host-studio_sid"
 SESSION_SEC = 30 * 86400
 RENEW_SEC = 86400
 LOCK_FAILS = 5

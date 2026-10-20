@@ -38,6 +38,8 @@ def test_login_sets_a_lax_secure_httponly_cookie(studio):
     assert r.status_code == 303 and r.headers["location"] == "/"
     c = r.headers["set-cookie"].lower()
     assert "studio_sid=" in c and "httponly" in c and "secure" in c and "samesite=lax" in c and "path=/" in c
+    # __Host-: браузер берёт её только с Secure, Path=/ и без Domain — соседний *.example.com не подменит (A1-M8)
+    assert r.headers["set-cookie"].startswith("__Host-studio_sid=") and "domain=" not in c
     assert studio.c.get("/", follow_redirects=False).status_code == 200
 
 

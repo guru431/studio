@@ -6,7 +6,8 @@ httpx.MockTransport, облачный сервис — `FakeCloud` (настоя
 Администратор `owner`/`password-123` с подключением «srvllm» заводится через manage.create_admin.
 Наблюдатель роликов включён и опрашивает шлюз раз в 0.2 с. Часы настоящие.
 
-Cookie сессии — Secure: Chromium принимает такие и с `http://localhost` (безопасный контекст).
+Cookie сессии — `__Host-` и Secure: Chromium принимает такие и с `http://localhost` (безопасный
+контекст).
 """
 from __future__ import annotations
 
