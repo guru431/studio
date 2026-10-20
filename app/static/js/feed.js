@@ -1,11 +1,12 @@
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
- * createFeed(el, { load, render, key, empty }): el — прокручиваемый контейнер ленты; load(before) —
+ * createFeed(el, { load, render, key, empty, head }): el — прокручиваемый контейнер ленты; load(before) —
  * Promise страницы записей новее-сверху, следующая — before = created последней (секунды unix),
  * первая — before undefined, пустая страница — конец; render(item) — узел карточки; key(item) —
- * id записи; empty — текст пустой ленты (необязательно). Записи несут `created`.
- * Ответ — { prepend(item), update(item), remove(id), reload() }; reload() — Promise первой страницы.
+ * id записи; empty — текст пустой ленты, head — узел над днями (оба необязательны). Записи несут `created`.
+ * Ответ — { prepend(item), update(item), remove(id), reload(), redraw() }; reload() — Promise первой
+ * страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка — на месте.
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты). */
 import { button, el as make, words } from './ui.js';
 
@@ -30,7 +31,7 @@ function dayTitle(created) {
   return d.toLocaleDateString('ru-RU', opts);
 }
 
-export function createFeed(el, { load, render, key, empty = '' }) {
+export function createFeed(el, { load, render, key, empty = '', head = null }) {
   const items = [];              // записи по порядку ленты
   const nodes = new Map();       // id → узел карточки
   const groups = new Map();      // день → { box, grid }
@@ -40,7 +41,7 @@ export function createFeed(el, { load, render, key, empty = '' }) {
   let done = false;
   let generation = 0;            // reload обнуляет: запоздалая страница прежней ленты не ляжет
 
-  el.replaceChildren(days, more);
+  el.replaceChildren(...(head ? [head] : []), days, more);
 
   function setState(name) {
     el.dataset.feed = name;
@@ -141,6 +142,16 @@ export function createFeed(el, { load, render, key, empty = '' }) {
     if (el.dataset.feed !== 'loading') setState(done ? 'end' : 'ready');
   }
 
+  function redraw() {
+    for (const item of items) {
+      const id = key(item);
+      const node = render(item);
+      nodes.get(id).replaceWith(node);
+      nodes.set(id, node);
+    }
+    if (near()) page();
+  }
+
   function reload() {
     generation += 1;
     loading = false;
@@ -154,5 +165,5 @@ export function createFeed(el, { load, render, key, empty = '' }) {
   }
 
   page();
-  return { prepend, update, remove, reload };
+  return { prepend, update, remove, reload, redraw };
 }

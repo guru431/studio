@@ -1,7 +1,9 @@
-/* Раздел «Видео» (#/video): лента роликов по дням, поле промпта снизу с фото-источником и чипами
- * (модель — если в разделе их больше одной, длительность, качество, плавность, seed), карточка с
- * ходом ролика и плеером; у ролика из фото
- * истории — «Промпты» (цепочка, chain.js).
+/* Раздел «Видео» (#/video): лента роликов по дням в одном из видов (views.js), поле промпта снизу
+ * с фото-источником и чипами (модель — если в разделе их больше одной, длительность, качество,
+ * плавность, seed). Превью — карточка с ходом ролика и плеером, у ролика из фото истории —
+ * «Промпты» (цепочка, chain.js); плитка и таблица — постер и ход, готовый ролик открывается в
+ * просмотре (плеер, цепочка, «Скачать», «Удалить»). Цепочку записи ленты (в ней — только число
+ * шагов) догружает GET /api/videos/<id>.
  *
  * Ролик: POST /api/videos (форма: файл `image` с устройства или `source_media_id` — фото, пришедшее
  * из раздела «Фото» адресом #/video?source=<media_id>). Ведёт ролик наблюдатель службы; идущие
@@ -15,6 +17,7 @@ import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
+import { tableHead, timeOf, viewSwitch } from './views.js';
 
 const POLL_MS = 3000;
 const PAGE = 30;
@@ -29,6 +32,8 @@ const RUNNING = new Set(['queued', 'in_progress']);
 const ICONS = {
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 
@@ -62,8 +67,13 @@ function build(view, ctx) {
   let alive = true;
 
   /* разметка */
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Видео'));
   const feedBox = el('div', { id: 'video-feed', class: 'video-feed' });
+  const layout = viewSwitch('video', 'preview', (name) => {
+    feedBox.dataset.view = name;
+    feed.redraw();
+  });
+  feedBox.dataset.view = layout.value;
+  const head = el('header', { class: 'head' }, el('h1', {}, 'Видео'), el('span', { class: 'grow' }), layout.node);
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
   const pick = el('label', { class: 'video-pick', id: 'video-pick' }, icon('clip'),
@@ -107,6 +117,7 @@ function build(view, ctx) {
     render: card,
     load: async (before) => (await api('GET', `/api/videos?limit=${PAGE}${before === undefined ? '' : `&before=${before}`}`)).items,
     empty: 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
+    head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
   });
 
   /* чип качества */
@@ -177,55 +188,169 @@ function build(view, ctx) {
     return item.state === 'in_progress' ? `${item.progress}% · ${spent}` : spent;
   }
 
+  function clipParams(item) {
+    return [`${item.seconds} с`, RESOLUTION[item.quality] || item.quality, item.smooth ? '32 к/с' : '16 к/с'].join(' · ');
+  }
+
+  function seedText(item) {
+    return item.seed !== null && item.seed !== undefined ? `seed ${item.seed}` : '';
+  }
+
   function metaText(item) {
-    return [`${item.seconds} с`, RESOLUTION[item.quality] || item.quality, item.smooth ? '32 к/с' : '16 к/с',
-      SOURCES[item.prompt_source], item.seed !== null && item.seed !== undefined ? `seed ${item.seed}` : '']
-      .filter(Boolean).join(' · ');
+    return [clipParams(item), SOURCES[item.prompt_source], seedText(item)].filter(Boolean).join(' · ');
+  }
+
+  function posterOf(item) {
+    return item.source_media_id ? media(item.source_media_id, '?thumb=1') : null;
+  }
+
+  function still(item) {
+    const src = posterOf(item);
+    return src ? el('img', { src, alt: '', loading: 'lazy', decoding: 'async' }) : null;
+  }
+
+  function failText(item) {
+    return item.state === 'failed' ? cap(item.detail) || 'Ролик не получился' : cap(item.detail) || 'Отменено';
+  }
+
+  /** Ход идущего ролика или итог неудачного — поверх постера. */
+  function overlay(item) {
+    const over = el('div', { class: 'video-over' });
+    if (RUNNING.has(item.state)) {
+      const bar = el('span');
+      bar.style.width = `${item.progress}%`;
+      over.append(el('span', { class: 'ring', 'aria-hidden': 'true' }),
+        el('p', { class: 'video-state' }, cap(item.detail) || 'В очереди'),
+        el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': 'Ход ролика', 'aria-valuemin': '0',
+          'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar),
+        el('b', { class: 'card-time' }, busyText(running.get(item.id))));
+    } else over.append(el('p', { class: item.state === 'failed' ? 'video-fail' : '' }, failText(item)));
+    return over;
+  }
+
+  /** Готовый ролик плитки и таблицы: постер со значком, нажатие — просмотр. */
+  function openButton(item, ...inside) {
+    const open = el('button', { type: 'button', class: 'video-open', 'aria-label': 'Открыть ролик' }, still(item),
+      el('span', { class: 'video-play', 'aria-hidden': 'true' }, icon('play')), ...inside);
+    open.addEventListener('click', () => openViewer(item));
+    return open;
+  }
+
+  function cancelButton(item, cls) {
+    return button('Отменить', { class: `${cls} card-cancel` }, (event) => cancel(item, event.currentTarget));
+  }
+
+  function deleteButton(item, cls) {
+    return button('Удалить', { class: `${cls} card-delete` }, () => remove(item).catch((err) => { error.textContent = words(err); }));
+  }
+
+  /** «Промпты»: цепочки в записи ленты нет — она из GET /api/videos/<id>. */
+  function chainButton(item) {
+    return button('Промпты', { class: 'btn btn-sm card-chain' }, async (event) => {
+      const b = event.currentTarget;
+      b.disabled = true;
+      try {
+        const full = await api('GET', `/api/videos/${encodeURIComponent(item.id)}`);
+        if (alive) openDialog(root, { id: 'chain-dialog', title: 'Как получен ролик', cancelText: 'Закрыть',
+          body: [chainList(full.chain, { current: null, onOpen: () => ctx.navigate('photo') })] });
+      } catch (err) {
+        error.textContent = words(err);
+      } finally {
+        b.disabled = false;
+      }
+    });
+  }
+
+  /** Вид «Превью»: плеер или ход ролика, под ним — итог, параметры, промпт и действия. */
+  function previewCard(item, node) {
+    const acts = el('div', { class: 'video-acts' });
+    const body = el('div', { class: 'video-body' });
+    if (item.state === 'done' && item.media_id) {
+      node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata',
+        poster: posterOf(item), src: media(item.media_id) }));
+      body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
+      acts.append(button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
+        button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
+    } else {
+      acts.append(RUNNING.has(item.state) ? cancelButton(item, 'btn btn-sm') : deleteButton(item, 'btn btn-sm btn-danger'));
+      node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
+    }
+    body.append(el('p', { class: 'video-meta' }, metaText(item)));
+    if (item.prompt) body.append(el('p', { class: 'video-prompt', title: item.prompt }, item.prompt));
+    if (item.steps > 1) acts.prepend(chainButton(item));
+    body.append(acts);
+    node.append(body);
+    return node;
+  }
+
+  /** Вид «Плитка»: только кадр; действия идущего и неудачного — ссылками поверх. */
+  function tileCard(item, node) {
+    if (item.state === 'done' && item.media_id) {
+      node.append(openButton(item, el('span', { class: 'card-cap' }, `${item.seconds} с`)));
+      return node;
+    }
+    const over = overlay(item);
+    over.append(RUNNING.has(item.state) ? cancelButton(item, 'btn-link') : deleteButton(item, 'btn-link'));
+    node.append(el('div', { class: 'video-stage' }, still(item), over));
+    return node;
+  }
+
+  /** Вид «Таблица»: постер, промпт, параметры, seed, время или ход, действие. */
+  function row(item, node) {
+    const done = item.state === 'done' && item.media_id;
+    const busy = RUNNING.has(item.state);
+    const when = done ? el('span', {}, `${timeOf(item.created)} · ${clock(item.elapsed)}`)
+      : busy ? el('b', { class: 'card-time', title: cap(item.detail) }, busyText(running.get(item.id)))
+        : el('span', { class: item.state === 'failed' ? 'error' : 'muted' }, failText(item));
+    const save = el('button', { type: 'button', class: 'icon-btn card-download', 'aria-label': 'Скачать', title: 'Скачать' },
+      icon('save'));
+    save.addEventListener('click', () => saveMedia(item.media_id, root));
+    node.append(done ? openButton(item)
+      : el('span', { class: 'row-thumb' }, still(item), busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
+    el('p', { class: 'cell-prompt', title: item.prompt || '' }, item.prompt || SOURCES[item.prompt_source] || ''),
+    el('span', { class: 'cell-meta' }, el('span', {}, clipParams(item)), el('span', {}, seedText(item)),
+      el('span', { class: 'cell-when' }, when)),
+    el('span', { class: 'cell-act' }, done ? save : busy ? cancelButton(item, 'btn-link') : deleteButton(item, 'btn-link')));
+    return node;
   }
 
   function card(item) {
     watch(item);
     const node = el('article', { class: 'card video-card', 'data-id': item.id, 'data-state': item.state });
-    const poster = item.source_media_id ? media(item.source_media_id, '?thumb=1') : null;
-    const acts = el('div', { class: 'video-acts' });
-    const body = el('div', { class: 'video-body' });
-    if (item.state === 'done' && item.media_id) {
-      node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata', poster,
-        src: media(item.media_id) }));
-      body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
-      acts.append(button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
-        button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
-    } else {
-      const over = el('div', { class: 'video-over' });
-      if (RUNNING.has(item.state)) {
-        const bar = el('span');
-        bar.style.width = `${item.progress}%`;
-        over.append(el('span', { class: 'ring', 'aria-hidden': 'true' }),
-          el('p', { class: 'video-state' }, cap(item.detail) || 'В очереди'),
-          el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': 'Ход ролика', 'aria-valuemin': '0',
-            'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar),
-          el('b', { class: 'card-time' }, busyText(running.get(item.id))));
-        acts.append(button('Отменить', { class: 'btn btn-sm card-cancel' }, (event) => cancel(item, event.currentTarget)));
-      } else {
-        const failed = item.state === 'failed';
-        over.append(el('p', { class: failed ? 'video-fail' : '' },
-          failed ? cap(item.detail) || 'Ролик не получился' : cap(item.detail) || 'Отменено'));
-        acts.append(button('Удалить', { class: 'btn btn-sm btn-danger card-delete' },
-          () => remove(item).catch((err) => { error.textContent = words(err); })));
-      }
-      node.append(el('div', { class: 'video-stage' },
-        poster ? el('img', { src: poster, alt: '', loading: 'lazy', decoding: 'async' }) : null, over));
-    }
-    body.append(el('p', { class: 'video-meta' }, metaText(item)));
-    if (item.prompt) body.append(el('p', { class: 'video-prompt', title: item.prompt }, item.prompt));
-    if (item.chain.length > 1) {
-      acts.prepend(button('Промпты', { class: 'btn btn-sm card-chain' }, () => openDialog(root, { id: 'chain-dialog',
-        title: 'Как получен ролик', cancelText: 'Закрыть',
-        body: [chainList(item.chain, { current: null, onOpen: () => ctx.navigate('photo') })] })));
-    }
-    body.append(acts);
-    node.append(body);
-    return node;
+    if (layout.value === 'table') return row(item, node);
+    return layout.value === 'tiles' ? tileCard(item, node) : previewCard(item, node);
+  }
+
+  /* просмотр ролика (плитка и таблица): плеер, параметры, цепочка, «Скачать», «Удалить» */
+  function openViewer(item) {
+    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': 'Закрыть', title: 'Закрыть' },
+      icon('x'));
+    const player = el('video', { class: 'viewer-video', controls: true, autoplay: true, playsinline: true, preload: 'metadata',
+      poster: posterOf(item), src: media(item.media_id) });
+    const dialog = el('dialog', { id: 'video-viewer', class: 'viewer', 'aria-label': 'Просмотр ролика' });
+    const act = (text, cls, fn) => button(text, { class: `btn btn-sm ${cls}` }, fn);
+    const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
+    let chain = el('ol', { class: 'viewer-chain' });
+    dialog.append(el('div', { class: 'viewer-top' }, close), el('div', { class: 'viewer-stage' }, player),
+      el('div', { class: 'viewer-bar' }, el('p', { class: 'viewer-meta' }, metaText(item)), chain, missing,
+        el('div', { class: 'viewer-actions' }, act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
+          act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
+    close.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => {
+      player.pause();
+      dialog.remove();
+    });
+    api('GET', `/api/videos/${encodeURIComponent(item.id)}`).then((full) => {
+      if (!dialog.open) return;
+      const next = chainList(full.chain, { current: null, onOpen: () => {
+        dialog.close();
+        ctx.navigate('photo');
+      } });
+      chain.replaceWith(next);
+      chain = next;
+    }, (err) => { missing.textContent = err.code === 'gone' ? 'Ролик удалён' : words(err); });
+    root.append(dialog);
+    dialog.showModal();
   }
 
   api('GET', '/api/sections').then(({ sections }) => {
@@ -258,18 +383,18 @@ function build(view, ctx) {
     }
   }
 
-  async function remove(item, dialog) {
+  async function remove(item, dialogs = []) {
     try {
       await api('DELETE', `/api/videos/${item.id}`);
     } catch (err) {
       if (err.code !== 'gone') throw err;
     }
-    if (dialog) dialog.close();
+    for (const d of dialogs) if (d) d.close();
     forget(item.id);
     feed.remove(item.id);
   }
 
-  function confirmDelete(item) {
+  function confirmDelete(item, viewer = null) {
     const fail = el('p', { class: 'error' });
     const confirm = button('Удалить', { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
     const dialog = openDialog(root, { id: 'video-delete-dialog', title: 'Удалить ролик?',
@@ -277,7 +402,7 @@ function build(view, ctx) {
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
-        await remove(item, dialog);
+        await remove(item, [dialog, viewer]);
       } catch (err) {
         fail.textContent = words(err);
         confirm.disabled = false;

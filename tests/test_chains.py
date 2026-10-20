@@ -78,6 +78,20 @@ def test_video_chain_ends_with_its_prompt(studio):
     assert video["chain"][0]["media_id"] == gen["media_id"]
 
 
+def test_feeds_carry_the_step_count_and_one_item_its_chain(studio):
+    """Лента — без цепочек (длинная раздула бы страницу), только число шагов; цепочка — у одной записи."""
+    add_gateway(studio)
+    gen = wait_state(studio, start(studio, prompt="кот").json()["id"], {"done"})
+    edit = wait_state(studio, start(studio, prompt="ярче", size="original", model="flux",
+                                    source_media_id=gen["media_id"]).json()["id"], {"done"})
+    studio.c.post("/api/videos", data={"prompt": "поворачивает голову"}, files={"source_media_id": (None, edit["media_id"])})
+    images_feed, videos_feed = (studio.c.get(f"/api/{name}").json()["items"] for name in ("images", "videos"))
+    assert {i["id"]: (i["steps"], "chain" in i) for i in images_feed} == {gen["id"]: (1, False), edit["id"]: (2, False)}
+    assert [(v["steps"], "chain" in v) for v in videos_feed] == [(3, False)]
+    assert len(edit["chain"]) == edit["steps"] == 2
+    assert kinds(studio.c.get(f"/api/videos/{videos_feed[0]['id']}").json()) == ["generation", "edit", "video"]
+
+
 def test_old_rows_get_a_chain_from_their_links(studio):
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users").fetchone()[0]

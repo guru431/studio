@@ -156,6 +156,13 @@ def test_sw_carries_the_static_version(studio):
     assert r.headers["cache-control"] == "no-cache" and r.headers["service-worker-allowed"] == "/"
 
 
+def test_photo_preview_knows_the_thumbnail_side():
+    """srcset превью называет ширину миниатюры по media.THUMB_SIDE — копия в photo.js не расходится."""
+    import media
+    side, = re.findall(r"const THUMB_SIDE = (\d+);", (STATIC / "js" / "photo.js").read_text(encoding="utf-8"))
+    assert int(side) == media.THUMB_SIDE
+
+
 def test_profile_module_is_gone_and_the_menu_opens_settings():
     assert not (STATIC / "js" / "profile.js").exists()
     assert 'href="#/settings">Настройки</a>' in (STATIC / "index.html").read_text(encoding="utf-8")

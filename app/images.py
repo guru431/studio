@@ -8,8 +8,9 @@
    (ревью 2026-10-19). Поэтому задание «отменяется», ждёт конца своего запроса, выбрасывает
    картинку и сразу зовёт release модели задания — на 409 повторяет с паузой до
    CANCEL_RELEASE_SEC; новое задание до тех пор получает busy.
-2. Готовая PNG — в media с превью, строка `images` — запись ленты. Описания в историю не
-   пишутся: текст живёт в памяти до выдачи (один раз) или KEEP_DONE_SEC.
+2. Готовая PNG — в media с превью, строка `images` — запись ленты. Описания и переводы промпта в
+   историю не пишутся: текст живёт в памяти до выдачи (один раз) или KEEP_DONE_SEC. Перевод — тот
+   же путь, что описание (маршрут шлюза `/slot/images/descriptions`, gemma-abl), без картинки.
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
    (`source_media_id`); оба нормализуются normalize_image. Маска (PNG) остаётся в студии: снаружи
    выделения результат берётся из исходника, модель получает только фото и инструкцию. Маска с
@@ -91,6 +92,19 @@ clearly legible text verbatim. Prioritize the details that make this particular 
 recognizable. Be as comprehensive as visible evidence allows; do not invent hidden objects,
 identities, exact camera settings, or details you cannot see. Aim for a rich, precise prompt,
 not a short caption. Stay within 3000 words."""
+TRANSLATION_PROMPT = """Translate the image-generation prompt below into English. Keep every detail,
+name, number and the punctuation that carries meaning (commas, parentheses, weights). If a part is
+already in English, keep it as is. Return only the translated prompt, without quotes, notes or an
+introduction.
+
+Prompt:
+"""
+TRANSLATION_MAX_TOKENS = 16384
+#: задания с текстом вместо картинки: в истории их нет, текст выдаётся один раз
+TEXT_KINDS = {"description", "translation"}
+#: слова заданий с текстом: готово, уже выдано, модель ответила пустым
+TEXT_WORDS = {"description": ("описание готово", "описание уже выдано", "gemma-abl не вернула описание"),
+              "translation": ("перевод готов", "перевод уже выдан", "gemma-abl не вернула перевод")}
 
 
 @dataclass
@@ -110,7 +124,7 @@ class Job:
     image: bytes | None = None
     strength: float = 0.65
     mask: bytes | None = None
-    kind: str = "generation"                 # generation | edit | description
+    kind: str = "generation"                 # generation | edit | description | translation
     description: str | None = None
     truncated: bool = False
     description_started: bool = False
@@ -142,6 +156,10 @@ class JobIn(BaseModel):
     strength: float = Field(default=0.65, ge=0.05, le=1)
     source_media_id: "str | None" = Field(default=None, max_length=64)
     mask_media_id: "str | None" = Field(default=None, max_length=64)    # маска прежней правки (повтор)
+
+
+class TranslationIn(BaseModel):
+    prompt: str = Field(min_length=1, max_length=24000)
 
 
 # ---- задания в памяти и строки истории -----------------------------------------
@@ -176,8 +194,8 @@ def _srvllm_photo(user_id: int) -> Connection:
 
 
 def _store(job: Job) -> None:
-    """Состояние задания — в его строку истории (описаний в истории нет)."""
-    if job.kind == "description":
+    """Состояние задания — в его строку истории (описаний и переводов в истории нет)."""
+    if job.kind in TEXT_KINDS:
         return
     state.DB.execute("UPDATE images SET state = ?, detail = ?, seed = ?, media_id = ?, finished = ? WHERE id = ?",
                      (job.state, job.detail, job.seed, job.media_id, job.finished_at, job.id))
@@ -190,14 +208,19 @@ def _row(user_id: int, image_id: str):
     return row
 
 
-def _out(row) -> dict:
+def _out(row, with_chain=True) -> dict:
+    """Запись ленты; цепочка промптов — только у одной записи (просмотр): в ленте — число шагов,
+    иначе длинные цепочки раздули бы страницу и добавили запросов к базе на каждый шаг."""
     end = row["finished"] if row["finished"] is not None else clock.NOW()
-    return {"id": row["id"], "kind": row["kind"], "state": row["state"], "detail": row["detail"],
-            "elapsed": int(max(0, end - row["created"])), "model": row["model"], "prompt": row["prompt"],
-            "size": row["size"], "seed": row["seed"], "strength": row["strength"],
-            "source_media_id": row["source_media_id"], "mask_media_id": row["mask_media_id"],
-            "media_id": row["media_id"], "created": row["created"],
-            "chain": chains.annotate(row["user_id"], chains.of_image(row["user_id"], row))}
+    chain = chains.of_image(row["user_id"], row)
+    out = {"id": row["id"], "kind": row["kind"], "state": row["state"], "detail": row["detail"],
+           "elapsed": int(max(0, end - row["created"])), "model": row["model"], "prompt": row["prompt"],
+           "size": row["size"], "seed": row["seed"], "strength": row["strength"],
+           "source_media_id": row["source_media_id"], "mask_media_id": row["mask_media_id"],
+           "media_id": row["media_id"], "created": row["created"], "steps": len(chain)}
+    if with_chain:
+        out["chain"] = chains.annotate(row["user_id"], chain)
+    return out
 
 
 def _status(job: Job) -> dict:
@@ -347,7 +370,7 @@ async def list_images(request: Request, before: "float | None" = None, limit: in
     else:
         rows = state.DB.execute("SELECT * FROM images WHERE user_id = ? AND created < ?"
                                 " ORDER BY created DESC, id DESC LIMIT ?", (uid, before, limit))
-    return {"items": [_out(r) for r in rows]}
+    return {"items": [_out(r, with_chain=False) for r in rows]}
 
 
 @router.post("/descriptions", status_code=202)
@@ -370,20 +393,48 @@ async def create_description(request: Request):
     return {"id": job.id}
 
 
-@router.get("/descriptions/{job_id}")
-async def description_status(job_id: str, request: Request):
-    """Статус описания; готовый текст — в этом же ответе, один раз."""
+def _text_status(job_id: str, request: Request, kind: str):
+    """Статус описания или перевода; готовый текст — в этом же ответе, один раз."""
     _prune()
     job = JOBS.get(job_id)
-    if job is None or job.user_id != request.state.user.id or job.kind != "description":
+    if job is None or job.user_id != request.state.user.id or job.kind != kind:
         raise HTTPException(404, {"code": "gone", "message": "задание забыто или не существовало"})
     if job.state != "done":
         return _status(job)
     if job.description is None:
-        raise HTTPException(404, {"code": "gone", "message": "описание уже выдано"})
+        raise HTTPException(404, {"code": "gone", "message": TEXT_WORDS[kind][1]})
     text, job.description = job.description, None
     return JSONResponse({"state": "done", "text": text, "truncated": job.truncated},
                         headers={"Cache-Control": "no-store"})
+
+
+@router.get("/descriptions/{job_id}")
+async def description_status(job_id: str, request: Request):
+    return _text_status(job_id, request, "description")
+
+
+@router.post("/translations", status_code=202)
+async def create_translation(request: Request):
+    """Промпт на английский (gemma-abl, как «Описать»): поле фото заменит ответ, без генерации."""
+    uid = request.state.user.id
+    conn = _srvllm_photo(uid)
+    ensure_idle(uid)
+    try:
+        body = TranslationIn.model_validate_json(await forms.read_body(request, JSON_MAX))
+    except ValidationError:
+        raise HTTPException(422, {"code": "input", "message": "нужен промпт до 24000 знаков"}) from None
+    ensure_idle(uid)
+    job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model="gemma-abl", prompt=body.prompt, size="", seed=0,
+              started=clock.NOW(), kind="translation", detail="жду карту или перевожу")
+    JOBS[job.id] = job
+    job.task = asyncio.create_task(run_job(job))
+    log.info("задание %s: перевод gemma-abl", job.id[:8])
+    return {"id": job.id}
+
+
+@router.get("/translations/{job_id}")
+async def translation_status(job_id: str, request: Request):
+    return _text_status(job_id, request, "translation")
 
 
 @router.post("/release")
@@ -565,12 +616,14 @@ async def describe(job: Job):
             raise JobError("connection", f"подключение «{job.conn.name}» удалено из профиля") from None
         if response.status_code != 200:
             raise JobError("release", "не удалось подготовить карту: " + upstream.gateway_error(response, job.conn.name))
-    image = "data:image/png;base64," + base64.b64encode(job.image).decode("ascii")
-    payload = {"model": DESCRIPTION_MODEL, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": DESCRIPTION_PROMPT},
-        {"type": "image_url", "image_url": {"url": image}}]}],
-        "temperature": 0.2, "max_tokens": 4096,
-        "chat_template_kwargs": {"enable_thinking": False}}
+    if job.kind == "translation":
+        content, max_tokens = TRANSLATION_PROMPT + job.prompt, TRANSLATION_MAX_TOKENS
+    else:
+        image = "data:image/png;base64," + base64.b64encode(job.image).decode("ascii")
+        content = [{"type": "text", "text": DESCRIPTION_PROMPT}, {"type": "image_url", "image_url": {"url": image}}]
+        max_tokens = 4096
+    payload = {"model": DESCRIPTION_MODEL, "messages": [{"role": "user", "content": content}],
+               "temperature": 0.2, "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
     job.description_started = True
     try:
         response = await _slot(job.conn, "/images/descriptions", GENERATE_TIMEOUT_SEC, json=payload)
@@ -586,21 +639,24 @@ async def describe(job: Job):
     choice = choices[0] if choices and isinstance(choices[0], dict) else {}
     text = (choice.get("message") or {}).get("content")
     if not isinstance(text, str) or not text.strip():
-        raise JobError("no_description", "gemma-abl не вернула описание")
-    job.description = text.strip()
+        raise JobError("no_description", TEXT_WORDS[job.kind][2])
     job.truncated = choice.get("finish_reason") == "length"
+    if job.truncated and job.kind == "translation":
+        # обрезанный перевод заменил бы промпт его половиной
+        raise JobError("length", "перевод не уместился в ответ модели — сократите промпт")
+    job.description = text.strip()
 
 
 async def release_after_cancel(job: Job, *, cancelled=True) -> str:
     """Release модели отменённого задания сразу после конца его запроса. 409 — slot-gate ещё
     считает запрос (свой или чужой): повтор с паузой до CANCEL_RELEASE_SEC."""
     deadline = clock.NOW() + CANCEL_RELEASE_SEC
-    prefix = "отменено" if cancelled else "описание готово"
+    prefix = "отменено" if cancelled else TEXT_WORDS[job.kind][0]
     if job.conn.kind != "srvllm":                 # у внешнего сервиса карты студии нет
         return prefix
     while True:
         try:
-            r = await release_description(job.conn) if job.kind == "description" else await release(job.conn, job.gateway_model)
+            r = await release_description(job.conn) if job.kind in TEXT_KINDS else await release(job.conn, job.gateway_model)
         except httpx.HTTPError as e:
             log.warning("задание %s: release не прошёл (%s)", job.id[:8], type(e).__name__)
             return f"{prefix}; карту освободить не удалось — шлюз недоступен: {type(e).__name__}"
@@ -627,9 +683,9 @@ async def run_job(job: Job) -> None:
     outcome = None
     try:
         try:
-            if job.kind == "description":
+            if job.kind in TEXT_KINDS:
                 await describe(job)
-                outcome = ("done", "описание готово", None, None)
+                outcome = ("done", TEXT_WORDS[job.kind][0], None, None)
             else:
                 png, seed = await generate(job)
                 outcome = ("done", "готово", png, seed)
@@ -640,7 +696,7 @@ async def run_job(job: Job) -> None:
             outcome = ("error", f"сбой службы: {type(e).__name__}", None, None)
             log.warning("задание %s: сбой %s", job.id[:8], type(e).__name__)
         description_cleanup = None
-        if job.kind == "description" and job.description_started:
+        if job.kind in TEXT_KINDS and job.description_started:
             description_cleanup = await release_after_cancel(job, cancelled=job.state == "cancelling")
             if outcome[0] == "done":
                 outcome = ("done", description_cleanup, None, None)
@@ -667,8 +723,8 @@ async def run_job(job: Job) -> None:
             # запрос кончился (картинкой или ошибкой) — картинку не выдаём, карту освобождаем
             job.detail = "запрос завершён — освобождаю карту"
             _store(job)
-            if job.kind == "description":
-                job.state, job.detail = "cancelled", (description_cleanup or "отменено").replace("описание готово", "отменено")
+            if job.kind in TEXT_KINDS:
+                job.state, job.detail = "cancelled", (description_cleanup or "отменено").replace(TEXT_WORDS[job.kind][0], "отменено")
             else:
                 job.state, job.detail = "cancelled", await release_after_cancel(job)
             return
@@ -680,7 +736,7 @@ async def run_job(job: Job) -> None:
             log.info("задание %s: готово", job.id[:8])
     except asyncio.CancelledError:                    # остановка службы — для истории это перезапуск
         job.description = None
-        if job.kind == "description":
+        if job.kind in TEXT_KINDS:
             job.state, job.detail = "cancelled", "отменено остановкой студии"
         else:
             job.state, job.detail = "error", INTERRUPTED

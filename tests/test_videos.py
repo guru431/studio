@@ -22,7 +22,7 @@ from image_upload import normalize_image
 PROMPT = "секретное движение: она оборачивается"
 PHOTO_NAME = "my-private-photo-name.png"
 VIDEO_OUT = {"id", "state", "progress", "detail", "prompt", "prompt_source", "seconds", "quality", "smooth",
-             "seed", "source_media_id", "media_id", "created", "elapsed", "chain"}
+             "seed", "source_media_id", "media_id", "created", "elapsed", "steps", "chain"}
 
 
 def photo(name=PHOTO_NAME, size=(40, 20)):
@@ -80,7 +80,7 @@ def test_video_is_created_as_gateway_multipart_without_private_names(studio, cap
     assert {k: v[k] for k in VIDEO_OUT - {"id", "source_media_id", "chain"}} == {
         "state": "queued", "progress": 0, "detail": "в очереди: перед ним 0", "prompt": PROMPT,
         "prompt_source": "auto", "seconds": 7, "quality": "high", "smooth": False, "seed": int(seed),
-        "media_id": None, "created": T0, "elapsed": 0}
+        "media_id": None, "created": T0, "elapsed": 0, "steps": 2}
     assert image.startswith(b"\x89PNG")
     assert b'name="input_reference"; filename="input.png"' in raw
     assert PHOTO_NAME.encode() not in raw

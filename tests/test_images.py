@@ -554,6 +554,57 @@ def test_description_reports_running_videos(studio):
     assert status["state"] == "error" and "идут ролики: 1" in status["detail"]
 
 
+# ---- перевод промпта ---------------------------------------------------------
+
+def wait_translation(s, job_id, limit=3000):
+    body = None
+    for _ in range(limit):
+        body = s.c.get(f"/api/images/translations/{job_id}").json()
+        if body["state"] in images.TERMINAL:
+            return body
+    raise AssertionError(f"перевод не дошёл до конца: {body}")
+
+
+def test_translation_goes_to_gemma_abl_as_text_and_is_given_once(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    studio.gw.description_reply = {"choices": [{"message": {"content": " a woman by the window \n"}, "finish_reason": "stop"}]}
+    add_gateway(studio)
+    r = studio.c.post("/api/images/translations", json={"prompt": PROMPT})
+    assert r.status_code == 202, r.text
+    job_id = r.json()["id"]
+    assert wait_translation(studio, job_id) == {"state": "done", "text": "a woman by the window", "truncated": False}
+    assert studio.c.get(f"/api/images/translations/{job_id}").status_code == 404
+    assert studio.c.get(f"/api/images/descriptions/{job_id}").status_code == 404      # чужой вид задания
+    (body,) = studio.gw.descriptions
+    assert body["model"] == "gemma4-abl" and body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body["messages"] == [{"role": "user", "content": images.TRANSLATION_PROMPT + PROMPT}]
+    assert [model for model, _ in studio.gw.releases] == [LUSTIFY, FLUX, "gemma4-abl"]
+    assert images.JOBS[job_id].prompt == "" and PROMPT not in caplog.text and "a woman" not in caplog.text
+    assert state.DB.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
+
+
+def test_cut_translation_is_an_error_not_half_a_prompt(studio):
+    studio.gw.description_reply = {"choices": [{"message": {"content": "a woman by"}, "finish_reason": "length"}]}
+    add_gateway(studio)
+    status = wait_translation(studio, studio.c.post("/api/images/translations", json={"prompt": PROMPT}).json()["id"])
+    assert status["state"] == "error" and "не уместился" in status["detail"] and "text" not in status
+
+
+def test_translation_is_one_job_of_the_user_and_needs_the_gateway(studio):
+    make_user(studio, "owner", is_admin=True)
+    signin(studio, "owner")
+    r = studio.c.post("/api/images/translations", json={"prompt": PROMPT})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_gateway"
+    add_gateway(studio)
+    assert studio.c.post("/api/images/translations", json={"prompt": ""}).status_code == 422
+    studio.gw.hold = True
+    job = start(studio).json()
+    r = studio.c.post("/api/images/translations", json={"prompt": PROMPT})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    studio.gw.hold = False
+    wait_state(studio, job["id"], {"done"})
+
+
 # ---- учётки и история --------------------------------------------------------
 
 def test_finished_image_lands_in_history_with_a_thumb(studio):

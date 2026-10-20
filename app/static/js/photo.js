@@ -1,14 +1,18 @@
-/* Раздел «Фото» (#/photo): лента картинок по дням, поле промпта снизу с чипами (исходное фото
- * и сила, модель, размер, seed), «Скачать» на превью (save.js), просмотр с действиями, правка кистью
+/* Раздел «Фото» (#/photo): лента картинок по дням в одном из видов (превью, плитка, таблица —
+ * views.js), поле промпта снизу с чипами (исходное фото и сила, модель, размер, seed) и «EN»
+ * (перевод промпта), «Скачать» на карточке (save.js), просмотр с действиями, правка кистью
  * (editor.js) и «Описать».
  *
- * Задание: POST /api/images (JSON; с файлом исходника — форма), запись ленты — GET /api/images/<id>.
- * Идущее задание (working, cancelling) ленту опрашивает раз в POLL_MS — и найденное в ленте после
- * перезагрузки страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать» и
- * действия просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
+ * Задание: POST /api/images (JSON; с файлом исходника — форма), запись ленты — GET /api/images/<id>
+ * (у неё цепочка промптов; в ленте — только число шагов, цепочку просмотр догружает). Идущее задание
+ * (working, cancelling) ленту опрашивает раз в POLL_MS — и найденное в ленте после перезагрузки
+ * страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать», «EN» и действия
+ * просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
  * «Повторить» правки кистью идёт с её маской (mask_media_id).
  * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
- * окно закрыли раньше — описание отменяется. Текст сервера — только textContent.
+ * окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ заменяет
+ * промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
+ * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm. */
 import { api } from './api.js';
@@ -19,8 +23,10 @@ import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
+import { tableHead, timeOf, viewSwitch } from './views.js';
 
 const POLL_MS = 1500;
+const THUMB_SIDE = 384;          // длинная сторона миниатюры (media.THUMB_SIDE)
 const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
@@ -71,6 +77,7 @@ function build(view, ctx) {
   let source = null;             // { file, url } — исходное фото с устройства
   let submitting = false;
   let describing = false;
+  let translating = null;        // { id, started, timer } — идущий перевод промпта
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
   const gated = new Set();       // кнопки открытого просмотра, начинающие задание
   const popups = [];             // { chip, menu } — открывающиеся меню
@@ -85,9 +92,14 @@ function build(view, ctx) {
   const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', hidden: true }, ...menuItems);
   const toggle = iconButton('more', 'Ещё', { id: 'photo-menu-toggle', 'aria-haspopup': 'true', 'aria-expanded': 'false',
     'aria-controls': 'photo-menu' });
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), el('span', { class: 'grow' }),
-    el('div', { class: 'photo-menu-wrap' }, toggle, menu));
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
+  const layout = viewSwitch('photo', 'tiles', (name) => {
+    feedBox.dataset.view = name;
+    feed.redraw();
+  });
+  feedBox.dataset.view = layout.value;
+  const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), el('span', { class: 'grow' }), layout.node,
+    el('div', { class: 'photo-menu-wrap' }, toggle, menu));
 
   const sourceImg = el('img', { alt: 'Исходное фото' });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -108,12 +120,13 @@ function build(view, ctx) {
   const seed = el('input', { id: 'photo-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
     'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
   const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-seed' }, el('span', {}, 'seed'), seed);
+  const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate' }, 'EN');
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
   const micNote = el('div', { class: 'mic-note' });
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }),
-      attachMic(prompt, micNote), go));
+      chipTranslate, attachMic(prompt, micNote), go));
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, form);
   view.append(root);
 
@@ -122,6 +135,7 @@ function build(view, ctx) {
     render: card,
     load: async (before) => (await api('GET', `/api/images?limit=${PAGE}${before === undefined ? '' : `&before=${before}`}`)).items,
     empty: 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
+    head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
   });
 
   /* меню чипов и раздела */
@@ -207,12 +221,16 @@ function build(view, ctx) {
 
   /* занятость: одно задание за раз */
   function syncBusy() {
-    const busy = submitting || describing || running.size > 0;
+    const busy = submitting || describing || !!translating || running.size > 0;
     for (const b of [go, ...gated]) {
       b.disabled = busy;
       b.title = busy ? 'Дождитесь конца текущего задания' : '';
     }
     describeFile.disabled = busy;                    // «Описать фото с устройства…» меню раздела
+    chipTranslate.disabled = busy && !translating;   // во время перевода «EN» его отменяет
+    chipTranslate.title = translating ? 'Отменить перевод'
+      : busy ? 'Дождитесь конца текущего задания' : 'Перевести промпт на английский (gemma-abl)';
+    chipTranslate.setAttribute('aria-label', chipTranslate.title);
   }
 
   /* карточки ленты */
@@ -275,40 +293,93 @@ function build(view, ctx) {
     return `${item.state === 'cancelling' ? 'Отменяю' : 'Генерирую'} · ${spent}`;
   }
 
+  /** Картинка карточки: миниатюра; в превью — и полный файл, если миниатюры мало (srcset). */
+  function picture(item) {
+    const thumb = media(item.media_id, '?thumb=1');
+    const [w, h] = String(item.size).split('x').map(Number);
+    const big = layout.value === 'preview' && w > 0 && h > 0;
+    return el('img', { src: thumb, alt: '', loading: 'lazy', decoding: 'async',
+      srcset: big ? `${thumb} ${Math.round(w * Math.min(1, THUMB_SIDE / Math.max(w, h)))}w, ${media(item.media_id)} ${w}w` : null,
+      sizes: big ? '(max-width: 760px) 100vw, 400px' : null });
+  }
+
+  function openButton(item, ...inside) {
+    const open = el('button', { type: 'button', class: 'card-open', 'aria-label': 'Открыть картинку' }, ...inside);
+    open.addEventListener('click', () => openViewer(item));
+    return open;
+  }
+
+  function saveButton(item) {
+    const save = el('button', { type: 'button', class: 'card-save', 'aria-label': 'Скачать', title: 'Скачать' }, icon('save'));
+    save.addEventListener('click', (event) => {
+      event.stopPropagation();
+      saveMedia(item.media_id, root);
+    });
+    return save;
+  }
+
+  function cancelButton(item) {
+    return button('Отменить', { class: 'btn-link card-cancel' }, async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await api('POST', `/api/images/${item.id}/cancel`);
+      } catch (err) {
+        say(words(err), true);
+      }
+      poll(item.id);
+    });
+  }
+
+  function deleteButton(item) {
+    return button('Удалить', { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)));
+  }
+
+  function noteText(item) {
+    return item.state === 'cancelled' ? cap(item.detail) || 'Отменено' : `Ошибка: ${item.detail || 'картинка не получена'}`;
+  }
+
+  function params(item) {
+    return [NAMES[item.model] || item.model, String(item.size || '').replace('x', '×'),
+      item.seed !== null && item.seed !== undefined ? `seed ${item.seed}` : ''];
+  }
+
+  /** Строка вида «Таблица»: миниатюра, промпт, модель, размер, seed, время или ход, действие. */
+  function row(item, node) {
+    const done = item.state === 'done' && item.media_id;
+    const busy = RUNNING.has(item.state);
+    const when = done ? el('span', {}, timeOf(item.created))
+      : busy ? el('b', { class: 'card-time' }, busyText(running.get(item.id)))
+        : el('span', { class: item.state === 'error' ? 'error' : 'muted' }, noteText(item));
+    node.append(done ? openButton(item, picture(item))
+      : el('span', { class: 'row-thumb' }, busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
+    el('p', { class: 'cell-prompt', title: item.prompt }, item.prompt),
+    el('span', { class: 'cell-meta' }, ...params(item).map((p) => el('span', {}, p)), el('span', { class: 'cell-when' }, when)),
+    el('span', { class: 'cell-act' }, done ? saveButton(item) : busy ? (item.state === 'working' ? cancelButton(item) : null)
+      : deleteButton(item)));
+    return node;
+  }
+
   function card(item) {
     watch(item);
     const node = el('div', { class: 'card photo-card', 'data-id': item.id, 'data-state': item.state });
+    if (layout.value === 'table') return row(item, node);
     if (item.state === 'done' && item.media_id) {
-      const open = el('button', { type: 'button', class: 'card-open', 'aria-label': 'Открыть картинку' },
-        el('img', { src: media(item.media_id, '?thumb=1'), alt: '', loading: 'lazy', decoding: 'async' }),
-        el('span', { class: 'card-cap' }, NAMES[item.model] || item.model));
-      open.addEventListener('click', () => openViewer(item));
-      // рядом с .card-open, а не внутри: кнопка в кнопке недопустима
-      const save = el('button', { type: 'button', class: 'card-save', 'aria-label': 'Скачать', title: 'Скачать' }, icon('save'));
-      save.addEventListener('click', (event) => {
-        event.stopPropagation();
-        saveMedia(item.media_id, root);
-      });
-      node.append(open, save);
+      // «Скачать» — рядом с .card-open, а не внутри: кнопка в кнопке недопустима
+      node.append(openButton(item, picture(item),
+        layout.value === 'tiles' ? el('span', { class: 'card-cap' }, NAMES[item.model] || item.model) : null), saveButton(item));
     } else if (RUNNING.has(item.state)) {
-      const box = el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('b', { class: 'card-time' }, busyText(running.get(item.id))));
-      if (item.state === 'working') {
-        box.append(button('Отменить', { class: 'btn-link card-cancel' }, async (event) => {
-          event.currentTarget.disabled = true;
-          try {
-            await api('POST', `/api/images/${item.id}/cancel`);
-          } catch (err) {
-            say(words(err), true);
-          }
-          poll(item.id);
-        }));
-      } else box.append(el('p', { class: 'small' }, cap(item.detail)));
-      node.append(box);
+      node.append(el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
+        el('b', { class: 'card-time' }, busyText(running.get(item.id))),
+        item.state === 'working' ? cancelButton(item) : el('p', { class: 'small' }, cap(item.detail))));
     } else {
-      const text = item.state === 'cancelled' ? cap(item.detail) || 'Отменено' : `Ошибка: ${item.detail || 'картинка не получена'}`;
-      node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, text),
-        button('Удалить', { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)))));
+      node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
+        deleteButton(item)));
+    }
+    if (layout.value === 'preview') {
+      const [w, h] = String(item.size).split('x').map(Number);
+      if (w > 0 && h > 0) node.style.setProperty('--ratio', `${w} / ${h}`);
+      node.append(el('div', { class: 'card-info' }, el('p', { class: 'card-prompt', title: item.prompt }, item.prompt),
+        el('p', { class: 'card-meta' }, [...params(item), timeOf(item.created)].filter(Boolean).join(' · '))));
     }
     return node;
   }
@@ -443,8 +514,18 @@ function build(view, ctx) {
         missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err);
       }
     };
+    // цепочка — у записи из GET /api/images/<id>; у записи ленты её нет — догрузить
+    let chain = item.chain ? chainList(item.chain, { current: item.id, onOpen }) : el('ol', { class: 'viewer-chain' });
+    if (!item.chain) {
+      api('GET', `/api/images/${encodeURIComponent(item.id)}`).then((full) => {
+        if (!dialog.open) return;
+        const next = chainList(full.chain, { current: item.id, onOpen });
+        chain.replaceWith(next);
+        chain = next;
+      }, (err) => { missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err); });
+    }
     dialog.append(el('div', { class: 'viewer-top' }, close), stage,
-      el('div', { class: 'viewer-bar' }, chainList(item.chain, { current: item.id, onOpen }), missing, actions));
+      el('div', { class: 'viewer-bar' }, chain, missing, actions));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       for (const b of starts) gated.delete(b);
@@ -584,6 +665,65 @@ function build(view, ctx) {
     });
   }
 
+  /* «EN»: gemma-abl переводит промпт на английский; перевод встаёт в поле вместо него */
+  async function translate() {
+    if (translating) {                                    // нажали ещё раз — отменить (id ещё нет — после создания)
+      translating.cancelled = true;
+      if (translating.id) api('POST', `/api/images/${translating.id}/cancel`).catch(() => {});
+      return;
+    }
+    const text = prompt.value.trim();
+    if (!text) {
+      error.textContent = 'Напишите промпт';
+      return;
+    }
+    error.textContent = '';
+    const job = { id: null, started: Date.now(), cancelled: false };
+    translating = job;
+    prompt.readOnly = true;                               // правка во время перевода пропала бы
+    const paint = () => { chipTranslate.textContent = `EN · ${clock((Date.now() - job.started) / 1000)}`; };
+    paint();
+    const timer = setInterval(paint, 1000);
+    syncBusy();
+    try {
+      job.id = (await api('POST', '/api/images/translations', { prompt: text })).id;
+      if (job.cancelled) api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        if (!alive) {                                     // ушли из раздела: перевод никто не заберёт
+          api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+          return;
+        }
+        let r;
+        try {
+          r = await api('GET', `/api/images/translations/${job.id}`);
+        } catch (err) {
+          if (err.code === 'gone') throw err;
+          continue;                                       // связь мигнула — спросить ещё раз
+        }
+        if (r.state === 'done') {
+          if (!job.cancelled) {                           // отмена опоздала — перевод не нужен
+            prompt.value = r.text;
+            autosize();
+          }
+          break;
+        }
+        if (r.state === 'error') throw new Error(`Перевод не получился: ${r.detail}`);
+        if (r.state === 'cancelled') break;
+      }
+    } catch (err) {
+      if (alive) error.textContent = words(err);
+    } finally {
+      clearInterval(timer);
+      translating = null;
+      if (alive) {
+        prompt.readOnly = false;
+        chipTranslate.textContent = 'EN';
+        syncBusy();
+      }
+    }
+  }
+
   /* освобождение карты (администратор) */
   async function release() {
     popup(toggle, menu, false);
@@ -626,6 +766,7 @@ function build(view, ctx) {
     setSource(null);
   });
   strength.addEventListener('input', () => { strengthValue.textContent = Number(strength.value).toFixed(2); });
+  chipTranslate.addEventListener('click', translate);
   describeFile.addEventListener('change', () => {
     const f = describeFile.files[0];
     describeFile.value = '';

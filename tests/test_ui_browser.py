@@ -1350,6 +1350,7 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("eval", "spy", CLICKS),
         ("click", "#viewer .act-download"), ("wait", "window.clicked.length === 1"),
         ("eval", "download", "window.clicked[0]"),
+        ("wait", "document.querySelector('#viewer .chain-step')"),          # цепочку просмотр догружает
         ("eval", "meta", "document.querySelector('#viewer .chain-step:last-child .chain-meta').textContent"),
         ("click", "#viewer .act-repeat"),
         ("wait", f"!document.querySelector('#viewer') && {done_cards(3)}"),
@@ -1442,7 +1443,7 @@ def test_viewer_shows_the_chain_and_opens_a_step(browser, live):
     steps = "[...document.querySelectorAll('#viewer .chain-step')]"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make_chain, *go("photo"),
         ("wait", FEED_READY), ("wait", done_cards(2)),
-        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("wait", f"{steps}.length === 2"),
         ("eval", "prompts", f"{steps}.map(s => s.querySelector('.chain-prompt').textContent)"),
         ("eval", "now", f"{steps}.map(s => s.getAttribute('aria-current'))"),
         ("eval", "meta", f"{steps}[0].querySelector('.chain-meta').textContent"),
@@ -1540,6 +1541,122 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
     assert f["calls"][0] is None and len(f["calls"]) == 4    # три страницы и пустая
     assert f["after"] == {"first": "new", "updated": "i0*", "titles": ["Сегодня", f["titles"][2]], "count": 21}
     assert f["reloaded"]["count"] == 10 and f["reloaded"]["calls"] == 5
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 390, 1280])
+def test_rail_labels_fit_their_tabs(browser, live, width):
+    """«Расшифровка» вылезала за рельс шириной 64 px; на телефоне от 390 px подписи целиком."""
+    fits = """[...document.querySelectorAll('#rail .tab span')].map(s => { const t = s.closest('.tab').getBoundingClientRect();
+      const b = s.getBoundingClientRect(); return [s.textContent, b.left >= t.left - 0.5 && b.right <= t.right + 0.5,
+      s.scrollWidth <= s.clientWidth]; })"""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("eval", "fits", fits)],
+                      width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
+    assert set(labels) == {"Чат", "Фото", "Видео", "Расшифровка", "Озвучка"}
+    assert all(inside for inside, _ in labels.values()), labels
+    if width >= 390:
+        assert all(whole for _, whole in labels.values()), labels
+
+
+def grid_cols(feed):
+    return f"getComputedStyle(document.querySelector('{feed} .feed-grid')).gridTemplateColumns.split(' ').length"
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
+    login = f"views{width}"
+    live.add_user(login)
+    card = "#photo-feed .photo-card"
+    rows = (f"[...document.querySelectorAll('{card}')].map(r => [r.querySelector('.cell-prompt').textContent,"
+            " ...[...r.querySelectorAll('.cell-meta > span')].map(s => s.textContent)])")
+    # заголовок «Промпт» — над промптами строк
+    aligned = (f"Math.abs(document.querySelectorAll('#photo-feed .feed-head span')[1].getBoundingClientRect().left"
+               f" - document.querySelector('{card} .cell-prompt').getBoundingClientRect().left) < 1")
+    newest = (f"(() => {{ const c = document.querySelector('{card}'); const o = c.querySelector('.card-open').getBoundingClientRect();"
+              " return [c.querySelector('.card-prompt').textContent, c.querySelector('.card-meta').textContent,"
+              " c.querySelector('img').getAttribute('srcset'), o.width / o.height]; })()")
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=3), ("wait", done_cards(3)),
+        ("eval", "pressed", "[...document.querySelectorAll('#view .view-switch [aria-pressed=true]')].map(b => b.id)"),
+        ("eval", "tiles", grid_cols("#photo-feed")),
+        ("click", "#photo-view-table"),
+        ("wait", "document.querySelector('#photo-feed').dataset.view === 'table' && document.querySelector('#photo-feed .cell-prompt')"),
+        ("eval", "head", "getComputedStyle(document.querySelector('#photo-feed .feed-head')).display"),
+        ("eval", "rows", rows),
+        ("eval", "aligned", f"{width} < 760 || {aligned}"),
+        ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#photo-feed').scrollWidth <= document.querySelector('#photo-feed').clientWidth"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("wait", "document.querySelector('#viewer .chain-step')"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#viewer')"),
+        ("click", "#photo-view-preview"), ("wait", "document.querySelector('#photo-feed .card-info')"),
+        ("eval", "previewCols", grid_cols("#photo-feed")),
+        ("eval", "newest", newest),
+        ("idle",), ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY} && {FEED_READY}"),
+        ("eval", "kept", "[document.querySelector('#photo-feed').dataset.view, localStorage.getItem('studio-view-photo'),"
+                         " document.querySelector('#photo-view-preview').getAttribute('aria-pressed')]")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["pressed"] == ["photo-view-tiles"] and v["tiles"] == (6 if width == 1280 else 2)
+    assert v["head"] == ("grid" if width == 1280 else "none") and v["aligned"] and v["tableFits"]
+    assert [row[0] for row in v["rows"]] == ["кот 2", "кот 1", "кот 0"]
+    prompt, model, size, seed, when = v["rows"][0]
+    assert (model, size, seed) == ("Lustify", "1216×832", "seed 102") and re.fullmatch(r"\d\d:\d\d", when)
+    assert (v["previewCols"] == 1) if width == 390 else (v["previewCols"] >= 3)
+    text, meta, srcset, ratio = v["newest"]
+    assert text == "кот 2" and meta.startswith("Lustify · 1216×832 · seed 102 · ")
+    assert re.fullmatch(r"/api/media/\w+\?thumb=1 384w, /api/media/\w+ 1216w", srcset)
+    assert abs(ratio - 1216 / 832) < 0.02                       # картинка целиком, без обрезки
+    assert v["kept"] == ["preview", "preview", "true"]
+    assert not problems(r), problems(r)
+
+
+def test_photo_translates_the_prompt_into_the_field(browser, live):
+    """«EN»: перевод встаёт в поле вместо промпта, генерации нет; во время перевода «Создать» закрыт,
+    а «EN» перевод отменяет — промпт остаётся."""
+    login = "translator"
+    live.add_user(login)
+    gw = live.gw
+    d0, g0 = len(gw.descriptions), len(gw.generations)
+
+    async def slow(request):
+        await asyncio.sleep(1.0)
+        return await gw.builtin(request)
+
+    saved = gw.description_reply
+    gw.description_reply = {"choices": [{"message": {"content": "a cat on the windowsill"}, "finish_reason": "stop"}]}
+    gw.on["/slot/images/descriptions"] = slow
+    idle = "document.querySelector('#photo-translate').textContent === 'EN' && !document.querySelector('#photo-go').disabled"
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login),
+            ("eval", "title", "document.querySelector('#photo-translate').title"),
+            ("click", "#photo-translate"), ("wait", "document.querySelector('#photo-error').textContent.length > 0"),
+            ("eval", "empty", "document.querySelector('#photo-error').textContent"),
+            ("type", "#photo-prompt", "кошка на подоконнике"), ("click", "#photo-translate"),
+            ("wait", "document.querySelector('#photo-translate').textContent.startsWith('EN · ')"),
+            ("eval", "busy", "[document.querySelector('#photo-go').disabled, document.querySelector('#photo-prompt').readOnly,"
+                             " document.querySelector('#photo-translate').title]"),
+            ("wait", "document.querySelector('#photo-prompt').value === 'a cat on the windowsill'"), ("wait", idle),
+            # второй перевод — отменён «EN»: промпт тот же
+            ("eval", "edit", "(() => { const p = document.querySelector('#photo-prompt'); p.value = 'собака'; return true; })()"),
+            ("click", "#photo-translate"),
+            ("wait", "document.querySelector('#photo-translate').textContent.startsWith('EN · ')"),
+            ("click", "#photo-translate"), ("wait", idle),
+            ("eval", "after", "[document.querySelector('#photo-prompt').value, document.querySelector('#photo-prompt').readOnly,"
+                              " document.querySelector('#photo-error').textContent]")], timeout=20000)
+    finally:
+        gw.description_reply = saved
+        gw.on.pop("/slot/images/descriptions", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"] == "Перевести промпт на английский (gemma-abl)" and v["empty"] == "Напишите промпт"
+    assert v["busy"] == [True, True, "Отменить перевод"]
+    assert v["after"] == ["собака", False, ""]
+    first, second = gw.descriptions[d0:]
+    assert first["messages"][0]["content"].endswith("кошка на подоконнике")
+    assert second["messages"][0]["content"].endswith("собака")
+    assert len(gw.generations) == g0 and any(s.endswith("/cancel") for s in r["sent"])
     assert not problems(r), problems(r)
 
 
@@ -1714,9 +1831,56 @@ def test_video_layout_fits_390(browser, live, ready_clips):
     assert (seconds, smooth, maxlength, go_text) == ("5", "true", 4000, "Оживить")
     assert "Обычно 576p" in quality and "32 к/с" in smooth_text
     assert "пусто — движение придумает gemma-abl" in placeholder
-    assert not v["overflow"] and v["cols"] == 2 and v["aboveTabs"] and v["inside"] and v["menu"]
+    # вид по умолчанию — превью: на телефоне ролик во всю ширину
+    assert not v["overflow"] and v["cols"] == 1 and v["aboveTabs"] and v["inside"] and v["menu"]
     assert v["qualities"] == ["Быстро 480p", "Обычно 576p", "Высоко 720p"]
     assert v["error"].startswith("Длительность") and v["cleared"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_clips, width):
+    login = f"vviews{width}"
+    live.add_user(login)
+    viewer = """(() => { const v = document.querySelector('#video-viewer video');
+      return [v.getAttribute('src'), v.controls, document.querySelector('#video-viewer .viewer-meta').textContent,
+        [...document.querySelectorAll('#video-viewer .viewer-actions .btn')].map(b => b.textContent)]; })()"""
+    r = browser.drive(live.url + "/", [*video_screen(login),
+        put_file("#video-file", png_of(48, 64, "olive")),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48"),
+        ("click", "#video-go"), ("wait", clips("done", 1)),
+        ("eval", "pressed", "document.querySelector('#video-view-preview').getAttribute('aria-pressed')"),
+        ("click", "#video-view-tiles"), ("wait", f"document.querySelector('{CLIP} .video-open')"),
+        ("eval", "tile", f"[document.querySelector('{CLIP} .card-cap').textContent, !!document.querySelector('{CLIP} video'),"
+                         f" {grid_cols('#video-feed')}]"),
+        ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
+        ("wait", "document.querySelectorAll('#video-viewer .chain-step').length === 2"),
+        ("eval", "viewer", viewer),
+        ("eval", "inside", f"[...document.querySelectorAll('#video-viewer button')].every(b => {{ const r = b.getBoundingClientRect();"
+                           f" return r.left >= 0 && r.right <= innerWidth; }}) && {NO_OVERFLOW}"),
+        ("eval", "spy", CLICKS), ("click", "#video-viewer .act-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "download", "window.clicked[0][0]"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#video-viewer')"),
+        ("click", "#video-view-table"), ("wait", f"document.querySelector('{CLIP} .cell-prompt')"),
+        ("eval", "row", f"[...document.querySelectorAll('{CLIP} .cell-meta > span')].map(s => s.textContent)"),
+        ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#video-feed').scrollWidth"
+                              " <= document.querySelector('#video-feed').clientWidth"),
+        ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
+        ("click", "#video-viewer .act-delete"), ("wait", is_open("#video-delete-dialog")),
+        ("click", "#video-delete-confirm"),
+        ("wait", f"!document.querySelector('#video-viewer') && !document.querySelector('{CLIP}')"),
+        ("eval", "kept", "localStorage.getItem('studio-view-video')")], width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["pressed"] == "true"
+    assert v["tile"] == ["5 с", False, 6 if width == 1280 else 2]
+    src, controls, meta, actions = v["viewer"]
+    assert src.startswith("/api/media/") and controls and meta.startswith("5 с · 576p · 32 к/с")
+    assert actions == ["Скачать", "Удалить"] and v["inside"] and v["download"] == f"{src}?download=1"
+    params, seed, when = v["row"]
+    assert params == "5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
+    assert v["tableFits"] and v["kept"] == "table"
+    assert any(s.startswith("DELETE /api/videos/") for s in r["sent"])
     assert not problems(r), problems(r)
 
 

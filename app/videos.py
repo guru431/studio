@@ -88,14 +88,18 @@ def _row(user_id: int, video_id: str):
     return row
 
 
-def _out(row) -> dict:
+def _out(row, with_chain=True) -> dict:
+    """Запись ленты; цепочка промптов — только у одной записи, в ленте — число шагов (как у картинок)."""
     end = row["finished"] if row["finished"] is not None else clock.NOW()
-    return {"id": row["id"], "state": row["state"], "progress": row["progress"], "detail": row["detail"],
-            "prompt": row["prompt"], "prompt_source": row["prompt_source"], "seconds": row["seconds"],
-            "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"],
-            "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"],
-            "elapsed": int(max(0, end - row["created"])),
-            "chain": chains.annotate(row["user_id"], chains.of_video(row["user_id"], row))}
+    chain = chains.of_video(row["user_id"], row)
+    out = {"id": row["id"], "state": row["state"], "progress": row["progress"], "detail": row["detail"],
+           "prompt": row["prompt"], "prompt_source": row["prompt_source"], "seconds": row["seconds"],
+           "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"],
+           "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"],
+           "elapsed": int(max(0, end - row["created"])), "steps": len(chain)}
+    if with_chain:
+        out["chain"] = chains.annotate(row["user_id"], chain)
+    return out
 
 
 def _settle(video_id: str, state_: str, detail: str, media_id: "str | None" = None) -> bool:
@@ -309,7 +313,7 @@ async def list_videos(request: Request, before: "float | None" = None, limit: in
     else:
         rows = state.DB.execute("SELECT * FROM videos WHERE user_id = ? AND created < ?"
                                 " ORDER BY created DESC, id DESC LIMIT ?", (uid, before, limit))
-    return {"items": [_out(r) for r in rows]}
+    return {"items": [_out(r, with_chain=False) for r in rows]}
 
 
 @router.get("/{video_id}")

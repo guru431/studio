@@ -35,9 +35,11 @@
   srt), `voices` (образцы голосов), `speeches` (озвучка в фоне), `admin`, `chat` (поток SSE), `documents`, `images`, `videos`, `media` (файлы на
   шаре, `Range`), `history`; формы фото и роликов (тело с пределом, фото файлом или из истории) —
   `forms.py`; цепочка промптов картинок и роликов (снимок шагов в `images.chain` / `videos.chain`,
-  у старых строк — по ссылкам) — `chains.py`; база — `db.py`, окружение — `config.py` (`REQUIRED`),
+  у старых строк — по ссылкам) — `chains.py`, в ответе — только у одной записи (`GET …/<id>`), лента
+  несёт число шагов `steps`; база — `db.py`, окружение — `config.py` (`REQUIRED`),
   часы — `clock.py`, команды хоста — `manage.py` (`create-admin`, `backup`). Фронтенд без сборки —
-  `app/static/` (модули ES, сторонние библиотеки копией в `static/vendor/`, без CDN). Иконки (PNG и
+  `app/static/` (модули ES, сторонние библиотеки копией в `static/vendor/`, без CDN); вид ленты
+  фото и видео (превью, плитка, таблица) — `views.js`, выбор — `localStorage` устройства. Иконки (PNG и
   `favicon.ico`) — `tools/make_icons.py` по геометрии `icons/icon.svg`: правка рисунка — в обоих,
   PNG коммитятся.
 - Схема базы — `db.VERSION`; новая база получает `SCHEMA` сразу, база прода — шаги `db.STEPS`
@@ -137,7 +139,7 @@
 
 ## Тесты
 
-    .venv/Scripts/python -m pytest -q                                   # быстрый набор (~25 с)
+    .venv/Scripts/python -m pytest -q                                   # быстрый набор (~22 с, 4 процесса)
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell
     v() { grep "^$1=" C:/work/projects/local-config/secrets/vault.env | cut -d= -f2-; }    # живая приёмка: значения не печатать
     STUDIO_ADMIN_LOGIN=$(v STUDIO_ADMIN_LOGIN) STUDIO_ADMIN_PASSWORD=$(v STUDIO_ADMIN_PASSWORD) \
@@ -162,7 +164,10 @@
 фикстура `studio` (`tests/conftest.py`): шлюз подменён `httpx.MockTransport` (`tests/fakes.py`),
 часы — `clock.NOW`, паузы — `clock.SLEEP`. Браузерные сценарии — `tests/test_ui_browser.py`
 (живая служба `tests/live_app.py`, драйвер `tests/browser.py` + `cdp_driver.mjs`). Договорённость
-юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`.
+юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`. Набор идёт четырьмя процессами
+(`-n 4 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
+его не делят; `integration` и `manual` — группой `serial` (хук в `tests/conftest.py`), одним
+процессом по очереди. Один тест без параллели — `-n0`.
 
 ## Ловушки
 
@@ -190,5 +195,11 @@
   освобождает модели картинок и gemma-abl (`speech.free_card`), а на 503 ждёт и повторяет
   (`RETRY_SEC`, до `WAIT_MAX_SEC`). Отмена обрывает только свой запрос — WhisperX дослушает запись.
 - Имя файла записи едет заголовком `X-Studio-Name`, а не строкой запроса: строку пишет журнал Apache.
+- Перевод промпта («EN», `POST /api/images/translations`) идёт маршрутом описания
+  `/slot/images/descriptions` — текстом, без картинки, а не чат-ролью `local-gemma-abl`: у этого
+  маршрута есть scoped release gemma-abl, и задание вида `translation` проходит путь «Описать» —
+  одно задание за раз, release моделей картинок до запроса и gemma-abl после, так что следующий
+  Lustify не ждёт карту под арендой gemma-abl. Обрезанный ответ (`finish_reason: length`) —
+  ошибка, а не половина промпта в поле.
 - Из LAN запрос на публичный адрес приходит с роутера 10.77.1.1 (петля): для него пауза входа —
   только на пару «логин + адрес» (`config.hairpin_ip`), иначе запирался бы весь дом.
