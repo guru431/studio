@@ -16,6 +16,11 @@ class Config:
     origin: str
     hairpin_ip: str = "10.77.1.1"
 
+    @property
+    def tmp_dir(self) -> Path:
+        """Временные файлы звука (ffmpeg) — на локальном диске рядом с базой, не на шаре."""
+        return self.db_path.parent / "tmp"
+
 
 def load() -> Config:
     missing = [k for k in REQUIRED if not os.environ.get(k)]

@@ -31,7 +31,10 @@ CHUNK = 64 << 10
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
        "video/mp4": ".mp4", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
-       "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"}
+       "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+       "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/wav": ".wav", "audio/x-wav": ".wav",
+       "audio/ogg": ".ogg", "audio/webm": ".webm", "audio/flac": ".flac", "audio/aac": ".aac", "video/webm": ".webm",
+       "video/quicktime": ".mov", "application/json": ".json"}
 GONE = {"code": "gone", "message": "файла нет"}
 
 log = logging.getLogger("studio")

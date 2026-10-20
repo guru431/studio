@@ -143,3 +143,34 @@ def add_gateway(s) -> int:
     from fakes import FakeGateway
     return add_connection(s, kind="srvllm", base_url="http://10.77.1.15:4000", token=FakeGateway.TOKEN,
                           name="srvllm")
+
+
+@pytest.fixture
+def fake_audio(monkeypatch):
+    """audio без ffmpeg: длительность — `fake.duration`, сжатие и WAV — копия байтов, склейка —
+    конкатенация; вызовы — в `fake.calls`."""
+    from pathlib import Path as P
+
+    import audio
+    fake = SimpleNamespace(calls=[], duration=61.0)
+
+    async def probe(path):
+        fake.calls.append(("probe",))
+        return fake.duration
+
+    async def compress(src, dst):
+        fake.calls.append(("compress",))
+        P(dst).write_bytes(P(src).read_bytes())
+
+    async def to_wav(src, dst, *, max_sec):
+        fake.calls.append(("to_wav", max_sec))
+        P(dst).write_bytes(P(src).read_bytes())
+        return min(fake.duration, max_sec)
+
+    async def mp3_of(parts, dst):
+        fake.calls.append(("mp3_of", len(parts)))
+        P(dst).write_bytes(b"".join(P(p).read_bytes() for p in parts))
+
+    for name, fn in (("probe", probe), ("compress", compress), ("to_wav", to_wav), ("mp3_of", mp3_of)):
+        monkeypatch.setattr(audio, name, fn)
+    return fake

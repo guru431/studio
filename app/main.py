@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 import admin
+import audio
 import auth
 import chat
 import config
@@ -57,6 +58,7 @@ async def lifespan(_app):
     state.CFG = config.load()
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
+    audio.clean_tmp()
     images.recover()
     chat.recover()
     state.HTTP = state.make_http()

@@ -356,3 +356,11 @@ def test_install_configtest_refusal_shows_the_output_and_blames_no_file():
     assert "line 1" in r.stderr and "other.conf" in r.stderr     # вывод целиком, не хвост
     assert "Apache не проходит configtest (вывод выше" in r.stderr
     assert "apache-vhost.conf" not in r.stderr
+
+
+def test_install_brings_ffmpeg_before_the_code_swap():
+    """Звук студии — ffmpeg debian: не встал — прежний код работает, а не новый без ffmpeg."""
+    install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "command -v ffmpeg" in install
+    assert install.index("apt-get install") < install.index('mv "$NEW/$p"')
+    assert "ffmpeg" in install[install.index("apt-get install"):install.index("apt-get install") + 120]

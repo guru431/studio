@@ -64,6 +64,9 @@ if ! findmnt -n -o FSTYPE -T "$MEDIA" 2>/dev/null | grep -qx cifs \
     exit 1
 fi
 
+# Звук студии (расшифровка, озвучка) — ffmpeg debian; до подмены кода: не встал — работает прежний
+command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg >/dev/null
+
 # Среда — до подмены кода: упади pip, работать останется прежний код
 [ -x "$R/.venv/bin/python" ] || python3 -m venv "$R/.venv"
 "$R/.venv/bin/pip" install --quiet --disable-pip-version-check --root-user-action=ignore -r "$NEW/requirements.txt"
