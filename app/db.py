@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 5).
+"""Соединение SQLite и схема базы (версия 6).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 5
+VERSION = 6
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -38,7 +38,7 @@ SCHEMA = SECTION_TABLES + SPEECH_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
-      created REAL NOT NULL);
+      created REAL NOT NULL, views TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE sessions(digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
          csrf TEXT NOT NULL, expires REAL NOT NULL, renewed REAL NOT NULL);
 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -114,6 +114,8 @@ SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FRO
            AND json_array_length(x.models) > 0));""",
     # речь: расшифровки записей, образцы голосов и озвучки
     5: SPEECH_TABLES,
+    # вид ленты разделов (profile.py) — в учётке: JSON {раздел: вид}
+    6: "ALTER TABLE users ADD COLUMN views TEXT NOT NULL DEFAULT '{}';",
 }
 
 

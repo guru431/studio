@@ -1593,8 +1593,8 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
         ("eval", "newest", newest),
         ("idle",), ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY} && {FEED_READY}"),
-        ("eval", "kept", "[document.querySelector('#photo-feed').dataset.view, localStorage.getItem('studio-view-photo'),"
-                         " document.querySelector('#photo-view-preview').getAttribute('aria-pressed')]")],
+        ("eval", "kept", "fetch('/api/me').then(r => r.json()).then(m => [document.querySelector('#photo-feed').dataset.view,"
+                         " m.views.photo, document.querySelector('#photo-view-preview').getAttribute('aria-pressed')])")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -1609,6 +1609,31 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
     assert re.fullmatch(r"/api/media/\w+\?thumb=1 384w, /api/media/\w+ 1216w", srcset)
     assert abs(ratio - 1216 / 832) < 0.02                       # картинка целиком, без обрезки
     assert v["kept"] == ["preview", "preview", "true"]
+    assert not problems(r), problems(r)
+
+
+def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, live):
+    """Тему и вид сменили на другом устройстве учётки: открытая студия берёт их, вернувшись на экран,
+    без перезагрузки — тему сразу, вид при следующем открытии раздела."""
+    login = "comeback"
+    live.add_user(login, theme="light")
+    elsewhere = ("fetch('/api/me').then(r => r.json()).then(m => fetch('/api/me', { method: 'PATCH',"
+                 " headers: { 'content-type': 'application/json', 'x-studio-csrf': m.csrf },"
+                 " body: JSON.stringify({ theme: 'dark', views: { photo: 'table' } }) })).then(r => r.status)")
+    r = browser.drive(live.url + "/", [*photo_screen(login),
+        ("eval", "before", "[document.documentElement.dataset.theme, document.querySelector('#photo-feed').dataset.view]"),
+        ("eval", "patched", elsewhere),
+        ("eval", "back", "document.dispatchEvent(new Event('visibilitychange'))"),
+        ("wait", "document.documentElement.dataset.theme === 'dark'"),
+        ("eval", "stillOpen", "document.querySelector('#photo-feed').dataset.view"),
+        *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
+        *go("photo"), ("wait", FEED_READY),
+        ("eval", "after", "document.querySelector('#photo-feed').dataset.view"),
+        ("eval", "pressed", "document.querySelector('#photo-view-table').getAttribute('aria-pressed')")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == ["light", "tiles"] and v["patched"] == 200
+    assert v["stillOpen"] == "tiles" and v["after"] == "table" and v["pressed"] == "true"
     assert not problems(r), problems(r)
 
 
@@ -1869,7 +1894,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         ("click", "#video-viewer .act-delete"), ("wait", is_open("#video-delete-dialog")),
         ("click", "#video-delete-confirm"),
         ("wait", f"!document.querySelector('#video-viewer') && !document.querySelector('{CLIP}')"),
-        ("eval", "kept", "localStorage.getItem('studio-view-video')")], width=width, mobile=width == 390)
+        ("eval", "kept", "fetch('/api/me').then(r => r.json()).then(m => m.views.video)")], width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["pressed"] == "true"

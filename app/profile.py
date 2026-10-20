@@ -1,6 +1,8 @@
 """Профиль у каждого: `/api/me` (с токеном CSRF сессии, готовностью разделов и умолчанием чата из
-sections.py), тема, смена пароля, удаление всей своей истории (спека, раздел 7.9)."""
+sections.py), тема и вид ленты разделов (общие для всех устройств учётки), смена пароля, удаление
+всей своей истории (спека, раздел 7.9)."""
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +17,8 @@ import security
 import state
 
 THEMES = ("auto", "dark", "light")
+VIEWS = ("preview", "tiles", "table")       # views.js
+VIEW_SECTIONS = ("photo", "video")
 PASSWORD_MAX = 1024
 
 log = logging.getLogger("studio")
@@ -23,6 +27,7 @@ router = APIRouter(prefix="/api")
 
 class MePatch(BaseModel):
     theme: str | None = None
+    views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
 
 
 class PasswordChange(BaseModel):
@@ -38,10 +43,11 @@ def check_password(password: str) -> None:
 def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
-    row = state.DB.execute("SELECT id, login, name, is_admin, theme FROM users WHERE id = ?", (uid,)).fetchone()
+    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views FROM users WHERE id = ?", (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
-            "theme": row["theme"], "default_connection_id": chat[0].id if chat else None,
+            "theme": row["theme"], "views": json.loads(row["views"]),
+            "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid)}
 
@@ -60,6 +66,11 @@ async def patch_me(body: MePatch, request: Request):
         if body.theme not in THEMES:
             raise HTTPException(422, {"code": "theme", "message": "тема — auto, dark или light"})
         changes["theme"] = body.theme
+    if "views" in sent:
+        if body.views is None or any(k not in VIEW_SECTIONS or v not in VIEWS for k, v in body.views.items()):
+            raise HTTPException(422, {"code": "views", "message": "вид ленты — preview, tiles или table у photo и video"})
+        stored = state.DB.execute("SELECT views FROM users WHERE id = ?", (uid,)).fetchone()["views"]
+        changes["views"] = json.dumps({**json.loads(stored), **body.views})
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))

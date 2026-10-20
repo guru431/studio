@@ -1,7 +1,8 @@
 /* Вид ленты разделов «Фото» и «Видео»: превью (крупно, с промптом), плитка (сетка миниатюр) и
- * таблица (строка на запись). Кнопки — в шапке раздела; выбор живёт на устройстве (localStorage
- * `studio-view-<раздел>`): телефону и компьютеру удобно разное. Вид ставится атрибутом
- * data-view ленты, по нему и раскладывает CSS. */
+ * таблица (строка на запись). Кнопки — в шапке раздела; выбор живёт в учётке (me.views, PATCH
+ * /api/me) и одинаков на всех её устройствах. Вид ставится атрибутом data-view ленты, по нему и
+ * раскладывает CSS. */
+import { api, me } from './api.js';
 import { el } from './ui.js';
 
 const VIEWS = [
@@ -14,14 +15,8 @@ const VIEWS = [
 
 /** Кнопки вида раздела `section` → { node, value }; onChange(вид) — после смены. */
 export function viewSwitch(section, fallback, onChange) {
-  const key = `studio-view-${section}`;
-  let value = fallback;
-  try {
-    const saved = localStorage.getItem(key);
-    if (VIEWS.some((v) => v[0] === saved)) value = saved;
-  } catch {
-    // хранилище закрыто — вид по умолчанию
-  }
+  const saved = me.views[section];
+  let value = VIEWS.some((v) => v[0] === saved) ? saved : fallback;
   const buttons = VIEWS.map(([name, label, path]) => {
     const b = el('button', { type: 'button', class: 'icon-btn', id: `${section}-view-${name}`, 'data-view': name,
       'aria-label': label, title: label });
@@ -29,11 +24,9 @@ export function viewSwitch(section, fallback, onChange) {
     b.addEventListener('click', () => {
       if (name === value) return;
       value = name;
-      try {
-        localStorage.setItem(key, name);
-      } catch {
-        // не запомнится — вид всё равно сменён
-      }
+      me.views[section] = name;
+      // вид уже сменён; без сети не запомнится — сохранится при следующем выборе
+      api('PATCH', '/api/me', { views: { [section]: name } }).catch(() => {});
       paint();
       onChange(name);
     });

@@ -55,8 +55,8 @@ def test_me_carries_csrf_and_profile(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     me = studio.c.get("/api/me").json()
     assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
-    assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False)
-    assert set(me) == {"id", "login", "name", "is_admin", "theme", "default_connection_id", "default_model",
+    assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
+    assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities"}
 
 
@@ -67,6 +67,18 @@ def test_theme_is_validated(studio):
     r = studio.c.patch("/api/me", json={"theme": "dark"})
     assert r.status_code == 200 and r.json()["theme"] == "dark"
     assert studio.c.get("/api/me").json()["theme"] == "dark"
+
+
+def test_views_are_kept_per_section_and_validated(studio):
+    """Вид ленты — в учётке, у каждого раздела свой: PATCH дополняет выбор, а не заменяет его."""
+    make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.patch("/api/me", json={"views": {"photo": "table"}}).json()["views"] == {"photo": "table"}
+    me = studio.c.patch("/api/me", json={"views": {"video": "tiles"}}).json()
+    assert me["views"] == {"photo": "table", "video": "tiles"}
+    for bad in ({"chat": "table"}, {"photo": "grid"}, None):
+        r = studio.c.patch("/api/me", json={"views": bad})
+        assert r.status_code == 422 and code(r) == "views", bad
+    assert studio.c.get("/api/me").json()["views"] == {"photo": "table", "video": "tiles"}
 
 
 def test_chat_default_comes_from_the_chat_section(studio):

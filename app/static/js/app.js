@@ -10,7 +10,9 @@
  * на настройки раздела. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты).
  *
  * Тема — кнопкой #theme-toggle над аватаром: из «auto» первое нажатие ставит противоположную видимой,
- * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. */
+ * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. Тема и вид ленты — в учётке: вернувшись
+ * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
+ * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело). */
 import { api, loadMe, me } from './api.js';
 
 const THEME_KEY = 'studio-theme';
@@ -134,6 +136,16 @@ function setupTheme() {
     api('PATCH', '/api/me', { theme: next }).catch(() => {});
   });
   darkMedia.addEventListener('change', paintToggle);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      await loadMe();
+    } catch {
+      return;              // нет связи — остаётся прежнее; сессия кончилась — api.js увёл на вход
+    }
+    applyTheme(me.theme);
+    paintToggle();
+  });
 }
 
 function parse(hash) {
