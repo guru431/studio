@@ -2,12 +2,19 @@
 
 Сервер ходит к хосту подключения, только если хост и порт адреса ТОЧНО совпадают с записью
 списка (`settings.allowlist`): без userinfo, только http/https, порт по умолчанию 80/443.
+Запись — IP (`10.0.0.5:4000`, `[::1]:8080`) или имя (`api.openai.com:443`). Имя — только для
+https: при каждом запросе сервер разрешает его сам (`RESOLVE`), отказывает, если хоть один адрес
+не публичный (`ipaddress.is_global`: частные, петля, link-local, CGNAT, multicast,
+зарезервированные), и соединяется именно с проверенным адресом (SNI и `Host` — имя): подмена DNS
+между проверкой и запросом ничего не даёт. Внутренние адреса — только IP-записями.
 Переадресации не выполняются — ответ 3xx возвращается как есть, второго запроса нет.
 Проверка — до всякого ввода-вывода; адрес разбирает тот же httpx.URL, по которому идёт запрос.
 """
+import asyncio
 import ipaddress
 import json
 import re
+import socket
 from contextlib import asynccontextmanager
 
 import httpx
@@ -16,20 +23,29 @@ import connections
 import state
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
+#: DNS-имя записи: метки до 63 знаков, хотя бы одна точка, последняя метка начинается с буквы
+NAME_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
 class UpstreamRefused(Exception):
-    """Адрес не из списка администратора: запрос не отправлен."""
+    """Адрес не из списка администратора (или имя ведёт во внутреннюю сеть): запрос не отправлен."""
 
 
 def _host(host: str) -> str:
-    """Хост записи: IPv4 или `[IPv6]` (сжатая форма); иначе ValueError. Имён нет: имя сверялось
-    бы с DNS на каждом запросе, и граница SSRF была бы у того, кто правит DNS."""
+    """Хост записи: IPv4, `[IPv6]` (сжатая форма) или DNS-имя (IDNA, нижний регистр); иначе
+    ValueError. Имя сверяется с DNS на каждом запросе (`_pinned`): доверять ему можно, только
+    проверив адреса, поэтому имя — только для https и только с публичными адресами."""
     if host.startswith("[") and host.endswith("]"):
         return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]"
     if re.fullmatch(r"[0-9.]+", host):
         return str(ipaddress.IPv4Address(host))
-    raise ValueError(host)
+    try:
+        name = host.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        raise ValueError(host) from None
+    if not NAME_RE.fullmatch(name):
+        raise ValueError(host)
+    return name
 
 
 def parse_entry(text: str) -> str:
@@ -64,30 +80,68 @@ def _parse(url) -> httpx.URL | None:
         return None
 
 
-def is_allowed(url: str) -> bool:
+def named(url: httpx.URL) -> bool:
+    """Хост адреса — имя, а не IP."""
+    host = url.host
+    return bool(host) and ":" not in host and not re.fullmatch(r"[0-9.]+", host)
+
+
+def is_allowed(url) -> bool:
     parsed = _parse(url)
     entry = _entry(parsed) if parsed is not None else None
-    return entry is not None and entry in allowlist()
+    return entry is not None and entry in allowlist() and (parsed.scheme == "https" or not named(parsed))
 
 
-def _prepare(conn, url, kw: dict) -> tuple[httpx.URL, dict]:
+async def _resolve(host: str, port: int) -> list[str]:
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        raise httpx.ConnectError("имя не разрешилось") from None
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
+#: разрешение имени (хост, порт) → адреса; тесты подменяют
+RESOLVE = _resolve
+
+
+def _public(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_global
+    except ValueError:                 # адрес с зоной (fe80::1%eth0) и прочее нераспознанное
+        return False
+
+
+async def _pinned(conn, url: httpx.URL, headers: dict, kw: dict) -> httpx.URL:
+    """Адрес имени, проверенный сейчас: запрос идёт на него, SNI и `Host` — имя."""
+    name = url.raw_host.decode("ascii")
+    addresses = await RESOLVE(name, url.port or DEFAULT_PORTS[url.scheme])
+    if not addresses or not all(_public(a) for a in addresses):
+        raise UpstreamRefused(f"подключение {conn.id}: имя разрешается во внутренний адрес")
+    headers["Host"] = name if url.port in (None, DEFAULT_PORTS[url.scheme]) else f"{name}:{url.port}"
+    kw["extensions"] = {**(kw.get("extensions") or {}), "sni_hostname": name}
+    return url.copy_with(host=addresses[0])
+
+
+async def _prepare(conn, url, kw: dict) -> tuple[httpx.URL, dict]:
     parsed = _parse(url)
     if parsed is None or not is_allowed(parsed):
         raise UpstreamRefused(f"подключение {conn.id}: адрес не из списка администратора")
     headers = dict(kw.pop("headers", None) or {})
     headers["Authorization"] = f"Bearer {connections.token(conn)}"
     kw.pop("follow_redirects", None)
+    if named(parsed):
+        parsed = await _pinned(conn, parsed, headers, kw)
     return parsed, {**kw, "headers": headers, "follow_redirects": False}
 
 
 async def request(conn, method: str, url: str, **kw) -> httpx.Response:
-    parsed, kw = _prepare(conn, url, kw)
+    parsed, kw = await _prepare(conn, url, kw)
     return await state.HTTP.request(method, parsed, **kw)
 
 
 @asynccontextmanager
 async def stream(conn, method: str, url: str, **kw):
-    parsed, kw = _prepare(conn, url, kw)
+    parsed, kw = await _prepare(conn, url, kw)
     async with state.HTTP.stream(method, parsed, **kw) as response:
         yield response
 

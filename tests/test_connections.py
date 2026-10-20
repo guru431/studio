@@ -69,16 +69,57 @@ def test_allowlist_entries_are_validated(studio):
     assert upstream.allowlist() == ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"]
 
 
-def test_allowlist_takes_ip_literals_only(studio):
-    """Имя в записи сверялось бы с DNS на каждом запросе: граница SSRF — у того, кто правит DNS."""
+def named_list(*entries):
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", (json.dumps(list(entries)),))
+
+
+def test_allowlist_takes_names_for_https_only(studio):
+    """Имя — только для https: адреса имени проверяются при каждом запросе (см. named ниже)."""
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
-    for name in ["llm.lan:8080", "localhost:4000", "cloud.test:443"]:
-        r = studio.c.put("/api/admin/allowlist", json={"entries": [name]})
-        assert r.status_code == 422 and code(r) == "entry", name
-    with pytest.raises(ValueError):
-        upstream.parse_entry("llm.lan:80")
-    state.DB.execute("""UPDATE settings SET value = '["llm.lan:80"]' WHERE key = 'allowlist'""")   # из старой базы
-    assert not upstream.is_allowed("http://llm.lan/v1")
+    r = studio.c.put("/api/admin/allowlist", json={"entries": ["API.OpenAI.com:443", "10.0.0.5:4000"]})
+    assert r.status_code == 200 and r.json()["entries"] == ["api.openai.com:443", "10.0.0.5:4000"]
+    for bad in ["localhost:4000", "llm:80", "1.2.3:80", "-x.test:443", "a..b:443"]:
+        r = studio.c.put("/api/admin/allowlist", json={"entries": [bad]})
+        assert r.status_code == 422 and code(r) == "entry", bad
+    assert upstream.is_allowed("https://api.openai.com/v1") and upstream.is_allowed("https://API.openai.com:443/x")
+    assert not upstream.is_allowed("http://api.openai.com:443/v1")          # имя — только https
+
+
+def test_named_request_goes_to_the_checked_address(studio, monkeypatch):
+    named_list("api.cloud.test:443")
+    async def resolve(host, port): return ["93.184.216.34"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(studio, base_url="https://api.cloud.test/v1", token="cloud-key-1")
+    seen = []
+    studio.gw.reply = lambda q: (seen.append(q), httpx.Response(200, json={"data": []}))[1]
+    asyncio.run(upstream.request(conn_of(cid), "GET", "https://api.cloud.test/v1/models"))
+    q, = seen
+    assert q.url.host == "93.184.216.34" and q.url.path == "/v1/models" and q.url.scheme == "https"
+    assert q.headers["host"] == "api.cloud.test" and q.extensions["sni_hostname"] == "api.cloud.test"
+    assert q.headers["authorization"] == "Bearer cloud-key-1"
+
+
+@pytest.mark.parametrize("addrs", [["10.0.0.7"], ["93.184.216.34", "127.0.0.1"], ["100.64.1.1"], ["169.254.1.1"],
+                                   ["::1"], ["fd00::1"], []])
+def test_named_host_that_resolves_inside_is_refused_before_any_io(studio, monkeypatch, addrs):
+    named_list("api.cloud.test:443")
+    async def resolve(host, port): return addrs
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(studio, base_url="https://api.cloud.test/v1", token="cloud-key-1")
+    with pytest.raises(upstream.UpstreamRefused):
+        asyncio.run(upstream.request(conn_of(cid), "GET", "https://api.cloud.test/v1/models"))
+    with pytest.raises(upstream.UpstreamRefused):
+        asyncio.run(streamed(conn_of(cid), "https://api.cloud.test/v1/models"))
+    assert studio.gw.requests == []
+
+
+def test_named_address_takes_any_path_but_ip_keeps_the_rule(studio):
+    named_list("openrouter.ai:443", "10.77.1.15:4000")
+    make_user(studio, "owner"); signin(studio, "owner")
+    r = post(studio, base_url="https://openrouter.ai/api/v1")
+    assert r.status_code == 201 and r.json()["proxied"] is True
+    r = post(studio, base_url="http://10.77.1.15:4000/api/v1")
+    assert r.status_code == 422 and code(r) == "path"
 
 
 def test_unparseable_hosts_are_refused_not_500(studio):

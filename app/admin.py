@@ -172,7 +172,8 @@ async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require
         try:
             entry = upstream.parse_entry(text)
         except ValueError:
-            raise HTTPException(422, {"code": "entry", "message": f"«{text[:100]}» — не IP:порт (имена не принимаются)"}) from None
+            raise HTTPException(422, {"code": "entry", "message": f"«{text[:100]}» — не IP:порт и не имя:порт"
+                                                                  " (имя — только для https)"}) from None
         if entry not in entries:
             entries.append(entry)
     state.DB.execute("INSERT INTO settings(key, value) VALUES ('allowlist', ?)"

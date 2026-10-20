@@ -496,11 +496,11 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("wait", "!document.querySelector('#delete-confirm').disabled"),
         ("click", "#delete-confirm"), ("wait", f"!document.querySelector('{rid}')"),
         # список разрешённых адресов
-        ("type", "#allow-entry", "gw.local:4000"), ("click", "#allow-add"),
+        ("type", "#allow-entry", "gw:4000"), ("click", "#allow-add"),
         ("click", "#allowlist-save"),
         ("wait", "document.querySelector('#allow-status').textContent.length > 0"),
         ("eval", "nameRefused", "document.querySelector('#allow-status').textContent"),
-        ("click", "#allow-list li[data-entry='gw.local:4000'] button"),
+        ("click", "#allow-list li[data-entry='gw:4000'] button"),
         ("type", "#allow-entry", entry), ("click", "#allow-add"),
         ("click", "#allowlist-save"),
         ("wait", "document.querySelector('#allow-status').textContent === 'Сохранено'"),
@@ -516,7 +516,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["pathError"] == "Адрес через сервер — без пути"
     assert v["conn"] == ["через сервер", "Чат, Фото, Видео"]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
-    assert "gw.local:4000" in v["nameRefused"] and "имена не принимаются" in v["nameRefused"]
+    assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
     assert v["saved"] == ["10.77.1.15:4000", entry]
     assert not v["overflow"]
     assert not known_refusals(problems(r), 422), problems(r)

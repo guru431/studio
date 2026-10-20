@@ -178,7 +178,7 @@ function allowlistBlock() {
   let entries = [];
   const list = el('ul', { class: 'allow-list', id: 'allow-list' });
   const input = el('input', { class: 'input', id: 'allow-entry', autocomplete: 'off', spellcheck: 'false',
-    autocapitalize: 'none', inputmode: 'url', placeholder: 'IP:порт, например 10.0.0.5:4000' });
+    autocapitalize: 'none', inputmode: 'url', placeholder: 'IP:порт или имя:порт, например 10.0.0.5:4000 или api.openai.com:443' });
   const note = el('p', { class: 'status', id: 'allow-status', 'aria-live': 'polite' });
   const save = button('Сохранить', { class: 'btn btn-accent', id: 'allowlist-save' });
 
@@ -234,7 +234,8 @@ function allowlistBlock() {
   return {
     el: el('section', { class: 'block' }, el('h2', {}, 'Разрешённые внутренние адреса'),
       el('p', { class: 'muted small' }, 'Подключения к этим адресам студия зовёт сама, их токен браузеру не отдаётся. '
-        + 'Запись — IP и порт: 10.0.0.5:4000 или [::1]:8080; имена не принимаются.'),
+        + 'Запись — IP и порт (10.0.0.5:4000, [::1]:8080) или имя и порт (api.openai.com:443). Имя — только для https: '
+        + 'студия при каждом запросе проверяет, что имя ведёт в интернет, а не во внутреннюю сеть.'),
       list, el('div', { class: 'row' }, input, button('Добавить', { class: 'btn', id: 'allow-add' }, add)),
       el('div', { class: 'row' }, save, note)),
     load,
