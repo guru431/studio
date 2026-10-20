@@ -208,6 +208,7 @@ class FakeCloud:
         self.chat_reply = ["Облако ", "на связи."]
         self.chat_requests = []          # тела запросов /v1/chat/completions
         self.chat_auth = []              # их заголовки авторизации
+        self.models_auth = []            # заголовки авторизации /v1/models
         self.chunk_pause = 0.05          # пауза между кусками: браузер видит поток, а не готовый ответ
         cloud = self
 
@@ -241,6 +242,7 @@ class FakeCloud:
             def do_GET(self):
                 if self.path != "/v1/models":
                     return self._json(404, {"error": {"message": "not found"}})
+                cloud.models_auth.append(self.headers.get("Authorization"))
                 if self._authorized():
                     self._json(200, {"object": "list", "data": cloud.models})
 

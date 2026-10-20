@@ -199,7 +199,10 @@ def test_patch_changes_only_what_was_sent(studio):
 
 def test_direct_token_is_given_to_its_owner_only(studio):
     cid = add_connection(studio)
-    assert studio.c.get(f"/api/connections/{cid}/token").json() == {"token": "cloud-key"}
+    # адреса — те, куда браузеру можно нести этот токен: не из списка подключений, который мог устареть
+    assert studio.c.get(f"/api/connections/{cid}/token").json() == {
+        "token": "cloud-key", "chat_url": "https://cloud.test/v1/chat/completions",
+        "models_url": "https://cloud.test/v1/models"}
     make_user(studio, "bob"); signin(studio, "bob")
     assert studio.c.get("/api/connections").json() == {"items": []}
     for method, path, body in [("GET", f"/api/connections/{cid}/token", None),
@@ -227,7 +230,7 @@ def test_https_entry_dropped_from_the_list_keeps_its_token_on_the_server(studio)
     assert r.status_code == 403 and "internal-https-secret" not in r.text
     # новый токен, введённый для прямого подключения, — уже браузерный
     assert studio.c.patch(f"/api/connections/{cid}", json={"token": "direct-key-0001"}).status_code == 200
-    assert studio.c.get(f"/api/connections/{cid}/token").json() == {"token": "direct-key-0001"}
+    assert studio.c.get(f"/api/connections/{cid}/token").json()["token"] == "direct-key-0001"
 
 
 def test_proxied_connection_turned_direct_needs_a_new_token(studio):
@@ -241,7 +244,7 @@ def test_proxied_connection_turned_direct_needs_a_new_token(studio):
     assert r.status_code == 403 and "gw-secret-token" not in r.text
     r = studio.c.patch(f"/api/connections/{cid}", json=evil | {"token": "evil-own-key-1"})
     assert r.status_code == 200 and not r.json()["proxied"]
-    assert studio.c.get(f"/api/connections/{cid}/token").json() == {"token": "evil-own-key-1"}
+    assert studio.c.get(f"/api/connections/{cid}/token").json()["token"] == "evil-own-key-1"
 
 
 def test_repointing_a_proxied_connection_needs_a_new_token(studio):

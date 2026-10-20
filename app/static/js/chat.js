@@ -37,7 +37,7 @@ const ICONS = {
 };
 
 const jobs = new Map();          // id диалога → ответ, который читает эта вкладка
-const tokens = new Map();        // id подключения → токен прямого подключения (память вкладки)
+const tokens = new Map();        // id подключения → { token, url } прямого подключения (память вкладки)
 let screen = null;               // смонтированный раздел
 
 function icon(name, cls = 'ico') {
@@ -107,9 +107,16 @@ async function readServer(job, response) {
   finish(job);
 }
 
-async function tokenOf(connId) {
-  if (!tokens.has(connId)) tokens.set(connId, (await api('GET', `/api/connections/${connId}/token`)).token);
-  return tokens.get(connId);
+/* Токен — только тому адресу, для которого сервер его выдал: подключение сменило адрес (здесь,
+ * в другой вкладке или у администратора) — прежний токен новому адресу не уходит. */
+async function tokenFor(connId, url) {
+  const known = tokens.get(connId);
+  if (known && known.url === url) return known.token;
+  tokens.delete(connId);
+  const fresh = await api('GET', `/api/connections/${connId}/token`);
+  if (fresh.chat_url !== url) throw new Error('Адрес подключения сменился — отправьте сообщение ещё раз');
+  tokens.set(connId, { token: fresh.token, url });
+  return fresh.token;
 }
 
 async function serviceRefusal(response) {
@@ -128,7 +135,7 @@ async function readBrowser(job, turn) {
   adoptIds(job, turn);
   let status = 'done';
   try {
-    const token = await tokenOf(job.connId);
+    const token = await tokenFor(job.connId, turn.url);
     let response;
     try {
       response = await fetch(turn.url, { method: 'POST', signal: job.controller.signal,

@@ -312,4 +312,5 @@ async def get_token(conn_id: int, request: Request):
     # было через сервер, пока адрес не убрали из списка, и его токен браузеру не предназначался
     if conn.server_only or conn.proxied or conn.kind == "srvllm" or not _direct_ok(conn.base_url):
         raise HTTPException(403, {"code": "proxied", "message": "токен подключения через сервер не выдаётся"})
-    return {"token": token(conn)}
+    # адреса — вместе с токеном: браузер несёт его только туда, а не по списку, который мог устареть
+    return {"token": token(conn), "chat_url": chat_url(conn), "models_url": models_url(conn)}

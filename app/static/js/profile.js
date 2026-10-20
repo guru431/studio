@@ -1,8 +1,8 @@
 /* Раздел «Профиль» (#/profile): подключения, чат по умолчанию, тема, пароль, удаление истории.
  *
  * Модели чата по умолчанию: подключение через сервер — GET /api/connections/<id>/models; прямое —
- * браузер сам зовёт `<адрес>/models` с токеном из /api/connections/<id>/token. Токен живёт только
- * в памяти этого запроса. Сервис без CORS (fetch бросает TypeError) — словами «подключите через сервер». */
+ * браузер сам зовёт адрес моделей из /api/connections/<id>/token (токен и адрес — из одного ответа,
+ * не из списка, который мог устареть). Токен живёт только в памяти этого запроса. Сервис без CORS (fetch бросает TypeError) — словами «подключите через сервер». */
 import { api, loadMe, me } from './api.js';
 import { connectionsBlock } from './connection-form.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -27,18 +27,18 @@ function say(node, text, kind) {
 
 async function directModels(conn) {
   let token;
+  let url;
   try {
-    ({ token } = await api('GET', `/api/connections/${conn.id}/token`));
+    ({ token, models_url: url } = await api('GET', `/api/connections/${conn.id}/token`));
   } catch (err) {
     if (err.status === 403 || err.status === 404) {
       throw new Error('Токен этого подключения браузеру не выдаётся — впишите модель вручную');
     }
     throw err;
   }
-  const base = conn.base_url + (conn.kind === 'srvllm' ? '/v1' : '');
   let response;
   try {
-    response = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${token}` },
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` },
       credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
   } catch (err) {
     if (err instanceof TypeError) throw new Error(CORS);

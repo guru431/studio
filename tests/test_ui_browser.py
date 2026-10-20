@@ -135,6 +135,32 @@ MARKDOWN = """(async () => {
            copy: box.querySelector('pre button.copy').textContent };
 })()"""
 
+#: HTML из ответа модели (или из подсказки в приложенном PDF): стиль на всю страницу, форма входа
+#: на чужую учётку, кнопка на весь экран, чужие id (B1-C1). Всё это — текст, а не разметка.
+HOSTILE = """(async () => {
+  const { renderMarkdown } = await import('/static/js/markdown.js');
+  const box = document.createElement('div');
+  box.className = 'md';
+  box.append(renderMarkdown('Готово.\\n\\n<style>body{display:none}</style>\\n\\n'
+    + '<div style="position:fixed;inset:0" id="chat-input" class="send">накрыло</div>\\n\\n'
+    + 'Вход: <form action="/login" method="post"><input type="hidden" name="login" value="mallory">'
+    + '<input name="password" value="x"><textarea name="t"></textarea><select name="s"></select>'
+    + '<button style="position:fixed;inset:0">войти</button></form> и <img src=x onerror="window.pwned=3">\\n\\n'
+    + '- [x] сделано\\n- [ ] нет\\n\\n'
+    + '```js\\nconst a = 1;\\n```'));
+  document.body.append(box);
+  await new Promise(r => setTimeout(r, 50));
+  const active = 'style, form, input, button:not(.copy), textarea, select, [style], [id], [name], [onerror]';
+  const classes = [...box.querySelectorAll('[class]')].map(e => e.className)
+    .filter(c => !/^(language-js hljs language-javascript|hljs-\\w+|copy)$/.test(c));
+  const out = { active: [...box.querySelectorAll(active)].map(e => e.outerHTML), classes,
+    pwned: window.pwned || 0,
+    text: box.textContent, highlighted: !!box.querySelector('pre code.hljs .hljs-keyword'),
+    copy: [...box.querySelectorAll('pre button.copy')].map(b => b.textContent) };
+  box.remove();
+  return out;
+})()"""
+
 SSE = """(async (base, token) => {
   const { readSSE } = await import('/static/js/sse.js');
   const r = await fetch(base + '/chat/completions', { method: 'POST',
@@ -152,10 +178,18 @@ SSE = """(async (base, token) => {
 def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser, live):
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
         ("eval", "md", MARKDOWN),
+        ("eval", "hostile", HOSTILE),
         ("eval", "sse", f"{SSE}({live.cloud.base_url!r}, {live.cloud.TOKEN!r})")])
     assert not r.get("failed"), r
+    hostile = r["values"]["hostile"]
+    assert hostile["active"] == [] and hostile["classes"] == [], hostile
+    assert hostile["pwned"] == 0
+    assert "<style>body{display:none}</style>" in hostile["text"]          # видно словами
+    assert '<form action="/login" method="post">' in hostile["text"]
+    assert "☑ сделано" in hostile["text"] and "☐ нет" in hostile["text"]
+    assert hostile["highlighted"] and hostile["copy"] == ["Копировать"]
     md = r["values"]["md"]
-    assert md == {"h1": "Заголовок", "target": "_blank", "rel": "noopener", "script": 0, "onerror": False,
+    assert md == {"h1": "Заголовок", "target": "_blank", "rel": "noopener noreferrer", "script": 0, "onerror": False,
                   "pwned": 0, "highlighted": True, "copy": "Копировать"}
     assert r["values"]["sse"]["out"] == ["Облако ", "на связи.", "", "[DONE]"]
     assert r["values"]["sse"]["parsed"] == [{"event": "delta", "data": {"a": 1}}, {"event": "message", "data": "tail"}]
@@ -595,6 +629,61 @@ def test_direct_cloud_chat_saves_the_answer(browser, live):
     assert live.cloud.chat_requests[-1]["model"] == "cloud-chat"
     assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "Ты здесь?"}]
     assert live.cloud.chat_auth[-1] == f"Bearer {live.cloud.TOKEN}"
+    assert not problems(r), problems(r)
+
+
+#: где токен прямого подключения мог бы остаться на странице
+TOKEN_TRACES = """(names) => { const where = { local: JSON.stringify({ ...localStorage }),
+  session: JSON.stringify({ ...sessionStorage }), dom: document.documentElement.outerHTML, cookie: document.cookie };
+  return Object.entries(where).flatMap(([k, v]) => names.filter(n => v.includes(n)).map(n => k + ':' + n)); }"""
+
+
+def test_direct_token_stays_in_tab_memory_and_goes_only_to_its_address(browser, live):
+    """B1-I1/M10: токен прямого подключения — ни в хранилищах, ни в DOM; после смены адреса
+    подключения (другая вкладка, администратор) прежний токен новому адресу не уходит — ни из
+    чата (токен в памяти вкладки), ни из профиля (список подключений на экране устарел)."""
+    from fakes import FakeCloud
+    live.add_user("tokens")
+    second = FakeCloud()
+    second.TOKEN = "second-key"
+    second.chat_reply = ["Второе ", "облако."]
+    first_chats, first_models = len(live.cloud.chat_auth), len(live.cloud.models_auth)
+    names = [live.cloud.TOKEN, second.TOKEN]
+    try:
+        r = browser.drive(live.url + "/", [*signin("tokens"), ("wait", READY),
+            ("eval", "made", f"""(async () => {{ const m = {API};
+              const c = await m.api('POST', '/api/connections', {{ name: 'Облако', kind: 'openai',
+                base_url: {live.cloud.base_url!r}, token: {live.cloud.TOKEN!r}, sections: ['chat'] }});
+              await m.loadMe(); window.connId = c.id; return true; }})()"""),
+            *go("profile"), ("wait", "document.querySelector('.conn')"), *open_new_chat(),
+            ("type", "#chat-input", "первый"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "firstAnswer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+            ("eval", "traces1", f"({TOKEN_TRACES})({names!r})"),
+            # профиль открыт со старым списком; подключение тем временем переехало (другая вкладка)
+            *go("profile"), ("wait", "document.querySelector('.conn') && document.querySelector('#default-conn option[value]')"),
+            ("eval", "moved", f"""(async () => {{ const m = {API};
+              const c = await m.api('PATCH', '/api/connections/' + window.connId,
+                {{ base_url: {second.base_url!r}, token: {second.TOKEN!r} }});
+              return c.base_url; }})()"""),
+            choose_first("#default-conn"),
+            ("wait", "/^Моделей|\\(\\d{3}\\)/.test(document.querySelector('#default-note').textContent)"),
+            ("eval", "models", "document.querySelector('#default-note').textContent"),
+            *open_new_chat(),
+            ("type", "#chat-input", "второй"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "secondAnswer", f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(),"
+                                     f" {LAST_ANSWER}.querySelector('.msg-meta').textContent]"),
+            ("eval", "traces2", f"({TOKEN_TRACES})({names!r})")])
+    finally:
+        second.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["firstAnswer"] == "Облако на связи." and v["moved"] == second.base_url
+    assert v["traces1"] == [] and v["traces2"] == []
+    assert v["models"] == "Моделей: 1"
+    assert v["secondAnswer"] == ["Второе облако.", ""]
+    assert live.cloud.chat_auth[first_chats:] == [f"Bearer {live.cloud.TOKEN}"]
+    assert live.cloud.models_auth[first_models:] == []
+    assert second.chat_auth == [f"Bearer {second.TOKEN}"] and second.models_auth == [f"Bearer {second.TOKEN}"]
     assert not problems(r), problems(r)
 
 
