@@ -1,9 +1,11 @@
 /* Запросы к API студии.
  *
  * api(метод, путь, тело): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData.
- * Не-GET несёт заголовок CSRF из me.csrf. Ответ: JSON → объект, 204 → null, прочее (например,
+ * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message)
  * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа.
+ * 423 `screen_locked` (студия заперта, lock.js) при заданном hooks.locked ждёт отпирания и повторяет
+ * тот же запрос: опрос хода задания не показывает ошибку из-за блокировки.
  *
  * Модули разделов импортируют './api.js' — один экземпляр на страницу (app.js — не импортировать:
  * его адрес с ?v= и второй импорт без версии запустил бы оболочку дважды). */
@@ -20,6 +22,16 @@ export class ApiError extends Error {
 /** Профиль вошедшего (GET /api/me); обновляет loadMe(). */
 export let me = null;
 
+/** locked — ожидание отпирания (lock.js): обещание, которое разрешится, когда студию откроют. */
+export const hooks = { locked: null };
+
+let csrf = null;
+
+/** CSRF сессии, пока профиля нет (запертая студия получает его из GET /api/lock). */
+export function useCsrf(token) {
+  csrf = token;
+}
+
 export async function loadMe() {
   me = await api('GET', '/api/me');
   return me;
@@ -28,7 +40,8 @@ export async function loadMe() {
 export async function api(method, path, body) {
   const headers = {};
   let payload;
-  if (method !== 'GET' && me) headers['x-studio-csrf'] = me.csrf;
+  const token = me ? me.csrf : csrf;
+  if (method !== 'GET' && token) headers['x-studio-csrf'] = token;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) {
     headers['content-type'] = 'application/json';
@@ -54,6 +67,10 @@ export async function api(method, path, body) {
       // тело не JSON — остаётся общий текст
     }
     if (code === 'login') location.href = '/login';
+    if (code === 'screen_locked' && hooks.locked) {
+      await hooks.locked();
+      return api(method, path, body);
+    }
     throw new ApiError(response.status, code, message);
   }
   if (response.status === 204) return null;

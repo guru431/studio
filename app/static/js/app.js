@@ -14,6 +14,7 @@
  * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
  * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело). */
 import { api, loadMe, me } from './api.js';
+import { installLock } from './lock.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -231,6 +232,7 @@ function setupMenu() {
 async function start() {
   const worker = 'serviceWorker' in navigator
     ? navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => null) : null;
+  installLock();             // до профиля: запертая студия покажет экран блокировки раньше раздела
   try {
     await loadMe();
   } catch (err) {

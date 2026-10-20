@@ -40,5 +40,18 @@
   <form method="post" action="/logout"><button class="menu-item" role="menuitem" id="menu-logout" type="submit">Выход</button></form>
 </div>
 <main id="view"></main>
+<dialog id="curtain" class="curtain" aria-label="Студия скрыта"><img class="lock-logo" src="/static/icons/icon.svg" alt=""></dialog>
+<dialog id="lock" class="lock" aria-labelledby="lock-title">
+  <img class="lock-logo" src="/static/icons/icon.svg" alt="">
+  <h1 id="lock-title">Студия заперта</h1>
+  <button id="lock-open" class="btn btn-accent" type="button">Открыть</button>
+  <button id="lock-use-password" class="btn-link" type="button">Открыть паролем</button>
+  <form id="lock-password-form" class="lock-password" hidden>
+    <input id="lock-password" class="input" type="password" autocomplete="current-password" maxlength="1024" aria-label="Пароль учётки" placeholder="Пароль учётки">
+    <button id="lock-password-go" class="btn" type="submit">Открыть</button>
+  </form>
+  <p id="lock-status" class="status" aria-live="polite"></p>
+  <form method="post" action="/logout"><button id="lock-logout" class="btn-link" type="submit">Выйти</button></form>
+</dialog>
 </body>
 </html>

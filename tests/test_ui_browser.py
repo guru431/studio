@@ -2142,3 +2142,151 @@ def test_add_key_is_absent_on_a_computer(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["found"] == [True, True, False, False]
     assert not problems(r), problems(r)
+
+
+LOCK_OPEN = "!!document.querySelector('#lock')?.open"
+CURTAIN_OPEN = "!!document.querySelector('#curtain')?.open"
+ME_STATUS = "fetch('/api/me').then(r => r.status)"
+PASSKEY_READY = "document.querySelector('#lock-open').dataset.ready === '1'"
+
+
+def visibility(state):
+    """Студия ушла с экрана (hidden) или вернулась (visible): подмена document и событие, как у браузера."""
+    return ("eval", state, f"""(() => {{
+      Object.defineProperty(document, 'visibilityState', {{ configurable: true, get: () => '{state}' }});
+      Object.defineProperty(document, 'hidden', {{ configurable: true, get: () => {str(state == 'hidden').lower()} }});
+      document.dispatchEvent(new Event('visibilitychange')); return true; }})()""")
+
+
+def hide():
+    return visibility("hidden")
+
+
+def show():
+    return visibility("visible")
+
+
+def later(ms):
+    """Часы страницы вперёд на ms (Date.now со сдвигом): минуту не ждать."""
+    return ("eval", "later", f"""(() => {{
+      if (!window.realNow) {{ window.realNow = Date.now.bind(Date); window.shift = 0; }}
+      window.shift += {ms}; Date.now = () => window.realNow() + window.shift; return window.shift; }})()""")
+
+
+def settled(expression, ms=300):
+    """Значение выражения спустя ms: окно, которое закрылось бы, успевает закрыться."""
+    return f"new Promise(r => setTimeout(() => r({expression}), {ms}))"
+
+
+def phone_with_key(login):
+    """Задача 4 до конца: блокировка включена, ключ этого устройства добавлен."""
+    return [*lock_settings(login), ("click", "#lock-enabled"), server_lock_is(True),
+            ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"),
+            ("wait", "document.querySelector('#passkey-add') && !document.querySelector('#passkey-add').hidden"),
+            ("click", "#passkey-add"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 1")]
+
+
+def locked_phone(login):
+    """Ключ, уход с экрана дольше минуты, возвращение: экран блокировки, сервер отказывает."""
+    return [*phone_with_key(login), hide(), ("wait", CURTAIN_OPEN), later(61000), show(),
+            ("wait", LOCK_OPEN), ("wait", f"{ME_STATUS}.then(s => s === 423)")]
+
+
+def test_phone_locks_a_minute_after_leaving_and_opens_with_the_passkey(browser, live):
+    login = "lk-pass"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), add_gateway(), *go("photo"),
+        ("wait", "document.querySelector('#photo-prompt')"), ("type", "#photo-prompt", "кот на крыше"),
+        hide(), ("wait", CURTAIN_OPEN), later(61000), show(), ("wait", LOCK_OPEN),
+        ("wait", f"{ME_STATUS}.then(s => s === 423)"),
+        ("eval", "title", "document.querySelector('#lock-title').textContent"),
+        ("press", "Escape"), ("eval", "afterEscape", settled(LOCK_OPEN)),
+        ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN} && !{CURTAIN_OPEN}"),
+        ("eval", "prompt", "document.querySelector('#photo-prompt').value"),
+        ("eval", "after", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"] == "Студия заперта" and v["afterEscape"] is True
+    assert v["prompt"] == "кот на крыше" and v["after"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_phone_back_within_a_minute_is_not_locked(browser, live):
+    login = "lk-soon"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), hide(), ("wait", CURTAIN_OPEN), later(30000), show(),
+        ("wait", f"!{CURTAIN_OPEN}"), ("eval", "lock", settled(LOCK_OPEN)), ("eval", "me", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["lock"] is False and r["values"]["me"] == 200
+    assert not problems(r), problems(r)
+
+
+def test_computer_never_locks(browser, live):
+    login = "lk-pc"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "on", f"(async () => (await {API}.api('POST', '/api/me/screen-lock', {{ enabled: true }})).screen_lock)()"),
+        hide(), ("eval", "covered", settled(CURTAIN_OPEN)), later(3_600_000), show(),
+        ("eval", "shown", settled(f"{CURTAIN_OPEN} || {LOCK_OPEN}")), ("eval", "me", ME_STATUS)], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["on"] is True and v["covered"] is False and v["shown"] is False and v["me"] == 200
+    assert not problems(r), problems(r)
+
+
+def test_password_opens_and_a_reload_stays_locked(browser, live):
+    login = "lk-reload"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN}"),
+        ("eval", "section", settled("document.querySelector('#view').children.length")),
+        ("click", "#lock-use-password"), ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"),
+        ("wait", f"!{LOCK_OPEN} && {READY}"),
+        ("eval", "after", "document.querySelector('#view').children.length > 0"), ("eval", "me", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["section"] == 0 and v["after"] is True and v["me"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_curtain_covers_an_open_viewer(browser, live):
+    login = "lk-viewer"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), add_gateway(), make_images(1), *go("photo"),
+        ("wait", FEED_READY), ("click", NEWEST_DONE), ("wait", is_open("#viewer")), hide(), ("wait", CURTAIN_OPEN),
+        ("eval", "covered", "document.querySelector('#curtain').contains(document.elementFromPoint(innerWidth / 2,"
+                            " innerHeight / 2))")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["covered"] is True
+    assert not problems(r), problems(r)
+
+
+def test_requests_during_the_lock_wait_and_are_retried(browser, live):
+    login = "lk-wait"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*locked_phone(login),
+        ("eval", "asked", """(() => { window.done = false;
+          import('/static/js/api.js').then(m => Promise.all([m.api('GET', '/api/sections'), m.api('GET', '/api/me')]))
+            .then(([sections, me]) => { window.done = !!sections.sections && !!me.login; }); return true; })()"""),
+        ("eval", "waiting", settled("window.done", 500)),
+        ("eval", "screens", "document.querySelectorAll('dialog.lock[open]').length"),
+        ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", "window.done === true")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["waiting"] is False and r["values"]["screens"] == 1
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_open_calls_the_passkey_without_waiting_for_the_network(browser, live):
+    login = "lk-gesture"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("wait", PASSKEY_READY),
+        ("eval", "spy", """(() => { window.fetches = 0; const real = window.fetch;
+          window.fetch = (...args) => { window.fetches += 1; return real(...args); };
+          const get = navigator.credentials.get.bind(navigator.credentials);
+          navigator.credentials.get = (options) => { window.atGet = window.fetches; return get(options); };
+          return true; })()"""),
+        ("click", "#lock-open"), ("wait", "window.atGet !== undefined"), ("eval", "atGet", "window.atGet"),
+        ("wait", f"!{LOCK_OPEN}")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["atGet"] == 0
+    assert not known_refusals(problems(r), 423), problems(r)
