@@ -114,7 +114,16 @@
 
     .venv/Scripts/python -m pytest -q                                   # быстрый набор (~25 с)
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell
-    GATEWAY_KEY_OWNER_IMAGES=… .venv/Scripts/python -m pytest -q -m manual   # живая приёмка: генерирует на карте
+    v() { grep "^$1=" C:/work/projects/local-config/secrets/vault.env | cut -d= -f2-; }    # живая приёмка: значения не печатать
+    STUDIO_ADMIN_LOGIN=$(v STUDIO_ADMIN_LOGIN) STUDIO_ADMIN_PASSWORD=$(v STUDIO_ADMIN_PASSWORD) \
+      GATEWAY_KEY_OWNER_IMAGES=$(v GATEWAY_KEY_OWNER_IMAGES) .venv/Scripts/python -m pytest -q -m manual
+
+Живая приёмка (`tests/test_studio_upload_live.py`, генерирует на карте, до ~1,5 ч) — после
+выкладки и `--create-admin`: входит администратором в `STUDIO_LIVE_URL` (по умолчанию
+`https://studio.example.com`), делает Lustify, правку кистью (Flux, вне маски — пиксели исходника),
+описание gemma-abl, ролик 1 с и ответ `local-gemma-abl` по PDF; удаляет только своё и освобождает
+карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
+напрямую (`STUDIO_LIVE_GATEWAY`) и `client/studio-batch.local.ps1`.
 
 Среда: `"/c/Program Files/Python314/python" -m venv .venv`, затем
 `.venv/Scripts/python -m pip install -r requirements-dev.txt`. Приложение в быстрых тестах —

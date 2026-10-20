@@ -1,153 +1,276 @@
-"""Manual production acceptance: synthetic photo through API, studio and local PS client.
+"""Manual production acceptance: the studio PWA (https://studio.example.com) and the local clients.
 
-Requires GATEWAY_KEY_OWNER_IMAGES and an authorized deployment. Generates three images
-under the slots controller, then releases the model. No user photos are read.
+Studio part — needs STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD of an administrator who already
+has the «srvllm» connection (`manage.py create-admin` with GATEWAY_KEY_OWNER_IMAGES). It logs in,
+generates a Lustify picture, edits half of it with the brush, describes it, makes a 1 s clip of it
+and asks local-gemma-abl about a PDF made here; then deletes only what it created (the owner's
+history stays) and releases the card. Gateway and PowerShell part — needs GATEWAY_KEY_OWNER_IMAGES
+and goes to the gateway directly, as the clients do. Pictures are synthetic: no user photos.
 """
-import io
 import base64
+import io
+import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from PIL import Image, ImageChops, ImageDraw
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from conftest import CLIENT
 
-pytestmark = [pytest.mark.manual, pytest.mark.timeout(1500)]
+pytestmark = pytest.mark.manual
 MODEL = "lustify-v10-krea2-turbo"
 PROMPT = "a simple watercolor landscape, green hills, a blue lake, no people"
+STUDIO = os.environ.get("STUDIO_LIVE_URL", "https://studio.example.com").rstrip("/")
+GATEWAY = os.environ.get("STUDIO_LIVE_GATEWAY", "http://10.77.1.15:4000/slot")
+CSRF = "x-studio-csrf"
+CHAT_MODEL = "local-gemma-abl"
+BUSY_SEC = 300                 # the owner may be using the studio: wait for their job, never touch it
+IMAGE_SEC = 1400               # gateway holds a picture request up to 1300 s (card wait + generation)
+VIDEO_SEC = 1800
+# cold gemma loads up to ~300 s; the studio pings every 15 s, so a silent minute is a broken line
+STREAM = httpx.Timeout(60, connect=30, read=400)
 
 
-def test_describe_with_gemma_abl_then_generate_from_text(tmp_path):
-    token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
-    if not token:
-        pytest.skip("GATEWAY_KEY_OWNER_IMAGES is required")
-    studio = os.environ.get("STUDIO_LIVE_URL", "https://llm.example.com/studio")
-    source = Image.new("RGB", (768, 768), "skyblue")
-    draw = ImageDraw.Draw(source)
-    draw.ellipse((550, 40, 680, 170), fill="yellow")
-    draw.polygon([(0, 768), (0, 440), (240, 260), (480, 440), (768, 320), (768, 768)], fill="forestgreen")
-    draw.rectangle((300, 420, 480, 600), fill="red")
-    draw.polygon([(260, 420), (390, 310), (520, 420)], fill="brown")
-    draw.rectangle((355, 495, 410, 600), fill="white")
-    source = source.resize((1440, 1440))
-    image = io.BytesIO()
-    source.save(image, "PNG")
+def png(image: Image.Image) -> bytes:
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
 
-    def wait_job(client, job_id):
-        deadline = time.monotonic() + 1300
-        while time.monotonic() < deadline:
-            status = client.get(studio + "/api/jobs/" + job_id).json()
-            if status["state"] in ("done", "error", "cancelled"):
-                assert status["state"] == "done", status
-                return status
-            time.sleep(1)
-        pytest.fail("job did not finish")
 
-    with httpx.Client(timeout=30, trust_env=False) as client:
-        assert client.post(studio + "/login", data={"token": token}).status_code == 303
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            if client.get(studio + "/api/jobs/current").status_code == 404:
-                break
-            time.sleep(2)
-        else:
-            pytest.fail("Studio busy; owner jobs were not interrupted")
+def pdf(text: str) -> bytes:
+    """One page with one ASCII line (Helvetica) — what documents.extract reads back."""
+    w = PdfWriter()
+    page = w.add_blank_page(612, 792)
+    font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+                             NameObject("/BaseFont"): NameObject("/Helvetica")})
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): w._add_object(font)})})
+    stream = DecodedStreamObject()
+    stream.set_data(b"BT /F1 14 Tf 72 720 Td (" + text.encode("ascii") + b") Tj ET")
+    page[NameObject("/Contents")] = w._add_object(stream)
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
+def poll(client, url, done, seconds, pause=2):
+    """GET url until done(body) — the body is returned; deadline — fail with the last state."""
+    deadline, body = time.monotonic() + seconds, None
+    while time.monotonic() < deadline:
+        r = client.get(url)
+        assert r.status_code == 200, (r.status_code, r.text[:300])
+        body = r.json()
+        if done(body):
+            return body
+        time.sleep(pause)
+    pytest.fail(f"{url} did not finish in {seconds} s: {str(body)[:300]}")
+
+
+def submit(client, url, expected, **kw):
+    """POST that the owner's own running job may refuse with 409 busy — wait, do not cancel it."""
+    deadline = time.monotonic() + BUSY_SEC
+    while True:
+        r = client.post(url, **kw)
+        busy = r.status_code == 409 and (r.json().get("detail") or {}).get("code") == "busy"
+        if not busy or time.monotonic() > deadline:
+            assert r.status_code == expected, (r.status_code, r.text[:500])
+            return r.json()
+        time.sleep(3)
+
+
+def finished(body):
+    return body.get("state") in ("done", "error", "cancelled", "failed")
+
+
+@pytest.fixture(scope="module")
+def studio():
+    """Logged-in client with the CSRF header; teardown deletes what the tests registered and releases the card."""
+    login, password = os.environ.get("STUDIO_ADMIN_LOGIN"), os.environ.get("STUDIO_ADMIN_PASSWORD")
+    if not login or not password:
+        pytest.skip("STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required")
+    created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[])
+    with httpx.Client(timeout=60, trust_env=False) as client:
+        r = client.post(STUDIO + "/login", data={"login": login, "password": password},
+                        headers={"Origin": STUDIO})
+        assert r.status_code == 303, f"login refused: {r.status_code}"      # the body never echoes the password
+        me = client.get(STUDIO + "/api/me")
+        assert me.status_code == 200, me.status_code
+        me = me.json()
+        assert me["is_admin"], "STUDIO_ADMIN_LOGIN must be an administrator (release)"
+        assert me["capabilities"] == {"chat": True, "photo": True, "video": True}, \
+            "the owner needs the «srvllm» connection: manage.py create-admin with GATEWAY_KEY_OWNER_IMAGES"
+        client.headers[CSRF] = me["csrf"]
         try:
-            response = client.post(studio + "/api/descriptions", files={"image": ("source.png", image.getvalue(), "image/png")})
-            assert response.status_code == 202, response.text[:500]
-            job_id = response.json()["id"]
-            assert wait_job(client, job_id)["model"] == "gemma-abl"
-            description = client.get(studio + "/api/jobs/" + job_id + "/description").json()
-            assert description["model"] == "gemma-abl" and len(description["text"]) >= 300
-            (tmp_path / "description.txt").write_text(description["text"], encoding="utf-8")
-            prompt = description["text"] + "\n\nAdditional instructions: add a small blue boat in the foreground."
-            assert len(prompt) <= 24000
-            response = client.post(studio + "/api/jobs", json={"model": "lustify", "size": "square",
-                                   "seed": 23, "prompt": prompt})
-            assert response.status_code == 202, response.text[:500]
-            job_id = response.json()["id"]
-            assert wait_job(client, job_id)["model"] == "lustify"
-            result = client.get(studio + "/api/jobs/" + job_id + "/image")
-            assert result.status_code == 200
-            with Image.open(io.BytesIO(result.content)) as generated:
-                assert generated.size == (1024, 1024)
+            yield SimpleNamespace(c=client, created=created)
         finally:
-            client.post(studio + "/api/release")
+            cleanup(client, created)
+            client.post(STUDIO + "/logout", headers={"Origin": STUDIO})
 
 
-def test_masked_flux_edit_preserves_every_pixel_outside_selection():
-    token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
-    if not token:
-        pytest.skip("GATEWAY_KEY_OWNER_IMAGES is required")
-    studio = os.environ.get("STUDIO_LIVE_URL", "https://llm.example.com/studio")
-    source = Image.new("RGB", (1024, 1024), "white")
-    ImageDraw.Draw(source).rectangle((350, 350, 674, 674), fill="red")
-    area = (280, 280, 744, 744)
+def cleanup(client, created):
+    """Only the rows this run made, newest first (an edit and a clip reference the generated picture)."""
+    for chat_id in created.chats:
+        client.delete(f"{STUDIO}/api/chats/{chat_id}")
+    for video_id in created.videos:
+        client.delete(f"{STUDIO}/api/videos/{video_id}")     # a running clip is dropped at the gateway first
+    for job_id in created.descriptions:                       # not in history; cancel if it still runs
+        client.post(f"{STUDIO}/api/images/{job_id}/cancel")
+    for image_id in reversed(created.images):
+        r = client.get(f"{STUDIO}/api/images/{image_id}")
+        if r.status_code == 200 and not finished(r.json()):
+            client.post(f"{STUDIO}/api/images/{image_id}/cancel")
+            try:                   # cancel waits for the gateway request to end, then frees the card
+                poll(client, f"{STUDIO}/api/images/{image_id}", finished, IMAGE_SEC)
+            except (AssertionError, pytest.fail.Exception, httpx.HTTPError):
+                continue           # cleanup goes on; the row stays for the owner to delete
+        client.delete(f"{STUDIO}/api/images/{image_id}")
+    r = client.post(STUDIO + "/api/images/release")
+    print("release:", r.status_code, r.json().get("results") if r.status_code == 200 else r.text[:200])
+
+
+@pytest.mark.timeout(3 * IMAGE_SEC + VIDEO_SEC + 600)
+def test_photo_edit_description_and_video_through_the_studio(studio):
+    c, made = studio.c, studio.created
+    # 1. Lustify from text, portrait 832x1216
+    job = submit(c, STUDIO + "/api/images", 202,
+                 json={"model": "lustify", "size": "portrait", "seed": 23, "prompt": PROMPT})
+    made.images.append(job["id"])
+    generated = poll(c, f"{STUDIO}/api/images/{job['id']}", finished, IMAGE_SEC)
+    assert generated["state"] == "done", generated
+    assert generated["kind"] == "generation" and generated["size"] == "832x1216" and generated["media_id"]
+    full = c.get(f"{STUDIO}/api/media/{generated['media_id']}")
+    assert full.status_code == 200 and full.headers["content-type"] == "image/png"
+    with Image.open(io.BytesIO(full.content)) as image:
+        assert image.size == (832, 1216)
+        source = image.convert("RGB")
+    thumb = c.get(f"{STUDIO}/api/media/{generated['media_id']}", params={"thumb": "1"})
+    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/webp"
+    with Image.open(io.BytesIO(thumb.content)) as small:
+        assert small.format == "WEBP" and max(small.size) <= 384
+
+    # 2. Brush edit of the left half (Flux): outside the mask every pixel is the source's
+    area = (0, 0, source.width // 2, source.height)
     mask = Image.new("L", source.size)
     mask.paste(255, area)
+    job = submit(c, STUDIO + "/api/images", 202,
+                 data={"model": "flux", "size": "original", "seed": "21",
+                       "prompt": "Turn the left half into a snowy winter scene. Keep everything else unchanged.",
+                       "source_media_id": generated["media_id"]},
+                 files={"mask": ("mask.png", png(mask), "image/png")})
+    made.images.append(job["id"])
+    edited = poll(c, f"{STUDIO}/api/images/{job['id']}", finished, IMAGE_SEC)
+    assert edited["state"] == "done", edited
+    assert edited["kind"] == "edit" and edited["source_media_id"] == generated["media_id"]
+    result = c.get(f"{STUDIO}/api/media/{edited['media_id']}")
+    assert result.status_code == 200 and result.headers["content-type"] == "image/png"
+    with Image.open(io.BytesIO(result.content)) as image:
+        assert image.size == source.size
+        difference = ImageChops.difference(image.convert("RGB"), source)
+    assert difference.crop(area).getbbox() is not None, "model returned the original unchanged"
+    difference.paste((0, 0, 0), area)
+    assert difference.getbbox() is None, "pixels outside the mask changed"
 
-    def png(image):
-        output = io.BytesIO()
-        image.save(output, "PNG")
-        return output.getvalue()
+    # 3. Description by gemma-abl of the generated picture; the text is given once, with «done»
+    job = submit(c, STUDIO + "/api/images/descriptions", 202,
+                 files={"source_media_id": (None, generated["media_id"])})
+    made.descriptions.append(job["id"])
+    described = poll(c, f"{STUDIO}/api/images/descriptions/{job['id']}", finished, IMAGE_SEC)
+    assert described["state"] == "done", described
+    assert len(described["text"]) >= 300, described["text"][:300]
 
-    with httpx.Client(timeout=30, trust_env=False) as client:
-        assert client.post(studio + "/login", data={"token": token}).status_code == 303
-        page = client.get(studio + "/")
-        assert page.status_code == 200 and 'id="editor"' in page.text
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            if client.get(studio + "/api/jobs/current").status_code == 404:
-                release = client.post(studio + "/api/release")
-                results = release.json().get("results", {})
-                if release.status_code == 200 and len(results) == 3 and all(
-                        item["state"] == "released" for item in results.values()):
+    # 4. A 1 s clip of the generated picture; the server watcher brings it into history
+    r = c.post(STUDIO + "/api/videos", data={"prompt": "slow camera pan over the hills", "seconds": "1",
+                                             "quality": "fast"},
+               files={"source_media_id": (None, generated["media_id"])})
+    assert r.status_code == 201, (r.status_code, r.text[:500])
+    made.videos.append(r.json()["id"])
+    video = poll(c, f"{STUDIO}/api/videos/{r.json()['id']}", finished, VIDEO_SEC, pause=5)
+    assert video["state"] == "done", video
+    assert video["seconds"] == 1 and video["source_media_id"] == generated["media_id"] and video["media_id"]
+    clip = c.get(f"{STUDIO}/api/media/{video['media_id']}", headers={"Range": "bytes=0-99"})
+    assert clip.status_code == 206 and clip.headers["content-type"] == "video/mp4"
+    assert clip.headers["content-range"].startswith("bytes 0-99/") and len(clip.content) == 100
+    assert clip.content[4:8] == b"ftyp"
+
+
+def letters(text: str) -> str:
+    """Only capitals and digits: the model may wrap the code in markdown or change its case."""
+    return re.sub(r"[^A-Z0-9]", "", text.upper())
+
+
+def read_turn(client, url, body) -> tuple[str, str]:
+    """(answer text, final status) from the SSE stream of a turn: turn, delta…, done | error."""
+    text, status = [], None
+    with client.stream("POST", url, json=body, timeout=STREAM) as r:
+        if r.status_code != 200:
+            r.read()
+            pytest.fail(f"turn refused: {r.status_code} {r.text[:500]}")
+        assert r.headers["content-type"].startswith("text/event-stream")
+        event = None
+        for line in r.iter_lines():
+            if line.startswith("event:"):
+                event = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data = json.loads(line[len("data:"):])
+                if event == "delta":
+                    text.append(data["text"])
+                elif event == "done":
+                    status = data["status"]
                     break
-            time.sleep(2)
-        else:
-            pytest.fail("Studio or image API remained busy; owner jobs were not interrupted")
-        try:
-            response = client.post(studio + "/api/jobs", data={"model": "flux", "size": "original",
-                                   "prompt": "Change the red square to a blue square. Keep everything else unchanged.",
-                                   "seed": "21"},
-                                   files={"image": ("source.png", png(source), "image/png"),
-                                          "mask": ("mask.png", png(mask), "image/png")})
-            assert response.status_code == 202, response.text[:500]
-            job_id = response.json()["id"]
-            deadline = time.monotonic() + 1300
-            while time.monotonic() < deadline:
-                status = client.get(studio + "/api/jobs/" + job_id).json()
-                if status["state"] in ("done", "error", "cancelled"):
-                    break
-                time.sleep(1)
-            assert status["state"] == "done", status
-            image = client.get(studio + "/api/jobs/" + job_id + "/image")
-            assert image.status_code == 200
-            with Image.open(io.BytesIO(image.content)) as result:
-                assert result.size == source.size
-                difference = ImageChops.difference(result.convert("RGB"), source)
-                assert difference.crop(area).getbbox() is not None, "model returned the original unchanged"
-                difference.paste((0, 0, 0), area)
-                assert difference.getbbox() is None, "pixels outside the mask changed"
-        finally:
-            client.post(studio + "/api/release")
+                elif event == "error":
+                    pytest.fail(f"model error: {data['message'][:300]}")
+    return "".join(text), status
 
 
+@pytest.mark.timeout(900)
+def test_chat_answers_from_an_attached_pdf(studio):
+    c, made = studio.c, studio.created
+    code = f"AZURE-OTTER-{secrets.randbelow(9000) + 1000}"
+    r = c.post(STUDIO + "/api/chats", json={"model": CHAT_MODEL})
+    assert r.status_code == 201, (r.status_code, r.text[:300])
+    chat_id = r.json()["id"]
+    made.chats.append(chat_id)
+    assert r.json()["model"] == CHAT_MODEL
+
+    r = c.post(STUDIO + "/api/attachments", files={"file": ("live-acceptance.pdf",
+                                                            pdf(f"The secret code phrase is {code}."),
+                                                            "application/pdf")})
+    assert r.status_code == 201, (r.status_code, r.text[:300])
+    attachment = r.json()
+    assert attachment["kind"] == "document" and attachment["chars"] > 0
+
+    answer, status = read_turn(c, f"{STUDIO}/api/chats/{chat_id}/turns", {
+        "text": "What is the secret code phrase in the attached document? Reply with the code phrase only.",
+        "attachment_ids": [attachment["id"]]})
+    assert status == "done", (status, answer[:300])
+    assert letters(code) in letters(answer), answer[:300]
+
+    saved = c.get(f"{STUDIO}/api/chats/{chat_id}").json()["messages"]
+    assert [m["role"] for m in saved] == ["user", "assistant"]
+    assert saved[0]["attachments"][0]["id"] == attachment["id"]
+    assert saved[1]["status"] == "done" and letters(code) in letters(saved[1]["content"])
+
+
+@pytest.mark.timeout(1500)
 def test_photo_api_maximum_size():
     token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
     if not token:
         pytest.skip("GATEWAY_KEY_OWNER_IMAGES is required")
     source = io.BytesIO()
     Image.new("RGB", (512, 512), "forestgreen").save(source, "PNG")
-    base = os.environ.get("STUDIO_LIVE_GATEWAY", "http://10.77.1.15:4000/slot")
     headers = {"Authorization": "Bearer " + token}
     with httpx.Client(timeout=1300, trust_env=False) as client:
         try:
-            response = client.post(base + "/images/edits", headers=headers,
+            response = client.post(GATEWAY + "/images/edits", headers=headers,
                                    data={"model": MODEL, "prompt": PROMPT, "strength": "0.65",
                                          "size": "1536x1536", "response_format": "b64_json", "seed": "20"},
                                    files={"image": ("source.png", source.getvalue(), "image/png")})
@@ -155,10 +278,11 @@ def test_photo_api_maximum_size():
             with Image.open(io.BytesIO(base64.b64decode(response.json()["data"][0]["b64_json"]))) as result:
                 assert result.size == (1440, 1440)
         finally:
-            client.post(base + "/images/release", json={"model": MODEL}, headers=headers, timeout=60)
+            client.post(GATEWAY + "/images/release", json={"model": MODEL}, headers=headers, timeout=60)
 
 
-def test_photo_through_all_live_clients(tmp_path):
+@pytest.mark.timeout(3000)
+def test_photo_through_the_gateway_and_the_powershell_client(tmp_path):
     token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
     if not token:
         pytest.skip("GATEWAY_KEY_OWNER_IMAGES is required")
@@ -169,53 +293,18 @@ def test_photo_through_all_live_clients(tmp_path):
     source = Image.new("RGB", (512, 512), "skyblue")
     draw = ImageDraw.Draw(source)
     draw.polygon([(0, 512), (0, 300), (160, 190), (320, 330), (512, 210), (512, 512)], fill="forestgreen")
-    output = io.BytesIO()
-    source.save(output, "PNG")
     photo = tmp_path / "source.png"
-    photo.write_bytes(output.getvalue())
+    photo.write_bytes(png(source))
     fields = {"model": MODEL, "prompt": PROMPT, "strength": "0.4", "seed": "17",
               "size": "1024x1024", "response_format": "b64_json"}
-    base = os.environ.get("STUDIO_LIVE_GATEWAY", "http://10.77.1.15:4000/slot")
-    studio = os.environ.get("STUDIO_LIVE_URL", "https://llm.example.com/studio")
     with httpx.Client(timeout=1300, trust_env=False) as client:
         try:
-            response = client.post(base + "/images/edits", data=fields,
-                                   files={"image": ("source.png", output.getvalue(), "image/png")},
+            response = client.post(GATEWAY + "/images/edits", data=fields,
+                                   files={"image": ("source.png", photo.read_bytes(), "image/png")},
                                    headers={"Authorization": "Bearer " + token})
             assert response.status_code == 200, response.text[:500]
             with Image.open(io.BytesIO(base64.b64decode(response.json()["data"][0]["b64_json"]))) as result:
                 assert result.size == (1024, 1024)
-
-            response = client.post(studio + "/login", data={"token": token})
-            assert response.status_code == 303, response.status_code
-            # The owner can use studio while acceptance runs. Never cancel or retrieve their job.
-            deadline = time.monotonic() + 300
-            while time.monotonic() < deadline:
-                current = client.get(studio + "/api/jobs/current")
-                if current.status_code == 404:
-                    response = client.post(studio + "/api/jobs", data={"model": "lustify", "size": "square",
-                                           "prompt": PROMPT, "strength": "0.4", "seed": "18"},
-                                           files={"image": ("source.png", output.getvalue(), "image/png")})
-                    if response.status_code != 409:
-                        break
-                else:
-                    assert current.status_code == 200, current.status_code
-                time.sleep(2)
-            else:
-                pytest.fail("Studio remained busy for 300 seconds; no owner job was interrupted")
-            assert response.status_code == 202, response.text[:500]
-            job_id = response.json()["id"]
-            deadline = time.monotonic() + 1300
-            while time.monotonic() < deadline:
-                status = client.get(studio + "/api/jobs/" + job_id).json()
-                if status["state"] in ("done", "error", "cancelled"):
-                    break
-                time.sleep(1)
-            assert status["state"] == "done", status
-            result = client.get(studio + "/api/jobs/" + job_id + "/image")
-            assert result.status_code == 200
-            with Image.open(io.BytesIO(result.content)) as image:
-                assert image.size == (1024, 1024)
 
             prompts = tmp_path / "prompts.txt"
             prompts.write_text(PROMPT + "\n", encoding="utf-8")
@@ -223,12 +312,12 @@ def test_photo_through_all_live_clients(tmp_path):
             run = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                   "-File", str(local), "-PromptsFile", str(prompts), "-ImagePath", str(photo),
                                   "-Strength", "0.4", "-Seed", "19", "-Size", "square",
-                                  "-OutDir", str(out), "-Url", base], capture_output=True, timeout=1350)
+                                  "-OutDir", str(out), "-Url", GATEWAY], capture_output=True, timeout=1350)
             assert run.returncode == 0, run.stderr.decode(errors="replace")
             results = list(out.glob("*.png"))
             assert len(results) == 1, run.stdout.decode(errors="replace")
             with Image.open(results[0]) as image:
                 assert image.size == (1024, 1024)
         finally:
-            client.post(base + "/images/release", json={"model": MODEL},
+            client.post(GATEWAY + "/images/release", json={"model": MODEL},
                         headers={"Authorization": "Bearer " + token}, timeout=60)

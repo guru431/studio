@@ -27,7 +27,9 @@
 ## Команды
 
 - Тесты: `.venv/Scripts/python -m pytest -q` (быстрый набор), `-m integration` (браузер,
-  PowerShell), `-m manual` (живая приёмка с `GATEWAY_KEY_OWNER_IMAGES`, генерирует на карте).
+  PowerShell), `-m manual` (живая приёмка `tests/test_studio_upload_live.py` после выкладки:
+  `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`, `GATEWAY_KEY_OWNER_IMAGES` из vault через `grep`,
+  генерирует на карте; команда — в CLAUDE.md).
 - Выкладка: `bash deploy/deploy.sh [--new-secret] [--create-admin]` — закоммиченный HEAD на debian
   (`ssh -p 22222 deploy@10.77.1.10`, код `/opt/services/studio`, юниты
   [studio-web.service](deploy/studio-web.service), [studio-backup.timer](deploy/studio-backup.timer)).
