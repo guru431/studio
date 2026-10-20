@@ -31,6 +31,7 @@ import dictation
 import images
 import media
 import profile
+import screenlock
 import sections
 import speeches
 import state
@@ -100,6 +101,7 @@ app.middleware("http")(headers)
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
 app.include_router(profile.router)
+app.include_router(screenlock.router)
 app.include_router(connections.router)
 app.include_router(sections.router)
 app.include_router(admin.router)

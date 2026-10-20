@@ -56,8 +56,9 @@ def test_me_carries_csrf_and_profile(studio):
     me = studio.c.get("/api/me").json()
     assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
+    assert me["screen_lock"] is False
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
-                       "csrf", "capabilities"}
+                       "csrf", "capabilities", "screen_lock"}
 
 
 def test_theme_is_validated(studio):

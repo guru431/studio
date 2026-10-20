@@ -211,6 +211,22 @@ def locked_key(key: tuple) -> bool:
     return len(FAILS.get(key, [])) >= LOCK_FAILS
 
 
+async def confirm_password(uid: int, password: str, what: str, message: str = "пароль неверен") -> None:
+    """Пароль учётки для действия из сессии (смена пароля, отпирание, ключ, выключение блокировки):
+    укравший сессию не переберёт его — пауза по ключу ("pw", uid), общая для всех этих действий."""
+    key = ("pw", uid)
+    if locked_key(key):
+        log.warning("пользователь %d: %s — пауза", uid, what)
+        raise HTTPException(429, {"code": "locked", "message": "слишком много попыток — подождите 15 минут"})
+    attempt = clock.NOW()
+    FAILS.setdefault(key, []).append(attempt)       # до хеша: параллельная пачка не пройдёт разом
+    stored = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()["pw_hash"]
+    if not await asyncio.to_thread(security.verify_password, password, stored):
+        log.warning("пользователь %d: %s — неверный пароль", uid, what)
+        raise HTTPException(403, {"code": "password", "message": message})
+    FAILS.pop(key, None)
+
+
 def _login_fails(login: str) -> int:
     return sum(len(times) for key, times in FAILS.items() if key[0] == "pair" and key[1] == login)
 

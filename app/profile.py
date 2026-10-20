@@ -10,7 +10,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import auth
-import clock
 import history
 import sections
 import security
@@ -43,13 +42,14 @@ def check_password(password: str) -> None:
 def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
-    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views FROM users WHERE id = ?", (uid,)).fetchone()
+    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock FROM users WHERE id = ?",
+                           (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "theme": row["theme"], "views": json.loads(row["views"]),
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
-            "capabilities": sections.capabilities(uid)}
+            "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"])}
 
 
 @router.get("/me")
@@ -80,18 +80,7 @@ async def patch_me(body: MePatch, request: Request):
 @router.post("/me/password", status_code=204)
 async def change_password(body: PasswordChange, request: Request):
     uid = request.state.user.id
-    # укравший сессию не переберёт текущий пароль: та же пауза, что у входа, по ключу учётки
-    key = ("pw", uid)
-    if auth.locked_key(key):
-        log.warning("пользователь %d: смена пароля — пауза", uid)
-        raise HTTPException(429, {"code": "locked", "message": "слишком много попыток — подождите 15 минут"})
-    attempt = clock.NOW()
-    auth.FAILS.setdefault(key, []).append(attempt)       # до хеша: параллельная пачка не пройдёт разом
-    stored = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()["pw_hash"]
-    if not await asyncio.to_thread(security.verify_password, body.current, stored):
-        log.warning("пользователь %d: смена пароля — неверный текущий", uid)
-        raise HTTPException(403, {"code": "password", "message": "текущий пароль неверен"})
-    auth.FAILS.pop(key, None)
+    await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен")
     check_password(body.new)
     pw_hash = await asyncio.to_thread(security.hash_password, body.new)
     state.DB.execute("BEGIN")
