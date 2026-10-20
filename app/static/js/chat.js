@@ -1,6 +1,9 @@
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
+ * Чип модели — отмеченные модели раздела «Чат» по подключениям (GET /api/sections), новый диалог —
+ * с умолчанием раздела; списки моделей сервисов при открытии меню не запрашиваются.
+ *
  * Ход: вложения — POST /api/attachments по одному, затем POST /api/chats/<id>/turns. Подключение
  * через сервер отвечает потоком SSE (turn, delta, done, error); прямое — JSON с адресом и
  * сообщениями: браузер зовёт модель сам с токеном из /api/connections/<id>/token (токен — только
@@ -14,9 +17,9 @@
  * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>).
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
-import { api, me } from './api.js';
+import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
-import { CORS, modelsOf } from './settings.js';
+import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
@@ -192,7 +195,8 @@ async function readBrowser(job, turn) {
 function build(view, ctx) {
   let chatId;                  // показанный диалог; null — новый, ещё не созданный
   let chat = null;             // { chat, messages } с сервера
-  let conns = [];              // подключения с разделом «чат»
+  let links = [];              // подключения раздела «Чат» с отмеченными моделями (GET /api/sections)
+  let chatDefault = null;      // { connection_id, model } — умолчание раздела
   let draft = null;            // { connection_id, model } нового диалога
   let atts = [];               // вложения поля ввода: { file, meta, error, busy }
   let sending = false;
@@ -203,7 +207,6 @@ function build(view, ctx) {
   let lastPaint = 0;
   let menuFor = null;          // пункт списка с открытым меню
   const parts = new WeakMap(); // сообщение → его узлы в ленте
-  const models = new Map();    // id подключения → Promise имён моделей
 
   /* разметка */
   const list = el('nav', { class: 'chat-list', 'aria-label': 'Диалоги' });
@@ -358,29 +361,17 @@ function build(view, ctx) {
   }
 
   /* чип модели */
-  function defaultConnId() {
-    return conns.some((c) => c.id === me.default_connection_id) ? me.default_connection_id : (conns[0] || {}).id;
-  }
-
   function chosen() {
     if (chat) return { connection_id: chat.chat.connection_id, model: chat.chat.model };
     if (draft) return draft;
-    return { connection_id: defaultConnId(), model: me.default_model || '' };
+    return chatDefault ? { ...chatDefault } : { connection_id: null, model: '' };
   }
 
   function paintChip() {
     const { connection_id: connId, model } = chosen();
     chipName.textContent = model || 'модель по умолчанию';
-    connName.textContent = (conns.find((c) => c.id === connId) || {}).name || '';
-  }
-
-  function modelsFor(conn) {
-    if (!models.has(conn.id)) {
-      const ask = modelsOf(conn);
-      models.set(conn.id, ask);
-      ask.catch(() => models.delete(conn.id));         // отказ — в следующий раз спросить заново
-    }
-    return models.get(conn.id);
+    const link = links.find((l) => l.connection.id === connId);
+    connName.textContent = link ? link.connection.name : '';
   }
 
   function openModels(open) {
@@ -388,27 +379,20 @@ function build(view, ctx) {
     chip.setAttribute('aria-expanded', String(open));
     if (!open) return;
     const now = chosen();
-    if (!conns.length) {
-      modelMenu.replaceChildren(el('p', { class: 'muted small' }, 'Нет подключений с чатом — добавьте в профиле'));
+    const shown = links.filter((l) => l.models.length);
+    if (!shown.length) {
+      modelMenu.replaceChildren(el('p', { class: 'muted small' }, 'Нет отмеченных моделей — выберите в настройках раздела «Чат»'));
       return;
     }
-    modelMenu.replaceChildren(...conns.map((conn) => {
-      const note = el('p', { class: 'muted small model-note' }, 'Загружаю список моделей…');
+    modelMenu.replaceChildren(...shown.map(({ connection: conn, models }) => {
       const group = el('div', { class: 'model-group', 'data-conn': String(conn.id) },
-        el('p', { class: 'model-group-name' }, conn.name), note);
-      modelsFor(conn).then((ids) => {
-        note.remove();
-        if (!ids.length) group.append(el('p', { class: 'muted small model-note' }, 'Сервис не назвал ни одной модели'));
-        for (const id of ids) {
-          const option = el('button', { type: 'button', class: 'model-option', 'data-conn': String(conn.id), 'data-model': id,
-            'aria-current': conn.id === now.connection_id && id === now.model ? 'true' : null }, id);
-          option.addEventListener('click', () => choose(conn.id, id));
-          group.append(option);
-        }
-      }, (err) => {
-        note.textContent = words(err);
-        note.className = 'error small model-note';
-      });
+        shown.length > 1 ? el('p', { class: 'model-group-name' }, conn.name) : null);
+      for (const id of models) {
+        const option = el('button', { type: 'button', class: 'model-option', 'data-conn': String(conn.id), 'data-model': id,
+          'aria-current': conn.id === now.connection_id && id === now.model ? 'true' : null }, id);
+        option.addEventListener('click', () => choose(conn.id, id));
+        group.append(option);
+      }
       return group;
     }));
   }
@@ -804,8 +788,10 @@ function build(view, ctx) {
     }
   });
 
-  api('GET', '/api/connections').then(({ items }) => {
-    conns = items.filter((c) => c.sections.includes('chat'));
+  api('GET', '/api/sections').then(({ sections }) => {
+    const section = sections.find((s) => s.id === 'chat');
+    links = section.links;
+    chatDefault = section.default;
     paintChip();
   }, (err) => { notice.textContent = words(err); });
   const firstList = loadList();

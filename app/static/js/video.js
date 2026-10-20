@@ -1,5 +1,6 @@
 /* Раздел «Видео» (#/video): лента роликов по дням, поле промпта снизу с фото-источником и чипами
- * (длительность, качество, плавность, seed), карточка с ходом ролика и плеером; у ролика из фото
+ * (модель — если в разделе их больше одной, длительность, качество, плавность, seed), карточка с
+ * ходом ролика и плеером; у ролика из фото
  * истории — «Промпты» (цепочка, chain.js).
  *
  * Ролик: POST /api/videos (форма: файл `image` с устройства или `source_media_id` — фото, пришедшее
@@ -11,6 +12,7 @@ import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
+import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -88,10 +90,12 @@ function build(view, ctx) {
   const seed = el('input', { id: 'video-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
     'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
   const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-vseed' }, el('span', {}, 'seed'), seed);
+  // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
+  const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': 'Модель', hidden: true });
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go' }, 'Оживить');
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
   const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt,
-    el('div', { class: 'row' }, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
+    el('div', { class: 'row' }, modelPick, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
       el('span', { class: 'grow' }), go));
   const root = el('div', { class: 'video' }, head, feedBox, error, form);
   view.append(root);
@@ -222,6 +226,15 @@ function build(view, ctx) {
     return node;
   }
 
+  api('GET', '/api/sections').then(({ sections }) => {
+    const section = sections.find((s) => s.id === 'video');
+    const options = section.links.flatMap(({ connection: c, models }) =>
+      models.map((m) => [`${c.id}:${m}`, `${modelLabel(m)} · ${c.name}`]));
+    modelPick.replaceChildren(...options.map(([value, label]) => el('option', { value }, label)));
+    if (section.default) modelPick.value = `${section.default.connection_id}:${section.default.model}`;
+    modelPick.hidden = options.length < 2;
+  }, () => {});
+
   const tick = setInterval(() => {
     for (const [id, entry] of running) {
       const time = feedBox.querySelector(`.video-card[data-id="${id}"] .card-time`);
@@ -288,6 +301,11 @@ function build(view, ctx) {
     body.append('quality', quality);
     body.append('smooth', String(smooth));
     if (seedText !== '') body.append('seed', seedText);
+    if (!modelPick.hidden && modelPick.value) {
+      const [connId, ...rest] = modelPick.value.split(':');
+      body.append('connection_id', connId);
+      body.append('model', rest.join(':'));
+    }
     return body;
   }
 

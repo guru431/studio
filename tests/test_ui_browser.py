@@ -409,8 +409,8 @@ def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
 
 
 @pytest.mark.parametrize("width", [390, 1280])
-def test_settings_photo_unchecks_flux(browser, live, width):
-    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в разделе остаётся Lustify."""
+def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, width):
+    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только Lustify."""
     login = f"sect{width}"
     live.add_user(login)
     panel = ".section-panel[data-section=photo]"
@@ -423,10 +423,14 @@ def test_settings_photo_unchecks_flux(browser, live, width):
         ("wait", f"!document.querySelector('{panel} input.model-check[value=flux]').checked"
                  f" && document.querySelector('{panel} input.model-check[value=flux]')"), ("idle",),
         ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/sections')).sections[1].links[0].models)()"),
-        ("eval", "overflow", f"!({NO_OVERFLOW})")],
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        # в чипе «модель» раздела «Фото» — только Lustify
+        *go("photo"), ("wait", FEED_READY), ("click", "#chip-model"),
+        ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .chip-option')].map(o => o.textContent)")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     assert r["values"]["saved"] == ["lustify"] and not r["values"]["overflow"]
+    assert r["values"]["options"] == ["Lustify"]
     assert not problems(r), problems(r)
 
 
@@ -1081,7 +1085,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("click", "#photo-source-clear"),
         ("eval", "cleared", "document.querySelector('#photo-source').hidden"
                             " && document.querySelector('#photo-file').files.length === 0"),
-        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={model}]"),
+        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{model}']"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
         ("click", "#viewer .act-edit"),
         ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
@@ -1091,7 +1095,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("eval", "emptyMask", f"{is_open('#editor')} && document.querySelector('#edit-error').textContent.length > 0"),
         ("click", "#edit-mask"), ("click", "#edit-submit"),
         ("wait", f"!{is_open('#editor')} && {done_cards(2)}"),
-        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={nxt}]"),
+        ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{nxt}']"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
         ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         ("eval", "reset", "!document.querySelector('#edit-local').checked && document.querySelector('#edit-prompt').value === ''"),
@@ -1144,7 +1148,7 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     described = f"{is_open('#describe-dialog')} && document.querySelector('#describe-text').value.length > 0"
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
-            ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value={model}]"),
+            ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{model}']"),
             ("click", "#photo-menu-toggle"), ("wait", "!document.querySelector('#photo-menu').hidden"),
             ("eval", "menu", "[...document.querySelectorAll('#photo-menu .menu-item')].map(e => e.textContent.trim())"),
             ("press", "Escape"), ("wait", "document.querySelector('#photo-menu').hidden"),
@@ -1713,4 +1717,21 @@ def test_video_layout_fits_390(browser, live, ready_clips):
     assert not v["overflow"] and v["cols"] == 2 and v["aboveTabs"] and v["inside"] and v["menu"]
     assert v["qualities"] == ["Быстро 480p", "Обычно 576p", "Высоко 720p"]
     assert v["error"].startswith("Длительность") and v["cleared"]
+    assert not problems(r), problems(r)
+
+
+def test_chat_chip_lists_only_checked_models_grouped_by_connection(browser, live):
+    login = "chipper"
+    live.add_user(login)
+    check = f"""(async () => {{ const m = {API}; const s = (await m.api('GET', '/api/sections')).sections[0];
+      const id = s.links[0].connection.id;
+      await m.api('PUT', '/api/sections/chat/links/' + id, {{ models: ['local-gemma-abl', 'gemma4-abl'] }});
+      return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), ("eval", "check", check),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *open_new_chat(), ("click", "#model-chip"), ("wait", "document.querySelector('.model-option')"),
+        ("eval", "models", "[...document.querySelectorAll('.model-option')].map(o => o.dataset.model)"),
+        ("eval", "groups", "document.querySelectorAll('.model-group-name').length")])
+    assert not r.get("failed"), r
+    assert r["values"]["models"] == ["local-gemma-abl", "gemma4-abl"] and r["values"]["groups"] == 0
     assert not problems(r), problems(r)

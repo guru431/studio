@@ -1,23 +1,24 @@
 /* Правка картинки ленты: инструкция, сила для Lustify, кисть по маске (перенос окна правки
  * прежней страницы app/index.html).
  *
- * openEditor(item, model, onCreated): item — готовая запись ленты (media_id), model — модель,
- * выбранная в разделе ('lustify' | 'flux'); onCreated({ id, seed }) — задание принято. Отправка —
- * POST /api/images формой: model, size=original, prompt, source_media_id, strength (только Lustify) и
- * mask (PNG: белое — менять, чёрное — взять из исходника), если включено «Изменить только выделенную
- * область». Маска снимается копией до первого await: штрих после нажатия в запрос не попадёт. */
+ * openEditor(item, choice, onCreated): item — готовая запись ленты (media_id), choice — модель,
+ * выбранная в разделе ({ connection_id, model, kind } или null — умолчание раздела); onCreated({ id,
+ * seed }) — задание принято. Отправка — POST /api/images формой: connection_id, model, size=original,
+ * prompt, source_media_id, strength (только Lustify) и mask (PNG: белое — менять, чёрное — взять из
+ * исходника), если включено «Изменить только выделенную область» — кисть только у шлюза srvllm.
+ * Маска снимается копией до первого await: штрих после нажатия в запрос не попадёт. */
 import { api } from './api.js';
+import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 
-const NAMES = { lustify: 'Lustify', flux: 'FLUX' };
 const STRENGTH = '0.25';
 const PROMPT_MAX = 24000;
 
-export function openEditor(item, model, onCreated) {
+export function openEditor(item, choice, onCreated) {
   const host = document.getElementById('view');
   const photo = el('img', { id: 'edit-photo', alt: 'Фото для изменения' });
   photo.src = `/api/media/${encodeURIComponent(item.media_id)}`;
-  photo.decode().then(() => show(host, item, model, photo, onCreated), () => {
+  photo.decode().then(() => show(host, item, choice, photo, onCreated), () => {
     const status = document.getElementById('photo-status');
     if (status) {
       status.textContent = 'Не удалось открыть фото для изменения';
@@ -26,8 +27,9 @@ export function openEditor(item, model, onCreated) {
   });
 }
 
-function show(host, item, model, photo, onCreated) {
-  const lustify = model === 'lustify';
+function show(host, item, choice, photo, onCreated) {
+  const gateway = !choice || choice.kind === 'srvllm';
+  const lustify = gateway && (!choice || choice.model === 'lustify');
   const mask = el('canvas', { id: 'edit-mask', hidden: true });
   const selection = document.createElement('canvas');           // белое — выделено, чёрное — нет
   const prompt = el('textarea', { id: 'edit-prompt', class: 'input', rows: '3', maxlength: String(PROMPT_MAX),
@@ -47,12 +49,14 @@ function show(host, item, model, photo, onCreated) {
   const dialog = openDialog(host, { id: 'editor', title: 'Изменить фотографию', actions: [submit], body: [
     el('div', { class: 'edit-layout' }, el('div', { id: 'edit-stage' }, photo, mask), el('div', { class: 'edit-controls' },
     el('div', { class: 'field' }, el('label', { for: 'edit-prompt' }, 'Что изменить'), prompt),
-    el('p', { id: 'edit-model-label', class: 'small' }, `Модель: ${NAMES[model] || model} (выбрана в разделе)`),
-    el('p', { id: 'edit-mode-tip', class: 'muted small' }, lustify
-      ? 'Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.'
-      : 'FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.'),
+    el('p', { id: 'edit-model-label', class: 'small' }, `Модель: ${choice ? modelLabel(choice.model) : 'по умолчанию раздела'} (выбрана в разделе)`),
+    el('p', { id: 'edit-mode-tip', class: 'muted small' }, !gateway
+      ? 'Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.'
+      : lustify
+        ? 'Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.'
+        : 'FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.'),
     strengthLabel,
-    el('label', { class: 'check' }, local, 'Изменить только выделенную область'),
+    el('label', { class: 'check', hidden: !gateway }, local, 'Изменить только выделенную область'),
     tools, error))] });
 
   selection.width = mask.width = photo.naturalWidth;
@@ -124,7 +128,10 @@ function show(host, item, model, photo, onCreated) {
       return;
     }
     const body = new FormData();
-    body.append('model', model);
+    if (choice) {
+      body.append('model', choice.model);
+      body.append('connection_id', String(choice.connection_id));
+    }
     body.append('size', 'original');
     body.append('prompt', text);
     body.append('source_media_id', item.media_id);

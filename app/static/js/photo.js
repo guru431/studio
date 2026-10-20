@@ -8,12 +8,15 @@
  * действия просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
  * «Повторить» правки кистью идёт с её маской (mask_media_id).
  * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
- * окно закрыли раньше — описание отменяется. Текст сервера — только textContent. */
+ * окно закрыли раньше — описание отменяется. Текст сервера — только textContent.
+ * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
+ * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
 import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
+import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const POLL_MS = 1500;
@@ -23,7 +26,6 @@ const EXTRA_MAX = 8000;
 const PHOTO_MAX = 10 * 1024 * 1024;
 const SEED_MAX = 4294967295;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
-const MODELS = [['lustify', 'Lustify'], ['flux', 'FLUX']];
 const SIZES = [['portrait', 'Портрет 832×1216', '832x1216'], ['square', 'Квадрат 1024×1024', '1024x1024'],
   ['landscape', 'Альбом 1216×832', '1216x832']];
 const NAMES = { lustify: 'Lustify', flux: 'FLUX', 'gemma-abl': 'gemma-abl' };
@@ -62,7 +64,8 @@ function media(id, query = '') {
 }
 
 function build(view, ctx) {
-  let model = 'lustify';
+  let choice = null;             // { connection_id, model, kind } — модель из чипа; null — умолчание раздела
+  let choices = [];              // варианты чипа: [ключ, подпись, выбор]
   let size = 'portrait';
   let source = null;             // { file, url } — исходное фото с устройства
   let submitting = false;
@@ -96,7 +99,10 @@ function build(view, ctx) {
   const file = el('input', { type: 'file', id: 'photo-file', class: 'sr', accept: ACCEPT });
   const chipPhoto = el('label', { class: 'chip', id: 'chip-photo', title: 'Исходное фото' }, icon('clip'),
     el('span', {}, 'фото'), file);
-  const chipModel = chipMenu('chip-model', MODELS, () => model, (value) => { model = value; paintSource(); });
+  const chipModel = chipMenu('chip-model', [], () => choiceKey(choice), (value) => {
+    choice = (choices.find((c) => c[0] === value) || [])[2] || null;
+    paintSource();
+  });
   const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; });
   const seed = el('input', { id: 'photo-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
     'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
@@ -116,29 +122,55 @@ function build(view, ctx) {
   });
 
   /* меню чипов и раздела */
-  function chipMenu(id, options, get, set) {
+  function chipMenu(id, initial, get, set) {
     const name = el('span', { class: 'chip-name' });
     const chip = el('button', { type: 'button', class: 'chip', id, 'aria-haspopup': 'true', 'aria-expanded': 'false',
       'aria-controls': `${id}-menu` }, name, icon('down', 'ico caret'));
     const list = el('div', { class: 'chip-menu', id: `${id}-menu`, role: 'menu', hidden: true });
+    let options = [];
     const paint = () => {
-      name.textContent = (options.find((o) => o[0] === get()) || options[0])[1];
+      name.textContent = (options.find((o) => o[0] === get()) || options[0] || [null, 'модель'])[1];
       for (const b of list.children) b.setAttribute('aria-checked', String(b.dataset.value === get()));
     };
-    for (const [value, label] of options) {
-      const option = el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio', 'data-value': value }, label);
-      option.addEventListener('click', () => {
-        set(value);
-        paint();
-        popup(chip, list, false);
-        chip.focus();
-      });
-      list.append(option);
-    }
+    const fill = (next) => {
+      options = next;
+      list.replaceChildren(...options.map(([value, label]) => {
+        const option = el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio', 'data-value': value }, label);
+        option.addEventListener('click', () => {
+          set(value);
+          paint();
+          popup(chip, list, false);
+          chip.focus();
+        });
+        return option;
+      }));
+      paint();
+    };
     chip.addEventListener('click', () => popup(chip, list, list.hidden));
     popups.push({ chip, menu: list });
-    paint();
-    return { wrap: el('div', { class: 'chip-wrap' }, chip, list) };
+    fill(initial);
+    return { wrap: el('div', { class: 'chip-wrap' }, chip, list), fill };
+  }
+
+  function choiceKey(c) {
+    return c ? `${c.connection_id}:${c.model}` : null;
+  }
+
+  function isLustify() {
+    return !!choice && choice.kind === 'srvllm' && choice.model === 'lustify';
+  }
+
+  /** Варианты чипа «модель» — отмеченные модели раздела «Фото», выбор — его умолчание. */
+  function loadModels(section) {
+    const many = section.links.filter((l) => l.models.length).length > 1;
+    choices = section.links.flatMap(({ connection: c, models }) => models.map((m) => {
+      const pick = { connection_id: c.id, model: m, kind: c.kind };
+      return [choiceKey(pick), many ? `${modelLabel(m)} · ${c.name}` : modelLabel(m), pick];
+    }));
+    const def = section.default && choices.find((c) => c[0] === `${section.default.connection_id}:${section.default.model}`);
+    choice = (def || choices[0] || [])[2] || null;
+    chipModel.fill(choices.map(([value, label]) => [value, label]));
+    paintSource();
   }
 
   function popup(chip, list, open) {
@@ -167,7 +199,7 @@ function build(view, ctx) {
 
   function paintSource() {
     sourceBox.hidden = !source;
-    strengthLabel.hidden = model !== 'lustify';
+    strengthLabel.hidden = !isLustify();
   }
 
   /* занятость: одно задание за раз */
@@ -318,13 +350,14 @@ function build(view, ctx) {
     if (seedText !== '' && (!/^\d+$/.test(seedText) || Number(seedText) > SEED_MAX)) {
       throw new Error(`Seed — целое число от 0 до ${SEED_MAX}; пусто — случайный`);
     }
-    if (!withSource || !source) return { prompt: text, size, model, seed: seedText === '' ? null : Number(seedText) };
+    const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
+    if (!withSource || !source) return { prompt: text, size, ...picked, seed: seedText === '' ? null : Number(seedText) };
     if (source.file.size > PHOTO_MAX) throw new Error('Фото больше 10 МиБ');
     const body = new FormData();
-    for (const [k, v] of Object.entries({ prompt: text, size, model, seed: seedText })) {
-      if (v !== '') body.append(k, v);
+    for (const [k, v] of Object.entries({ prompt: text, size, ...picked, seed: seedText })) {
+      if (v !== '') body.append(k, String(v));
     }
-    if (model === 'lustify') body.append('strength', strength.value);
+    if (isLustify()) body.append('strength', strength.value);
     body.append('image', source.file, source.file.name);
     return body;
   }
@@ -377,7 +410,7 @@ function build(view, ctx) {
     const starts = [
       act('Изменить', 'act-edit', () => {
         dialog.close();
-        openEditor(item, model, (created) => adopt(created.id));
+        openEditor(item, choice, (created) => adopt(created.id));
       }),
       act('Повторить с тем же seed', 'act-repeat', () => {
         dialog.close();
@@ -608,6 +641,9 @@ function build(view, ctx) {
     if (!go.disabled) submit(true);
   });
   syncBusy();
+  api('GET', '/api/sections').then(({ sections }) => {
+    if (alive) loadModels(sections.find((s) => s.id === 'photo'));
+  }, (err) => say(words(err), true));
 
   return {
     destroy() {
