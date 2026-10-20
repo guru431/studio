@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 CLIENT = ROOT / "client"
 DEPLOY = ROOT / "deploy"
-sys.path.insert(0, str(APP))             # image_upload — рядом с server.py
+sys.path.insert(0, str(APP))             # модули службы импортируют друг друга по имени, как в main.py
 
 
 @pytest.fixture

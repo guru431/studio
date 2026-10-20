@@ -1,4 +1,5 @@
-"""Команды хоста. `python manage.py create-admin` — первый администратор (логин и пароль — из vault).
+"""Команды хоста. `python manage.py create-admin` — первый администратор (логин и пароль — из vault);
+`python manage.py backup` — копия базы на шару (таймер deploy/studio-backup.timer, раз в сутки).
 
 Значения — только из stdin строками KEY=VALUE: аргументы видны в списке процессов и в истории
 оболочки. Обязательны STUDIO_ADMIN_LOGIN и STUDIO_ADMIN_PASSWORD, необязателен
@@ -8,10 +9,19 @@ GATEWAY_KEY_OWNER_IMAGES. Повтор с тем же паролем ничег�
 С GATEWAY_KEY_OWNER_IMAGES у администратора появляется подключение «srvllm» (шлюз srvllm, все
 разделы); при создании оно становится подключением чата по умолчанию с моделью DEFAULT_MODEL.
 Повтор обновляет ключ того же подключения, второго не заводит. Ключ в вывод не попадает.
+
+backup — согласованная копия SQLite (`Connection.backup`, служба при этом работает) сначала во
+временный файл рядом с базой (локальный диск: SQLite на CIFS не работает), затем копией байтов
+на шару под временным именем и `os.replace` в `$STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db`
+(дата — UTC). Хранятся BACKUP_KEEP последних копий.
 """
 import json
+import os
 import re
+import shutil
+import sqlite3
 import sys
+from datetime import datetime, timezone
 
 import auth
 import clock
@@ -21,10 +31,11 @@ import db
 import security
 import state
 
-USAGE = "использование: manage.py create-admin < файл со строками KEY=VALUE"
+USAGE = "использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
 GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
+BACKUP_KEEP = 7
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -116,11 +127,51 @@ def _ensure_admin(conn, login: str, password: str) -> int:
     return 0
 
 
-def main(argv: list[str]) -> int:
-    if argv != ["create-admin"]:
-        print(USAGE, file=sys.stderr)
+def backup() -> int:
+    try:
+        cfg = config.load()
+    except RuntimeError as e:
+        print(e, file=sys.stderr)
         return 2
-    return create_admin(read_pairs(sys.stdin.read()))
+    if not cfg.db_path.is_file():   # sqlite3.connect завёл бы пустую базу
+        print(f"нет базы {cfg.db_path}", file=sys.stderr)
+        return 2
+    day = datetime.fromtimestamp(clock.NOW(), timezone.utc)
+    folder = cfg.media_dir / "backup"
+    target = folder / f"studio-{day:%Y%m%d}.db"
+    local = cfg.db_path.with_name(f".{target.name}.part")
+    shared = folder / f".{target.name}.part"
+    try:
+        local.unlink(missing_ok=True)
+        src, dst = sqlite3.connect(cfg.db_path), sqlite3.connect(local)
+        try:
+            src.backup(dst)
+            # копия — один файл без -wal/-shm: открывать её с шары и переносить проще
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+            src.close()
+        folder.mkdir(exist_ok=True)
+        shutil.copyfile(local, shared)
+        os.replace(shared, target)
+    except (OSError, sqlite3.Error) as e:     # шара недоступна: копии нет, база не тронута
+        print(f"копия базы не сделана: {e}", file=sys.stderr)
+        return 1
+    finally:
+        local.unlink(missing_ok=True)
+    for old in sorted(folder.glob("studio-????????.db"))[:-BACKUP_KEEP]:
+        old.unlink()
+    print(f"копия базы: {target}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["create-admin"]:
+        return create_admin(read_pairs(sys.stdin.read()))
+    if argv == ["backup"]:
+        return backup()
+    print(USAGE, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

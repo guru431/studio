@@ -1,6 +1,6 @@
 [Unit]
-Description=studio-web — страница студии https://llm.example.com/studio/ (клиент API картинок и видео шлюза srvllm)
-After=network-online.target
+Description=studio-web — студия https://studio.example.com (учётки, чат, фото, видео)
+After=network-online.target remote-fs.target
 Wants=network-online.target
 
 [Service]
@@ -13,18 +13,32 @@ Group=www-data
 UMask=0007
 RuntimeDirectory=studio
 RuntimeDirectoryMode=0750
-# Секрет (0600 root, из vault): STUDIO_SESSION_SECRET — подпись cookie сессии. Файл читает
-# systemd при старте, а не служба: самой учётке studio он недоступен.
+# Секрет (0600 root, из vault): STUDIO_DATA_KEY — ключ Fernet, им зашифрованы токены подключений
+# в базе. Файл читает systemd при старте, а не служба: самой учётке studio он недоступен.
 EnvironmentFile=/etc/studio/studio.env
-# Шлюз srvllm, маршруты slot-gate и прямые маршруты видео; ключ — у владельца, в cookie сессии
-Environment=STUDIO_GATEWAY_URL=http://10.77.1.15:4000/slot
+# База — SQLite на локальном диске (на CIFS SQLite портится): /var/lib/studio, 0700.
+StateDirectory=studio
+StateDirectoryMode=0700
+Environment=STUDIO_DB=/var/lib/studio/studio.db
+# Файлы истории — шара storage \\storage\dd$\SharedData\studio (//10.77.1.5/dd$ смонтирован в
+# /mnt/storage, /etc/fstab). «-»: шара не смонтирована — каталога нет, и запись падает ошибкой
+# «не удалось сохранить», а не ложится на локальный диск.
+Environment=STUDIO_MEDIA_DIR=/mnt/storage/SharedData/studio
+ReadWritePaths=-/mnt/storage/SharedData/studio
+# Origin для проверки изменяющих запросов
+Environment=STUDIO_ORIGIN=https://studio.example.com
 WorkingDirectory=/opt/services/studio
-# --no-proxy-headers: адрес клиента студия читает из X-Forwarded-For сама (server.client_ip),
-# подмена request.client и схемы uvicorn-ом ей не нужна — поведение то же, что было на srvllm.
-ExecStart=/opt/services/studio/.venv/bin/uvicorn server:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers
-# Кэш роликов для Range (до 3 mp4, server.VIDEO_CACHE_ITEMS) и загрузка картинки до 20 МБ
+# --no-proxy-headers: адрес клиента студия читает из X-Forwarded-For сама (auth.client_ip),
+# подмена request.client и схемы uvicorn-ом ей не нужна.
+# --timeout-graceful-shutdown: открытый поток чата (SSE) держит соединение минутами — uvicorn ждёт
+# его не дольше 10 с, затем снимает задачи и закрывает базу (chat.stop_all, images.stop); после
+# старта недописанное помечают chat.recover() и images.recover(). Предел меньше TimeoutStopSec,
+# иначе каждая выкладка кончалась бы SIGKILL.
+ExecStart=/opt/services/studio/.venv/bin/uvicorn main:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers --timeout-graceful-shutdown 10
+TimeoutStopSec=30
+# Ролик отдаётся с шары кусками (Range), загрузки — до 21 МиБ
 MemoryMax=2G
-# Ключ шлюза владельца живёт в памяти запроса — дамп памяти не должен лечь на диск
+# Ключ данных и токены подключений бывают в памяти — дамп памяти не должен лечь на диск
 LimitCORE=0
 NoNewPrivileges=yes
 PrivateTmp=yes

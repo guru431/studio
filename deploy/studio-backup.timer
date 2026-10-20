@@ -1,0 +1,10 @@
+[Unit]
+Description=studio-backup — копия базы студии каждый день в 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30
+# Пропущенный запуск (хост был выключен) — сразу после загрузки
+Persistent=true
+
+[Install]
+WantedBy=timers.target

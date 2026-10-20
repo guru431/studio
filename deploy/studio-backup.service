@@ -1,0 +1,29 @@
+[Unit]
+Description=studio-backup — суточная копия базы студии на шару storage (manage.py backup)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Пользователь, группа, окружение и каталоги — как у studio-web.service (сверяет
+# tests/test_deploy.py): другой Group у того же StateDirectory systemd перевёл бы владельца
+# каталога базы.
+User=studio
+Group=www-data
+UMask=0077
+EnvironmentFile=/etc/studio/studio.env
+StateDirectory=studio
+StateDirectoryMode=0700
+Environment=STUDIO_DB=/var/lib/studio/studio.db
+Environment=STUDIO_MEDIA_DIR=/mnt/storage/SharedData/studio
+ReadWritePaths=-/mnt/storage/SharedData/studio
+Environment=STUDIO_ORIGIN=https://studio.example.com
+WorkingDirectory=/opt/services/studio
+# Согласованная копия (sqlite3 backup) во временный файл рядом с базой, затем на шару в
+# $STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db; хранятся 7 последних.
+ExecStart=/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py backup
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
