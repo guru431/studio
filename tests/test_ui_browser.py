@@ -1860,3 +1860,41 @@ def test_voice_is_added_in_settings(browser, live):
     assert not r.get("failed"), r
     assert "Мой голос" in r["values"]["voice"] and "0:06" in r["values"]["voice"]
     assert not problems(r), problems(r)
+
+
+# ---- озвучка --------------------------------------------------------------------
+
+def add_voice(seconds=6.0):
+    b64 = base64.b64encode(wav_of(seconds)).decode()
+    return ("eval", "voice", f"""(async () => {{ const m = {API};
+      const bytes = Uint8Array.from(atob('{b64}'), c => c.charCodeAt(0));
+      const body = new FormData(); body.append('name', 'Мой голос'); body.append('text', 'текст образца');
+      body.append('audio', new File([bytes], 'sample.wav', {{ type: 'audio/wav' }}));
+      return (await m.api('POST', '/api/voices', body)).id; }})()""")
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
+    login = f"sp{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("speech"), ("wait", "document.querySelector('#speech-composer')"),
+        ("eval", "hint", "document.querySelector('.sp-voice-hint')?.textContent || ''"),
+        add_voice(), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("speech"), ("wait", "document.querySelector('#chip-voice option')"),
+        ("type", "#speech-text", "Привет. Как дела?"),
+        ("eval", "count", "document.querySelector('#speech-count').textContent"),
+        ("click", "#speech-go"),
+        ("wait", "document.querySelector('.sp-item[data-state=done]') && document.querySelector('.sp-view audio.sp-audio')"),
+        ("eval", "audio", "document.querySelector('.sp-view audio.sp-audio').getAttribute('src')"),
+        ("eval", "text", "document.querySelector('.sp-view .sp-text').textContent"),
+        ("eval", "spy", CLICKS), ("click", "#sp-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "clicked", "window.clicked[0]"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "добавьте голос" in v["hint"] and v["count"].startswith("17 / 2000")
+    assert v["audio"].startswith("/api/media/") and v["text"] == "Привет. Как дела?"
+    assert v["clicked"][0].endswith("?download=1") and v["clicked"][1] and not v["overflow"]
+    assert not problems(r), problems(r)

@@ -1,6 +1,6 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/settings, #/settings/<раздел>, #/admin (только
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -20,6 +20,7 @@ const HINTS = {
   photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
   video: 'Чтобы делать видео, выберите модель в настройках раздела «Видео»',
   transcribe: 'Чтобы расшифровывать записи, выберите модель в настройках раздела «Расшифровка»',
+  speech: 'Чтобы озвучивать текст, выберите модель в настройках раздела «Озвучка»',
 };
 const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -27,6 +28,7 @@ const ICONS = {
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
 };
 const THEME_ICONS = {
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -39,6 +41,7 @@ const SECTIONS = {
   photo: { title: 'Фото', load: () => import('./photo.js') },
   video: { title: 'Видео', load: () => import('./video.js') },
   transcribe: { title: 'Расшифровка', load: () => import('./transcribe.js') },
+  speech: { title: 'Озвучка', load: () => import('./speech.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
 };

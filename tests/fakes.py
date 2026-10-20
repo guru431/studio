@@ -45,7 +45,19 @@ def _png() -> bytes:
 
 
 PNG_REAL = _png()
-WAV_FAKE = b"RIFF" + bytes(40) + b"fake-wav"
+def _wav(seconds: float = 0.3, rate: int = 24000) -> bytes:
+    """Настоящий WAV тишины: живая студия склеивает части озвучки настоящим ffmpeg."""
+    import wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(rate * seconds))
+    return out.getvalue()
+
+
+WAV_FAKE = _wav()
 SPEECH_ASR = ("/speech/asr", "/speech/transcriptions", "/speech/lite/transcriptions")
 RELEASES = ("/slot/images/release", "/slot/images/descriptions/release")
 

@@ -206,6 +206,12 @@ label { font-size: 13px; color: var(--muted); }
 .tr-turns { display: flex; flex-direction: column; gap: 12px; }
 .tr-turn p { margin: 0; }
 .tr-who { color: var(--muted); font-size: 13px; font-weight: 600; }
+.sp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.sp-audio { width: 100%; }
+.speech .composer { margin: 0 16px 12px; }
+.speech .composer textarea { width: 100%; resize: vertical; }
+.sp-voice { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.sp-voice-hint { margin: 0; }
 .tr-text { overflow-wrap: anywhere; line-height: 1.5; }
 @media (max-width: 760px) {
   .split-aside { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw);
