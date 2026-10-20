@@ -364,3 +364,14 @@ def test_install_brings_ffmpeg_before_the_code_swap():
     assert "command -v ffmpeg" in install
     assert install.index("apt-get install") < install.index('mv "$NEW/$p"')
     assert "ffmpeg" in install[install.index("apt-get install"):install.index("apt-get install") + 120]
+
+
+def test_apache_lets_a_recording_through_only_on_its_route():
+    import transcripts
+    v = uncommented(VHOST)
+    block = re.search(r'<LocationMatch "\^/api/transcripts\$">(.*?)</LocationMatch>', v, re.S)
+    assert block, "нет LocationMatch загрузки записи"
+    limit = int(re.search(r"LimitRequestBody (\d+)", block.group(1)).group(1))
+    assert limit >= transcripts.UPLOAD_MAX
+    general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
+    assert general < transcripts.UPLOAD_MAX

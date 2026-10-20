@@ -29,11 +29,12 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 
 DROP_V4 = "DROP TABLE section_links; DROP TABLE section_defaults;"
+DROP_V5 = "DROP TABLE transcripts; DROP TABLE voices; DROP TABLE speeches;"
 
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 5
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -43,12 +44,12 @@ def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN mask_media_id; ALTER TABLE messages DROP COLUMN alive_at;"
                        " ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V4} PRAGMA user_version = 1;")
+                       f" {DROP_V4} {DROP_V5} PRAGMA user_version = 1;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert conn.execute("SELECT id, mask_media_id FROM images").fetchone()[:] == ("i1", None)
     assert "alive_at" in [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
 
@@ -57,12 +58,12 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
     """База прода — версии 2: шаг добавляет столбцы цепочки, строки остаются без неё."""
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V4} PRAGMA user_version = 2;")
+                       f" {DROP_V4} {DROP_V5} PRAGMA user_version = 2;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert conn.execute("SELECT id, chain IS NULL FROM images").fetchone()[:] == ("i1", 1)
     assert "chain" in [r[1] for r in conn.execute("PRAGMA table_info(videos)")]
 
@@ -70,7 +71,7 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
 def test_migrate_links_a_version_3_base_to_every_section(env):
     """Шаг 4: srvllm — во всех шести разделах с перечнем, чат — с моделью пользователя; openai — в чате."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V4} PRAGMA user_version = 3;")
+    conn.executescript(f"{DROP_V4} {DROP_V5} PRAGMA user_version = 3;")
     ins = ("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
            " VALUES (?, 1, 'c', ?, ?, x'00', ?, 0)")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
@@ -78,7 +79,7 @@ def test_migrate_links_a_version_3_base_to_every_section(env):
     conn.execute(ins, (8, "openai", "https://cloud.test/v1", '["chat"]'))
     conn.execute("UPDATE users SET default_connection_id = 7, default_model = 'gemma4-abl'")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     links = {(r[0], r[1]): json.loads(r[2]) for r in conn.execute("SELECT connection_id, section, models FROM section_links")}
     assert links == {(7, "chat"): ["gemma4-abl"], (7, "photo"): ["lustify", "flux"], (7, "video"): ["wan"],
                      (7, "transcribe"): ["whisperx"], (7, "speech"): ["qwen3-tts"], (7, "dictation"): ["gigaam", "whisperx"],
@@ -116,3 +117,14 @@ def test_token_encryption_needs_the_same_key(env, monkeypatch):
     monkeypatch.setattr(state, "CFG", dataclasses.replace(cfg, data_key=Fernet.generate_key().decode()))
     with pytest.raises(InvalidToken):
         security.decrypt(blob)
+
+
+def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
+    conn = db.connect(env.db_path); db.migrate(conn)
+    conn.executescript(f"{DROP_V5} PRAGMA user_version = 4;")
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
+    db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"transcripts", "voices", "speeches"} <= tables
+    assert conn.execute("SELECT count(*) FROM users").fetchone()[0] == 1

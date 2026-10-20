@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 4).
+"""Соединение SQLite и схема базы (версия 5).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 4
+VERSION = 5
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -17,7 +17,24 @@ CREATE TABLE section_defaults(user_id INTEGER NOT NULL REFERENCES users ON DELET
              PRIMARY KEY (user_id, section));
 """
 
-SCHEMA = SECTION_TABLES + """
+#: речь (transcripts.py, voices.py, speeches.py): расшифровки, образцы голосов, озвучки
+SPEECH_TABLES = """
+CREATE TABLE transcripts(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+            connection_id INTEGER, model TEXT NOT NULL, name TEXT NOT NULL, source_media_id TEXT NOT NULL,
+            result_media_id TEXT, duration REAL, speakers INTEGER, state TEXT NOT NULL, detail TEXT NOT NULL,
+            created REAL NOT NULL, finished REAL);
+CREATE TABLE voices(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, ref_text TEXT NOT NULL, media_id TEXT NOT NULL, duration REAL NOT NULL,
+       created REAL NOT NULL);
+CREATE TABLE speeches(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+         connection_id INTEGER, model TEXT NOT NULL, voice TEXT NOT NULL, text TEXT NOT NULL, media_id TEXT,
+         duration REAL, state TEXT NOT NULL, detail TEXT NOT NULL, created REAL NOT NULL, finished REAL);
+CREATE INDEX transcripts_user_created ON transcripts(user_id, created);
+CREATE INDEX voices_user_created ON voices(user_id, created);
+CREATE INDEX speeches_user_created ON speeches(user_id, created);
+"""
+
+SCHEMA = SECTION_TABLES + SPEECH_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
@@ -95,6 +112,8 @@ SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FRO
                           AND d.connection_id = u.default_connection_id AND json_array_length(d.models) > 0)),
        (SELECT MIN(x.connection_id) FROM section_links x WHERE x.user_id = l.user_id AND x.section = l.section
            AND json_array_length(x.models) > 0));""",
+    # речь: расшифровки записей, образцы голосов и озвучки
+    5: SPEECH_TABLES,
 }
 
 

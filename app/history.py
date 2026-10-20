@@ -1,4 +1,5 @@
-"""Вся история пользователя: чаты с сообщениями, вложения, картинки, ролики и файлы media."""
+"""Вся история пользователя: чаты с сообщениями, вложения, картинки, ролики, расшифровки, голоса,
+озвучки и файлы media."""
 import asyncio
 import logging
 
@@ -6,6 +7,7 @@ import chat
 import images
 import media
 import state
+import transcripts
 import videos
 
 log = logging.getLogger("studio")
@@ -18,6 +20,7 @@ async def stop_user(user_id: int) -> None:
     images.forget_user(user_id)
     await chat.stop_user(user_id)
     await videos.cancel_user(user_id)
+    await transcripts.stop_user(user_id)
 
 
 async def delete_all(user_id: int) -> None:
@@ -42,7 +45,7 @@ async def delete_all(user_id: int) -> None:
     try:
         state.DB.execute("DELETE FROM attachments WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))      # сообщения — каскадом
-        for table in ("images", "videos", "media"):
+        for table in ("images", "videos", "transcripts", "voices", "speeches", "media"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         state.DB.execute("COMMIT")
     except BaseException:

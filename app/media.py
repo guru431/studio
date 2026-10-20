@@ -46,6 +46,10 @@ class StorageError(Exception):
         super().__init__(message)
 
 
+class TooBig(StorageError):
+    """Поток длиннее предела save_stream: файла нет."""
+
+
 # ---- запись ----------------------------------------------------------------
 
 def _target(user_id: int, media_id: str, mime: str) -> tuple[str, Path]:
@@ -162,7 +166,7 @@ async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, dow
         async for chunk in chunks:
             size += len(chunk)
             if size > max_bytes:
-                raise StorageError("файл больше предела")
+                raise TooBig("файл больше предела")
             await asyncio.to_thread(out.write, chunk)
         await asyncio.to_thread(out.close)
         await asyncio.to_thread(os.replace, tmp, full)
@@ -232,13 +236,16 @@ def alive(user_id: int, media_id: str) -> bool:
 
 
 def referenced(user_id: int, media_id: str) -> bool:
-    """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик или вложение чата:
-    удаление другой записи его не трогает."""
+    """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик, вложение чата,
+    расшифровка (запись, итог), голос или озвучка: удаление другой записи его не трогает."""
     return state.DB.execute(
         "SELECT 1 FROM images WHERE user_id = ? AND ? IN (media_id, source_media_id, mask_media_id)"
         " UNION ALL SELECT 1 FROM videos WHERE user_id = ? AND ? IN (media_id, source_media_id)"
-        " UNION ALL SELECT 1 FROM attachments WHERE user_id = ? AND media_id = ? LIMIT 1",
-        (user_id, media_id) * 3).fetchone() is not None
+        " UNION ALL SELECT 1 FROM attachments WHERE user_id = ? AND media_id = ?"
+        " UNION ALL SELECT 1 FROM transcripts WHERE user_id = ? AND ? IN (source_media_id, result_media_id)"
+        " UNION ALL SELECT 1 FROM voices WHERE user_id = ? AND media_id = ?"
+        " UNION ALL SELECT 1 FROM speeches WHERE user_id = ? AND media_id = ? LIMIT 1",
+        (user_id, media_id) * 6).fetchone() is not None
 
 
 async def delete_async(user_id: int, media_id: str) -> None:
