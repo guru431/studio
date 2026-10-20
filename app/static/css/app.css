@@ -50,8 +50,11 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
 #rail .spacer { flex: 1; }
-#avatar { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
+#avatar, .theme-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
   color: var(--text); font-weight: 600; font-size: 13px; display: grid; place-items: center; padding: 0; }
+.theme-toggle { color: var(--muted); }
+.theme-toggle:hover { color: var(--text); }
+.theme-toggle svg.ico { width: 18px; height: 18px; }
 #avatar[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 #view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; padding-bottom: var(--tabs-h); }
 
@@ -81,8 +84,9 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
   #rail .tab { flex: 1; width: auto; justify-content: center; }
   #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
+  .theme-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
-  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 60px; }
+  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 100px; }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }
 }

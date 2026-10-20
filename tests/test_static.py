@@ -90,6 +90,12 @@ def test_root_icon_paths_answer_without_login(studio):
     assert r.status_code == 200 and r.headers["content-type"] in ("image/x-icon", "image/vnd.microsoft.icon")
 
 
+def test_theme_toggle_lives_in_the_rail_not_the_profile():
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert index.index('id="theme-toggle"') < index.index('id="avatar"')
+    assert "themeBlock" not in (STATIC / "js" / "profile.js").read_text(encoding="utf-8")
+
+
 def test_service_worker_never_caches_api_or_media():
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
     assert "'/api/'" in sw and "'/static/js/'" in sw

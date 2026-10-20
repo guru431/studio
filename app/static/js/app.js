@@ -2,12 +2,15 @@
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/profile, #/admin (только администратору);
  * прочее — #/chat. Раздел — модуль с `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id,
- * query, applyTheme }, id — хвост адреса (#/chat/<id>) или null, query — URLSearchParams после `?`
+ * query }, id — хвост адреса (#/chat/<id>) или null, query — URLSearchParams после `?`
  * (#/video?source=<media_id> — «Оживить» из раздела фото). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
  * Раздел без возможности (me.capabilities.photo === false) открывается подсказкой со ссылкой
- * на профиль. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты). */
-import { loadMe, me } from './api.js';
+ * на профиль. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты).
+ *
+ * Тема — кнопкой #theme-toggle над аватаром: из «auto» первое нажатие ставит противоположную видимой,
+ * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. */
+import { api, loadMe, me } from './api.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -22,6 +25,11 @@ const ICONS = {
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
+const THEME_ICONS = {
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
+    + 'M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+};
 
 const SECTIONS = {
   chat: { title: 'Чат', load: () => import('./chat.js') },
@@ -33,6 +41,8 @@ const SECTIONS = {
 
 const view = document.getElementById('view');
 const avatar = document.getElementById('avatar');
+const toggle = document.getElementById('theme-toggle');
+const darkMedia = matchMedia('(prefers-color-scheme: dark)');
 const menu = document.getElementById('menu');
 let current = null;      // { section, module }
 let renders = 0;         // номер последнего перехода: медленная загрузка раздела не перебьёт новый
@@ -93,6 +103,32 @@ function applyTheme(theme) {
   document.getElementById('hl-graphite').media = scheme('dark');
 }
 
+function visibleTheme() {
+  if (me.theme === 'dark' || me.theme === 'light') return me.theme;
+  return darkMedia.matches ? 'dark' : 'light';
+}
+
+function paintToggle() {
+  const dark = visibleTheme() === 'dark';
+  const label = dark ? 'Светлая тема' : 'Тёмная тема';
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+  toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${THEME_ICONS[dark ? 'sun' : 'moon']}</svg>`;   // константа
+}
+
+function setupTheme() {
+  paintToggle();
+  toggle.addEventListener('click', () => {
+    const next = visibleTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    me.theme = next;
+    paintToggle();
+    // тема уже применена и лежит в localStorage; без сети сохранится при следующем нажатии
+    api('PATCH', '/api/me', { theme: next }).catch(() => {});
+  });
+  darkMedia.addEventListener('change', paintToggle);
+}
+
 function parse(hash) {
   const match = /^#\/([a-z]+)(?:\/([^?]+))?(?:\?(.*))?$/.exec(hash);
   const query = new URLSearchParams(match ? match[3] || '' : '');
@@ -119,7 +155,7 @@ async function render() {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
-  const ctx = { me, navigate, id: route.id, query: route.query, applyTheme };
+  const ctx = { me, navigate, id: route.id, query: route.query };
   if (current && current.section === route.section && current.module.update) {
     current.module.update(ctx);
     return;
@@ -182,6 +218,7 @@ async function start() {
   }
   applyTheme(me.theme);
   setupMenu();
+  setupTheme();
   window.addEventListener('hashchange', render);
   await render();
   await worker;

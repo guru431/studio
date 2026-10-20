@@ -1,4 +1,5 @@
-/* Раздел «Профиль» (#/profile): подключения, чат по умолчанию, тема, пароль, удаление истории.
+/* Раздел «Профиль» (#/profile): подключения, чат по умолчанию, пароль, удаление истории
+ * (тема — кнопкой в рельсе, app.js).
  *
  * Модели чата по умолчанию: подключение через сервер — GET /api/connections/<id>/models; прямое —
  * браузер сам зовёт адрес моделей из /api/connections/<id>/token (токен и адрес — из одного ответа,
@@ -7,7 +8,6 @@ import { api, loadMe, me } from './api.js';
 import { connectionsBlock } from './connection-form.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
-const THEMES = [['auto', 'Авто'], ['dark', 'Графит'], ['light', 'Бумага']];
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 
 function block(title, ...children) {
@@ -129,28 +129,7 @@ function defaultsBlock() {
   };
 }
 
-/* ---- тема, пароль, история -------------------------------------------------- */
-
-function themeBlock(ctx) {
-  const note = status('theme-status');
-  const chips = THEMES.map(([value, label]) => button(label, { class: 'chip', id: `theme-${value}`,
-    'aria-pressed': String(me.theme === value) }));
-  chips.forEach((chip, i) => chip.addEventListener('click', async () => {
-    const theme = THEMES[i][0];
-    try {
-      await api('PATCH', '/api/me', { theme });
-      await loadMe();
-    } catch (err) {
-      say(note, words(err), 'error');
-      return;
-    }
-    ctx.applyTheme(theme);
-    chips.forEach((c, j) => c.setAttribute('aria-pressed', String(i === j)));
-    say(note, '');
-  }));
-  return block('Тема', el('div', { class: 'chips', role: 'group', 'aria-label': 'Тема' }, ...chips),
-    el('p', { class: 'muted small' }, 'Авто — как на устройстве. Графит — тёмная, Бумага — светлая.'), note);
-}
+/* ---- пароль, история -------------------------------------------------------- */
 
 function passwordBlock() {
   const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
@@ -213,14 +192,14 @@ function wipeBlock(host) {
 
 /* ---- раздел ----------------------------------------------------------------- */
 
-export function mount(view, ctx) {
+export function mount(view) {
   const root = el('div', { class: 'page' });
   const defaults = defaultsBlock();
   const conns = connectionsBlock(root, '/api/connections', async (items) => {
     await loadMe().catch(() => null);           // возможности разделов сменились — роутер читает me
     defaults.fill(items);
   });
-  root.append(block('Подключения', conns.el), defaults.el, themeBlock(ctx), passwordBlock(), wipeBlock(root));
+  root.append(block('Подключения', conns.el), defaults.el, passwordBlock(), wipeBlock(root));
   view.append(el('header', { class: 'head' }, el('h1', {}, 'Профиль')), root);
   conns.reload().then((items) => defaults.fill(items));
 }

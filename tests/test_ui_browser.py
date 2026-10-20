@@ -76,6 +76,32 @@ def test_theme_from_profile_is_applied(browser, live, theme, bg):
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [390, 1280])
+def test_theme_toggle_switches_and_is_kept(browser, live, width):
+    login = f"toggle{width}"
+    live.add_user(login)
+    expected = "(matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "want", expected),
+        ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme === {expected}"),
+        ("idle",), ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("eval", "kept", "document.documentElement.dataset.theme"),
+        ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme !== {expected}"),
+        ("eval", "apart", "(() => { const a = document.querySelector('#theme-toggle').getBoundingClientRect();"
+                          " const b = document.querySelector('#avatar').getBoundingClientRect();"
+                          " return a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top; })()"),
+        ("eval", "inside", "(() => { const a = document.querySelector('#theme-toggle').getBoundingClientRect();"
+                           " return a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight; })()"),
+        ("eval", "go", "location.hash = '#/profile'"), ("wait", "document.querySelector('#view .page')"),
+        ("eval", "profileTheme", "!!document.querySelector('#theme-auto, #theme-dark, #theme-light')")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kept"] == v["want"] and v["apart"] and v["inside"] and v["profileTheme"] is False
+    assert not problems(r), problems(r)
+
+
 def test_wrong_password_shows_words(browser, live):
     r = browser.drive(live.url + "/login", [*signin(password="wrong-password"),
         ("wait", "document.querySelector('.error') && document.querySelector('.error').textContent.length > 0"),
@@ -292,7 +318,7 @@ def known_refusals(log, *codes):
     return [e for e in log if not any(f"status of {c}" in e for c in codes)]
 
 
-def test_profile_adds_a_cloud_connection_and_switches_theme(browser, live):
+def test_profile_adds_a_cloud_connection(browser, live):
     live.add_user("cloudy")
     dialog = "#conn-dialog"
     r = browser.drive(live.url + "/", [*signin("cloudy"), ("wait", READY), *go("profile"),
@@ -327,18 +353,7 @@ def test_profile_adds_a_cloud_connection_and_switches_theme(browser, live):
         ("click", "#conn-save"),
         ("wait", f"document.querySelector('{dialog} .error[data-for=token]').textContent.length > 0"),
         ("eval", "tokenError", f"document.querySelector('{dialog} .error[data-for=token]').textContent"),
-        ("press", "Escape"), ("wait", f"!{is_open(dialog)}"),
-        # тема — на сервере: после перезагрузки та же
-        ("click", "#theme-dark"), ("wait", "document.documentElement.dataset.theme === 'dark'"),
-        ("wait", "document.querySelector('#theme-dark').getAttribute('aria-pressed') === 'true'"),
-        ("idle",),
-        ("eval", "reload", "location.reload()"),
-        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
-        ("wait", "document.querySelector('#theme-dark')"),
-        ("eval", "theme", "[document.documentElement.dataset.theme,"
-                          " document.querySelector('#theme-dark').getAttribute('aria-pressed'),"
-                          " document.querySelector('#theme-auto').getAttribute('aria-pressed')]"),
-        ("click", "#theme-auto"), ("wait", "!document.documentElement.hasAttribute('data-theme')")],
+        ("press", "Escape"), ("wait", f"!{is_open(dialog)}")],
         width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
@@ -349,7 +364,6 @@ def test_profile_adds_a_cloud_connection_and_switches_theme(browser, live):
     assert v["chat"] is True and not v["overflow"]
     assert v["default"] == [True, "cloud-chat"]
     assert v["tokenEmpty"] and v["tokenError"] == "Новый адрес — введите токен заново"
-    assert v["theme"] == ["dark", "true", "false"]
     assert not known_refusals(problems(r), 422), problems(r)
 
 
