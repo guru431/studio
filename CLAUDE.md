@@ -90,7 +90,7 @@
   `sslh`, wildcard `/etc/letsencrypt/live/example.net/`) подключён в конце `/opt/services/apache/apache2.conf`
   строкой `IncludeOptional /opt/services/studio/deploy/apache-vhost.conf`. Правка vhost — выкладка:
   `install.sh` после подмены кода гоняет `apache2ctl -t` (отказ — прежний код на место, служба не
-  перезапускается) и делает `reload apache2`, только если vhost сменился.
+  перезапускается) и после ответа `/health` всегда делает `reload apache2`.
 - Журнал: `sudo journalctl -u studio-web`, `-u studio-backup` (промптов и имён файлов там нет).
 
 ## Выкладка

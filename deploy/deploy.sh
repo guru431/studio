@@ -12,7 +12,7 @@
 # Значения идут потоком grep | ssh: не печатаются, не ложатся на диск workstation и не попадают в
 # argv. Откат — выложить прежний коммит. Vhost (deploy/apache-vhost.conf) подключён в
 # /opt/services/apache/apache2.conf строкой IncludeOptional: install.sh проверяет его apache2ctl -t
-# (отказ — прежний код на место) и, если он сменился, сам делает reload Apache.
+# (отказ — прежний код на место) и после ответа службы всегда сам делает reload Apache.
 set -euo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}

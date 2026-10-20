@@ -161,6 +161,25 @@ HOSTILE = """(async () => {
   return out;
 })()"""
 
+#: N2: <br> в ячейке таблицы (так модели переносят строку) — перенос, а не текст; <br> с атрибутами
+#: и прочие теги рядом остаются текстом.
+BR = """(async () => {
+  const { renderMarkdown } = await import('/static/js/markdown.js');
+  const box = document.createElement('div');
+  box.className = 'md';
+  box.append(renderMarkdown('| a | b |\\n|---|---|\\n| раз<br>два | три<br/>четыре<BR />пять |\\n'
+    + '| <br onclick="window.pwned=4">x | <b>жирно</b><script>window.pwned=5</script> |\\n'));
+  document.body.append(box);
+  await new Promise(r => setTimeout(r, 50));
+  const cells = [...box.querySelectorAll('td')];
+  const out = { brs: cells.map(td => td.querySelectorAll('br').length),
+    text: cells.map(td => td.textContent),
+    active: [...box.querySelectorAll('[onclick], script, b')].map(e => e.outerHTML),
+    pwned: window.pwned || 0 };
+  box.remove();
+  return out;
+})()"""
+
 SSE = """(async (base, token) => {
   const { readSSE } = await import('/static/js/sse.js');
   const r = await fetch(base + '/chat/completions', { method: 'POST',
@@ -179,6 +198,7 @@ def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser,
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
         ("eval", "md", MARKDOWN),
         ("eval", "hostile", HOSTILE),
+        ("eval", "br", BR),
         ("eval", "sse", f"{SSE}({live.cloud.base_url!r}, {live.cloud.TOKEN!r})")])
     assert not r.get("failed"), r
     hostile = r["values"]["hostile"]
@@ -188,6 +208,11 @@ def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser,
     assert '<form action="/login" method="post">' in hostile["text"]
     assert "☑ сделано" in hostile["text"] and "☐ нет" in hostile["text"]
     assert hostile["highlighted"] and hostile["copy"] == ["Копировать"]
+    br = r["values"]["br"]
+    assert br["brs"] == [1, 2, 0, 0] and br["active"] == [] and br["pwned"] == 0, br
+    assert br["text"][:2] == ["раздва", "тричетырепять"], br
+    assert br["text"][2] == '<br onclick="window.pwned=4">x', br
+    assert br["text"][3] == "<b>жирно</b><script>window.pwned=5</script>", br
     md = r["values"]["md"]
     assert md == {"h1": "Заголовок", "target": "_blank", "rel": "noopener noreferrer", "script": 0, "onerror": False,
                   "pwned": 0, "highlighted": True, "copy": "Копировать"}

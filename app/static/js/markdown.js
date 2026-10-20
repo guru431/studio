@@ -6,7 +6,7 @@
  *
  * HTML в ответе модели — текст, а не разметка: иначе ответ (или подсказка в приложенном PDF)
  * вставил бы в страницу <style>, форму входа на чужую учётку или кнопку на весь экран. marked
- * экранирует такие куски сам; DOMPurify пропускает только теги разметки, без style, id и форм;
+ * экранирует такие куски сам (кроме голого <br> — перенос строки в ячейке таблицы); DOMPurify пропускает только теги разметки, без style, id и форм;
  * class остаётся только language-* у кода. Флажки списков задач — знаками ☑/☐, без <input>. */
 
 const COPIED_MS = 1500;
@@ -14,6 +14,7 @@ const TAGS = ['a', 'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong'
   'blockquote', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img'];
 const ATTRS = ['href', 'title', 'alt', 'src', 'class', 'start', 'align'];
 const LANG = /^language-[\w+#-]+$/;
+const BR = /^<br\s*\/?>$/i;     // единственный тег из ответа модели, что остаётся тегом
 
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -27,6 +28,7 @@ function markdownParser() {
     async: false,
     renderer: {
       html({ text, block }) {
+        if (!block && BR.test(text)) return '<br>';   // модели так переносят строку в ячейке таблицы
         return block ? `<p>${escapeHtml(text)}</p>` : escapeHtml(text);
       },
       checkbox({ checked }) {

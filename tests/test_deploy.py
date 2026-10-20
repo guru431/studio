@@ -320,14 +320,37 @@ def test_install_restore_puts_the_previous_tree_back(tmp_path):
     assert not (root / "deploy").exists()
 
 
-def test_install_checks_apache_before_the_restart_and_reloads_only_a_changed_vhost():
+def test_install_checks_apache_before_the_restart_and_always_reloads_after_health():
     """B2-M3: vhost Apache включает прямо из выложенного дерева — сломанный положил бы все vhost
-    хоста при следующем старте Apache. configtest — после подмены и до перезапуска, с откатом."""
+    хоста при следующем старте Apache. configtest — после подмены и до перезапуска, с откатом.
+    N1: reload — после каждого ответа /health, а не по сравнению с прежним деревом: повтор
+    выкладки после неудачной видел бы «без изменений», и Apache остался бы на старом vhost."""
     test = INSTALL.index("apache2ctl -t")
     assert INSTALL.index('mv "$NEW/$p" "$R/$p"') < test < INSTALL.index('systemctl restart "$UNIT"')
     failed = INSTALL[test:INSTALL.index("fi\n", test)]
     assert "restore" in failed and "exit 1" in failed
-    assert 'cmp -s "$OLD/deploy/apache-vhost.conf" "$R/deploy/apache-vhost.conf" || vhost_changed=1' in INSTALL
+    assert "vhost_changed" not in INSTALL and "cmp -s" not in INSTALL
     reload = INSTALL.index("systemctl reload apache2")
+    assert INSTALL.count("systemctl reload apache2") == 1
     assert INSTALL.index("|| health_failed") < reload < INSTALL.index('rm -rf "$OLD"\necho "OK')
-    assert 'if [ "$vhost_changed" = 1 ]; then\n    systemctl reload apache2' in INSTALL
+    line = INSTALL[INSTALL.rindex("\n", 0, reload) + 1:INSTALL.index("\n", reload)]
+    assert line == "systemctl reload apache2"           # без условия вокруг
+
+
+def test_install_configtest_refusal_shows_the_output_and_blames_no_file():
+    """N3: configtest падает и из-за чужого vhost хоста — сообщение не называет файл студии,
+    а вывод apache2ctl показан целиком."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    start = INSTALL.index("if ! apache_test=$(apache2ctl -t 2>&1); then")
+    block = INSTALL[start:INSTALL.index("fi\n", start) + 3]
+    stubs = ("set -euo pipefail\nUNIT=studio-web.service\nrestore() { echo restored; }\n"
+             "apache2ctl() { for i in 1 2 3 4 5 6 7; do echo \"line $i\"; done;"
+             " echo 'AH00526: Syntax error on line 3 of /etc/apache2/sites-enabled/other.conf'; return 1; }\n")
+    r = subprocess.run([bash, "-c", stubs + block + "echo unreachable\n"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout and "restored" in r.stdout, r
+    assert "line 1" in r.stderr and "other.conf" in r.stderr     # вывод целиком, не хвост
+    assert "Apache не проходит configtest (вывод выше" in r.stderr
+    assert "apache-vhost.conf" not in r.stderr

@@ -87,15 +87,12 @@ restore() {     # прежнее дерево — на место нового (
 # Vhost Apache включает прямо из этого дерева: сломанный отказал бы не сейчас, а при следующем
 # старте Apache (перезагрузка debian) — и вместе со всеми vhost хоста. Проверка — до перезапуска.
 if ! apache_test=$(apache2ctl -t 2>&1); then
-    printf '%s\n' "$apache_test" | tail -n 5 >&2
+    printf '%s\n' "$apache_test" >&2
     restore
-    echo "ОШИБКА: с новым deploy/apache-vhost.conf Apache не проходит configtest — прежний код" \
-         "возвращён, $UNIT не перезапускалась" >&2
+    echo "ОШИБКА: Apache не проходит configtest (вывод выше; сломан может быть и чужой vhost) —" \
+         "прежний код возвращён, $UNIT не перезапускалась" >&2
     exit 1
 fi
-# reload — только когда vhost сменился, и после проверки службы; иначе Apache не трогаем
-vhost_changed=0
-cmp -s "$OLD/deploy/apache-vhost.conf" "$R/deploy/apache-vhost.conf" || vhost_changed=1
 
 install -m 0644 "$R/deploy/$UNIT" "/etc/systemd/system/$UNIT"
 install -m 0644 "$R/deploy/studio-backup.service" "$R/deploy/studio-backup.timer" /etc/systemd/system/
@@ -127,10 +124,10 @@ for _ in $(seq 1 40); do
     sleep 0.5
 done
 [ "$code" = 200 ] || health_failed
-if [ "$vhost_changed" = 1 ]; then
-    systemctl reload apache2
-    echo "OK: vhost сменился — Apache перечитал конфигурацию"
-fi
+# reload — всегда после проверки службы (configtest пройден выше): сравнение с прежним деревом
+# пропустило бы vhost, выложенный неудачной выкладкой того же коммита
+systemctl reload apache2
+echo "OK: Apache перечитал конфигурацию"
 rm -rf "$OLD"
 echo "OK: $UNIT отвечает на $SOCK"
 systemctl enable --now studio-backup.timer >/dev/null 2>&1
