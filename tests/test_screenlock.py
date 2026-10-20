@@ -1,11 +1,14 @@
 """Блокировка на телефоне (app/screenlock.py, признак «заперто» в auth.guard): спека
 2026-10-21-studio-screen-lock, раздел 6."""
+import base64
+import hashlib
 import logging
 
 import auth
 import security
 import state
 from conftest import make_user, signin
+from softkey import SoftKey, unb64u
 
 
 def code(r) -> str:
@@ -224,3 +227,182 @@ def test_lock_events_log_only_ids(studio, caplog):
     assert f"пользователь {uid}: заперто" in caplog.text
     assert f"пользователь {uid}: открыто (пароль)" in caplog.text
     assert "wrong-secret-9" not in caplog.text and "password-123" not in caplog.text
+
+
+# ---- ключи passkey -----------------------------------------------------------
+
+def handle(key: SoftKey) -> str:
+    """id ключа в API — не credential id (его строка запроса понесла бы в журнал Apache), а хеш от него."""
+    return hashlib.sha256(key.id.encode()).hexdigest()[:16]
+
+
+def add_key(s, key=None, name="iPhone") -> SoftKey:
+    key = key or SoftKey()
+    options = s.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    r = s.c.post("/api/passkeys", json={"credential": key.register(options), "name": name})
+    assert r.status_code == 201, r.text
+    return key
+
+
+def insert_key(uid, key: SoftKey) -> None:
+    """Ключ мимо API (у API нет пути добавить чужой или без проверки пользователя)."""
+    state.DB.execute("INSERT INTO passkeys(id, user_id, public_key, sign_count, transports, name, created)"
+                     " VALUES (?, ?, ?, 0, ?, 'iPhone', 0)", (key.id, uid, key.public_key, '["internal"]'))
+
+
+def open_with(s, key: SoftKey):
+    options = s.c.post("/api/lock/challenge").json()
+    return s.c.post("/api/lock/open", json={"credential": key.assertion(options)})
+
+
+def key_row(key: SoftKey):
+    return state.DB.execute("SELECT sign_count, used FROM passkeys WHERE id = ?", (key.id,)).fetchone()
+
+
+def test_adding_a_key_needs_the_password(studio):
+    uid = owner(studio)
+    for body in ({}, {"password": "wrong-pw"}):
+        r = studio.c.post("/api/passkeys/options", json=body)
+        assert r.status_code == 403 and code(r) == "password", body
+    r = studio.c.post("/api/passkeys/options", json={"password": "password-123"})
+    assert r.status_code == 200
+    options = r.json()
+    assert options["rp"] == {"id": "testserver", "name": "Студия"}
+    assert options["authenticatorSelection"]["userVerification"] == "required"
+    assert options["attestation"] == "none"
+    assert options["user"]["name"] == options["user"]["displayName"] == "owner"
+    assert unb64u(options["user"]["id"]) == f"studio-{uid}".encode()
+    assert len(unb64u(options["challenge"])) == 32
+
+
+def test_key_is_added_listed_and_excluded_next_time(studio):
+    owner(studio)
+    key = SoftKey()
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    assert options["excludeCredentials"] == []
+    r = studio.c.post("/api/passkeys", json={"credential": key.register(options), "name": "iPhone"})
+    assert r.status_code == 201
+    assert r.json() == {"id": handle(key), "name": "iPhone", "created": studio.clock[0], "used": None}
+    studio.clock[0] += 1
+    second = add_key(studio, name="iPad")
+    assert [k["id"] for k in studio.c.get("/api/passkeys").json()["items"]] == [handle(second), handle(key)]
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    assert sorted(c["id"] for c in options["excludeCredentials"]) == sorted([key.id, second.id])
+    # тот же ключ ещё раз (браузер с excludeCredentials так не сделает) — 409
+    r = studio.c.post("/api/passkeys", json={"credential": key.register(options), "name": "iPhone"})
+    assert r.status_code == 409 and code(r) == "exists"
+
+
+def test_registration_needs_a_fresh_single_use_challenge(studio):
+    owner(studio)
+    key = SoftKey()
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    answer = key.register(options)
+    assert studio.c.post("/api/passkeys", json={"credential": answer, "name": "iPhone"}).status_code == 201
+    other = SoftKey()
+    for replay in (answer, other.register(options)):     # вызов уже взят
+        r = studio.c.post("/api/passkeys", json={"credential": replay, "name": "iPhone"})
+        assert r.status_code == 400 and code(r) == "passkey"
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    studio.clock[0] += 121
+    r = studio.c.post("/api/passkeys", json={"credential": other.register(options), "name": "iPhone"})
+    assert r.status_code == 400
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    r = studio.c.post("/api/passkeys", json={"credential": SoftKey(uv=False).register(options), "name": "iPhone"})
+    assert r.status_code == 400                          # без проверки пользователя (Face ID, код) — не ключ
+    assert len(studio.c.get("/api/passkeys").json()["items"]) == 1
+
+
+def test_unknown_key_name_is_refused(studio):
+    owner(studio)
+    options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+    r = studio.c.post("/api/passkeys", json={"credential": SoftKey().register(options), "name": "Мой телефон"})
+    assert r.status_code == 422
+
+
+def test_passkey_opens_a_locked_phone(studio):
+    uid = owner(studio)
+    key = add_key(studio)
+    lock_on(uid); phone(studio)
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert studio.c.get("/api/lock").json() == {"locked": True, "keys": True, "csrf": studio.c.headers[auth.CSRF_HEADER]}
+    options = studio.c.post("/api/lock/challenge").json()
+    assert [(c["id"], c["transports"]) for c in options["allowCredentials"]] == [(key.id, ["internal"])]
+    assert options["userVerification"] == "required" and options["rpId"] == "testserver"
+    r = studio.c.post("/api/lock/open", json={"credential": key.assertion(options)})
+    assert r.status_code == 204
+    assert studio.c.get("/api/me").status_code == 200
+    assert key_row(key)[:] == (1, studio.clock[0])
+    # пауза пароля passkey не касается
+    studio.c.post("/api/lock/now")
+    for _ in range(5):
+        studio.c.post("/api/lock/password", json={"password": "wrong-password"})
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 429
+    assert open_with(studio, key).status_code == 204
+    assert studio.c.get("/api/me").status_code == 200
+
+
+def test_open_refuses_a_foreign_key_a_replay_no_uv_and_a_stale_challenge(studio):
+    foreign = SoftKey()
+    insert_key(make_user(studio, "other"), foreign)
+    uid = owner(studio)
+    key = add_key(studio)
+    lock_on(uid); phone(studio)
+    studio.c.post("/api/lock/now")
+    r = open_with(studio, foreign)
+    assert r.status_code == 403 and code(r) == "passkey"
+    answer = key.assertion(studio.c.post("/api/lock/challenge").json())
+    assert studio.c.post("/api/lock/open", json={"credential": answer}).status_code == 204
+    studio.c.post("/api/lock/now")
+    assert studio.c.post("/api/lock/open", json={"credential": answer}).status_code == 403     # повтор
+    weak = SoftKey(uv=False)
+    insert_key(uid, weak)
+    assert open_with(studio, weak).status_code == 403                                            # без UV
+    options = studio.c.post("/api/lock/challenge").json()
+    studio.clock[0] += 121
+    assert studio.c.post("/api/lock/open", json={"credential": key.assertion(options)}).status_code == 403
+    for broken in ({}, {"id": key.id}, {"id": key.id, "rawId": "%%%", "response": {}}):
+        studio.c.post("/api/lock/challenge")
+        assert studio.c.post("/api/lock/open", json={"credential": broken}).status_code == 403, broken
+    assert studio.c.get("/api/me").status_code == 423
+
+
+def test_challenge_without_keys_is_409(studio):
+    owner(studio)
+    r = studio.c.post("/api/lock/challenge")
+    assert r.status_code == 409 and code(r) == "no_keys"
+
+
+def test_keys_are_removed_one_by_one_and_with_the_account(studio):
+    foreign = SoftKey()
+    insert_key(make_user(studio, "other"), foreign)
+    uid = owner(studio)
+    key = add_key(studio)
+    r = studio.c.delete(f"/api/passkeys/{handle(foreign)}")
+    assert r.status_code == 404 and code(r) == "not_found"
+    assert studio.c.delete(f"/api/passkeys/{handle(key)}").status_code == 204
+    assert studio.c.get("/api/passkeys").json() == {"items": []}
+    assert studio.c.delete(f"/api/passkeys/{handle(key)}").status_code == 404
+    add_key(studio)
+    state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))
+    assert state.DB.execute("SELECT count(*) FROM passkeys WHERE user_id = ?", (uid,)).fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM passkeys").fetchone()[0] == 1          # чужой цел
+
+
+def test_passkey_events_log_no_key_material(studio, caplog):
+    caplog.set_level(logging.INFO)
+    uid = owner(studio)
+    key = add_key(studio)
+    lock_on(uid); phone(studio)
+    studio.c.post("/api/lock/now")
+    options = studio.c.post("/api/lock/challenge").json()
+    answer = key.assertion(options)
+    assert studio.c.post("/api/lock/open", json={"credential": answer}).status_code == 204
+    studio.c.post("/api/lock/open", json={"credential": answer})
+    studio.c.delete(f"/api/passkeys/{handle(key)}")
+    assert f"пользователь {uid}: ключ добавлен" in caplog.text
+    assert f"пользователь {uid}: открыто (passkey)" in caplog.text
+    assert f"пользователь {uid}: ключ удалён" in caplog.text
+    for secret in (key.id, options["challenge"], answer["response"]["signature"],
+                   answer["response"]["clientDataJSON"], base64.urlsafe_b64encode(key.public_key).decode().rstrip("=")):
+        assert secret not in caplog.text

@@ -51,6 +51,7 @@ def studio(env, monkeypatch):
     import clock
     import images
     import main
+    import screenlock
     import security
     import state
     import speeches
@@ -73,6 +74,7 @@ def studio(env, monkeypatch):
     monkeypatch.setattr(state, "make_http", lambda: httpx.AsyncClient(transport=httpx.MockTransport(gw.handler)))
     monkeypatch.setattr(state, "WATCHER", False)
     auth.FAILS.clear()
+    screenlock.CHALLENGES.clear()
     images.JOBS.clear()
     chat.STREAMS.clear()
     transcripts.JOBS.clear()
@@ -80,6 +82,7 @@ def studio(env, monkeypatch):
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
+    screenlock.CHALLENGES.clear()
     images.JOBS.clear()
     chat.STREAMS.clear()
 

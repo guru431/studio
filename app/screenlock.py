@@ -1,20 +1,39 @@
 """Блокировка на телефоне (спека 2026-10-21-studio-screen-lock): отметки «на экране», «заперто»,
-отпирание паролем учётки, включение и выключение.
+отпирание паролем учётки и passkey, ключи учётки, включение и выключение.
 
 Признак «заперто» считает auth.guard (auth.screen_locked); запертая сессия делает только запросы
-auth.SCREEN_LOCK_PATHS. Сессия запроса — request.state.digest. Журнал — только события с id: пароль
-туда не пишется."""
+auth.SCREEN_LOCK_PATHS. Сессия запроса — request.state.digest. Passkey: RP ID — хост STUDIO_ORIGIN,
+проверка ответов — библиотекой webauthn (origin, RP ID, вызов, UV, подпись, счётчик). Журнал — только
+события с id: credential id, открытый ключ, вызов, ответы устройства и пароль туда не пишутся."""
+import hashlib
+import json
 import logging
+import secrets
+import sqlite3
+from urllib.parse import urlparse
 
+import webauthn
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers.structs import (AttestationConveyancePreference, AuthenticatorAttachment,
+                                      AuthenticatorSelectionCriteria, AuthenticatorTransport,
+                                      PublicKeyCredentialDescriptor, ResidentKeyRequirement,
+                                      UserVerificationRequirement)
 
 import auth
 import clock
 import state
 
 PASSWORD_MAX = 1024
+CHALLENGE_SEC = 120
+#: (digest сессии, "register" | "open") → (вызов, когда выдан); в памяти службы — перезапуск его забудет
+CHALLENGES: dict[tuple[str, str], tuple[bytes, float]] = {}
+NAMES = ("iPhone", "iPad", "Android", "Устройство")      # lock.js deviceName()
+TRANSPORTS = frozenset(t.value for t in AuthenticatorTransport)
+REFUSED_KEY = {"code": "passkey", "message": "устройство не подтвердило ключ"}
+REFUSED_OPEN = {"code": "passkey", "message": "ключ не подошёл — нажмите «Открыть» ещё раз"}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
@@ -33,6 +52,19 @@ class ScreenLock(BaseModel):
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
 
 
+class KeyPassword(BaseModel):
+    password: str | None = Field(default=None, max_length=PASSWORD_MAX)
+
+
+class NewKey(BaseModel):
+    credential: dict             # ответ navigator.credentials.create() в JSON-форме
+    name: str
+
+
+class Answer(BaseModel):
+    credential: dict             # ответ navigator.credentials.get()
+
+
 def _has_keys(uid: int) -> bool:
     return state.DB.execute("SELECT 1 FROM passkeys WHERE user_id = ? LIMIT 1", (uid,)).fetchone() is not None
 
@@ -40,6 +72,45 @@ def _has_keys(uid: int) -> bool:
 def _seen(request: Request, value: float | None) -> None:
     state.DB.execute("UPDATE sessions SET seen = ? WHERE digest = ?", (value, request.state.digest))
 
+
+def _rp() -> tuple[str, str]:
+    """(RP ID, origin): хост и адрес STUDIO_ORIGIN — ключ работает только на нём."""
+    origin = state.CFG.origin.rstrip("/")
+    return urlparse(origin).hostname, origin
+
+
+def _issue(digest: str, kind: str) -> bytes:
+    """Новый вызов сессии (прежний того же вида заменяется). Заодно забыть просроченные: иначе вызовы
+    закрытых сессий лежали бы до перезапуска."""
+    now = clock.NOW()
+    for k in [k for k, (_, issued) in CHALLENGES.items() if now - issued > CHALLENGE_SEC]:
+        del CHALLENGES[k]
+    challenge = secrets.token_bytes(32)
+    CHALLENGES[(digest, kind)] = (challenge, now)
+    return challenge
+
+
+def _take(digest: str, kind: str) -> bytes | None:
+    """Вызов одноразовый: взятие удаляет; старше CHALLENGE_SEC — вызова нет."""
+    issued = CHALLENGES.pop((digest, kind), None)
+    if issued is None or clock.NOW() - issued[1] > CHALLENGE_SEC:
+        return None
+    return issued[0]
+
+
+def _handle(key_id: str) -> str:
+    """id ключа в API — хеш credential id: DELETE несёт его строкой запроса, а её пишет журнал Apache."""
+    return hashlib.sha256(key_id.encode()).hexdigest()[:16]
+
+
+def _descriptors(uid: int) -> list[PublicKeyCredentialDescriptor]:
+    rows = state.DB.execute("SELECT id, transports FROM passkeys WHERE user_id = ? ORDER BY created", (uid,))
+    return [PublicKeyCredentialDescriptor(id=webauthn.base64url_to_bytes(r["id"]),
+                                          transports=[AuthenticatorTransport(t) for t in json.loads(r["transports"])])
+            for r in rows]
+
+
+# ---- отметки, «заперто», пароль ----------------------------------------------
 
 @router.get("/lock")
 async def lock_state(request: Request):
@@ -92,3 +163,117 @@ async def set_screen_lock(body: ScreenLock, request: Request):
     state.DB.execute("UPDATE users SET screen_lock = ? WHERE id = ?", (int(body.enabled), uid))
     log.info("пользователь %d: блокировка %s", uid, "включена" if body.enabled else "выключена")
     return {"screen_lock": body.enabled}
+
+
+# ---- ключи passkey -----------------------------------------------------------
+
+@router.post("/passkeys/options")
+async def passkey_options(body: KeyPassword, request: Request):
+    """Варианты создания ключа — только с паролем учётки: иначе получивший телефон открытым на минуту
+    добавил бы свой. user.name — логин (его покажут «Пароли» iPhone), дескриптор — не логин и не имя."""
+    user = request.state.user
+    await auth.confirm_password(user.id, body.password or "", "ключ")
+    options = webauthn.generate_registration_options(
+        rp_id=_rp()[0], rp_name="Студия", user_name=user.login, user_display_name=user.login,
+        user_id=f"studio-{user.id}".encode(), challenge=_issue(request.state.digest, "register"),
+        attestation=AttestationConveyancePreference.NONE,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM, resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED),
+        exclude_credentials=_descriptors(user.id))
+    return json.loads(webauthn.options_to_json(options))
+
+
+@router.post("/passkeys", status_code=201)
+async def add_passkey(body: NewKey, request: Request):
+    uid = request.state.user.id
+    if body.name not in NAMES:
+        raise HTTPException(422, {"code": "name", "message": "название ключа — по устройству"})
+    challenge = _take(request.state.digest, "register")
+    rp_id, origin = _rp()
+    try:
+        if challenge is None:
+            raise ValueError("нет вызова")
+        verified = webauthn.verify_registration_response(
+            credential=body.credential, expected_challenge=challenge, expected_rp_id=rp_id, expected_origin=origin,
+            require_user_verification=True)
+    except Exception:            # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
+        log.warning("пользователь %d: ключ не добавлен", uid)
+        raise HTTPException(400, REFUSED_KEY) from None
+    key_id = bytes_to_base64url(verified.credential_id)
+    sent = body.credential["response"].get("transports")
+    transports = [t for t in sent if isinstance(t, str) and t in TRANSPORTS] if isinstance(sent, list) else []
+    now = clock.NOW()
+    try:
+        state.DB.execute("INSERT INTO passkeys(id, user_id, public_key, sign_count, transports, name, created)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?)", (key_id, uid, verified.credential_public_key,
+                                                          verified.sign_count, json.dumps(transports), body.name, now))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, {"code": "exists", "message": "этот ключ уже добавлен"}) from None
+    log.info("пользователь %d: ключ добавлен", uid)
+    return {"id": _handle(key_id), "name": body.name, "created": now, "used": None}
+
+
+@router.get("/passkeys")
+async def list_passkeys(request: Request):
+    rows = state.DB.execute("SELECT id, name, created, used FROM passkeys WHERE user_id = ? ORDER BY created DESC",
+                            (request.state.user.id,))
+    return {"items": [{"id": _handle(r["id"]), "name": r["name"], "created": r["created"], "used": r["used"]}
+                      for r in rows]}
+
+
+@router.delete("/passkeys/{key_id}", status_code=204)
+async def delete_passkey(key_id: str, request: Request):
+    """Без пароля (и последний тоже): доступа удаление не даёт, отпирать тогда — паролем."""
+    uid = request.state.user.id
+    rows = state.DB.execute("SELECT id FROM passkeys WHERE user_id = ?", (uid,)).fetchall()
+    found = next((r["id"] for r in rows if _handle(r["id"]) == key_id), None)
+    if found is None:
+        raise HTTPException(404, {"code": "not_found", "message": "такого ключа нет"})
+    state.DB.execute("DELETE FROM passkeys WHERE id = ? AND user_id = ?", (found, uid))
+    log.info("пользователь %d: ключ удалён", uid)
+    return Response(status_code=204)
+
+
+# ---- отпирание passkey -------------------------------------------------------
+
+@router.post("/lock/challenge")
+async def lock_challenge(request: Request):
+    """Варианты входа: ключи учётки, проверка пользователя (Face ID, отпечаток, код устройства) обязательна."""
+    uid = request.state.user.id
+    allowed = _descriptors(uid)
+    if not allowed:
+        raise HTTPException(409, {"code": "no_keys", "message": "у учётки нет ключей — откройте паролем"})
+    options = webauthn.generate_authentication_options(
+        rp_id=_rp()[0], challenge=_issue(request.state.digest, "open"), allow_credentials=allowed,
+        user_verification=UserVerificationRequirement.REQUIRED)
+    return json.loads(webauthn.options_to_json(options))
+
+
+@router.post("/lock/open", status_code=204)
+async def open_with_passkey(body: Answer, request: Request):
+    """Пауза пароля passkey не касается. Любой отказ — один ответ, seen не меняется."""
+    uid = request.state.user.id
+    challenge = _take(request.state.digest, "open")
+    sent_id = body.credential.get("id")
+    row = None
+    if isinstance(sent_id, str):
+        row = state.DB.execute("SELECT id, public_key, sign_count FROM passkeys WHERE id = ? AND user_id = ?",
+                               (sent_id, uid)).fetchone()
+    rp_id, origin = _rp()
+    try:
+        if challenge is None or row is None:
+            raise ValueError("нет вызова или ключа")
+        verified = webauthn.verify_authentication_response(
+            credential=body.credential, expected_challenge=challenge, expected_rp_id=rp_id, expected_origin=origin,
+            credential_public_key=row["public_key"], credential_current_sign_count=row["sign_count"],
+            require_user_verification=True)
+    except Exception:            # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
+        log.warning("пользователь %d: ключ не подошёл", uid)
+        raise HTTPException(403, REFUSED_OPEN) from None
+    now = clock.NOW()
+    state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",
+                     (verified.new_sign_count, now, row["id"]))
+    _seen(request, now)
+    log.info("пользователь %d: открыто (passkey)", uid)
+    return Response(status_code=204)
