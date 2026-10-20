@@ -8,6 +8,7 @@
  * исходника), если включено «Изменить только выделенную область» — кисть только у шлюза srvllm.
  * Маска снимается копией до первого await: штрих после нажатия в запрос не попадёт. */
 import { api } from './api.js';
+import { attachMic } from './mic.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 
@@ -45,10 +46,12 @@ function show(host, item, choice, photo, onCreated) {
     el('label', { class: 'edit-brush' }, 'Размер кисти', brush), clear,
     el('p', { class: 'muted small' }, 'Закрасьте нужную часть фото пальцем или мышью. Пиксели вне выделения будут взяты из исходника без изменений.'));
   const error = el('p', { id: 'edit-error', class: 'error', role: 'alert' });
+  const micNote = el('div', { class: 'mic-note' });
   const submit = button('Применить изменения', { class: 'btn btn-accent', id: 'edit-submit' });
   const dialog = openDialog(host, { id: 'editor', title: 'Изменить фотографию', actions: [submit], body: [
     el('div', { class: 'edit-layout' }, el('div', { id: 'edit-stage' }, photo, mask), el('div', { class: 'edit-controls' },
-    el('div', { class: 'field' }, el('label', { for: 'edit-prompt' }, 'Что изменить'), prompt),
+    el('div', { class: 'field' }, el('label', { for: 'edit-prompt' }, 'Что изменить'),
+      el('div', { class: 'with-mic' }, prompt, attachMic(prompt, micNote)), micNote),
     el('p', { id: 'edit-model-label', class: 'small' }, `Модель: ${choice ? modelLabel(choice.model) : 'по умолчанию раздела'} (выбрана в разделе)`),
     el('p', { id: 'edit-mode-tip', class: 'muted small' }, !gateway
       ? 'Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.'

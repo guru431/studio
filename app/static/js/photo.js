@@ -14,6 +14,7 @@
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
+import { attachMic } from './mic.js';
 import { createFeed } from './feed.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
@@ -109,8 +110,10 @@ function build(view, ctx) {
   const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-seed' }, el('span', {}, 'seed'), seed);
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
-  const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt,
-    el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }), go));
+  const micNote = el('div', { class: 'mic-note' });
+  const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
+    el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }),
+      attachMic(prompt, micNote), go));
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, form);
   view.append(root);
 

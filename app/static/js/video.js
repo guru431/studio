@@ -11,6 +11,7 @@
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed } from './feed.js';
+import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
@@ -94,9 +95,10 @@ function build(view, ctx) {
   const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': 'Модель', hidden: true });
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go' }, 'Оживить');
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
-  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt,
+  const micNote = el('div', { class: 'mic-note' });
+  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, modelPick, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
-      el('span', { class: 'grow' }), go));
+      el('span', { class: 'grow' }), attachMic(prompt, micNote), go));
   const root = el('div', { class: 'video' }, head, feedBox, error, form);
   view.append(root);
 

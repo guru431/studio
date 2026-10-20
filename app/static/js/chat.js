@@ -19,6 +19,7 @@
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
+import { attachMic } from './mic.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -235,8 +236,9 @@ function build(view, ctx) {
     icon('send'));
   const stop = el('button', { type: 'button', id: 'stop', class: 'send', 'aria-label': 'Остановить', title: 'Остановить',
     hidden: true }, icon('stop'));
-  const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input,
-    el('div', { class: 'row' }, clip, el('span', { class: 'grow' }), send, stop));
+  const micNote = el('div', { class: 'mic-note' });
+  const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input, micNote,
+    el('div', { class: 'row' }, clip, attachMic(input, micNote), el('span', { class: 'grow' }), send, stop));
   const main = el('section', { class: 'chat-main' }, head, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);

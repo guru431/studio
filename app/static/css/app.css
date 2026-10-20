@@ -176,6 +176,16 @@ label { font-size: 13px; color: var(--muted); }
 .dialog p { margin: 0 0 12px; }
 .dialog .error { margin: 4px 0 0; font-size: 13px; }
 
+/* голосовой ввод: кнопка у поля промпта, во время записи — красная с таймером */
+.mic { position: relative; flex: none; }
+.mic.on { color: #fff; background: #d64545; border-radius: 999px; width: auto; padding: 0 10px; gap: 6px; display: inline-flex; align-items: center; }
+.mic.busy { opacity: .55; }
+.mic-time { font-size: 13px; font-variant-numeric: tabular-nums; }
+.mic-note .mic-error { margin: 2px 0 0; font-size: 13px; }
+.mic-note .mic-error:empty { display: none; }
+.with-mic { display: flex; align-items: flex-start; gap: 6px; }
+.with-mic textarea { flex: 1; min-width: 0; }
+
 /* настройки: разделы слева, раздел справа (на телефоне — по очереди) */
 .settings { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }

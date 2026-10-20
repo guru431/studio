@@ -1042,7 +1042,7 @@ def put_file(selector, data, name="photo.png"):
 def add_gateway():
     return ("eval", "gateway", f"""(async () => {{ const m = {API};
       await m.api('POST', '/api/connections', {{ name: 'Шлюз', kind: 'srvllm', base_url: {GATEWAY_URL!r},
-        token: {GW_TOKEN!r}, sections: ['chat', 'photo', 'video'] }});
+        token: {GW_TOKEN!r}, sections: ['chat', 'photo', 'video', 'transcribe', 'speech', 'dictation'] }});
       await m.loadMe(); return true; }})()""")
 
 
@@ -1735,3 +1735,58 @@ def test_chat_chip_lists_only_checked_models_grouped_by_connection(browser, live
     assert not r.get("failed"), r
     assert r["values"]["models"] == ["local-gemma-abl", "gemma4-abl"] and r["values"]["groups"] == 0
     assert not problems(r), problems(r)
+
+
+#: микрофон браузера без железа: запись — Blob 1 КиБ audio/webm, разрешение дано
+FAKE_MIC = """(() => {
+  navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });
+  window.MediaRecorder = class {
+    static isTypeSupported(t) { return t === 'audio/webm'; }
+    constructor(stream, opts) { this.mimeType = (opts && opts.mimeType) || 'audio/webm'; this.state = 'inactive'; this.l = {}; }
+    addEventListener(n, f) { this.l[n] = f; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.l.dataavailable({ data: new Blob([new Uint8Array(1024)], { type: 'audio/webm' }) });
+             this.l.stop(); }
+  };
+  return true; })()"""
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_mic_inserts_text_at_the_cursor(browser, live, width):
+    login = f"mic{width}"
+    live.add_user(login)
+    saved = live.gw.asr_reply
+    live.gw.asr_reply = {"text": "кот"}
+    put = """(() => { const f = document.querySelector('#photo-prompt'); f.value = 'рыжий на окне';
+      f.setSelectionRange(6, 6); return f.selectionStart; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+            ("eval", "spy", SPY), ("eval", "mic", FAKE_MIC), ("eval", "put", put),
+            ("click", "#photo-composer .mic"), ("wait", "document.querySelector('#photo-composer .mic.on')"),
+            ("click", "#photo-composer .mic"),
+            ("wait", "document.querySelector('#photo-prompt').value === 'рыжий кот на окне'"),
+            ("eval", "sent", "window.sentForms.length"),
+            ("eval", "overflow", f"!({NO_OVERFLOW})"),
+            # микрофон есть и в окне «Изменить», в чате и в видео
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"),
+            ("wait", "document.querySelector('#editor .mic')"), ("press", "Escape"),
+            *go("chat"), ("wait", "document.querySelector('#composer .mic')"),
+            *go("video"), ("wait", "document.querySelector('#video-composer .mic')")],
+            width=width, mobile=width == 390)
+    finally:
+        live.gw.asr_reply = saved
+    assert not r.get("failed"), r
+    assert r["values"]["sent"] == 0 and not r["values"]["overflow"]
+    assert not problems(r), problems(r)
+
+
+def test_mic_without_permission_says_so(browser, live):
+    live.add_user("nomic")
+    deny = """(() => { navigator.mediaDevices.getUserMedia = async () => {
+      throw new DOMException('denied', 'NotAllowedError'); }; return true; })()"""
+    r = browser.drive(live.url + "/", [*photo_screen("nomic"), ("eval", "deny", deny),
+        ("click", "#photo-composer .mic"),
+        ("wait", "document.querySelector('#photo-composer .mic-error').textContent.length > 0"),
+        ("eval", "words", "document.querySelector('#photo-composer .mic-error').textContent")])
+    assert not r.get("failed"), r
+    assert "разрешения на микрофон" in r["values"]["words"]

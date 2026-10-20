@@ -27,6 +27,7 @@ import chat
 import config
 import connections
 import db
+import dictation
 import images
 import media
 import profile
@@ -99,6 +100,7 @@ app.include_router(media.router)
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
+app.include_router(dictation.router)
 
 
 @app.exception_handler(RequestValidationError)
