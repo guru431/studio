@@ -2087,3 +2087,58 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
     assert v["audio"].startswith("/api/media/") and v["text"] == "Привет. Как дела?"
     assert v["clicked"][0].endswith("?download=1") and v["clicked"][1] and not v["overflow"]
     assert not problems(r), problems(r)
+
+
+# ---- блокировка на телефоне (спека 2026-10-21-studio-screen-lock) -----------------
+
+PHONE = {"width": 390, "mobile": True, "touch": True, "authenticator": True}
+KEY_NAMES = ("iPhone", "iPad", "Android", "Устройство")
+
+
+def server_lock_is(value):
+    """Ждать, пока сервер не скажет, что блокировка учётки включена (True) или выключена (False)."""
+    return ("wait", f"fetch('/api/me').then(r => r.json()).then(m => m.screen_lock === {str(value).lower()})")
+
+
+def lock_settings(login):
+    return [*signin(login), ("wait", READY), *go("settings/other"), ("wait", "document.querySelector('#lock-enabled')")]
+
+
+def test_touch_emulation_gives_a_coarse_pointer(browser, live):
+    coarse = [("idle",), ("eval", "coarse", "matchMedia('(pointer: coarse)').matches")]
+    phone = browser.drive(live.url + "/login", coarse, width=390, mobile=True, touch=True)
+    computer = browser.drive(live.url + "/login", coarse)
+    assert not phone.get("failed") and not computer.get("failed"), (phone, computer)
+    assert phone["values"]["coarse"] is True and computer["values"]["coarse"] is False
+
+
+def test_lock_settings_add_list_and_remove_a_key(browser, live):
+    login = "lockset"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("eval", "before", "document.querySelector('#lock-enabled').checked"),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"),
+        ("wait", "document.querySelector('#passkey-add') && !document.querySelector('#passkey-add').hidden"),
+        ("click", "#passkey-add"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 1"),
+        ("eval", "row", "document.querySelector('#passkeys .passkey').textContent"),
+        ("click", "#passkeys .passkey-delete"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 0"),
+        ("click", "#lock-enabled"), ("wait", "document.querySelector('#lock-off').getClientRects().length > 0"),
+        ("type", "#lock-off-password", "password-123"), ("click", "#lock-off"), server_lock_is(False),
+        ("eval", "after", "document.querySelector('#lock-enabled').checked")], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] is False and v["after"] is False
+    assert any(name in v["row"] for name in KEY_NAMES) and "ещё не открывал" in v["row"], v["row"]
+    assert not problems(r), problems(r)
+
+
+def test_add_key_is_absent_on_a_computer(browser, live):
+    login = "lockpc"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("eval", "found", "['#lock-enabled', '#passkeys', '#passkey-add', '#passkey-password']"
+                          ".map(s => !!document.querySelector(s))")], width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["found"] == [True, True, False, False]
+    assert not problems(r), problems(r)

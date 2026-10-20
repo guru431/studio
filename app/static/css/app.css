@@ -260,10 +260,11 @@ label { font-size: 13px; color: var(--muted); }
 .model-default-label input { accent-color: var(--accent); margin: 0; }
 .model-default-label input:disabled + span { opacity: .45; }
 .model-search { max-width: 320px; }
-.voices { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.voice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.voice b { font-weight: 600; }
-.voice .voice-delete { margin-left: auto; }
+.voices, .passkeys { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.voice, .passkey { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.voice b, .passkey b { font-weight: 600; }
+.voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
+.lock-block > .check { margin-bottom: 12px; }
 @media (max-width: 760px) {
   .settings { grid-template-columns: minmax(0, 1fr); }
   .settings[data-view="nav"] .settings-panel, .settings[data-view="panel"] .settings-nav { display: none; }

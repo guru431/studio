@@ -4,9 +4,12 @@
  * Копия драйвера панели llm_routers (dashboard/tests/cdp_driver.mjs) на 2026-10-19.
  * Зависимостей нет: `fetch` и `WebSocket` встроены в node 22+.
  *
- * Задание: { port, url, width, height, mobile, timeout, steps, probe, writes }.
+ * Задание: { port, url, width, height, mobile, touch, authenticator, timeout, steps, probe, writes }.
  * `writes` — пути, куда вкладке можно писать (запрос не GET); остальную запись
  * браузер обрывает сам. Нет поля — запись не ограничена.
+ * `touch` — касание вместо мыши (`pointer: coarse`); `authenticator` — виртуальный ключ WebAuthn
+ * (internal, проверка пользователя проходит сама). Ключ живёт во вкладке: добавленный в одном
+ * задании в следующем не виден.
  * Шаги исполняются по порядку до первого отказа:
  *   ["idle"]               — страница загружена и запросов в полёте нет;
  *   ["wait", выражение]    — выражение стало истинным;
@@ -178,6 +181,12 @@ async function run(job) {
     await tab.send('Emulation.setDeviceMetricsOverride', {
       width: job.width || 1280, height: job.height || 900, deviceScaleFactor: 1, mobile: !!job.mobile,
     });
+    if (job.touch) await tab.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    if (job.authenticator) {
+      await tab.send('WebAuthn.enable');
+      await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',
+        hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+    }
     const opened = await tab.send('Page.navigate', { url: job.url });
 
     // Пока страница сменяется (вход, переход), выражение вычислить негде: это «ещё нет», а не отказ.

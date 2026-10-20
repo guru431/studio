@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -17,8 +17,9 @@
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
  * переключаются на месте, «Прочего», голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
-import { api, loadMe } from './api.js';
+import { api, loadMe, me } from './api.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
+import { addPasskey, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
@@ -106,6 +107,136 @@ function passwordBlock() {
   return el('section', { class: 'block' }, el('h2', {}, 'Пароль'), el('div', { class: 'grid3' },
     field('Текущий', current, 'current'), field('Новый', fresh, 'new'), field('Повтор нового', repeat, 'repeat')),
   el('div', { class: 'row' }, save, note));
+}
+
+function day(ts) {
+  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+/* «Блокировка»: переключатель (выключить — только с паролем учётки), ключи учётки с «Удалить» и — на
+ * телефоне и планшете — «Добавить Face ID / отпечаток»: пароль и «Далее» готовят варианты, и нажатие
+ * «Добавить» сразу зовёт navigator.credentials.create (Safari без нажатия Face ID не покажет). */
+function lockBlock() {
+  const note = status('screen-lock-status');
+  const enabled = el('input', { type: 'checkbox', id: 'lock-enabled', checked: !!me.screen_lock });
+  const offPassword = el('input', { class: 'input', id: 'lock-off-password', type: 'password',
+    autocomplete: 'current-password', maxlength: '1024' });
+  const off = button('Выключить', { class: 'btn', id: 'lock-off' });
+  const offBox = el('div', { hidden: true }, field('Пароль учётки — чтобы выключить блокировку', offPassword, 'lock-off'),
+    el('div', { class: 'row' }, off));
+  const list = el('ul', { class: 'passkeys', id: 'passkeys' });
+
+  async function setLock(body) {
+    const answer = await api('POST', '/api/me/screen-lock', body);
+    me.screen_lock = answer.screen_lock;
+    enabled.checked = answer.screen_lock;
+  }
+
+  enabled.addEventListener('change', async () => {
+    say(note, '');
+    if (!enabled.checked) {           // выключение — с паролем: переключатель включён, пока не «Выключить»
+      enabled.checked = true;
+      offBox.hidden = false;
+      offPassword.focus();
+      return;
+    }
+    try {
+      await setLock({ enabled: true });
+    } catch (err) {
+      enabled.checked = false;
+      say(note, words(err), 'error');
+    }
+  });
+  off.addEventListener('click', async () => {
+    off.disabled = true;
+    try {
+      await setLock({ enabled: false, password: offPassword.value });
+      offPassword.value = '';
+      offBox.hidden = true;
+      say(note, 'Блокировка выключена', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      off.disabled = false;
+    }
+  });
+
+  async function reload() {
+    try {
+      const { items } = await api('GET', '/api/passkeys');
+      list.replaceChildren(...(items.length ? items.map((k) => {
+        const del = button('Удалить', { class: 'btn btn-sm btn-danger passkey-delete' }, async () => {
+          del.disabled = true;
+          try {
+            await api('DELETE', `/api/passkeys/${k.id}`);
+          } catch (err) {
+            say(note, words(err), 'error');
+          }
+          reload();
+        });
+        return el('li', { class: 'passkey', 'data-id': k.id }, el('b', {}, k.name), el('span', { class: 'muted small' },
+          ` добавлен ${day(k.created)} · ${k.used ? `открывал ${day(k.used)}` : 'ещё не открывал'}`), del);
+      }) : [el('li', { class: 'muted small' }, 'Ключей нет: запертую студию откроет пароль учётки')]));
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+  }
+
+  const adding = [];
+  if (isTouch()) {
+    const password = el('input', { class: 'input', id: 'passkey-password', type: 'password',
+      autocomplete: 'current-password', maxlength: '1024' });
+    const next = button('Далее', { class: 'btn', id: 'passkey-next' });
+    const ask = el('div', {}, field('Пароль учётки — чтобы добавить ключ этого устройства', password, 'passkey'),
+      el('div', { class: 'row' }, next));
+    const create = button('Добавить Face ID / отпечаток этого устройства', { class: 'btn btn-accent', id: 'passkey-add',
+      hidden: true });
+    let options = null;
+    const restart = () => {
+      options = null;
+      create.hidden = true;
+      ask.hidden = false;
+    };
+    next.addEventListener('click', async () => {
+      next.disabled = true;
+      say(note, '');
+      try {
+        options = await passkeyOptions(password.value);
+        password.value = '';
+        ask.hidden = true;
+        create.hidden = false;
+      } catch (err) {
+        say(note, words(err), 'error');
+      } finally {
+        next.disabled = false;
+      }
+    });
+    create.addEventListener('click', async () => {
+      const pending = addPasskey(options);           // create — до первого await (Safari)
+      create.disabled = true;
+      try {
+        await pending;
+        restart();
+        say(note, 'Ключ добавлен', 'ok');
+      } catch (err) {
+        if (err && err.name === 'NotAllowedError') {
+          say(note, 'Устройство не подтвердило — нажмите ещё раз', 'error');      // вызов на сервере ещё жив
+        } else {
+          restart();
+          say(note, err && err.name === 'InvalidStateError' ? 'Ключ этого устройства уже добавлен' : words(err), 'error');
+        }
+      } finally {
+        create.disabled = false;
+      }
+      reload();
+    });
+    adding.push(ask, el('div', { class: 'row' }, create));
+  }
+
+  reload();
+  return el('section', { class: 'block lock-block' }, el('h2', {}, 'Блокировка'),
+    el('label', { class: 'check' }, enabled, 'Запирать на телефоне и планшете через минуту после ухода с экрана'),
+    offBox, list, ...adding, note);
 }
 
 function wipeBlock(host) {
@@ -425,7 +556,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'other') {
-      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(), wipeBlock(host)));
+      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
+        lockBlock(), wipeBlock(host)));
       return;
     }
     const s = sectionOf(shown);
