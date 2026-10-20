@@ -400,7 +400,7 @@ label.chip { cursor: pointer; }
 .chip-wrap { position: relative; }
 .chip-seed input, .chip-num input { width: 10ch; padding: 0; border: 0; outline: none; background: none; color: inherit;
   font: inherit; }
-.chip-num input { width: 2.2ch; text-align: right; }
+.chip-num input { width: 2ch; text-align: center; }
 .chip-seed:focus-within, .chip-num:focus-within { border-color: var(--muted); }
 .chip-menu { position: absolute; z-index: 15; bottom: calc(100% + 6px); left: 0; min-width: 150px; padding: 4px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
@@ -491,6 +491,7 @@ label.chip { cursor: pointer; }
 @media (max-width: 760px) {
   .video-feed .feed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .video-body { padding: 6px 8px 8px; }
+  .video .composer textarea { min-height: calc(2.9em + 4px); }   /* подсказка поля — целиком, в две строки */
 }
 
 /* ---- вход и «Нет связи» ------------------------------------------------------ */
