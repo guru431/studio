@@ -20,6 +20,10 @@
    (как перед описанием); занята она (409) — запрос ждёт карту у шлюза, как и без release.
 5. База — только с цикла событий: в asyncio.to_thread уходят файлы и Pillow, не SQLite.
 6. Журнал — только id задания и модель: промпт, токен, картинки и имена файлов туда не пишутся.
+7. Подключение и модель — из раздела «Фото» (sections.resolve). Внешний сервис (`openai`):
+   `/images/generations` и `/images/edits` без seed и силы, размеры — EXTERNAL_SIZES, ответ — только
+   `b64_json` (по ссылке из ответа сервер не ходит). Кисть, «Описать», «Освободить карту» и release —
+   только у шлюза srvllm.
 """
 import asyncio
 import base64
@@ -71,6 +75,8 @@ SETTLE_SEC = 90
 MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
 #: Размеры: портрет, квадрат, альбом — около мегапикселя, кратны 16 (обе модели их держат).
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
+#: те же форматы у внешнего сервиса (размеры gpt-image-1); «original» — без size
+EXTERNAL_SIZES = {"832x1216": "1024x1536", "1024x1024": "1024x1024", "1216x832": "1536x1024"}
 DESCRIPTION_MODEL = "gemma4-abl"
 DESCRIPTION_PROMPT = """Describe this image as an exceptionally detailed, generation-ready English
 prompt for recreating a visually similar image. Return only the description, without an
@@ -288,6 +294,8 @@ async def create_job(request: Request):
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": "проверьте промпт, модель, размер, seed и силу изменения"}) from None
     conn, model = sections.resolve(uid, "photo", body.connection_id, body.model)
+    if mask is not None and conn.kind != "srvllm":
+        raise HTTPException(422, {"code": "brush", "message": "правка кистью — только через шлюз srvllm"})
     # Parsing uploads yields to other requests: recheck before inserting the job.
     ensure_idle(uid)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
@@ -315,7 +323,7 @@ async def create_job(request: Request):
     job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=model, prompt=body.prompt, size=size,
               seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
               strength=body.strength, mask=mask, source_media_id=source_id, mask_media_id=mask_id)
-    strength = body.strength if image is not None else None
+    strength = body.strength if image is not None and conn.kind == "srvllm" else None
     chain = chains.of_source(uid, source_id) + [chains.image_step(
         image_id=job.id, kind="brush" if mask_id else job.kind, model=job.model, prompt=job.prompt, size=size,
         seed=seed, strength=strength, created=now)]
@@ -483,7 +491,39 @@ async def _release_others(job: Job) -> None:
             log.info("задание %s: release другой модели — код %s", job.id[:8], r.status_code)
 
 
+async def _generate_external(job: Job) -> "tuple[bytes, int | None]":
+    """Внешний сервис OpenAI-стиля (п. 7 шапки)."""
+    payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "response_format": "b64_json"}
+    if job.size in EXTERNAL_SIZES:               # «original» — размер фото, у сервиса его нет
+        payload["size"] = EXTERNAL_SIZES[job.size]
+    url = f"{job.conn.base_url}/images/{'edits' if job.image is not None else 'generations'}"
+    try:
+        if job.image is not None:
+            r = await upstream.request(job.conn, "POST", url, timeout=GENERATE_TIMEOUT_SEC,
+                                       data={k: str(v) for k, v in payload.items()},
+                                       files={"image": ("input.png", job.image, "image/png")})
+        else:
+            r = await upstream.request(job.conn, "POST", url, timeout=GENERATE_TIMEOUT_SEC, json=payload)
+    except httpx.TimeoutException:
+        raise JobError("timeout", f"сервис не ответил за {GENERATE_TIMEOUT_SEC} с")
+    except httpx.HTTPError as e:
+        raise JobError("gateway", f"сервис недоступен: {type(e).__name__}")
+    except upstream.UpstreamRefused:
+        raise _refused(job.conn) from None
+    if r.status_code != 200:
+        raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
+    body = upstream.json_body(r)
+    data = body.get("data")
+    first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+    if "b64_json" not in first and "url" in first:
+        raise JobError("url", "сервис вернул ссылку, а не картинку")
+    png, _seed = _png(body)
+    return png, None
+
+
 async def generate(job: Job) -> "tuple[bytes, int | None]":
+    if job.conn.kind != "srvllm":
+        return await _generate_external(job)
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
     await _release_others(job)
@@ -556,6 +596,8 @@ async def release_after_cancel(job: Job, *, cancelled=True) -> str:
     считает запрос (свой или чужой): повтор с паузой до CANCEL_RELEASE_SEC."""
     deadline = clock.NOW() + CANCEL_RELEASE_SEC
     prefix = "отменено" if cancelled else "описание готово"
+    if job.conn.kind != "srvllm":                 # у внешнего сервиса карты студии нет
+        return prefix
     while True:
         try:
             r = await release_description(job.conn) if job.kind == "description" else await release(job.conn, job.gateway_model)

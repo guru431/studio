@@ -17,6 +17,7 @@ import forms
 import images
 import media
 import state
+import upstream
 from conftest import T0, add_connection, add_gateway, login, make_user, signin
 from fakes import PNG_REAL, TOKEN
 from image_upload import decode_form, normalize_image
@@ -911,3 +912,60 @@ def test_photo_without_a_checked_model_points_to_settings(studio):
     studio.c.delete(f"/api/sections/photo/links/{cid}")
     r = start(studio)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"
+
+
+def cloud_photo(studio, monkeypatch):
+    """Внешний сервис картинок по имени в списке: адрес имени подменён публичным."""
+    state.DB.execute("UPDATE settings SET value = '[\"10.77.1.15:4000\", \"img.cloud.test:443\"]' WHERE key = 'allowlist'")
+    async def resolve(host, port): return ["93.184.216.34"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(studio, base_url="https://img.cloud.test/v1", token="cloud-key-1", sections=["photo"])
+    studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["gpt-image-1"]})
+    return cid
+
+
+def test_external_photo_generation_takes_b64_only(studio, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    seen = []
+    async def reply(q):
+        seen.append(q)
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_REAL).decode()}]})
+    studio.gw.on["/v1/images/generations"] = reply
+    releases = len(studio.gw.releases)
+    job = wait_state(studio, start(studio, model="gpt-image-1", connection_id=cid, size="portrait").json()["id"], {"done"})
+    body = json.loads(seen[0].content)
+    assert body == {"model": "gpt-image-1", "prompt": PROMPT, "n": 1, "size": "1024x1536", "response_format": "b64_json"}
+    assert seen[0].headers["host"] == "img.cloud.test" and seen[0].headers["authorization"] == "Bearer cloud-key-1"
+    assert job["media_id"] and len(studio.gw.releases) == releases          # release — только шлюзу
+
+
+def test_external_photo_edit_sends_the_picture_without_strength(studio, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    seen = []
+    async def reply(q):
+        seen.append(q)
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_REAL).decode()}]})
+    studio.gw.on["/v1/images/edits"] = reply
+    r = studio.c.post("/api/images", data={"prompt": "ярче", "size": "original", "model": "gpt-image-1",
+                                           "connection_id": str(cid)}, files={"image": ("p.png", photo(), "image/png")})
+    wait_state(studio, r.json()["id"], {"done"})
+    fields, image = decode_form(seen[0].content, seen[0].headers["content-type"])
+    assert fields == {"model": "gpt-image-1", "prompt": "ярче", "n": "1", "response_format": "b64_json"} and image
+
+
+def test_external_photo_url_answer_is_an_error_and_not_fetched(studio, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    async def reply(q):
+        return httpx.Response(200, json={"data": [{"url": "http://10.0.0.1/x.png"}]})
+    studio.gw.on["/v1/images/generations"] = reply
+    job = wait_state(studio, start(studio, model="gpt-image-1", connection_id=cid).json()["id"], {"error"})
+    assert "ссылку" in job["detail"] and not any(q.url.host == "10.0.0.1" for q in studio.gw.requests)
+
+
+def test_brush_is_srvllm_only(studio, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    mask = Image.new("L", (48, 32), 0); mask.paste(255, (0, 0, 8, 8))
+    r = studio.c.post("/api/images", data={"prompt": "x", "size": "original", "model": "gpt-image-1", "connection_id": str(cid)},
+                      files={"image": ("p.png", photo(), "image/png"), "mask": ("m.png", png(mask), "image/png")})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "brush"
+    assert not state.DB.execute("SELECT count(*) FROM media").fetchone()[0]
