@@ -176,6 +176,48 @@ label { font-size: 13px; color: var(--muted); }
 .dialog p { margin: 0 0 12px; }
 .dialog .error { margin: 4px 0 0; font-size: 13px; }
 
+/* раздел со списком слева и выбранным справа (расшифровка, озвучка); на телефоне список выезжает */
+.split { flex: 1; min-height: 0; display: flex; }
+.split-aside { width: 280px; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 12px; overflow-y: auto;
+  background: var(--side); border-right: 1px solid var(--border); }
+.split-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.split-backdrop, .icon-btn.split-toggle { display: none; }
+.tr-add { justify-content: flex-start; }
+.tr-list { display: flex; flex-direction: column; gap: 2px; }
+.tr-group { margin: 10px 8px 2px; color: var(--muted); font-size: 12px; }
+.tr-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 7px 9px; border: 0;
+  border-radius: 8px; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.tr-item:hover { background: var(--panel-2); }
+.tr-item[aria-current="true"] { background: var(--panel); }
+.tr-name { max-width: 100%; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-state { color: var(--muted); font-size: 12px; }
+.tr-view { width: 100%; max-width: 820px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.tr-error { margin: 8px 16px 0; }
+.tr-error:empty { display: none; }
+.tr-meta { margin: 0; }
+.tr-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-start; }
+.tr-download-wrap { position: relative; }
+.tr-formats { position: absolute; z-index: 12; top: calc(100% + 4px); left: 0; display: flex; flex-direction: column; gap: 4px;
+  min-width: 170px; padding: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); }
+.tr-audio { width: 100%; }
+.tr-busy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tr-busy p { margin: 0; }
+.tr-turns { display: flex; flex-direction: column; gap: 12px; }
+.tr-turn p { margin: 0; }
+.tr-who { color: var(--muted); font-size: 13px; font-weight: 600; }
+.tr-text { overflow-wrap: anywhere; line-height: 1.5; }
+@media (max-width: 760px) {
+  .split-aside { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw);
+    padding-top: calc(12px + env(safe-area-inset-top, 0px)); transform: translateX(-100%); visibility: hidden;
+    transition: transform .2s ease, visibility 0s linear .2s; }
+  .split.panel-open .split-aside { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow); }
+  .split-backdrop { display: block; position: fixed; z-index: 24; inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
+  .icon-btn.split-toggle { display: inline-grid; margin-left: -6px; }
+  .split-main > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }
+}
+@media (prefers-reduced-motion: reduce) { .split-aside { transition: none !important; } }
+
 /* голосовой ввод: кнопка у поля промпта, во время записи — красная с таймером */
 .mic { position: relative; flex: none; }
 .mic.on { color: #fff; background: #d64545; border-radius: 999px; width: auto; padding: 0 10px; gap: 6px; display: inline-flex; align-items: center; }

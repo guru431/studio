@@ -1790,3 +1790,56 @@ def test_mic_without_permission_says_so(browser, live):
         ("eval", "words", "document.querySelector('#photo-composer .mic-error').textContent")])
     assert not r.get("failed"), r
     assert "разрешения на микрофон" in r["values"]["words"]
+
+
+# ---- расшифровка ----------------------------------------------------------------
+
+def wav_of(seconds=1.0, rate=16000) -> bytes:
+    import wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(rate * seconds))
+    return out.getvalue()
+
+
+def put_audio(selector, data, name="Звонок.wav", mime="audio/wav"):
+    """Запись в поле файла, как из окна выбора, и событие change."""
+    b64 = base64.b64encode(data).decode()
+    return ("eval", "file", f"""(() => {{ const bytes = Uint8Array.from(atob('{b64}'), c => c.charCodeAt(0));
+      const dt = new DataTransfer(); dt.items.add(new File([bytes], '{name}', {{ type: '{mime}' }}));
+      const input = document.querySelector('{selector}'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.files.length; }})()""")
+
+
+COPY_SPY = "(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; }; return true; })()"
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
+    login = f"tr{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("eval", "who", "[...document.querySelectorAll('.tr-view .tr-who')].map(e => e.textContent)"),
+        ("eval", "meta", "document.querySelector('.tr-view .tr-meta').textContent"),
+        ("eval", "audio", "document.querySelector('.tr-view audio.tr-audio').getAttribute('src').startsWith('/api/media/')"),
+        ("eval", "item", "document.querySelector('.tr-item[data-state=done]').textContent"),
+        ("eval", "copy", COPY_SPY), ("click", "#tr-copy"), ("wait", "window.copied"),
+        ("eval", "copied", "window.copied"),
+        ("eval", "spy", CLICKS), ("click", "#tr-download"), ("click", ".tr-formats [data-format=docx]"),
+        ("wait", "window.clicked.length === 1"), ("eval", "clicked", "window.clicked[0]"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["who"] == ["Собеседник 1 · 00:00", "Собеседник 2 · 00:03"]
+    assert "собеседников: 2" in v["meta"] and v["audio"] and "Звонок.wav" in v["item"]
+    assert v["copied"].startswith("Собеседник 1 · 00:00\nЗдравствуйте.")
+    assert v["clicked"][0].endswith("/export?format=docx") and v["clicked"][1]
+    assert not v["overflow"]
+    assert not problems(r), problems(r)
