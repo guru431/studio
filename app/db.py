@@ -1,13 +1,23 @@
-"""Соединение SQLite и схема базы (версия 3).
+"""Соединение SQLite и схема базы (версия 4).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 3
+VERSION = 4
 
-SCHEMA = """
+#: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
+SECTION_TABLES = """
+CREATE TABLE section_links(user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, section TEXT NOT NULL,
+             connection_id INTEGER NOT NULL REFERENCES connections ON DELETE CASCADE, models TEXT NOT NULL,
+             created REAL NOT NULL, PRIMARY KEY (user_id, section, connection_id));
+CREATE TABLE section_defaults(user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, section TEXT NOT NULL,
+             connection_id INTEGER NOT NULL REFERENCES connections ON DELETE CASCADE, model TEXT NOT NULL,
+             PRIMARY KEY (user_id, section));
+"""
+
+SCHEMA = SECTION_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
@@ -56,6 +66,35 @@ STEPS = {
     2: "ALTER TABLE images ADD COLUMN mask_media_id TEXT;\nALTER TABLE messages ADD COLUMN alive_at REAL;",
     # цепочка промптов — снимок шагов JSON (chains.py); у старых строк NULL — собирается по ссылкам
     3: "ALTER TABLE images ADD COLUMN chain TEXT;\nALTER TABLE videos ADD COLUMN chain TEXT;",
+    # разделы: srvllm — во всех шести с встроенным перечнем (чат — с моделью пользователя, если это его
+    # подключение по умолчанию), openai — в чате; умолчание — первая отмеченная модель подключения
+    # пользователя по умолчанию (чат) или наименьшего id. Прежние столбцы остаются для отката.
+    4: SECTION_TABLES + """
+INSERT INTO section_links(user_id, section, connection_id, models, created)
+SELECT c.user_id, s.section, c.id,
+       CASE WHEN s.section = 'chat'
+            THEN json_array(COALESCE(CASE WHEN u.default_connection_id = c.id THEN u.default_model END, 'local-gemma-abl'))
+            ELSE s.models END, c.created
+  FROM connections c JOIN users u ON u.id = c.user_id
+  JOIN (SELECT 'chat' AS section, NULL AS models UNION ALL SELECT 'photo', '["lustify","flux"]'
+        UNION ALL SELECT 'video', '["wan"]' UNION ALL SELECT 'transcribe', '["whisperx"]'
+        UNION ALL SELECT 'speech', '["qwen3-tts"]' UNION ALL SELECT 'dictation', '["gigaam","whisperx"]') s
+ WHERE c.kind = 'srvllm';
+INSERT INTO section_links(user_id, section, connection_id, models, created)
+SELECT c.user_id, 'chat', c.id,
+       CASE WHEN u.default_connection_id = c.id AND u.default_model IS NOT NULL THEN json_array(u.default_model)
+            ELSE '[]' END, c.created
+  FROM connections c JOIN users u ON u.id = c.user_id
+ WHERE c.kind = 'openai' AND EXISTS (SELECT 1 FROM json_each(c.sections) WHERE value = 'chat');
+INSERT INTO section_defaults(user_id, section, connection_id, model)
+SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FROM section_links l
+ WHERE json_array_length(l.models) > 0
+   AND l.connection_id = COALESCE(
+       (SELECT u.default_connection_id FROM users u WHERE u.id = l.user_id AND l.section = 'chat'
+           AND EXISTS (SELECT 1 FROM section_links d WHERE d.user_id = u.id AND d.section = 'chat'
+                          AND d.connection_id = u.default_connection_id AND json_array_length(d.models) > 0)),
+       (SELECT MIN(x.connection_id) FROM section_links x WHERE x.user_id = l.user_id AND x.section = l.section
+           AND json_array_length(x.models) > 0));""",
 }
 
 

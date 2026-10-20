@@ -1,8 +1,9 @@
 """Профиль (app/profile.py), панель администратора (app/admin.py), удаление истории (app/history.py)."""
 import auth
 import clock
+import sections
 import state
-from conftest import add_gateway, login, make_user, signin
+from conftest import add_connection, add_gateway, login, make_user, signin
 
 
 def add_history(s, env, uid, tag="тайна"):
@@ -54,7 +55,7 @@ def test_me_carries_csrf_and_profile(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     me = studio.c.get("/api/me").json()
     assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
-    assert me["capabilities"] == {"chat": False, "photo": False, "video": False}
+    assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False)
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "default_connection_id", "default_model",
                        "csrf", "capabilities"}
 
@@ -68,19 +69,15 @@ def test_theme_is_validated(studio):
     assert studio.c.get("/api/me").json()["theme"] == "dark"
 
 
-def test_profile_defaults_take_only_ones_own_connection(studio):
-    uid = make_user(studio, "owner"); other = make_user(studio, "bob"); signin(studio, "owner")
-    ins = ("INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
-           " VALUES (?, 'c', 'openai', 'https://cloud.test/v1', x'00', '[\"chat\"]', 0)")
-    mine, theirs = state.DB.execute(ins, (uid,)).lastrowid, state.DB.execute(ins, (other,)).lastrowid
-    r = studio.c.patch("/api/me", json={"default_connection_id": theirs})
-    assert r.status_code == 422 and code(r) == "connection"
-    me = studio.c.patch("/api/me", json={"default_connection_id": mine, "default_model": "gemma"}).json()
-    assert me["default_connection_id"] == mine and me["default_model"] == "gemma"
-    me = studio.c.patch("/api/me", json={"theme": "light"}).json()       # чего нет в запросе — не трогается
-    assert me["default_connection_id"] == mine and me["default_model"] == "gemma"
-    me = studio.c.patch("/api/me", json={"default_connection_id": None, "default_model": None}).json()
-    assert me["default_connection_id"] is None and me["default_model"] is None
+def test_chat_default_comes_from_the_chat_section(studio):
+    """Умолчание чата в /api/me — из раздела «Чат»; PATCH /api/me его больше не правит."""
+    cid = add_connection(studio, chat_models=("gemma", "gemma-2"))
+    me = studio.c.get("/api/me").json()
+    assert me["default_connection_id"] == cid and me["default_model"] == "gemma"
+    uid = me["id"]
+    sections.set_default(uid, "chat", cid, "gemma-2")
+    me = studio.c.patch("/api/me", json={"theme": "light", "default_connection_id": None, "default_model": "x"}).json()
+    assert me["default_connection_id"] == cid and me["default_model"] == "gemma-2" and me["theme"] == "light"
 
 
 def test_password_change_needs_current_and_ends_other_sessions(studio):

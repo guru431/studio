@@ -37,6 +37,7 @@ import connections
 import documents
 import manage
 import media
+import sections
 import state
 import upstream
 from connections import Connection
@@ -119,12 +120,11 @@ def _chat_connection(user_id: int, conn_id: int) -> Connection:
 
 
 def _default_connection(user) -> Connection:
-    """Подключение чата из профиля, иначе первое с разделом «чат»."""
-    chats = [c for c in connections.list_for(user.id) if "chat" in c.sections]
-    conn = next((c for c in chats if c.id == user.default_connection_id), chats[0] if chats else None)
-    if conn is None:
-        raise HTTPException(409, {"code": "no_connection", "message": "добавьте подключение для чата в профиле"})
-    return conn
+    """Подключение умолчания раздела «Чат»."""
+    chosen = sections.default(user.id, "chat")
+    if chosen is None:
+        raise HTTPException(409, {"code": "no_connection", "message": "выберите модель в настройках раздела «Чат»"})
+    return chosen[0]
 
 
 def _attachments(chat_id: str) -> dict[str, list]:

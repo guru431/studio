@@ -116,19 +116,26 @@ def signin(s, login_name) -> str:
 
 
 def add_connection(s, kind="openai", base_url="https://cloud.test/v1", token="cloud-key", sections=None,
-                   name=None) -> int:
+                   name=None, chat_models=("local-gemma-abl",)) -> int:
     """Подключение текущему пользователю через POST /api/connections (без входа — заводит
-    администратора «owner» и входит им). sections=None — все разделы вида."""
+    администратора «owner» и входит им). sections=None — srvllm во всех разделах, openai — в чате;
+    у openai в чате отмечаются `chat_models` (при подключении у него не отмечено ничего)."""
     import auth
     import connections
+    import sections as sections_
+    import state
     if auth.CSRF_HEADER not in s.c.headers:
         make_user(s, "owner", is_admin=True)
         signin(s, "owner")
-    body = {"name": name or kind, "kind": kind, "base_url": base_url, "token": token,
-            "sections": sorted(sections if sections is not None else connections.KINDS[kind])}
+    chosen = sections if sections is not None else connections.KINDS[kind] if kind == "srvllm" else ["chat"]
+    body = {"name": name or kind, "kind": kind, "base_url": base_url, "token": token, "sections": sorted(chosen)}
     r = s.c.post("/api/connections", json=body)
     assert r.status_code == 201, r.text
-    return r.json()["id"]
+    cid = r.json()["id"]
+    if kind == "openai" and "chat" in chosen and chat_models:
+        uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (cid,)).fetchone()[0]
+        sections_.set_models(uid, "chat", cid, list(chat_models))
+    return cid
 
 
 def add_gateway(s) -> int:

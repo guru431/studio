@@ -12,6 +12,8 @@
 - Через сервер путь IP-адреса фиксирован: srvllm — без пути, openai — без пути или `/v1`; у имени
   из списка (публичный https-хост) путь любой.
 - srvllm — всегда через сервер: вне списка такое подключение не сохраняется.
+- Разделы подключения — его связи в `section_links` (sections.py); поле `sections` POST и PATCH
+  ставит связи ровно на эти разделы. Виды по разделам — KINDS.
 - Журнал — только id: имена, адреса и токены туда не пишутся.
 """
 import json
@@ -25,11 +27,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import clock
+import sections
 import security
 import state
 import upstream
 
-KINDS = {"openai": {"chat"}, "srvllm": {"chat", "photo", "video"}}
+KINDS = {"openai": {"chat", "photo", "transcribe", "speech", "dictation"},
+         "srvllm": {"chat", "photo", "video", "transcribe", "speech", "dictation"}}
 NAME_MAX = 64
 URL_MAX = 2048
 TOKEN_RE = r"[\x20-\x7e]{1,512}"
@@ -57,7 +61,7 @@ class ConnIn(BaseModel):
     kind: str = Field(max_length=16)
     base_url: str = Field(max_length=URL_MAX)
     token: str = Field(max_length=4096)
-    sections: list[str] = Field(max_length=8)
+    sections: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ConnPatch(BaseModel):
@@ -74,11 +78,12 @@ def _gone() -> HTTPException:
 
 def _from_row(row) -> Connection:
     return Connection(id=row["id"], user_id=row["user_id"], name=row["name"], kind=row["kind"],
-                      base_url=row["base_url"], sections=frozenset(json.loads(row["sections"])),
+                      base_url=row["base_url"], sections=frozenset(json.loads(row["linked"])),
                       proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]))
 
 
-_COLS = "id, user_id, name, kind, base_url, sections, server_only"
+_COLS = ("id, user_id, name, kind, base_url, server_only,"
+         " (SELECT json_group_array(l.section) FROM section_links l WHERE l.connection_id = connections.id) AS linked")
 
 
 def list_for(user_id: int) -> list[Connection]:
@@ -127,12 +132,6 @@ def video_connection(user_id: int) -> Connection | None:
     return _section_connection(user_id, "video")
 
 
-def capabilities(user_id: int) -> dict[str, bool]:
-    return {"chat": any("chat" in c.sections for c in list_for(user_id)),
-            "photo": photo_connection(user_id) is not None,
-            "video": video_connection(user_id) is not None}
-
-
 def _direct_ok(base_url: str) -> bool:
     """Прямое подключение браузер откроет: https или петля."""
     url = httpx.URL(base_url)
@@ -143,7 +142,8 @@ def out(conn: Connection) -> dict:
     secret = token(conn)
     hint = "…" + secret[-4:] if len(secret) > 8 else "…"   # короткий токен по хвосту угадывается целиком
     return {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
-            "sections": sorted(conn.sections), "proxied": conn.proxied, "token_hint": hint}
+            "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
+            "token_hint": hint}
 
 
 # ---- проверка при сохранении ---------------------------------------------------
@@ -190,25 +190,26 @@ def check_base_url(kind: str, text: str) -> str:
     return raw
 
 
-def check(kind: str, base_url: str, sections: list[str]) -> tuple[str, list[str]]:
+def check(kind: str, base_url: str, wanted: list[str]) -> tuple[str, list[str]]:
     if kind not in KINDS:
         raise _bad("kind", "вид подключения — openai или srvllm")
-    chosen = set(sections)
-    if not chosen or not chosen <= KINDS[kind]:
-        raise _bad("sections", "разделы — " + ", ".join(sorted(KINDS[kind])) + ", хотя бы один")
-    return check_base_url(kind, base_url), sorted(chosen)
+    if not set(wanted) <= KINDS[kind]:
+        raise _bad("sections", "разделы — " + ", ".join(s for s in sections.SECTIONS if s in KINDS[kind]))
+    return check_base_url(kind, base_url), [s for s in sections.SECTIONS if s in wanted]
 
 
 # ---- общие действия (профиль и панель администратора) ------------------------
 
 def create(user_id: int, body: ConnIn) -> dict:
     name, secret = check_name(body.name), check_token(body.token)
-    base_url, sections = check(body.kind, body.base_url, body.sections)
-    cid = state.DB.execute(
-        "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (user_id, name, body.kind, base_url, security.encrypt(secret), json.dumps(sections), clock.NOW(),
-         int(upstream.is_allowed(base_url)))).lastrowid
+    base_url, wanted = check(body.kind, body.base_url, body.sections)
+    with sections.transaction():               # подключение — вместе со связями или никак
+        cid = state.DB.execute(
+            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
+            " VALUES (?, ?, ?, ?, ?, '[]', ?, ?)",
+            (user_id, name, body.kind, base_url, security.encrypt(secret), clock.NOW(),
+             int(upstream.is_allowed(base_url)))).lastrowid
+        sections.set_sections(user_id, cid, wanted)
     log.info("пользователь %d: подключение %d создано", user_id, cid)
     return out(get(user_id, cid))
 
@@ -227,10 +228,13 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
         changes["name"] = check_name(body.name)
     kind = body.kind if "kind" in sent and body.kind is not None else conn.kind
     base_url = body.base_url if "base_url" in sent and body.base_url is not None else conn.base_url
-    sections = body.sections if "sections" in sent and body.sections is not None else list(conn.sections)
-    changes["base_url"], chosen = check(kind, base_url, sections)    # вид, адрес и разделы — вместе
-    changes["kind"], changes["sections"] = kind, json.dumps(chosen)
+    wanted = body.sections if "sections" in sent and body.sections is not None else list(conn.sections)
+    changes["base_url"], chosen = check(kind, base_url, wanted)      # вид, адрес и разделы — вместе
+    changes["kind"] = kind
     proxied = upstream.is_allowed(changes["base_url"])
+    if not proxied and set(chosen) & sections.SERVER_ONLY:
+        raise _bad("server", "адрес вне списка разрешённых — уберите подключение из разделов, кроме чата,"
+                             " или попросите администратора внести адрес")
     moved = (kind != conn.kind or proxied != conn.proxied
              or _address(changes["base_url"]) != _address(conn.base_url))
     if "token" in sent and body.token is not None:
@@ -239,22 +243,19 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     elif moved:                                  # прежний ключ — только прежнему адресу
         raise _bad("token", "новый адрес — введите токен заново")
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
-    state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id = ?", (*changes.values(), conn_id, user_id))
+    with sections.transaction():
+        state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id = ?",
+                         (*changes.values(), conn_id, user_id))
+        sections.set_sections(user_id, conn_id, chosen)
     log.info("пользователь %d: подключение %d изменено", user_id, conn_id)
     return out(get(user_id, conn_id))
 
 
 def delete(user_id: int, conn_id: int) -> None:
     get(user_id, conn_id)
-    state.DB.execute("BEGIN")
-    try:
+    with sections.transaction():               # связи и умолчания — каскадом, затем порядок в разделах
         state.DB.execute("DELETE FROM connections WHERE id = ? AND user_id = ?", (conn_id, user_id))
-        state.DB.execute("UPDATE users SET default_connection_id = NULL WHERE id = ? AND default_connection_id = ?",
-                         (user_id, conn_id))
-        state.DB.execute("COMMIT")
-    except BaseException:
-        state.DB.execute("ROLLBACK")
-        raise
+        sections.settle_all(user_id)
     log.info("пользователь %d: подключение %d удалено", user_id, conn_id)
 
 

@@ -1,5 +1,5 @@
-"""Профиль у каждого: `/api/me` (с токеном CSRF сессии), тема и умолчания чата, смена пароля,
-удаление всей своей истории (спека, раздел 7.9)."""
+"""Профиль у каждого: `/api/me` (с токеном CSRF сессии, готовностью разделов и умолчанием чата из
+sections.py), тема, смена пароля, удаление всей своей истории (спека, раздел 7.9)."""
 import asyncio
 import logging
 
@@ -9,13 +9,12 @@ from pydantic import BaseModel, Field
 
 import auth
 import clock
-import connections
 import history
+import sections
 import security
 import state
 
 THEMES = ("auto", "dark", "light")
-MODEL_MAX = 200
 PASSWORD_MAX = 1024
 
 log = logging.getLogger("studio")
@@ -24,8 +23,6 @@ router = APIRouter(prefix="/api")
 
 class MePatch(BaseModel):
     theme: str | None = None
-    default_connection_id: int | None = None
-    default_model: str | None = Field(None, max_length=MODEL_MAX)
 
 
 class PasswordChange(BaseModel):
@@ -39,13 +36,14 @@ def check_password(password: str) -> None:
 
 
 def _me(request: Request) -> dict:
-    """Из базы, а не из request.state: после PATCH там прежние значения."""
+    """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
-    row = state.DB.execute("SELECT id, login, name, is_admin, theme, default_connection_id, default_model"
-                           " FROM users WHERE id = ?", (uid,)).fetchone()
+    row = state.DB.execute("SELECT id, login, name, is_admin, theme FROM users WHERE id = ?", (uid,)).fetchone()
+    chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
-            "theme": row["theme"], "default_connection_id": row["default_connection_id"],
-            "default_model": row["default_model"], "csrf": request.state.csrf, "capabilities": connections.capabilities(uid)}
+            "theme": row["theme"], "default_connection_id": chat[0].id if chat else None,
+            "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
+            "capabilities": sections.capabilities(uid)}
 
 
 @router.get("/me")
@@ -62,14 +60,6 @@ async def patch_me(body: MePatch, request: Request):
         if body.theme not in THEMES:
             raise HTTPException(422, {"code": "theme", "message": "тема — auto, dark или light"})
         changes["theme"] = body.theme
-    if "default_connection_id" in sent:
-        cid = body.default_connection_id
-        if cid is not None and state.DB.execute("SELECT 1 FROM connections WHERE id = ? AND user_id = ?",
-                                                (cid, uid)).fetchone() is None:
-            raise HTTPException(422, {"code": "connection", "message": "такого подключения в профиле нет"})
-        changes["default_connection_id"] = cid
-    if "default_model" in sent:
-        changes["default_model"] = body.default_model or None
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))

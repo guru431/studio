@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet
 import connections
 import db
 import manage
+import sections
 import state
 import upstream
 from conftest import add_connection, add_gateway, make_user, signin
@@ -190,7 +191,7 @@ def test_connection_out_carries_only_a_hint(studio):
                       "sections": ["chat"], "proxied": False, "token_hint": "…4567"}]
     cid = add_gateway(studio)
     gw = studio.c.get("/api/connections").json()["items"][1]
-    assert gw["id"] == cid and gw["proxied"] and gw["sections"] == ["chat", "photo", "video"]
+    assert gw["id"] == cid and gw["proxied"] and gw["sections"] == list(sections.SECTIONS)
 
 
 def test_direct_connection_needs_https_except_localhost(studio):
@@ -218,14 +219,15 @@ def test_srvllm_kind_must_be_on_the_list(studio):
     for url in ["https://cloud.test", "http://10.77.1.15:40000", "http://localhost:4000"]:
         r = post(studio, kind="srvllm", base_url=url, sections=["photo"])
         assert r.status_code == 422 and code(r) == "srvllm", url
-    for kind, sections in [("openai", ["photo"]), ("openai", []), ("srvllm", ["chat", "music"]), ("nope", ["chat"])]:
-        r = post(studio, kind=kind, base_url=GW, sections=sections)
-        assert r.status_code == 422 and code(r) in ("sections", "kind"), (kind, sections)
+    for kind, wanted in [("openai", ["video"]), ("srvllm", ["chat", "music"]), ("nope", ["chat"])]:
+        r = post(studio, kind=kind, base_url=GW, sections=wanted)
+        assert r.status_code == 422 and code(r) in ("sections", "kind"), (kind, wanted)
+    assert post(studio, kind="openai", base_url=GW, sections=[]).status_code == 201     # без разделов — можно
     cid = add_gateway(studio)
     r = studio.c.patch(f"/api/connections/{cid}", json={"base_url": "https://cloud.test"})
     assert r.status_code == 422 and code(r) == "srvllm"
     assert conn_of(cid).base_url == GW
-    r = studio.c.patch(f"/api/connections/{cid}", json={"kind": "openai"})   # разделы фото/видео — не для openai
+    r = studio.c.patch(f"/api/connections/{cid}", json={"kind": "openai"})   # видео — не для openai
     assert r.status_code == 422 and code(r) == "sections"
 
 
@@ -333,7 +335,7 @@ def test_token_is_encrypted_at_rest(studio):
 
 def test_delete_clears_the_profile_default(studio):
     cid = add_connection(studio)
-    studio.c.patch("/api/me", json={"default_connection_id": cid})
+    assert studio.c.get("/api/me").json()["default_connection_id"] == cid
     assert studio.c.delete(f"/api/connections/{cid}").status_code == 204
     assert studio.c.get("/api/connections").json() == {"items": []}
     assert studio.c.get("/api/me").json()["default_connection_id"] is None
@@ -342,13 +344,14 @@ def test_delete_clears_the_profile_default(studio):
 def test_capabilities_follow_connections(studio):
     make_user(studio, "owner"); signin(studio, "owner")
     caps = lambda: studio.c.get("/api/me").json()["capabilities"]   # noqa: E731
-    assert caps() == {"chat": False, "photo": False, "video": False}
+    none = dict.fromkeys(sections.SECTIONS, False)
+    assert caps() == none
     cid = add_connection(studio, kind="srvllm", base_url=GW, sections=["chat", "photo"])
-    assert caps() == {"chat": True, "photo": True, "video": False}
+    assert caps() == none | {"chat": True, "photo": True}
     uid = conn_of(cid).user_id
     assert connections.photo_connection(uid).id == cid and connections.video_connection(uid) is None
     state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")   # не через сервер — не фото
-    assert caps() == {"chat": True, "photo": False, "video": False}
+    assert caps() == none | {"chat": True}
 
 
 def test_urls_of_each_kind():

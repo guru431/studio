@@ -16,7 +16,6 @@ backup — согласованная копия SQLite (`Connection.backup`, с
 (дата — UTC). Хранятся BACKUP_KEEP последних копий; временный файл на шаре при отказе убирается,
 забытые прежними сбоями — вместе со старыми копиями.
 """
-import json
 import os
 import re
 import shutil
@@ -29,6 +28,7 @@ import clock
 import config
 import connections
 import db
+import sections
 import security
 import state
 
@@ -83,26 +83,25 @@ def create_admin(values: dict[str, str]) -> int:
 
 
 def _ensure_gateway(conn, login: str, key: str) -> None:
+    """Подключение «srvllm» во всех разделах (чат — с DEFAULT_MODEL); связи ставит sections.py на
+    этом же соединении (state.DB — на время вызова)."""
     uid = conn.execute("SELECT id FROM users WHERE login = ?", (login,)).fetchone()["id"]
     row = conn.execute("SELECT id FROM connections WHERE user_id = ? AND kind = 'srvllm' AND name = ?",
                        (uid, GATEWAY_NAME)).fetchone()
-    conn.execute("BEGIN")
+    before, state.DB = state.DB, conn
     try:
-        if row is None:
-            cid = conn.execute(
-                "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
-                " VALUES (?, ?, 'srvllm', ?, ?, ?, ?, 1)",
-                (uid, GATEWAY_NAME, GATEWAY_URL, security.encrypt(key),
-                 json.dumps(sorted(connections.KINDS["srvllm"])), clock.NOW())).lastrowid
-            conn.execute("UPDATE users SET default_connection_id = ?, default_model = ? WHERE id = ?",
-                         (cid, DEFAULT_MODEL, uid))
-        else:
-            conn.execute("UPDATE connections SET token_enc = ?, server_only = 1 WHERE id = ?",
-                         (security.encrypt(key), row["id"]))
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+        with sections.transaction():
+            if row is None:
+                cid = conn.execute(
+                    "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
+                    " VALUES (?, ?, 'srvllm', ?, ?, '[]', ?, 1)",
+                    (uid, GATEWAY_NAME, GATEWAY_URL, security.encrypt(key), clock.NOW())).lastrowid
+                sections.set_sections(uid, cid, list(sections.SECTIONS))
+            else:
+                conn.execute("UPDATE connections SET token_enc = ?, server_only = 1 WHERE id = ?",
+                             (security.encrypt(key), row["id"]))
+    finally:
+        state.DB = before
     print(f"подключение {GATEWAY_NAME}: " + ("создано" if row is None else "ключ обновлён"))
 
 
