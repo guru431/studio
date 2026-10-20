@@ -16,6 +16,7 @@ import secrets
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -36,6 +37,8 @@ CHAT_MODEL = "local-gemma-abl"
 BUSY_SEC = 300                 # the owner may be using the studio: wait for their job, never touch it
 IMAGE_SEC = 1400               # gateway holds a picture request up to 1300 s (card wait + generation)
 VIDEO_SEC = 1800
+SPEECH_SEC = 1800              # speech and transcription wait for the card up to 30 min (WAIT_MAX_SEC)
+PHRASE = "Проверка студии: озвучка, расшифровка и голосовой ввод работают."
 # cold gemma loads up to ~300 s; the studio pings every 15 s, so a silent minute is a broken line
 STREAM = httpx.Timeout(60, connect=30, read=400)
 
@@ -97,7 +100,7 @@ def studio():
     login, password = os.environ.get("STUDIO_ADMIN_LOGIN"), os.environ.get("STUDIO_ADMIN_PASSWORD")
     if not login or not password:
         pytest.skip("STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required")
-    created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[])
+    created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[], transcripts=[], speeches=[], voices=[])
     with httpx.Client(timeout=60, trust_env=False) as client:
         r = client.post(STUDIO + "/login", data={"login": login, "password": password},
                         headers={"Origin": STUDIO})
@@ -106,8 +109,8 @@ def studio():
         assert me.status_code == 200, me.status_code
         me = me.json()
         assert me["is_admin"], "STUDIO_ADMIN_LOGIN must be an administrator (release)"
-        assert me["capabilities"] == {"chat": True, "photo": True, "video": True}, \
-            "the owner needs the «srvllm» connection: manage.py create-admin with GATEWAY_KEY_OWNER_IMAGES"
+        assert all(me["capabilities"].values()), \
+            "the owner needs the «srvllm» connection in every section: manage.py create-admin with GATEWAY_KEY_OWNER_IMAGES"
         client.headers[CSRF] = me["csrf"]
         try:
             yield SimpleNamespace(c=client, created=created)
@@ -118,6 +121,12 @@ def studio():
 
 def cleanup(client, created):
     """Only the rows this run made, newest first (an edit and a clip reference the generated picture)."""
+    for kind in ("transcripts", "speeches"):
+        for row_id in getattr(created, kind):
+            client.post(f"{STUDIO}/api/{kind}/{row_id}/cancel")
+            client.delete(f"{STUDIO}/api/{kind}/{row_id}")
+    for voice_id in created.voices:
+        client.delete(f"{STUDIO}/api/voices/{voice_id}")
     for chat_id in created.chats:
         client.delete(f"{STUDIO}/api/chats/{chat_id}")
     for video_id in created.videos:
@@ -323,3 +332,49 @@ def test_photo_through_the_gateway_and_the_powershell_client(tmp_path):
         finally:
             client.post(GATEWAY + "/images/release", json={"model": MODEL},
                         headers={"Authorization": "Bearer " + token}, timeout=60)
+
+
+def words_of(text: str) -> set[str]:
+    return {w for w in letters(text).split() if len(w) > 3}
+
+
+@pytest.mark.timeout(3 * SPEECH_SEC + 300)
+def test_voice_speech_dictation_and_transcription(studio):
+    """Голос по образцу владельца → озвучка фразы (Qwen3-TTS) → голосовой ввод (GigaAM) и расшифровка
+    (WhisperX) того же mp3. Образец — STUDIO_LIVE_VOICE (5–15 с речи), его текст — STUDIO_LIVE_VOICE_TEXT."""
+    sample, ref_text = os.environ.get("STUDIO_LIVE_VOICE"), os.environ.get("STUDIO_LIVE_VOICE_TEXT")
+    if not sample or not ref_text:
+        pytest.skip("STUDIO_LIVE_VOICE (запись 5–15 с) and STUDIO_LIVE_VOICE_TEXT are required")
+    c = studio.c
+    r = c.post(STUDIO + "/api/voices", data={"name": "приёмка", "text": ref_text},
+               files={"audio": (Path(sample).name, Path(sample).read_bytes(), "application/octet-stream")})
+    assert r.status_code == 201, (r.status_code, r.text[:300])
+    voice_id = r.json()["id"]
+    studio.created.voices.append(voice_id)
+
+    speech = submit(c, STUDIO + "/api/speeches", 202, json={"text": PHRASE, "voice": voice_id})
+    studio.created.speeches.append(speech["id"])
+    speech = poll(c, f"{STUDIO}/api/speeches/{speech['id']}", finished, SPEECH_SEC, pause=5)
+    assert speech["state"] == "done", speech["detail"]
+    mp3 = c.get(f"{STUDIO}/api/media/{speech['media_id']}").content
+    assert mp3[:3] == b"ID3" or mp3[:2] == b"\xff\xfb", mp3[:8]
+
+    r = c.post(STUDIO + "/api/dictation", files={"audio": ("phrase.mp3", mp3, "audio/mpeg")}, timeout=200)
+    assert r.status_code == 200, (r.status_code, r.text[:300])
+    assert len(words_of(r.json()["text"]) & words_of(PHRASE)) >= 3, r.json()["text"]
+
+    deadline = time.monotonic() + BUSY_SEC
+    while True:
+        r = c.post(STUDIO + "/api/transcripts", content=mp3,
+                   headers={"content-type": "audio/mpeg", "x-studio-name": "acceptance.mp3"})
+        if r.status_code != 409 or time.monotonic() > deadline:
+            break
+        time.sleep(3)
+    assert r.status_code == 202, (r.status_code, r.text[:300])
+    studio.created.transcripts.append(r.json()["id"])
+    item = poll(c, f"{STUDIO}/api/transcripts/{r.json()['id']}", finished, SPEECH_SEC, pause=5)
+    assert item["state"] == "done", item["detail"]
+    heard = " ".join(s["text"] for s in item["segments"])
+    assert len(words_of(heard) & words_of(PHRASE)) >= 3, heard
+    r = c.get(f"{STUDIO}/api/transcripts/{item['id']}/export?format=docx")
+    assert r.status_code == 200 and r.content[:2] == b"PK"

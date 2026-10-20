@@ -1879,8 +1879,8 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
         *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
-        *go("speech"), ("wait", "document.querySelector('#speech-composer')"),
-        ("eval", "hint", "document.querySelector('.sp-voice-hint')?.textContent || ''"),
+        *go("speech"), ("wait", "document.querySelector('.sp-voice-hint') && !document.querySelector('.sp-voice-hint').hidden"),
+        ("eval", "hint", "document.querySelector('.sp-voice-hint').textContent"),
         add_voice(), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
         *go("speech"), ("wait", "document.querySelector('#chip-voice option')"),
         ("type", "#speech-text", "Привет. Как дела?"),
