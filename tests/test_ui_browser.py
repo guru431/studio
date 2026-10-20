@@ -470,6 +470,29 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+#: шапка раздела на месте и под аватаром, фон непрозрачный: прокрученное под аватар не уходит
+HEAD_UNDER_AVATAR = """(() => { const view = document.querySelector('#view'); view.scrollTop = 400;
+  const head = document.querySelector('#view > .head').getBoundingClientRect();
+  const a = document.querySelector('#avatar').getBoundingClientRect();
+  const bg = getComputedStyle(document.querySelector('#view > .head')).backgroundColor;
+  return { scrolled: view.scrollTop > 0, top: head.top, covers: a.top >= head.top && a.bottom <= head.bottom,
+           opaque: bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent' }; })()"""
+
+
+def test_phone_avatar_never_covers_scrolled_profile_and_admin(browser, live):
+    """B1-M8: на телефоне аватар закреплён, а шапка раздела уезжала с прокруткой — блоки
+    профиля и панели проходили под аватаром. Шапка — на месте, с непрозрачным фоном."""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        *go("profile"), ("wait", "document.querySelector('#history-wipe')"),
+        ("eval", "profile", HEAD_UNDER_AVATAR),
+        *go("admin"), ("wait", "document.querySelector('#users tbody tr') && document.querySelector('#allow-list li')"),
+        ("eval", "admin", HEAD_UNDER_AVATAR)], width=390, height=500, mobile=True)
+    assert not r.get("failed"), r
+    for name in ("profile", "admin"):
+        assert r["values"][name] == {"scrolled": True, "top": 0, "covers": True, "opaque": True}, (name, r["values"])
+    assert not problems(r), problems(r)
+
+
 def test_history_wipe_clears_chats_and_feed(browser, live):
     live.add_user("wiper")
     r = browser.drive(live.url + "/", [*signin("wiper"), ("wait", READY),
@@ -750,6 +773,25 @@ def test_chat_list_renames_and_deletes(browser, live):
           return !(await m.api('GET', '/api/chats')).items.some(c => c.id === window.made); }})()""")])
     assert not r.get("failed"), r
     assert r["values"]["gone"] is True
+    assert not problems(r), problems(r)
+
+
+def test_chat_link_loads_the_list_once(browser, live):
+    """B1-M5: ссылка #/chat/<id> на свежий раздел — один GET /api/chats, а не два."""
+    spy = """(() => { window.listGets = 0; const real = window.fetch;
+      window.fetch = (url, opts = {}) => { if ((opts.method || 'GET') === 'GET' && String(url) === '/api/chats')
+        window.listGets += 1; return real(url, opts); }; return true; })()"""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        ("eval", "made", f"""(async () => {{ const m = {API};
+          window.made = (await m.api('POST', '/api/chats', {{}})).id; return true; }})()"""),
+        *go("profile"), ("wait", "document.querySelector('.conn, #conn-add')"),
+        ("eval", "spy", spy),
+        ("eval", "open", "location.hash = '#/chat/' + window.made"),
+        ("wait", "document.querySelector('.chat-item[data-id=\"' + window.made + '\"] [aria-current=page]')"),
+        ("idle",),
+        ("eval", "gets", "window.listGets")])
+    assert not r.get("failed"), r
+    assert r["values"]["gets"] == 1
     assert not problems(r), problems(r)
 
 
@@ -1040,6 +1082,67 @@ def test_photo_feed_survives_reload_with_a_running_job(browser, live):
     assert v["goBusy"] and v["goBusyAfter"] and v["goFree"]
     assert "Отменено" in v["final"]
     assert any(s.endswith("/cancel") for s in r["sent"])
+    assert not problems(r), problems(r)
+
+
+def test_editor_strength_out_of_range_is_refused_in_words(browser, live):
+    """B1-M9: сила перерисовки вне 0.05–1 — отказ словами в окне, запрос не уходит."""
+    login = "strength"
+    live.add_user(login)
+    edit_error = "document.querySelector('#edit-error').textContent"
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        ("type", "#edit-prompt", "make it blue"),
+        set_value("#edit-strength", "5"), ("click", "#edit-submit"),
+        ("wait", f"{edit_error}.length > 0"), ("eval", "high", edit_error),
+        set_value("#edit-strength", "0"), ("click", "#edit-submit"),
+        ("eval", "low", f"{is_open('#editor')} && {edit_error}"),
+        set_value("#edit-strength", "0.5"), ("click", "#edit-submit"),
+        ("wait", f"!{is_open('#editor')} && {done_cards(2)}")], width=390, height=900, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["high"] == v["low"] == "Сила перерисовки — число от 0.05 до 1"
+    posts = [s for s in r["sent"] if s == "POST /api/images"]
+    assert len(posts) == 2                       # картинка ленты и последняя, верная попытка правки
+    assert not problems(r), problems(r)
+
+
+#: опрос задания идёт медленно (1 с в пути); window.polls — сколько опросов в пути сейчас и максимум
+SLOW_POLLS = """(() => { window.polls = { now: 0, max: 0 }; const real = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    if ((opts.method || 'GET') !== 'GET' || !/^\\/api\\/images\\/[0-9a-f]+$/.test(String(url))) return real(url, opts);
+    window.polls.now += 1; window.polls.max = Math.max(window.polls.max, window.polls.now);
+    try { await new Promise(r => setTimeout(r, 1000)); return await real(url, opts); } finally { window.polls.now -= 1; }
+  }; return true; })()"""
+
+
+def test_photo_cancel_during_a_poll_keeps_one_poll_chain(browser, live):
+    """B1-M3: «Отменить», пока опрос задания в пути, не заводит второй цепочки опросов."""
+    import images
+    login = "onechain"
+    live.add_user(login)
+
+    async def held(request):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not any(j.state == "cancelling" for j in images.JOBS.values()):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(3)                       # «Отменяю» держится: несколько опросов подряд
+        return await live.gw.builtin(request)
+
+    running = "#photo-feed .photo-card[data-state=working]"
+    live.gw.on["/slot/images/generations"] = held
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SLOW_POLLS),
+            ("type", "#photo-prompt", "долгий рассвет"), ("click", "#photo-go"),
+            ("wait", f"document.querySelector('{running} .card-cancel') && window.polls.now === 1"),
+            ("click", f"{running} .card-cancel"),
+            ("wait", "document.querySelector('#photo-feed .photo-card[data-state=cancelled]')"),
+            ("eval", "polls", "window.polls.max")], timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/generations", None)
+    assert not r.get("failed"), r
+    assert r["values"]["polls"] == 1
     assert not problems(r), problems(r)
 
 

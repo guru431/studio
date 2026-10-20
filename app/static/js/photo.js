@@ -192,24 +192,36 @@ function build(view, ctx) {
     syncBusy();
   }
 
+  /* Одна цепочка опросов на задание: позвали, пока опрос в пути (отмена), — его ответ устарел,
+   * он выбрасывается, и тот же опрос сразу спрашивает заново. */
   async function poll(id) {
     const entry = running.get(id);
     if (!entry || !alive) return;
+    clearTimeout(entry.timer);
+    if (entry.inflight) {
+      entry.again = true;
+      return;
+    }
+    entry.inflight = true;
+    entry.again = false;
+    let item = null;
     try {
-      const item = await api('GET', `/api/images/${id}`);
-      if (!alive) return;
-      feed.update(item);
-      watch(item);
+      item = await api('GET', `/api/images/${id}`);
     } catch (err) {
-      if (!alive) return;
-      if (err.code === 'gone') {
+      if (alive && err.code === 'gone') {
         forget(id);
         feed.remove(id);
         return;
       }
+    } finally {
+      entry.inflight = false;
     }
-    const next = running.get(id);
-    if (next) next.timer = setTimeout(() => poll(id), POLL_MS);
+    if (!alive) return;
+    if (item && !entry.again) {
+      feed.update(item);
+      watch(item);
+    }
+    if (running.get(id) === entry) entry.timer = setTimeout(() => poll(id), entry.again ? 0 : POLL_MS);
   }
 
   function busyText(entry) {
@@ -238,11 +250,7 @@ function build(view, ctx) {
           } catch (err) {
             say(words(err), true);
           }
-          const entry = running.get(item.id);
-          if (entry) {
-            clearTimeout(entry.timer);
-            poll(item.id);
-          }
+          poll(item.id);
         }));
       } else box.append(el('p', { class: 'small' }, cap(item.detail)));
       node.append(box);

@@ -561,7 +561,11 @@ function build(view, ctx) {
       if (here) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
-    if (id !== null && !listed) loadList();          // диалог новее списка (другая вкладка, ссылка)
+    if (id !== null && !listed) {                    // диалог новее списка (другая вкладка, ссылка)
+      firstList.then(() => {                         // первый список раздела ещё мог не прийти
+        if (chatId === id && ![...list.querySelectorAll('.chat-item')].some((n) => n.dataset.id === id)) loadList();
+      });
+    }
     syncBusy();
     paintChip();
     if (id === null) {
@@ -785,7 +789,7 @@ function build(view, ctx) {
     conns = items.filter((c) => c.sections.includes('chat'));
     paintChip();
   }, (err) => { notice.textContent = words(err); });
-  loadList();
+  const firstList = loadList();
 
   return {
     open,

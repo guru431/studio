@@ -118,6 +118,11 @@ function show(host, item, model, photo, onCreated) {
       error.textContent = 'Выделите кистью область для изменения';
       return;
     }
+    const force = Number(strength.value);         // пусто или не число — тоже отказ
+    if (lustify && !(force >= 0.05 && force <= 1)) {
+      error.textContent = 'Сила перерисовки — число от 0.05 до 1';
+      return;
+    }
     const body = new FormData();
     body.append('model', model);
     body.append('size', 'original');

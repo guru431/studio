@@ -14,6 +14,13 @@ def test_static_has_no_external_urls():
             assert not re.search(r"https?://(?!localhost)", p.read_text(encoding="utf-8")), p
 
 
+def test_static_has_no_lan_addresses():
+    """/static открыт всем в интернете: адреса LAN (шлюз и прочее) в примерах — не свои (B1-M6)."""
+    for p in STATIC.rglob("*"):
+        if p.suffix in {".html", ".js", ".css", ".webmanifest"} and "vendor" not in p.parts:
+            assert not re.search(r"\b192\.168\.\d+\.\d+", p.read_text(encoding="utf-8")), p
+
+
 def test_vendor_files_name_package_and_version():
     banners = {"marked.min.js": "marked 18.1.1", "purify.min.js": "dompurify 3.4.17",
                "highlight.min.js": "highlight.js 11.12.0", "hl-paper.css": "highlight.js 11.12.0",

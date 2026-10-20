@@ -85,6 +85,8 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
   .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 60px; }
+  /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
+  #view > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }
 }
 
 /* ---- элементы управления ------------------------------------------------------- */
