@@ -279,7 +279,7 @@ def byte_range(header: str, size: int) -> "tuple[int, int] | None":
     return start, min(end, size - 1)
 
 
-def _disposition(name: str) -> str:
+def disposition(name: str) -> str:
     """ASCII-замена в `filename` (без кавычек, `\\` и управляющих), полное имя — в `filename*` (RFC 5987)."""
     plain = "".join(ch if " " <= ch <= "~" and ch not in '"\\' else "_" for ch in name) or "file"
     header = f'attachment; filename="{plain}"'
@@ -315,7 +315,7 @@ async def get_media(media_id: str, request: Request, thumb: str = "", download: 
     headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=86400",
                "X-Content-Type-Options": "nosniff"}
     if download == "1":
-        headers["Content-Disposition"] = _disposition(row["download_name"])
+        headers["Content-Disposition"] = disposition(row["download_name"])
     spec = request.headers.get("range")
     if spec is None:
         return StreamingResponse(_read(file, 0, size), media_type=mime,

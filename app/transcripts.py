@@ -28,6 +28,7 @@ from fastapi.responses import Response
 
 import audio
 import clock
+import exports
 import forms
 import media
 import sections
@@ -304,3 +305,20 @@ async def delete(tid: str, request: Request):
             except OSError:
                 log.warning("расшифровка %s: файл media не удалился", tid[:8])
     return Response(status_code=204)
+
+
+@router.get("/{tid}/export")
+async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx|srt)$")):  # noqa: A002
+    """Готовая расшифровка файлом: имя — по записи («Звонок.m4a» → «Звонок.docx»)."""
+    uid = request.state.user.id
+    row = _row(uid, tid)
+    if row["state"] != "done" or row["result_media_id"] is None:
+        raise HTTPException(409, {"code": "running", "message": "расшифровка ещё не готова"})
+    segments = await segments_of(uid, row)
+    stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
+    if format == "docx":
+        body = exports.docx(segments, stem)
+    else:
+        body = (exports.txt(segments) if format == "txt" else exports.srt(segments)).encode("utf-8")
+    return Response(body, media_type=exports.TYPES[format],
+                    headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})
