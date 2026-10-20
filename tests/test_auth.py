@@ -311,7 +311,7 @@ def test_create_admin_new_password_ends_sessions(env, monkeypatch, capsys):
     assert manage.main(["create-admin"]) == 0
     conn = db.connect(env.db_path)
     conn.execute("UPDATE users SET is_admin = 0, disabled = 1")
-    conn.execute("INSERT INTO sessions VALUES ('d', 1, 'c', 9e12, 0)")
+    conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d', 1, 'c', 9e12, 0)")
     monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\r\nSTUDIO_ADMIN_PASSWORD=other-long-pass\r\n"))
     assert manage.main(["create-admin"]) == 0
     row = conn.execute("SELECT is_admin, disabled, pw_hash FROM users").fetchone()

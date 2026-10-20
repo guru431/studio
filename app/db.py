@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 6).
+"""Соединение SQLite и схема базы (версия 7).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 6
+VERSION = 7
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -34,13 +34,22 @@ CREATE INDEX voices_user_created ON voices(user_id, created);
 CREATE INDEX speeches_user_created ON speeches(user_id, created);
 """
 
-SCHEMA = SECTION_TABLES + SPEECH_TABLES + """
+#: блокировка на телефоне (screenlock.py): ключи passkey учётки; id — credential id (base64url)
+PASSKEY_TABLES = """
+CREATE TABLE passkeys(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+         public_key BLOB NOT NULL, sign_count INTEGER NOT NULL, transports TEXT NOT NULL, name TEXT NOT NULL,
+         created REAL NOT NULL, used REAL);
+CREATE INDEX passkeys_user ON passkeys(user_id);
+"""
+
+SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
-      created REAL NOT NULL, views TEXT NOT NULL DEFAULT '{}');
+      created REAL NOT NULL, views TEXT NOT NULL DEFAULT '{}', screen_lock INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions(digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
-         csrf TEXT NOT NULL, expires REAL NOT NULL, renewed REAL NOT NULL);
+         csrf TEXT NOT NULL, expires REAL NOT NULL, renewed REAL NOT NULL, mobile INTEGER NOT NULL DEFAULT 0,
+         seen REAL);
 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE connections(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
             name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('openai','srvllm')),
@@ -116,6 +125,10 @@ SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FRO
     5: SPEECH_TABLES,
     # вид ленты разделов (profile.py) — в учётке: JSON {раздел: вид}
     6: "ALTER TABLE users ADD COLUMN views TEXT NOT NULL DEFAULT '{}';",
+    # блокировка на телефоне: включена ли у учётки, мобильна ли сессия, последняя отметка «на экране»
+    7: """ALTER TABLE users ADD COLUMN screen_lock INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN mobile INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
 }
 
 

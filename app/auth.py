@@ -14,6 +14,10 @@
   целиком не запирается: после пятой неудачи за 15 минут со всех адресов ответ на неверный
   пароль ждёт 2, 4, 8 … 30 с. Адрес — последний элемент X-Forwarded-For: путь к службе один,
   Apache (unix-сокет), начало заголовка мог прислать сам клиент.
+- Блокировка на телефоне (спека 2026-10-21-studio-screen-lock, 6.2): сессия заперта, когда у учётки
+  включена блокировка, сессия мобильная и отметки «на экране» (screenlock.py) не было дольше STALE_SEC.
+  Запертой — 423 `screen_locked` на всё /api/*, кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
+  (LOCK_SEC, locked, 429 `locked`).
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся.
 """
 import asyncio
@@ -42,6 +46,10 @@ LOGIN_BODY_MAX = 4096
 CSRF_HEADER = "x-studio-csrf"
 LOGIN_RE = r"[a-z0-9._-]{2,32}"
 DELAY_MAX = 30
+STALE_SEC = 75
+#: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
+SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
+                               "/api/lock/open", "/api/lock/password"})
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
@@ -92,20 +100,27 @@ def create_session(user_id: int) -> tuple[str, str]:
     now = clock.NOW()
     value, csrf = security.new_token(), security.new_token()
     state.DB.execute("DELETE FROM sessions WHERE expires <= ?", (now,))      # заодно забыть истёкшие
-    state.DB.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES (?, ?, ?, ?, ?)",
-                     (security.digest(value), user_id, csrf, now + SESSION_SEC, now))
+    # seen = now: только что вошедший паролем не заперт
+    state.DB.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, seen) VALUES (?, ?, ?, ?, ?, ?)",
+                     (security.digest(value), user_id, csrf, now + SESSION_SEC, now, now))
     return value, csrf
 
 
-def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool] | None:
-    """(пользователь, csrf, продлена ли сейчас) живой сессии или None. renew=False — для ответов,
-    которые cookie заново не ставят (страницы): продлит следующий запрос /api/* вместе с cookie."""
+def screen_locked(enabled: int, mobile: int, seen: float | None, now: float) -> bool:
+    """Заперта ли сессия: блокировка учётки включена, сессия мобильная, свежей отметки нет."""
+    return bool(enabled) and bool(mobile) and (seen is None or now - seen > STALE_SEC)
+
+
+def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool, bool] | None:
+    """(пользователь, csrf, продлена ли сейчас, заперта ли) живой сессии или None. renew=False — для
+    ответов, которые cookie заново не ставят (страницы): продлит следующий запрос /api/* вместе с cookie."""
     if not value:
         return None
     key = security.digest(value)
     row = state.DB.execute(
         "SELECT u.id, u.login, u.name, u.is_admin, u.theme, u.default_connection_id, u.default_model,"
-        " u.disabled, s.csrf, s.expires, s.renewed FROM sessions s JOIN users u ON u.id = s.user_id"
+        " u.disabled, u.screen_lock, s.csrf, s.expires, s.renewed, s.mobile, s.seen"
+        " FROM sessions s JOIN users u ON u.id = s.user_id"
         " WHERE s.digest = ?", (key,)).fetchone()
     if row is None:
         return None
@@ -120,7 +135,7 @@ def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool] | Non
     user = User(id=row["id"], login=row["login"], name=row["name"], is_admin=bool(row["is_admin"]),
                 theme=row["theme"], default_connection_id=row["default_connection_id"],
                 default_model=row["default_model"])
-    return user, row["csrf"], renewed
+    return user, row["csrf"], renewed, screen_locked(row["screen_lock"], row["mobile"], row["seen"], now)
 
 
 def session_user(value: str | None, renew: bool = True) -> tuple[User, str] | None:
@@ -143,21 +158,27 @@ def require_admin(request: Request) -> User:
 
 
 async def guard(request: Request, call_next):
-    """Все /api/* — только с живой сессией; не-GET — ещё и с заголовком CSRF этой сессии."""
+    """Все /api/* — только с живой сессией; не-GET — ещё и с заголовком CSRF этой сессии; запертой
+    сессии — только запросы блокировки. Порядок: сессия → CSRF → блокировка."""
     path = request.url.path
     if path != "/api" and not path.startswith("/api/"):
         return await call_next(request)
     live = _live(request.cookies.get(COOKIE))
     if live is None:
         return JSONResponse({"detail": {"code": "login", "message": "нужен вход"}}, status_code=401)
-    user, csrf, renewed = live
+    user, csrf, renewed, screen = live
     if request.method != "GET":
         sent = request.headers.get(CSRF_HEADER, "")
         # байты: compare_digest со строкой не-ASCII падает TypeError
         if not hmac.compare_digest(sent.encode("utf-8"), csrf.encode("utf-8")):
             return JSONResponse({"detail": {"code": "csrf", "message": "обновите страницу"}}, status_code=403)
-    request.state.user, request.state.csrf = user, csrf
-    response = await call_next(request)
+    if screen and path not in SCREEN_LOCK_PATHS:
+        response = JSONResponse({"detail": {"code": "screen_locked", "message": "студия заперта"}}, status_code=423,
+                                headers={"Cache-Control": "no-store"})
+    else:
+        request.state.user, request.state.csrf = user, csrf
+        request.state.locked, request.state.digest = screen, security.digest(request.cookies[COOKIE])
+        response = await call_next(request)
     if renewed:                      # срок в браузере догоняет продлённый на сервере
         _set_cookie(response, request.cookies[COOKIE])
     # ответы API (токен прямого подключения, csrf в /api/me, чаты) — не в дисковый кеш браузера;
