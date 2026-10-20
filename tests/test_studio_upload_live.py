@@ -157,12 +157,14 @@ def test_photo_edit_description_and_video_through_the_studio(studio):
     with Image.open(io.BytesIO(thumb.content)) as small:
         assert small.format == "WEBP" and max(small.size) <= 384
 
-    # 2. Brush edit of the left half (Flux): outside the mask every pixel is the source's
+    # 2. Brush edit of the left half (Lustify, strength as the editor's default): outside the mask every
+    # pixel is the source's. Lustify, not FLUX: the gateway cannot swap comfy→image within its 300 s
+    # budget while comfy's lease is active, so a model switch here would fail with no_capacity.
     area = (0, 0, source.width // 2, source.height)
     mask = Image.new("L", source.size)
     mask.paste(255, area)
     job = submit(c, STUDIO + "/api/images", 202,
-                 data={"model": "flux", "size": "original", "seed": "21",
+                 data={"model": "lustify", "strength": "0.25", "size": "original", "seed": "21",
                        "prompt": "Turn the left half into a snowy winter scene. Keep everything else unchanged.",
                        "source_media_id": generated["media_id"]},
                  files={"mask": ("mask.png", png(mask), "image/png")})
