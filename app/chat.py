@@ -8,9 +8,14 @@
    ответа только читает её очередь. Пока данных нет, раз в PING_SEC в поток идёт `: ping` —
    холодная модель грузится минутами, а Apache рвёт молчащую линию.
 3. Прямое подключение — браузер зовёт модель сам: ход отдаёт ему адрес и сообщения, готовый
-   ответ браузер кладёт `PUT .../messages/{id}`.
-4. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
-5. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
+   ответ браузер кладёт `PUT .../messages/{id}`. Пока читает, раз в ~15 с шлёт признак жизни
+   (`POST .../messages/{id}/alive`, время — в `alive_at`): ответ без признака дольше ALIVE_SEC —
+   брошенный (вкладку закрыли) — «прервано»; живой другие вкладки показывают идущим, и новый ход
+   ждёт его, как ответ сервера.
+4. Вложение, которое так и не отправили, удаляется крестиком (`DELETE /api/attachments/{id}`) или
+   уборкой (`sweep_attachments`) через ORPHAN_SEC.
+5. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
+6. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
 """
 import asyncio
 import base64
@@ -30,7 +35,6 @@ from pydantic import BaseModel, Field
 import clock
 import connections
 import documents
-import images
 import manage
 import media
 import state
@@ -48,6 +52,11 @@ TITLE_CHARS = 60
 STREAM_READ_SEC = 600
 MODELS_TIMEOUT_SEC = 10
 SAVE_SEC = 5                     # идущий ответ — в базу не чаще (перезапуск оставит прочитанное)
+# признак жизни ответа из браузера: вкладка шлёт его раз в ~15 с, а фоновой вкладке браузер
+# разрешает таймер раз в минуту
+ALIVE_SEC = 90
+ORPHAN_SEC = 86400               # неотправленное вложение живёт сутки
+SWEEP_SEC = 3600
 TEXT_MAX = 200_000
 ANSWER_MAX = 2_000_000
 MODEL_MAX = 200
@@ -132,10 +141,17 @@ def _messages(chat_id: str):
     return state.DB.execute("SELECT * FROM messages WHERE chat_id = ? ORDER BY created, rowid", (chat_id,)).fetchall()
 
 
+def _alive(row) -> bool:
+    """Ответ из браузера, который вкладка ещё читает (признак жизни свежее ALIVE_SEC)."""
+    return (row["via"] == "browser" and row["status"] == "streaming" and row["alive_at"] is not None
+            and clock.NOW() - row["alive_at"] < ALIVE_SEC)
+
+
 def _message_out(row, atts: list) -> dict:
     live = STREAMS.get(row["id"])
     return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
+            "live": _alive(row),
             "attachments": [{"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"],
                              "chars": a["chars"]} for a in atts]}
 
@@ -286,6 +302,7 @@ def _too_big(tokens: int, limit: int) -> HTTPException:
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
     ("delta", текст), ("done", статус) или ("error", слова)."""
+    user_id: int
     chat_id: str
     message_id: str
     conn: Connection
@@ -403,11 +420,12 @@ def _stop_unstarted(chat_ids: set[str]) -> None:
 
 
 async def stop_user(user_id: int) -> None:
-    """Стирание истории или удаление учётки: идущие ответы пользователя останавливаются — модель не
-    держит карту ради ответа, который уже некуда сохранить."""
+    """Стирание истории, удаление или отключение учётки: идущие ответы пользователя останавливаются —
+    модель не держит карту ради ответа, который уже некуда сохранить. Потоки — по user_id, а не по
+    диалогам: поток диалога, который уже удалён, тоже его."""
     chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ?", (user_id,))}
     _stop_unstarted(chats)
-    await _cancel([st for st in STREAMS.values() if st.chat_id in chats])
+    await _cancel([st for st in STREAMS.values() if st.user_id == user_id])
 
 
 async def stop_all() -> None:
@@ -499,7 +517,7 @@ async def delete_chat(chat_id: str, request: Request):
         "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?", (chat_id,))}
     state.DB.execute("DELETE FROM chats WHERE id = ?", (chat_id,))   # сообщения и вложения — каскадом
     for media_id in media_ids:
-        if not images._referenced(uid, media_id):
+        if not media.referenced(uid, media_id):
             try:
                 await media.delete_async(uid, media_id)
             except OSError:
@@ -542,6 +560,56 @@ async def upload_attachment(request: Request):
     return {"id": att_id, "kind": kind, "name": name, "chars": chars, "media_id": media_id}
 
 
+async def _drop_attachments(rows) -> int:
+    """Строки неотправленных вложений и их файлы (кроме тех, на что ссылается другая запись);
+    вложение, которое за это время ушло в ход, остаётся. Итог — сколько удалено."""
+    dropped = 0
+    for row in rows:
+        if state.DB.execute("DELETE FROM attachments WHERE id = ? AND message_id IS NULL", (row["id"],)).rowcount != 1:
+            continue
+        dropped += 1
+        if not media.referenced(row["user_id"], row["media_id"]):
+            try:
+                await media.delete_async(row["user_id"], row["media_id"])
+            except OSError:
+                log.warning("вложение %s: файл не удалился", row["id"][:8])
+    return dropped
+
+
+@router.delete("/attachments/{att_id}", status_code=204)
+async def delete_attachment(att_id: str, request: Request):
+    """Крестик на вложении, которое ещё не отправили; отправленное — часть сообщения (409)."""
+    row = state.DB.execute("SELECT * FROM attachments WHERE id = ? AND user_id = ?",
+                           (att_id, request.state.user.id)).fetchone()
+    if row is None:
+        raise _gone("такого вложения нет")
+    if row["message_id"] is not None:
+        raise HTTPException(409, {"code": "sent", "message": "вложение уже отправлено"})
+    await _drop_attachments([row])
+    return Response(status_code=204)
+
+
+async def sweep_attachments() -> None:
+    """Неотправленные вложения старше ORPHAN_SEC (вкладку закрыли с прикреплённым файлом) — прочь."""
+    rows = state.DB.execute("SELECT * FROM attachments WHERE message_id IS NULL AND created < ?",
+                            (clock.NOW() - ORPHAN_SEC,)).fetchall()
+    if rows and (count := await _drop_attachments(rows)):
+        log.info("уборка: удалено неотправленных вложений — %d", count)
+
+
+async def _sweep() -> None:
+    while True:
+        try:
+            await sweep_attachments()
+        except Exception as e:                       # noqa: BLE001 — уборка не должна вставать
+            log.warning("уборка вложений: сбой (%s)", type(e).__name__)
+        await clock.SLEEP(SWEEP_SEC)
+
+
+def start_sweeper() -> asyncio.Task:
+    return asyncio.create_task(_sweep())
+
+
 # ---- API: ход ------------------------------------------------------------------
 
 def _free_attachments(user_id: int, ids: list[str]) -> list:
@@ -558,11 +626,15 @@ def _free_attachments(user_id: int, ids: list[str]) -> list:
 
 
 def _busy(chat_id: str) -> None:
-    """Идёт ответ через сервер — его поток или строка `streaming` (поток ещё не запущен: ход читает фото)."""
+    """Идёт ответ через сервер — его поток или строка `streaming` (поток ещё не запущен: ход читает
+    фото) — или ответ из браузера, который вкладка ещё читает."""
     if _chat_streams(chat_id) or state.DB.execute(
             "SELECT 1 FROM messages WHERE chat_id = ? AND status = 'streaming' AND via = 'server' LIMIT 1",
             (chat_id,)).fetchone():
         raise HTTPException(409, {"code": "busy", "message": "ответ ещё идёт — дождитесь или остановите"})
+    if any(_alive(r) for r in state.DB.execute(
+            "SELECT via, status, alive_at FROM messages WHERE chat_id = ? AND status = 'streaming'", (chat_id,))):
+        raise HTTPException(409, {"code": "busy", "message": "ответ ещё идёт в другой вкладке — дождитесь его"})
 
 
 def _drop_last_answer(chat_id: str) -> str:
@@ -604,7 +676,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
     try:
-        # ответ прямого подключения, который так и не сохранили (вкладку закрыли), — не вечная загрузка
+        # ответ прямого подключения, который так и не сохранили (вкладку закрыли), — не вечная загрузка;
+        # живой ответ сюда не доходит: его ждёт _busy
         state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
                          " AND status = 'streaming'", (chat_id,))
         if body.regenerate:
@@ -622,8 +695,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
             raise _too_big(tokens, limit)
-        state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-                         " VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?)", (answer_id, chat_id, via, model, now))
+        state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
+                         " VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?, ?)",
+                         (answer_id, chat_id, via, model, now, now))
         title = row["title"] or (None if body.regenerate else _title(body.text))
         state.DB.execute("UPDATE chats SET title = ?, updated = ? WHERE id = ?", (title, now, chat_id))
         state.DB.execute("COMMIT")
@@ -651,7 +725,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if not conn.proxied:
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
-    st = StreamTask(chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages)
+    st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return StreamingResponse(_events(st, user_mid), media_type="text/event-stream",
@@ -671,6 +745,17 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
     log.info("чат %s: ответ %s от браузера — %s", chat_id[:8], message_id[:8], body.status)
     return {"id": message_id, "status": body.status}
+
+
+@router.post("/chats/{chat_id}/messages/{message_id}/alive", status_code=204)
+async def answer_alive(chat_id: str, message_id: str, request: Request):
+    """Признак жизни ответа, который читает браузер; ответ уже не идёт — 409, его вкладка перестаёт слать."""
+    _chat_row(request.state.user.id, chat_id)
+    if state.DB.execute("UPDATE messages SET alive_at = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'"
+                        " AND via = 'browser' AND status = 'streaming'",
+                        (clock.NOW(), message_id, chat_id)).rowcount != 1:
+        raise HTTPException(409, {"code": "state", "message": "этот ответ уже не идёт"})
+    return Response(status_code=204)
 
 
 @router.post("/chats/{chat_id}/stop", status_code=204)

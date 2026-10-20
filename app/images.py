@@ -12,20 +12,22 @@
    пишутся: текст живёт в памяти до выдачи (один раз) или KEEP_DONE_SEC.
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
    (`source_media_id`); оба нормализуются normalize_image. Маска (PNG) остаётся в студии: снаружи
-   выделения результат берётся из исходника, модель получает только фото и инструкцию. Фото и
-   маска задания очищаются в finally.
-4. База — только с цикла событий: в asyncio.to_thread уходят файлы и Pillow, не SQLite.
-5. Журнал — только id задания и модель: промпт, токен, картинки и имена файлов туда не пишутся.
+   выделения результат берётся из исходника, модель получает только фото и инструкцию. Маска с
+   устройства ложится в media (`mask_media_id`) — повтор правки идёт с ней же. Фото и маска
+   задания в памяти очищаются в finally.
+4. Аренда модели картинок держит карту 600 с простоя, и другая модель её не вытесняет: шлюз ждал
+   бы карту дольше своего бюджета и отвечал 503. Поэтому перед запросом — release другой модели
+   (как перед описанием); занята она (409) — запрос ждёт карту у шлюза, как и без release.
+5. База — только с цикла событий: в asyncio.to_thread уходят файлы и Pillow, не SQLite.
+6. Журнал — только id задания и модель: промпт, токен, картинки и имена файлов туда не пишутся.
 """
 import asyncio
 import base64
 import binascii
 import logging
-import re
 import secrets
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -36,12 +38,12 @@ from pydantic import BaseModel, Field, ValidationError
 import auth
 import clock
 import connections
+import forms
 import media
 import state
 import upstream
 from connections import Connection
-from image_upload import (IMAGE_FIELDS, MAX_BODY, MAX_UPLOAD, UploadError, decode_form, image_size,
-                          normalize_image, prepare_mask, restrict_edit)
+from image_upload import MAX_BODY, MAX_UPLOAD, UploadError, image_size, prepare_mask, restrict_edit
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/images")
@@ -59,9 +61,8 @@ TERMINAL = {"done", "error", "cancelled"}
 CANCELLING = "отменяю — карта освободится сразу после текущей картинки (если шлюз ещё ждёт карту — после её получения и картинки)"
 INTERRUPTED = "прервано перезапуском студии"
 JSON_MAX = 512 * 1024
-MEDIA_ID_RE = re.compile(r"[0-9a-f]{32}")
-#: отказ decode_form форме без файла фото — тогда фото может прийти полем source_media_id
-NO_FILE = f"нужен файл {IMAGE_FIELDS[0]} (PNG, JPEG или WebP)"
+#: удаление учётки ждёт конца её отменённых заданий: они освобождают карту её подключением
+SETTLE_SEC = 90
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
 MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
@@ -106,6 +107,7 @@ class Job:
     description_started: bool = False
     source_media_id: str | None = None
     media_id: str | None = None              # готовая картинка в media (вместо прежнего png в памяти)
+    mask_media_id: str | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -124,6 +126,7 @@ class JobIn(BaseModel):
     seed: "int | None" = Field(default=None, ge=0, le=2**32 - 1)
     strength: float = Field(default=0.65, ge=0.05, le=1)
     source_media_id: "str | None" = Field(default=None, max_length=64)
+    mask_media_id: "str | None" = Field(default=None, max_length=64)    # маска прежней правки (повтор)
 
 
 # ---- задания в памяти и строки истории -----------------------------------------
@@ -175,7 +178,8 @@ def _out(row) -> dict:
     return {"id": row["id"], "kind": row["kind"], "state": row["state"], "detail": row["detail"],
             "elapsed": int(max(0, end - row["created"])), "model": row["model"], "prompt": row["prompt"],
             "size": row["size"], "seed": row["seed"], "strength": row["strength"],
-            "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"]}
+            "source_media_id": row["source_media_id"], "mask_media_id": row["mask_media_id"],
+            "media_id": row["media_id"], "created": row["created"]}
 
 
 def _status(job: Job) -> dict:
@@ -193,14 +197,27 @@ def recover() -> None:
 
 
 def forget_user(user_id: int) -> None:
-    """Стирание истории или удаление учётки: идущие задания пользователя отменяются — картинку,
-    пришедшую после, путь отмены run_job выбросит и освободит карту; невыданные описания забываются."""
+    """Стирание истории, удаление или отключение учётки: идущие задания пользователя отменяются —
+    картинку, пришедшую после, путь отмены run_job выбросит и освободит карту; невыданные описания
+    забываются."""
     for job in JOBS.values():
         if job.user_id != user_id:
             continue
         job.description = None
         if job.state == "working":
             job.state, job.detail = "cancelling", CANCELLING
+            _store(job)
+
+
+async def settle_user(user_id: int) -> bool:
+    """Ждать конца заданий пользователя (после forget_user они сами освобождают карту) не дольше
+    SETTLE_SEC; True — все кончились."""
+    deadline = clock.NOW() + SETTLE_SEC
+    while any(j.user_id == user_id and j.task is not None and not j.task.done() for j in JOBS.values()):
+        if clock.NOW() >= deadline:
+            return False
+        await clock.SLEEP(1)
+    return True
 
 
 async def stop() -> None:
@@ -217,57 +234,13 @@ def _multipart(request: Request) -> bool:
     return request.headers.get("content-type", "").lower().startswith("multipart/form-data")
 
 
-async def _body(request: Request, limit: int) -> bytes:
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > limit:
-            raise HTTPException(413, {"code": "too_big", "message": "слишком большое тело запроса"})
-    return bytes(raw)
-
-
-def _decode(raw: bytes, content_type: str, with_mask: bool) -> tuple[dict, "bytes | None", "bytes | None"]:
-    """(поля, фото, маска) формы. Фото — файл `image` или поле `source_media_id` (фото истории):
-    форме без файла decode_form отказывает, и тогда она разбирается ещё раз этим полем вместо файла."""
-    extra = {} if with_mask else None
-    try:
-        fields, image = decode_form(raw, content_type, extra_files=extra)
-    except UploadError as e:
-        if str(e) != NO_FILE:
-            raise
-        extra = {} if with_mask else None
+async def _discard(user_id: int, media_ids: list[str]) -> None:
+    """Файлы, записанные запросом, который потом отказал."""
+    for media_id in media_ids:
         try:
-            fields, source = decode_form(raw, content_type, extra_files=extra, file_fields=("source_media_id",))
-        except UploadError:
-            raise e from None                   # ни файла, ни фото истории
-        fields["source_media_id"], image = source.decode("utf-8", "replace"), None
-    else:
-        if "source_media_id" in fields:
-            raise UploadError("нужно одно фото: файл или фото из истории")
-    return fields, image, (extra or {}).get("mask")
-
-
-def _load(file: Path) -> bytes:
-    if file.stat().st_size > MAX_UPLOAD:
-        raise UploadError(f"фото должно быть непустым и не больше {MAX_UPLOAD // (1024 * 1024)} МиБ", 413)
-    return file.read_bytes()
-
-
-async def _photo(user_id: int, upload: "bytes | None", source_id: "str | None") -> "bytes | None":
-    """Нормализованное фото задания: файл с устройства или своё фото истории; нет ни того, ни другого — None."""
-    if upload is None and source_id is None:
-        return None
-    if upload is None:
-        if not MEDIA_ID_RE.fullmatch(source_id):
-            raise HTTPException(404, media.GONE)
-        file = media.path(user_id, source_id)            # чужое и неизвестное — 404 gone
-        try:
-            upload = await asyncio.to_thread(_load, file)
-        except FileNotFoundError:
-            raise HTTPException(404, media.GONE) from None
+            await media.delete_async(user_id, media_id)
         except OSError:
-            raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
-    return await asyncio.to_thread(normalize_image, upload)
+            log.warning("исходник или маска пользователя %d: файл не удалился", user_id)
 
 
 # ---- API -------------------------------------------------------------------
@@ -281,14 +254,19 @@ async def create_job(request: Request):
     try:
         if _multipart(request):
             # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
-            fields, upload, mask = await asyncio.to_thread(_decode, await _body(request, MAX_BODY + MAX_UPLOAD),
-                                                           request.headers["content-type"], with_mask=True)
+            fields, upload, mask = await asyncio.to_thread(
+                forms.decode, await forms.read_body(request, MAX_BODY + MAX_UPLOAD), request.headers["content-type"],
+                with_mask=True)
             if fields.get("seed") == "":
                 fields.pop("seed")
             body = JobIn.model_validate(fields)
         else:
-            body = JobIn.model_validate_json(await _body(request, JSON_MAX))
-        image = await _photo(uid, upload, body.source_media_id)
+            body = JobIn.model_validate_json(await forms.read_body(request, JSON_MAX))
+        image = await forms.photo(uid, upload, body.source_media_id)
+        if body.mask_media_id is not None:
+            if mask is not None:
+                raise UploadError("нужна одна маска: файл или маска прежней правки")
+            mask = await forms.history_file(uid, body.mask_media_id)
         if mask is not None:
             mask = await asyncio.to_thread(prepare_mask, mask, image)
         if body.size == "original" and image is None:
@@ -301,30 +279,33 @@ async def create_job(request: Request):
     ensure_idle(uid)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
     size = "{}x{}".format(*image_size(image)) if body.size == "original" else SIZES[body.size]
-    source_id = body.source_media_id
-    if upload is not None:
-        try:
+    source_id, mask_id = body.source_media_id, body.mask_media_id
+    saved = []                                   # файлы этого запроса: отказ ниже их удаляет
+    try:
+        if upload is not None:
             source_id = await media.save_async(uid, image, "image/png", f"studio-source-{seed}.png", thumb=True)
-        except media.StorageError as e:
-            raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
-        try:
+            saved.append(source_id)
+        if mask is not None and mask_id is None:
+            mask_id = await media.save_async(uid, mask, "image/png", f"studio-mask-{seed}.png")
+            saved.append(mask_id)
+        if saved:
             ensure_idle(uid)                     # запись на шару тоже уступала другим запросам
-        except HTTPException:
-            try:
-                await media.delete_async(uid, source_id)
-            except OSError:
-                log.warning("исходник пользователя %d: файл не удалился", uid)
-            raise
-    if source_id is not None and not media.alive(uid, source_id):
-        raise HTTPException(404, media.GONE)     # исходник удалили, пока задание его готовило
+        if any(m is not None and not media.alive(uid, m) for m in (source_id, mask_id)):
+            raise HTTPException(404, media.GONE)  # исходник или маску удалили, пока задание их готовило
+    except media.StorageError as e:
+        await _discard(uid, saved)
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    except HTTPException:
+        await _discard(uid, saved)
+        raise
     now = clock.NOW()
     job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=body.model, prompt=body.prompt, size=size,
               seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
-              strength=body.strength, mask=mask, source_media_id=source_id)
+              strength=body.strength, mask=mask, source_media_id=source_id, mask_media_id=mask_id)
     state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
-                     " state, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     " mask_media_id, state, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (job.id, uid, job.kind, job.model, job.prompt, size, seed,
-                      body.strength if image is not None else None, source_id, job.state, job.detail, now))
+                      body.strength if image is not None else None, source_id, mask_id, job.state, job.detail, now))
     JOBS[job.id] = job
     job.task = asyncio.create_task(run_job(job))
     log.info("задание %s: %s %s", job.id[:8], body.model, job.size)
@@ -350,9 +331,9 @@ async def create_description(request: Request):
     conn = _photo_connection(uid)
     ensure_idle(uid)
     try:
-        fields, upload, _ = await asyncio.to_thread(_decode, await _body(request, MAX_BODY),
-                                                    request.headers.get("content-type", ""), with_mask=False)
-        image = await _photo(uid, upload, fields.get("source_media_id"))
+        fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, MAX_BODY),
+                                                    request.headers.get("content-type", ""))
+        image = await forms.photo(uid, upload, fields.get("source_media_id"))
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     ensure_idle(uid)
@@ -424,14 +405,6 @@ async def cancel_job(job_id: str, request: Request):
     return {"state": job.state}
 
 
-def _referenced(user_id: int, media_id: str) -> bool:
-    return state.DB.execute(
-        "SELECT 1 FROM images WHERE user_id = ? AND ? IN (media_id, source_media_id)"
-        " UNION ALL SELECT 1 FROM videos WHERE user_id = ? AND ? IN (media_id, source_media_id)"
-        " UNION ALL SELECT 1 FROM attachments WHERE user_id = ? AND media_id = ? LIMIT 1",
-        (user_id, media_id) * 3).fetchone() is not None
-
-
 @router.delete("/{image_id}", status_code=204)
 async def delete_image(image_id: str, request: Request):
     """Строка и её файлы; файл, на который ссылается другая запись истории, остаётся."""
@@ -441,8 +414,8 @@ async def delete_image(image_id: str, request: Request):
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
     state.DB.execute("DELETE FROM images WHERE id = ?", (image_id,))
     JOBS.pop(image_id, None)
-    for media_id in {row["media_id"], row["source_media_id"]} - {None}:
-        if not _referenced(uid, media_id):
+    for media_id in {row["media_id"], row["source_media_id"], row["mask_media_id"]} - {None}:
+        if not media.referenced(uid, media_id):
             try:
                 await media.delete_async(uid, media_id)
             except OSError:
@@ -479,9 +452,24 @@ def _png(body: dict) -> "tuple[bytes, int | None]":
     return png, seed if isinstance(seed, int) and not isinstance(seed, bool) else None
 
 
+async def _release_others(job: Job) -> None:
+    """Release другой модели картинок перед запросом (п. 4 шапки): итог не важен — занятую (409)
+    запрос дождётся у шлюза, а недоступный шлюз и убранный адрес назовёт сам запрос."""
+    for model in MODELS.values():
+        if model == MODELS[job.model]:
+            continue
+        try:
+            r = await release(job.conn, model)
+        except (httpx.HTTPError, upstream.UpstreamRefused):
+            return
+        if r.status_code not in (200, 409):
+            log.info("задание %s: release другой модели — код %s", job.id[:8], r.status_code)
+
+
 async def generate(job: Job) -> "tuple[bytes, int | None]":
     payload = {"model": MODELS[job.model], "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
+    await _release_others(job)
     try:
         if job.image is not None:
             if job.model == "lustify":

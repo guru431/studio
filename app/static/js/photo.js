@@ -3,7 +3,9 @@
  *
  * Задание: POST /api/images (JSON; с файлом исходника — форма), запись ленты — GET /api/images/<id>.
  * Идущее задание (working, cancelling) ленту опрашивает раз в POLL_MS — и найденное в ленте после
- * перезагрузки страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать» закрыта.
+ * перезагрузки страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать» и
+ * действия просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
+ * «Повторить» правки кистью идёт с её маской (mask_media_id).
  * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
  * окно закрыли раньше — описание отменяется. Текст сервера — только textContent. */
 import { api } from './api.js';
@@ -62,6 +64,7 @@ function build(view, ctx) {
   let submitting = false;
   let describing = false;
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
+  const gated = new Set();       // кнопки открытого просмотра, начинающие задание
   const popups = [];             // { chip, menu } — открывающиеся меню
   let alive = true;
 
@@ -166,8 +169,11 @@ function build(view, ctx) {
   /* занятость: одно задание за раз */
   function syncBusy() {
     const busy = submitting || describing || running.size > 0;
-    go.disabled = busy;
-    go.title = busy ? 'Дождитесь конца текущего задания' : '';
+    for (const b of [go, ...gated]) {
+      b.disabled = busy;
+      b.title = busy ? 'Дождитесь конца текущего задания' : '';
+    }
+    describeFile.disabled = busy;                    // «Описать фото с устройства…» меню раздела
   }
 
   /* карточки ленты */
@@ -335,6 +341,7 @@ function build(view, ctx) {
     if (item.source_media_id) {
       body.source_media_id = item.source_media_id;
       if (item.strength !== null && item.strength !== undefined) body.strength = item.strength;
+      if (item.mask_media_id) body.mask_media_id = item.mask_media_id;      // правка кистью — с той же маской
     }
     return body;
   }
@@ -357,14 +364,10 @@ function build(view, ctx) {
     const close = iconButton('x', 'Закрыть', { class: 'icon-btn viewer-close' });
     const act = (text, cls, fn) => button(text, { class: `btn btn-sm ${cls}` }, fn);
     const dialog = el('dialog', { id: 'viewer', class: 'viewer', 'aria-label': 'Просмотр картинки' });
-    const actions = el('div', { class: 'viewer-actions' },
+    const starts = [
       act('Изменить', 'act-edit', () => {
         dialog.close();
         openEditor(item, model, (created) => adopt(created.id));
-      }),
-      act('Оживить', 'act-animate', () => {
-        dialog.close();
-        ctx.navigate(`video?source=${encodeURIComponent(item.media_id)}`);
       }),
       act('Повторить с тем же seed', 'act-repeat', () => {
         dialog.close();
@@ -373,15 +376,26 @@ function build(view, ctx) {
       act('Описать', 'act-describe', () => {
         dialog.close();
         describe({ mediaId: item.media_id });
+      })];
+    const actions = el('div', { class: 'viewer-actions' }, starts[0],
+      act('Оживить', 'act-animate', () => {
+        dialog.close();
+        ctx.navigate(`video?source=${encodeURIComponent(item.media_id)}`);
       }),
+      starts[1], starts[2],
       el('a', { class: 'btn btn-sm act-download', href: media(item.media_id, '?download=1'), download: '' }, 'Скачать'),
       act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)));
+    for (const b of starts) gated.add(b);
+    syncBusy();
     dialog.append(el('div', { class: 'viewer-top' }, close), stage,
       el('div', { class: 'viewer-bar' },
         el('p', { class: 'viewer-meta' }, `${NAMES[item.model] || item.model} · ${String(item.size).replace('x', '×')} · seed ${item.seed}`),
         el('p', { class: 'viewer-prompt' }, item.prompt), actions));
     close.addEventListener('click', () => dialog.close());
-    dialog.addEventListener('close', () => dialog.remove());
+    dialog.addEventListener('close', () => {
+      for (const b of starts) gated.delete(b);
+      dialog.remove();
+    });
     // 1:1 — точка под пальцем или курсором остаётся на месте; клик мимо картинки — закрыть
     img.addEventListener('click', (event) => {
       const fx = event.offsetX / img.clientWidth;

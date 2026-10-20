@@ -2,7 +2,7 @@
 import auth
 import clock
 import state
-from conftest import login, make_user, signin
+from conftest import add_gateway, login, make_user, signin
 
 
 def add_history(s, env, uid, tag="тайна"):
@@ -188,6 +188,50 @@ def test_reset_password_and_disable_end_sessions(studio):
     assert login(studio, "bob", "reset-password").status_code == 401        # отключён
     state.DB.execute("UPDATE users SET disabled = 0 WHERE id = ?", (bob,))
     assert login(studio, "bob", "reset-password").status_code == 303
+
+
+def test_disabling_a_user_stops_their_work_but_keeps_history(studio):
+    """Отключение учётки останавливает её задание картинки (карта освобождается её подключением),
+    поток чата и ролик у шлюза; история остаётся (ревью A1-M13)."""
+    import time
+    import chat
+    import images
+    from fakes import PNG_REAL, TOKEN
+    from test_chat import events_of
+
+    def until(cond):
+        for _ in range(3000):
+            if cond():
+                return
+            time.sleep(0.001)
+        raise AssertionError("условие не наступило")
+
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "bob")
+    add_gateway(studio)
+    video = studio.c.post("/api/videos", files={"image": ("p.png", PNG_REAL, "image/png")}).json()
+    studio.gw.hold = studio.gw.chat_hold = True
+    try:
+        job = studio.c.post("/api/images", json={"prompt": "p", "size": "square"}).json()["id"]
+        until(lambda: studio.gw.generations)
+        cid = studio.c.post("/api/chats", json={}).json()["id"]
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(events)[0] == "turn" and next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+            (stream,) = chat.STREAMS.values()
+        signin(studio, "owner")
+        assert studio.c.patch(f"/api/admin/users/{bob}", json={"disabled": True}).status_code == 200
+        assert stream.task.done() and not chat.STREAMS
+        assert images.JOBS[job].state == "cancelling"
+    finally:
+        studio.gw.hold = studio.gw.chat_hold = False
+    until(lambda: images.JOBS[job].state in images.TERMINAL)
+    assert images.JOBS[job].state == "cancelled" and "карта освобождена" in images.JOBS[job].detail
+    assert studio.gw.releases[-1] == ("lustify-v10-krea2-turbo", f"Bearer {TOKEN}")
+    row = state.DB.execute("SELECT state, gateway_id FROM videos WHERE id = ?", (video["id"],)).fetchone()
+    assert row["state"] == "cancelled" and studio.gw.video_deleted == [row["gateway_id"]]
+    statuses = [r["status"] for r in state.DB.execute("SELECT status FROM messages WHERE chat_id = ?", (cid,))]
+    assert statuses == ["done", "stopped"]
+    assert state.DB.execute("SELECT state FROM images WHERE id = ?", (job,)).fetchone()["state"] == "cancelled"
 
 
 def test_admin_cannot_lock_themselves_out(studio):

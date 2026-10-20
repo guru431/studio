@@ -13,8 +13,8 @@
 
 - История — в базе (`/var/lib/studio/studio.db`) и на шаре (`/mnt/storage/SharedData/studio`), в
   журнал — ничего: промпты, ключи, пароли, тексты, картинки и имена файлов не пишутся.
-- Анонимны только `/health`, `/login`, `/logout` и оболочка PWA; всё `/api/*` — через сессию и
-  CSRF (`auth.guard`). Пользователь видит только своё.
+- Анонимны только `/health`, `/login`, `/logout`, `/robots.txt` и оболочка PWA; всё `/api/*` —
+  через сессию и CSRF (`auth.guard`). Пользователь видит только своё.
 - Служба слушает только unix-сокет `/run/studio/web.sock` за Apache debian
   ([deploy/apache-vhost.conf](deploy/apache-vhost.conf)) и потому верит последнему
   `X-Forwarded-For` — TCP-порт не открывать.

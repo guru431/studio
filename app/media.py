@@ -228,6 +228,16 @@ def alive(user_id: int, media_id: str) -> bool:
         "SELECT 1 FROM media WHERE id = ? AND user_id = ?", (media_id, user_id)).fetchone() is not None
 
 
+def referenced(user_id: int, media_id: str) -> bool:
+    """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик или вложение чата:
+    удаление другой записи его не трогает."""
+    return state.DB.execute(
+        "SELECT 1 FROM images WHERE user_id = ? AND ? IN (media_id, source_media_id, mask_media_id)"
+        " UNION ALL SELECT 1 FROM videos WHERE user_id = ? AND ? IN (media_id, source_media_id)"
+        " UNION ALL SELECT 1 FROM attachments WHERE user_id = ? AND media_id = ? LIMIT 1",
+        (user_id, media_id) * 3).fetchone() is not None
+
+
 async def delete_async(user_id: int, media_id: str) -> None:
     """Файлы — в потоке (зависшая шара не останавливает службу), затем строка — здесь, на цикле.
     Нет файла или строки — не ошибка. Прочая OSError — наружу, строка остаётся."""

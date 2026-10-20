@@ -71,6 +71,7 @@ class FakeGateway:
         self.video_create_reply = None   # (код, тело) вместо нового ролика
         self.video_ids = []              # id всех созданных роликов по порядку
         self.videos = {}                 # ролики, которые шлюз помнит: id → seed
+        self.video_fields = {}           # их поля создания: id → поля формы (для списка шлюза)
         self.video_status = "queued"     # статус любого ролика в ответе шлюза
         self.video_extra = {}            # прочие поля ответа статуса (progress, detail, error, prompt…)
         self.video_content = MP4
@@ -158,7 +159,16 @@ class FakeGateway:
             video_id = f"video_{len(self.video_ids) + 1:024x}"
             self.video_ids.append(video_id)
             self.videos[video_id] = int(fields["seed"]) if "seed" in fields else 42
+            self.video_fields[video_id] = fields
             return httpx.Response(200, json=video_object(video_id, seed=self.videos[video_id]))
+        if path == "/slot/videos" and method == "GET":
+            # список шлюза — как у переводчика: все задания всех ключей, с длительностью, качеством, дорисовкой
+            data = []
+            for vid, seed in self.videos.items():
+                f = self.video_fields.get(vid, {})
+                data.append(video_object(vid, status=self.video_status, seed=seed, seconds=f.get("seconds", "5"),
+                                         quality=f.get("quality", "standard"), smooth=f.get("smooth", "true") == "true"))
+            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
         video_id, _, tail = path.removeprefix("/slot/videos/").partition("/")
         if video_id not in self.videos:
             return httpx.Response(404, json={"error": {"message": "нет такого ролика", "type": "not_found"}})

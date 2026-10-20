@@ -418,17 +418,109 @@ def test_compose_merges_user_messages_left_without_an_answer(studio):
 
 
 def test_new_turn_ends_a_browser_answer_nobody_saves(studio):
-    """Вкладка с прямым ответом закрылась: следующий ход помечает его ошибкой, а не вечной загрузкой
-    (ревью A2-M11); `via` в сообщении отличает ответ браузера от потока сервера."""
+    """Вкладка с прямым ответом закрылась (признака жизни нет дольше ALIVE_SEC): следующий ход
+    помечает его ошибкой, а не вечной загрузкой (ревью A2-M11); `via` в сообщении отличает ответ
+    браузера от потока сервера."""
     add_connection(studio); cid = new_chat(studio)
     first = turn(studio, cid, "Привет").json()
     assert {m["via"] for m in messages(studio, cid)} == {"browser"}
+    studio.clock[0] += chat.ALIVE_SEC
+    assert messages(studio, cid)[1]["live"] is False
     assert turn(studio, cid, "Ты тут?").status_code == 200
     statuses = {m["id"]: m["status"] for m in messages(studio, cid)}
     assert statuses[first["assistant_message_id"]] == "error"
     late = studio.c.put(f"/api/chats/{cid}/messages/{first['assistant_message_id']}",
                         json={"content": "поздно", "status": "done"})
     assert late.status_code == 409
+
+
+def test_browser_answer_another_tab_still_reads_is_live(studio):
+    """Две вкладки: ответ, который читает первая (шлёт признак жизни), вторая видит идущим, а не
+    «прервано», и её новый ход ждёт его, а не помечает ошибкой (ревью B1-M4)."""
+    add_connection(studio); cid = new_chat(studio)
+    first = turn(studio, cid, "Привет").json()
+    aid = first["assistant_message_id"]
+    alive = f"/api/chats/{cid}/messages/{aid}/alive"
+    assert messages(studio, cid)[1]["live"] is True
+    for _ in range(3):                                        # вкладка читает дольше ALIVE_SEC
+        studio.clock[0] += chat.ALIVE_SEC - 1
+        assert studio.c.post(alive).status_code == 204
+    assert messages(studio, cid)[1]["live"] is True
+    busy = turn(studio, cid, "Ты тут?")
+    assert busy.status_code == 409 and "в другой вкладке" in busy.json()["detail"]["message"]
+    assert [m["status"] for m in messages(studio, cid)] == ["done", "streaming"]
+    url = f"/api/chats/{cid}/messages/{aid}"
+    assert studio.c.put(url, json={"content": "Здравствуйте!", "status": "done"}).status_code == 200
+    assert studio.c.post(alive).status_code == 409             # ответ сохранён — вкладка перестаёт слать
+    assert messages(studio, cid)[1]["live"] is False
+    assert turn(studio, cid, "Ты тут?").status_code == 200
+    user = messages(studio, cid)[0]["id"]
+    assert studio.c.post(f"/api/chats/{cid}/messages/{user}/alive").status_code == 409
+    make_user(studio, "bob"); signin(studio, "bob")
+    assert studio.c.post(alive).status_code == 404                # чужой диалог
+
+
+def test_history_wipe_stops_a_turn_started_during_it(studio, monkeypatch):
+    """Ход без фото, начатый из другой вкладки, пока стирание удаляет файлы: его поток
+    останавливается и после удаления диалога, а не держит карту до конца ответа (ревью B2-M7)."""
+    import media
+    add_gateway(studio); cid = new_chat(studio)
+    attach(studio, "a.txt", b"x", "text/plain")                 # файл есть: стирание идёт в поток
+    real, streams = media.remove_files, []
+
+    def racing(rows):                                         # поток стирания: цикл свободен
+        if not streams:
+            with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+                events = events_of(r.iter_lines())
+                assert next(events)[0] == "turn"
+                assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+                streams.extend(chat.STREAMS.values())
+        return real(rows)
+
+    monkeypatch.setattr(media, "remove_files", racing)
+    studio.gw.chat_hold = True
+    try:
+        assert studio.c.delete("/api/history").status_code == 204
+        (stream,) = streams
+        assert stream.task.done() and not chat.STREAMS
+    finally:
+        studio.gw.chat_hold = False
+    assert studio.c.get("/api/chats").json() == {"items": []}
+
+
+# ---- неотправленные вложения ---------------------------------------------------
+
+def _media_count() -> int:
+    return state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+
+
+def test_unsent_attachment_is_deleted_with_its_file(studio, env):
+    add_gateway(studio); cid = new_chat(studio)
+    doc = attach(studio, "a.txt", b"draft", "text/plain")
+    assert studio.c.delete(f"/api/attachments/{doc['id']}").status_code == 204
+    assert _media_count() == 0 and [p for p in env.media_dir.rglob("*") if p.is_file()] == []
+    assert studio.c.delete(f"/api/attachments/{doc['id']}").status_code == 404
+    sent = attach(studio, "b.txt", b"sent", "text/plain")
+    sse(turn(studio, cid, "вот", attachment_ids=[sent["id"]]))
+    r = studio.c.delete(f"/api/attachments/{sent['id']}")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "sent" and _media_count() == 1
+    mine = attach(studio, "c.txt", b"mine", "text/plain")
+    make_user(studio, "bob"); signin(studio, "bob")
+    assert studio.c.delete(f"/api/attachments/{mine['id']}").status_code == 404
+    assert _media_count() == 2
+
+
+def test_sweep_drops_attachments_left_unsent_for_a_day(studio, env):
+    add_gateway(studio); cid = new_chat(studio)
+    old = attach(studio, "old.txt", b"old", "text/plain")
+    sent = attach(studio, "sent.txt", b"sent", "text/plain")
+    sse(turn(studio, cid, "вот", attachment_ids=[sent["id"]]))
+    studio.clock[0] += chat.ORPHAN_SEC + 1
+    fresh = attach(studio, "fresh.txt", b"fresh", "text/plain")
+    studio.c.portal.call(chat.sweep_attachments)
+    left = {r["id"] for r in state.DB.execute("SELECT id FROM attachments")}
+    assert left == {sent["id"], fresh["id"]} and _media_count() == 2
+    assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 404
 
 
 def test_history_wipe_stops_the_users_streams(studio):

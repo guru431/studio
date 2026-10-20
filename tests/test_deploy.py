@@ -129,7 +129,9 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     """B2-M8: при равных пределах 502 Apache закрывал бы 504 службы словами «шлюз не ответил»."""
     timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))
     release = (len(images.MODELS) + 1) * images.SHORT_TIMEOUT_SEC         # «Освободить карту»: три release
-    assert timeout > max(videos.VIDEO_TIMEOUT_SEC, chat.MODELS_TIMEOUT_SEC, release)
+    video = videos.VIDEO_TIMEOUT_SEC + videos.ADOPT_TIMEOUT_SEC           # создание и поиск потерянного ответа
+    # удаление учётки ждёт её заданий картинок
+    assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC)
 
 
 def test_backup_unit_is_bounded_and_never_owns_the_socket_directory():

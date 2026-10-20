@@ -227,7 +227,7 @@ async def small_body(request: Request, limit: int) -> bytes | None:
     return body
 
 
-@router.get("/login")
+@router.api_route("/login", methods=["GET", "HEAD"])
 async def login_page(request: Request):
     if session_user(request.cookies.get(COOKIE), renew=False):
         return RedirectResponse("/", status_code=303)

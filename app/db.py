@@ -1,8 +1,11 @@
-"""Соединение SQLite и схема базы (версия 1)."""
+"""Соединение SQLite и схема базы (версия 2).
+
+Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
+Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 
 SCHEMA = """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
@@ -24,7 +27,8 @@ CREATE TABLE chats(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES user
 CREATE TABLE messages(id TEXT PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE,
          role TEXT NOT NULL CHECK (role IN ('user','assistant')), content TEXT NOT NULL,
          status TEXT NOT NULL CHECK (status IN ('done','streaming','stopped','error')),
-         via TEXT NOT NULL CHECK (via IN ('server','browser')), model TEXT, created REAL NOT NULL);
+         via TEXT NOT NULL CHECK (via IN ('server','browser')), model TEXT, created REAL NOT NULL,
+         alive_at REAL);
 CREATE TABLE attachments(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
             message_id TEXT REFERENCES messages ON DELETE CASCADE,
             kind TEXT NOT NULL CHECK (kind IN ('document','image')), name TEXT NOT NULL,
@@ -32,7 +36,7 @@ CREATE TABLE attachments(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCE
 CREATE TABLE images(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
        kind TEXT NOT NULL CHECK (kind IN ('generation','edit')), model TEXT NOT NULL, prompt TEXT NOT NULL,
        size TEXT NOT NULL, seed INTEGER NOT NULL, strength REAL, source_media_id TEXT, media_id TEXT,
-       state TEXT NOT NULL, detail TEXT NOT NULL, created REAL NOT NULL, finished REAL);
+       state TEXT NOT NULL, detail TEXT NOT NULL, created REAL NOT NULL, finished REAL, mask_media_id TEXT);
 CREATE TABLE videos(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
        connection_id INTEGER NOT NULL, gateway_id TEXT, source_media_id TEXT NOT NULL, media_id TEXT,
        prompt TEXT NOT NULL, prompt_source TEXT, seconds INTEGER NOT NULL, quality TEXT NOT NULL,
@@ -45,6 +49,12 @@ CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
 """
 
+#: версия → SQL, который приводит к ней базу предыдущей версии
+STEPS = {
+    # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
+    2: "ALTER TABLE images ADD COLUMN mask_media_id TEXT;\nALTER TABLE messages ADD COLUMN alive_at REAL;",
+}
+
 
 def connect(path: Path) -> sqlite3.Connection:
     """Автокоммит (isolation_level=None): транзакции — явным BEGIN."""
@@ -56,7 +66,9 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    if conn.execute("PRAGMA user_version").fetchone()[0] >= VERSION:
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current >= VERSION:
         return
-    # одной транзакцией: обрыв посреди не оставит полсхемы с user_version = 0
-    conn.executescript(f"BEGIN;\n{SCHEMA}\nPRAGMA user_version = {VERSION};\nCOMMIT;")
+    body = SCHEMA if current == 0 else "\n".join(STEPS[v] for v in range(current + 1, VERSION + 1))
+    # одной транзакцией: обрыв посреди не оставит полсхемы со старой user_version
+    conn.executescript(f"BEGIN;\n{body}\nPRAGMA user_version = {VERSION};\nCOMMIT;")

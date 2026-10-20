@@ -5,11 +5,15 @@
 1. Создание: фото с устройства (сохраняется в media с превью) или фото истории (`source_media_id`),
    нормализованное normalize_image, уходит шлюзу формой с именем файла `input.png` — имя с
    устройства дальше студии не идёт. Строка появляется только после ответа шлюза с его id.
+   Seed выбирает студия (пусто — случайный): ответ на создание потерялся (таймаут, обрыв, 502/504
+   перед шлюзом), а шлюз задание мог принять — студия ищет его в списке шлюза по seed, длительности,
+   качеству и времени (`_adopt`) и берёт, только если такое ровно одно и его нет у другой строки.
+   Больше список шлюза (`GET /slot/videos`) студия не читает: чужие задания в ленту не попадают.
 2. Наблюдатель службы (`start_watcher`) раз в POLL_SEC опрашивает шлюз по всем идущим строкам —
    вкладка не нужна, после перезапуска опрос продолжается. Готовый mp4 (до VIDEO_CONTENT_MAX)
    идёт потоком со шлюза на шару (`media.save_stream`) и снимается у шлюза. Шлюз или шара
    недоступны — строка не меняется до следующего прохода; 401 — `failed` со словами о профиле,
-   сессия студии жива. Список шлюза (`GET /slot/videos`) студия не читает.
+   сессия студии жива.
 3. Отмена и удаление идущего ролика сначала снимают его у шлюза. Строки меняются условием
    «ещё идёт»: отмена посреди скачивания выбрасывает скачанное.
 4. База — только с цикла событий. Журнал — только id и коды: промпт, токен, картинки, ролики и
@@ -18,6 +22,7 @@
 import asyncio
 import logging
 import re
+import secrets
 import uuid
 from typing import AsyncIterator, Literal
 
@@ -28,12 +33,12 @@ from pydantic import BaseModel, Field, ValidationError
 
 import clock
 import connections
-import images
+import forms
 import media
 import state
 import upstream
 from connections import Connection
-from image_upload import MAX_BODY, MAX_UPLOAD, VIDEO_PIXELS, VIDEO_UPLOAD, UploadError, decode_form, normalize_image
+from image_upload import MAX_BODY, MAX_UPLOAD, VIDEO_PIXELS, VIDEO_UPLOAD, UploadError
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/videos")
@@ -43,6 +48,10 @@ VIDEO_MODEL = "wan2.2-remix-i2v-v3"
 VIDEO_ID_RE = re.compile(r"video_[0-9a-f]{24}")
 # загрузка картинки и ответ `queued` — ролик шлюз не ждёт; чтение mp4 — тот же срок на кусок
 VIDEO_TIMEOUT_SEC = 120
+# поиск задания, ответ на создание которого потерялся: список шлюза — один короткий запрос
+ADOPT_TIMEOUT_SEC = 20
+# часы шлюза и студии разные: задание считается созданным этим запросом с таким запасом
+ADOPT_SKEW_SEC = 300
 VIDEO_CONTENT_MAX = 300 * 1024 * 1024
 POLL_SEC = 5
 BODY_MAX = VIDEO_UPLOAD + (MAX_BODY - MAX_UPLOAD)
@@ -165,41 +174,42 @@ async def _drop_quietly(conn: Connection, gateway_id: str, video_id: str) -> Non
         log.warning("ролик %s: у шлюза не снят — код %s", video_id[:8], r.status_code)
 
 
-async def cancel_at_gateway(user_id: int) -> None:
-    """Все идущие ролики пользователя — снять у шлюза (удаление истории); отказ не мешает."""
+async def cancel_user(user_id: int) -> None:
+    """Все идущие ролики пользователя — снять у шлюза и пометить отменёнными (стирание истории,
+    удаление и отключение учётки); отказ шлюза не мешает — забытое он снимет сам по сроку."""
     rows = state.DB.execute(f"SELECT * FROM videos WHERE user_id = ? AND {WHERE_ACTIVE}"
                             " AND gateway_id IS NOT NULL", (user_id,)).fetchall()
     for row in rows:
         conn = _connection(row)
         if conn is not None:
             await _drop_quietly(conn, row["gateway_id"], row["id"])
+        _settle(row["id"], "cancelled", "отменено")
 
 
 # ---- ввод ------------------------------------------------------------------
-
-def _decode(raw: bytes, content_type: str) -> tuple[dict, "bytes | None"]:
-    """(поля, фото) формы: файл `image` (до VIDEO_UPLOAD) или поле `source_media_id` — тогда фото None."""
-    try:
-        fields, image = decode_form(raw, content_type, max_upload=VIDEO_UPLOAD)
-    except UploadError as e:
-        if str(e) != images.NO_FILE:
-            raise
-        try:
-            fields, source = decode_form(raw, content_type, file_fields=("source_media_id",))
-        except UploadError:
-            raise e from None                     # ни файла, ни фото истории
-        fields["source_media_id"] = source.decode("utf-8", "replace")
-        return fields, None
-    if "source_media_id" in fields:
-        raise UploadError("нужно одно фото: файл или фото из истории")
-    return fields, image
-
 
 def _video_connection(user_id: int) -> Connection:
     conn = connections.video_connection(user_id)
     if conn is None:
         raise HTTPException(409, {"code": "no_gateway", "message": "добавьте подключение к шлюзу srvllm в профиле"})
     return conn
+
+
+async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
+    """Задание этого запроса в списке шлюза (п. 1 шапки): тот же seed, длительность, качество и
+    дорисовка, создано не раньше запроса и не принадлежит другой строке. Не ровно одно — None."""
+    try:
+        r = await upstream.request(conn, "GET", connections.slot_url(conn, "/videos"), timeout=ADOPT_TIMEOUT_SEC)
+    except (httpx.HTTPError, upstream.UpstreamRefused):
+        return None
+    data = upstream.json_body(r).get("data") if r.is_success else None
+    found = [v for v in (data if isinstance(data, list) else [])
+             if isinstance(v, dict) and isinstance(v.get("id"), str) and VIDEO_ID_RE.fullmatch(v["id"])
+             and str(v.get("seed")) == form["seed"] and str(v.get("seconds")) == form["seconds"]
+             and v.get("quality") == form["quality"] and v.get("smooth") is (form["smooth"] == "true")
+             and _int(v.get("created_at"), 0) >= since - ADOPT_SKEW_SEC
+             and state.DB.execute("SELECT 1 FROM videos WHERE gateway_id = ?", (v["id"],)).fetchone() is None]
+    return found[0] if len(found) == 1 else None
 
 
 async def _forget(user_id: int, media_id: str) -> None:
@@ -217,15 +227,12 @@ async def create_video(request: Request):
     conn = _video_connection(uid)
     try:
         # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
-        fields, upload = await asyncio.to_thread(_decode, await images._body(request, BODY_MAX),
-                                                 request.headers.get("content-type", ""))
+        fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, BODY_MAX),
+                                                    request.headers.get("content-type", ""), max_upload=VIDEO_UPLOAD)
         source_id = fields.pop("source_media_id", None)
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
-        if upload is not None:
-            image = await asyncio.to_thread(normalize_image, upload, VIDEO_PIXELS)
-        else:
-            image = await images._photo(uid, None, source_id)
+        image = await forms.photo(uid, upload, source_id, VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     except ValidationError:
@@ -236,24 +243,30 @@ async def create_video(request: Request):
             source_id = await media.save_async(uid, image, "image/png", "studio-video-source.png", thumb=True)
         except media.StorageError as e:
             raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
     form = {"model": VIDEO_MODEL, "seconds": str(body.seconds), "quality": body.quality,
-            "smooth": "true" if body.smooth else "false"}
+            "smooth": "true" if body.smooth else "false", "seed": str(seed)}
     if body.prompt.strip():
         form["prompt"] = body.prompt.strip()
-    if body.seed is not None:
-        form["seed"] = str(body.seed)
-    failure, answer = None, {}
+    failure, answer, lost, started = None, {}, False, clock.NOW()
     try:
         r = await upstream.request(conn, "POST", connections.slot_url(conn, "/videos"), timeout=VIDEO_TIMEOUT_SEC,
                                    data=form, files={"input_reference": ("input.png", image, "image/png")})
     except (httpx.HTTPError, upstream.UpstreamRefused) as e:
         failure = _unreachable(e, conn)
+        # соединения не было — задания у шлюза нет; иначе запрос мог дойти, а ответ — потеряться
+        lost = isinstance(e, httpx.HTTPError) and not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout,
+                                                                      httpx.PoolTimeout))
     else:
         answer = upstream.json_body(r)
         if not r.is_success:
             failure = _refusal(r, conn)
+            lost = r.status_code in (502, 504)          # отказ прокси перед переводчиком
         elif not isinstance(answer.get("id"), str) or not VIDEO_ID_RE.fullmatch(answer["id"]):
             failure = HTTPException(502, {"code": "gateway", "message": "шлюз вернул ролик без id"})
+    if lost and (found := await _adopt(conn, form, started)) is not None:
+        log.warning("ролик пользователя %d: ответ шлюза потерялся — задание найдено в его списке", uid)
+        failure, answer = None, found
     if failure is not None:
         log.warning("ролик пользователя %d не создан: %s", uid, failure.status_code)
         if upload is not None:
@@ -268,7 +281,7 @@ async def create_video(request: Request):
         "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source, seconds,"
         " quality, smooth, seed, state, progress, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (video_id, uid, conn.id, answer["id"], source_id, body.prompt.strip(), _text(answer.get("prompt_source"), None),
-         body.seconds, body.quality, int(body.smooth), _int(answer.get("seed"), body.seed),
+         body.seconds, body.quality, int(body.smooth), _int(answer.get("seed"), seed),
          status if status in ACTIVE else "queued", min(100, max(0, _int(answer.get("progress"), 0))),
          _text(answer.get("detail"), "в очереди"), now))
     log.info("ролик %s: создан, %d с, %s", video_id[:8], body.seconds, body.quality)
@@ -319,7 +332,7 @@ async def delete_video(video_id: str, request: Request):
     row = _row(uid, video_id)                     # наблюдатель мог успеть положить ролик
     state.DB.execute("DELETE FROM videos WHERE id = ?", (video_id,))
     for media_id in {row["media_id"], row["source_media_id"]} - {None}:
-        if not images._referenced(uid, media_id):
+        if not media.referenced(uid, media_id):
             try:
                 await media.delete_async(uid, media_id)
             except OSError:

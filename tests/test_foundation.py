@@ -30,9 +30,23 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 2
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
+    """База прода — версии 1: шаг добавляет столбцы, строки и настройки остаются."""
+    conn = db.connect(env.db_path); db.migrate(conn)
+    conn.executescript("ALTER TABLE images DROP COLUMN mask_media_id; ALTER TABLE messages DROP COLUMN alive_at;"
+                       " PRAGMA user_version = 1;")
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
+    conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                 " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
+    db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("SELECT id, mask_media_id FROM images").fetchone()[:] == ("i1", None)
+    assert "alive_at" in [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
 
 
 def test_deleting_a_user_cascades(env):

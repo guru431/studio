@@ -11,6 +11,7 @@ import httpx
 import pytest
 from PIL import Image
 
+import forms
 import media
 import state
 import videos
@@ -67,16 +68,19 @@ def test_video_is_created_as_gateway_multipart_without_private_names(studio, cap
     assert r.status_code == 201, r.text
     v = r.json()
     assert set(v) == VIDEO_OUT
-    assert {k: v[k] for k in VIDEO_OUT - {"id", "source_media_id"}} == {
-        "state": "queued", "progress": 0, "detail": "в очереди: перед ним 0", "prompt": PROMPT,
-        "prompt_source": "auto", "seconds": 7, "quality": "high", "smooth": False, "seed": 42,
-        "media_id": None, "created": T0, "elapsed": 0}
     (call,) = studio.gw.video_calls
     assert (call["method"], call["path"]) == ("POST", "/slot/videos")
     assert call["auth"] == f"Bearer {TOKEN}" and call["timeout"] == 120
     (fields, image, raw), = studio.gw.video_forms
+    # пустой seed — случайный, но выбирает его студия: по нему она найдёт ролик, если ответ потеряется
+    seed = fields.pop("seed")
+    assert seed.isdigit() and int(seed) < 2**32
     assert fields == {"model": "wan2.2-remix-i2v-v3", "prompt": PROMPT, "seconds": "7",
-                      "quality": "high", "smooth": "false"}       # пустой seed не уходит
+                      "quality": "high", "smooth": "false"}
+    assert {k: v[k] for k in VIDEO_OUT - {"id", "source_media_id"}} == {
+        "state": "queued", "progress": 0, "detail": "в очереди: перед ним 0", "prompt": PROMPT,
+        "prompt_source": "auto", "seconds": 7, "quality": "high", "smooth": False, "seed": int(seed),
+        "media_id": None, "created": T0, "elapsed": 0}
     assert image.startswith(b"\x89PNG")
     assert b'name="input_reference"; filename="input.png"' in raw
     assert PHOTO_NAME.encode() not in raw
@@ -169,6 +173,69 @@ def test_gateway_id_of_a_strange_form_is_not_kept(studio):
     assert len(studio.gw.video_calls) == 1
 
 
+def _answer_lost(s, error=httpx.ReadTimeout, accepted=True):
+    """Ответ на создание до студии не доходит (ревью A2-M8); accepted — задание шлюз всё же принял."""
+    async def create(request):
+        if request.method != "POST":
+            return await s.gw.builtin(request)
+        if accepted:
+            await s.gw.builtin(request)
+        raise error("ответ потерялся", request=request)
+
+    s.gw.on["/slot/videos"] = create
+
+
+def _foreign(s, seed, quality="standard"):
+    """Задание в очереди шлюза, которого у студии нет (скрипт или другой клиент того же ключа)."""
+    gid = f"video_{len(s.gw.videos) + 900:024x}"
+    s.gw.videos[gid] = seed
+    s.gw.video_fields[gid] = {"seconds": "5", "quality": quality, "smooth": "true"}
+    return gid
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout, httpx.RemoteProtocolError])
+def test_video_whose_answer_was_lost_is_found_in_the_gateway_list(studio, error):
+    add_gateway(studio)
+    _answer_lost(studio, error)
+    r = create_video(studio, seconds="7", quality="high")
+    assert r.status_code == 201, r.text
+    v = r.json()
+    gid = v_gateway_id(studio)
+    assert state.DB.execute("SELECT gateway_id FROM videos WHERE id = ?", (v["id"],)).fetchone()[0] == gid
+    assert [(c["method"], c["path"]) for c in studio.gw.video_calls] == [("POST", "/slot/videos"), ("GET", "/slot/videos")]
+    studio.gw.video_status = "completed"
+    poll(studio)
+    assert item(studio, v["id"])["state"] == "done" and studio.gw.video_deleted == [gid]
+
+
+def test_lost_answer_adopts_only_its_own_job(studio):
+    """Шлюз задание не принял, а в его списке — тот же seed у ролика другой строки студии и у
+    чужого задания другого качества: ни одно не своё — 504, исходник не остаётся, чужое не тронуто.
+    Два подходящих чужих — тоже не своё: не угадываем."""
+    add_gateway(studio)
+    first = create_video(studio, seed="7").json()
+    _foreign(studio, 7, quality="fast")
+    _answer_lost(studio, accepted=False)
+    r = create_video(studio, seed="7")
+    assert r.status_code == 504 and "не ответил" in r.json()["detail"]["message"]
+    assert [c["method"] for c in studio.gw.video_calls][-2:] == ["POST", "GET"]
+    assert [x["id"] for x in studio.c.get("/api/videos").json()["items"]] == [first["id"]]
+    assert media_rows() == 1 and studio.gw.video_deleted == []
+    _foreign(studio, 8), _foreign(studio, 8)
+    assert create_video(studio, seed="8").status_code == 504
+    assert media_rows() == 1
+
+
+def test_unsent_video_is_not_looked_up(studio):
+    """Соединения не было — задания у шлюза нет: список не читается, отказ 502."""
+    add_gateway(studio)
+    studio.gw.down = True
+    r = create_video(studio)
+    assert r.status_code == 502 and [(q.method, q.url.path) for q in studio.gw.requests] == [("POST", "/slot/videos")]
+    studio.gw.down = False
+    assert studio.c.get("/api/videos").json()["items"] == [] and media_rows() == 0
+
+
 # ---- наблюдатель -------------------------------------------------------------
 
 def test_watcher_brings_a_finished_video_into_history(studio):
@@ -183,7 +250,7 @@ def test_watcher_brings_a_finished_video_into_history(studio):
     assert r.status_code == 206 and r.headers["content-type"] == "video/mp4" and r.content == MP4[:10]
     download = studio.c.get(f"/api/media/{item_['media_id']}?download=1")
     assert download.content == MP4
-    assert download.headers["content-disposition"] == 'attachment; filename="studio-video-42.mp4"'
+    assert download.headers["content-disposition"] == f'attachment; filename="studio-video-{v["seed"]}.mp4"'
     calls = [(c["method"], c["path"]) for c in studio.gw.video_calls]
     gid = v_gateway_id(studio)
     assert calls == [("POST", "/slot/videos"), ("GET", f"/slot/videos/{gid}"), ("GET", f"/slot/videos/{gid}/content"),
@@ -377,7 +444,7 @@ def test_finished_clip_is_kept_before_the_gateway_drops_it(studio):
 
 def test_video_form_is_decoded_off_the_loop(studio, monkeypatch):
     """Форма ролика — до 20 МиБ: разбор не на цикле событий (ревью A2-M4)."""
-    calls, real = [], videos.decode_form
+    calls, real = [], forms.decode_form
 
     def spy(*args, **kwargs):
         try:
@@ -387,7 +454,7 @@ def test_video_form_is_decoded_off_the_loop(studio, monkeypatch):
             calls.append(False)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(videos, "decode_form", spy)
+    monkeypatch.setattr(forms, "decode_form", spy)
     add_gateway(studio)
     assert create_video(studio).status_code == 201
     assert calls == [False]

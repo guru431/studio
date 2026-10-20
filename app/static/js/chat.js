@@ -8,8 +8,11 @@
  * прямое — обрыв запроса и PUT со статусом stopped.
  *
  * Ответы, которые читает эта вкладка (`jobs`), живут дольше экрана: ушли в другой диалог или
- * раздел — ответ дочитывается и сохраняется. Ответ `streaming` из браузера, который никто не
- * читает, — «прервано»; ответ сервера, который идёт без нас, — опрос диалога раз в POLL_MS.
+ * раздел — ответ дочитывается и сохраняется. Пока вкладка читает ответ из браузера, она раз в
+ * BEAT_MS шлёт признак жизни (POST .../alive): сервер отдаёт такой ответ с `live` — другая вкладка
+ * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
+ * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
+ * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>).
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api, me } from './api.js';
 import { renderMarkdown } from './markdown.js';
@@ -20,6 +23,7 @@ import { button, el, field, openDialog, words } from './ui.js';
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
 const POLL_MS = 2000;
+const BEAT_MS = 15000;           // признак жизни ответа из браузера; сервер ждёт его 90 с (ALIVE_SEC)
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
 const COPIED_MS = 1500;
 const ICONS = {
@@ -133,6 +137,12 @@ async function serviceRefusal(response) {
 async function readBrowser(job, turn) {
   job.message.via = 'browser';
   adoptIds(job, turn);
+  // признак жизни; ответ уже не идёт (диалог удалили, историю стёрли) — читать его дальше незачем
+  const beat = setInterval(() => {
+    api('POST', `/api/chats/${job.chatId}/messages/${job.message.id}/alive`).catch((err) => {
+      if (err.code === 'gone' || err.code === 'state') job.controller.abort();
+    });
+  }, BEAT_MS);
   let status = 'done';
   try {
     const token = await tokenFor(job.connId, turn.url);
@@ -167,6 +177,7 @@ async function readBrowser(job, turn) {
       job.message.error = words(err);
     }
   }
+  clearInterval(beat);
   job.message.status = status;
   try {
     await api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, { content: job.message.content, status });
@@ -463,7 +474,7 @@ function build(view, ctx) {
     let kind = '';
     if (m.status === 'streaming') {
       if (job) text = job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;
-      else if (m.via === 'browser') text = 'прервано';
+      else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
       else text = 'ответ ещё идёт…';
     } else if (m.status === 'stopped') text = 'остановлено';
     else if (m.status === 'error') {
@@ -473,7 +484,7 @@ function build(view, ctx) {
     p.meta.textContent = text;
     p.meta.className = `msg-meta${kind}`;
     p.actions.replaceChildren();
-    if (m.status === 'streaming' && (job || m.via !== 'browser')) return;     // «прервано» можно переспросить
+    if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
     if (m.content) {
       const copy = button('Копировать', { class: 'btn btn-sm msg-copy' }, async () => {
         try {
@@ -514,6 +525,12 @@ function build(view, ctx) {
       && liveOf(m) === m);
   }
 
+  /* ответ из браузера, который читает другая вкладка: остановить его отсюда нельзя, только дождаться */
+  function otherTab() {
+    return !!chat && chat.messages.some((m) => m.role === 'assistant' && m.status === 'streaming' && m.via === 'browser'
+      && m.live && liveOf(m) === m);
+  }
+
   function syncBusy() {
     const busy = jobs.has(chatId) || remoteStream();
     send.hidden = busy;
@@ -523,7 +540,7 @@ function build(view, ctx) {
 
   function schedulePoll() {
     clearTimeout(poll);
-    poll = remoteStream() && !jobs.has(chatId) ? setTimeout(reload, POLL_MS) : null;
+    poll = (remoteStream() || otherTab()) && !jobs.has(chatId) ? setTimeout(reload, POLL_MS) : null;
   }
 
   async function reload() {
@@ -597,6 +614,8 @@ function build(view, ctx) {
       remove.addEventListener('click', () => {
         atts = atts.filter((x) => x !== a);
         paintAtts();
+        // уже загружено, но не отправлено — и с сервера; отказ не важен: остаток уберёт уборка
+        if (a.meta) api('DELETE', `/api/attachments/${a.meta.id}`).catch(() => {});
       });
       return el('span', { class: `att-chip${a.error ? ' bad' : ''}` },
         icon(a.file.type.startsWith('image/') ? 'image' : 'doc'), el('span', { class: 'att-name' }, a.file.name),

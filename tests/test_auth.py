@@ -207,7 +207,19 @@ def test_api_answers_are_not_cached(studio):
     assert studio.c.get("/api/connections").headers["cache-control"] == "no-store"
 
 
-ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html"}
+ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html", "/robots.txt"}
+
+
+def test_pages_answer_head_and_robots_are_turned_away(studio):
+    """Проверки адреса и превью ссылок ходят HEAD — не 405; роботам — весь сайт закрыт (страница
+    входа не в поиске)."""
+    for path in ("/health", "/login", "/", "/sw.js", "/manifest.webmanifest", "/offline.html", "/robots.txt"):
+        r = studio.c.head(path, follow_redirects=False)
+        assert r.status_code in (200, 303) and not r.content, path
+    assert studio.c.head("/", follow_redirects=False).headers["location"] == "/login"
+    r = studio.c.get("/robots.txt")
+    assert r.status_code == 200 and r.text == "User-agent: *\nDisallow: /\n"
+    assert r.headers["content-type"].startswith("text/plain")
 
 
 def test_every_route_but_the_anonymous_ones_needs_a_session(studio):

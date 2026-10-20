@@ -13,6 +13,7 @@ import httpx
 import pytest
 from PIL import Image
 
+import forms
 import images
 import media
 import state
@@ -92,7 +93,31 @@ def test_job_goes_through_the_gateway_with_the_connection_key(studio):
     assert payload == {"model": LUSTIFY, "prompt": PROMPT, "n": 1, "size": "832x1216", "seed": 7,
                        "response_format": "b64_json"}
     assert auth == f"Bearer {TOKEN}" and read_timeout == 1300
-    assert str(studio.gw.requests[0].url) == GW + "/slot/images/generations"
+    assert [str(r.url) for r in studio.gw.requests] == [GW + "/slot/images/release", GW + "/slot/images/generations"]
+    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]      # другая модель — до запроса
+
+
+@pytest.mark.parametrize("reply", [SLOT_BUSY, (500, {"error": {"message": "boom"}})], ids=["busy", "failed"])
+def test_switching_models_releases_the_other_one_first(studio, reply):
+    """Аренда Lustify (слот comfy) держит карту 600 с простоя, и FLUX её не вытесняет: без release
+    шлюз ждал карту 300 с и отвечал 503 (приёмка 2026-10-20). Release занятой модели (409) или
+    сбой release задание не останавливает — карту дождётся сам запрос."""
+    add_gateway(studio)
+    wait_state(studio, start(studio, model="lustify").json()["id"], {"done"})
+    assert [m for m, _ in studio.gw.releases] == [FLUX]
+    studio.gw.release_replies = [reply]
+    body = wait_state(studio, start(studio, model="flux").json()["id"], {"done", "error"})
+    assert body["state"] == "done"
+    assert [m for m, _ in studio.gw.releases] == [FLUX, LUSTIFY]
+    paths = [r.url.path for r in studio.gw.requests]
+    assert paths[-2:] == ["/slot/images/release", "/slot/images/generations"]
+
+
+def test_unreachable_gateway_is_named_by_the_request_not_the_release(studio):
+    studio.gw.down = True
+    add_gateway(studio)
+    body = wait_state(studio, start(studio).json()["id"], {"done", "error"})
+    assert body["state"] == "error" and body["detail"] == "шлюз недоступен: ConnectError"
 
 
 @pytest.mark.parametrize("model, gateway_id", [("flux", FLUX), ("lustify", LUSTIFY)])
@@ -151,6 +176,7 @@ def _cancel_while_generating(s, model="flux"):
     add_gateway(s)
     job = start(s, model=model).json()["id"]
     wait_for(lambda: s.gw.generations)
+    s.gw.releases.clear()          # release другой модели перед запросом — свой тест; ответы — с начала
     assert s.c.post(f"/api/images/{job}/cancel").json() == {"state": "cancelling"}
     return job
 
@@ -206,8 +232,9 @@ def test_finished_job_is_not_cancelled(studio):
     add_gateway(studio)
     job = start(studio).json()["id"]
     wait_state(studio, job, {"done"})
+    before = list(studio.gw.releases)
     assert studio.c.post(f"/api/images/{job}/cancel").json() == {"state": "done"}
-    assert studio.gw.releases == []
+    assert studio.gw.releases == before
 
 
 # ---- освобождение карты ------------------------------------------------------
@@ -301,7 +328,7 @@ def test_uploaded_photo_is_forwarded_to_edits_and_discarded(studio, model):
     (fields, sent), = studio.gw.edits
     assert fields["model"] == images.MODELS[model] and sent.startswith(b"\x89PNG")
     assert (fields.get("strength") == "0.4") if model == "lustify" else "strength" not in fields
-    assert str(studio.gw.requests[0].url) == GW + "/slot/images/edits"
+    assert str(studio.gw.requests[-1].url) == GW + "/slot/images/edits"
     assert images.JOBS[job_id].image is None
     # исходник — в истории, как его получил шлюз
     assert studio.c.get(f"/api/media/{body['source_media_id']}").content == sent == normalize_image(source)
@@ -365,13 +392,74 @@ def test_edit_from_history_uses_the_stored_source(studio):
                                            "source_media_id": first["media_id"]},
                       files={"mask": ("mask.png", png(mask), "image/png")})
     assert r.status_code == 202, r.text
-    assert wait_state(studio, r.json()["id"], {"done", "error"})["state"] == "done"
-    assert studio.gw.edits[-1][1] == stored and media_rows() == 3      # исходник истории не копируется
+    masked = wait_state(studio, r.json()["id"], {"done", "error"})
+    assert masked["state"] == "done" and masked["mask_media_id"]
+    # исходник истории не копируется; маска — в историю (повтор правки идёт с ней)
+    assert studio.gw.edits[-1][1] == stored and media_rows() == 4
     # и файл, и фото истории — отказ; чужое или неизвестное фото — 404
     both = studio.c.post("/api/images", data={"prompt": "x", "size": "square", "source_media_id": first["media_id"]},
                          files={"image": ("p.png", photo(), "image/png")})
     assert both.status_code == 400
     assert start(studio, source_media_id="0" * 32).status_code == 404
+
+
+def test_repeating_a_brush_edit_keeps_its_mask(studio, env):
+    """«Повторить» правки кистью шлёт mask_media_id прежней правки: вне выделения — снова пиксели
+    исходника, а не вся картинка заново (ревью B1-M1)."""
+    async def edits(request):
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(
+            png(Image.new("RGB", (64, 48), (0, 255, 0)))).decode()}]})
+
+    add_gateway(studio)
+    first = wait_state(studio, start(studio).json()["id"], {"done"})
+    studio.gw.on["/slot/images/edits"] = edits
+    mask = Image.new("L", (64, 48), 0)
+    mask.paste(255, (0, 0, 16, 16))
+    form = {"prompt": "x", "size": "original", "model": "flux", "source_media_id": first["media_id"]}
+    edit = wait_state(studio, studio.c.post("/api/images", data=form, files={"mask": ("m.png", png(mask), "image/png")})
+                      .json()["id"], {"done"})
+    repeat = start(studio, prompt="x", size="original", model="flux", seed=edit["seed"],
+                   source_media_id=first["media_id"], mask_media_id=edit["mask_media_id"])
+    assert repeat.status_code == 202, repeat.text
+    again = wait_state(studio, repeat.json()["id"], {"done"})
+    assert again["mask_media_id"] == edit["mask_media_id"]
+    source = Image.open(io.BytesIO(normalize_image(PNG_REAL))).convert("RGB")
+    with Image.open(io.BytesIO(studio.c.get(f"/api/media/{again['media_id']}").content)) as result:
+        assert result.getpixel((4, 4)) == (0, 255, 0)                          # внутри выделения — правка
+        assert result.getpixel((40, 30)) == source.getpixel((40, 30))          # снаружи — исходник
+    # маска общая: удаление первой правки её не трогает, удаление последней ссылки — удаляет
+    assert studio.c.delete(f"/api/images/{edit['id']}").status_code == 204
+    assert studio.c.get(f"/api/media/{edit['mask_media_id']}").status_code == 200
+    assert studio.c.delete(f"/api/images/{again['id']}").status_code == 204
+    assert studio.c.get(f"/api/media/{edit['mask_media_id']}").status_code == 404
+    # маска — одна: файлом или из истории; чужая или неизвестная — 404
+    both = studio.c.post("/api/images", data=form | {"mask_media_id": first["media_id"]},
+                         files={"mask": ("m.png", png(mask), "image/png")})
+    assert both.status_code == 400 and both.json()["detail"]["code"] == "image"
+    unknown = start(studio, size="original", source_media_id=first["media_id"], mask_media_id="0" * 32)
+    assert unknown.status_code == 404
+
+
+def test_a_refused_masked_upload_leaves_no_files(studio, env, monkeypatch):
+    """Исходник и маска записаны, а задание отказано (другая вкладка начала своё): оба файла удаляются."""
+    add_gateway(studio)
+    studio.gw.hold = True
+    real, other = media.write, []
+
+    def racing(*args, **kwargs):                  # поток записи: цикл свободен — другая вкладка успела
+        if not other:
+            other.append(start(studio).json()["id"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(media, "write", racing)
+    mask = Image.new("L", (48, 32), 0)
+    mask.paste(255, (0, 0, 8, 8))
+    r = studio.c.post("/api/images", data={"prompt": "x", "size": "original", "model": "flux"},
+                      files={"image": ("p.png", photo(), "image/png"), "mask": ("m.png", png(mask), "image/png")})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    assert media_rows() == 0 and share_files(env) == []
+    studio.gw.hold = False
+    wait_state(studio, other[0], {"done"})
 
 
 # ---- описание ----------------------------------------------------------------
@@ -561,7 +649,7 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
     studio.gw.hold = False
     job = wait_job(job_id)
     assert job.state == "cancelled" and "карта освобождена" in job.detail
-    assert studio.gw.releases == [(LUSTIFY, f"Bearer {TOKEN}")]
+    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}"), (LUSTIFY, f"Bearer {TOKEN}")]   # до запроса и после
     assert media_rows() == 0 and share_files(env) == []
 
 
@@ -588,8 +676,37 @@ def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypa
     assert media_rows() == 0 and share_files(env) == []
 
 
-def test_deleting_a_user_during_their_generation_ends_the_job(studio, env):
-    """Удаление учётки посреди генерации: ни IntegrityError, ни задания, вечно занятого (ревью A2-I1)."""
+def test_deleting_a_user_releases_the_card_once_their_job_ends(studio, env):
+    """Удаление учётки ждёт конца её отменённого задания: карту оно освобождает подключением учётки,
+    которое каскад удалил бы раньше (ревью N4)."""
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+
+    async def generation(request):                # картинка досчитывается, когда удаление уже идёт
+        for _ in range(3000):
+            if state.DB.execute("SELECT disabled FROM users WHERE id = ?", (bob,)).fetchone()[0]:
+                break
+            await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/generations"] = generation
+    job_id = start(studio).json()["id"]
+    wait_for(lambda: studio.gw.requests and studio.gw.requests[-1].url.path == "/slot/images/generations")
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 204
+    job = images.JOBS[job_id]
+    assert job.state == "cancelled" and "карта освобождена" in job.detail
+    assert studio.gw.releases[-1] == (LUSTIFY, f"Bearer {TOKEN}")
+    assert state.DB.execute("SELECT COUNT(*) FROM users WHERE id = ?", (bob,)).fetchone()[0] == 0
+    assert media_rows() == 0 and share_files(env) == []
+
+
+def test_deleting_a_user_during_their_generation_ends_the_job(studio, env, monkeypatch):
+    """Удаление учётки посреди генерации: ни IntegrityError, ни задания, вечно занятого (ревью A2-I1).
+    Задание не кончилось за SETTLE_SEC — учётка удаляется, карту освободит срок аренды."""
+    monkeypatch.setattr(images, "SETTLE_SEC", 3)
     make_user(studio, "owner", is_admin=True)
     bob = make_user(studio, "bob")
     signin(studio, "bob")
@@ -635,7 +752,7 @@ def test_cancel_during_the_save_discards_the_saved_image(studio, env, monkeypatc
     result = wait_state(studio, job_id, {"cancelled", "done", "error"})
     assert result["state"] == "cancelled" and result["media_id"] is None
     assert media_rows() == 0 and share_files(env) == []
-    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]
+    assert studio.gw.releases == [(LUSTIFY, f"Bearer {TOKEN}"), (FLUX, f"Bearer {TOKEN}")]   # до запроса и после
 
 
 def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env, monkeypatch):
@@ -698,13 +815,13 @@ def on_loop() -> bool:
 
 def test_forms_are_decoded_off_the_loop(studio, monkeypatch):
     """Разбор формы в 20 МиБ — доли секунды: не на цикле событий (ревью A2-M4)."""
-    calls, real = [], images.decode_form
+    calls, real = [], forms.decode_form
 
     def spy(*args, **kwargs):
         calls.append(on_loop())
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(images, "decode_form", spy)
+    monkeypatch.setattr(forms, "decode_form", spy)
     add_gateway(studio)
     r = studio.c.post("/api/images", data={"prompt": PROMPT, "size": "square"},
                       files={"image": ("photo.png", photo(), "image/png")})

@@ -1,8 +1,9 @@
 """Студия на https://studio.example.com (спека docs/superpowers/specs/2026-10-19-studio-pwa-design.md).
 
 Служба слушает только unix-сокет за Apache. Анонимны `/health`, `/login` (страница и вход),
-`/logout` и оболочка PWA: `/static/*`, `/manifest.webmanifest`, `/sw.js`, `/offline.html`;
-`/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
+`/logout`, `/robots.txt` (роботам — ничего) и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
+`/sw.js`, `/offline.html`; `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
+Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
 
 У HTML-ответов — CSP без inline-скриптов (`CSP`); у всех — nosniff и Referrer-Policy. Статика
 по ссылке с `?v=` (версия — `STATIC_VERSION`) хранится в браузере год, без неё — сверяется
@@ -41,6 +42,8 @@ STATIC_VERSION = auth.STATIC_VERSION
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 SW_BODY = f'const VERSION = "{STATIC_VERSION}";\n' + (auth.STATIC / "sw.js").read_text(encoding="utf-8")
+ROBOTS = "User-agent: *\nDisallow: /\n"
+PAGE = ["GET", "HEAD"]
 
 
 @asynccontextmanager
@@ -55,13 +58,13 @@ async def lifespan(_app):
     images.recover()
     chat.recover()
     state.HTTP = state.make_http()
-    watcher = videos.start_watcher() if state.WATCHER else None
+    loops = [videos.start_watcher(), chat.start_sweeper()] if state.WATCHER else []
     try:
         yield
     finally:
-        if watcher is not None:
-            watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
+        for loop in loops:
+            loop.cancel()
+        await asyncio.gather(*loops, return_exceptions=True)
         await images.stop()
         await chat.stop_all()
         await state.HTTP.aclose()
@@ -99,12 +102,17 @@ async def invalid_request(_request: Request, _exc: RequestValidationError):
     return JSONResponse({"detail": {"code": "invalid", "message": "неверные данные запроса"}}, status_code=422)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=PAGE)
 async def health():
     return {"status": "ok"}
 
 
-@app.get("/")
+@app.api_route("/robots.txt", methods=PAGE)
+async def robots():
+    return Response(ROBOTS, media_type="text/plain", headers={"Cache-Control": "no-cache"})
+
+
+@app.api_route("/", methods=PAGE)
 async def index(request: Request):
     # renew=False: страница cookie заново не ставит — продлит первый запрос /api/* вместе с cookie
     if auth.session_user(request.cookies.get(auth.COOKIE), renew=False) is None:
@@ -112,19 +120,19 @@ async def index(request: Request):
     return HTMLResponse(auth.page("index.html"), headers={"Cache-Control": "no-store"})
 
 
-@app.get("/sw.js")
+@app.api_route("/sw.js", methods=PAGE)
 async def service_worker():
     """Из корня: область работника — весь сайт (`Service-Worker-Allowed: /`)."""
     return Response(SW_BODY, media_type="text/javascript",
                     headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
-@app.get("/manifest.webmanifest")
+@app.api_route("/manifest.webmanifest", methods=PAGE)
 async def manifest():
     return FileResponse(auth.STATIC / "manifest.webmanifest", media_type="application/manifest+json",
                         headers={"Cache-Control": "no-cache"})
 
 
-@app.get("/offline.html")
+@app.api_route("/offline.html", methods=PAGE)
 async def offline():
     return HTMLResponse(auth.page("offline.html"), headers={"Cache-Control": "no-cache"})

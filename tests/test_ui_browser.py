@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import io
+import json
 import re
 import socket
 import time
@@ -638,16 +639,40 @@ def test_chat_context_refusal_keeps_the_text_and_the_attachments(browser, live):
         ("eval", "kept", "[document.querySelector('#chat-input').value,"
                          " document.querySelectorAll('#composer .att-chip').length,"
                          " document.querySelectorAll('#messages .msg').length]"),
-        ("eval", "ready", "!document.querySelector('#send').hidden && !document.querySelector('#send').disabled")])
+        ("eval", "ready", "!document.querySelector('#send').hidden && !document.querySelector('#send').disabled"),
+        # загруженное, но не отправленное вложение крестик убирает и с сервера
+        ("click", "#composer .att-remove"), ("wait", "!document.querySelector('#composer .att-chip')"),
+        ("idle",)])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["error"].startswith("Не помещается в контекст модели")
     assert v["kept"] == ["Перескажи", 1, 0] and v["ready"]
+    assert any(re.fullmatch(r"DELETE /api/attachments/[0-9a-f]{32}", s) for s in r["sent"]), r["sent"]
     assert not known_refusals(problems(r), 413), problems(r)
 
 
+def abandoned_answer(live, uid):
+    """Диалог с ответом из браузера, чья вкладка закрылась: признака жизни нет дольше ALIVE_SEC."""
+    import uuid
+    import chat
+    import db
+    conn = db.connect(live.db_path)
+    try:
+        cid, now = uuid.uuid4().hex, time.time()
+        conn.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES (?, ?, 'брошенный', ?, ?)",
+                     (cid, uid, now, now))
+        conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                     " VALUES (?, ?, 'user', 'брошенный', 'done', 'browser', 'cloud-chat', ?)", (uuid.uuid4().hex, cid, now))
+        conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
+                     " VALUES (?, ?, 'assistant', '', 'streaming', 'browser', 'cloud-chat', ?, ?)",
+                     (uuid.uuid4().hex, cid, now + 1, now - chat.ALIVE_SEC - 1))
+        return cid
+    finally:
+        conn.close()
+
+
 def test_direct_cloud_chat_saves_the_answer(browser, live):
-    live.add_user("clouder")
+    abandoned = abandoned_answer(live, live.add_user("clouder"))
     # подключение появилось после входа: раздел чата открывается заново, уже не подсказкой
     steps = [*signin("clouder"), ("wait", READY), add_cloud(live.cloud), *go("profile"),
         ("wait", "document.querySelector('.conn')"), *open_new_chat(),
@@ -662,18 +687,31 @@ def test_direct_cloud_chat_saves_the_answer(browser, live):
         ("eval", "saved", SAVED),
         ("eval", "model", f"""(async () => {{ const m = {API};
           return (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).chat.model; }})()"""),
-        # ответ прямого подключения, который никто не дочитал (вкладку закрыли), — «прервано»
-        ("eval", "left", f"""(async () => {{ const m = {API};
+        # ответ, который читает другая вкладка (ход — через API, признак жизни свежий), — идущий:
+        # без «Ответить заново»; вкладка его сохранила — диалог перечитывается сам
+        ("eval", "other", f"""(async () => {{ const m = {API};
           const c = await m.api('POST', '/api/chats', {{}});
-          await m.api('POST', '/api/chats/' + c.id + '/turns', {{ text: 'брошенный' }});
-          location.hash = '#/chat/' + c.id; return true; }})()"""),
+          const t = await m.api('POST', '/api/chats/' + c.id + '/turns', {{ text: 'из другой вкладки' }});
+          location.hash = '#/chat/' + c.id; return [c.id, t.assistant_message_id]; }})()"""),
+        ("wait", f"{LAST_ANSWER}?.querySelector('.msg-meta').textContent === 'ответ идёт в другой вкладке…'"),
+        ("eval", "otherActions", f"{LAST_ANSWER}.querySelectorAll('.msg-actions button').length"),
+        ("eval", "put", f"""(async () => {{ const m = {API}; const id = location.hash.split('/')[2];
+          const last = (await m.api('GET', '/api/chats/' + id)).messages.at(-1);
+          await m.api('PUT', '/api/chats/' + id + '/messages/' + last.id, {{ content: 'Готово в другой вкладке', status: 'done' }});
+          return true; }})()"""),
+        ("wait", f"{LAST_ANSWER}?.querySelector('.md').textContent.trim() === 'Готово в другой вкладке'"
+                 f" && {LAST_ANSWER}.querySelector('.msg-retry')"),
+        # ответ, который никто не дочитал (вкладку закрыли, признака жизни нет), — «прервано»
+        ("eval", "left", f"location.hash = '#/chat/{abandoned}'"),
         ("wait", f"{LAST_ANSWER}?.querySelector('.msg-meta').textContent === 'прервано'"),
+        ("eval", "leftRetry", f"!!{LAST_ANSWER}.querySelector('.msg-retry')"),
         ("eval", "free", "!document.querySelector('#send').hidden")]
     r = browser.drive(live.url + "/", steps)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["conn"] == "Облако" and v["answer"] == "Облако на связи." and v["model"] == "cloud-chat"
     assert v["saved"] == ["assistant", "done", "Облако на связи."] and v["free"]
+    assert v["otherActions"] == 0 and v["leftRetry"]
     assert live.cloud.chat_requests[-1]["model"] == "cloud-chat"
     assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "Ты здесь?"}]
     assert live.cloud.chat_auth[-1] == f"Bearer {live.cloud.TOKEN}"
@@ -1077,19 +1115,26 @@ def test_photo_feed_survives_reload_with_a_running_job(browser, live):
     live.add_user(login)
 
     async def held(request):
-        """Генерация «идёт», пока задание не отменят (предел — 30 с)."""
+        """Генерация «долгого заката» «идёт», пока задание не отменят (предел — 30 с)."""
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and not any(j.state == "cancelling" for j in images.JOBS.values()):
+        while (json.loads(request.content)["prompt"] == "долгий закат" and time.monotonic() < deadline
+               and not any(j.state == "cancelling" for j in images.JOBS.values())):
             await asyncio.sleep(0.01)
         return await live.gw.builtin(request)
 
     running = "#photo-feed .photo-card[data-state=working]"
+    #: кнопки просмотра, начинающие задание, и «Описать фото с устройства…»: закрыты ли
+    starts = ("[...document.querySelectorAll('#viewer .act-edit, #viewer .act-repeat, #viewer .act-describe,"
+              " #describe-file')].map(b => b.disabled).concat(document.querySelector('#viewer .act-animate').disabled)")
     live.gw.on["/slot/images/generations"] = held
     try:
-        r = browser.drive(live.url + "/", [*photo_screen(login),
+        r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
             ("type", "#photo-prompt", "долгий закат"), ("click", "#photo-go"),
             ("wait", f"document.querySelector('{running} .card-cancel')"),
             ("eval", "goBusy", "document.querySelector('#photo-go').disabled"),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+            ("eval", "startsBusy", starts),
+            ("press", "Escape"), ("wait", "!document.querySelector('#viewer')"),
             ("idle",),
             ("eval", "reload", "location.reload()"),
             ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
@@ -1099,12 +1144,16 @@ def test_photo_feed_survives_reload_with_a_running_job(browser, live):
             ("click", f"{running} .card-cancel"),
             ("wait", "document.querySelector('#photo-feed .photo-card[data-state=cancelled]')"),
             ("eval", "final", "document.querySelector('#photo-feed .photo-card').textContent"),
-            ("eval", "goFree", "!document.querySelector('#photo-go').disabled")], timeout=20000)
+            ("eval", "goFree", "!document.querySelector('#photo-go').disabled"),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+            ("eval", "startsFree", starts)], timeout=20000)
     finally:
         live.gw.on.pop("/slot/images/generations", None)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["goBusy"] and v["goBusyAfter"] and v["goFree"]
+    # B1-M2: пока идёт своё задание, просмотр не начинает второе; «Оживить» — раздел видео, открыт
+    assert v["startsBusy"] == [True, True, True, True, False] and v["startsFree"] == [False] * 5
     assert "Отменено" in v["final"]
     assert any(s.endswith("/cancel") for s in r["sent"])
     assert not problems(r), problems(r)
@@ -1239,7 +1288,9 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     v = r["values"]
     assert v["cols"] == 6 and v["caption"] == "Lustify"
     assert v["released"] == "Lustify — освобождена; FLUX — освобождена; gemma-abl — освобождена"
-    assert len(live.gw.releases) - rel0 == 3
+    # две картинки ленты и повтор (Lustify) — release FLUX до запроса; кнопка — три модели
+    lustify, flux = MODEL_IDS["lustify"], MODEL_IDS["flux"]
+    assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, lustify, flux, "gemma4-abl", flux]
     newest = v["items"][0]
     assert [i[:3] for i in v["items"]] == [["кот 1", 101, "1024x1024"], ["кот 0", 100, "832x1216"]]
     assert v["download"].endswith("?download=1") and "seed 101" in v["meta"]
@@ -1248,6 +1299,49 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["lustify"]
     assert any(s.startswith("DELETE /api/images/") for s in r["sent"])
     assert v["hash"] == f"#/video?source={newest[3]}" and v["current"] == "video"
+    assert not problems(r), problems(r)
+
+
+#: правка кистью через API страницы по первой картинке ленты: mask_media_id готовой правки
+BRUSH_EDIT = f"""(async () => {{ const m = {API}; const source = (await m.api('GET', '/api/images')).items[0];
+  const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 48;
+  const ctx = canvas.getContext('2d'); ctx.fillStyle = 'black'; ctx.fillRect(0, 0, 64, 48);
+  ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 16, 16);
+  const mask = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  const body = new FormData();
+  for (const [k, v] of Object.entries({{ model: 'flux', size: 'original', prompt: 'patch', source_media_id: source.media_id }}))
+    body.append(k, v);
+  body.append('mask', mask, 'mask.png');
+  const job = await m.api('POST', '/api/images', body);
+  for (let t = 0; t < 200; t++) {{
+    const item = await m.api('GET', '/api/images/' + job.id);
+    if (item.state === 'done') return [source.media_id, item.mask_media_id];
+    await new Promise(r => setTimeout(r, 30));
+  }}
+  return null; }})()"""
+
+
+def test_photo_repeat_of_a_brush_edit_keeps_its_mask(browser, live):
+    """B1-M1: «Повторить» правки кистью шлёт её маску — меняется снова только выделенное."""
+    login = "remask"
+    live.add_user(login)
+    e0 = len(live.gw.edits)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make_images(1),
+        ("eval", "edit", BRUSH_EDIT), *go("photo"), ("wait", FEED_READY), ("wait", done_cards(2)),
+        ("eval", "spy", SPY),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-repeat"),
+        ("wait", f"!document.querySelector('#viewer') && {done_cards(3)}"),
+        ("eval", "forms", "window.sentForms"),
+        ("eval", "masks", f"(async () => (await {API}.api('GET', '/api/images')).items.map(i => i.mask_media_id))()")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    source, mask = v["edit"]
+    assert mask and v["masks"] == [mask, mask, None]
+    (sent,) = v["forms"]
+    assert sent["path"] == "/api/images" and sent["form"]["mask_media_id"] == mask
+    assert sent["form"]["source_media_id"] == source and sent["form"]["size"] == "original"
+    edits = live.gw.edits[e0:]
+    assert len(edits) == 2 and edits[0][1] == edits[1][1]       # тот же исходник у шлюза
     assert not problems(r), problems(r)
 
 
@@ -1358,6 +1452,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     forms = live.gw.video_forms[v0:]
     assert len(forms) == 1
     fields, image, _raw = forms[0]
+    seed = fields.pop("seed")                                   # пусто — случайный, выбирает студия
     assert fields == {"model": VIDEO_MODEL, "seconds": "7", "quality": "high", "smooth": "false",
                       "prompt": "she slowly turns her head"}
     assert picture(image) == picture(PNG_REAL)                  # фото истории, а не файл с устройства
@@ -1366,7 +1461,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     assert v["player"] == [f"/api/media/{item['media_id']}", f"/api/media/{v['source']}?thumb=1", True, True, "metadata"]
     assert v["range"] == [206, "video/mp4"]
     assert v["download"] == [f"/api/media/{item['media_id']}?download=1", "Скачать"]
-    for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", "seed 42", "Удалить"):
+    for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", f"seed {seed}", "Удалить"):
         assert words in v["card"], words
     assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
     assert not problems(r), problems(r)
@@ -1417,7 +1512,7 @@ def test_video_feed_shows_progress_and_survives_reload(browser, live, ready_clip
     first, second = (f[0] for f in live.gw.video_forms[v0:])
     assert picture(live.gw.video_forms[v0][1]) == ((48, 64), (128, 0, 128))
     assert "prompt" not in first and first["seconds"] == "5" and first["quality"] == "standard"
-    assert first["smooth"] == "true" and "seed" not in first
+    assert first["smooth"] == "true" and first["seed"].isdigit()     # пустой seed — случайный от студии
     assert second["prompt"] == "медленный наезд камеры"
     assert not problems(r), problems(r)
 
