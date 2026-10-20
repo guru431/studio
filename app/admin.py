@@ -37,6 +37,7 @@ class UserCreate(BaseModel):
 
 
 class UserPatch(BaseModel):
+    login: str | None = Field(None, max_length=64)
     name: str | None = Field(None, max_length=NAME_MAX)
     is_admin: bool | None = None
     disabled: bool | None = None
@@ -56,6 +57,17 @@ def _user_out(uid: int) -> dict:
         raise HTTPException(404, {"code": "gone", "message": "такого пользователя нет"})
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"]}
+
+
+def _login(text: str) -> str:
+    login = text.strip().lower()
+    if not re.fullmatch(auth.LOGIN_RE, login):
+        raise HTTPException(422, {"code": "login", "message": "логин — 2–32 знака: латиница, цифры, . _ -"})
+    return login
+
+
+def _taken() -> HTTPException:
+    return HTTPException(409, {"code": "taken", "message": "такой логин уже есть"})
 
 
 def _name(text: str) -> str:
@@ -78,9 +90,7 @@ async def list_users():
 
 @router.post("/users", status_code=201)
 async def create_user(body: UserCreate, admin: auth.User = Depends(auth.require_admin)):
-    login = body.login.strip().lower()
-    if not re.fullmatch(auth.LOGIN_RE, login):
-        raise HTTPException(422, {"code": "login", "message": "логин — 2–32 знака: латиница, цифры, . _ -"})
+    login = _login(body.login)
     name = _name(body.name)
     profile.check_password(body.password)
     pw_hash = await asyncio.to_thread(security.hash_password, body.password)
@@ -88,7 +98,7 @@ async def create_user(body: UserCreate, admin: auth.User = Depends(auth.require_
         uid = state.DB.execute("INSERT INTO users(login, name, pw_hash, is_admin, created) VALUES (?, ?, ?, ?, ?)",
                                (login, name, pw_hash, int(body.is_admin), clock.NOW())).lastrowid
     except sqlite3.IntegrityError:
-        raise HTTPException(409, {"code": "taken", "message": "такой логин уже есть"}) from None
+        raise _taken() from None
     log.info("администратор %d: создан пользователь %d", admin.id, uid)
     return _user_out(uid)
 
@@ -99,6 +109,8 @@ async def patch_user(uid: int, body: UserPatch, request: Request, admin: auth.Us
     if body.disabled or body.is_admin is False:
         _self(admin, uid)
     changes = {}
+    if body.login is not None:
+        changes["login"] = _login(body.login)               # сессии — по id: переименование их не гасит
     if body.name is not None:
         changes["name"] = _name(body.name)
     if body.is_admin is not None:
@@ -118,6 +130,9 @@ async def patch_user(uid: int, body: UserPatch, request: Request, admin: auth.Us
             keep = security.digest(request.cookies[auth.COOKIE]) if uid == admin.id else None
             auth.end_sessions(uid, keep_digest=keep)
         state.DB.execute("COMMIT")
+    except sqlite3.IntegrityError:
+        state.DB.execute("ROLLBACK")
+        raise _taken() from None
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise

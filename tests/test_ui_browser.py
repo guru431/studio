@@ -437,6 +437,18 @@ def test_admin_creates_a_friend_who_sees_no_owner_history(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_admin_renames_a_user_in_the_panel(browser, live):
+    live.add_user("chief", is_admin=True); live.add_user("olduser")
+    dialog = "#user-edit-dialog"
+    r = browser.drive(live.url + "/", [*signin("chief"), ("wait", READY), *go("admin"),
+        ("wait", "document.querySelector('tr[data-login=olduser] .user-edit')"),
+        ("click", "tr[data-login=olduser] .user-edit"), ("wait", is_open(dialog)),
+        set_value(f"{dialog} [name=login]", "newuser"), ("click", "#user-edit-save"),
+        ("wait", "document.querySelector('tr[data-login=newuser]')")])
+    assert not r.get("failed"), r
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_admin_manages_users_connections_and_the_allowlist(browser, live, width):
     login = f"mate{width}"

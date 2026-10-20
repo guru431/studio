@@ -1,6 +1,7 @@
 /* Раздел «Панель» (#/admin, только администратору): пользователи и список разрешённых адресов.
  *
  * Пользователи — таблица `#users` (логин, имя, админ, отключён, подключений) с действиями строки:
+ * «Изменить» (логин и имя; себя тоже — тогда страница перезагружается за новым логином в меню),
  * «Подключения» (та же форма, что в профиле), «Сбросить пароль», «Отключить» / «Включить»,
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
@@ -70,6 +71,30 @@ function usersBlock(host) {
     });
   }
 
+  function edit(user) {
+    const login = el('input', { class: 'input', name: 'login', maxlength: '32', autocomplete: 'off',
+      autocapitalize: 'none', spellcheck: 'false', value: user.login });
+    const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: user.name });
+    const save = button('Сохранить', { class: 'btn btn-accent', id: 'user-edit-save' });
+    const form = el('div', {}, field('Логин', login, 'login'), field('Имя', name, 'name'),
+      el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' }));
+    const dialog = openDialog(host, { id: 'user-edit-dialog', title: `Изменить: ${user.login}`, body: [form], actions: [save] });
+    login.focus();
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await api('PATCH', `/api/admin/users/${user.id}`, { login: login.value.trim(), name: name.value.trim() });
+        dialog.close();
+        if (user.id === me.id) location.reload();         // меню аватара берёт логин из /api/me
+        else await reload();
+      } catch (err) {
+        showError(form, err, USER_ERRORS, 'form');
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+
   function resetPassword(user) {
     const password = el('input', { class: 'input', name: 'password', type: 'password', maxlength: '1024',
       autocomplete: 'new-password', placeholder: 'не короче 10 знаков' });
@@ -131,6 +156,7 @@ function usersBlock(host) {
     return el('tr', { 'data-login': user.login, class: user.disabled ? 'off' : null },
       ...COLUMNS.map(([key, title]) => el('td', { 'data-col': key, 'data-label': title }, values[key])),
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
+        button('Изменить', { class: 'btn btn-sm user-edit' }, () => edit(user)),
         button('Подключения', { class: 'btn btn-sm user-conns' }, () => connections(user)),
         button('Сбросить пароль', { class: 'btn btn-sm user-reset' }, () => resetPassword(user)),
         button(user.disabled ? 'Включить' : 'Отключить', { class: 'btn btn-sm user-toggle', disabled: self,

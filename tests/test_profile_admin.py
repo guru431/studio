@@ -172,6 +172,25 @@ def test_login_must_be_simple_and_unique(studio):
     assert r.status_code == 422 and code(r) == "short"
 
 
+def test_admin_renames_a_login_and_sessions_survive(studio):
+    owner = make_user(studio, "owner", is_admin=True); signin(studio, "owner")
+    r = studio.c.patch(f"/api/admin/users/{owner}", json={"login": " example-user "})
+    assert r.status_code == 200 and r.json()["login"] == "example-user"
+    assert studio.c.get("/api/me").json()["login"] == "example-user"          # своя сессия жива
+    assert login(studio, "example-user", "password-123").status_code == 303
+    assert login(studio, "owner", "password-123").status_code == 401
+
+
+def test_rename_refuses_bad_or_taken_logins(studio):
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
+    for bad in ["Иван", "a", "x" * 33, "a b"]:
+        r = studio.c.patch(f"/api/admin/users/{bob}", json={"login": bad})
+        assert r.status_code == 422 and code(r) == "login", bad
+    r = studio.c.patch(f"/api/admin/users/{bob}", json={"login": "OWNER"})
+    assert r.status_code == 409 and code(r) == "taken"
+    assert studio.c.get("/api/admin/users").json()["items"][1]["login"] == "bob"
+
+
 def test_reset_password_and_disable_end_sessions(studio):
     make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
     session, _ = auth.create_session(bob)
