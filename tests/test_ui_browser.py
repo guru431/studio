@@ -1843,3 +1843,20 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
     assert v["clicked"][0].endswith("/export?format=docx") and v["clicked"][1]
     assert not v["overflow"]
     assert not problems(r), problems(r)
+
+
+def test_voice_is_added_in_settings(browser, live):
+    live.add_user("voicer")
+    dialog = "#voice-dialog"
+    r = browser.drive(live.url + "/", [*signin("voicer"), ("wait", READY), add_gateway(),
+        *go("settings/speech"), ("wait", "document.querySelector('#voice-add')"),
+        ("click", "#voice-add"), ("wait", is_open(dialog)),
+        ("type", f"{dialog} [name=name]", "Мой голос"),
+        ("type", f"{dialog} [name=text]", "Привет, это образец моего голоса."),
+        put_audio(f"{dialog} input[type=file]", wav_of(6.0), "sample.wav"),
+        ("click", "#voice-save"), ("wait", f"!{is_open(dialog)} && document.querySelector('.voice')"),
+        ("eval", "voice", "document.querySelector('.voice').textContent"),
+        ("click", ".voice .voice-delete"), ("wait", "!document.querySelector('.voice')")])
+    assert not r.get("failed"), r
+    assert "Мой голос" in r["values"]["voice"] and "0:06" in r["values"]["voice"]
+    assert not problems(r), problems(r)

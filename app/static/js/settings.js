@@ -11,11 +11,15 @@
  * адрес — из одного ответа /token, токен живёт только в памяти запроса; сервис без CORS — словами).
  * Отмеченная модель, которой нет в найденном списке, остаётся отмеченной с пометкой «не найдена».
  *
+ * В «Озвучке» своих настроек — ещё «Голоса» (образцы для озвучки srvllm): запись 5–15 с файлом или
+ * с микрофона, её текст и имя (POST /api/voices), список с «Удалить».
+ *
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
- * переключаются на месте, «Прочего» и прямого списка моделей нет). На телефоне без раздела в адресе —
- * список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
+ * переключаются на месте, «Прочего», голосов и прямого списка моделей нет). На телефоне без раздела
+ * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe } from './api.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
+import { recordingName, startRecording } from './mic.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
@@ -137,10 +141,104 @@ function wipeBlock(host) {
     el('div', { class: 'row' }, start, note));
 }
 
+/* ---- голоса озвучки ------------------------------------------------------------------ */
+
+function clock(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function voicesBlock(host) {
+  const list = el('ul', { class: 'voices' });
+  const note = status('voice-status');
+
+  async function reload() {
+    try {
+      const { items } = await api('GET', '/api/voices');
+      list.replaceChildren(...(items.length ? items.map((v) => {
+        const del = button('Удалить', { class: 'btn btn-sm btn-danger voice-delete' }, async () => {
+          del.disabled = true;
+          try {
+            await api('DELETE', `/api/voices/${v.id}`);
+          } catch (err) {
+            say(note, words(err), 'error');
+          }
+          reload();
+        });
+        return el('li', { class: 'voice', 'data-id': v.id }, el('b', {}, v.name),
+          el('span', { class: 'muted small' }, ` образец ${clock(v.duration)}`), del);
+      }) : [el('li', { class: 'muted small' }, 'Голосов пока нет: озвучка шлюза srvllm говорит голосом по образцу')]));
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+  }
+
+  function add() {
+    const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off' });
+    const text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: '500',
+      placeholder: 'Что именно сказано в записи — дословно' });
+    const file = el('input', { type: 'file', name: 'audio', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm' });
+    const rec = button('Записать с микрофона', { class: 'btn btn-sm', id: 'voice-record' });
+    const recNote = el('p', { class: 'muted small', 'aria-live': 'polite' });
+    const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
+    const save = button('Сохранить', { class: 'btn btn-accent', id: 'voice-save' });
+    let recorded = null;
+    let recording = null;
+    const dialog = openDialog(host, { id: 'voice-dialog', title: 'Новый голос', actions: [save], body: [
+      field('Имя голоса', name, 'name'), field('Текст образца', text, 'text'),
+      el('p', { class: 'muted small' }, 'Запись 5–15 секунд чистой речи: файлом или с микрофона.'),
+      el('div', { class: 'row' }, file, rec), recNote, fail] });
+    rec.addEventListener('click', async () => {
+      if (recording) {
+        recording.stop();
+        return;
+      }
+      try {
+        recording = await startRecording(15, (sec) => { recNote.textContent = `Запись · ${clock(sec)} — нажмите ещё раз, чтобы остановить`; });
+      } catch (err) {
+        recNote.textContent = words(err);
+        return;
+      }
+      rec.textContent = 'Остановить';
+      recorded = await recording.done;
+      recording = null;
+      rec.textContent = 'Записать заново';
+      recNote.textContent = 'Запись готова';
+      file.value = '';
+    });
+    save.addEventListener('click', async () => {
+      const sample = file.files[0] || recorded;
+      if (!sample) {
+        fail.textContent = 'Нужна запись образца: файл или с микрофона';
+        return;
+      }
+      save.disabled = true;
+      const body = new FormData();
+      body.append('name', name.value.trim());
+      body.append('text', text.value.trim());
+      body.append('audio', sample, sample.name || recordingName(sample, 'sample'));
+      try {
+        await api('POST', '/api/voices', body);
+        dialog.close();
+        reload();
+      } catch (err) {
+        showError(dialog, err, { name: 'name', text: 'text' }, 'form');
+      } finally {
+        save.disabled = false;
+      }
+    });
+    name.focus();
+  }
+
+  reload();
+  return el('section', { class: 'block voices-block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Голоса'),
+    button('+ Голос', { class: 'btn', id: 'voice-add' }, add)), list, note);
+}
+
 /* ---- разделы ---------------------------------------------------------------------- */
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
-  other = false, direct = false, onChange = null }) {
+  other = false, direct = false, voices = false, onChange = null }) {
   const ids = [...Object.keys(SECTION_NAMES), ...(other ? ['other'] : [])];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
@@ -340,7 +438,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     panel.replaceChildren(back, el('section', { class: 'block section-panel', 'data-section': s.id },
       el('h2', {}, s.name), list,
       el('div', { class: 'row' }, button('+ Адрес для раздела', { class: 'btn', id: 'link-add' }, () => addLink(s))),
-      note));
+      note), ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
   }
 
   function show(id) {
@@ -369,7 +467,7 @@ let screen = null;
 
 export function mount(view, ctx) {
   screen = settingsView(view, { sections: '/api/sections', connections: '/api/connections', section: ctx.id,
-    hash: true, other: true, direct: true, onChange: () => loadMe().catch(() => null) });
+    hash: true, other: true, direct: true, voices: true, onChange: () => loadMe().catch(() => null) });
   view.append(el('header', { class: 'head' }, el('h1', {}, 'Настройки')), el('div', { class: 'page wide' }, screen.el));
   screen.reload();
 }

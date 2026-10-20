@@ -35,6 +35,7 @@ import sections
 import state
 import transcripts
 import videos
+import voices
 
 log = logging.getLogger("studio")
 
@@ -105,6 +106,7 @@ app.include_router(videos.router)
 app.include_router(chat.router)
 app.include_router(dictation.router)
 app.include_router(transcripts.router)
+app.include_router(voices.router)
 
 
 @app.exception_handler(RequestValidationError)
