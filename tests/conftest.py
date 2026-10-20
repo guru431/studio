@@ -43,6 +43,7 @@ def studio(env, monkeypatch):
     import main
     import security
     import state
+    import speeches
     import transcripts
     from fakes import FakeGateway
 
@@ -65,6 +66,7 @@ def studio(env, monkeypatch):
     images.JOBS.clear()
     chat.STREAMS.clear()
     transcripts.JOBS.clear()
+    speeches.JOBS.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()

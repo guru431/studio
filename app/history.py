@@ -6,6 +6,7 @@ import logging
 import chat
 import images
 import media
+import speeches
 import state
 import transcripts
 import videos
@@ -21,6 +22,7 @@ async def stop_user(user_id: int) -> None:
     await chat.stop_user(user_id)
     await videos.cancel_user(user_id)
     await transcripts.stop_user(user_id)
+    await speeches.stop_user(user_id)
 
 
 async def delete_all(user_id: int) -> None:

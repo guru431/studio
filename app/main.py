@@ -32,6 +32,7 @@ import images
 import media
 import profile
 import sections
+import speeches
 import state
 import transcripts
 import videos
@@ -65,6 +66,7 @@ async def lifespan(_app):
     images.recover()
     chat.recover()
     transcripts.recover()
+    speeches.recover()
     state.HTTP = state.make_http()
     loops = [videos.start_watcher(), chat.start_sweeper()] if state.WATCHER else []
     try:
@@ -75,6 +77,7 @@ async def lifespan(_app):
         await asyncio.gather(*loops, return_exceptions=True)
         await images.stop()
         await transcripts.stop()
+        await speeches.stop()
         await chat.stop_all()
         await state.HTTP.aclose()
         state.DB.close()
@@ -107,6 +110,7 @@ app.include_router(chat.router)
 app.include_router(dictation.router)
 app.include_router(transcripts.router)
 app.include_router(voices.router)
+app.include_router(speeches.router)
 
 
 @app.exception_handler(RequestValidationError)
