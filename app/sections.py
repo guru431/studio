@@ -20,7 +20,9 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 import clock
 import connections
@@ -38,6 +40,7 @@ MODEL_MAX = 200
 MODELS_MAX = 200
 
 log = logging.getLogger("studio")
+router = APIRouter(prefix="/api/sections")
 
 
 @dataclass(frozen=True)
@@ -267,3 +270,78 @@ def _sync_legacy(user_id: int) -> None:
     chat = _default_row(user_id, "chat")
     state.DB.execute("UPDATE users SET default_connection_id = ?, default_model = ? WHERE id = ?",
                      (chat["connection_id"] if chat else None, chat["model"] if chat else None, user_id))
+
+
+# ---- API (профиль; панель администратора зовёт те же функции для `uid` пути) ----------
+
+class LinkIn(BaseModel):
+    connection_id: int
+
+
+class ModelsIn(BaseModel):
+    models: list[str] = Field(max_length=MODELS_MAX)
+
+
+class DefaultIn(BaseModel):
+    connection_id: int
+    model: str = Field(max_length=MODEL_MAX)
+
+
+def section_out(user_id: int, section: str) -> dict:
+    chosen = _default_row(user_id, section)
+    return {"id": section, "name": NAMES[section],
+            "links": [{"connection": connections.out(l.connection), "models": list(l.models),
+                       "catalog": CATALOG.get(section) if l.connection.kind == "srvllm" else None}
+                      for l in links(user_id, section)],
+            "default": {"connection_id": chosen["connection_id"], "model": chosen["model"]} if chosen else None}
+
+
+def all_out(user_id: int) -> dict:
+    return {"sections": [section_out(user_id, s) for s in SECTIONS]}
+
+
+async def found(user_id: int, section: str, conn_id: int) -> dict:
+    """Найденные модели: srvllm вне чата — встроенный перечень; прочее — `GET …/models` через сервер."""
+    check_section(section)
+    conn = connections.get(user_id, conn_id)
+    if conn.kind == "srvllm" and section in CATALOG:
+        return {"items": list(CATALOG[section])}
+    return {"items": [m["id"] for m in await connections.fetch_models(conn)]}
+
+
+def _uid(request: Request) -> int:
+    return request.state.user.id
+
+
+@router.get("")
+async def get_sections(request: Request):
+    return all_out(_uid(request))
+
+
+@router.post("/{section}/links")
+async def add_link(section: str, body: LinkIn, request: Request):
+    link(_uid(request), section, body.connection_id)
+    return section_out(_uid(request), section)
+
+
+@router.delete("/{section}/links/{conn_id}", status_code=204)
+async def remove_link(section: str, conn_id: int, request: Request):
+    unlink(_uid(request), section, conn_id)
+    return Response(status_code=204)
+
+
+@router.put("/{section}/links/{conn_id}")
+async def put_models(section: str, conn_id: int, body: ModelsIn, request: Request):
+    set_models(_uid(request), section, conn_id, body.models)
+    return section_out(_uid(request), section)
+
+
+@router.put("/{section}/default")
+async def put_default(section: str, body: DefaultIn, request: Request):
+    set_default(_uid(request), section, body.connection_id, body.model)
+    return section_out(_uid(request), section)
+
+
+@router.get("/{section}/links/{conn_id}/found")
+async def get_found(section: str, conn_id: int, request: Request):
+    return await found(_uid(request), section, conn_id)

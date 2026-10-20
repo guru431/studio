@@ -1,13 +1,14 @@
 """Разделы (app/sections.py): подключения раздела, отмеченные модели, умолчание; прежние столбцы
 для отката; API профиля и панели."""
 import json
+import logging
 
 import pytest
 from fastapi import HTTPException
 
 import sections
 import state
-from conftest import add_connection, add_gateway
+from conftest import add_connection, add_gateway, make_user
 
 
 def uid_of_owner() -> int:
@@ -76,3 +77,68 @@ def test_resolve_takes_an_explicit_checked_pair_and_finds_a_bare_model(studio):
     with pytest.raises(HTTPException) as e:
         sections.resolve(uid, "photo", cid, "sdxl")
     assert e.value.status_code == 422 and e.value.detail["code"] == "model"
+
+
+# ---- API ---------------------------------------------------------------------------
+
+def test_sections_api_round_trip(studio):
+    cid = add_gateway(studio)
+    body = studio.c.get("/api/sections").json()["sections"]
+    assert [s["id"] for s in body] == list(sections.SECTIONS)
+    photo = body[1]
+    assert photo["name"] == "Фото" and photo["links"][0]["catalog"] == ["lustify", "flux"]
+    assert photo["links"][0]["connection"]["id"] == cid and photo["default"] == {"connection_id": cid, "model": "lustify"}
+    assert body[0]["links"][0]["catalog"] is None                           # чат srvllm — из /v1/models
+    r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["lustify"]})
+    assert r.status_code == 200 and r.json()["links"][0]["models"] == ["lustify"]
+    r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["sdxl"]})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "model"
+    assert studio.c.put("/api/sections/photo/default", json={"connection_id": cid, "model": "flux"}).status_code == 422
+    assert "local-gemma-abl" in studio.c.get(f"/api/sections/chat/links/{cid}/found").json()["items"]
+    assert studio.c.get(f"/api/sections/photo/links/{cid}/found").json()["items"] == ["lustify", "flux"]
+    assert studio.c.delete(f"/api/sections/photo/links/{cid}").status_code == 204
+    assert studio.c.get("/api/sections").json()["sections"][1]["default"] is None
+    r = studio.c.post("/api/sections/photo/links", json={"connection_id": cid})
+    assert r.status_code == 200 and r.json()["default"] == {"connection_id": cid, "model": "lustify"}
+    assert studio.c.put("/api/sections/music/default", json={"connection_id": cid, "model": "x"}).status_code == 404
+
+
+def test_foreign_connection_is_gone_everywhere(studio):
+    add_gateway(studio)
+    bob = make_user(studio, "bob")
+    theirs = state.DB.execute("INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
+                              " VALUES (?, 'b', 'srvllm', 'http://10.77.1.15:4000', x'00', '[]', 0)", (bob,)).lastrowid
+    for method, path, body in (("post", "/api/sections/photo/links", {"connection_id": theirs}),
+                               ("put", f"/api/sections/photo/links/{theirs}", {"models": ["lustify"]}),
+                               ("put", "/api/sections/photo/default", {"connection_id": theirs, "model": "lustify"}),
+                               ("delete", f"/api/sections/photo/links/{theirs}", None),
+                               ("get", f"/api/sections/chat/links/{theirs}/found", None)):
+        r = getattr(studio.c, method)(path, **({"json": body} if body else {}))
+        assert r.status_code == 404 and r.json()["detail"]["code"] == "gone", path
+        assert "192.168" not in r.text
+
+
+def test_direct_connection_models_come_from_the_browser(studio):
+    add_gateway(studio)
+    cloud = add_connection(studio)
+    r = studio.c.get(f"/api/sections/chat/links/{cloud}/found")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "direct"
+
+
+def test_admin_edits_a_users_sections(studio):
+    add_gateway(studio)                                   # owner — администратор
+    bob = make_user(studio, "bob")
+    cid = studio.c.post(f"/api/admin/users/{bob}/connections", json={"name": "gw", "kind": "srvllm",
+        "base_url": "http://10.77.1.15:4000", "token": "k", "sections": ["photo"]}).json()["id"]
+    r = studio.c.put(f"/api/admin/users/{bob}/sections/photo/links/{cid}", json={"models": ["flux"]})
+    assert r.status_code == 200 and r.json()["default"] == {"connection_id": cid, "model": "flux"}
+    assert [s["id"] for s in studio.c.get(f"/api/admin/users/{bob}/sections").json()["sections"]] == list(sections.SECTIONS)
+    assert studio.c.get("/api/admin/users/9999/sections").status_code == 404
+
+
+def test_section_changes_log_only_ids(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    cid = add_gateway(studio)
+    studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["flux"]})
+    studio.c.put("/api/sections/photo/default", json={"connection_id": cid, "model": "flux"})
+    assert "flux" not in caplog.text and "192.168" not in caplog.text

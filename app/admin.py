@@ -1,4 +1,4 @@
-"""Панель администратора (спека, раздел 7.10): пользователи, их подключения и список разрешённых адресов.
+"""Панель администратора (спека, раздел 7.10): пользователи, их подключения и разделы, список разрешённых адресов.
 
 Чужую историю панель не отдаёт: ответы о пользователях — только поля учётки и число подключений.
 Журнал — только id: логины, имена и пароли туда не пишутся.
@@ -19,6 +19,7 @@ import connections
 import history
 import images
 import profile
+import sections
 import security
 import state
 import upstream
@@ -213,3 +214,50 @@ async def delete_user_connection(uid: int, conn_id: int, admin: auth.User = Depe
     connections.delete(uid, conn_id)
     log.info("администратор %d: у пользователя %d удалено подключение %d", admin.id, uid, conn_id)
     return Response(status_code=204)
+
+
+# ---- разделы пользователя: те же действия, что в настройках, но для `uid` ---------
+
+@router.get("/users/{uid}/sections")
+async def get_user_sections(uid: int):
+    _user_out(uid)
+    return sections.all_out(uid)
+
+
+@router.post("/users/{uid}/sections/{section}/links")
+async def add_user_link(uid: int, section: str, body: sections.LinkIn, admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    sections.link(uid, section, body.connection_id)
+    log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
+    return sections.section_out(uid, section)
+
+
+@router.delete("/users/{uid}/sections/{section}/links/{conn_id}", status_code=204)
+async def remove_user_link(uid: int, section: str, conn_id: int, admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    sections.unlink(uid, section, conn_id)
+    log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
+    return Response(status_code=204)
+
+
+@router.put("/users/{uid}/sections/{section}/links/{conn_id}")
+async def put_user_models(uid: int, section: str, conn_id: int, body: sections.ModelsIn,
+                          admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    sections.set_models(uid, section, conn_id, body.models)
+    log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
+    return sections.section_out(uid, section)
+
+
+@router.put("/users/{uid}/sections/{section}/default")
+async def put_user_default(uid: int, section: str, body: sections.DefaultIn, admin: auth.User = Depends(auth.require_admin)):
+    _user_out(uid)
+    sections.set_default(uid, section, body.connection_id, body.model)
+    log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
+    return sections.section_out(uid, section)
+
+
+@router.get("/users/{uid}/sections/{section}/links/{conn_id}/found")
+async def get_user_found(uid: int, section: str, conn_id: int):
+    _user_out(uid)
+    return await sections.found(uid, section, conn_id)

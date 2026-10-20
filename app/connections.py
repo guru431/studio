@@ -286,14 +286,14 @@ async def delete_connection(conn_id: int, request: Request):
     return Response(status_code=204)
 
 
-@router.get("/{conn_id}/models")
-async def models(conn_id: int, request: Request):
-    conn = get(_uid(request), conn_id)
+async def fetch_models(conn: Connection) -> list[dict]:
+    """Модели подключения через сервер (`GET …/models`): `{"id"[, "context_length"]}`; прямое — 409,
+    его список берёт браузер; нет связи или отказ — 502 словами."""
     if not conn.proxied:
         raise HTTPException(409, {"code": "direct", "message": "список моделей прямого подключения берёт браузер"})
     try:
         r = await upstream.request(conn, "GET", models_url(conn))
-    except httpx.HTTPError:
+    except (httpx.HTTPError, upstream.UpstreamRefused):
         raise HTTPException(502, {"code": "upstream", "message": f"нет связи с подключением «{conn.name}»"}) from None
     if not r.is_success:
         raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn.name)})
@@ -305,7 +305,12 @@ async def models(conn_id: int, request: Request):
             if isinstance(m.get("context_length"), int):
                 item["context_length"] = m["context_length"]
             items.append(item)
-    return {"items": items}
+    return items
+
+
+@router.get("/{conn_id}/models")
+async def models(conn_id: int, request: Request):
+    return {"items": await fetch_models(get(_uid(request), conn_id))}
 
 
 @router.get("/{conn_id}/token")
