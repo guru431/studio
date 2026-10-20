@@ -22,6 +22,10 @@ WorkingDirectory=/opt/services/studio
 # Согласованная копия (sqlite3 backup) во временный файл рядом с базой, затем на шару в
 # $STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db; хранятся 7 последних.
 ExecStart=/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py backup
+# У oneshot предела запуска по умолчанию нет: копия, повисшая на CIFS, держала бы юнит в
+# activating, и таймер следующих суток его бы не запустил. RuntimeDirectory здесь не ставить
+# никогда: остановка oneshot удалила бы /run/studio вместе с сокетом studio-web.
+TimeoutStartSec=30min
 LimitCORE=0
 NoNewPrivileges=yes
 PrivateTmp=yes

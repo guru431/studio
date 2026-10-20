@@ -13,7 +13,8 @@ GATEWAY_KEY_OWNER_IMAGES. Повтор с тем же паролем ничег�
 backup — согласованная копия SQLite (`Connection.backup`, служба при этом работает) сначала во
 временный файл рядом с базой (локальный диск: SQLite на CIFS не работает), затем копией байтов
 на шару под временным именем и `os.replace` в `$STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db`
-(дата — UTC). Хранятся BACKUP_KEEP последних копий.
+(дата — UTC). Хранятся BACKUP_KEEP последних копий; временный файл на шаре при отказе убирается,
+забытые прежними сбоями — вместе со старыми копиями.
 """
 import json
 import os
@@ -155,13 +156,23 @@ def backup() -> int:
         shutil.copyfile(local, shared)
         os.replace(shared, target)
     except (OSError, sqlite3.Error) as e:     # шара недоступна: копии нет, база не тронута
+        try:
+            shared.unlink(missing_ok=True)    # недописанная копия на шаре не остаётся
+        except OSError:
+            pass
         print(f"копия базы не сделана: {e}", file=sys.stderr)
         return 1
     finally:
         local.unlink(missing_ok=True)
-    for old in sorted(folder.glob("studio-????????.db"))[:-BACKUP_KEEP]:
-        old.unlink()
     print(f"копия базы: {target}")
+    try:
+        # и .part суток, что упали, пока его уборки не было (своя копия к этому месту уже на месте)
+        stale = sorted(folder.glob("studio-????????.db"))[:-BACKUP_KEEP] + list(folder.glob(".studio-????????.db.part"))
+        for old in stale:
+            old.unlink()
+    except OSError as e:
+        print(f"старые копии не убраны: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

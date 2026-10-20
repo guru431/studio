@@ -54,8 +54,12 @@ if ! grep -qE '^STUDIO_DATA_KEY=.+$' "$ENV_FILE" 2>/dev/null || grep -qvE '^STUD
     exit 1
 fi
 # Файлы истории — на шаре storage. Не смонтирована или нет прав — до подмены кода, прежний работает.
-if ! sudo -u studio test -w "$MEDIA"; then
-    echo "ОШИБКА: учётке studio не писать в $MEDIA — смонтирована ли /mnt/storage" \
+# Проверка — настоящей записью: у cifs с noperm `test -w` (access(2)) верен при любых правах на
+# сервере, а каталог с тем же путём на диске debian прошёл бы его и без шары.
+probe="$MEDIA/.install-probe-$$"
+if ! findmnt -n -o FSTYPE -T "$MEDIA" 2>/dev/null | grep -qx cifs \
+        || ! sudo -u studio touch "$probe" || ! sudo -u studio rm -f "$probe"; then
+    echo "ОШИБКА: учётке studio не писать на шару в $MEDIA — смонтирована ли /mnt/storage" \
          "(//10.77.1.5/dd\$ в /etc/fstab: mount /mnt/storage) и есть ли каталог SharedData/studio?" >&2
     exit 1
 fi
@@ -74,11 +78,45 @@ for p in "${PARTS[@]}"; do      # убранные из репозитория �
 done
 rm -rf "$NEW"
 
+restore() {     # прежнее дерево — на место нового (первая установка: прежнего нет)
+    for p in "${PARTS[@]}"; do
+        rm -rf "${R:?}/$p"
+        if [ -e "$OLD/$p" ]; then mv "$OLD/$p" "$R/$p"; fi
+    done
+}
+# Vhost Apache включает прямо из этого дерева: сломанный отказал бы не сейчас, а при следующем
+# старте Apache (перезагрузка debian) — и вместе со всеми vhost хоста. Проверка — до перезапуска.
+if ! apache_test=$(apache2ctl -t 2>&1); then
+    printf '%s\n' "$apache_test" | tail -n 5 >&2
+    restore
+    echo "ОШИБКА: с новым deploy/apache-vhost.conf Apache не проходит configtest — прежний код" \
+         "возвращён, $UNIT не перезапускалась" >&2
+    exit 1
+fi
+# reload — только когда vhost сменился, и после проверки службы; иначе Apache не трогаем
+vhost_changed=0
+cmp -s "$OLD/deploy/apache-vhost.conf" "$R/deploy/apache-vhost.conf" || vhost_changed=1
+
 install -m 0644 "$R/deploy/$UNIT" "/etc/systemd/system/$UNIT"
 install -m 0644 "$R/deploy/studio-backup.service" "$R/deploy/studio-backup.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "$UNIT" >/dev/null 2>&1
 systemctl restart "$UNIT"
+health_failed() {
+    # status упавшей службы (failed, auto-restart) возвращает 3: под pipefail диагностика не должна
+    # ронять скрипт раньше журнала и подсказки
+    echo "ОШИБКА: $UNIT не ответил 200 на /health за 20 с (от www-data, последний код $code)" >&2
+    systemctl status "$UNIT" --no-pager 2>&1 | tail -n 15 >&2 || true
+    journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
+    echo "Откат: прежние код и юнит — в $OLD:" >&2
+    echo "  for p in ${PARTS[*]}; do rm -rf $R/\$p; [ ! -e $OLD/\$p ] || mv $OLD/\$p $R/; done" >&2
+    echo "  install -m 0644 $R/deploy/$UNIT /etc/systemd/system/$UNIT; systemctl daemon-reload; systemctl restart $UNIT" >&2
+    if [ -f "$OLD/deploy/$UNIT" ] && grep -q ' server:app' "$OLD/deploy/$UNIT"; then
+        echo "Но это переход со старой студии (server:app): в $ENV_FILE уже только STUDIO_DATA_KEY," \
+             "прежняя служба с ним не поднимется — откат здесь значит чинить вперёд." >&2
+    fi
+    exit 1
+}
 # Type=simple: restart возвращается раньше, чем uvicorn поднял приложение — ждём ответа.
 # От www-data — так к сокету ходит Apache; /health открыт без входа.
 code=000
@@ -88,12 +126,10 @@ for _ in $(seq 1 40); do
     [ "$code" = 200 ] && break
     sleep 0.5
 done
-if [ "$code" != 200 ]; then
-    echo "ОШИБКА: $UNIT не ответил 200 на /health за 20 с (от www-data, последний код $code)" >&2
-    systemctl status "$UNIT" --no-pager 2>&1 | tail -n 15 >&2
-    journalctl -u "$UNIT" -n 20 --no-pager >&2
-    echo "Прежний код — $OLD: for p in ${PARTS[*]}; do rm -rf $R/\$p; mv $OLD/\$p $R/; done; systemctl restart $UNIT" >&2
-    exit 1
+[ "$code" = 200 ] || health_failed
+if [ "$vhost_changed" = 1 ]; then
+    systemctl reload apache2
+    echo "OK: vhost сменился — Apache перечитал конфигурацию"
 fi
 rm -rf "$OLD"
 echo "OK: $UNIT отвечает на $SOCK"

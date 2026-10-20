@@ -6,11 +6,13 @@ import subprocess
 
 import pytest
 
+import chat
 import clock
 import config
 import db
 import documents
 import image_upload
+import images
 import manage
 import videos
 from conftest import DEPLOY, ROOT
@@ -76,7 +78,16 @@ def test_state_and_media_paths_are_writable_in_the_sandbox():
         assert directives(unit, "StateDirectoryMode") == ["0700"]
         assert directives(unit, "ReadWritePaths") == ["-/mnt/storage/SharedData/studio"]
     assert "MemoryMax=2G" in UNIT
-    assert "sudo -u studio test -w \"$MEDIA\"" in INSTALL and "MEDIA=/mnt/storage/SharedData/studio" in INSTALL
+    assert "MEDIA=/mnt/storage/SharedData/studio" in INSTALL
+
+
+def test_install_checks_the_share_by_a_real_write():
+    """B2-M2: у cifs с noperm `test -w` верен при любых правах, а локальный каталог с тем же путём
+    прошёл бы его без шары: путь — на cifs, и studio там правда создаёт и удаляет файл."""
+    check = INSTALL[INSTALL.index('probe="$MEDIA/'):INSTALL.index("# Среда — до подмены кода")]
+    assert 'findmnt -n -o FSTYPE -T "$MEDIA"' in check and "grep -qx cifs" in check
+    assert 'sudo -u studio touch "$probe"' in check and 'sudo -u studio rm -f "$probe"' in check
+    assert "test -w" not in uncommented(INSTALL)
 
 
 def test_vhost_is_public_and_streams_chat():
@@ -96,7 +107,7 @@ def test_vhost_details():
         assert re.search(r"^\s*" + re.escape(line).replace(r"\ ", r"\s+") + r"\s*$", v, re.M), line
     assert (f"ProxyPass /api/chats/ unix:{SOCK}|http://studio-backend/api/chats/ timeout=600 flushpackets=on"
             in v)
-    assert f"ProxyPass / unix:{SOCK}|http://studio-backend/ timeout=120" in v
+    assert f"ProxyPass / unix:{SOCK}|http://studio-backend/ timeout=150" in v
     assert f"ProxyPassReverse / unix:{SOCK}|http://studio-backend/" in v
     assert 'RequestHeader set X-Forwarded-Proto "https"' in v
     assert 'SetEnvIf Request_URI "^/api/chats/" no-gzip=1' in v
@@ -112,6 +123,20 @@ def test_apache_lets_through_the_largest_body_the_studio_accepts():
     assert limit >= documents.BODY_MAX and documents.BODY_MAX > documents.DOC_MAX     # документ чата
     assert limit >= videos.BODY_MAX and videos.BODY_MAX > image_upload.VIDEO_UPLOAD   # картинка ролика
     assert limit >= image_upload.MAX_BODY + image_upload.MAX_UPLOAD                   # правка: фото и маска
+
+
+def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
+    """B2-M8: при равных пределах 502 Apache закрывал бы 504 службы словами «шлюз не ответил»."""
+    timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))
+    release = (len(images.MODELS) + 1) * images.SHORT_TIMEOUT_SEC         # «Освободить карту»: три release
+    assert timeout > max(videos.VIDEO_TIMEOUT_SEC, chat.MODELS_TIMEOUT_SEC, release)
+
+
+def test_backup_unit_is_bounded_and_never_owns_the_socket_directory():
+    """B2-M4: копия, повисшая на CIFS, не держит юнит сутками (таймер бы его не перезапустил).
+    B2-M10: RuntimeDirectory у oneshot удалял бы /run/studio с сокетом службы при каждой остановке."""
+    assert directives(BACKUP, "TimeoutStartSec") == ["30min"]
+    assert "RuntimeDirectory" not in uncommented(BACKUP)
 
 
 def test_backup_timer_runs_as_the_service_user():
@@ -198,6 +223,36 @@ def test_backup_without_the_share_fails_cleanly(env, capsys):
     assert not env.media_dir.exists() and list(env.db_path.parent.glob("*.part")) == []
 
 
+def test_backup_failing_on_the_share_leaves_no_part_file_there(env, monkeypatch, capsys):
+    """B2-M5: копия упала уже на шаре (os.replace, место) — временный .part оттуда убран."""
+    conn = db.connect(env.db_path)
+    db.migrate(conn)
+    conn.close()
+    monkeypatch.setattr(clock, "NOW", lambda: 1_792_454_400.0)   # 2026-10-20 00:00 UTC
+
+    def refuse(src, dst):
+        raise OSError("шара занята")
+
+    monkeypatch.setattr(manage.os, "replace", refuse)
+    assert manage.main(["backup"]) == 1
+    assert "копия базы не сделана" in capsys.readouterr().err
+    folder = env.media_dir / "backup"
+    assert sorted(p.name for p in folder.iterdir()) == [] and list(env.db_path.parent.glob("*.part")) == []
+
+
+def test_backup_retention_removes_stale_part_files(env, monkeypatch):
+    """B2-M5: .part прежних неудачных суток (до исправления) уходит вместе со старыми копиями."""
+    conn = db.connect(env.db_path)
+    db.migrate(conn)
+    conn.close()
+    folder = env.media_dir / "backup"
+    folder.mkdir()
+    (folder / ".studio-20261012.db.part").write_bytes(b"half")
+    monkeypatch.setattr(clock, "NOW", lambda: 1_792_454_400.0)
+    assert manage.main(["backup"]) == 0
+    assert sorted(p.name for p in folder.iterdir()) == ["studio-20261020.db"]
+
+
 def test_backup_refuses_without_a_database(env):
     assert manage.main(["backup"]) != 0
     assert not env.db_path.exists() and not (env.media_dir / "backup").exists()
@@ -217,3 +272,62 @@ def test_scripts_parse(script):
         pytest.skip("нет bash")
     r = subprocess.run([bash, "-n", (DEPLOY / script).as_posix()], capture_output=True, text=True, timeout=20)
     assert r.returncode == 0, r.stderr
+
+
+def _function(name: str) -> str:
+    """Тело функции install.sh — для запуска в bash с подменёнными командами хоста."""
+    return re.search(rf"^{name}\(\) \{{[^\n]*\n.*?^\}}\n", INSTALL, re.S | re.M).group(0)
+
+
+def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():
+    """B2-M1: `systemctl status` упавшей службы отвечает 3 — под pipefail скрипт умирал на нём, и
+    журнал (traceback) с подсказкой отката не печатались; подсказка забывала прежний юнит."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    stubs = ("set -euo pipefail\n"
+             "systemctl() { echo 'studio-web.service: activating (auto-restart)'; return 3; }\n"
+             "journalctl() { echo 'Traceback: boom'; }\n"
+             "R=/r; OLD=/r/.previous; UNIT=studio-web.service; ENV_FILE=/etc/studio/studio.env\n"
+             "PARTS=(app deploy requirements.txt); code=000\n")
+    r = subprocess.run([bash, "-c", stubs + _function("health_failed") + "health_failed\necho unreachable\n"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    assert "auto-restart" in r.stderr and "Traceback: boom" in r.stderr
+    assert "install -m 0644 /r/deploy/studio-web.service /etc/systemd/system/studio-web.service" in r.stderr
+    assert "systemctl daemon-reload" in r.stderr and "чинить вперёд" not in r.stderr
+
+
+def test_install_restore_puts_the_previous_tree_back(tmp_path):
+    """Откат после отказа configtest: новое дерево уходит, прежнее — на место; без прежнего (первая
+    установка) — просто нет нового."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    root, old = tmp_path / "r", tmp_path / "r" / ".previous"
+    for part, text in (("app", "new"), ("deploy", "new")):
+        (root / part).mkdir(parents=True)
+        (root / part / "f").write_text(text)
+    (root / "requirements.txt").write_text("new")
+    (old / "app").mkdir(parents=True)
+    (old / "app" / "f").write_text("old")
+    (old / "requirements.txt").write_text("old")
+    script = (f"set -euo pipefail\nR={root.as_posix()}; OLD={old.as_posix()}; PARTS=(app deploy requirements.txt)\n"
+              + _function("restore") + "restore\n")
+    r = subprocess.run([bash, "-c", script], capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert (root / "app" / "f").read_text() == "old" and (root / "requirements.txt").read_text() == "old"
+    assert not (root / "deploy").exists()
+
+
+def test_install_checks_apache_before_the_restart_and_reloads_only_a_changed_vhost():
+    """B2-M3: vhost Apache включает прямо из выложенного дерева — сломанный положил бы все vhost
+    хоста при следующем старте Apache. configtest — после подмены и до перезапуска, с откатом."""
+    test = INSTALL.index("apache2ctl -t")
+    assert INSTALL.index('mv "$NEW/$p" "$R/$p"') < test < INSTALL.index('systemctl restart "$UNIT"')
+    failed = INSTALL[test:INSTALL.index("fi\n", test)]
+    assert "restore" in failed and "exit 1" in failed
+    assert 'cmp -s "$OLD/deploy/apache-vhost.conf" "$R/deploy/apache-vhost.conf" || vhost_changed=1' in INSTALL
+    reload = INSTALL.index("systemctl reload apache2")
+    assert INSTALL.index("|| health_failed") < reload < INSTALL.index('rm -rf "$OLD"\necho "OK')
+    assert 'if [ "$vhost_changed" = 1 ]; then\n    systemctl reload apache2' in INSTALL

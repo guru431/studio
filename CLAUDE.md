@@ -72,20 +72,25 @@
   `www-data`), `ProtectSystem=strict`, запись — только `StateDirectory=studio` (`/var/lib/studio`,
   0700) и `ReadWritePaths=-/mnt/storage/SharedData/studio`; `MemoryMax=2G`, `LimitCORE=0`.
 - Шара: `/mnt/storage` = `//10.77.1.5/dd$` (cifs, `noperm`, `/etc/fstab`); каталог
-  `SharedData/studio`. Не смонтирована — каталога нет, запись падает ошибкой, а не ложится на диск
-  debian (`-` у `ReadWritePaths`); `install.sh` проверяет запись от `studio` до подмены кода.
+  `SharedData/studio`. Не смонтирована — каталога нет, и запись падает ошибкой, а не ложится на диск
+  debian: `/mnt` под `ProtectSystem=strict` только для чтения (`-` у `ReadWritePaths` лишь даёт
+  службе стартовать без каталога). `install.sh` до подмены кода проверяет, что путь — на cifs, и
+  пробует настоящую запись от `studio` (`test -w` при `noperm` верен всегда).
 - Секрет — `/etc/studio/studio.env` (0600 root, одна строка `STUDIO_DATA_KEY=`, vault
   `STUDIO_DATA_KEY`): его читает systemd, а не служба. Смена ключа делает прежние токены
   подключений нерасшифровываемыми — их вводят заново.
 - Копия базы — `studio-backup.timer` (04:30, `Persistent=true`) → `studio-backup.service` →
   `manage.py backup`: `sqlite3` backup во временный файл рядом с базой, затем на шару
-  `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних. Восстановление —
+  `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних; юнит ограничен
+  `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт ещё
+  до 7 дней. Восстановление —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
   `studio:www-data`, удалить `-wal`/`-shm`), запустить.
 - Apache: vhost [deploy/apache-vhost.conf](deploy/apache-vhost.conf) (`*:8443` за прозрачным
   `sslh`, wildcard `/etc/letsencrypt/live/example.net/`) подключён в конце `/opt/services/apache/apache2.conf`
-  строкой `IncludeOptional /opt/services/studio/deploy/apache-vhost.conf`. Правка vhost — выкладка,
-  затем `sudo apache2ctl configtest && sudo systemctl reload apache2`.
+  строкой `IncludeOptional /opt/services/studio/deploy/apache-vhost.conf`. Правка vhost — выкладка:
+  `install.sh` после подмены кода гоняет `apache2ctl -t` (отказ — прежний код на место, служба не
+  перезапускается) и делает `reload apache2`, только если vhost сменился.
 - Журнал: `sudo journalctl -u studio-web`, `-u studio-backup` (промптов и имён файлов там нет).
 
 ## Выкладка

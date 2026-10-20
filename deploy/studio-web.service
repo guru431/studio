@@ -21,8 +21,11 @@ StateDirectory=studio
 StateDirectoryMode=0700
 Environment=STUDIO_DB=/var/lib/studio/studio.db
 # Файлы истории — шара storage \\storage\dd$\SharedData\studio (//10.77.1.5/dd$ смонтирован в
-# /mnt/storage, /etc/fstab). «-»: шара не смонтирована — каталога нет, и запись падает ошибкой
-# «не удалось сохранить», а не ложится на локальный диск.
+# /mnt/storage, /etc/fstab). На локальный диск запись не ложится из-за ProtectSystem=strict: без
+# шары каталога SharedData/studio на диске debian нет, а завести его в /mnt, открытом только для
+# чтения, служба не может — запись падает ошибкой «не удалось сохранить». «-» лишь даёт службе
+# стартовать без этого каталога. Локальный каталог с тем же путём это обошёл бы — поэтому
+# install.sh проверяет, что путь лежит на cifs, и пробует запись от studio.
 Environment=STUDIO_MEDIA_DIR=/mnt/storage/SharedData/studio
 ReadWritePaths=-/mnt/storage/SharedData/studio
 # Origin для проверки изменяющих запросов
