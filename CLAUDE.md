@@ -126,10 +126,17 @@
 
 Живая приёмка (`tests/test_studio_upload_live.py`, генерирует на карте, до ~1,5 ч) — после
 выкладки и `--create-admin`: входит администратором в `STUDIO_LIVE_URL` (по умолчанию
-`https://studio.example.com`), делает Lustify, правку кистью (Flux, вне маски — пиксели исходника),
+`https://studio.example.com`), делает Lustify, правку кистью (Lustify, вне маски — пиксели исходника),
 описание gemma-abl, ролик 1 с и ответ `local-gemma-abl` по PDF; удаляет только своё и освобождает
 карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
 напрямую (`STUDIO_LIVE_GATEWAY`) и `client/studio-batch.local.ps1`.
+
+**`STUDIO_ADMIN_PASSWORD` в vault — пароль восстановления, не рабочий:** владелец входит своим
+(решение 2026-10-20, `local-config/project-knowledge-base.yaml` → `api_keys.studio_admin`), поэтому вход
+на проде паролем из vault отвечает 401 — это не сбой выкладки. Не повторять: из LAN неудачи идут
+парой «owner + 10.77.1.1», и пятая за 15 минут запрёт владельцу вход из дома. Для живой приёмки
+— спросить владельца: временно вернуть пароль восстановления (`--create-admin` гасит его сессии)
+или завести отдельную учётку администратора для приёмки.
 
 Среда: `"/c/Program Files/Python314/python" -m venv .venv`, затем
 `.venv/Scripts/python -m pip install -r requirements-dev.txt`. Приложение в быстрых тестах —
