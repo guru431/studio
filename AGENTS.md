@@ -3,7 +3,8 @@
 Полные правила — [CLAUDE.md](CLAUDE.md), что умеет страница и скрипты — [README.md](README.md).
 
 Страница `https://llm.example.com/studio/` (FastAPI, `app/server.py`) и PowerShell-скрипты
-`client/studio-batch.ps1`, `client/studio-video.ps1` — клиенты API картинок и видео шлюза srvllm
+`client/studio-batch.ps1`, `client/studio-video.ps1` (и их Linux-версии `*.py`) — клиенты API
+картинок и видео шлюза srvllm
 (`http://10.77.1.15:4000/slot`, ключ владельца `owner-images`). Модели, карта и маршруты шлюза —
 проект `llm_routers`; отсюда выделено 2026-10-19, старая история — там.
 
@@ -15,8 +16,9 @@
 - Служба слушает только unix-сокет `/run/studio/web.sock` за Apache debian и потому верит
   последнему `X-Forwarded-For` — TCP-порт не открывать.
 - Секреты — только vault и `/etc/studio/studio.env` на хосте; скрипты в репозитории без ключа,
-  копии с ключом `*.local.ps1` — в `.gitignore`. Репозиторий приватный.
-- `client/*.ps1` — UTF-8 с BOM и CRLF.
+  копии с ключом `*.local.ps1` и `*.local.py` — в `.gitignore`. Репозиторий приватный.
+- `client/*.ps1` — UTF-8 с BOM и CRLF; `client/*.py` — UTF-8 без BOM и LF (shebang), только stdlib.
+  Поведение двух версий одинаковое — правка идёт в обе.
 
 ## Команды
 

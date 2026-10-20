@@ -1,9 +1,9 @@
-"""Клиент пакетного видео client/studio-video.ps1 — без сети.
+"""Клиент пакетного видео client/studio-video.ps1 и его Python-версия studio-video.py — без сети.
 
 Скрипт ходит в API видео шлюза (форма OpenAI Videos). Его интерфейс зафиксирован спекой
 2026-10-19-srvllm-studio-video-design.md (раздел 7 и «Решения исполнителя»: контракт API
 видео и параметры скрипта). Ключ в репозитории пустой, а локальная копия с ключом
-(studio-video.local.ps1) — в .gitignore. Прогоны powershell идут против подставной службы
+(studio-video.local.ps1) — в .gitignore. Прогоны обеих версий идут против подставной службы
 на 127.0.0.1: она отвечает «готово» с первого опроса, поэтому скрипт не ждёт свои 5 с.
 """
 import json
@@ -17,6 +17,7 @@ from email.parser import BytesParser
 
 import pytest
 
+from clients import RUNNERS, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-video.ps1"
@@ -197,11 +198,8 @@ def service():
         thread.join(1)
 
 
-def run_script(fake, folder, *extra):
-    ps = _powershell()
-    r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT),
-                        "-Folder", str(folder), "-Token", "test-key", "-Url", fake.url, *extra],
-                       capture_output=True, timeout=25)
+def run_script(runner, fake, folder, *extra):
+    r = run_client(runner, SCRIPT, ["-Folder", str(folder), "-Token", "test-key", "-Url", fake.url, *extra])
     out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
     assert r.returncode == 0, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
@@ -215,8 +213,8 @@ def manifest_rows(folder):
     return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
 
 
-@pytest.mark.integration
-def test_folder_run_sends_downloads_records_and_releases(service, tmp_path):
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_path):
     fake = service()
     (tmp_path / "a.png").write_bytes(b"img-a")
     (tmp_path / "a.txt").write_text("\ufeff  slow turn\tto camera \n", encoding="utf-8")
@@ -228,7 +226,7 @@ def test_folder_run_sends_downloads_records_and_releases(service, tmp_path):
     with open(tmp_path / "huge.png", "wb") as f:     # больше 20 МБ — пропуск с предупреждением
         f.truncate(21 * 1024 * 1024)
 
-    run_script(fake, tmp_path)
+    run_script(runner, fake, tmp_path)
 
     assert [p["input_reference"] for p in fake.posts] == [b"img-a", b"img-b", b"img-c"]
     first = fake.posts[0]
@@ -260,25 +258,26 @@ def test_folder_run_sends_downloads_records_and_releases(service, tmp_path):
 
     # Повторный запуск: всё в журнале и файлы на месте — ни одного запроса, карта не трогается
     fake.log.clear()
-    run_script(fake, tmp_path)
+    run_script(runner, fake, tmp_path)
     assert fake.log == []
 
     # -Redo: снова все три; у B и c теперь свой промпт из .auto.txt
-    run_script(fake, tmp_path, "-Redo")
+    run_script(runner, fake, tmp_path, "-Redo")
     assert len(fake.posts) == 6
     assert [p.get("prompt") for p in fake.posts[3:]] == [b"slow turn\tto camera", b"auto motion 2", b"auto motion 3"]
     rows = manifest_rows(tmp_path)
     assert len(rows) == 6 and [r["prompt_source"] for r in rows[3:]] == ["file", "auto", "auto"]
-    assert (tmp_path / "video-manifest.tsv").read_bytes().count(b"\xef\xbb\xbf") == 1
+    # BOM (для Excel) — только у PowerShell-версии и только в начале; на Linux журнал без BOM
+    assert (tmp_path / "video-manifest.tsv").read_bytes().count(b"\xef\xbb\xbf") == (1 if runner == "ps" else 0)
 
 
-@pytest.mark.integration
-def test_full_queue_waits_for_sent_jobs_and_resends(service, tmp_path):
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_full_queue_waits_for_sent_jobs_and_resends(runner, service, tmp_path):
     fake = service(busy_posts={3})
     for name in ("a.png", "b.png", "c.png"):
         (tmp_path / name).write_bytes(name.encode())
 
-    run_script(fake, tmp_path, "-KeepCard")
+    run_script(runner, fake, tmp_path, "-KeepCard")
 
     posts = [i for i, entry in enumerate(fake.log) if entry == ("POST", "/slot/videos")]
     assert len(posts) == 4, "третья отправка получила 429 и ушла снова"
@@ -290,12 +289,12 @@ def test_full_queue_waits_for_sent_jobs_and_resends(service, tmp_path):
     assert fake.release == [], "-KeepCard: карта не освобождается"
 
 
-@pytest.mark.integration
-def test_variants_use_consecutive_seeds_and_options(service, tmp_path):
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_variants_use_consecutive_seeds_and_options(runner, service, tmp_path):
     fake = service()
     (tmp_path / "x.png").write_bytes(b"img-x")
 
-    out = run_script(fake, tmp_path, "-Count", "2", "-Seed", "10", "-Seconds", "3", "-Quality", "fast",
+    out = run_script(runner, fake, tmp_path, "-Count", "2", "-Seed", "10", "-Seconds", "3", "-Quality", "fast",
                      "-NoSmooth", "-Prompt", "common move")
 
     assert [(p["seed"], p["seconds"], p["quality"], p["smooth"], p["prompt"]) for p in fake.posts] == [
@@ -307,13 +306,13 @@ def test_variants_use_consecutive_seeds_and_options(service, tmp_path):
     assert "auto.txt" not in out
 
 
-@pytest.mark.integration
-def test_failed_job_is_deleted_and_not_recorded(service, tmp_path):
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_failed_job_is_deleted_and_not_recorded(runner, service, tmp_path):
     fake = service(fail_names={b"bad"})
     (tmp_path / "bad.png").write_bytes(b"bad")
     (tmp_path / "good.png").write_bytes(b"good")
 
-    run_script(fake, tmp_path)
+    run_script(runner, fake, tmp_path)
 
     assert ("DELETE", "/slot/videos/video_%024x" % 1) in fake.log
     assert ("GET", "/slot/videos/video_%024x/content" % 1) not in fake.log

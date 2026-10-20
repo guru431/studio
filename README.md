@@ -1,7 +1,7 @@
 # studio — студия картинок и роликов
 
 Личные тесты владельца: страница **https://llm.example.com/studio/** (только LAN и туннели) и два
-пакетных скрипта для Windows. Всё это — клиенты API картинок и видео LLM-шлюза srvllm
+пакетных скрипта — для Windows и для Linux. Всё это — клиенты API картинок и видео LLM-шлюза srvllm
 (`http://10.77.1.15:4000/slot`); модели, карта и очередь живут там, в проекте `llm_routers`.
 Не для бота и не для чужих глаз: фильтров контента нет (решение владельца), только вымышленные
 взрослые, реальные люди — только с согласия.
@@ -12,7 +12,7 @@
 | Что | Где |
 |---|---|
 | Страница | [app/](app/) — FastAPI `server.py`, `index.html`, `login.html`; служба `studio-web` на debian |
-| Скрипты | [client/studio-batch.ps1](client/studio-batch.ps1) — картинки, [client/studio-video.ps1](client/studio-video.ps1) — ролики |
+| Скрипты | [client/studio-batch.ps1](client/studio-batch.ps1) — картинки, [client/studio-video.ps1](client/studio-video.ps1) — ролики; для Linux — те же на Python: [studio-batch.py](client/studio-batch.py), [studio-video.py](client/studio-video.py) |
 | Выкладка | [deploy/](deploy/) — `deploy.sh` с workstation, `install.sh` на хосте, юнит, блок Apache |
 | Правила для агентов | [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md) |
 
@@ -76,6 +76,26 @@ Safari на iPhone не играет), держа в памяти до 3 рол�
 придумает шлюз, а скрипт сохранит в `<имя>.auto.txt`. Ролики — `<имя>_<N>s_s<seed>.mp4`, журнал —
 `video-manifest.tsv`: повторный запуск пропускает сделанное, `-Redo` — заново. Ctrl+C снимает свои
 задания и освобождает карту.
+
+## Скрипты для Linux и macOS
+
+`client/studio-batch.py` и `client/studio-video.py` — те же скрипты на Python 3.8+ без сторонних
+пакетов: то же поведение, те же имена файлов и журналы (на Linux — UTF-8 без BOM). Параметры те
+же, в стиле Linux: `-PromptsFile` → `--prompts-file`, `-NoSmooth` → `--no-smooth`, `-MakeLocal` →
+`--make-local`; полный список — `--help`.
+
+Локальную копию с ключом проще собрать на workstation, где лежит vault, и перенести на Linux:
+
+    py client\studio-batch.py --make-local
+    py client\studio-video.py --make-local
+
+Рядом появятся `*.local.py` (в `.gitignore`). На Linux без vault — `--vault-path /путь/vault.env`;
+там копия получает права 0700. Запуск —
+
+    python3 studio-batch.local.py --prompts-file prompts.txt --model flux --count 3 --out-dir ~/out
+    python3 studio-video.local.py --folder ~/pics --seconds 8 --quality high
+
+Ключ разовым `--token` на Linux виден другим пользователям в списке процессов — лучше копия.
 
 Контракт API картинок и видео, отказы шлюза и что делать — руководство srvllm в `llm_routers`
 (`srvllm/LLM srvllm - Manual.md`, разделы «API картинок для приложений», «Видео по картинке»,

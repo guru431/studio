@@ -1,6 +1,6 @@
 # CLAUDE.md — studio
 
-Страница студии `https://llm.example.com/studio/` и пакетные скрипты для Windows — клиенты API
+Страница студии `https://llm.example.com/studio/` и пакетные скрипты для Windows и Linux — клиенты API
 картинок и видео LLM-шлюза srvllm. Что умеет и как пользоваться — [README.md](README.md).
 Репозиторий `git.example.net/xadmin/studio` — **приватный**: NSFW-назначение, хосты LAN.
 
@@ -32,8 +32,13 @@
   (каталог `0750 studio:www-data`) и потому верит последнему элементу `X-Forwarded-For`. Порт TCP
   не открывать: счёт попыток входа подделывался бы заголовком.
 - Секреты — vault `local-config/secrets/vault.env`; в репозиторий — никогда. Скрипты в репозитории
-  без ключа (`$EmbeddedKey = ''`, сторожит тест), копии с ключом — `*.local.ps1`, в `.gitignore`.
+  без ключа (`$EmbeddedKey = ''`, `EMBEDDED_KEY = ""`, сторожат тесты), копии с ключом —
+  `*.local.ps1` и `*.local.py`, в `.gitignore`.
 - `client/*.ps1` — UTF-8 **с BOM** и CRLF (PowerShell 5.1 без BOM читает CP1251).
+- `client/*.py` — Linux-версии тех же скриптов: UTF-8 без BOM, LF (иначе shebang не сработает),
+  Python 3.8+ без сторонних пакетов. Правка поведения — в обеих версиях сразу: общие сценарии
+  `test_studio_{batch,video}_client.py` гоняют обе (`-PromptsFile` у PowerShell = `--prompts-file`
+  у Python, это и сверяют).
 
 ## Хост (debian, 10.77.1.10)
 
