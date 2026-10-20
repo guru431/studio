@@ -24,6 +24,7 @@
 import asyncio
 import base64
 import binascii
+import json
 import logging
 import secrets
 import uuid
@@ -36,6 +37,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 import auth
+import chains
 import clock
 import connections
 import forms
@@ -179,7 +181,8 @@ def _out(row) -> dict:
             "elapsed": int(max(0, end - row["created"])), "model": row["model"], "prompt": row["prompt"],
             "size": row["size"], "seed": row["seed"], "strength": row["strength"],
             "source_media_id": row["source_media_id"], "mask_media_id": row["mask_media_id"],
-            "media_id": row["media_id"], "created": row["created"]}
+            "media_id": row["media_id"], "created": row["created"],
+            "chain": chains.annotate(row["user_id"], chains.of_image(row["user_id"], row))}
 
 
 def _status(job: Job) -> dict:
@@ -302,10 +305,14 @@ async def create_job(request: Request):
     job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=body.model, prompt=body.prompt, size=size,
               seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
               strength=body.strength, mask=mask, source_media_id=source_id, mask_media_id=mask_id)
+    strength = body.strength if image is not None else None
+    chain = chains.of_source(uid, source_id) + [chains.image_step(
+        image_id=job.id, kind="brush" if mask_id else job.kind, model=job.model, prompt=job.prompt, size=size,
+        seed=seed, strength=strength, created=now)]
     state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
-                     " mask_media_id, state, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (job.id, uid, job.kind, job.model, job.prompt, size, seed,
-                      body.strength if image is not None else None, source_id, mask_id, job.state, job.detail, now))
+                     " mask_media_id, state, detail, created, chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (job.id, uid, job.kind, job.model, job.prompt, size, seed, strength, source_id, mask_id,
+                      job.state, job.detail, now, json.dumps(chain, ensure_ascii=False)))
     JOBS[job.id] = job
     job.task = asyncio.create_task(run_job(job))
     log.info("задание %s: %s %s", job.id[:8], body.model, job.size)

@@ -20,6 +20,7 @@
    имена файлов туда не пишутся.
 """
 import asyncio
+import json
 import logging
 import re
 import secrets
@@ -31,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 
+import chains
 import clock
 import connections
 import forms
@@ -89,7 +91,8 @@ def _out(row) -> dict:
             "prompt": row["prompt"], "prompt_source": row["prompt_source"], "seconds": row["seconds"],
             "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"],
             "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"],
-            "elapsed": int(max(0, end - row["created"]))}
+            "elapsed": int(max(0, end - row["created"])),
+            "chain": chains.annotate(row["user_id"], chains.of_video(row["user_id"], row))}
 
 
 def _settle(video_id: str, state_: str, detail: str, media_id: "str | None" = None) -> bool:
@@ -277,13 +280,18 @@ async def create_video(request: Request):
     if not media.alive(uid, source_id):           # фото удалили, пока шлюз принимал ролик
         await _drop_quietly(conn, answer["id"], video_id)
         raise HTTPException(404, media.GONE)
+    prompt_source = _text(answer.get("prompt_source"), None)
+    chain = chains.of_source(uid, source_id) + [chains.video_step(
+        video_id=video_id, prompt=body.prompt.strip(), prompt_source=prompt_source, seconds=body.seconds,
+        quality=body.quality, created=now)]
     state.DB.execute(
         "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source, seconds,"
-        " quality, smooth, seed, state, progress, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (video_id, uid, conn.id, answer["id"], source_id, body.prompt.strip(), _text(answer.get("prompt_source"), None),
+        " quality, smooth, seed, state, progress, detail, created, chain)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (video_id, uid, conn.id, answer["id"], source_id, body.prompt.strip(), prompt_source,
          body.seconds, body.quality, int(body.smooth), _int(answer.get("seed"), seed),
          status if status in ACTIVE else "queued", min(100, max(0, _int(answer.get("progress"), 0))),
-         _text(answer.get("detail"), "в очереди"), now))
+         _text(answer.get("detail"), "в очереди"), now, json.dumps(chain, ensure_ascii=False)))
     log.info("ролик %s: создан, %d с, %s", video_id[:8], body.seconds, body.quality)
     return _out(_row(uid, video_id))
 
