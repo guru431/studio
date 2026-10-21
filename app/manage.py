@@ -15,13 +15,22 @@ backup — согласованная копия SQLite (`Connection.backup`, с
 на шару под временным именем и `os.replace` в `$STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db`
 (дата — UTC). Хранятся BACKUP_KEEP последних копий; временный файл на шаре при отказе убирается,
 забытые прежними сбоями — вместе со старыми копиями.
+
+verify-backup [ПУТЬ] — поднимется ли студия из копии (без пути — из новейшей): verify_backup на
+временной копии в tmp_dir, рабочая база не открывается. Итог — JSON в stdout; код 0 — поднимается,
+1 — нет, 2 — копии нет или неверный вызов. Та же функция — у панели (admin.py, «Проверить копию»).
 """
+import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+from cryptography.fernet import Fernet, InvalidToken
 
 import auth
 import clock
@@ -32,12 +41,14 @@ import sections
 import security
 import state
 
-USAGE = "использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
+USAGE = ("использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
+         " | manage.py verify-backup [ПУТЬ]")
 GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
 BACKUP_KEEP = 7
 BACKUP_GLOB = "studio-????????.db"          # копии в $STUDIO_MEDIA_DIR/backup; их возраст видит панель (admin.py)
+VERIFY_FILES_SEC = 600                      # verify_backup: дольше файлы не проверяются — «проверено N из M»
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -176,11 +187,135 @@ def backup() -> int:
     return 0
 
 
+def _newest_backup(folder: Path) -> "Path | None":
+    names = sorted(p.name for p in folder.glob(BACKUP_GLOB))
+    return folder / names[-1] if names else None
+
+
+def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict, start: float) -> None:
+    """Шаги 2–5 verify_backup на временной копии; итог — в out, провалы — словами в out["problems"]."""
+    problems = out["problems"]
+    try:
+        verdict = [row[0] for row in conn.execute("PRAGMA integrity_check")]
+    except sqlite3.DatabaseError:
+        verdict = []
+    out["integrity"] = "ok" if verdict == ["ok"] else "broken"
+    if verdict != ["ok"]:
+        problems.append("копия повреждена или это не база SQLite")
+        return
+    out["schema_from"] = conn.execute("PRAGMA user_version").fetchone()[0]
+    if out["schema_from"] < 1:                  # migrate налил бы в неё свежую схему и «прошёл»
+        problems.append("копия пуста: схемы студии в ней нет")
+        return
+    if out["schema_from"] > db.VERSION:
+        problems.append(f"схема копии ({out['schema_from']}) новее кода ({db.VERSION})")
+        return
+    try:
+        db.migrate(conn)
+    except sqlite3.Error:
+        problems.append("шаги схемы к копии не применились")
+        return
+    out["schema_to"] = conn.execute("PRAGMA user_version").fetchone()[0]
+    out["users"] = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if not out["users"]:
+        problems.append("в копии нет ни одной учётки")
+    key, tokens = Fernet(cfg.data_key), out["tokens"]
+    for (blob,) in conn.execute("SELECT token_enc FROM connections"):
+        try:
+            key.decrypt(blob)                    # значение не держится и не печатается
+            tokens["ok"] += 1
+        except InvalidToken:
+            tokens["failed"] += 1
+    if tokens["failed"]:
+        problems.append(f"токены подключений не расшифрованы: {tokens['failed']} из "
+                        f"{tokens['ok'] + tokens['failed']} — STUDIO_DATA_KEY не тот, что у копии")
+    files = out["files"]
+    rels = [row[0] for row in conn.execute("SELECT rel_path FROM media")]
+    files["total"] = len(rels)
+    try:
+        cfg.media_dir.stat()
+    except OSError:
+        files["state"] = "down"
+        problems.append("шара недоступна: файлы не проверены")
+        return
+    for rel in rels:
+        if clock.NOW() - start > VERIFY_FILES_SEC:
+            files["state"] = "partial"
+            return
+        try:
+            (cfg.media_dir / rel).stat()
+            files["present"] += 1
+        except FileNotFoundError:
+            files["missing"] += 1
+        except OSError:
+            files["state"] = "down"
+            problems.append("шара перестала отвечать: файлы проверены не все")
+            return
+        files["checked"] += 1
+    files["state"] = "ok"
+
+
+def verify_backup(path: "str | Path | None" = None) -> dict:
+    """Поднимется ли студия из копии базы: без пути — новейшая `backup/<BACKUP_GLOB>` на шаре. Копия
+    копируется файлом `verify-<случайное>.db` в tmp_dir (локальный диск; файл, а не каталог: каталог
+    уронил бы audio.clean_tmp при старте) и там проверяется: целостность, схема (1…db.VERSION, шаги
+    db.STEPS проходят), учётки, токены текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше
+    VERIFY_FILES_SEC). Рабочую базу не открывает, шару только читает; временная копия удаляется.
+    Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
+    или из main)."""
+    cfg, start = state.CFG, clock.NOW()
+    out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
+           "users": None, "tokens": {"ok": 0, "failed": 0},
+           "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
+           "ok": False, "took": 0, "problems": []}
+    try:
+        source = Path(path) if path else _newest_backup(cfg.media_dir / "backup")
+        found = source is not None and source.is_file()
+    except OSError:
+        found = False
+    if not found:
+        out["problems"].append("копии базы нет" if path else "копий базы нет (или шара недоступна)")
+        return out
+    info = source.stat()
+    out.update(backup=source.name, at=info.st_mtime, size=info.st_size)
+    cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp = cfg.tmp_dir / f"verify-{secrets.token_hex(8)}.db"
+    try:
+        shutil.copyfile(source, tmp)
+        conn = sqlite3.connect(tmp, isolation_level=None)
+        try:
+            _check_copy(conn, cfg, out, start)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as e:
+        out["problems"].append(f"копию не удалось прочитать ({type(e).__name__})")
+    finally:
+        for extra in ("", "-journal", "-wal", "-shm"):
+            Path(f"{tmp}{extra}").unlink(missing_ok=True)
+    out["ok"] = not out["problems"]
+    out["took"] = round(clock.NOW() - start, 1)
+    return out
+
+
+def verify_command(argv: list[str]) -> int:
+    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается, 1 — нет, 2 — копии нет."""
+    try:
+        state.CFG = config.load()
+    except RuntimeError as e:
+        print(e, file=sys.stderr)
+        return 2
+    out = verify_backup(argv[0] if argv else None)
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    return 0 if out["ok"] else 2 if out["backup"] is None else 1
+
+
 def main(argv: list[str]) -> int:
     if argv == ["create-admin"]:
         return create_admin(read_pairs(sys.stdin.read()))
     if argv == ["backup"]:
         return backup()
+    if argv[:1] == ["verify-backup"] and len(argv) <= 2:
+        return verify_command(argv[1:])
     print(USAGE, file=sys.stderr)
     return 2
 

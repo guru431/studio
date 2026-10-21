@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, хранилище, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -27,7 +27,7 @@ import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
-import { button, el, field, openDialog, showError, words } from './ui.js';
+import { button, el, field, openDialog, plural, showError, words } from './ui.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
@@ -293,7 +293,45 @@ export function queueText(pending) {
     + 'удалятся, когда оно станет доступно', ''] : ['Очередь удаления пуста: удалённое стёрто и с хранилища', 'ok'];
 }
 
-function storageBlock() {
+/* «Выгрузить мою историю»: окно с галочками разделов (все отмечены) → «Подготовить» (POST /api/me/export,
+ * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
+ * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
+const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
+  ['speech', 'Озвучка'], ['voices', 'Голоса озвучки']];
+
+function exportDialog(host) {
+  const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
+    el('input', { type: 'checkbox', name: 'export-section', value: key, checked: true }), name));
+  const fail = el('p', { class: 'error', id: 'export-error', 'aria-live': 'polite' });
+  const ready = el('p', { id: 'export-ready', hidden: true });
+  const prepare = button('Подготовить', { class: 'btn btn-accent', id: 'export-prepare' });
+  openDialog(host, { id: 'export-dialog', title: 'Выгрузить мою историю', cancelText: 'Закрыть', actions: [prepare],
+    body: [el('p', { class: 'muted small' }, 'Один ZIP: чаты, промпты, цепочки, расшифровки и файлы, с описанием '
+      + 'и списком сумм sha256. Ключей подключений и пароля в нём нет. Ссылка живёт час.'), ...boxes, fail, ready] });
+  prepare.addEventListener('click', async () => {
+    const sections = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+    fail.textContent = '';
+    ready.hidden = true;
+    if (!sections.length) {
+      fail.textContent = 'Отметьте хотя бы один раздел';
+      return;
+    }
+    prepare.disabled = true;
+    try {
+      const { id, files, bytes } = await api('POST', '/api/me/export', { sections });
+      const count = `${files.toLocaleString('ru-RU')} ${plural(files, ['файл', 'файла', 'файлов'])}`;
+      ready.replaceChildren(el('a', { class: 'btn btn-accent', id: 'export-download', download: '',
+        href: `/api/me/export/${encodeURIComponent(id)}` }, `Скачать: ${count}, ${sizeText(bytes)}`));
+      ready.hidden = false;
+    } catch (err) {
+      fail.textContent = words(err);
+    } finally {
+      prepare.disabled = false;
+    }
+  });
+}
+
+function storageBlock(host) {
   const list = el('dl', { class: 'storage', id: 'storage' });
   const queue = status('storage-queue');
 
@@ -313,7 +351,9 @@ function storageBlock() {
   reload();
   return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, 'Хранилище'), list, queue,
     el('p', { class: 'muted small' }, 'Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: '
-      + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).')) };
+      + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).'),
+    el('div', { class: 'row' }, button('Выгрузить мою историю', { class: 'btn', id: 'export-open' },
+      () => exportDialog(host)))) };
 }
 
 /* «Уведомления» (jobs.js): флаг этого устройства; включение спрашивает разрешение браузера. */
@@ -718,7 +758,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'other') {
-      const storage = storageBlock();
+      const storage = storageBlock(host);
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
         lockBlock(), notifyBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;

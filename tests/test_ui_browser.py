@@ -755,6 +755,36 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
     assert not problems(r), problems(r)
 
 
+def test_export_dialog_prepares_a_download_link(browser, live):
+    """«Хранилище» → «Выгрузить мою историю»: галочки разделов (все отмечены), без них — отказ словами;
+    «Подготовить» — ссылка «Скачать: N файлов, X» на ZIP по токену."""
+    uid = live.add_user("exporter")
+    live_sql(live, "INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
+                   " VALUES ('exp-chat', ?, 'title', NULL, 'm', ?, ?)", (uid, time.time(), time.time()))
+    boxes = "[...document.querySelectorAll('#export-dialog input[name=export-section]')]"
+    r = browser.drive(live.url + "/", [*signin("exporter"), ("wait", READY),
+        *go("settings/other"), ("wait", "document.querySelector('#export-open')"),
+        ("click", "#export-open"), ("wait", is_open("#export-dialog")),
+        ("eval", "boxes", f"{boxes}.map((b) => [b.value, b.checked])"),
+        ("eval", "none", f"{boxes}.forEach((b) => {{ b.checked = false; }})"),
+        ("click", "#export-prepare"), ("wait", "document.querySelector('#export-error').textContent"),
+        ("eval", "empty", "document.querySelector('#export-error').textContent"),
+        ("eval", "all", f"{boxes}.forEach((b) => {{ b.checked = true; }})"),
+        ("click", "#export-prepare"), ("wait", "document.querySelector('#export-download')"),
+        ("eval", "link", "document.querySelector('#export-download').textContent"),
+        ("eval", "zip", """(async () => { const r = await fetch(document.querySelector('#export-download').href);
+          const head = new Uint8Array(await r.arrayBuffer()).slice(0, 2);
+          return [r.status, r.headers.get('content-type'), String.fromCharCode(...head)]; })()"""),
+        ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices")]
+    assert v["empty"] == "Отметьте хотя бы один раздел"
+    assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
+    assert v["fits"] is True
+    assert not problems(r), problems(r)
+
+
 def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     folder = live.db_path.parent / "media" / "backup"
     folder.mkdir(exist_ok=True)
@@ -775,6 +805,37 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     assert backup[0] == "backup" and backup[1].startswith("3 ч назад (") and backup[1].endswith("копий — 1")
     assert backup[2] is False
     assert queue[0] == "queue" and queue[1].startswith(("Очередь удаления пуста", "Ждут удаления"))
+    assert not problems(r), problems(r)
+
+
+def test_admin_checks_the_backup(browser, live):
+    """«Хранилище» → «Проверить копию»: итог словами, зелёным, — копия живой базы поднимается."""
+    import sqlite3
+    folder = live.db_path.parent / "media" / "backup"
+    folder.mkdir(exist_ok=True)
+    copy = folder / "studio-20990101.db"
+    src, dst = sqlite3.connect(live.db_path), sqlite3.connect(copy)
+    try:
+        src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        dst.close()
+        src.close()
+    result = "document.querySelector('#admin-backup-result')"
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+            *go("admin"), ("wait", f"{result} && {result}.textContent.startsWith('Ещё не проверялась')"),
+            ("click", "#admin-backup-check"),
+            ("wait", f"{result}.textContent.startsWith('Копия ')"),
+            ("eval", "text", f"{result}.textContent"), ("eval", "ok", f"{result}.classList.contains('ok')"),
+            ("eval", "enabled", "!document.querySelector('#admin-backup-check').disabled")])
+    finally:
+        copy.unlink()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert re.match(r"Копия \d\d\.\d\d \d\d:\d\d — поднимается: схема ", v["text"]), v["text"]
+    assert "целостность в порядке" in v["text"] and "файлов нет на шаре" in v["text"]
+    assert v["ok"] is True and v["enabled"] is True
     assert not problems(r), problems(r)
 
 
