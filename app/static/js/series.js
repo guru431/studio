@@ -2,8 +2,10 @@
  * одним запросом, меняется seed или сила. Общая для поля «Фото» (чип «×1», панель — в его меню) и
  * окна «Изменить» (панель в окне).
  *
- * seriesControl({ prefix, canStrength, from, onChange }): prefix — начало id; canStrength() — можно
- * ли менять силу (Lustify с исходным фото); from() — сила «от» (ползунок раздела или поле окна);
+ * seriesControl({ prefix, canStrength, canSeed, from, onChange }): prefix — начало id; canStrength() —
+ * можно ли менять силу (Lustify с исходным фото); canSeed() — получает ли модель seed (шлюз srvllm;
+ * внешнему сервису серия — N независимых картинок: чип «×N» без строки «меняется», в запросе — vary
+ * seed, seed сервер ему не шлёт); from() — сила «от» (ползунок раздела или поле окна);
  * onChange() — после каждой смены. Ответ — { panel, label(), value(), reset(), refresh() }: value() —
  * поле `series` запроса или null (×1); refresh() — перерисовать (сменились модель, фото, сила «от»).
  * Силы считаются так же, как на сервере (images.series_strengths): целыми двадцатыми. */
@@ -18,7 +20,7 @@ export function seriesStrengths(from, to, count) {
   return new Set(steps).size === count ? steps.map((n) => n / 20) : null;
 }
 
-export function seriesControl({ prefix, canStrength, from, onChange = () => {} }) {
+export function seriesControl({ prefix, canStrength, canSeed = () => true, from, onChange = () => {} }) {
   let count = 1;
   let vary = 'seed';
   const option = (text, attrs) => el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio', ...attrs }, text);
@@ -39,7 +41,7 @@ export function seriesControl({ prefix, canStrength, from, onChange = () => {} }
 
   function paint() {
     for (const b of counts) b.setAttribute('aria-checked', String(Number(b.dataset.count) === count));
-    varyBox.hidden = count < 2;
+    varyBox.hidden = count < 2 || !canSeed();
     byStrength.hidden = !canStrength();
     bySeed.setAttribute('aria-checked', String(!strengthWanted()));
     byStrength.setAttribute('aria-checked', String(strengthWanted()));
@@ -77,7 +79,11 @@ export function seriesControl({ prefix, canStrength, from, onChange = () => {} }
   return {
     panel,
     refresh,
-    label: () => (count < 2 ? '×1' : `×${count} · ${strengthWanted() ? 'сила' : 'seed'}`),
+    label: () => {
+      if (count < 2) return '×1';
+      if (strengthWanted()) return `×${count} · сила`;
+      return canSeed() ? `×${count} · seed` : `×${count}`;
+    },
     value: () => {
       if (count < 2) return null;
       return strengthWanted() ? { count, vary: 'strength', strength_to: Number(to.value) } : { count, vary: 'seed' };

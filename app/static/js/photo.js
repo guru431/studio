@@ -149,7 +149,7 @@ function build(view, ctx) {
   const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series', 'aria-haspopup': 'true',
     'aria-expanded': 'false', 'aria-controls': 'chip-series-menu', title: 'Серия: несколько вариантов подряд' }, seriesName);
   const series = seriesControl({ prefix: 'photo-series', canStrength: () => isLustify() && !!source,
-    from: () => strength.value, onChange: () => {
+    canSeed: () => !choice || choice.kind === 'srvllm', from: () => strength.value, onChange: () => {
       seriesName.textContent = series ? series.label() : '×1';
       chipSeries.classList.toggle('on', !!(series && series.value()));
     } });
@@ -954,7 +954,10 @@ function build(view, ctx) {
     file.value = '';
     setSource(null);
   });
-  strength.addEventListener('input', () => { strengthValue.textContent = Number(strength.value).toFixed(2); });
+  strength.addEventListener('input', () => {
+    strengthValue.textContent = Number(strength.value).toFixed(2);
+    series.refresh();                                   // сила «от» серии по силе — этот ползунок
+  });
   chipTranslate.addEventListener('click', translate);
   describeFile.addEventListener('change', () => {
     const f = describeFile.files[0];
