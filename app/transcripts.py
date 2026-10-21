@@ -424,16 +424,21 @@ async def delete(tid: str, request: Request):
     return Response(status_code=204)
 
 
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
 @router.get("/{tid}/export")
 async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx|srt)$")):  # noqa: A002
     """Готовая расшифровка файлом: имя — по записи («Звонок.m4a» → «Звонок.docx»)."""
     uid = request.state.user.id
     row = _done(uid, tid)
-    segments = view(row, await result_of(uid, row))
-    stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
+    result = await result_of(uid, row)
+    segments = view(row, result)
+    stem = _stem(row["name"])
     if format == "docx":
         body = exports.docx(segments, stem)
     else:
-        body = (exports.txt(segments) if format == "txt" else exports.srt(segments)).encode("utf-8")
+        body = (exports.txt(segments) if format == "txt" else exports.srt(segments, result.get("raw"))).encode("utf-8")
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})

@@ -25,6 +25,61 @@ def test_srt_numbers_and_times_the_replicas():
     assert exports.srt([{"speaker": None, "start": 0, "end": 0, "text": "Раз."}]) == "1\n00:00:00,000 --> 00:00:01,000\nРаз.\n"
 
 
+def cues(text: str) -> list:
+    """Субтитры SRT: (начало, конец, текст) в секундах."""
+    def sec(stamp):
+        h, m, rest = stamp.split(":")
+        s, ms = rest.split(",")
+        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+    out = []
+    for block in text.strip().split("\n\n"):
+        _, times, body = block.split("\n", 2)
+        start, end = times.split(" --> ")
+        out.append((sec(start), sec(end), body))
+    return out
+
+
+def within_limits(got: list) -> None:
+    for n, (start, end, body) in enumerate(got):
+        assert end - start <= exports.SRT_MAX_SEC + 1e-9 and len(body) <= exports.SRT_MAX_CHARS, got[n]
+        assert end > start, got[n]
+        if n:
+            assert start >= got[n - 1][1], got[n - 1:n + 1]
+
+
+def test_srt_follows_the_recognized_segments_of_an_unedited_replica():
+    turns = [{"speaker": "Иван", "start": 0.0, "end": 9.0, "text": "Раз два. Три четыре.", "edited": False},
+             {"speaker": "Собеседник 2", "start": 9.0, "end": 12.0, "text": "Правлено целиком.", "edited": True}]
+    raw = [{"start": 0.0, "end": 4.0, "speaker": "Собеседник 1", "text": "Раз два.", "turn": 0},
+           {"start": 4.0, "end": 9.0, "speaker": "Собеседник 1", "text": "Три четыре.", "turn": 0},
+           {"start": 9.0, "end": 12.0, "speaker": "Собеседник 2", "text": "Исходное.", "turn": 1}]
+    assert cues(exports.srt(turns, raw)) == [(0.0, 4.0, "Иван: Раз два."), (4.0, 9.0, "Три четыре."),
+                                             (9.0, 12.0, "Собеседник 2: Правлено целиком.")]
+
+
+def test_srt_splits_a_long_replica_within_the_limits():
+    words = [f"слово{n}" for n in range(90)]
+    text = " ".join(words[:40]) + ". " + " ".join(words[40:]) + "."
+    got = cues(exports.srt([{"speaker": "Собеседник 1", "start": 10.0, "end": 70.0, "text": text}]))
+    within_limits(got)
+    assert got[0][0] == 10.0 and got[-1][1] <= 70.0 and len(got) >= 9          # 60 с — не меньше девяти по 7 с
+    assert " ".join(b for _, _, b in got) == "Собеседник 1: " + text
+    assert all(not b.startswith("Собеседник") for _, _, b in got[1:])
+    long_word = cues(exports.srt([{"speaker": None, "start": 0, "end": 5, "text": "я" * 200}]))
+    within_limits(long_word)
+    assert "".join(b for _, _, b in long_word) == "я" * 200
+
+
+def test_srt_caps_a_short_word_on_a_long_replica_and_times_without_duration():
+    assert cues(exports.srt([{"speaker": None, "start": 0, "end": 20, "text": "Да."}])) == [(0.0, 7.0, "Да.")]
+    got = cues(exports.srt([{"speaker": None, "start": 0, "end": 0, "text": "Раз."},
+                            {"speaker": None, "start": 0, "end": 0, "text": "Два."}]))
+    assert got == [(0.0, 1.0, "Раз."), (1.0, 2.0, "Два.")]
+    got = cues(exports.srt([{"speaker": None, "start": 0, "end": 0, "text": "Раз."},
+                            {"speaker": None, "start": 0.4, "end": 2, "text": "Два."}]))
+    assert got == [(0.0, 0.4, "Раз."), (0.4, 2.0, "Два.")]
+
+
 def test_docx_is_a_valid_word_file_with_the_text_escaped():
     data = exports.docx(SEGMENTS, "Звонок Ивану")
     with zipfile.ZipFile(io.BytesIO(data)) as z:
