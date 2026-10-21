@@ -35,6 +35,7 @@ import media
 import presets
 import profile
 import screenlock
+import search
 import sections
 import speeches
 import state
@@ -121,6 +122,7 @@ app.include_router(transcripts.router)
 app.include_router(voices.router)
 app.include_router(speeches.router)
 app.include_router(jobs.router)
+app.include_router(search.router)
 app.include_router(takeout.router)
 
 
