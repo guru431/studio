@@ -7,8 +7,24 @@ Exa — постоянный адрес `EXA_URL` через общий клие
 пользователь и не модель (адрес страницы уходит в Exa данными, сервер по нему не ходит). Наружу — только
 поисковый запрос или адрес страницы и ключ заголовком `x-api-key`. Шаг инструмента — dict: поиск
 `{"kind": "search", "query", "results": [{"title", "url", "published"}], "text"}`, страница
-`{"kind": "page", "url", "title", "text"}`; `text` — ровно то, что получит модель."""
-from urllib.parse import urlsplit
+`{"kind": "page", "url", "title", "text"}`; `text` — ровно то, что получит модель.
+
+YouTube — общий yt-dlp debian (`/usr/local/bin/yt-dlp`, root обновляет ночью), списком аргументов без
+оболочки. Адрес разбирает студия (`youtube_id`), yt-dlp получает только канонический
+`https://www.youtube.com/watch?v=<id>`: у него есть общий извлекатель, и чужой адрес сервер прочитал бы.
+Одна дорожка — язык оригинала (`pick_track`; автопереводы не берутся: третий подряд запрос дорожки YouTube
+отвечал 429). Файлы — `<uuid>.*` в state.CFG.tmp_dir (файлы, не каталог: audio.clean_tmp удаляет файлы),
+убираются в finally. stderr yt-dlp — только для выбора слов ошибки, в журнал не идёт. Шаг —
+`{"kind": "youtube", "id", "url", "title", "channel", "duration", "lang", "text"}`."""
+import asyncio
+import html
+import json
+import re
+import uuid
+from asyncio.subprocess import DEVNULL, PIPE
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -20,6 +36,16 @@ EXA_URL = "https://api.exa.ai"
 EXA_TIMEOUT_SEC = 30
 SEARCH_RESULTS = 10          # базовая цена поиска Exa — до 10 результатов
 PAGE_MAX = 40_000            # знаков текста страницы: ~10 тыс. токенов из 131 072 контекста gemma-abl
+
+YTDLP = "yt-dlp"
+YTDLP_TIMEOUT_SEC = 60       # на каждый из двух вызовов; дорожка 1,5-часового ролика скачивалась за ~1 с
+SUBS_MAX = 120_000           # знаков субтитров: 1,5 ч — ~94 тыс., ~30 тыс. токенов из 131 072 контекста
+PARAGRAPH_SEC = 30           # абзац с отметкой времени — не чаще раза в 30 с ролика
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_PATH_ID = re.compile(r"/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})/?")
+_TAG = re.compile(r"<[^>]*>")
+_YT_CLOSED = ("Private video", "Sign in", "unavailable", "has been removed")
 
 
 class ToolError(Exception):
@@ -112,3 +138,154 @@ async def page(key: str, url: str) -> dict:
     title = results[0].get("title") or ""
     return {"kind": "page", "url": url, "title": title,
             "text": f"{title}\n{url}\n\n{results[0].get('text') or ''}"}
+
+
+async def _run(argv: list[str], timeout: float) -> "tuple[int, bytes, bytes]":
+    try:
+        proc = await asyncio.create_subprocess_exec(*argv, stdin=DEVNULL, stdout=PIPE, stderr=PIPE)
+    except OSError:
+        raise ToolError("чтение YouTube на сервере недоступно") from None
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except BaseException:                        # срок, «Стоп», остановка службы
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode, out, err
+
+
+RUN: Callable[[list[str], float], Awaitable[tuple[int, bytes, bytes]]] = _run    # тесты подменяют
+
+
+def youtube_id(url: str) -> "str | None":
+    """id ролика из адреса YouTube (хвост запроса и фрагмент не важны); не разобралось — None."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    host = parts.hostname or ""                  # hostname — уже в нижнем регистре
+    if host == "youtu.be":
+        m = re.fullmatch(r"/([A-Za-z0-9_-]{11})/?", parts.path)
+    elif host in YOUTUBE_HOSTS:
+        if parts.path.rstrip("/") == "/watch":
+            v = (parse_qs(parts.query).get("v") or [""])[0]
+            return v if _ID.fullmatch(v) else None
+        m = _PATH_ID.fullmatch(parts.path)
+    else:
+        return None
+    return m.group(1) if m else None
+
+
+def pick_track(info: dict) -> "tuple[str, bool] | None":
+    """(ключ дорожки, автоматическая): своя на языке ролика, затем автоматическая оригинала, затем любая
+    своя; автопереводы (`en` у русского ролика) — нет."""
+    lang = info.get("language")
+    subs = {k: v for k, v in (info.get("subtitles") or {}).items() if k != "live_chat"}
+    auto = info.get("automatic_captions") or {}
+    if lang and lang in subs:
+        return lang, False
+    if lang and f"{lang}-orig" in auto:
+        return f"{lang}-orig", True
+    if lang and lang in auto:
+        return lang, True
+    orig = [k for k in auto if k.endswith("-orig")]
+    if orig:
+        return orig[0], True
+    if subs:
+        return next(iter(subs)), False
+    return None
+
+
+def _seconds(stamp: str) -> float:
+    """«00:01:02.500» или «01:02.500» → секунды."""
+    return sum(float(p) * 60 ** i for i, p in enumerate(reversed(stamp.split(":"))))
+
+
+def _clock(sec: float) -> str:
+    h, rest = divmod(int(sec), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
+
+
+def vtt_text(vtt: str) -> str:
+    """Текст субтитров: без заголовка, строк времени и тегов; строка, равная последней выведенной, —
+    повтор «бегущих» автосубтитров; абзац с отметкой `[м:сс]` — не чаще раза в PARAGRAPH_SEC."""
+    paragraphs, start, last, in_cue, cue = [], None, None, False, 0.0
+    for line in vtt.splitlines():
+        if "-->" in line:
+            try:
+                cue, in_cue = _seconds(line.split("-->")[0].strip()), True
+            except ValueError:
+                in_cue = False
+        elif not line:                           # реплика кончается пустой строкой; « » — внутри неё
+            in_cue = False
+        elif in_cue:
+            text = " ".join(html.unescape(_TAG.sub("", line)).split())
+            if not text or text == last:
+                continue
+            last = text
+            if start is None or cue >= start + PARAGRAPH_SEC:
+                start = cue
+                paragraphs.append([f"[{_clock(cue)}]"])
+            paragraphs[-1].append(text)
+    return "\n\n".join(" ".join(p) for p in paragraphs)
+
+
+def _yt_words(err: bytes) -> str:
+    text = err.decode("utf-8", "replace")
+    if "HTTP Error 429" in text:
+        return "YouTube временно ограничил запросы — попробуйте позже"
+    if any(s in text for s in _YT_CLOSED):
+        return "ролик закрыт или недоступен"
+    return "субтитры не получены"
+
+
+async def _yt(argv: list[str]) -> "tuple[int, bytes, bytes]":
+    try:
+        return await RUN(argv, YTDLP_TIMEOUT_SEC)
+    except TimeoutError:
+        raise ToolError(f"YouTube не ответил за {YTDLP_TIMEOUT_SEC} с") from None
+
+
+async def youtube(url: str) -> dict:
+    vid = youtube_id(url)
+    if vid is None:
+        raise ToolError("это не адрес ролика YouTube")
+    canon = f"https://www.youtube.com/watch?v={vid}"
+    base = [YTDLP, "--ignore-config", "--no-playlist", "--no-cache-dir"]
+    folder, name = state.CFG.tmp_dir, uuid.uuid4().hex
+    try:
+        code, out, err = await _yt([*base, "-J", canon])
+        if code != 0:
+            raise ToolError(_yt_words(err))
+        try:
+            info = json.loads(out)
+        except ValueError:
+            info = None
+        if not isinstance(info, dict):
+            raise ToolError("субтитры не получены")
+        track = pick_track(info)
+        if track is None:
+            raise ToolError("у ролика нет субтитров")
+        key, auto = track
+        code, _out, err = await _yt([*base, "--skip-download", "--write-auto-subs" if auto else "--write-subs",
+                                     "--sub-langs", key, "--sub-format", "vtt",
+                                     "-o", f"{folder}/{name}.%(ext)s", canon])
+        path = Path(f"{folder}/{name}.{key}.vtt")
+        if code != 0 or not path.is_file():
+            raise ToolError(_yt_words(err))
+        body = await asyncio.to_thread(lambda: vtt_text(path.read_text(encoding="utf-8", errors="replace")))
+    finally:
+        for f in folder.glob(f"{name}.*"):
+            f.unlink(missing_ok=True)
+    if len(body) > SUBS_MAX:
+        body = body[:SUBS_MAX] + "\n\n[субтитры обрезаны]"
+    title, channel = info.get("title") or "", info.get("channel") or info.get("uploader") or ""
+    duration, lang = int(info.get("duration") or 0), key.removesuffix("-orig")
+    return {"kind": "youtube", "id": vid, "url": canon, "title": title, "channel": channel,
+            "duration": duration, "lang": lang,
+            "text": f"{title} — {channel}, {_clock(duration)}, язык {lang}\n{canon}\n\n{body}"}
