@@ -353,6 +353,7 @@ label { font-size: 13px; color: var(--muted); }
 .model-chip:hover { background: var(--panel-2); }
 .model-chip .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-chip .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--ok); }
+.model-chip.off .dot { background: var(--muted); }
 .model-chip svg.caret { width: 14px; height: 14px; }
 .chat-conn { min-width: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-menu { position: absolute; z-index: 15; top: calc(100% + 6px); left: 0; width: min(320px, calc(100vw - 80px));

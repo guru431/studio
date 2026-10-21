@@ -2430,7 +2430,9 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
         # чат: новый диалог — подсказка без поля ввода, прежний — читается
         *go("chat"), ("wait", "document.querySelector('#messages .hint')"),
         ("eval", "chatNew", "[document.querySelector('#composer').hidden,"
-                            " document.querySelector('#messages .hint a').getAttribute('href')]"),
+                            " document.querySelector('#messages .hint a').getAttribute('href'),"
+                            " document.querySelector('#model-chip').textContent.trim(),"
+                            " document.querySelector('#model-chip').classList.contains('off')]"),
         ("eval", "open", "location.hash = '#/chat/' + window.made.chat"),
         ("wait", "document.querySelectorAll('#messages .msg').length === 2"),
         ("eval", "chatOld", "[document.querySelector('#composer').hidden, [...document.querySelectorAll('#messages .msg')]"
@@ -2466,7 +2468,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
     assert not r.get("failed"), r
     v = r["values"]
     assert v["made"]["caps"] == {s: False for s in v["made"]["caps"]}
-    assert v["chatNew"] == [True, "#/settings/chat"]
+    assert v["chatNew"] == [True, "#/settings/chat", "модель не выбрана", True]
     assert v["chatOld"] == [False, ["привет", "Здравствуйте!"]]
     assert v["video"] == [False, "#/settings/video"] and v["photo"] == [False, "#/settings/photo"] and not v["overflow"]
     assert "Изменить" not in v["acts"] and "Повторить с тем же seed" not in v["acts"]

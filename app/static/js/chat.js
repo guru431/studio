@@ -397,7 +397,10 @@ function build(view, ctx) {
 
   function paintChip() {
     const { connection_id: connId, model } = chosen();
-    chipName.textContent = model || 'модель по умолчанию';
+    // ни подключения, ни модели (раздел без модели, подключение диалога удалено) — «по умолчанию» нечему
+    const none = connId === null && !model;
+    chipName.textContent = none ? 'модель не выбрана' : model || 'модель по умолчанию';
+    chip.classList.toggle('off', none);
     const link = links.find((l) => l.connection.id === connId);
     connName.textContent = link ? link.connection.name : '';
   }
