@@ -136,8 +136,11 @@
 `--create-admin` берёт из vault `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`,
 `GATEWAY_KEY_OWNER_IMAGES` и через `install.sh --admin-stdin` отдаёт в `manage.py create-admin`
 (`systemd-run --pipe` от `studio` с окружением юнита); повтор безопасен, новый пароль гасит сессии.
-`install.sh` ставит зависимости до подмены кода, держит прежний код в `.previous` до ответа
-`/health` от www-data через сокет, ставит юниты копии базы и включает таймер. Перезапуск ждёт
+`install.sh` до подмены кода собирает новую среду Python рядом (`.incoming/.venv`; только если
+сменились `requirements.txt` или `python3` — штамп `.venv/.studio-requirements`), переносит её на
+место вместе с кодом, держит прежние код и среду в `.previous` до ответа `/health` от www-data
+через сокет, ставит юниты копии базы и включает таймер. Перенесённая среда — с чужим shebang в
+`bin/`: всё запускается `.venv/bin/python` (`-m uvicorn`, `-m pip`, `manage.py`), не `bin/<скрипт>`. Перезапуск ждёт
 открытые потоки чата не дольше 10 с (`--timeout-graceful-shutdown`, `TimeoutStopSec=30`);
 недописанное помечают `chat.recover()` / `images.recover()` при старте. Смоук —
 `https://studio.example.com/health`; живая приёмка — `tests/test_studio_upload_live.py` (ниже).
