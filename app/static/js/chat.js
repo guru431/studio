@@ -25,9 +25,11 @@
  * раздел 9): новый диалог, POST /api/transcripts/<id>/attachments — вложение встаёт в поле уже
  * загруженным (`meta` без файла), в поле — вопрос по `ask`; адрес — сразу #/chat без записи в историю.
  * Модель — локальная (`local_models` ссылки раздела): умолчание, иначе первая отмеченная, иначе не
- * выбрана, и «Отправить» закрыто до явного выбора. Отправка расшифровки нелокальной модели — после окна
- * «уйдёт во внешний сервис» (ход с `external_ok`; 409 `external` сервера — то же окно). Ничего не
- * отправляется само. У отправленного вложения из расшифровки — ссылка «к записи».
+ * выбрана, и «Отправить» закрыто до явного выбора. Ход и «Ответить заново», что унесут расшифровку
+ * (вложением хода или из истории диалога — признак `external` сервера) нелокальной модели (у открытого
+ * диалога — признак `local` сервера), — после окна «уйдёт во внешний сервис» (ход с `external_ok`;
+ * 409 `external` сервера — то же окно). Ничего не отправляется само. У отправленного вложения из
+ * расшифровки — ссылка «к записи».
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api } from './api.js';
 import { kick } from './jobs.js';
@@ -430,10 +432,20 @@ function build(view, ctx) {
     paintGuard();
   }
 
-  /* правило локальной модели для расшифровки */
+  /* правило локальной модели для расшифровки: пара нового диалога — из отмеченных (`local_models`
+   * ссылки), у открытого диалога — признак сервера `local` (sections.is_local и для модели, которую
+   * уже сняли с отметки, и для диалога без модели) */
   function isLocal({ connection_id: connId, model }) {
     const link = links.find((l) => l.connection.id === connId);
     return !!link && (link.local_models || []).includes(model);
+  }
+
+  /* ход унесёт расшифровку во внешний сервис без подтверждения: в этом ходе (новое вложение) или в
+   * истории открытого диалога (`external` сервера — после смены модели, и для «Ответить заново») */
+  function needsConsent(regenerate) {
+    const fresh = !regenerate && atts.some((a) => a.transcript);
+    if (chat) return !!chat.chat.external || (fresh && !chat.chat.local);
+    return fresh && !isLocal(chosen());
   }
 
   function localPair() {
@@ -454,14 +466,14 @@ function build(view, ctx) {
     send.disabled = sending || blocked();
   }
 
-  function askExternal() {
+  function askExternal(regenerate) {
     const link = links.find((l) => l.connection.id === chosen().connection_id);
     const confirm = button('Отправить', { class: 'btn btn-accent', id: 'external-confirm' });
     const dialog = openDialog(root, { id: 'external-dialog', title: 'Отправить расшифровку?', actions: [confirm],
       body: [el('p', {}, `Расшифровка уйдёт во внешний сервис «${link ? link.connection.name : 'подключение диалога'}» — отправить?`)] });
     confirm.addEventListener('click', () => {
       dialog.close();
-      submit(false, true);
+      submit(regenerate, true);
     });
   }
 
@@ -482,6 +494,9 @@ function build(view, ctx) {
       meta = await api('POST', `/api/transcripts/${encodeURIComponent(tid)}/attachments`);
     } catch (err) {
       notice.textContent = words(err);
+      draft = null;                                 // вложения нет — обычный новый диалог: чип — как его создаст сервер
+      needModel = false;
+      paintChip();
       return;
     }
     atts.push({ file: null, meta, error: '', busy: false, transcript: tid });
@@ -770,8 +785,8 @@ function build(view, ctx) {
     const text = input.value;
     if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
     if (!regenerate && blocked()) return;
-    if (!regenerate && !externalOk && atts.some((a) => a.transcript) && !isLocal(chosen())) {
-      askExternal();
+    if (!externalOk && needsConsent(regenerate)) {
+      askExternal(regenerate);
       return;
     }
     sending = true;
@@ -781,7 +796,7 @@ function build(view, ctx) {
     try {
       await turn(regenerate, text, externalOk);
     } catch (err) {
-      if (err.code === 'external') askExternal();   // вкладка не знала, что модель не локальная
+      if (err.code === 'external') askExternal(regenerate);   // вкладка не знала (другая вкладка сменила модель)
       else notice.textContent = words(err);
     } finally {
       sending = false;
@@ -820,9 +835,9 @@ function build(view, ctx) {
     scrollDown(true);
     let reply;
     try {
-      reply = await api('POST', `/api/chats/${id}/turns`,
-        regenerate ? { regenerate: true }
-          : { text, attachment_ids: sent.map((a) => a.meta.id), ...(externalOk ? { external_ok: true } : {}) });
+      reply = await api('POST', `/api/chats/${id}/turns`, {
+        ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
+        ...(externalOk ? { external_ok: true } : {}) });
     } catch (err) {
       jobs.delete(id);
       if (chatId === id) {
@@ -832,6 +847,7 @@ function build(view, ctx) {
       }
       throw err;
     }
+    if (chatId === id && externalOk) chat.chat.external = false;   // ответ этой модели — след подтверждения
     if (chatId === id && !regenerate) {
       input.value = '';
       autosize();

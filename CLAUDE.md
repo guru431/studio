@@ -105,8 +105,14 @@
   сегменты до склейки с номером реплики `turn` (`speech.turns`), по ним SRT (`exports.srt`, пределы 7 с
   и 84 знака); прежний код читает только `segments`. Вложение из расшифровки
   (`POST /api/transcripts/<id>/attachments`) — обычный документ чата со своим .txt и
-  `attachments.source_transcript_id` (без FK); ход, который привязывает его к модели, не локальной по
-  `sections.is_local` (`local-*` подключения srvllm через сервер), — 409 `external` без `external_ok`.
+  `attachments.source_transcript_id` (без FK); ход и повтор, чья история (что уйдёт модели) несёт такое
+  вложение, к модели, не локальной по `sections.is_local` (`local-*` подключения srvllm через сервер), —
+  409 `external` без `external_ok`. След подтверждения — без новой схемы (`chat._needs_consent`): ответ
+  ассистента той же `messages.model` и `via` после последнего сообщения с расшифровкой (подключение
+  сообщение не хранит: та же модель другого подключения того же пути — подтверждена). Страница
+  берёт признаки `local` и `external` у диалога (GET, POST, PATCH одного диалога).
+- Правленый текст реплики — одной строкой (управляющие — пробелом, пробелы схлопнуты), до
+  `len(исходной) + EDIT_TEXT_MAX`; SRT и DOCX ещё и сами убирают управляющие (`exports.CONTROL`).
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.

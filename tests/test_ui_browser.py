@@ -3163,6 +3163,73 @@ def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
     assert not problems(r), problems(r)
 
 
+#: PATCH расшифровки идёт 1.5 с; window.patched — его ответ пришёл (и страница успела его применить)
+SLOW_PATCH = """(() => { window.patched = false; const real = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    if (opts.method !== 'PATCH' || !String(url).includes('/api/transcripts/')) return real(url, opts);
+    await new Promise(r => setTimeout(r, 1500));
+    try { return await real(url, opts); } finally { setTimeout(() => { window.patched = true; }, 500); }
+  }; return true; })()"""
+TR_SHOWN = "[document.querySelector('.split-main h1').textContent, document.querySelector('.tr-item[aria-current=true]')?.dataset.id]"
+TR_EXITS = "['#tr-copy', '#tr-download', '#tr-chat'].map(s => !!document.querySelector(s))"
+
+
+def test_transcribe_edit_hides_the_exits_seeks_by_the_time_and_a_late_save_keeps_the_pick(browser, live):
+    """Время реплики — кнопка (перемотка и с клавиатуры). Во время правки нет «Копировать», «Скачать» и
+    «В чат». «Сохранить», а пока PATCH идёт, выбрана другая запись: ответ вид не забирает, правка — на сервере."""
+    login = "trlate"
+    other = seed_list(live, "transcribe", live.add_user(login), 1)[0]
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("eval", "seek", """(() => { const b = document.querySelector(".tr-turn[data-index='1'] .tr-seek");
+          b.focus(); b.click(); return [b.tagName, b.type, document.activeElement === b, b.textContent]; })()"""),
+        ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
+        ("eval", "who", "document.querySelector(\".tr-turn[data-index='1'] .tr-who\").textContent"),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        ("eval", "editing", TR_EXITS),
+        set_value(".tr-turn[data-index='1'] .tr-edit-text", "Добрый вечер."),
+        ("eval", "spy", SLOW_PATCH), ("click", "#tr-save"),
+        ("click", f".tr-item[data-id='{other}']"),
+        ("wait", "document.querySelector('.split-main h1').textContent === 'Запись 0' && window.patched"),
+        ("eval", "shown", TR_SHOWN),
+        ("click", f".tr-item:not([data-id='{other}'])"),
+        ("wait", "document.querySelector('.split-main h1').textContent === 'Звонок.wav'"),
+        ("eval", "texts", TR_TEXTS), ("eval", "after", TR_EXITS)], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["seek"] == ["BUTTON", "button", True, "00:03"] and v["who"] == "Собеседник 2 · 00:03"
+    assert v["editing"] == [False, False, False] and v["after"] == [True, True, True]
+    assert v["shown"] == ["Запись 0", other]
+    assert v["texts"] == ["Здравствуйте.", "Добрый вечер."]
+    assert not known_refusals(problems(r), 404), problems(r)      # плеер записи без файла (строка — без media)
+
+
+#: первый список расшифровок идёт 2 с; window.slow — он пришёл (и страница успела бы выбрать запись)
+SLOW_FIRST_LIST = """(() => { window.slow = false; let first = true; const real = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    if (!first || !/^\\/api\\/transcripts\\?/.test(String(url))) return real(url, opts);
+    first = false;
+    await new Promise(r => setTimeout(r, 2000));
+    try { return await real(url, opts); } finally { setTimeout(() => { window.slow = true; }, 1000); }
+  }; return true; })()"""
+
+
+def test_transcribe_link_does_not_take_a_record_picked_meanwhile(browser, live):
+    """#/transcribe?id=<A>, а пока идёт первый список, загрузили запись: она и остаётся выбранной."""
+    login = "trwanted"
+    wanted = seed_list(live, "transcribe", live.add_user(login), 1)[0]
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+        ("wait", "document.querySelector('.settings-nav')"),
+        ("eval", "spy", SLOW_FIRST_LIST), ("eval", "go", f"location.hash = '#/transcribe?id={wanted}'"),
+        ("wait", "document.querySelector('#transcribe-add input')"),
+        put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelector('.split-main h1').textContent === 'Звонок.wav'"),
+        ("wait", "window.slow"),
+        ("eval", "shown", "document.querySelector('.split-main h1').textContent")], timeout=20000)
+    assert not r.get("failed"), r
+    assert r["values"]["shown"] == "Звонок.wav"
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
 TURNS_SO_FAR = "performance.getEntriesByType('resource').filter(e => e.name.includes('/turns')).length"
 CHAT_CHIP = "document.querySelector('#composer .att-chip .att-open')"
 
@@ -3233,6 +3300,66 @@ def test_transcript_to_chat_without_a_local_model_asks_first(browser, live):
     assert live.gw.chat_requests[-1]["model"] == "gemma4-abl"
     assert live.gw.chat_requests[-1]["messages"][-1]["content"].endswith("сроки, если названы.")
     assert not problems(r), problems(r)
+
+
+ASSISTANTS = "document.querySelectorAll('#messages .msg.assistant').length"
+NOT_ASKED = "!document.querySelector('#external-dialog')"
+UNMARK_LOCAL = f"""(async () => {{ const m = {API}; const s = await m.api('GET', '/api/sections');
+  const link = s.sections.find(x => x.id === 'chat').links[0];
+  await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['gemma4-abl'] }});
+  return true; }})()"""
+
+
+def test_transcript_in_the_chat_history_asks_once_per_cloud_model(browser, live):
+    """Расшифровка ушла локальной модели. Её сняли с отметки — диалог на ней ходит без вопроса (признак
+    сервера `local`, а не отмеченные модели). Смена модели на облачную — окно «уйдёт во внешний сервис»
+    и для хода без нового вложения; после подтверждения — без окна, и «Ответить заново» тоже."""
+    live.add_user("trhist")
+    sent = len(live.gw.chat_requests)
+    r = browser.drive(live.url + "/", [*transcribed("trhist", 1.0),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=summary]"), ("wait", CHAT_CHIP),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("click", "#send"), ("wait", f"{ASSISTANTS} === 1 && {ANSWERED}"), ("wait", CHAT_ID),
+        ("eval", "unmark", UNMARK_LOCAL),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", f"{ASSISTANTS} === 1 && {ANSWERED}"),
+        ("type", "#chat-input", "Ещё"), ("click", "#send"),
+        ("wait", f"{ASSISTANTS} === 2 && {ANSWERED}"), ("eval", "local", NOT_ASKED),
+        ("click", "#model-chip"), ("click", "#model-menu .model-option[data-model='gemma4-abl']"),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('gemma4-abl')"),
+        ("type", "#chat-input", "Облаку"), ("click", "#send"), ("wait", is_open("#external-dialog")),
+        ("eval", "asked", "document.querySelector('#external-dialog p').textContent"),
+        ("eval", "before", TURNS_SO_FAR),
+        ("click", "#external-confirm"), ("wait", f"{ASSISTANTS} === 3 && {ANSWERED}"),
+        ("type", "#chat-input", "Ещё облаку"), ("click", "#send"),
+        ("wait", f"{ASSISTANTS} === 4 && {ANSWERED}"), ("eval", "again", NOT_ASKED),
+        ("click", "#messages .msg.assistant:last-child .msg-retry"),
+        ("wait", f"{TURNS_SO_FAR} === 4 && {ANSWERED}"), ("eval", "retried", NOT_ASKED)], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["local"] and v["again"] and v["retried"] and v["before"] == 1
+    assert v["asked"] == "Расшифровка уйдёт во внешний сервис «Шлюз» — отправить?"
+    assert [q["model"] for q in live.gw.chat_requests[sent:]] == [
+        "local-gemma-abl", "local-gemma-abl", "gemma4-abl", "gemma4-abl", "gemma4-abl"]
+    assert not problems(r), problems(r)
+
+
+def test_transcript_to_chat_that_fails_leaves_the_sections_default(browser, live):
+    """Вложение из расшифровки не создалось (запись удалили): чип — умолчание раздела, а не «модель не
+    выбрана»: сообщение без вложения уйдёт в диалог с этим умолчанием."""
+    live.add_user("trgone")
+    r = browser.drive(live.url + "/", [*transcribed("trgone", 1.0),
+        ("eval", "gone", f"""(async () => {{ const m = {API}; const id = document.querySelector('.tr-item').dataset.id;
+          await m.api('DELETE', '/api/transcripts/' + id); window.gone = id; return id; }})()"""),
+        ("eval", "unmark", UNMARK_LOCAL),
+        ("eval", "go", "location.hash = '#/chat?transcript=' + window.gone + '&ask=summary'"),
+        ("wait", "document.querySelector('#chat-error')?.textContent"),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('gemma4-abl')"),
+        ("eval", "open", "[document.querySelector('#send').disabled, document.querySelector('#model-note').textContent]")])
+    assert not r.get("failed"), r
+    assert r["values"]["open"] == [False, ""]
+    assert not known_refusals(problems(r), 404), problems(r)
 
 
 def test_voice_is_added_in_settings(browser, live):
