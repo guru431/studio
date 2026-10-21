@@ -1,11 +1,13 @@
 """Расшифровка записей (app/transcripts.py): загрузка потоком на шару, задание в фоне, ожидание
 карты, отмена, перезапуск, удаление; имя файла и текст — не в журнал."""
+import json
 import logging
 import pathlib
 import threading
 from urllib.parse import quote
 
 import clock
+import media
 import state
 import transcripts
 from conftest import T0, add_gateway, make_user, signin
@@ -46,6 +48,27 @@ def test_upload_streams_to_the_share_and_reads_by_speakers(studio, env, fake_aud
     assert NAME not in caplog.text and "Здравствуйте" not in caplog.text
     assert not list((env.db_path.parent / "tmp").iterdir())
     assert transcripts.JOBS == {}                     # кончившееся в памяти не живёт
+
+
+def result_file(tid) -> pathlib.Path:
+    row = state.DB.execute("SELECT user_id, result_media_id FROM transcripts WHERE id = ?", (tid,)).fetchone()
+    return media.path(row["user_id"], row["result_media_id"])
+
+
+def test_result_keeps_the_recognized_segments_and_an_old_one_still_reads(studio, fake_audio):
+    """Файл итога новой расшифровки — ещё и `raw` (сегменты до склейки с номером реплики); старый
+    файл без `raw` читается и выгружается как прежде."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    data = json.loads(result_file(tid).read_bytes())
+    assert [(r["speaker"], r["text"], r["turn"]) for r in data["raw"]] == [("Собеседник 1", "Здравствуйте.", 0),
+                                                                          ("Собеседник 2", "Добрый день.", 1)]
+    del data["raw"]
+    result_file(tid).write_bytes(json.dumps(data).encode())
+    assert [s["text"] for s in studio.c.get(f"/api/transcripts/{tid}").json()["segments"]] == ["Здравствуйте.", "Добрый день."]
+    srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt")
+    assert srt.status_code == 200 and "Собеседник 2: Добрый день." in srt.text
 
 
 def hold_temp_unlink(env, monkeypatch):

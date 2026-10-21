@@ -154,10 +154,11 @@ async def run(job: Job) -> None:
                 raise JobError(f"запись длиннее {DURATION_MAX // 60} минут — разделите её")
             await audio.compress(source, tmp)
             await speech.free_card(job.conn)
-            replicas = speech.speakers(await _recognize(job, tmp))
+            replicas, raw = speech.turns(await _recognize(job, tmp))
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
-            payload = json.dumps({"segments": [asdict(s) for s in replicas]}, ensure_ascii=False).encode("utf-8")
+            payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
+                                 ensure_ascii=False).encode("utf-8")
             result = await media.save_async(job.user_id, payload, "application/json", "transcript.json")
             outcome = ("done", "готово", {"result_media_id": result,
                                           "speakers": len({s.speaker for s in replicas if s.speaker})})
@@ -265,15 +266,21 @@ async def list_transcripts(request: Request, before: "float | None" = None,
     return {"items": [_out(r) for r in rows]}
 
 
-async def segments_of(user_id: int, row) -> list:
-    """Реплики готовой расшифровки — с шары; файла нет — 404, шара недоступна — 503."""
+async def result_of(user_id: int, row) -> dict:
+    """Файл итога готовой расшифровки — с шары: `segments` и у новых `raw`; файла нет — 404, шара
+    недоступна — 503."""
     try:
         data = await asyncio.to_thread(media.path(user_id, row["result_media_id"]).read_bytes)
     except FileNotFoundError:
         raise HTTPException(404, media.GONE) from None
     except OSError:
         raise HTTPException(503, forms.STORAGE) from None
-    return json.loads(data)["segments"]
+    return json.loads(data)
+
+
+async def segments_of(user_id: int, row) -> list:
+    """Реплики готовой расшифровки как распознаны (без правок)."""
+    return (await result_of(user_id, row))["segments"]
 
 
 @router.get("/{tid}")
