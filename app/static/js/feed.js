@@ -10,7 +10,9 @@
  * страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка — на месте.
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
  *
- * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки». */
+ * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
+ * их список с выбором. */
+import { api } from './api.js';
 import { button, el as make, words } from './ui.js';
 
 const NEAR_PX = 600;             // ближе к низу — подгрузить следующую страницу
@@ -48,6 +50,96 @@ export function withFirstPage(first, items, size) {
   const ids = new Set(first.map((x) => x.id));
   return [...first, ...items.filter((x) => !ids.has(x.id)
     && (x.created < edge.created || (x.created === edge.created && x.id < edge.id)))];
+}
+
+/** Список с выбором «Расшифровки» и «Озвучки»: записи url страницами по size, старше — more();
+ * идущие (running(item)) — опрос первой страницы раз в pollMs, подгруженные остаются; выбранная —
+ * GET url/<id>. Номера чтений и выбора: запоздалый ответ прежнего не ляжет и вид не займёт.
+ * paint() — перерисовать список, show() — выбор занял вид (current), fail(err) — ошибка.
+ * Ответ — { items, current, done, paging, load, more, refresh, select, forget(id), stop };
+ * forget(id) — запись удалена на сервере (дальше — вид и load()). */
+export function createPicker({ url, size, pollMs, running, paint, show, fail }) {
+  const s = { items: [], current: null, done: false, paging: false, load, more, refresh, select, forget, stop };
+  let alive = true;
+  let poll = null;
+  let listing = 0;             // номер чтения первой страницы: запоздавшее прежнее не ляжет
+  let removals = 0;            // удаления: страница, начатая до удаления, не вернёт удалённую
+  let picking = 0;             // номер выбора: запоздалый ответ прежнего вид не займёт
+  let wanted = null;           // id последнего выбора
+
+  async function load() {
+    const mine = ++listing;
+    try {
+      const first = (await api('GET', `${url}?limit=${size}`)).items;
+      if (mine !== listing) return;
+      s.items = withFirstPage(first, s.items, size);
+      if (first.length < size) s.done = true;
+    } catch (err) {
+      if (mine !== listing) return;
+      fail(err);
+    }
+    paint();
+    clearTimeout(poll);
+    if (alive && s.items.some(running)) poll = setTimeout(refresh, pollMs);
+  }
+
+  async function more() {
+    if (s.paging || s.done || !s.items.length) return;
+    s.paging = true;
+    const removed = removals;
+    paint();
+    try {
+      const got = (await api('GET', `${url}?limit=${size}${pageQuery(s.items[s.items.length - 1])}`)).items;
+      if (removed === removals) {
+        const ids = new Set(s.items.map((x) => x.id));
+        s.items = [...s.items, ...got.filter((x) => !ids.has(x.id))];
+        s.done = got.length < size;
+      }
+    } catch (err) {
+      fail(err);
+    }
+    s.paging = false;
+    if (alive) paint();
+  }
+
+  async function refresh() {
+    await load();
+    const { current } = s;
+    if (current && wanted === current.id) {           // выбор другой записи в пути — его не перебивать
+      const fresh = s.items.find((i) => i.id === current.id);
+      if (fresh && (fresh.state !== current.state || fresh.detail !== current.detail)) await select(current.id);
+    }
+  }
+
+  async function select(id) {
+    const mine = ++picking;
+    wanted = id;
+    let got;
+    try {
+      got = await api('GET', `${url}/${id}`);
+    } catch (err) {
+      if (mine === picking) fail(err);
+      return;
+    }
+    if (!alive || mine !== picking) return;
+    s.current = got;
+    show();
+  }
+
+  function forget(id) {
+    removals += 1;
+    s.items = s.items.filter((x) => x.id !== id);
+    picking += 1;                                     // выбор, начатый до удаления, вид не займёт
+    wanted = null;
+    s.current = null;
+  }
+
+  function stop() {
+    alive = false;
+    clearTimeout(poll);
+  }
+
+  return s;
 }
 
 export function createFeed(el, { load, render, key, empty = '', head = null }) {
