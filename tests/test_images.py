@@ -393,7 +393,9 @@ def test_uploaded_photo_is_forwarded_to_edits_and_discarded(studio, model):
     assert r.status_code == 202, r.text
     job_id = r.json()["id"]
     body = wait_state(studio, job_id, {"done", "error"})
-    assert body["state"] == "done" and body["kind"] == "edit" and body["strength"] == 0.4
+    # сила — только у Lustify: FLUX её не получает, и в строке и цепочке её нет (раздел 9 спеки фото)
+    assert body["state"] == "done" and body["kind"] == "edit"
+    assert body["strength"] == (0.4 if model == "lustify" else None) == body["chain"][-1]["strength"]
     (fields, sent), = studio.gw.edits
     assert fields["model"] == images.MODELS[model] and sent.startswith(b"\x89PNG")
     assert (fields.get("strength") == "0.4") if model == "lustify" else "strength" not in fields
@@ -755,12 +757,12 @@ def test_unsaved_image_becomes_an_error(studio, monkeypatch):
 def test_restart_marks_running_images_interrupted(studio):
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
-    for image_id, status in (("a" * 32, "working"), ("b" * 32, "cancelling"), ("c" * 32, "done")):
+    for image_id, status in (("a" * 32, "working"), ("b" * 32, "cancelling"), ("c" * 32, "done"), ("d" * 32, "queued")):
         state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                          " VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, ?, 'x', ?)",
                          (image_id, uid, status, T0))
     images.recover()
-    for image_id, status in (("a" * 32, "error"), ("b" * 32, "error"), ("c" * 32, "done")):
+    for image_id, status in (("a" * 32, "error"), ("b" * 32, "error"), ("c" * 32, "done"), ("d" * 32, "error")):
         body = studio.c.get(f"/api/images/{image_id}").json()
         assert body["state"] == status
     assert studio.c.get(f"/api/images/{'a' * 32}").json()["detail"] == "прервано перезапуском студии"
@@ -1164,6 +1166,269 @@ def test_brush_is_srvllm_only(studio, monkeypatch):
     assert not state.DB.execute("SELECT count(*) FROM media").fetchone()[0]
 
 
+# ---- серии -------------------------------------------------------------------
+
+def rows_of(ids) -> list:
+    return [state.DB.execute("SELECT state, detail, seed, strength FROM images WHERE id = ?", (i,)).fetchone()[:]
+            for i in ids]
+
+
+def held_gateway(s, path="/slot/images/generations"):
+    """Запрос `path` «идёт», пока событие не поднято: (поднять, сколько запросов сразу в пути — максимум)."""
+    go, now, peak = threading.Event(), [0], [0]
+
+    async def held(request):
+        now[0] += 1
+        peak[0] = max(peak[0], now[0])
+        try:
+            while not go.is_set():
+                await asyncio.sleep(0.001)
+            return await s.gw.builtin(request)
+        finally:
+            now[0] -= 1
+
+    s.gw.on[path] = held
+    return go, peak
+
+
+def generating(s) -> bool:
+    """Запрос генерации дошёл до шлюза (и висит у held_gateway)."""
+    return any(r.url.path == "/slot/images/generations" for r in s.gw.requests)
+
+
+def first_photo(s) -> str:
+    return wait_state(s, start(s).json()["id"], {"done"})["media_id"]
+
+
+def test_seed_series_goes_one_by_one_in_the_users_slot(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    go, peak = held_gateway(studio)
+    r = start(studio, seed=7, series={"count": 3, "vary": "seed"})
+    assert r.status_code == 202, r.text
+    out = r.json()
+    ids = out["ids"]
+    assert len(ids) == 3 and out["id"] == ids[0] and out["seed"] == 7
+    wait_for(lambda: generating(studio))
+    assert rows_of(ids) == [("working", "жду карту или генерирую", 7, None),
+                            ("queued", "в очереди серии · 2 из 3", 8, None),
+                            ("queued", "в очереди серии · 3 из 3", 9, None)]
+    feed = [i["id"] for i in studio.c.get("/api/images").json()["items"]]
+    assert feed == ids                                         # первая сверху, по порядку серии
+    busy = start(studio)
+    assert busy.status_code == 409 and busy.json()["detail"]["code"] == "busy"
+    go.set()
+    for i in ids:
+        wait_state(studio, i, {"done"})
+    assert [g[0]["seed"] for g in studio.gw.generations] == [7, 8, 9] and peak[0] == 1
+    assert [m for m, _ in studio.gw.releases] == [FLUX] * 3   # до каждого запроса; карта после — не освобождается
+    assert PROMPT not in caplog.text
+    assert start(studio).status_code == 202
+
+
+def test_random_seed_series_has_distinct_seeds(studio):
+    add_gateway(studio)
+    ids = start(studio, series={"count": 4, "vary": "seed"}).json()["ids"]
+    seeds = [wait_state(studio, i, {"done"})["seed"] for i in ids]
+    assert len(set(seeds)) == 4 and [g[0]["seed"] for g in studio.gw.generations] == seeds
+
+
+def test_seed_series_wraps_at_two_to_the_32(studio):
+    add_gateway(studio)
+    ids = start(studio, seed=2**32 - 1, series={"count": 2, "vary": "seed"}).json()["ids"]
+    assert [wait_state(studio, i, {"done"})["seed"] for i in ids] == [2**32 - 1, 0]
+
+
+def test_strength_series_values(studio):
+    add_gateway(studio)
+    source = first_photo(studio)
+    edit = dict(size="original", source_media_id=source)
+    r = start(studio, strength=0.25, series={"count": 3, "vary": "strength", "strength_to": 0.75}, **edit)
+    assert r.status_code == 202, r.text
+    ids = r.json()["ids"]
+    assert [wait_state(studio, i, {"done"})["strength"] for i in ids] == [0.25, 0.5, 0.75]
+    assert [f["strength"] for f, _ in studio.gw.edits] == ["0.25", "0.5", "0.75"]
+    assert [s["strength"] for s in (studio.c.get(f"/api/images/{i}").json()["chain"][-1] for i in ids)] == [0.25, 0.5, 0.75]
+    assert len({g[0]["seed"] for g in studio.gw.generations[1:]}) == 1     # по силе — один seed на всю серию
+
+
+def test_strength_series_refusals(studio):
+    add_gateway(studio)
+    edit = dict(size="original", source_media_id=first_photo(studio))
+    narrow = start(studio, strength=0.25, series={"count": 4, "vary": "strength", "strength_to": 0.3}, **edit)
+    assert narrow.status_code == 422 and narrow.json()["detail"] == {
+        "code": "series", "message": "слишком узкий диапазон для 4 вариантов"}
+    for refused in (start(studio, model="flux", series={"count": 2, "vary": "strength", "strength_to": 1}, **edit),
+                    start(studio, series={"count": 2, "vary": "strength", "strength_to": 1}),
+                    start(studio, series={"count": 2, "vary": "strength"}, **edit)):
+        assert refused.status_code == 422 and refused.json()["detail"]["code"] == "series", refused.text
+    for bad in ({"count": 1, "vary": "seed"}, {"count": 5, "vary": "seed"}, {"count": 2, "vary": "prompt"},
+                {"count": 2, "vary": "strength", "strength_to": 0}):
+        assert start(studio, series=bad, **edit).status_code == 422
+    assert studio.gw.edits == [] and len(images.JOBS) == 1
+
+
+def test_series_with_a_mask_is_refused(studio, env):
+    add_gateway(studio)
+    mask = Image.new("L", (48, 32), 0)
+    mask.paste(255, (0, 0, 8, 8))
+    r = studio.c.post("/api/images", data={"prompt": "x", "size": "original", "model": "flux",
+                                           "series": json.dumps({"count": 2, "vary": "seed"})},
+                      files={"image": ("p.png", photo(), "image/png"), "mask": ("m.png", png(mask), "image/png")})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "series"
+    assert media_rows() == 0 and share_files(env) == [] and not images.JOBS
+
+
+def test_series_field_in_a_form_is_json(studio, env):
+    add_gateway(studio)
+    form = {"prompt": "x", "size": "original", "model": "lustify", "strength": "0.25"}
+    bad = studio.c.post("/api/images", data=form | {"series": "{broken"}, files={"image": ("p.png", photo(), "image/png")})
+    assert bad.status_code == 422 and bad.json()["detail"]["code"] == "input"
+    assert media_rows() == 0 and share_files(env) == []
+    r = studio.c.post("/api/images", data=form | {"series": json.dumps({"count": 2, "vary": "strength", "strength_to": 0.5})},
+                      files={"image": ("p.png", photo(), "image/png")})
+    assert r.status_code == 202, r.text
+    rows = [wait_state(studio, i, {"done"}) for i in r.json()["ids"]]
+    assert [x["strength"] for x in rows] == [0.25, 0.5]
+    assert len({x["source_media_id"] for x in rows}) == 1        # исходник — один файл на всю серию
+
+
+def test_external_series_sends_no_seed(studio, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    seen = []
+
+    async def reply(q):
+        seen.append(json.loads(q.content))
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_REAL).decode()}]})
+
+    studio.gw.on["/v1/images/generations"] = reply
+    r = start(studio, model="gpt-image-1", connection_id=cid, seed=5, series={"count": 2, "vary": "seed"})
+    for i in r.json()["ids"]:
+        wait_state(studio, i, {"done"})
+    assert len(seen) == 2 and not any("seed" in body for body in seen)
+    refused = start(studio, model="gpt-image-1", connection_id=cid, size="original", source_media_id=first_photo(studio),
+                    series={"count": 2, "vary": "strength", "strength_to": 1})
+    assert refused.status_code == 422 and refused.json()["detail"]["code"] == "series"
+
+
+def series_held(s, model="flux", count=3):
+    """Серия, первая строка которой висит на запросе к шлюзу: (ids, поднять)."""
+    add_gateway(s)
+    go, _ = held_gateway(s)
+    ids = start(s, model=model, series={"count": count, "vary": "seed"}).json()["ids"]
+    wait_for(lambda: generating(s))
+    s.gw.releases.clear()
+    return ids, go
+
+
+@pytest.mark.parametrize("which", [0, 2], ids=["running", "queued"])
+def test_series_cancel_stops_the_whole_rest_and_frees_the_card(studio, which):
+    """«Отменить» у любой строки серии: идущая — как одиночная отмена (ждёт конца запроса, release
+    модели), все в очереди — сразу «отменено»; новое задание до конца — 409."""
+    ids, go = series_held(studio)
+    expected = "cancelling" if which == 0 else "cancelled"
+    assert studio.c.post(f"/api/images/{ids[which]}/cancel").json() == {"state": expected}
+    assert [r[0] for r in rows_of(ids)] == ["cancelling", "cancelled", "cancelled"]
+    assert rows_of(ids)[1][1] == "отменено"
+    busy = start(studio)
+    assert busy.status_code == 409 and "отменяется" in busy.json()["detail"]["message"]
+    assert studio.c.post(f"/api/images/{ids[1]}/cancel").json() == {"state": "cancelled"}   # повтор — без перемен
+    go.set()
+    first = wait_state(studio, ids[0], {"cancelled", "done", "error"})
+    assert first["state"] == "cancelled" and "карта освобождена" in first["detail"]
+    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")] and len(studio.gw.generations) == 1
+    assert media_rows() == 0
+    nxt = start(studio)
+    assert nxt.status_code == 202
+    wait_state(studio, nxt.json()["id"], {"done"})
+
+
+def test_series_error_of_one_does_not_stop_the_next(studio):
+    calls = []
+
+    async def flaky(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/generations"] = flaky
+    add_gateway(studio)
+    ids = start(studio, series={"count": 3, "vary": "seed"}).json()["ids"]
+    assert [wait_state(studio, i, images.TERMINAL)["state"] for i in ids] == ["error", "done", "done"]
+
+
+def test_series_keeps_the_slot_until_the_last(studio):
+    """Между строками серии нет мгновения без занятости: вторая стартует, не отпуская слот."""
+    add_gateway(studio)
+    go, calls = threading.Event(), []
+
+    async def second_held(request):
+        calls.append(1)
+        while len(calls) == 2 and not go.is_set():
+            await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/generations"] = second_held
+    ids = start(studio, series={"count": 2, "vary": "seed"}).json()["ids"]
+    wait_state(studio, ids[0], {"done"})
+    assert start(studio).status_code == 409
+    assert studio.c.delete(f"/api/images/{ids[1]}").json()["detail"]["code"] == "running"
+    go.set()
+    wait_state(studio, ids[1], {"done"})
+    assert start(studio).status_code == 202
+
+
+def test_queued_row_cannot_be_deleted(studio):
+    ids, go = series_held(studio, count=2)
+    r = studio.c.delete(f"/api/images/{ids[1]}")
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "running", "message": "сначала отмените"}
+    go.set()
+    wait_state(studio, ids[1], {"done"})
+    assert studio.c.delete(f"/api/images/{ids[1]}").status_code == 204
+
+
+def test_stop_marks_queued_rows_interrupted(studio, monkeypatch):
+    """Остановка службы посреди серии: строки в очереди — «прервано перезапуском» самой остановкой
+    (прежний код после отката install.sh о queued не знает и оставил бы их неудаляемыми)."""
+    ids, go = series_held(studio)
+    studio.c.__exit__(None, None, None)
+    go.set()
+    monkeypatch.setattr(images, "recover", lambda: None)
+    studio.c.__enter__()
+    assert [r[:2] for r in rows_of(ids)] == [("error", "прервано перезапуском студии")] * 3
+    assert all(images.JOBS[i].prompt == "" for i in ids)
+
+
+def test_history_wipe_during_a_series_starts_nothing_more(studio, env):
+    ids, go = series_held(studio)
+    assert studio.c.delete("/api/history").status_code == 200
+    go.set()
+    job = wait_job(ids[0])
+    assert job.state == "cancelled" and "карта освобождена" in job.detail
+    assert [images.JOBS[i].state for i in ids[1:]] == ["cancelled", "cancelled"]
+    assert len(studio.gw.generations) == 1 and media_rows() == 0 and share_files(env) == []
+
+
+def test_deleting_a_user_during_a_series_ends_it(studio, env, monkeypatch):
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    ids, go = series_held(studio)
+    signin(studio, "owner")
+    real_settle = images.settle_user
+
+    async def settle(uid):                        # конец задания приходит, пока удаление его ждёт
+        go.set()
+        return await real_settle(uid)
+
+    monkeypatch.setattr(images, "settle_user", settle)
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    assert [images.JOBS[i].state for i in ids] == ["cancelled"] * 3
+    assert "карта освобождена" in images.JOBS[ids[0]].detail and len(studio.gw.generations) == 1
+    assert media_rows() == 0 and share_files(env) == []
+
+
 # ---- пресеты -----------------------------------------------------------------
 
 PRESET = {"model": "lustify", "connection_id": None, "size": "portrait", "seed": 7, "strength": 0.4,
@@ -1198,8 +1463,11 @@ def test_presets_crud_and_replace_by_name(studio, caplog):
 
 def test_presets_limit_is_50(studio):
     add_gateway(studio)
-    for i in range(50):
-        assert save_preset(studio, f"p{i}").status_code == 201
+    assert save_preset(studio, "p0").status_code == 201
+    uid = state.DB.execute("SELECT user_id FROM presets").fetchone()[0]
+    for i in range(1, 50):                        # остальные — строками: 50 запросов — больше секунды
+        state.DB.execute("INSERT INTO presets(id, user_id, section, name, params, created) VALUES (?, ?, 'photo', ?, '{}', ?)",
+                         (f"{i:032x}", uid, f"p{i}", T0))
     r = save_preset(studio, "лишний")
     assert r.status_code == 409 and r.json()["detail"] == {
         "code": "presets", "message": "не больше 50 пресетов — удалите ненужные"}
