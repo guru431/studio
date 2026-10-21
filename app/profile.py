@@ -80,12 +80,15 @@ async def patch_me(body: MePatch, request: Request):
 @router.post("/me/password", status_code=204)
 async def change_password(body: PasswordChange, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен")
+    confirmed = await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен")
     check_password(body.new)
     pw_hash = await asyncio.to_thread(security.hash_password, body.new)
     state.DB.execute("BEGIN")
     try:
-        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (pw_hash, uid))
+        # пока считался новый хеш, пароль могли сбросить из панели: сброс не перекрывается
+        if not state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ? AND pw_hash = ? AND disabled = 0",
+                                (pw_hash, uid, confirmed)).rowcount:
+            raise HTTPException(403, {"code": "password", "message": "текущий пароль неверен"})
         auth.end_sessions(uid, keep_digest=security.digest(request.cookies[auth.COOKIE]))
         state.DB.execute("COMMIT")
     except BaseException:

@@ -14,6 +14,8 @@
   целиком не запирается: после пятой неудачи за 15 минут со всех адресов ответ на неверный
   пароль ждёт 2, 4, 8 … 30 с. Адрес — последний элемент X-Forwarded-For: путь к службе один,
   Apache (unix-сокет), начало заголовка мог прислать сам клиент.
+- Хеш считается в потоке: вход и подтверждение паролем после него сверяют учётку заново
+  (still_valid) — сброс пароля, отключение или удаление посреди проверки старым паролем не обойти.
 - Блокировка на телефоне (спека 2026-10-21-studio-screen-lock, 6.2): сессия заперта, когда у учётки
   включена блокировка, сессия мобильная и отметки «на экране» (screenlock.py) не было дольше STALE_SEC.
   Запертой — 423 `screen_locked` на всё /api/*, кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
@@ -211,9 +213,17 @@ def locked_key(key: tuple) -> bool:
     return len(FAILS.get(key, [])) >= LOCK_FAILS
 
 
-async def confirm_password(uid: int, password: str, what: str, message: str = "пароль неверен") -> None:
+def still_valid(uid: int, pw_hash: str) -> bool:
+    """Учётка жива, включена и её хеш — тот, что проверяли: пока scrypt считался в потоке, пароль
+    могли сбросить (панель, смена с другого устройства), учётку — отключить или удалить."""
+    return state.DB.execute("SELECT 1 FROM users WHERE id = ? AND pw_hash = ? AND disabled = 0",
+                            (uid, pw_hash)).fetchone() is not None
+
+
+async def confirm_password(uid: int, password: str, what: str, message: str = "пароль неверен") -> str:
     """Пароль учётки для действия из сессии (смена пароля, отпирание, ключ, выключение блокировки):
-    укравший сессию не переберёт его — пауза по ключу ("pw", uid), общая для всех этих действий."""
+    укравший сессию не переберёт его — пауза по ключу ("pw", uid), общая для всех этих действий.
+    Возвращает проверенный хеш: действие, которое ждёт ещё раз (смена пароля), сверяет его снова."""
     key = ("pw", uid)
     if locked_key(key):
         log.warning("пользователь %d: %s — пауза", uid, what)
@@ -221,10 +231,11 @@ async def confirm_password(uid: int, password: str, what: str, message: str = "�
     attempt = clock.NOW()
     FAILS.setdefault(key, []).append(attempt)       # до хеша: параллельная пачка не пройдёт разом
     stored = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()["pw_hash"]
-    if not await asyncio.to_thread(security.verify_password, password, stored):
+    if not await asyncio.to_thread(security.verify_password, password, stored) or not still_valid(uid, stored):
         log.warning("пользователь %d: %s — неверный пароль", uid, what)
         raise HTTPException(403, {"code": "password", "message": message})
     FAILS.pop(key, None)
+    return stored
 
 
 def _login_fails(login: str) -> int:
@@ -300,7 +311,7 @@ async def login(request: Request):
     # неизвестный логин проверяется против DUMMY_HASH: по времени ответа его не отличить
     ok = await asyncio.to_thread(security.verify_password, password,
                                  row["pw_hash"] if row else security.DUMMY_HASH)
-    if ok and row:
+    if ok and row and still_valid(row["id"], row["pw_hash"]):   # сессия — без await после сверки
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса
         replaced = request.cookies.get(COOKIE)

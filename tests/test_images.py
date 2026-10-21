@@ -886,7 +886,8 @@ def test_forms_are_decoded_off_the_loop(studio, monkeypatch):
 @pytest.mark.parametrize("change, words", [
     ("UPDATE settings SET value = '[]' WHERE key = 'allowlist'", "убран из списка администратора"),
     ("DELETE FROM connections", "«srvllm» удалено из профиля"),
-], ids=["refused", "deleted"])
+    ("UPDATE connections SET base_url = 'http://10.77.1.16:4000'", "«srvllm» изменено — запустите заново"),
+], ids=["refused", "deleted", "moved"])
 def test_description_release_refusals_read_as_words(studio, change, words):
     """Подготовка карты к описанию: адрес убрали из списка или подключение удалили — словами (ревью A2-M6)."""
     async def release(request):

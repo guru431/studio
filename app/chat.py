@@ -353,8 +353,8 @@ class StreamTask:
                         text = delta.get("content") if isinstance(delta, dict) else None
                         if isinstance(text, str) and text:
                             self._delta(text)
-        except upstream.UpstreamRefused:
-            return f"адрес подключения «{self.conn.name}» убран из списка администратора"
+        except upstream.UpstreamRefused as e:
+            return upstream.refused_words(e, self.conn)
         except httpx.TimeoutException:
             return f"шлюз не ответил за {STREAM_READ_SEC} с"
         except httpx.HTTPError as e:

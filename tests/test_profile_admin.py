@@ -1,7 +1,10 @@
 """Профиль (app/profile.py), панель администратора (app/admin.py), удаление истории (app/history.py)."""
+import pytest
+
 import auth
 import clock
 import sections
+import security
 import state
 from conftest import add_connection, add_gateway, login, make_user, signin
 
@@ -107,6 +110,25 @@ def test_password_change_needs_current_and_ends_other_sessions(studio):
     assert studio.c.get("/api/me").status_code == 200                    # текущая сессия жива
     assert login(studio, "owner", "password-123").status_code == 401
     assert login(studio, "owner", "brand-new-pass").status_code == 303
+
+
+@pytest.mark.parametrize("target", ["verify_password", "hash_password"])
+def test_password_change_confirmed_before_a_reset_does_not_win(studio, monkeypatch, target):
+    """Сброс из панели посреди проверки текущего пароля или хеша нового: смена не перекрывает сброс (аудит P1)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    reset_hash, original = security.hash_password("admin-reset-1"), getattr(security, target)
+
+    def racing(*args):
+        result = original(*args)
+        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (reset_hash, uid))
+        auth.end_sessions(uid)
+        return result
+
+    monkeypatch.setattr(security, target, racing)
+    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
+    assert r.status_code == 403 and code(r) == "password"
+    assert state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()[0] == reset_hash
+    assert studio.c.get("/api/me").status_code == 401
 
 
 def test_wrong_current_password_is_limited(studio):

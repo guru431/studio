@@ -197,8 +197,9 @@ async def add_passkey(body: NewKey, request: Request):
         verified = webauthn.verify_registration_response(
             credential=body.credential, expected_challenge=challenge, expected_rp_id=rp_id, expected_origin=origin,
             require_user_verification=True)
-    except Exception:            # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
-        log.warning("пользователь %d: ключ не добавлен", uid)
+    except Exception as e:       # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
+        # тип, а не сообщение библиотеки (в нём бывает origin): настройку STUDIO_ORIGIN видно по нему
+        log.warning("пользователь %d: ключ не добавлен (%s)", uid, type(e).__name__)
         raise HTTPException(400, REFUSED_KEY) from None
     key_id = bytes_to_base64url(verified.credential_id)
     sent = body.credential["response"].get("transports")
@@ -268,8 +269,8 @@ async def open_with_passkey(body: Answer, request: Request):
             credential=body.credential, expected_challenge=challenge, expected_rp_id=rp_id, expected_origin=origin,
             credential_public_key=row["public_key"], credential_current_sign_count=row["sign_count"],
             require_user_verification=True)
-    except Exception:            # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
-        log.warning("пользователь %d: ключ не подошёл", uid)
+    except Exception as e:       # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
+        log.warning("пользователь %d: ключ не подошёл (%s)", uid, type(e).__name__)
         raise HTTPException(403, REFUSED_OPEN) from None
     now = clock.NOW()
     state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",

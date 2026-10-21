@@ -167,6 +167,64 @@ def test_request_outside_the_list_is_refused_before_any_io(studio):
     assert studio.gw.requests == []
 
 
+GW16 = "http://10.77.1.16:4000"
+
+
+def refused_change(call) -> upstream.ConnectionChanged:
+    with pytest.raises(upstream.ConnectionChanged) as e:
+        asyncio.run(call())
+    return e.value
+
+
+def test_old_snapshot_never_carries_the_new_token_to_the_old_address(studio):
+    """Задание держит снимок подключения: адрес сменили с новым ключом — снимку ключ не отдаётся (аудит P1)."""
+    named_list("10.77.1.15:4000", "10.77.1.16:4000")
+    cid = add_gateway(studio)
+    old = conn_of(cid)
+    r = studio.c.patch(f"/api/connections/{cid}", json={"base_url": GW16, "token": "new-gateway-key"})
+    assert r.status_code == 200
+    for call in (lambda: upstream.request(old, "GET", GW + "/v1/models"), lambda: streamed(old, GW + "/v1/models")):
+        assert not refused_change(call).deleted
+    assert studio.gw.requests == []
+    assert upstream.refused_words(upstream.ConnectionChanged(old, False), old) == \
+        "подключение «srvllm» изменено — запустите заново"
+    asyncio.run(upstream.request(conn_of(cid), "GET", GW16 + "/v1/models"))      # свежий снимок — новому адресу
+    q, = studio.gw.requests
+    assert q.url.host == "10.77.1.16" and q.headers["authorization"] == "Bearer new-gateway-key"
+
+
+def test_old_snapshot_is_refused_after_a_kind_change(studio):
+    cid = add_connection(studio, kind="openai", base_url=GW, token="openai-key")
+    old = conn_of(cid)
+    r = studio.c.patch(f"/api/connections/{cid}", json={"kind": "srvllm", "token": "srvllm-key"})
+    assert r.status_code == 200
+    assert not refused_change(lambda: upstream.request(old, "GET", GW + "/models")).deleted
+    assert studio.gw.requests == []
+
+
+def test_new_token_for_the_same_address_reaches_an_old_snapshot(studio):
+    cid = add_gateway(studio)
+    old = conn_of(cid)
+    assert studio.c.patch(f"/api/connections/{cid}", json={"name": "шлюз", "token": "fresh-key"}).status_code == 200
+    asyncio.run(upstream.request(old, "GET", GW + "/v1/models"))
+    q, = studio.gw.requests
+    assert q.headers["authorization"] == "Bearer fresh-key"
+
+
+def test_deleted_connection_and_its_reused_id_give_no_token(studio):
+    """Удалённое подключение — отказ; id, занятый потом подключением другой учётки к тому же адресу, — тоже."""
+    cid = add_gateway(studio)
+    old = conn_of(cid)
+    assert studio.c.delete(f"/api/connections/{cid}").status_code == 204
+    assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
+    other = make_user(studio, "other")
+    reused = connections.create(other, connections.ConnIn(name="srvllm", kind="srvllm", base_url=GW,
+                                                          token="other-key", sections=["photo"]))
+    assert reused["id"] == cid
+    assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
+    assert studio.gw.requests == []
+
+
 def test_gateway_401_words_point_to_the_profile():
     text = upstream.gateway_error(httpx.Response(401), "srvllm")
     assert "srvllm" in text and "профиле" in text
