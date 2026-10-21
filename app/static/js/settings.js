@@ -10,6 +10,10 @@
  * модели» (`GET …/found`, через сервер). Список прямого подключения берёт браузер (modelsOf: токен и
  * адрес — из одного ответа /token, токен живёт только в памяти запроса; сервис без CORS — словами).
  * Отмеченная модель, которой нет в найденном списке, остаётся отмеченной с пометкой «не найдена».
+ * Подключение, убранное из списка администратора (`dropped`), спрашивается у сервера: он скажет это словами.
+ *
+ * «Проверить» и паспорт под шапкой карточки, «Пробный ответ» у отмеченных моделей чата не-srvllm
+ * подключений — passport.js; найденные проверкой модели встают в найденные. Только в своих настройках.
  *
  * В «Озвучке» своих настроек — ещё «Голоса» (образцы для озвучки srvllm): запись 5–15 с файлом или
  * с микрофона, её текст и имя (POST /api/voices), список с «Удалить».
@@ -21,6 +25,7 @@ import { api, loadMe, me } from './api.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
+import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
@@ -457,6 +462,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   const root = el('div', { class: 'settings' }, nav, panel);
   const note = el('p', { class: 'status section-status', 'aria-live': 'polite' });
   const found = new Map();        // `<раздел>:<подключение>` → найденные модели после «Обновить модели»
+  const checkErrors = new Map();  // подключение → отказ последней проверки (в блоке паспорта)
+  const checking = new Set();     // подключения, которые проверяются сейчас
+  const opened = new Set();       // `<раздел>:<подключение>` — паспорт раскрыт
   let data = [];
   let current = ids.includes(section) ? section : null;
 
@@ -504,8 +512,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   async function refresh(s, conn) {
     say(note, 'Загружаю список моделей…');
     try {
-      // прямое подключение: список берёт браузер; через сервер (и в панели) — GET …/found
-      const items = direct && !conn.proxied ? await modelsOf(conn)
+      // прямое подключение: список берёт браузер; через сервер, убранное из списка (и в панели) — GET …/found
+      const items = direct && !conn.proxied && !conn.dropped ? await modelsOf(conn)
         : (await api('GET', `${base}/${s.id}/links/${conn.id}/found`)).items;
       found.set(`${s.id}:${conn.id}`, items);
       say(note, items.length ? `Найдено моделей: ${items.length}` : 'Сервис не назвал ни одной модели');
@@ -513,6 +521,40 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       say(note, words(err), 'error');
     }
     render();
+  }
+
+  async function runCheck(s, conn) {
+    checking.add(conn.id);
+    checkErrors.delete(conn.id);
+    render();
+    try {
+      const answer = await check(conn, !conn.proxied && !conn.dropped);
+      for (const [section, items] of Object.entries(answer.found)) found.set(`${section}:${conn.id}`, items);
+      opened.add(`${s.id}:${conn.id}`);
+    } catch (err) {
+      checkErrors.set(conn.id, words(err));
+    }
+    checking.delete(conn.id);
+    await reload();                  // паспорт — в подключении
+  }
+
+  function tryModel(s, conn, model) {
+    const send = button('Отправить', { class: 'btn btn-accent', id: 'probe-send' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'probe-dialog', title: 'Пробный ответ', actions: [send], body: [
+      el('p', {}, `Модель «${modelLabel(model)}» подключения «${conn.name}».`), el('p', {}, PROBE_WARNING), fail] });
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try {
+        await probe(conn, model, !conn.proxied && !conn.dropped);
+        dialog.close();
+        opened.add(`${s.id}:${conn.id}`);
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        send.disabled = false;
+      }
+    });
   }
 
   function remove(conn) {
@@ -550,9 +592,12 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         checked: !!s.default && s.default.connection_id === conn.id && s.default.model === m });
       check.addEventListener('change', () => saveModels(s, conn, names, box));
       radio.addEventListener('change', () => saveDefault(s, conn, m));
+      // пробный ответ тратит запрос: только по кнопке, только у отмеченной модели чата и не у srvllm (занял бы карту)
+      const tryable = direct && checked && s.id === 'chat' && conn.kind !== 'srvllm';
       box.append(el('li', { class: 'model', 'data-model': m },
         el('label', { class: 'check model-name' }, check, modelLabel(m)),
         known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, 'не найдена') : null,
+        tryable ? button('Пробный ответ', { class: 'btn btn-sm model-probe' }, () => tryModel(s, conn, m)) : null,
         el('label', { class: 'model-default-label', title: 'По умолчанию' }, radio, el('span', { class: 'small muted' }, 'по умолчанию'))));
     }
     let search = null;
@@ -579,6 +624,14 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       actions.hidden = !actions.hidden;
       menu.setAttribute('aria-expanded', String(!actions.hidden));
     });
+    const key = `${s.id}:${conn.id}`;
+    const busy = checking.has(conn.id);
+    const passport = direct && (conn.passport || busy || checkErrors.has(conn.id))
+      ? passportBlock({ conn, section: s.id, models: link.catalog || link.models, label: modelLabel,
+        error: checkErrors.get(conn.id), busy, open: opened.has(key),
+        onToggle: (open) => (open ? opened.add(key) : opened.delete(key)) }) : null;
+    const checkButton = direct ? button('Проверить', { class: 'btn btn-sm link-check', disabled: busy },
+      () => runCheck(s, conn)) : null;
     return el('li', { class: 'link', 'data-conn': String(conn.id) },
       el('div', { class: 'link-head' },
         el('div', { class: 'link-main' },
@@ -587,8 +640,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('span', { class: 'link-hint' },
             el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? 'через сервер' : 'из браузера'),
             ` ключ ${conn.token_hint}`)),
-        el('div', { class: 'link-buttons' }, button('Обновить модели', { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
-      actions, search,
+        el('div', { class: 'link-buttons' }, checkButton,
+          button('Обновить модели', { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
+      passport, actions, search,
       names.length ? box : el('p', { class: 'muted small' }, 'Нажмите «Обновить модели» и отметьте нужные'));
   }
 
