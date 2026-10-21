@@ -49,6 +49,8 @@ DEFAULT_MODEL = "local-gemma-abl"
 BACKUP_KEEP = 7
 BACKUP_GLOB = "studio-????????.db"          # копии в $STUDIO_MEDIA_DIR/backup; их возраст видит панель (admin.py)
 VERIFY_FILES_SEC = 600                      # verify_backup: дольше файлы не проверяются — «проверено N из M»
+#: verify_backup: свободного места в tmp_dir (диск рабочей базы) — копия плюс столько (или 10 % копии)
+VERIFY_RESERVE = 256 << 20
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -192,7 +194,7 @@ def _newest_backup(folder: Path) -> "Path | None":
     return folder / names[-1] if names else None
 
 
-def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict, start: float) -> None:
+def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None:
     """Шаги 2–5 verify_backup на временной копии; итог — в out, провалы — словами в out["problems"]."""
     problems = out["problems"]
     try:
@@ -238,6 +240,7 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict, start: 
         files["state"] = "down"
         problems.append("шара недоступна: файлы не проверены")
         return
+    start = clock.NOW()                          # срок — на файлы: копия, integrity_check и migrate — не в счёт
     for rel in rels:
         if clock.NOW() - start > VERIFY_FILES_SEC:
             files["state"] = "partial"
@@ -258,9 +261,10 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict, start: 
 def verify_backup(path: "str | Path | None" = None) -> dict:
     """Поднимется ли студия из копии базы: без пути — новейшая `backup/<BACKUP_GLOB>` на шаре. Копия
     копируется файлом `verify-<случайное>.db` в tmp_dir (локальный диск; файл, а не каталог: каталог
-    уронил бы audio.clean_tmp при старте) и там проверяется: целостность, схема (1…db.VERSION, шаги
-    db.STEPS проходят), учётки, токены текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше
-    VERIFY_FILES_SEC). Рабочую базу не открывает, шару только читает; временная копия удаляется.
+    уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
+    копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
+    токены текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
+    обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
@@ -279,12 +283,17 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     info = source.stat()
     out.update(backup=source.name, at=info.st_mtime, size=info.st_size)
     cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
+    # tmp_dir — на диске рабочей базы: копия, забившая его до ENOSPC, уронила бы запись студии до уборки
+    if shutil.disk_usage(cfg.tmp_dir).free < info.st_size + max(VERIFY_RESERVE, info.st_size // 10):
+        out["problems"].append("мало места на диске базы: копию проверить негде")
+        out["took"] = round(clock.NOW() - start, 1)
+        return out
     tmp = cfg.tmp_dir / f"verify-{secrets.token_hex(8)}.db"
     try:
         shutil.copyfile(source, tmp)
         conn = sqlite3.connect(tmp, isolation_level=None)
         try:
-            _check_copy(conn, cfg, out, start)
+            _check_copy(conn, cfg, out)
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as e:

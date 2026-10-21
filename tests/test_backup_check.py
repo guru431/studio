@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import shutil
 import sqlite3
 import threading
 import time
@@ -166,6 +167,39 @@ def test_verify_backup_checks_files_only_for_its_time(base, env, monkeypatch):
     out = manage.verify_backup()
     assert out["files"]["state"] == "partial" and 0 < out["files"]["checked"] < 3 and out["files"]["total"] == 3
     assert out["ok"] is True                                     # шара отвечает, проверено не всё — не провал
+
+
+def test_verify_backup_file_time_starts_after_the_copy(base, env, monkeypatch):
+    """Срок VERIFY_FILES_SEC — на файлы: медленная копия и migrate его не съедают («проверено 0» при ok)."""
+    add_rows(base)
+    backup_of(base, env, monkeypatch)
+    now = [0.0]
+    monkeypatch.setattr(clock, "NOW", lambda: now[0])
+    real = shutil.copyfile
+
+    def slow_copy(src, dst):
+        now[0] += manage.VERIFY_FILES_SEC + 1
+        return real(src, dst)
+
+    monkeypatch.setattr(shutil, "copyfile", slow_copy)
+    out = manage.verify_backup()
+    assert out["files"] == {"state": "ok", "present": 2, "missing": 1, "checked": 3, "total": 3}
+    assert out["ok"] is True and out["took"] > manage.VERIFY_FILES_SEC
+
+
+def test_verify_backup_without_room_for_the_copy_does_not_copy(base, env, monkeypatch):
+    """Временная копия — на диске рабочей базы: места меньше копии с запасом — не копировать (ENOSPC уронил
+    бы запись рабочей базы), «мало места», провал."""
+    add_rows(base)
+    copy = backup_of(base, env, monkeypatch)
+    room = copy.stat().st_size + manage.VERIFY_RESERVE - 1
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(10 ** 12, 0, room))
+    copied = []
+    monkeypatch.setattr(shutil, "copyfile", lambda src, dst: copied.append(dst))
+    out = manage.verify_backup()
+    assert out["ok"] is False and copied == [] and out["integrity"] is None
+    assert out["backup"] == "studio-20261020.db" and any("мало места" in p for p in out["problems"])
+    assert tmp_files(env) == []
 
 
 def test_verify_backup_command_codes(base, env, monkeypatch, capsys, tmp_path):

@@ -192,8 +192,9 @@
   Восстановление — сначала проверить копию: `manage.py verify-backup [ПУТЬ]` (без пути — новейшая;
   панель — «Хранилище» → «Проверить копию») поднимает её файлом `verify-<hex>.db` в
   `/var/lib/studio/tmp` (файл, не каталог: `audio.clean_tmp` при старте удаляет файлы, каталог
-  уронил бы старт), гоняет `integrity_check`, шаги `db.STEPS`, расшифровку токенов текущим ключом и
-  `stat` файлов шары (до `VERIFY_FILES_SEC`), рабочую базу не открывает; JSON в stdout, код 0 —
+  уронил бы старт; это диск рабочей базы — свободно меньше копии плюс `VERIFY_RESERVE` или 10 % — «мало
+  места», не копирует), гоняет `integrity_check`, шаги `db.STEPS`, расшифровку токенов текущим ключом и
+  `stat` файлов шары (`VERIFY_FILES_SEC` от начала обхода файлов), рабочую базу не открывает; JSON в stdout, код 0 —
   поднимается, 1 — нет, 2 — копии нет. На хосте — от `studio` с окружением юнита, как
   `create-admin` в `install.sh`: `sudo systemd-run --quiet --collect --pipe --wait
   --service-type=exec -p User=studio -p Group=www-data -p EnvironmentFile=/etc/studio/studio.env
