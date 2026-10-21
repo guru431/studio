@@ -36,6 +36,7 @@ import screenlock
 import sections
 import speeches
 import state
+import takeout
 import transcripts
 import videos
 import voices
@@ -115,6 +116,7 @@ app.include_router(transcripts.router)
 app.include_router(voices.router)
 app.include_router(speeches.router)
 app.include_router(jobs.router)
+app.include_router(takeout.router)
 
 
 @app.exception_handler(RequestValidationError)

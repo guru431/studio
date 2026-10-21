@@ -57,6 +57,7 @@ def studio(env, monkeypatch):
     import security
     import state
     import speeches
+    import takeout
     import transcripts
     import videos
     from fakes import FakeGateway
@@ -90,6 +91,7 @@ def studio(env, monkeypatch):
     # поток записи, переживший цикл событий прошлого теста, свой id из SAVING уже не снимет
     media.SAVING.clear()
     media.ARCHIVES.clear()
+    takeout.EXPORTS.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
