@@ -39,11 +39,17 @@
   шаре, `Range`; архив выделенного — `POST /api/media/archives` списком в теле → токен в памяти на
   `ARCHIVE_TTL_SEC`, `GET /api/media/archives/<токен>` — ZIP без сжатия на лету; CRC и размер — в
 локальном заголовке первым проходом по файлу, без дескриптора данных: запись без сжатия с ним не
-открывают Archive Utility macOS и потоковые читатели), `history`; формы фото и роликов (тело с пределом, фото файлом или из истории) —
+открывают Archive Utility macOS и потоковые читатели; учёт записей — `media.ZipWriter`, общий с
+выгрузкой), `takeout` (выгрузка своей истории: `POST /api/me/export` разделами → токен на
+`EXPORT_TTL_SEC`, не больше `EXPORT_KEEP`; `GET /api/me/export/<токен>` — ZIP асинхронным
+генератором: база — по записи на цикле событий, файлы — `asyncio.to_thread`; README, JSON
+разделов, диалог — своим файлом, `files/<media id><расш.>`, `manifest.json` с sha256 последним;
+`transcripts.edits` и `presets` — если есть в базе; без токенов, хешей, сессий, passkey), `history`; формы фото и роликов (тело с пределом, фото файлом или из истории) —
   `forms.py`; цепочка промптов картинок и роликов (снимок шагов в `images.chain` / `videos.chain`,
   у старых строк — по ссылкам) — `chains.py`, в ответе — только у одной записи (`GET …/<id>`), лента
   несёт число шагов `steps`; база — `db.py`, окружение — `config.py` (`REQUIRED`),
-  часы — `clock.py`, команды хоста — `manage.py` (`create-admin`, `backup`). Фронтенд без сборки —
+  часы — `clock.py`, команды хоста — `manage.py` (`create-admin`, `backup`, `verify-backup`; проверку
+  копии зовёт и панель — `POST/GET /api/admin/backup-check`, поток-демон `admin.CHECK`, одна за раз). Фронтенд без сборки —
   `app/static/` (модули ES, сторонние библиотеки копией в `static/vendor/`, без CDN); шторка,
   экран блокировки, отметки и помощники passkey — `lock.js` (ставит `api.js` `hooks.locked`: 423
   ждёт отпирания и повторяется); значок и панель «В работе», опрос `GET /api/jobs` и уведомления
@@ -149,10 +155,21 @@
   `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт, пока
   его не вытеснят 7 более новых успешных копий — без календарного срока: пропуски копирования его
   продлевают; файлы, которые шара не дала удалить, — пока их не доудалит очередь `purge`.
-  Восстановление —
+  Восстановление — сначала проверить копию: `manage.py verify-backup [ПУТЬ]` (без пути — новейшая;
+  панель — «Хранилище» → «Проверить копию») поднимает её файлом `verify-<hex>.db` в
+  `/var/lib/studio/tmp` (файл, не каталог: `audio.clean_tmp` при старте удаляет файлы, каталог
+  уронил бы старт), гоняет `integrity_check`, шаги `db.STEPS`, расшифровку токенов текущим ключом и
+  `stat` файлов шары (до `VERIFY_FILES_SEC`), рабочую базу не открывает; JSON в stdout, код 0 —
+  поднимается, 1 — нет, 2 — копии нет. На хосте — от `studio` с окружением юнита, как
+  `create-admin` в `install.sh`: `sudo systemd-run --quiet --collect --pipe --wait
+  --service-type=exec -p User=studio -p Group=www-data -p EnvironmentFile=/etc/studio/studio.env
+  -p "Environment=$(systemctl show -p Environment --value studio-web)"
+  /opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py verify-backup`. Затем —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
   `studio:www-data`, удалить `-wal`/`-shm`), запустить. Файлов, удалённых после даты копии, на шаре
-  уже нет: их строки `media` отвечают 404.
+  уже нет: их строки `media` отвечают 404. Запасной `STUDIO_DATA_KEY` — vault
+  `local-config/secrets/vault.env` `STUDIO_DATA_KEY` (тот же, что в `/etc/studio/studio.env`): без него
+  токены подключений из копии не расшифровать — их вводят заново.
 - Apache: vhost [deploy/apache-vhost.conf](deploy/apache-vhost.conf) (`*:8443` за прозрачным
   `sslh`, wildcard `/etc/letsencrypt/live/example.net/`) подключён в конце `/opt/services/apache/apache2.conf`
   строкой `IncludeOptional /opt/services/studio/deploy/apache-vhost.conf`. Правка vhost — выкладка:
