@@ -287,23 +287,27 @@ class DefaultIn(BaseModel):
     model: str = Field(max_length=MODEL_MAX)
 
 
-def section_out(user_id: int, section: str) -> dict:
+def section_out(user_id: int, section: str, passport: bool = True) -> dict:
+    """passport=False — панель администратора: паспорт подключения туда не идёт."""
     chosen = _default_row(user_id, section)
     return {"id": section, "name": NAMES[section],
-            "links": [{"connection": connections.out(l.connection), "models": list(l.models),
+            "links": [{"connection": connections.out(l.connection, passport), "models": list(l.models),
                        "catalog": CATALOG.get(section) if l.connection.kind == "srvllm" else None}
                       for l in links(user_id, section)],
             "default": {"connection_id": chosen["connection_id"], "model": chosen["model"]} if chosen else None}
 
 
-def all_out(user_id: int) -> dict:
-    return {"sections": [section_out(user_id, s) for s in SECTIONS]}
+def all_out(user_id: int, passport: bool = True) -> dict:
+    return {"sections": [section_out(user_id, s, passport) for s in SECTIONS]}
 
 
 async def found(user_id: int, section: str, conn_id: int) -> dict:
-    """Найденные модели: srvllm вне чата — встроенный перечень; прочее — `GET …/models` через сервер."""
+    """Найденные модели: srvllm вне чата — встроенный перечень; прочее — `GET …/models` через сервер.
+    Адрес убран из списка — отказ словами и с перечнем (`connections.check_reachable`)."""
     check_section(section)
     conn = connections.get(user_id, conn_id)
+    if connections.dropped(conn):
+        connections.check_reachable(conn)
     if conn.kind == "srvllm" and section in CATALOG:
         return {"items": list(CATALOG[section])}
     return {"items": [m["id"] for m in await connections.fetch_models(conn)]}

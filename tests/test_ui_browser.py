@@ -415,6 +415,104 @@ def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
     assert not refused, problems(r)
 
 
+def spent(gw):
+    """Сколько шлюз нарисовал, освободил, озвучил, ответил и сколько раз его спросили о роликах."""
+    return (len(gw.generations), len(gw.releases), len(gw.video_calls), len(gw.descriptions), len(gw.chat_requests),
+            len(gw.asr_requests), len(gw.tts_requests))
+
+
+PASSPORT_STAMP = r"Проверено \d\d\.\d\d \d\d:\d\d"
+
+
+def test_settings_check_shows_the_gateway_passport(browser, live):
+    """Критерий 1 спеки проверки: «Проверить» у srvllm — паспорт под карточкой; ничего не потрачено."""
+    live.add_user("checker")
+    photo, chat, speech = (f".section-panel[data-section={s}]" for s in ("photo", "chat", "speech"))
+    before = spent(live.gw)
+    summary = "document.querySelector('{} .passport-summary')?.textContent || ''"
+    r = browser.drive(live.url + "/", [*signin("checker"), ("wait", READY), add_gateway(),
+        *go("settings/photo"), ("wait", f"document.querySelector('{photo} .link-check')"),
+        ("eval", "unchecked", f"!document.querySelector('{photo} .passport')"),
+        ("click", f"{photo} .link-check"),
+        ("wait", f"document.querySelector('{photo} .passport')?.open && ({summary.format(photo)}).startsWith('Проверено')"),
+        ("eval", "photo", summary.format(photo)),
+        ("eval", "lines", f"[...document.querySelectorAll('{photo} .passport-lines li')].map(li => li.textContent)"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        *go("settings/chat"), ("wait", f"document.querySelector('{chat} .passport')"),
+        ("eval", "chat", summary.format(chat)),
+        ("eval", "probes", f"document.querySelectorAll('{chat} .model-probe').length"),
+        *go("settings/speech"), ("wait", f"document.querySelector('{speech} .passport')"),
+        ("eval", "speech", summary.format(speech))],
+        width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["unchecked"] and not v["overflow"]
+    assert re.fullmatch(PASSPORT_STAMP + " · адрес отвечает · ключ принят", v["photo"]), v["photo"]
+    lines = v["lines"]
+    assert re.fullmatch(r"Адрес — отвечает, \d+ мс", lines[0]) and lines[1:4] == [
+        "Ключ — принят", "Модели — 3", "Профиль — шлюз srvllm"]
+    assert "Lustify: генерация, правка, кисть, сила, seed — встроенный перечень srvllm" in lines
+    assert "FLUX: генерация, правка, кисть, seed — встроенный перечень srvllm" in lines
+    assert "gemma4-abl: «Описать», «EN» — встроенный перечень srvllm" in lines
+    assert re.fullmatch(PASSPORT_STAMP + " · адрес отвечает · ключ принят", v["chat"]), v["chat"]
+    assert v["probes"] == 0                                  # у srvllm пробного ответа нет
+    assert re.fullmatch(PASSPORT_STAMP + " · не проверяется: проба занимала бы карту", v["speech"]), v["speech"]
+    assert spent(live.gw) == before
+    assert not problems(r), problems(r)
+
+
+def test_settings_check_of_a_cloud_runs_in_the_browser(browser, live):
+    """Прямое подключение проверяет браузер; «Пробный ответ» — с предупреждением; закрытый порт — слова про CORS."""
+    live.add_user("cloudcheck")
+    with socket.socket() as s:                 # порт, который никто не слушает
+        s.bind(("127.0.0.1", 0))
+        deaf = f"http://127.0.0.1:{s.getsockname()[1]}/v1"
+    panel = ".section-panel[data-section=chat]"
+    cloud, dead = f"{panel} .link:first-child", f"{panel} .link:last-child"
+    summary = "document.querySelector('{} .passport-summary')?.textContent || ''"
+    asked = len(live.cloud.chat_requests)
+    r = browser.drive(live.url + "/", [*signin("cloudcheck"), ("wait", READY),
+        ("eval", "added", f"""(async () => {{ const m = {API};
+          const c = await m.api('POST', '/api/connections', {{ name: 'Облако', kind: 'openai',
+            base_url: {live.cloud.base_url!r}, token: {live.cloud.TOKEN!r}, sections: ['chat'] }});
+          await m.api('PUT', `/api/sections/chat/links/${{c.id}}`, {{ models: ['cloud-chat'] }});
+          await m.api('POST', '/api/connections', {{ name: 'Глухой', kind: 'openai', base_url: {deaf!r},
+            token: 'deaf-key-123', sections: ['chat'] }});
+          await m.loadMe(); return true; }})()"""),
+        *go("settings/chat"), ("wait", f"document.querySelectorAll('{panel} .link').length === 2"),
+        ("click", f"{cloud} .link-check"),
+        ("wait", f"({summary.format(cloud)}).startsWith('Проверено')"),
+        ("eval", "cloud", summary.format(cloud)),
+        ("eval", "lines", f"[...document.querySelectorAll('{cloud} .passport-lines li')].map(li => li.textContent)"),
+        ("click", f"{cloud} .model-probe"), ("wait", is_open("#probe-dialog")),
+        ("eval", "warning", "document.querySelector('#probe-dialog').textContent"),
+        ("click", "#probe-send"),
+        ("wait", f"!{is_open('#probe-dialog')} && document.querySelector('{cloud} .passport-probe')"),
+        ("eval", "probe", f"document.querySelector('{cloud} .passport-probe').textContent"),
+        ("eval", "probeCaps", f"[...document.querySelectorAll('{cloud} .passport-model')].map(li => li.textContent)"),
+        ("click", f"{dead} .link-check"),
+        ("wait", f"({summary.format(dead)}).includes('CORS')"),
+        ("eval", "dead", summary.format(dead)),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")],
+        width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert re.fullmatch(PASSPORT_STAMP + " · адрес отвечает · ключ принят · по словам браузера", v["cloud"]), v["cloud"]
+    assert "Модели — 1" in v["lines"] and any(l.startswith("Профиль — OpenAI-совместимый: нет кисти") for l in v["lines"])
+    assert "Отправит одно короткое сообщение; у платного сервиса это расход." in v["warning"]
+    assert re.fullmatch(r"cloud-chat: пробный ответ — ответила за \d+ мс \(\d\d\.\d\d \d\d:\d\d, по словам браузера\)",
+                        v["probe"]), v["probe"]
+    assert v["probeCaps"] == ["cloud-chat: отвечает — пробный ответ"]
+    body, = live.cloud.chat_requests[asked:]
+    assert body == {"model": "cloud-chat", "messages": [{"role": "user", "content": "Ответь одним словом: ok"}],
+                    "max_tokens": 16, "stream": False}
+    assert v["dead"].endswith("адрес: нет ответа: сервис недоступен или не разрешает запросы из браузера (CORS)"
+                              " · по словам браузера"), v["dead"]
+    assert not v["overflow"]
+    refused = [e for e in known_refusals(problems(r), 401) if "ERR_CONNECTION_REFUSED" not in e]
+    assert not refused, problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, width):
     """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только Lustify."""
@@ -522,6 +620,9 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("wait", "document.querySelector('#user-conns-dialog .link')"),
         ("eval", "conn", "[document.querySelector('#user-conns-dialog .link-hint .tag').textContent,"
                          " [...document.querySelectorAll('#user-conns-dialog input.model-check')].map(c => c.value)]"),
+        # паспорт и проверка чужих подключений панели не даны
+        ("eval", "noCheck", "!document.querySelector('#user-conns-dialog .link-check, #user-conns-dialog .passport,"
+                            " #user-conns-dialog .model-probe')"),
         ("click", "#user-conns-dialog .dialog-close"), ("wait", "!" + is_open("#user-conns-dialog")),
         ("wait", f"document.querySelector('{rid} td[data-col=connections]').textContent === '1'"),
         # сброс пароля, отключение
@@ -558,7 +659,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["short"].startswith("Пароль короче")
     assert v["tokenType"] == "password"
     assert v["pathError"] == "Адрес через сервер — без пути"
-    assert v["conn"] == ["через сервер", ["local-gemma-abl"]]
+    assert v["conn"] == ["через сервер", ["local-gemma-abl"]] and v["noCheck"]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
     assert v["selfReset"] is True                  # свой пароль — в «Прочем», с текущим
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]

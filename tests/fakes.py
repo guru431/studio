@@ -2,7 +2,7 @@
 
 Встроенное поведение — API картинок шлюза srvllm (перенос `Gateway` из tests/test_studio.py с путями
 `/slot/...`): генерация и правка отдают настоящий PNG (`PNG_REAL`, Pillow — чтобы строилось превью),
-release моделей, описание gemma-abl; API роликов `/slot/videos` (перенос фикстуры `videos` из
+release моделей, описание gemma-abl, список карты `GET /slot/models` (`slot_models`); API роликов `/slot/videos` (перенос фикстуры `videos` из
 tests/test_studio.py): создание, статус, `content`, удаление; чат — `/v1/models` и
 `/v1/chat/completions` (поток OpenAI SSE); речь — `/speech/asr`, `/speech/transcriptions`,
 `/speech/lite/transcriptions` (`asr_replies` — очередь ответов, затем `asr_reply`) и `/speech/tts-qwen`
@@ -93,6 +93,8 @@ class FakeGateway:
         self.video_content = MP4
         self.video_deleted = []          # id роликов, снятых DELETE
         self.models = [{"id": "local-gemma-abl", "context_length": 131072}, {"id": "gemma4-abl"}]
+        #: `GET /slot/models` — модели карты, отвечает сам slot-gate
+        self.slot_models = [{"id": "flux.2-klein-4b"}, {"id": "lustify-v10-krea2-turbo"}, {"id": VIDEO_MODEL}]
         self.chat_requests = []          # тела запросов /v1/chat/completions
         self.chat_auth = []              # их заголовки авторизации
         self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели
@@ -133,6 +135,8 @@ class FakeGateway:
             return self._video(request)
         if path == "/v1/models" and request.method == "GET":
             return httpx.Response(200, json={"object": "list", "data": self.models})
+        if path == "/slot/models" and request.method == "GET":
+            return httpx.Response(200, json={"object": "list", "data": self.slot_models})
         if path == "/v1/chat/completions" and request.method == "POST":
             return self._chat(request)
         if path in SPEECH_ASR and request.method == "POST":

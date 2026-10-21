@@ -15,6 +15,10 @@
 - srvllm — всегда через сервер: вне списка такое подключение не сохраняется.
 - Разделы подключения — его связи в `section_links` (sections.py); поле `sections` POST и PATCH
   ставит связи ровно на эти разделы. Виды по разделам — KINDS.
+- `dropped` — адрес убрали из списка, а подключение прямым не стало (srvllm, `server_only`, адрес без
+  https): «Обновить модели» и «Проверить» говорят «убран из списка администратора», а не «нет связи».
+- Паспорт (`passport`, checks.py) — итог «Проверить» JSON; смена адреса, вида или токена его обнуляет;
+  `out(…, passport=False)` — зеркала панели администратора.
 - Журнал — только id: имена, адреса и токены туда не пишутся.
 """
 import json
@@ -135,12 +139,31 @@ def _direct_ok(base_url: str) -> bool:
     return url.scheme == "https" or url.host in LOCAL_HOSTS
 
 
-def out(conn: Connection) -> dict:
+def dropped(conn: Connection) -> bool:
+    """Не через сервер, но и не прямое: адрес убрали из списка, а токен вводили для сервера (или это
+    srvllm, или адрес без https) — браузеру его не выдать, серверу туда нельзя."""
+    return not conn.proxied and (conn.server_only or conn.kind == "srvllm" or not _direct_ok(conn.base_url))
+
+
+def passport_of(conn_id: int) -> dict | None:
+    row = state.DB.execute("SELECT passport FROM connections WHERE id = ?", (conn_id,)).fetchone()
+    return json.loads(row["passport"]) if row is not None and row["passport"] else None
+
+
+def save_passport(conn_id: int, passport: dict) -> None:
+    state.DB.execute("UPDATE connections SET passport = ? WHERE id = ?", (json.dumps(passport, ensure_ascii=False), conn_id))
+
+
+def out(conn: Connection, passport: bool = True) -> dict:
+    """passport=False — зеркала панели администратора: паспорт чужого подключения туда не идёт."""
     secret = token(conn)
     hint = "…" + secret[-4:] if len(secret) > 8 else "…"   # короткий токен по хвосту угадывается целиком
-    return {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
+    item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
-            "token_hint": hint}
+            "dropped": dropped(conn), "token_hint": hint}
+    if passport:
+        item["passport"] = passport_of(conn.id)
+    return item
 
 
 # ---- проверка при сохранении ---------------------------------------------------
@@ -239,6 +262,8 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
         changes["server_only"] = int(proxied)    # снимается только токеном, введённым для прямого
     elif moved:                                  # прежний ключ — только прежнему адресу
         raise _bad("token", "новый адрес — введите токен заново")
+    if "token_enc" in changes or kind != conn.kind or changes["base_url"] != conn.base_url:
+        changes["passport"] = None               # проверяли другой адрес, вид или ключ
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
     with sections.transaction():
         state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id = ?",
@@ -283,14 +308,28 @@ async def delete_connection(conn_id: int, request: Request):
     return Response(status_code=204)
 
 
-async def fetch_models(conn: Connection) -> list[dict]:
-    """Модели подключения через сервер (`GET …/models`): `{"id"[, "context_length"]}`; прямое — 409,
-    его список берёт браузер; нет связи или отказ — 502 словами."""
+def refused(conn: Connection, e: upstream.UpstreamRefused) -> HTTPException:
+    return HTTPException(409, {"code": "refused", "message": upstream.refused_words(e, conn)})
+
+
+def check_reachable(conn: Connection) -> None:
+    """Подключение, убранное из списка, — 409 `refused` этими словами; прямое — 409 `direct`."""
+    if dropped(conn):
+        raise refused(conn, upstream.UpstreamRefused(f"подключение {conn.id}: адрес не из списка администратора"))
     if not conn.proxied:
         raise HTTPException(409, {"code": "direct", "message": "список моделей прямого подключения берёт браузер"})
+
+
+async def fetch_models(conn: Connection) -> list[dict]:
+    """Модели подключения через сервер (`GET …/models`): `{"id"[, "context_length"]}`; прямое — 409,
+    его список берёт браузер; адрес убран из списка (или имя ведёт внутрь) — 409 `refused` словами;
+    нет связи или отказ сервиса — 502 словами."""
+    check_reachable(conn)
     try:
         r = await upstream.request(conn, "GET", models_url(conn))
-    except (httpx.HTTPError, upstream.UpstreamRefused):
+    except upstream.UpstreamRefused as e:
+        raise refused(conn, e) from None
+    except httpx.HTTPError:
         raise HTTPException(502, {"code": "upstream", "message": f"нет связи с подключением «{conn.name}»"}) from None
     if not r.is_success:
         raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn.name)})

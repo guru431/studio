@@ -301,6 +301,11 @@ label { font-size: 13px; color: var(--muted); }
 .model-default-label input { accent-color: var(--accent); margin: 0; }
 .model-default-label input:disabled + span { opacity: .45; }
 .model-search { max-width: 320px; }
+.passport { font-size: 13px; color: var(--muted); }
+.passport-summary { cursor: pointer; overflow-wrap: anywhere; }
+.passport-lines { list-style: none; margin: 6px 0 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 3px;
+  color: var(--text); overflow-wrap: anywhere; }
+.passport-lines .error { color: var(--danger); }
 .voices, .passkeys { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .voice, .passkey { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .voice b, .passkey b { font-weight: 600; }

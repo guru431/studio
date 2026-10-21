@@ -30,7 +30,12 @@ NAME_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[
 
 
 class UpstreamRefused(Exception):
-    """Адрес не из списка администратора (или имя ведёт во внутреннюю сеть): запрос не отправлен."""
+    """Запрос не отправлен. `reason`: `unlisted` — адреса нет в списке администратора, `internal` — имя из
+    списка разрешается во внутренний адрес, `changed` — подключение сменили после снимка."""
+
+    def __init__(self, message: str, reason: str = "unlisted"):
+        super().__init__(message)
+        self.reason = reason
 
 
 class ConnectionChanged(UpstreamRefused):
@@ -38,15 +43,17 @@ class ConnectionChanged(UpstreamRefused):
     ключ не отдан (connections.token) — новый ключ ушёл бы прежнему адресу."""
 
     def __init__(self, conn, deleted: bool):
-        super().__init__(f"подключение {conn.id}: {'удалено' if deleted else 'изменено'}")
+        super().__init__(f"подключение {conn.id}: {'удалено' if deleted else 'изменено'}", "changed")
         self.deleted = deleted
 
 
 def refused_words(e: UpstreamRefused, conn) -> str:
-    """Отказ до отправки — словами для пользователя."""
+    """Отказ до отправки — словами для пользователя; каждая причина — своими."""
     if isinstance(e, ConnectionChanged):
         return (f"подключение «{conn.name}» удалено из профиля" if e.deleted
                 else f"подключение «{conn.name}» изменено — запустите заново")
+    if e.reason == "internal":
+        return f"имя адреса подключения «{conn.name}» разрешается во внутренний адрес — сервер туда не ходит"
     return f"адрес подключения «{conn.name}» убран из списка администратора"
 
 
@@ -135,26 +142,29 @@ async def _pinned(conn, url: httpx.URL, headers: dict, kw: dict) -> httpx.URL:
     name = url.raw_host.decode("ascii")
     addresses = await RESOLVE(name, url.port or DEFAULT_PORTS[url.scheme])
     if not addresses or not all(_public(a) for a in addresses):
-        raise UpstreamRefused(f"подключение {conn.id}: имя разрешается во внутренний адрес")
+        raise UpstreamRefused(f"подключение {conn.id}: имя разрешается во внутренний адрес", "internal")
     headers["Host"] = name if url.port in (None, DEFAULT_PORTS[url.scheme]) else f"{name}:{url.port}"
     kw["extensions"] = {**(kw.get("extensions") or {}), "sni_hostname": name}
     return url.copy_with(host=addresses[0])
 
 
-async def _prepare(conn, url, kw: dict) -> tuple[httpx.URL, dict]:
+async def _prepare(conn, url, kw: dict, keyless: bool = False) -> tuple[httpx.URL, dict]:
     parsed = _parse(url)
     if parsed is None or not is_allowed(parsed):
         raise UpstreamRefused(f"подключение {conn.id}: адрес не из списка администратора")
     headers = dict(kw.pop("headers", None) or {})
-    headers["Authorization"] = f"Bearer {connections.token(conn)}"
+    if not keyless:
+        headers["Authorization"] = f"Bearer {connections.token(conn)}"
     kw.pop("follow_redirects", None)
     if named(parsed):
         parsed = await _pinned(conn, parsed, headers, kw)
     return parsed, {**kw, "headers": headers, "follow_redirects": False}
 
 
-async def request(conn, method: str, url: str, **kw) -> httpx.Response:
-    parsed, kw = await _prepare(conn, url, kw)
+async def request(conn, method: str, url: str, *, keyless: bool = False, **kw) -> httpx.Response:
+    """keyless — без заголовка `Authorization` (проверка: отдаёт ли сервис список без ключа); правила
+    списка и имени — те же."""
+    parsed, kw = await _prepare(conn, url, kw, keyless)
     return await state.HTTP.request(method, parsed, **kw)
 
 
