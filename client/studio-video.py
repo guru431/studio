@@ -9,17 +9,26 @@
 
 Берутся картинки .jpg .jpeg .png .webp прямо в --folder (без подпапок и скрытых файлов), по
 имени; файлы больше 20 МБ пропускаются с предупреждением. Ролики ложатся рядом с картинкой под
-именами <имя>_<N>s_s<seed>.mp4, рядом — журнал video-manifest.tsv (картинка, ролик, seed,
-длительность, качество, дорисовка, вариант, откуда промпт, промпт).
+именами <имя>_<N>s_s<seed>_<отпечаток>.mp4 (занятое имя не перезаписывается — к нему
+добавляется -2, -3, …), рядом — журнал video-manifest.tsv (картинка, ролик, seed,
+длительность, качество, дорисовка, вариант, откуда промпт, промпт, модель, отпечаток).
 
 Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе --prompt → иначе <имя>.auto.txt
 (промпт, придуманный службой в прошлый раз) → иначе пусто: служба опишет движение по фото
 сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
 
 Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
-ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролики, уже
-записанные в журнал с той же картинкой, длительностью, качеством, дорисовкой и номером
-варианта (если файл ролика на месте); --redo — сделать заново.
+ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролик, если в журнале
+есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
+модели, seed (если задан --seed), длительности, качества, дорисовки, номера варианта и своего
+промпта (<имя>.txt или --prompt; промпт службы и <имя>.auto.txt в него не входят): смена
+любого из них — новый ролик. Строки журнала прежней версии (без отпечатка) сверяются только
+по имени картинки, длительности, качеству, дорисовке и варианту — смены промпта, seed, модели
+и содержимого картинки по ним не видно, скрипт об этом предупреждает. --redo — сделать заново.
+
+Код выхода: 0 — все ролики готовы или уже были; 3 — хотя бы один не вышел (не отправлен,
+не сделан службой, не скачался, картинка больше 20 МБ или промпт длиннее предела); 1 — скрипт
+остановился с ошибкой (нет ключа, папки, картинок); 2 — неверные параметры; 130 — Ctrl+C.
 
 Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     python3 studio-video.py --make-local [--vault-path /путь/vault.env]
@@ -38,6 +47,7 @@ gemma4; --keep-card — оставить карту. Ctrl+C отменяет в�
     python3 studio-video.local.py --folder ~/photos --seconds 8 --quality high --count 2 --seed 100
 """
 import argparse
+import hashlib
 import http.client
 import json
 import os
@@ -66,7 +76,9 @@ MAX_IMAGE = 20 * 1024 * 1024
 MAX_SEED = 4294967295
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 MANIFEST = "video-manifest.tsv"
-HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt"]
+HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt", "model",
+          "fingerprint"]
+OLD_HEADER = HEADER[:9]                # журнал прежней версии: без модели и отпечатка
 
 
 class Fail(Exception):
@@ -337,13 +349,21 @@ class Videos:
             self.failed += 1
             return True
         seed = int(obj["seed"]) if obj.get("seed") is not None else job.seed
-        file = f"{job.base}_{self.args.seconds}s_s{seed}.mp4"
-        (self.folder / file).write_bytes(video)
+        # Отпечаток в имени разводит картинки с одним именем и разные запросы; занятое имя не
+        # перезаписывается (--redo с тем же seed), а недописанный файл не ляжет под именем ролика
+        stem = f"{job.base}_{self.args.seconds}s_s{seed}_{job.key[:8]}"
+        file, n = stem + ".mp4", 1
+        while (self.folder / file).exists():
+            n += 1
+            file = f"{stem}-{n}.mp4"
+        part = self.folder / (file + ".part")
+        part.write_bytes(video)
+        os.replace(part, self.folder / file)
         self.remove(job)
         prompt = job.prompt or str(obj.get("prompt") or "")
         source = job.source or str(obj.get("prompt_source") or "") or "auto"
         self.add_row([job.image.name, file, str(seed), str(self.args.seconds), self.args.quality, self.smooth,
-                      str(job.variant), source, prompt])
+                      str(job.variant), source, prompt, self.args.model, job.key])
         self.done += 1
         say(f"{self.label(job)}: готово за {span(time.monotonic() - (job.running or job.sent))} → {file}")
         return True
@@ -351,15 +371,27 @@ class Videos:
     def plan(self):
         """Задания по картинкам папки без уже сделанных по журналу."""
         a = self.args
-        recorded = set()
+        recorded, legacy = set(), set()
         if self.manifest.exists():
-            with open(self.manifest, encoding="utf-8-sig", errors="replace") as f:
-                for row in f:
-                    c = row.rstrip("\n").split("\t")
-                    if len(c) >= 9 and c[0] != "image" and (self.folder / c[1]).is_file():
-                        recorded.add((c[0], c[3], c[4], c[5], c[6]))
+            raw = self.manifest.read_bytes()
+            bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+            rows = raw[len(bom):].decode("utf-8", "replace").splitlines()
+            if rows and rows[0].split("\t") == OLD_HEADER:
+                # Журнал прежней версии: шапку — с новыми столбцами, строки как есть
+                part = self.folder / (MANIFEST + ".part")
+                part.write_bytes(bom + raw[len(bom):].replace(rows[0].encode(), "\t".join(HEADER).encode(), 1))
+                os.replace(part, self.manifest)
+            for row in rows:
+                c = row.split("\t")
+                if len(c) < 9 or c[0] == "image" or not (self.folder / c[1]).is_file():
+                    continue
+                if len(c) >= 11 and c[10]:
+                    recorded.add(c[10])
+                else:
+                    legacy.add((c[0], c[3], c[4], c[5], c[6]))
         else:
             self.add_row(HEADER)
+        legacy_skipped = 0
 
         images = sorted((p for p in self.folder.iterdir()
                          if p.suffix.lower() in MIME and not p.name.startswith(".") and p.is_file()),
@@ -398,14 +430,25 @@ class Videos:
                 warn(f"{img.name}: промпт длиннее {MAX_PROMPT} символов — пропущена")
                 self.failed += a.count
                 continue
+            # Отпечаток запроса (тот же у PowerShell-версии): промпт — только свой; придуманный
+            # службой и <имя>.auto.txt не входят, иначе повтор переделывал бы готовое
+            digest = hashlib.sha256(img.read_bytes()).hexdigest()
+            own_prompt = re.sub(r"\r\n?", "\n", text) if source in ("file", "common") else ""
             added = 0
             for k in range(1, a.count + 1):
-                if not a.redo and (img.name, str(a.seconds), a.quality, self.smooth, str(k)) in recorded:
+                seed = a.seed + k - 1 if a.seed is not None else secrets.randbits(32)
+                key = hashlib.sha256("\n".join([
+                    digest, a.model, str(seed) if a.seed is not None else "", str(a.seconds), a.quality,
+                    self.smooth, str(k), own_prompt]).encode()).hexdigest()
+                if not a.redo and key in recorded:
                     self.skipped += 1
                     continue
-                seed = a.seed + k - 1 if a.seed is not None else secrets.randbits(32)
+                if not a.redo and (img.name, str(a.seconds), a.quality, self.smooth, str(k)) in legacy:
+                    self.skipped += 1
+                    legacy_skipped += 1
+                    continue
                 todo.append(SimpleNamespace(n=len(todo) + 1, image=img, base=base, variant=k, seed=seed,
-                                            prompt=text, source=source, id="", detail="", sent=0.0,
+                                            prompt=text, source=source, key=key, id="", detail="", sent=0.0,
                                             running=0.0, tries=0))
                 added += 1
             if added:
@@ -413,6 +456,9 @@ class Videos:
         self.total = len(todo)
         if self.skipped:
             say(f"Уже в журнале — пропущено: {self.skipped} (--redo — сделать заново)")
+        if legacy_skipped:
+            warn(f"из них {legacy_skipped} — по строкам журнала прежней версии без отпечатка: смена промпта, "
+                 "seed, модели или содержимого картинки по ним не видна; --redo — сделать заново")
         return todo
 
     def run(self):
@@ -485,9 +531,11 @@ class Videos:
                     warn(f"Карту освободить не удалось: {e}")
             say(f"Итого: готово {self.done}, не вышло {self.failed}, пропущено {self.skipped}, "
                 f"{(time.monotonic() - started) / 60:.0f} мин. Папка: {self.folder}")
+        return self.failed
 
 
 def run(args):
+    """Прогон по папке; возвращает число не вышедших роликов."""
     token = args.token or EMBEDDED_KEY
     if not token:
         raise Fail("Нет ключа шлюза. Соберите локальную копию с ключом из vault: python3 studio-video.py "
@@ -499,7 +547,7 @@ def run(args):
         raise Fail(f"Общий промпт длиннее {MAX_PROMPT} символов")
     if args.seed is not None and (args.seed < 0 or args.seed + args.count - 1 > MAX_SEED):
         raise Fail(f"Seed — от 0 до {MAX_SEED}")
-    Videos(args, token, folder.resolve()).run()
+    return Videos(args, token, folder.resolve()).run()
 
 
 def main(argv=None):
@@ -507,8 +555,8 @@ def main(argv=None):
     try:
         if args.make_local:
             make_local(args.vault_path)
-        else:
-            run(args)
+        elif run(args):
+            return 3                    # хотя бы один ролик не вышел: внешний запуск должен это видеть
     except (Fail, OSError) as e:
         print(f"ошибка: {e}", file=sys.stderr)
         return 1

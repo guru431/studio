@@ -26,6 +26,10 @@ manifest.tsv (номер, файл, seed, размер, модель, промп
 По окончании карта освобождается и возвращается gemma4; --keep-card — оставить карту.
 Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
+Код выхода: 0 — все картинки готовы; 3 — хотя бы одна не вышла (отказ шлюза, промпт длиннее
+предела); 1 — скрипт остановился с ошибкой (нет ключа, файла промптов, фото); 2 — неверные
+параметры; 130 — Ctrl+C.
+
 Против дубля человека и лишних рук: одному человеку — начинать промпт с «solo, 1girl» (или
 «1boy»), руки описывать явно («left hand on hip, right hand holding a glass»), и брать
 --count 3–4, чтобы выбрать удачную. Негатива у Turbo нет: без CFG он не работает.
@@ -225,6 +229,7 @@ def slug(text):
 
 
 def run(args):
+    """Прогон по файлу промптов; возвращает число не вышедших картинок."""
     token = args.token or EMBEDDED_KEY
     if not token:
         raise Fail("Нет ключа шлюза. Соберите локальную копию с ключом из vault: python3 studio-batch.py "
@@ -310,6 +315,7 @@ def run(args):
                 warn(f"Карту освободить не удалось: {e}")
         say(f"Итого: {done} готово, {failed} не вышло, {(time.monotonic() - started) / 60:.0f} мин. "
             f"Папка: {out_dir}")
+    return failed
 
 
 def main(argv=None):
@@ -317,8 +323,8 @@ def main(argv=None):
     try:
         if args.make_local:
             make_local(args.vault_path)
-        else:
-            run(args)
+        elif run(args):
+            return 3                    # хотя бы одна картинка не вышла: внешний запуск должен это видеть
     except (Fail, OSError) as e:
         print(f"ошибка: {e}", file=sys.stderr)
         return 1

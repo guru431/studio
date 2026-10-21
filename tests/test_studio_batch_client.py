@@ -87,7 +87,8 @@ def test_powershell_parses_script_and_defaults_match_contract():
 @pytest.fixture
 def images():
     """Подставной API картинок на 127.0.0.1: журнал (путь, Authorization, поля или JSON).
-    generations отдаёт «png-<номер>» без seed (так отвечает FLUX), edits — «result-png» и seed 7."""
+    generations отдаёт «png-<номер>» без seed (так отвечает FLUX), на промпт «bad» — 400;
+    edits — «result-png» и seed 7."""
     log = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -101,14 +102,17 @@ def images():
             else:
                 payload = json.loads(raw)
             log.append((self.path, self.headers["Authorization"], payload))
-            if self.path == "/slot/images/edits":
+            code = 200
+            if self.path == "/slot/images/generations" and payload.get("prompt") == "bad":
+                code, reply = 400, {"error": {"message": "промпт не принят"}}
+            elif self.path == "/slot/images/edits":
                 reply = {"data": [{"b64_json": base64.b64encode(b"result-png").decode(), "seed": 7}]}
             elif self.path == "/slot/images/generations":
                 reply = {"data": [{"b64_json": base64.b64encode(b"png-%d" % len(log)).decode()}]}
             else:
                 reply = {"ok": True}
             body = json.dumps(reply).encode()
-            self.send_response(200)
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -126,10 +130,12 @@ def images():
     thread.join(1)
 
 
-def run_script(runner, images, *args):
+def run_script(runner, images, *args, code=0):
+    """code — ожидаемый код выхода: 0 — все картинки готовы, 3 — хотя бы одна не вышла."""
     r = run_client(runner, SCRIPT, [*args, "-Token", "test-key", "-Url", images.url])
-    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
-    assert r.returncode == 0, out
+    enc = "oem" if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
+    out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
+    assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
     return out
 
@@ -177,3 +183,27 @@ def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, image
         f"1-1\t{names[0]}\t5\tsquare\tflux\tfirst prompt", f"1-2\t{names[1]}\t6\tsquare\tflux\tfirst prompt",
         f"2-1\t{names[2]}\t5\tsquare\tflux\tsecond: a/b", f"2-2\t{names[3]}\t6\tsquare\tflux\tsecond: a/b"]
     assert images.log[-1] == ("/slot/images/release", "Bearer test-key", {"model": "flux.2-klein-4b"})
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_partly_failed_run_exits_with_failure_and_still_releases(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("good\nbad\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    text = run_script(runner, images, "-PromptsFile", str(prompts), "-Seed", "1", "-OutDir", str(out), code=3)
+
+    assert "промпт не принят" in text and "1 готово, 1 не вышло" in text
+    assert [p.name for p in out.glob("*.png")] == ["001-01_good_s1.png"]
+    assert images.log[-1][0] == "/slot/images/release"
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_fully_failed_run_exits_with_failure(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("bad\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    text = run_script(runner, images, "-PromptsFile", str(prompts), "-KeepCard", "-OutDir", str(out), code=3)
+
+    assert "0 готово, 1 не вышло" in text and not list(out.glob("*.png"))
