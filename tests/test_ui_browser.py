@@ -502,7 +502,7 @@ def test_settings_check_of_a_cloud_runs_in_the_browser(browser, live):
     assert "Отправит одно короткое сообщение; у платного сервиса это расход." in v["warning"]
     assert re.fullmatch(r"cloud-chat: пробный ответ — ответила за \d+ мс \(\d\d\.\d\d \d\d:\d\d, по словам браузера\)",
                         v["probe"]), v["probe"]
-    assert v["probeCaps"] == ["cloud-chat: отвечает — пробный ответ"]
+    assert v["probeCaps"] == ["cloud-chat: отвечает — пробный ответ, по словам браузера"]
     body, = live.cloud.chat_requests[asked:]
     assert body == {"model": "cloud-chat", "messages": [{"role": "user", "content": "Ответь одним словом: ok"}],
                     "max_tokens": 16, "stream": False}
@@ -704,7 +704,9 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
         ("eval", "confirmHidden", "document.querySelector('#wipe-confirm').hidden"),
         ("click", "#wipe-next"), ("wait", "!document.querySelector('#wipe-confirm').hidden"),
         ("click", "#wipe-confirm"),
-        ("wait", "document.querySelector('#wipe-status').textContent === 'История удалена'"),
+        # начало: Windows иногда на миг держит свежий файл (антивирус) — он уходит в очередь удаления,
+        # и статус добавляет «но файлов на хранилище ещё 1»; на debian открытый файл удаляется сразу
+        ("wait", "document.querySelector('#wipe-status').textContent.startsWith('История удалена')"),
         ("eval", "closed", "!" + is_open("#wipe-dialog")),
         history_of("after"),
         ("eval", "conns", f"(async () => (await {API}.api('GET', '/api/connections')).items.length)()")],
