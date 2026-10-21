@@ -115,3 +115,7 @@ def launch(profile: Path):
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=10)
+        # Профиль — свой на каждый тест: без удаления прогон копил их в %TEMP% (~1,2 ГБ) и кончал место на C:.
+        # Дочерние процессы браузера отпускают файлы не сразу — недоудалённое не повод валить тест.
+        shutil.rmtree(profile, ignore_errors=True)
