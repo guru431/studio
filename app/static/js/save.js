@@ -33,23 +33,29 @@ async function fileOf(mediaId, response) {
   return new File([blob], `studio-${mediaId.slice(0, 8)}${EXT[blob.type] || ''}`, { type: blob.type });
 }
 
-/** Меню «Поделиться» с файлами; жест истёк — окно с «Сохранить» (новый жест); закрыли меню — тихо. */
+/** Меню «Поделиться» с файлами; жест истёк — окно с «Сохранить» (новый жест); закрыли меню — тихо.
+ * false — окно закрыли «Отменой», не сохранив (выделение в ленте остаётся). */
 async function offer(files, host) {
   try {
     await navigator.share({ files });
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return true;
     if (err.name !== 'NotAllowedError') throw err;
     const many = files.length > 1;
     const again = button('Сохранить', { id: 'save-again', class: 'btn btn-accent' });
     const dialog = openDialog(host, { id: 'save-dialog', title: many ? 'Файлы готовы' : 'Файл готов', actions: [again],
       body: [el('p', {}, many ? 'Нажмите «Сохранить» и выберите в меню «Сохранить изображения» или «Сохранить видео».'
         : 'Нажмите «Сохранить» и выберите в меню «Сохранить изображение» или «Сохранить видео».')] });
-    again.addEventListener('click', () => {
-      navigator.share({ files }).catch(() => {});
-      dialog.close();
+    return new Promise((resolve) => {
+      again.addEventListener('click', () => {
+        navigator.share({ files }).catch(() => {});
+        resolve(true);
+        dialog.close();
+      });
+      dialog.addEventListener('close', () => resolve(false));
     });
   }
+  return true;
 }
 
 async function share(mediaId, host) {
@@ -81,7 +87,8 @@ export async function saveMedia(mediaId, host) {
   }
 }
 
-/** Файлы в память телефона по одному; null — не вышло или вместе больше SHARE_MAX. */
+/** Файлы в память телефона по одному; удалённый в другой вкладке (404) пропускается, как в архиве;
+ * null — не вышло, ни одного файла или вместе больше SHARE_MAX. */
 async function fetchAll(mediaIds, onProgress) {
   const files = [];
   let total = 0;
@@ -90,6 +97,10 @@ async function fetchAll(mediaIds, onProgress) {
     const abort = new AbortController();
     const response = await fetch(`/api/media/${encodeURIComponent(mediaId)}`,
       { credentials: 'same-origin', signal: abort.signal });
+    if (response.status === 404) {
+      abort.abort();
+      continue;
+    }
     total += Number(response.headers.get('Content-Length')) || 0;
     if (!response.ok || total > SHARE_MAX) {
       abort.abort();
@@ -97,11 +108,12 @@ async function fetchAll(mediaIds, onProgress) {
     }
     files.push(await fileOf(mediaId, response));
   }
-  return files;
+  return files.length ? files : null;
 }
 
 /** Несколько файлов истории разом; onProgress(i, n) — ход скачивания в память iPhone. Отказ сервера
- * архива — исключение api() (страница говорит его словами). */
+ * архива — исключение api() (страница говорит его словами). false — окно «Файлы готовы» закрыли
+ * «Отменой», ничего не сохранив. */
 export async function saveMany(mediaIds, host, onProgress = () => {}) {
   if (isIOS() && typeof navigator.canShare === 'function') {
     let files = null;
@@ -112,8 +124,7 @@ export async function saveMany(mediaIds, host, onProgress = () => {}) {
     }
     if (files && navigator.canShare({ files })) {
       try {
-        await offer(files, host);
-        return;
+        return await offer(files, host);
       } catch {
         // меню не открылось — архивом
       }
@@ -121,4 +132,5 @@ export async function saveMany(mediaIds, host, onProgress = () => {}) {
   }
   const { id } = await api('POST', '/api/media/archives', { media_ids: mediaIds });
   link(`/api/media/archives/${encodeURIComponent(id)}`);
+  return true;
 }

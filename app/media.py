@@ -18,16 +18,18 @@
   играет. С диска читается только нужный кусок.
 - Имена файлов и содержимое в журнал не пишутся: `download_name` — только в `Content-Disposition`.
 - Выделенное в лентах — одним архивом: `POST /api/media/archives` (список телом) даёт токен,
-  `GET /api/media/archives/<токен>` — ZIP без сжатия на лету, файлами с шары блоками CHUNK.
+  `GET /api/media/archives/<токен>` — ZIP без сжатия на лету, файлами с шары блоками CHUNK; CRC и
+  размер записи — в её локальном заголовке (первым проходом по файлу), без дескриптора данных.
 """
 import asyncio
 import logging
 import os
 import re
 import secrets
+import struct
 import time
 import uuid
-import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -68,6 +70,8 @@ GONE = {"code": "gone", "message": "файла нет"}
 ARCHIVE_MAX = 1000
 ARCHIVE_TTL_SEC = 600
 ARCHIVE_KEEP = 5
+#: размер записи или смещение от этого — поля ZIP64 (тесты понижают, чтобы пройти эту ветку)
+ZIP64_AT = 0xFFFFFFFF
 HEX = re.compile(r"[0-9a-f]{32}")
 #: токен → (user_id, media id по порядку, время создания); в памяти службы, как задания
 ARCHIVES: dict[str, tuple[int, list[str], float]] = {}
@@ -558,52 +562,79 @@ def _entry_names(rows) -> list[str]:
     return names
 
 
-class _Sink:
-    """Несдвигаемый приёмник zipfile (записи — с дескриптором данных): копит записанное, генератор
-    архива забирает его после каждого блока."""
+def _crc(file: Path) -> tuple[int, int]:
+    """CRC-32 и размер файла — первым проходом: заголовок записи уходит раньше её данных."""
+    crc = size = 0
+    with open(file, "rb") as f:
+        while block := f.read(CHUNK):
+            crc = zlib.crc32(block, crc)
+            size += len(block)
+    return crc, size
 
-    def __init__(self):
-        self.parts = []
 
-    def write(self, data) -> int:
-        self.parts.append(bytes(data))
-        return len(data)
+def _dos_time(created: float) -> tuple[int, int]:
+    t = time.localtime(created)
+    return (t.tm_hour << 11 | t.tm_min << 5 | t.tm_sec // 2,
+            (t.tm_year - 1980) << 9 | t.tm_mon << 5 | t.tm_mday)
 
-    def flush(self) -> None:
-        pass
 
-    def take(self) -> bytes:
-        data = b"".join(self.parts)
-        self.parts.clear()
-        return data
+def _zip_entry(name: bytes, flags: int, dos: tuple[int, int], crc: int, size: int, offset: int) -> tuple[bytes, bytes]:
+    """Локальный заголовок записи ZIP_STORED и её строка центрального каталога. CRC и размер — в
+    самом заголовке: запись без сжатия с дескриптором данных (бит 3) не открывают Archive Utility
+    macOS и потоковые читатели. Большие размер и смещение — в поле ZIP64 (тип 1)."""
+    big, far = size >= ZIP64_AT, offset >= ZIP64_AT
+    need = 45 if big or far else 20
+    field = 0xFFFFFFFF if big else size
+    local_extra = struct.pack("<HHQQ", 1, 16, size, size) if big else b""
+    local = struct.pack("<IHHHHHIIIHH", 0x04034B50, need, flags, 0, *dos, crc, field, field,
+                        len(name), len(local_extra)) + name + local_extra
+    data = (struct.pack("<QQ", size, size) if big else b"") + (struct.pack("<Q", offset) if far else b"")
+    extra = struct.pack("<HH", 1, len(data)) + data if data else b""
+    central = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 3 << 8 | need, need, flags, 0, *dos, crc, field, field,
+                          len(name), len(extra), 0, 0, 0, 0o100644 << 16,
+                          0xFFFFFFFF if far else offset) + name + extra
+    return local, central
+
+
+def _zip_end(count: int, start: int, size: int) -> bytes:
+    """Конец центрального каталога; не влезает в 16/32 бита — сначала запись и указатель ZIP64."""
+    end = b""
+    if count >= 0xFFFF or start >= ZIP64_AT or size >= ZIP64_AT:
+        end = (struct.pack("<IQHHIIQQQQ", 0x06064B50, 44, 3 << 8 | 45, 45, 0, 0, count, count, size, start)
+               + struct.pack("<IIQI", 0x07064B50, 0, start + size, 1))
+    return end + struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, min(count, 0xFFFF), min(count, 0xFFFF),
+                             min(size, 0xFFFFFFFF), min(start, 0xFFFFFFFF), 0)
 
 
 def _zip(entries: list[tuple[str, Path, float]]):
     """ZIP_STORED на лету; Starlette крутит обычный генератор в пуле потоков. Файла уже нет —
     пропускается; шара оборвала чтение — исключение без пути: ответ рвётся, браузер покажет сбой."""
-    sink = _Sink()
+    offset, central = 0, []
     try:
-        with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED) as zf:
-            for name, file, created in entries:
-                try:
-                    f = open(file, "rb")
-                except FileNotFoundError:
-                    continue
-                with f:
-                    info = zipfile.ZipInfo(name, time.localtime(created)[:6])
-                    info.file_size = os.fstat(f.fileno()).st_size
-                    with zf.open(info, "w") as out:
-                        while block := f.read(CHUNK):
-                            out.write(block)
-                            if data := sink.take():
-                                yield data
-                if data := sink.take():
-                    yield data
+        for name, file, created in entries:
+            try:
+                crc, size = _crc(file)
+                f = open(file, "rb")
+            except FileNotFoundError:
+                continue
+            raw = name.encode()
+            local, row = _zip_entry(raw, 0 if raw.isascii() else 0x800, _dos_time(created), crc, size, offset)
+            with f:
+                yield local
+                left = size
+                while left > 0:
+                    block = f.read(min(CHUNK, left))
+                    if not block:
+                        raise OSError("файл стал короче")
+                    left -= len(block)
+                    yield block
+            central.append(row)
+            offset += len(local) + size
     except OSError:
         log.warning("archive: хранилище оборвало чтение")
         raise StorageError("хранилище оборвало чтение") from None
-    if data := sink.take():
-        yield data
+    table = b"".join(central)
+    yield table + _zip_end(len(central), offset, len(table))
 
 
 @router.post("/media/archives")

@@ -218,9 +218,9 @@ function setupMenu() {
     event.stopPropagation();
     openMenu(menu.hidden);
   });
-  document.addEventListener('click', (event) => {
-    if (!menu.hidden && !menu.contains(event.target)) openMenu(false);
-  });
+  document.addEventListener('click', (event) => {     // в фазе захвата: лента в режиме выделения глушит нажатие
+    if (!menu.hidden && !menu.contains(event.target) && !avatar.contains(event.target)) openMenu(false);
+  }, true);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !menu.hidden) {
       openMenu(false);

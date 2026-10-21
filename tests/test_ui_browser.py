@@ -2084,6 +2084,57 @@ def test_photo_selection_archive_refusal_is_told(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_photo_selection_leaves_an_open_chip_menu_to_itself(browser, live):
+    """Escape при открытом меню чипа закрывает меню, режим остаётся; нажатие по карточке в режиме закрывает
+    меню и отмечает её. Вне режима карточка — свой слой (галочка строки не выше шапки таблицы), картинка
+    не перетаскивается (долгое нажатие в Chrome на Android)."""
+    live.add_user("selmenu")
+    menu_open = "!document.querySelector('#chip-size-menu').hidden"
+    r = browser.drive(live.url + "/", [*photo_screen("selmenu", cards=2), ("wait", done_cards(2)),
+        ("eval", "isolated", f"getComputedStyle(document.querySelector('{nth(1)}')).isolation"),
+        ("eval", "drag", f"getComputedStyle(document.querySelector('{nth(1, 'img')}')).webkitUserDrag"),
+        ("click", "#photo-select"), ("click", nth(1)),
+        ("click", "#chip-size"), ("wait", menu_open),
+        ("press", "Escape"), ("wait", f"!({menu_open})"), ("eval", "afterEscape", selecting()),
+        ("click", "#chip-size"), ("wait", menu_open),
+        ("click", nth(2)), ("eval", "menuAfterCard", menu_open), ("eval", "picked", picked()), ("eval", "all", ids())],
+        width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["isolated"] == "isolate" and v["drag"] == "none"
+    assert v["afterEscape"] is True and v["menuAfterCard"] is False and sorted(v["picked"]) == sorted(v["all"])
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_on_iphone_cancel_of_files_ready_keeps_the_picked(browser, live):
+    live.add_user("ioscancel")
+    r = browser.drive(live.url + "/", [*photo_screen("ioscancel", cards=2), ("wait", done_cards(2)), iphone(True),
+        ("click", "#photo-select"), ("click", "#photo-select-all"), ("click", "#photo-select-download"),
+        ("wait", is_open("#save-dialog")), ("click", "#save-dialog .dialog-close"),
+        ("wait", "!document.querySelector('#save-dialog')"),
+        ("eval", "mode", selecting()), ("eval", "picked", picked()), ("eval", "all", ids()),
+        ("eval", "count", text_of("#photo-select-count")), ("eval", "shared", "window.shared.length")],
+        width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["mode"] is True and sorted(v["picked"]) == sorted(v["all"]) and v["count"] == "Выбрано 2"
+    assert v["shared"] == 0
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_on_iphone_skips_a_file_gone_in_another_tab(browser, live):
+    live.add_user("iosgone")
+    gone = ("eval", "gone", f"""(async () => {{ const id = document.querySelector('{nth(1)}').dataset.id;
+      await {API}.api('DELETE', '/api/images/' + id); return id; }})()""")
+    r = browser.drive(live.url + "/", [*photo_screen("iosgone", cards=3), ("wait", done_cards(3)), iphone(),
+        ("eval", "spy", CLICKS), ("click", "#photo-select"), ("click", "#photo-select-all"), gone,
+        ("click", "#photo-select-download"), ("wait", "window.shared.length === 1"), ("wait", f"!{selecting()}"),
+        ("eval", "shared", "window.shared"), ("eval", "clicked", "window.clicked.length")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["shared"] == [[[".png", "image/png", True]] * 2] and r["values"]["clicked"] == 0
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
 def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, live):
     """Тему и вид сменили на другом устройстве учётки: открытая студия берёт их, вернувшись на экран,
     без перезагрузки — тему сразу, вид при следующем открытии раздела."""

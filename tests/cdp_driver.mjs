@@ -23,10 +23,12 @@
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
  *
- * Ответ: { values, probe, log, sent, failed }. В `log` — ошибки журнала браузера
+ * Ответ: { values, probe, log, sent, failed, where }. В `log` — ошибки журнала браузера
  * (нарушения политики содержимого, отказы загрузки), необработанные
  * исключения и console.error. В `sent` — каждый запрос не GET, «МЕТОД путь»,
  * в том числе оборванный: отправку видно в миг запроса, а не по ответу.
+ * `where` — только после отказа шага: где стояла страница (адрес, readyState, data-ready,
+ * открытые окна) и пути запросов, которые ещё в полёте, — редкий отказ объясняет себя сам.
  */
 import { writeFile } from 'node:fs/promises';
 import process from 'node:process';
@@ -147,17 +149,18 @@ async function press(tab, key) {
 }
 
 async function run(job) {
-  const out = { values: {}, probe: null, log: [], sent: [], failed: null };
-  const timeout = job.timeout || 15000;
+  const out = { values: {}, probe: null, log: [], sent: [], failed: null, where: null };
+  const timeout = job.timeout || 30000;
   const { id, tab } = await openTab(job.port);
   try {
-    // Запросы в полёте. Поток событий не кончается никогда и «тишине» не мешает.
-    const flying = new Set();
+    // Запросы в полёте (id → «МЕТОД путь»). Поток событий не кончается никогда и «тишине» не мешает.
+    const flying = new Map();
     let quietSince = Date.now();
     const landed = ({ requestId }) => { flying.delete(requestId); quietSince = Date.now(); };
     tab.on('Network.requestWillBeSent', ({ requestId, type, request }) => {
-      if (type !== 'EventSource') flying.add(requestId);
-      if (request.method !== 'GET') out.sent.push(`${request.method} ${new URL(request.url).pathname}`);
+      const path = `${request.method} ${new URL(request.url).pathname}`;
+      if (type !== 'EventSource') flying.set(requestId, path);
+      if (request.method !== 'GET') out.sent.push(path);
     });
     if (job.writes) {
       // Живой прогон: запись мимо разрешённых путей не уходит из браузера вовсе.
@@ -216,6 +219,11 @@ async function run(job) {
       }
     } catch (err) {
       out.failed = String(err.message || err);
+      const page = await tab.evaluate(`({ href: location.href, readyState: document.readyState,
+        ready: document.documentElement.dataset.ready || null,
+        dialogs: [...document.querySelectorAll('dialog[open]')].map((d) => d.id || d.className) })`)
+        .catch((e) => ({ unreadable: String(e.message || e) }));
+      out.where = { ...page, flying: [...flying.values()].slice(0, 20) };
     }
     if (job.probe) {
       try { out.probe = await tab.evaluate(job.probe); } catch (err) { out.failed = out.failed || String(err.message || err); }

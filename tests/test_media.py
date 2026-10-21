@@ -4,6 +4,7 @@ import dataclasses
 import io
 import logging
 import sqlite3
+import struct
 import threading
 import time
 import uuid
@@ -488,6 +489,11 @@ def archive(studio, ids):
     return studio.c.post("/api/media/archives", json={"media_ids": ids})
 
 
+def local_headers(blob, zf):
+    """Флаги, CRC, сжатый и полный размер из локального заголовка каждой записи."""
+    return [struct.unpack_from("<6xH6xIII", blob, i.header_offset) for i in zf.infolist()]
+
+
 def test_archive_streams_the_chosen_files_in_order(studio, caplog):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     a = media.save(uid, png(64, 64), "image/png", "studio-lustify-42.png", thumb=True)
@@ -507,9 +513,26 @@ def test_archive_streams_the_chosen_files_in_order(studio, caplog):
     assert zf.namelist() == ["studio-video-7.mp4", "studio-lustify-42.png", "studio-lustify-42-2.png"]
     assert {i.compress_type for i in zf.infolist()} == {zipfile.ZIP_STORED}
     assert zf.read("studio-video-7.mp4") == DATA and zf.read("studio-lustify-42-2.png") == png(32, 32)
+    # без дескриптора данных (бит 3): CRC и размеры — в локальном заголовке (Archive Utility macOS)
+    for (flags, crc, packed, size), info in zip(local_headers(z.content, zf), zf.infolist()):
+        assert not flags & 0x08 and crc == info.CRC and packed == size == info.file_size
     assert "archive: 3" in caplog.text
     for secret in ("studio-lustify", "studio-video", a, b, c):
         assert secret not in caplog.text
+
+
+def test_archive_big_sizes_and_offsets_go_to_zip64_fields(studio, monkeypatch):
+    """Размер и смещение от 4 ГиБ — поля и конец ZIP64; порог понижен, чтобы пройти ветку малыми файлами."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    ids = [media.save(uid, DATA + bytes([n]), "video/mp4", f"{n}.mp4") for n in range(3)]
+    token = archive(studio, ids).json()["id"]
+    monkeypatch.setattr(media, "ZIP64_AT", 1)
+    blob = studio.c.get(f"/api/media/archives/{token}").content
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    assert zf.testzip() is None and zf.namelist() == ["0.mp4", "1.mp4", "2.mp4"]
+    assert [zf.read(f"{n}.mp4") for n in range(3)] == [DATA + bytes([n]) for n in range(3)]
+    assert [h[0] & 0x08 for h in local_headers(blob, zf)] == [0, 0, 0]
+    assert b"PK\x06\x06" in blob and b"PK\x06\x07" in blob           # запись и указатель конца ZIP64
 
 
 def test_archive_names_are_safe_inside(studio):

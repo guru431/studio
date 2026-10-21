@@ -757,7 +757,7 @@ function build(view, ctx) {
     prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
-  /* события */
+  /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */
   const onDocClick = (event) => {
     for (const p of popups) {
       if (!p.menu.hidden && !p.menu.contains(event.target) && !p.chip.contains(event.target)) popup(p.chip, p.menu, false);
@@ -771,7 +771,7 @@ function build(view, ctx) {
       shown.chip.focus();
     }
   };
-  document.addEventListener('click', onDocClick);
+  document.addEventListener('click', onDocClick, true);
   document.addEventListener('keydown', onKey);
 
   file.addEventListener('change', () => setSource(file.files[0] || null));
@@ -807,7 +807,7 @@ function build(view, ctx) {
     destroy() {
       alive = false;
       selection.destroy();
-      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('click', onDocClick, true);
       document.removeEventListener('keydown', onKey);
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);

@@ -46,6 +46,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
   let stopDeleting = null;       // остановить идущее удаление
   let press = null;              // { id, x, y, timer } — палец на карточке
   let swallow = false;           // хвостовой click долгого нажатия
+  let marked = false;            // в ленте могут быть отметки: вне режима paint() их снимает один раз
 
   const selectBtn = el('button', { type: 'button', class: 'btn btn-sm select-btn', id: `${section}-select`,
     title: 'Выбрать', 'aria-label': 'Выбрать' });
@@ -94,7 +95,8 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
   }
 
   function paint() {
-    if (!ctx) return;
+    if (!ctx || (!selecting && !marked)) return;      // вне режима лента меняется без обхода карточек
+    marked = selecting;
     const all = pickable();
     const full = all.length > 0 && all.every((i) => picked.has(idOf(i)));
     count.textContent = note || `Выбрано ${picked.size}`;
@@ -127,8 +129,9 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     ctx.error.textContent = '';
     setBusy(true);
     let failed = null;
+    let saved = true;
     try {
-      await saveMany(files, ctx.root, (i, n) => {
+      saved = await saveMany(files, ctx.root, (i, n) => {
         note = `Готовлю ${i} из ${n}…`;
         count.textContent = note;
       });
@@ -138,10 +141,9 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     note = '';
     busy = false;
     if (!alive) return;
-    if (failed) {
-      ctx.error.textContent = words(failed);
-      paint();
-    } else exit();
+    if (failed) ctx.error.textContent = words(failed);
+    if (failed || !saved) paint();           // «Отмена» окна «Файлы готовы» — отметки остаются
+    else exit();
   }
 
   function enter() {
@@ -307,8 +309,10 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     if (card && card.hasAttribute('data-pickable')) event.preventDefault();      // Android: долгое нажатие — наше
   }
 
+  /* в фазе захвата — раньше разделов: открытое меню (чип, раздел, аватар) Escape закрывает само, без выхода */
   function onKey(event) {
-    if (event.key === 'Escape' && selecting && !busy && !document.querySelector('dialog[open]')) exit();
+    if (event.key === 'Escape' && selecting && !busy
+      && !document.querySelector('dialog[open], [role="menu"]:not([hidden])')) exit();
   }
 
   function place() {
@@ -323,7 +327,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     box.addEventListener('pointermove', onPointerMove, { passive: true });
     for (const type of ['pointerup', 'pointercancel', 'scroll']) box.addEventListener(type, cancelPress, { passive: true });
     box.addEventListener('contextmenu', onContextMenu);
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
     narrow.addEventListener('change', place);
     place();
     paint();
@@ -333,7 +337,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     alive = false;
     cancelPress();
     if (stopDeleting) stopDeleting();
-    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('keydown', onKey, true);
     narrow.removeEventListener('change', place);
   }
 

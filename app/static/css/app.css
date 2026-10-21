@@ -691,8 +691,11 @@ label.chip { cursor: pointer; }
 [data-selecting] .head > :is(h1, .select-btn, .photo-menu-wrap) { display: none; }
 .select-tools .icon-btn svg.ico { width: 18px; height: 18px; }
 .select-count { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* долгое нажатие — выделение: без меню картинки iPhone и выделения текста */
-.photo-feed .card, .video-feed .card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* долгое нажатие — выделение: без меню картинки iPhone, выделения текста и перетаскивания картинки (Chrome на
+   Android); isolation — галочка (z-index 6) и слой режима не выше прилипшей шапки таблицы и вне режима */
+.photo-feed .card, .video-feed .card { isolation: isolate; -webkit-touch-callout: none; -webkit-user-select: none;
+  user-select: none; }
+.photo-feed .card img, .video-feed .card img { -webkit-user-drag: none; }
 .card-pick, .day-pick { place-items: center; padding: 0; border: 2px solid #fff; border-radius: 50%; background: rgba(0, 0, 0, .3);
   color: transparent; }
 .card-pick { position: absolute; z-index: 6; top: 6px; left: 6px; display: grid; width: 26px; height: 26px;
@@ -707,8 +710,8 @@ label.chip { cursor: pointer; }
 .day-pick { display: none; width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px; border-color: var(--muted);
   background: none; }
 [data-selecting] .day-pick { display: inline-grid; }
-/* в режиме нажатие — отметка: слой поверх карточки, кнопки карточки скрыты; isolation — слой не выше шапки таблицы */
-[data-selecting] .card[data-pickable] { isolation: isolate; cursor: pointer; }
+/* в режиме нажатие — отметка: слой поверх карточки, кнопки карточки скрыты */
+[data-selecting] .card[data-pickable] { cursor: pointer; }
 [data-selecting] .card[data-pickable]::after { content: ''; position: absolute; inset: 0; z-index: 5; }
 [data-selecting] :is(.card-save, .card-delete, .card-cancel, .card-chain, .card-download) { visibility: hidden; }
 [data-selecting] .card[data-selected="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }

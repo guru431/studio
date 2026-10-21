@@ -474,7 +474,7 @@ function build(view, ctx) {
     prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
-  /* события */
+  /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */
   const onDocClick = (event) => {
     if (!qualityMenu.hidden && !qualityMenu.contains(event.target) && !chipQuality.contains(event.target)) openQuality(false);
   };
@@ -483,7 +483,7 @@ function build(view, ctx) {
     openQuality(false);
     chipQuality.focus();
   };
-  document.addEventListener('click', onDocClick);
+  document.addEventListener('click', onDocClick, true);
   document.addEventListener('keydown', onKey);
 
   chipQuality.addEventListener('click', () => openQuality(qualityMenu.hidden));
@@ -527,7 +527,7 @@ function build(view, ctx) {
     destroy() {
       alive = false;
       selection.destroy();
-      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('click', onDocClick, true);
       document.removeEventListener('keydown', onKey);
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);
