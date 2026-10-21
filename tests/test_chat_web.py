@@ -318,7 +318,7 @@ def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Не влезло."]]
     assert sse(turn(studio, other, "Прочитай https://example.test/long"))[-1] == ("done", {"status": "done"})
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == (
-        "Ошибка инструмента: не помещается в контекст модели")
+        f"Ошибка инструмента: не помещается в контекст модели\n{web.NOTHING}")
     (step,) = steps_of(messages(studio, other)[1]["id"])
     assert step["error"] == "не помещается в контекст модели" and "text" not in step
 
@@ -357,7 +357,7 @@ def test_page_is_read_only_from_the_chat_or_the_search(studio):
     steps = steps_of(messages(studio, cid)[1]["id"])
     assert [s.get("error") for s in steps] == [None, None, web.NOT_KNOWN]
     assert steps[2] == {"kind": "page", "url": evil, "error": "читаю только ссылки из переписки или найденные поиском"}
-    assert studio.gw.chat_requests[2]["messages"][-1]["content"] == "Ошибка инструмента: " + web.NOT_KNOWN
+    assert studio.gw.chat_requests[2]["messages"][-1]["content"] == f"Ошибка инструмента: {web.NOT_KNOWN}\n{web.NOTHING}"
     # следующий ход: найденное прежним ответом и адрес из вложенного документа
     doc = attach(studio, "ссылки.txt", "См. https://docs.example.test/guide.".encode(), "text/plain")["id"]
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://docs.python.org/3/whatsnew"),
@@ -385,7 +385,7 @@ def test_calls_over_the_round_cap_are_error_steps_with_their_replies(studio):
     second = studio.gw.chat_requests[1]["messages"]
     ids = [tc["id"] for tc in second[2]["tool_calls"]]
     assert [m["tool_call_id"] for m in second[3:]] == ids and len(ids) == n
-    assert second[-1]["content"] == "Ошибка инструмента: не больше 4 вызовов за раз"
+    assert second[-1]["content"] == f"Ошибка инструмента: не больше 4 вызовов за раз\n{web.NOTHING}"
     assert events[-1] == ("done", {"status": "done"})
 
 
@@ -594,7 +594,7 @@ def test_history_block_holds_each_step_with_its_model_text():
              {"kind": "page", "url": "u", "error": "страница не найдена"}]
     assert web.history_block(steps) == (
         '<web kind="search">\nнайдено\n</web>\n\n'
-        '<web kind="page">\nОшибка инструмента: страница не найдена\n</web>\n\n')
+        f'<web kind="page">\nОшибка инструмента: страница не найдена\n{web.NOTHING}\n</web>\n\n')
     assert web.history_block([]) == ""
 
 
@@ -730,7 +730,9 @@ def test_labels_and_model_text_of_steps():
     assert web.label("youtube", {"url": CANON}) == f"субтитры {CANON}"
     assert web.label("unknown", {}) == "" and web.label("search", {"query": 42}) == ""
     assert web.for_model({"kind": "page", "url": "u", "text": "текст"}) == "текст"
+    # без прямого запрета gemma-abl после ошибки поиска выдумывала курс доллара «из интернета» 12 раз из 12
     assert web.for_model({"kind": "page", "url": "u", "error": "страница не найдена"}) == (
-        "Ошибка инструмента: страница не найдена")
+        "Ошибка инструмента: страница не найдена\nИз интернета ничего не получено — не выдумывай данные и не "
+        "пиши, что нашёл их; скажи пользователю, что не получилось.")
     assert web.public({"kind": "page", "url": "u", "title": "t", "text": "текст"}) == {
         "kind": "page", "url": "u", "title": "t"}

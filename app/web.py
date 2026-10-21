@@ -361,6 +361,10 @@ async def youtube(url: str) -> dict:
 
 LABEL_MAX = 200
 NO_KEY = "ключ Exa не читается — введите его заново в Настройках"
+# к ошибке шага для модели: без него gemma-abl после «Exa недоступен» писала курс доллара «из интернета» в 12
+# прогонах из 12, с ним — 0 из 12 (проба 2026-10-22)
+NOTHING = ("Из интернета ничего не получено — не выдумывай данные и не пиши, что нашёл их; скажи пользователю, "
+           "что не получилось.")
 
 
 def args_of(arguments: str) -> "dict | None":
@@ -382,8 +386,8 @@ def label(kind: str, args: dict) -> str:
 
 
 def for_model(step: dict) -> str:
-    """Результат шага, как его получает модель (`role: tool`)."""
-    return f"Ошибка инструмента: {step['error']}" if "error" in step else step["text"]
+    """Результат шага, как его получает модель (`role: tool`); ошибка — с запретом выдумывать (NOTHING)."""
+    return f"Ошибка инструмента: {step['error']}\n{NOTHING}" if "error" in step else step["text"]
 
 
 def history_block(steps: list[dict]) -> str:
