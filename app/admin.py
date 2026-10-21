@@ -1,5 +1,6 @@
 """Панель администратора (спека, раздел 7.10): пользователи, их подключения и разделы, список разрешённых
-адресов, хранилище (шара, копия базы, очередь удаления числом).
+адресов, хранилище (шара, копия базы, очередь удаления числом) и проверка копии базы (manage.verify_backup:
+поднимется ли из неё студия — только числа).
 
 Чужую историю панель не отдаёт: ответы о пользователях — только поля учётки и число подключений,
 о хранилище — без пользователей, путей и объёмов чужих файлов.
@@ -200,18 +201,22 @@ def _probe(media_dir: Path) -> dict:
     return {"share": share, "backup": {"state": "ok", "copies": len(names), "at": newest} if names else {"state": "none"}}
 
 
-def _start_probe(media_dir: Path) -> concurrent.futures.Future:
+def _daemon(name: str, fn, *args) -> concurrent.futures.Future:
     """Свой поток-демон, а не пул asyncio.to_thread: зависший не занимает пул службы и не держит её остановку."""
     fut = concurrent.futures.Future()
 
     def run():
         try:
-            fut.set_result(_probe(media_dir))
-        except BaseException as e:            # noqa: BLE001 — итог пробы (и отказ) забирает запрос
+            fut.set_result(fn(*args))
+        except BaseException as e:            # noqa: BLE001 — итог (и отказ) забирает запрос
             fut.set_exception(e)
 
-    threading.Thread(target=run, name="studio-probe", daemon=True).start()
+    threading.Thread(target=run, name=name, daemon=True).start()
     return fut
+
+
+def _start_probe(media_dir: Path) -> concurrent.futures.Future:
+    return _daemon("studio-probe", _probe, media_dir)
 
 
 @router.get("/storage")
@@ -240,6 +245,44 @@ async def get_storage():
     if backup.get("at") is not None:
         backup = backup | {"age": clock.NOW() - backup["at"]}
     return out | {"share": found["share"], "backup": backup}
+
+
+#: идущая или последняя проверка копии базы (manage.verify_backup) — одна за раз; итог живёт в памяти
+#: службы до следующей проверки
+CHECK: "concurrent.futures.Future | None" = None
+CHECK_FAILED = {"ok": False, "problems": ["проверка копии не удалась — повторите на хосте: manage.py verify-backup"]}
+
+
+def _check_backup() -> dict:
+    """В потоке: проверка новейшей копии; журнал — только ok или fail, без чисел и путей."""
+    try:
+        result = manage.verify_backup()
+    except Exception as e:                    # noqa: BLE001 — текст отказа может нести путь
+        log.warning("backup-check: fail (%s)", type(e).__name__)
+        return CHECK_FAILED
+    log.info("backup-check: %s", "ok" if result["ok"] else "fail")
+    return result
+
+
+@router.post("/backup-check", status_code=202)
+async def start_backup_check(admin: auth.User = Depends(auth.require_admin)):
+    """Проверка копии базы потоком-демоном: долгая (копия на локальный диск, stat каждого файла шары)."""
+    global CHECK
+    if CHECK is not None and not CHECK.done():
+        raise HTTPException(409, {"code": "running", "message": "проверка копии уже идёт"})
+    CHECK = _daemon("studio-backup-check", _check_backup)
+    log.info("администратор %d: проверка копии базы", admin.id)
+    return {"state": "running"}
+
+
+@router.get("/backup-check")
+async def get_backup_check():
+    """{state: idle|running|done, result?}: итог — только числа и слова, без путей, логинов и имён."""
+    if CHECK is None:
+        return {"state": "idle"}
+    if not CHECK.done():
+        return {"state": "running"}
+    return {"state": "done", "result": CHECK.result()}
 
 
 @router.get("/allowlist")
