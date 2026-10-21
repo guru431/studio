@@ -33,8 +33,9 @@
 8. Серия (поле `series`, спека 2026-10-21-studio-photo-presets-compare-series, раздел 7): `count`
    строк сразу — первая `working`, остальные `queued` со своими seed и силой; одна задача
    (run_series) ведёт их по одной тем же run_job, так что серия держит слот пользователя до
-   последней (`queued` — не TERMINAL). Ошибка одной не останавливает следующую. Отмена любой строки
-   снимает весь остаток: идущую — как одиночную (release_after_cancel), строки в очереди — сразу
+   последней (`queued` — не TERMINAL). Ошибка одной не останавливает следующую. Время строки
+   (`elapsed`, `started` в «В работе») — с её перехода в работу (Job.started). Отмена любой строки,
+   и только что кончившейся, снимает весь остаток: идущую — как одиночную (release_after_cancel), строки в очереди — сразу
    `cancelled`. Строки в очереди при остановке службы — `error` самой остановкой (stop), при старте —
    recover. Связь строк — только в памяти (Job.series).
 9. Варианты (`GET /<id>/variants`): свои готовые картинки с тем же исходником и сделанные из этой.
@@ -278,13 +279,20 @@ def _row(user_id: int, image_id: str):
     return row
 
 
+def started(row) -> float:
+    """Начало работы строки: у строки серии — переход из очереди в работу (Job.started в памяти),
+    а не создание серии; задания в памяти нет — время создания."""
+    job = JOBS.get(row["id"])
+    return job.started if job is not None else row["created"]
+
+
 def _out(row, with_chain=True) -> dict:
     """Запись ленты; цепочка промптов — только у одной записи (просмотр): в ленте — число шагов,
     иначе длинные цепочки раздули бы страницу и добавили запросов к базе на каждый шаг."""
     end = row["finished"] if row["finished"] is not None else clock.NOW()
     chain = chains.of_image(row["user_id"], row)
     out = {"id": row["id"], "kind": row["kind"], "state": row["state"], "detail": row["detail"],
-           "elapsed": int(max(0, end - row["created"])), "model": row["model"], "prompt": row["prompt"],
+           "elapsed": int(max(0, end - started(row))), "model": row["model"], "prompt": row["prompt"],
            "size": row["size"], "seed": row["seed"], "strength": row["strength"],
            "source_media_id": row["source_media_id"], "mask_media_id": row["mask_media_id"],
            "media_id": row["media_id"], "created": row["created"], "steps": len(chain)}
@@ -389,7 +397,10 @@ async def create_job(request: Request):
             if fields.get("seed") == "":
                 fields.pop("seed")
             if "series" in fields:                   # серия в форме — строкой JSON
-                fields["series"] = json.loads(fields["series"])
+                try:
+                    fields["series"] = json.loads(fields["series"])
+                except RecursionError:               # глубокая вложенность: не 500
+                    raise _series_refused("поле серии не разобрать") from None
             body = JobIn.model_validate(fields)
         else:
             body = JobIn.model_validate_json(await forms.read_body(request, JSON_MAX))
@@ -623,9 +634,10 @@ async def cancel_job(job_id: str, request: Request):
     job = JOBS.get(job_id)
     if job is None or job.user_id != uid:
         return {"state": _row(uid, job_id)["state"]}          # закончилось до перезапуска или забыто
-    if job.state in ("working", "queued"):
-        for j in job.series or [job]:                         # серия — весь её остаток (п. 8 шапки)
-            _cancel(j)
+    # серия — весь её остаток (п. 8 шапки), даже если нажатая строка уже кончилась: кончившиеся
+    # строки _cancel не трогает
+    for j in job.series or [job]:
+        _cancel(j)
     return {"state": job.state}
 
 
@@ -855,7 +867,7 @@ async def run_series(jobs: list[Job]) -> None:
         if i:
             if job.state != "queued":
                 continue
-            job.state, job.detail = "working", WORKING
+            job.state, job.detail, job.started = "working", WORKING, clock.NOW()   # время строки — с этого мига
             _store(job)
         await run_job(job)
 

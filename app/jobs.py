@@ -55,8 +55,10 @@ def _photo(uid: int, after: float) -> list:
         job = images.JOBS.get(row["id"])
         detail = job.detail if job is not None and row["finished"] is None else row["detail"]
         kind = "Правка" if row["kind"] == "edit" else "Картинка"
-        out.append(_item("photo", row, f"{kind} · {MODEL_NAMES.get(row['model'], row['model'])}", detail,
-                         f"photo?id={row['id']}"))
+        item = _item("photo", row, f"{kind} · {MODEL_NAMES.get(row['model'], row['model'])}", detail,
+                     f"photo?id={row['id']}")
+        item["started"] = images.started(row)        # строка серии — с перехода в работу, не с создания
+        out.append(item)
     return out
 
 
