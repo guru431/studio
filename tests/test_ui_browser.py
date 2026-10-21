@@ -976,10 +976,11 @@ def test_direct_stream_without_an_ending_is_saved_as_cut(browser, live):
 
 def test_direct_answer_longer_than_the_limit_is_saved_cut(browser, live):
     """Ответ прямого подключения длиннее ANSWER_MAX — как у сервера: обрезан с пометкой и сохранён
-    ошибкой, а не потерян отказом PUT (422)."""
+    ошибкой, а не потерян отказом PUT (422). Край среза — посреди эмодзи: половину пары (одиночный
+    суррогат) PUT не принял бы, она отрезается целиком."""
     import chat
     live.add_user("cloudbig")
-    saved, live.cloud.chat_reply = live.cloud.chat_reply, ["x" * 700_000] * 3 + ["лишнее"]
+    saved, live.cloud.chat_reply = live.cloud.chat_reply, ["x" * 700_000] * 2 + ["x" * 599_999 + "😀" * 3, "лишнее"]
     measured = f"""(async () => {{ const m = {API}; const id = location.hash.split('/')[2];
       const last = (await m.api('GET', '/api/chats/' + id)).messages.at(-1);
       return [last.status, last.content.length, last.content.slice(-60)]; }})()"""
@@ -993,7 +994,7 @@ def test_direct_answer_longer_than_the_limit_is_saved_cut(browser, live):
         live.cloud.chat_reply = saved
     assert not r.get("failed"), r
     assert r["values"]["meta"] == "Ответ слишком длинный — обрезан"
-    assert r["values"]["saved"] == ["error", chat.ANSWER_MAX + len(chat.CUT_SIZE), ("x" * 60 + chat.CUT_SIZE)[-60:]]
+    assert r["values"]["saved"] == ["error", chat.ANSWER_MAX - 1 + len(chat.CUT_SIZE), ("x" * 60 + chat.CUT_SIZE)[-60:]]
     assert not problems(r), problems(r)
 
 

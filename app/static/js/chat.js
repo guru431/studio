@@ -79,6 +79,13 @@ function groupOf(updated) {
   return t >= today ? 'Сегодня' : t >= day.getTime() ? 'Вчера' : 'Ранее';
 }
 
+/** Начало text не длиннее max единиц UTF-16 и без половины эмодзи на краю: одиночный старший
+ * суррогат PUT ответа не принял бы (422). */
+function clip(text, max) {
+  const cut = text.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
 function notify(job, final) {
   if (screen) screen.refresh(job, final);
 }
@@ -185,7 +192,7 @@ async function readBrowser(job, turn) {
           if (choice && typeof choice.finish_reason === 'string' && choice.finish_reason) ending = choice.finish_reason;
         }
         if (job.message.content.length > ANSWER_MAX) {     // как сервер: дальше не читать, прочитанное — ошибкой
-          job.message.content = job.message.content.slice(0, ANSWER_MAX) + CUT_SIZE;
+          job.message.content = clip(job.message.content, ANSWER_MAX) + CUT_SIZE;
           throw new Error('Ответ слишком длинный — обрезан');
         }
       }
