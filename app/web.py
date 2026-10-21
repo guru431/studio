@@ -354,6 +354,12 @@ def for_model(step: dict) -> str:
     return f"Ошибка инструмента: {step['error']}" if "error" in step else step["text"]
 
 
+def history_block(steps: list[dict]) -> str:
+    """Шаги прежнего ответа для следующих ходов: блоком `<web kind>` на шаг, текст — как его получила модель
+    (for_model). Без ролей `tool` — шаблоны Gemma требуют чередования ролей (chat.compose)."""
+    return "".join(f'<web kind="{s["kind"]}">\n{for_model(s)}\n</web>\n\n' for s in steps)
+
+
 def public(step: dict) -> dict:
     """Шаг для страницы — без текста для модели."""
     return {k: v for k, v in step.items() if k != "text"}
