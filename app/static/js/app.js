@@ -1,10 +1,12 @@
-/* Оболочка студии: профиль, тема, разделы по hash, меню аватара, служебный работник.
+/* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
+ * служебный работник.
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
- * (#/video?source=<media_id> — «Оживить» из раздела фото). Смена id в том же разделе зовёт
+ * (#/video?source=<media_id> — «Оживить» из раздела фото; ?id=<запись> — переход к записи из
+ * «В работе», jobs.js: раздел открывает её и убирает ?id из адреса). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
  * Раздел без готовой модели (me.capabilities.photo === false) открывается всё равно — история
  * читается, скачивается и удаляется; hint(cls) — подсказка со ссылкой на настройки раздела, её
@@ -18,6 +20,7 @@
  * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
  * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело). */
 import { api, loadMe, me } from './api.js';
+import { setupJobs } from './jobs.js';
 import { installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
 
@@ -279,6 +282,7 @@ function retryLater(first, worker) {
 async function enter(worker) {
   applyTheme(me.theme);
   setupMenu();
+  setupJobs({ navigate });
   setupTheme();
   window.addEventListener('hashchange', render);
   await render();

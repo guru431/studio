@@ -30,6 +30,7 @@
   <a class="tab" href="#/transcribe" data-section="transcribe"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg><span>Расшифровка</span></a>
   <a class="tab" href="#/speech" data-section="speech"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Озвучка</span></a>
   <span class="spacer"></span>
+  <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M15.5 16.5l2 2 3.5-4"/></svg><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
   <button id="theme-toggle" class="theme-toggle" type="button"></button>
   <button id="avatar" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="Настройки и выход"></button>
 </nav>
@@ -40,6 +41,15 @@
   <form method="post" action="/logout"><button class="menu-item" role="menuitem" id="menu-logout" type="submit">Выход</button></form>
 </div>
 <main id="view"></main>
+<dialog id="jobs-panel" class="jobs-panel" aria-labelledby="jobs-title">
+  <div class="jobs-sheet">
+    <div class="jobs-head"><h2 id="jobs-title">В работе</h2><button id="jobs-close" class="btn-link" type="button">Закрыть</button></div>
+    <h3>Идёт</h3>
+    <ul id="jobs-running" class="jobs-list"></ul>
+    <h3>Готово за час</h3>
+    <ul id="jobs-finished" class="jobs-list"></ul>
+  </div>
+</dialog>
 <dialog id="curtain" class="curtain" closedby="none" aria-label="Студия скрыта"><img class="lock-logo" src="/static/icons/icon.svg" alt=""></dialog>
 <dialog id="lock" class="lock" closedby="none" aria-labelledby="lock-title">
   <img class="lock-logo" src="/static/icons/icon.svg" alt="">

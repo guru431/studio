@@ -10,10 +10,12 @@
  * ролики ленты (queued, in_progress) страница опрашивает GET /api/videos/<id> раз в POLL_MS — и
  * найденные после перезагрузки тоже. Роликов может идти несколько: очередь — у шлюза.
  * Раздел без модели (ctx.hint): лента и просмотр — как всегда, вместо поля промпта — подсказка.
- * Текст сервера — только textContent. */
+ * #/video?id=<id> («Открыть» в «В работе», jobs.js): готовый — просмотр, иначе — его карточка;
+ * созданный ролик зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
+import { kick } from './jobs.js';
 import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
@@ -119,16 +121,43 @@ function build(view, ctx) {
     selection.bar);
   view.append(root);
 
+  let focusId = null;            // запись из «В работе», которую ещё ждёт лента
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
     load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши ролики.' : 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
     head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
-    onChange: () => selection.sync(),
+    onChange: () => {
+      selection.sync();
+      focusCard();
+    },
     dayTools: selection.dayTools,
   });
   selection.attach({ root, head, feedBox, feed, error });
+
+  /* переход к записи из «В работе» (#/video?id=…): готовый — просмотр, иначе — его карточка в ленте;
+   * ?id из адреса убирается: повторное «Открыть» снова сменит адрес */
+  function focusCard() {
+    const node = focusId && feedBox.querySelector(`.video-card[data-id="${CSS.escape(focusId)}"]`);
+    if (!node) return;
+    focusId = null;
+    node.classList.add('jobs-focus');
+    node.scrollIntoView({ block: 'center' });
+  }
+
+  const wanted = ctx.query.get('id');
+  if (wanted) {
+    history.replaceState(null, '', '#/video');
+    api('GET', `/api/videos/${encodeURIComponent(wanted)}`).then((item) => {
+      if (!alive) return;
+      if (item.state === 'done' && item.media_id) openViewer(item);
+      else {
+        focusId = item.id;
+        focusCard();
+      }
+    }, (err) => { if (alive) error.textContent = words(err); });
+  }
 
   /* чип качества */
   function paintQuality() {
@@ -460,6 +489,7 @@ function build(view, ctx) {
     go.disabled = true;
     try {
       const out = await api('POST', '/api/videos', body);
+      kick();
       if (alive) feed.prepend(out);
     } catch (err) {
       error.textContent = words(err);

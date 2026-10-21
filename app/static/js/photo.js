@@ -17,12 +17,15 @@
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
  * Раздел без модели (ctx.hint): лента, просмотр, «Скачать» и «Удалить» — как всегда, вместо поля
- * промпта — подсказка, в просмотре нет «Изменить» и «Повторить». */
+ * промпта — подсказка, в просмотре нет «Изменить» и «Повторить».
+ * #/photo?id=<id> («Открыть» в «В работе», jobs.js): готовая — просмотр, иначе — её карточка; запуск
+ * задания зовёт jobs.kick(). */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
 import { attachMic } from './mic.js';
 import { createFeed, pageQuery } from './feed.js';
+import { kick } from './jobs.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
@@ -138,16 +141,43 @@ function build(view, ctx) {
     selection.bar);
   view.append(root);
 
+  let focusId = null;            // запись из «В работе», которую ещё ждёт лента
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
     load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши картинки.' : 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
-    onChange: () => selection.sync(),
+    onChange: () => {
+      selection.sync();
+      focusCard();
+    },
     dayTools: selection.dayTools,
   });
   selection.attach({ root, head, feedBox, feed, error });
+
+  /* переход к записи из «В работе» (#/photo?id=…): готовая — просмотр, иначе — её карточка в ленте;
+   * ?id из адреса убирается: повторное «Открыть» снова сменит адрес */
+  function focusCard() {
+    const node = focusId && feedBox.querySelector(`.photo-card[data-id="${CSS.escape(focusId)}"]`);
+    if (!node) return;
+    focusId = null;
+    node.classList.add('jobs-focus');
+    node.scrollIntoView({ block: 'center' });
+  }
+
+  const wanted = ctx.query.get('id');
+  if (wanted) {
+    history.replaceState(null, '', '#/photo');
+    api('GET', `/api/images/${encodeURIComponent(wanted)}`).then((item) => {
+      if (!alive) return;
+      if (item.state === 'done' && item.media_id) openViewer(item);
+      else {
+        focusId = item.id;
+        focusCard();
+      }
+    }, (err) => { if (alive) error.textContent = words(err); });
+  }
 
   /* меню чипов и раздела */
   function chipMenu(id, initial, get, set) {
@@ -418,6 +448,7 @@ function build(view, ctx) {
     syncBusy();
     try {
       await adopt((await api('POST', '/api/images', body)).id);
+      kick();
       return true;
     } catch (err) {
       error.textContent = words(err);
@@ -495,7 +526,10 @@ function build(view, ctx) {
     const starts = [
       act('Изменить', 'act-edit', () => {
         dialog.close();
-        openEditor(item, choice, (created) => adopt(created.id));
+        openEditor(item, choice, (created) => {
+          adopt(created.id);
+          kick();
+        });
       }),
       act('Повторить с тем же seed', 'act-repeat', () => {
         dialog.close();
