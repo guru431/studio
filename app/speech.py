@@ -30,6 +30,7 @@ LITE_TIMEOUT_SEC = 180
 TTS_TIMEOUT_SEC = 720
 EXTERNAL_TIMEOUT_SEC = 600
 TTS_LANGUAGE = "Russian"
+LABEL = "Собеседник {}"          # метка собеседника по порядку первого появления (с 1)
 
 
 class Busy(Exception):
@@ -149,7 +150,7 @@ def turns(segments: list[Segment]) -> tuple[list[Segment], list[dict]]:
     out: list[Segment] = []
     raw: list[dict] = []
     for s in segments:
-        name = names.setdefault(s.speaker, f"Собеседник {len(names) + 1}") if s.speaker is not None else None
+        name = names.setdefault(s.speaker, LABEL.format(len(names) + 1)) if s.speaker is not None else None
         if out and name is not None and out[-1].speaker == name:
             last = out[-1]
             out[-1] = Segment(last.start, s.end, name, f"{last.text} {s.text}")

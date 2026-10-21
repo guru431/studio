@@ -46,3 +46,17 @@ def test_export_route_names_the_file_after_the_recording(studio, fake_audio):
     assert studio.c.get(f"/api/transcripts/{tid}/export?format=pdf").status_code == 422
     make_user(studio, "bob"); signin(studio, "bob")
     assert studio.c.get(f"/api/transcripts/{tid}/export?format=txt").status_code == 404
+
+
+def test_exports_carry_the_edits_and_the_names(studio, fake_audio):
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    studio.c.patch(f"/api/transcripts/{tid}", json={"texts": {"1": "Добрый вечер."}, "names": {"Собеседник 1": "Иван"}})
+    txt = studio.c.get(f"/api/transcripts/{tid}/export?format=txt").text
+    assert txt == "Иван · 00:00\nЗдравствуйте.\n\nСобеседник 2 · 00:03\nДобрый вечер.\n"
+    with zipfile.ZipFile(io.BytesIO(studio.c.get(f"/api/transcripts/{tid}/export?format=docx").content)) as z:
+        texts = [t.text for t in ElementTree.fromstring(z.read("word/document.xml")).iter(f"{W}t")]
+    assert "Иван · 00:00" in texts and "Добрый вечер." in texts and "Добрый день." not in texts
+    srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt").text
+    assert "Иван: Здравствуйте." in srt and "Собеседник 2: Добрый вечер." in srt
