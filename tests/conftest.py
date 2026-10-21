@@ -92,6 +92,7 @@ def studio(env, monkeypatch):
     media.SAVING.clear()
     media.ARCHIVES.clear()
     takeout.EXPORTS.clear()
+    takeout.RUNNING.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()

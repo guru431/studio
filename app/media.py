@@ -22,6 +22,8 @@
   размер записи — в её локальном заголовке (первым проходом по файлу), без дескриптора данных.
 """
 import asyncio
+import contextlib
+import hashlib
 import logging
 import os
 import re
@@ -562,14 +564,23 @@ def _entry_names(rows) -> list[str]:
     return names
 
 
-def _crc(file: Path) -> tuple[int, int]:
-    """CRC-32 и размер файла — первым проходом: заголовок записи уходит раньше её данных."""
+def open_summed(file: Path, chunk: int = CHUNK, sha: bool = False):
+    """Файл открытым, CRC-32, размер и sha256 (`sha`, иначе None) — первым проходом: заголовок записи ZIP
+    уходит раньше её данных. Данные вызывающий читает с того же дескриптора (он уже в начале) и сам
+    закрывает: второе открытие файла, удалённого между проходами, оборвало бы весь архив, а удалённый
+    открытый файл на Linux читается. Общий у архива выделенного (_zip) и выгрузки истории (takeout.py)."""
     crc = size = 0
-    with open(file, "rb") as f:
-        while block := f.read(CHUNK):
+    digest = hashlib.sha256() if sha else None
+    with contextlib.ExitStack() as stack:
+        f = stack.enter_context(open(file, "rb"))
+        while block := f.read(chunk):
             crc = zlib.crc32(block, crc)
+            if digest is not None:
+                digest.update(block)
             size += len(block)
-    return crc, size
+        f.seek(0)
+        stack.pop_all()                                    # сбой до этого места — файл закрыт
+    return f, crc, size, digest.hexdigest() if digest is not None else None
 
 
 def _dos_time(created: float) -> tuple[int, int]:
@@ -637,8 +648,7 @@ def _zip(entries: list[tuple[str, Path, float]]):
     try:
         for name, file, created in entries:
             try:
-                crc, size = _crc(file)
-                f = open(file, "rb")
+                f, crc, size, _ = open_summed(file)
             except FileNotFoundError:
                 continue
             with f:
