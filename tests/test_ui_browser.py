@@ -4365,3 +4365,124 @@ def test_notify_toggle_explains_a_refusal(browser, live):
     assert v["note"] == "Браузер запретил уведомления — разрешите их в настройках сайта"
     assert v["checked"] is False and v["stored"] is None
     assert not problems(r), problems(r)
+
+
+#: ответы GET /api/jobs — из window.jobsOut (пока он задан); window.job(раздел, id, состояние, finished, доп.)
+JOBS_STUB = """(() => { window.jobsOut = null; const real = window.fetch;
+  window.job = (section, id, state, finished, extra = {}) => ({ section, id, state, title: 'Запись ' + id,
+    detail: 'шаг ' + id, started: Date.now() / 1000 - 60, finished, href: section + '?id=' + id, ...extra });
+  window.fetch = (u, o) => !(window.jobsOut && String(u).startsWith('/api/jobs')) ? real(u, o)
+    : Promise.resolve(new Response(JSON.stringify({ now: Date.now() / 1000, ...window.jobsOut }),
+      { status: 200, headers: { 'content-type': 'application/json' } }));
+  return true; })()"""
+KICK = "(await import('/static/js/jobs.js')).kick()"
+
+
+def test_jobs_panel_keeps_rows_and_focus_between_polls(browser, live):
+    """Открытая панель на опросе не пересобирается: фокус на «Открыть» остаётся, строка того же id — тот
+    же узел с новым ходом, ставшее готовым уходит из «Идёт» и встаёт сверху «Готово за час» (новое)."""
+    login = "jobs-keep"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("eval", "stub", JOBS_STUB),
+        ("eval", "first", f"""(async () => {{ window.jobsOut = {{ running: [job('photo', 'ja', 'running', null),
+          job('video', 'jb', 'running', null, {{ progress: 10 }})],
+          finished: [job('speech', 'jc', 'done', Date.now() / 1000 - 120)] }}; {KICK}; return true; }})()"""),
+        ("wait", "document.querySelector('#jobs').dataset.running === '2'"),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("eval", "opened", settled("document.querySelectorAll('#jobs-panel .jobs-row').length", 500)),
+        ("eval", "focus", """(() => { const b = document.querySelector('#jobs-finished .jobs-row[data-id=jc] .jobs-open');
+          b.focus(); window.kept = b; window.rowB = document.querySelector('#jobs-running .jobs-row[data-id=jb]');
+          return document.activeElement === b; })()"""),
+        ("eval", "second", f"""(async () => {{ window.jobsOut = {{
+          running: [job('video', 'jb', 'running', null, {{ progress: 50, detail: 'генерирую кадры' }})],
+          finished: [job('photo', 'ja', 'done', Date.now() / 1000), job('speech', 'jc', 'done', Date.now() / 1000 - 120)] }};
+          {KICK}; return true; }})()"""),
+        ("wait", "document.querySelectorAll('#jobs-finished .jobs-row').length === 2"),
+        ("eval", "after", """(() => { const b = window.rowB;
+          return { focused: document.activeElement === window.kept, sameRow: document.querySelector('#jobs-running .jobs-row[data-id=jb]') === b,
+            detail: b.querySelector('.jobs-detail').textContent,
+            running: [...document.querySelectorAll('#jobs-running .jobs-row')].map((n) => n.dataset.id),
+            finished: [...document.querySelectorAll('#jobs-finished .jobs-row')].map((n) => [n.dataset.id, n.dataset.state, n.classList.contains('new')]) }; })()""")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["opened"] == 3 and v["focus"] is True
+    a = v["after"]
+    assert a["focused"] is True and a["sameRow"] is True
+    assert re.fullmatch(r"генерирую кадры · 50% · \d+:\d\d", a["detail"]), a["detail"]
+    assert a["running"] == ["jb"] and [f[:2] for f in a["finished"]] == [["ja", "done"], ["jc", "done"]]
+    assert a["finished"][0][2] is True
+    assert not problems(r), problems(r)
+
+
+def test_jobs_poll_gives_up_a_hanging_request(browser, live):
+    """Запрос опроса висит без ответа (iOS после сна держит fetch минуту): у него срок, и следующий опрос
+    (kick) проходит, а не ждёт его вечно."""
+    login = "jobs-hang"
+    live.add_user(login)
+    hang = """(() => { window.asked = []; window.hangJobs = true; const timeout = AbortSignal.timeout.bind(AbortSignal);
+      AbortSignal.timeout = (ms) => { window.asked.push(ms); return timeout(100); };
+      const real = window.fetch;
+      window.fetch = (u, o) => !(window.hangJobs && String(u).startsWith('/api/jobs')) ? real(u, o) : new Promise((_, no) => {
+        if (o && o.signal) o.signal.addEventListener('abort', () => no(o.signal.reason)); });
+      return true; })()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("eval", "hang", hang),
+        ("eval", "kicks", f"""(async () => {{ delete document.querySelector('#jobs').dataset.polled; {KICK};
+          await new Promise((r) => setTimeout(r, 30)); window.hangJobs = false; {KICK}; return true; }})()"""),
+        ("wait", JOBS_POLLED), ("eval", "asked", "window.asked")], timeout=8000)
+    assert not r.get("failed"), r
+    assert 20000 in r["values"]["asked"]
+    assert not problems(r), problems(r)
+
+
+def test_jobs_open_keeps_the_open_section(browser, live):
+    """«Открыть» (и адрес ?id) в раздел, который уже открыт, его не пересобирает: набранный промпт и
+    текст остаются в том же поле, запись открыта или выбрана, ?id из адреса убран."""
+    login = "jobs-same"
+    uid = live.add_user(login)
+    now = time.time()
+    live_sql(live, "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created, finished)"
+                   " VALUES ('sp-keep', ?, 'qwen3-tts', 'v', 'Привет', 'error', 'не вышло', ?, ?)",
+             (uid, now - 60, now - 20))
+    live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                   " state, progress, detail, created, finished) VALUES ('vd-keep', ?, 1, 'nope', '', 5, 'standard',"
+                   " 1, 'failed', 0, 'ролик не получился', ?, ?)", (uid, now - 60, now - 10))
+    kept = "(() => {{ const f = document.querySelector('{0}'); return [f === window.field, f.value, location.hash]; }})()"
+    mark = "(() => {{ window.field = document.querySelector('{0}'); return true; }})()"
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", JOBS_POLLED),
+        ("type", "#photo-prompt", "черновик промпта"), ("eval", "m1", mark.format("#photo-prompt")),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("wait", "document.querySelector('#jobs-finished .jobs-row[data-section=photo] .jobs-open')"),
+        ("click", "#jobs-finished .jobs-row[data-section=photo] .jobs-open"), ("wait", is_open("#viewer")),
+        ("eval", "photo", kept.format("#photo-prompt")),
+        *go("video"), ("wait", VIDEO_FEED_READY),
+        ("type", "#video-prompt", "черновик ролика"), ("eval", "m2", mark.format("#video-prompt")),
+        *go("video?id=vd-keep"), ("wait", "document.querySelector('.video-card[data-id=\"vd-keep\"].jobs-focus')"),
+        ("eval", "video", kept.format("#video-prompt")),
+        *go("speech"), ("wait", "document.querySelector('#speech-text')"),
+        ("type", "#speech-text", "черновик озвучки"), ("eval", "m3", mark.format("#speech-text")),
+        *go("speech?id=sp-keep"), ("wait", "document.querySelector('.sp-item[data-id=\"sp-keep\"][aria-current=true]')"),
+        ("eval", "speech", kept.format("#speech-text"))])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["photo"] == [True, "черновик промпта", "#/photo"]
+    assert v["video"] == [True, "черновик ролика", "#/video"]
+    assert v["speech"] == [True, "черновик озвучки", "#/speech"]
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
+def test_jobs_open_keeps_the_transcript_draft(browser, live):
+    """Правка расшифровки не сохранена, а пришёл адрес той же записи (?id, «Открыть»): черновик цел."""
+    login = "jobs-draft"
+    live.add_user(login)
+    area = "document.querySelector(\".tr-turn[data-index='1'] .tr-edit-text\")"
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        set_value(".tr-turn[data-index='1'] .tr-edit-text", "Черновик правки"),
+        ("eval", "nav", "location.hash = '#/transcribe?id=' + document.querySelector('.tr-item[aria-current=true]').dataset.id"),
+        ("wait", "location.hash === '#/transcribe'"),
+        ("eval", "draft", settled(f"{area}?.value ?? null", 1000))])
+    assert not r.get("failed"), r
+    assert r["values"]["draft"] == "Черновик правки"
+    assert not problems(r), problems(r)

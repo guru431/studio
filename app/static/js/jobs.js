@@ -4,10 +4,12 @@
  * точка, если есть готовые позже отметки просмотра (`data-new`). Отметка — время сервера `now` того
  * опроса, при котором панель открыли (localStorage `studio-jobs-seen`, удобство устройства, как тема:
  * пропала — новыми считаются все готовые за час). Панель — <dialog>: «Идёт» и «Готово за час», у
- * строки — «Открыть» (адрес раздела с ?id=, chat/<id>); отмены и удаления в панели нет.
+ * строки — «Открыть» (адрес раздела с ?id=, chat/<id>); отмены и удаления в панели нет. Открытая
+ * панель на опросе строки не пересобирает: сопоставляет по id (fill), фокус и нажатие не теряются.
  *
  * Опрос: раз в JOBS_POLL_MS, пока что-то идёт или открыта панель, иначе раз в IDLE_POLL_MS и при
  * возвращении на экран; первый — без since (готовое за час), дальше since — `now` прошлого ответа.
+ * У запроса срок POLL_TIMEOUT_MS: зависший fetch не держит следующие опросы.
  * Скрытая страница опрашивает, только если включены уведомления и что-то идёт. Запертая сессия: api() ждёт отпирания —
  * опрос стоит (отметку «на экране» он не ставит: она — только POST /api/lock/alive). Раздел, запустивший
  * задание, зовёт kick() — опрос сразу. Текст сервера — только textContent.
@@ -22,6 +24,7 @@ import { el } from './ui.js';
 
 export const JOBS_POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
+const POLL_TIMEOUT_MS = 20000;   // срок одного опроса
 const RECENT_SEC = 3600;
 const SEEN_KEY = 'studio-jobs-seen';
 const NOTIFY_KEY = 'studio-notify';
@@ -119,11 +122,41 @@ function row(item, fresh) {
   open);
 }
 
+/** Строка того же id — тот же узел: меняются только слова и состояние. */
+function refresh(node, item) {
+  node.dataset.state = item.state;
+  node.querySelector('.jobs-title').textContent = item.title;
+  const detail = node.querySelector('.jobs-detail');
+  detail.textContent = detailText(item);
+  detail.classList.toggle('error', item.state === 'error');
+}
+
+/** Список по id: ушедшие строки убираются, новые встают на место, прежние не пересоздаются и без нужды
+ * не двигаются — фокус на «Открыть» и нажатие во время опроса не теряются. */
+function fill(list, items, fresh, empty) {
+  if (!items.length) {
+    if (!list.querySelector('.jobs-empty')) list.replaceChildren(el('li', { class: 'muted small jobs-empty' }, empty));
+    return;
+  }
+  const ids = new Set(items.map((i) => i.id));
+  const old = new Map();
+  for (const node of [...list.children]) {
+    if (node.classList.contains('jobs-row') && ids.has(node.dataset.id)) old.set(node.dataset.id, node);
+    else node.remove();
+  }
+  let at = list.firstChild;
+  for (const item of items) {
+    let node = old.get(item.id);
+    if (node) refresh(node, item);
+    else node = row(item, fresh(item));
+    if (node === at) at = at.nextSibling;
+    else list.insertBefore(node, at);
+  }
+}
+
 function renderPanel() {
-  runningList.replaceChildren(...(running.length ? running.map((i) => row(i, false))
-    : [el('li', { class: 'muted small jobs-empty' }, 'Сейчас ничего не идёт')]));
-  finishedList.replaceChildren(...(finished.length ? finished.map((i) => row(i, i.finished > shownMark))
-    : [el('li', { class: 'muted small jobs-empty' }, 'За час ничего не закончилось')]));
+  fill(runningList, running, () => false, 'Сейчас ничего не идёт');
+  fill(finishedList, finished, (i) => i.finished > shownMark, 'За час ничего не закончилось');
 }
 
 function paint() {
@@ -172,9 +205,11 @@ async function poll() {
   again = false;
   let out = null;
   try {
-    out = await api('GET', `/api/jobs${since === null ? '' : `?since=${since}`}`);
+    // срок: iOS после сна держит fetch минуту и дольше, а inflight держал бы все следующие опросы
+    out = await api('GET', `/api/jobs${since === null ? '' : `?since=${since}`}`, undefined,
+      { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
   } catch {
-    // нет связи — следующий опрос по расписанию
+    // нет связи или срок вышел — следующий опрос по расписанию
   }
   inflight = false;
   if (out) take(out);
@@ -197,6 +232,8 @@ function openHref(href) {
 function openPanel() {
   shownMark = readSeen();
   if (since !== null) writeSeen(since);
+  runningList.replaceChildren();              // «новые» — по отметке этого открытия
+  finishedList.replaceChildren();
   renderPanel();
   panel.showModal();
   paint();

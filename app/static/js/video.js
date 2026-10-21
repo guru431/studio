@@ -10,8 +10,9 @@
  * ролики ленты (queued, in_progress) страница опрашивает GET /api/videos/<id> раз в POLL_MS — и
  * найденные после перезагрузки тоже. Роликов может идти несколько: очередь — у шлюза.
  * Раздел без модели (ctx.hint): лента и просмотр — как всегда, вместо поля промпта — подсказка.
- * #/video?id=<id> («Открыть» в «В работе», jobs.js): готовый — просмотр, иначе — его карточка;
- * созданный ролик зовёт jobs.kick(). Текст сервера — только textContent. */
+ * #/video?id=<id> («Открыть» в «В работе», jobs.js): готовый — просмотр, иначе — его карточка; в уже
+ * открытом разделе — update, без пересборки (промпт и фото-источник целы); созданный ролик зовёт
+ * jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
@@ -142,22 +143,28 @@ function build(view, ctx) {
     const node = focusId && feedBox.querySelector(`.video-card[data-id="${CSS.escape(focusId)}"]`);
     if (!node) return;
     focusId = null;
+    for (const old of feedBox.querySelectorAll('.jobs-focus')) old.classList.remove('jobs-focus');
     node.classList.add('jobs-focus');
     node.scrollIntoView({ block: 'center' });
   }
 
-  const wanted = ctx.query.get('id');
-  if (wanted) {
+  /** ?id адреса — при сборке и при переходе внутри раздела (update): прочее состояние не трогает. */
+  function follow(wanted) {
+    if (!wanted) return;
     history.replaceState(null, '', '#/video');
     api('GET', `/api/videos/${encodeURIComponent(wanted)}`).then((item) => {
       if (!alive) return;
-      if (item.state === 'done' && item.media_id) openViewer(item);
-      else {
+      if (item.state === 'done' && item.media_id) {
+        const shown = root.querySelector('#video-viewer');
+        if (shown) shown.close();                       // просмотр один: прежний уступает
+        openViewer(item);
+      } else {
         focusId = item.id;
         focusCard();
       }
     }, (err) => { if (alive) error.textContent = words(err); });
   }
+  follow(ctx.query.get('id'));
 
   /* чип качества */
   function paintQuality() {
@@ -554,6 +561,7 @@ function build(view, ctx) {
   setSource(fromPhoto ? { mediaId: fromPhoto, url: media(fromPhoto, '?thumb=1') } : null);
 
   return {
+    follow,
     destroy() {
       alive = false;
       selection.destroy();
@@ -569,6 +577,11 @@ function build(view, ctx) {
 
 export function mount(view, ctx) {
   screen = build(view, ctx);
+}
+
+/** Переход внутри открытого раздела (#/video?id=…): только ?id — промпт, фото-источник и выделение целы. */
+export function update(ctx) {
+  if (screen) screen.follow(ctx.query.get('id'));
 }
 
 export function unmount() {

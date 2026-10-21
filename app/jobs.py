@@ -77,7 +77,8 @@ def _transcribe(uid: int, after: float) -> list:
     out = []
     for row in going + done:
         job = transcripts.JOBS.get(row["id"])
-        detail = transcripts.detail(job) if job is not None and row["finished"] is None else row["detail"]
+        # этап без своего времени: время одно — общее, его считает страница
+        detail = job.stage if job is not None and row["finished"] is None else row["detail"]
         out.append(_item("transcribe", row, f"Расшифровка «{row['name']}»", detail, f"transcribe?id={row['id']}"))
     return out
 
