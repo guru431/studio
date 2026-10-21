@@ -260,10 +260,10 @@
   старые версии. Обновляет root каждую ночь — `/etc/crontab`: `0 1 * * * root /usr/bin/pip3 install -U
   yt-dlp --break-system-packages` (крон — не часть репозитория); `install.sh` без yt-dlp только
   предупреждает. Пишет только в `config.tmp_dir`, кэш выключен (`--no-cache-dir`).
-- **api.exa.ai с debian заблокирован** (2026-10-21): Cloudflare Exa отвечает выходу debian (Финляндия)
-  403 HTML-страницей — поиск и страницы «Exa недоступен с сервера студии». Решение — маршрут в проекте
-  `network` (его `FINDINGS.md`, 2026-10-21), код студии под это не меняется; живая проверка поиска на
-  проде — после маршрута.
+- **api.exa.ai с debian — только через маршрут** проекта `network` (2026-10-22): выходу debian (Финляндия)
+  Cloudflare Exa отвечает 403 HTML-страницей — поиск и страницы «Exa недоступен с сервера студии». Код
+  студии под это не меняется. Проверка маршрута: с debian `curl -s -X POST https://api.exa.ai/search -H
+  'Content-Type: application/json' -d '{}'` — JSON 402 `X402_PAYMENT_REQUIRED`, а не HTML.
 - Секрет — `/etc/studio/studio.env` (0600 root, одна строка `STUDIO_DATA_KEY=`, vault
   `STUDIO_DATA_KEY`): его читает systemd, а не служба. Смена ключа делает прежние токены
   подключений нерасшифровываемыми — их вводят заново.
