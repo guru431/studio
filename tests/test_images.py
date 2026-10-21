@@ -1162,3 +1162,88 @@ def test_brush_is_srvllm_only(studio, monkeypatch):
                       files={"image": ("p.png", photo(), "image/png"), "mask": ("m.png", png(mask), "image/png")})
     assert r.status_code == 422 and r.json()["detail"]["code"] == "brush"
     assert not state.DB.execute("SELECT count(*) FROM media").fetchone()[0]
+
+
+# ---- пресеты -----------------------------------------------------------------
+
+PRESET = {"model": "lustify", "connection_id": None, "size": "portrait", "seed": 7, "strength": 0.4,
+          "prompt": "портрет, студийный свет"}
+
+
+def save_preset(s, name="Портрет студия", **params):
+    return s.c.post("/api/images/presets", json={"name": name, "params": PRESET | params})
+
+
+def test_presets_crud_and_replace_by_name(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    first = save_preset(studio)
+    assert first.status_code == 201, first.text
+    item = first.json()
+    assert item["name"] == "Портрет студия" and item["params"] == PRESET and item["id"]
+    studio.clock[0] += 5
+    other = save_preset(studio, "Альбом", size="landscape", seed=None, prompt=None).json()
+    listed = studio.c.get("/api/images/presets").json()["items"]
+    assert [p["id"] for p in listed] == [other["id"], item["id"]]           # новые сверху
+    studio.clock[0] += 5
+    again = save_preset(studio, "Портрет студия", size="square")
+    assert again.status_code == 201 and again.json()["id"] == item["id"]   # то же имя — замена
+    listed = studio.c.get("/api/images/presets").json()["items"]
+    assert len(listed) == 2 and listed[0]["params"]["size"] == "square"
+    assert studio.c.delete(f"/api/images/presets/{item['id']}").status_code == 204
+    assert [p["id"] for p in studio.c.get("/api/images/presets").json()["items"]] == [other["id"]]
+    assert studio.c.delete(f"/api/images/presets/{item['id']}").status_code == 404
+    assert "студийный" not in caplog.text and "Портрет" not in caplog.text
+
+
+def test_presets_limit_is_50(studio):
+    add_gateway(studio)
+    for i in range(50):
+        assert save_preset(studio, f"p{i}").status_code == 201
+    r = save_preset(studio, "лишний")
+    assert r.status_code == 409 and r.json()["detail"] == {
+        "code": "presets", "message": "не больше 50 пресетов — удалите ненужные"}
+    assert save_preset(studio, "p3", seed=1).status_code == 201             # замена — не новый
+
+
+def test_presets_are_own(studio):
+    add_gateway(studio)
+    mine = save_preset(studio).json()
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    assert studio.c.get("/api/images/presets").json()["items"] == []
+    assert studio.c.delete(f"/api/images/presets/{mine['id']}").status_code == 404
+    signin(studio, "owner")
+    assert len(studio.c.get("/api/images/presets").json()["items"]) == 1
+
+
+@pytest.mark.parametrize("body", [
+    {"name": "", "params": PRESET},
+    {"name": "   ", "params": PRESET},
+    {"name": "x" * 61, "params": PRESET},
+    {"name": "x", "params": PRESET | {"seed": -1}},
+    {"name": "x", "params": PRESET | {"strength": 2}},
+    {"name": "x", "params": PRESET | {"size": "huge"}},
+    {"name": "x", "params": PRESET | {"prompt": "я" * 24001}},
+    {"name": "x", "params": PRESET | {"extra": 1}},
+    {"name": "x"},
+])
+def test_presets_input_is_validated(studio, body):
+    add_gateway(studio)
+    r = studio.c.post("/api/images/presets", json=body)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "input"
+    assert studio.c.get("/api/images/presets").json()["items"] == []
+
+
+def test_presets_outlive_the_history_wipe_but_not_the_account(studio):
+    """Пресеты — настройки, а не история: стирание истории их не трогает, удаление учётки — каскадом."""
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    save_preset(studio)
+    assert studio.c.delete("/api/history").status_code == 200
+    assert len(studio.c.get("/api/images/presets").json()["items"]) == 1
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    assert state.DB.execute("SELECT COUNT(*) FROM presets").fetchone()[0] == 0

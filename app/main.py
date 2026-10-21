@@ -30,6 +30,7 @@ import db
 import dictation
 import images
 import media
+import presets
 import profile
 import screenlock
 import sections
@@ -106,6 +107,7 @@ app.include_router(connections.router)
 app.include_router(sections.router)
 app.include_router(admin.router)
 app.include_router(media.router)
+app.include_router(presets.router)          # раньше images: /api/images/presets — не id картинки
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)

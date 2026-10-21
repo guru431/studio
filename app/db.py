@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 9).
+"""Соединение SQLite и схема базы (версия 10).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 9
+VERSION = 10
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -57,6 +57,14 @@ INDEXES_9 = """CREATE INDEX media_user ON media(user_id);
 CREATE INDEX messages_streaming ON messages(chat_id) WHERE status = 'streaming';
 """
 
+#: фото (presets.py, images.py): пресеты учётки — настройки, а не история (стирание истории их не
+#: трогает, удаление учётки — каскадом); картинки по исходнику — «Варианты» просмотра
+PHOTO_10 = """CREATE TABLE presets(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+        section TEXT NOT NULL, name TEXT NOT NULL, params TEXT NOT NULL, created REAL NOT NULL);
+CREATE INDEX presets_user ON presets(user_id, section);
+CREATE INDEX images_user_source ON images(user_id, source_media_id);
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -99,7 +107,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9
+""" + INDEXES_9 + PHOTO_10
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -148,6 +156,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     8: PURGE_TABLES,
     # индексы: файлы по учётке, идущие ответы
     9: INDEXES_9,
+    # фото: пресеты учётки, индекс картинок по исходнику
+    10: PHOTO_10,
 }
 
 
