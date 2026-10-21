@@ -102,6 +102,7 @@ class TurnIn(BaseModel):
     text: str = Field("", max_length=TEXT_MAX)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     regenerate: bool = False
+    external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
 
 
 class AnswerIn(BaseModel):
@@ -159,8 +160,17 @@ def _message_out(row, atts: list) -> dict:
     return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
-            "attachments": [{"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"],
-                             "chars": a["chars"]} for a in atts]}
+            "attachments": [_attachment_out(a) for a in atts]}
+
+
+def _attachment_out(a) -> dict:
+    """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»)."""
+    out = {"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"], "chars": a["chars"]}
+    if a["source_transcript_id"] is not None:
+        exists = state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
+                                  (a["source_transcript_id"], a["user_id"])).fetchone() is not None
+        out["source"] = {"transcript_id": a["source_transcript_id"], "exists": exists}
+    return out
 
 
 def _finish(message_id: str, chat_id: str, content: str, status: str) -> bool:
@@ -736,6 +746,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
+    if any(a["source_transcript_id"] for a in atts) and not body.external_ok and not sections.is_local(conn, model):
+        raise HTTPException(409, {"code": "external",
+                                  "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
     limit = await _limit(conn, model)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     via = "server" if conn.proxied else "browser"

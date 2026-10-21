@@ -35,8 +35,10 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import audio
+import chat
 import clock
 import db
+import documents
 import exports
 import forms
 import media
@@ -426,6 +428,33 @@ async def delete(tid: str, request: Request):
 
 def _stem(name: str) -> str:
     return name.rsplit(".", 1)[0] if "." in name else name
+
+
+@router.post("/{tid}/attachments", status_code=201)
+async def to_chat(tid: str, request: Request):
+    """Расшифровка с правками — неотправленным документом чата («<имя записи>.txt», свой файл): дальше
+    это обычное вложение (крестик, уборка, отправка, предел контекста). Ссылка на запись —
+    `source_transcript_id`; к нелокальной модели его ход пускает только с `external_ok` (chat.create_turn)."""
+    uid = request.state.user.id
+    row = _done(uid, tid)
+    segments = view(row, await result_of(uid, row))
+    head = f"Расшифровка «{row['name']}»" + (f" · {exports.stamp(row['duration'])}" if row["duration"] else "")
+    text = f"{head}\n\n{exports.txt(segments)}"
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise HTTPException(413, {"code": "too_big", "message": (
+            f"расшифровка длиннее {documents.TEXT_MAX_CHARS:,} знаков — в чат её не передать".replace(",", " "))})
+    name = f"{_stem(row['name'])}.txt"
+    try:
+        media_id = await media.save_async(uid, text.encode("utf-8"), "text/plain", name)
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    att_id = uuid.uuid4().hex
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created,"
+                     " source_transcript_id) VALUES (?, ?, NULL, 'document', ?, ?, ?, ?, ?, ?)",
+                     (att_id, uid, name, media_id, text, len(text), clock.NOW(), tid))
+    log.info("вложение %s: из расшифровки %s, %d знаков", att_id[:8], tid[:8], len(text))
+    return {"id": att_id, "kind": "document", "name": name, "chars": len(text), "media_id": media_id, "text": text,
+            "tokens": chat.estimate_tokens([{"role": "user", "content": text}])}
 
 
 @router.get("/{tid}/export")

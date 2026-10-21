@@ -750,6 +750,103 @@ def test_chat_text_never_reaches_the_log(studio, caplog):
     assert caplog.records, "служба ничего не пишет в журнал"
 
 
+# ---- расшифровка в чат -----------------------------------------------------------
+
+TRANSCRIPT_TEXT = ("Расшифровка «Звонок Ивану.m4a» · 01:01\n\n"
+                   "Иван · 00:00\nЗдравствуйте.\n\nСобеседник 2 · 00:03\nДобрый день.\n")
+
+
+def done_transcript(s) -> str:
+    from test_transcripts import upload, wait_tr
+    tid = upload(s).json()["id"]
+    wait_tr(s, tid, {"done"})
+    return tid
+
+
+def from_transcript(s, tid):
+    return s.c.post(f"/api/transcripts/{tid}/attachments")
+
+
+def test_transcript_becomes_an_unsent_document_with_its_edits(studio, fake_audio):
+    add_gateway(studio); tid = done_transcript(studio)
+    studio.c.patch(f"/api/transcripts/{tid}", json={"names": {"Собеседник 1": "Иван"}})
+    r = from_transcript(studio, tid)
+    assert r.status_code == 201, r.text
+    a = r.json()
+    assert {k: a[k] for k in ("kind", "name", "chars", "text")} == {
+        "kind": "document", "name": "Звонок Ивану.txt", "chars": len(TRANSCRIPT_TEXT), "text": TRANSCRIPT_TEXT}
+    assert a["tokens"] == chat.estimate_tokens([{"role": "user", "content": TRANSCRIPT_TEXT}])
+    assert studio.c.get(f"/api/media/{a['media_id']}").content.decode() == TRANSCRIPT_TEXT
+    row = state.DB.execute("SELECT message_id, source_transcript_id FROM attachments WHERE id = ?", (a["id"],)).fetchone()
+    assert tuple(row) == (None, tid)
+    cid = new_chat(studio)
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]]))
+    assert studio.gw.chat_requests[0]["messages"] == [{"role": "user", "content": (
+        f'<document name="Звонок Ивану.txt">\n{TRANSCRIPT_TEXT}\n</document>\n\nИтоги?')}]
+    assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": True}
+    assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
+    assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": False}
+    assert studio.c.get(f"/api/media/{a['media_id']}").status_code == 200       # вложение — своим файлом
+    doc = attach(studio, "a.txt", b"x", "text/plain")
+    sse(turn(studio, cid, "ещё", attachment_ids=[doc["id"]]))
+    assert "source" not in messages(studio, cid)[2]["attachments"][0]
+
+
+def test_transcript_attachment_is_dropped_like_any_unsent_one(studio, fake_audio):
+    add_gateway(studio); tid = done_transcript(studio)
+    gone = from_transcript(studio, tid).json()
+    assert studio.c.delete(f"/api/attachments/{gone['id']}").status_code == 204
+    assert studio.c.get(f"/api/media/{gone['media_id']}").status_code == 404
+    left = from_transcript(studio, tid).json()
+    studio.clock[0] += chat.ORPHAN_SEC + 1
+    studio.c.portal.call(chat.sweep_attachments)
+    assert state.DB.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 0
+    assert studio.c.get(f"/api/media/{left['media_id']}").status_code == 404
+    assert studio.c.get(f"/api/transcripts/{tid}").json()["state"] == "done"      # запись — на месте
+
+
+def test_transcript_attachment_is_own_done_and_fits(studio, fake_audio, monkeypatch):
+    import documents
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
+    state.DB.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
+                     " VALUES ('w1', ?, 'whisperx', 'a.m4a', 'm', 'working', 'распознаю', 0)", (uid,))
+    r = from_transcript(studio, "w1")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "running"
+    # предел контекста — у отправки, как у документа
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "local-tiny"]})
+    studio.gw.models.append({"id": "local-tiny", "context_length": 4200})
+    cid = new_chat(studio, connection_id=gw, model="local-tiny")
+    a = from_transcript(studio, tid).json()
+    r = turn(studio, cid, "а" * 900, attachment_ids=[a["id"]])
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "context"
+    monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 50)
+    r = from_transcript(studio, tid)
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "too_big"
+    assert state.DB.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 1
+    make_user(studio, "bob"); signin(studio, "bob")
+    r = from_transcript(studio, tid)
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_transcript_goes_to_a_cloud_model_only_when_confirmed(studio, fake_audio, caplog):
+    caplog.set_level(logging.DEBUG)
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    a = from_transcript(studio, tid).json()
+    r = turn(studio, cid, "Итоги?", attachment_ids=[a["id"]])
+    assert r.status_code == 409 and r.json()["detail"] == {
+        "code": "external", "message": "Расшифровка уйдёт во внешний сервис «srvllm» — подтвердите"}
+    assert messages(studio, cid) == [] and not studio.gw.chat_requests
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]], external_ok=True))
+    assert studio.gw.chat_requests[0]["model"] == "gemma4-abl"
+    doc = attach(studio, "a.txt", b"x", "text/plain")                      # обычный документ — без вопроса
+    sse(turn(studio, cid, "ещё", attachment_ids=[doc["id"]]))
+    for secret in ("Здравствуйте", "Добрый день", "Звонок", "Итоги?"):
+        assert secret not in caplog.text, secret
+
+
 def test_new_chat_takes_the_sections_default(studio):
     cid = add_gateway(studio)
     studio.c.put(f"/api/sections/chat/links/{cid}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
