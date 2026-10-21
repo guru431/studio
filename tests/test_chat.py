@@ -10,9 +10,10 @@ from PIL import Image
 
 import chat
 import state
-from conftest import add_connection, add_gateway, make_user, signin
+from conftest import T0, add_connection, add_gateway, make_user, signin
 from fakes import TOKEN
 from test_documents import pdf
+from test_images import describe, wait_description
 
 QUESTION = "Что сказано в договоре о сроке оплаты?"
 
@@ -83,7 +84,7 @@ def test_proxied_turn_streams_and_saves(studio):
     assert [m["id"] for m in msgs] == [turn_ev["user_message_id"], turn_ev["assistant_message_id"]]
     assert msgs[1]["content"] == "Здравствуйте!" and msgs[1]["model"] == "local-gemma-abl"
     assert events[-1] == ("done", {"status": "done"})
-    assert studio.gw.chat_requests[0]["messages"] == [{"role": "user", "content": "Привет"}]
+    assert studio.gw.chat_requests[0]["messages"][1:] == [{"role": "user", "content": "Привет"}]
     assert studio.gw.chat_auth == [f"Bearer {TOKEN}"]
     assert chat["id"] not in {st.chat_id for st in chat_streams()}
 
@@ -291,7 +292,7 @@ def test_document_goes_in_full_before_the_question(studio):
     doc = attach(studio, "договор.pdf", pdf("Payment is due in 30 days", "Penalty 1% per day"), "application/pdf")
     assert {k: doc[k] for k in ("kind", "name", "chars")} == {"kind": "document", "name": "договор.pdf", "chars": 45}
     sse(turn(studio, cid, QUESTION, attachment_ids=[doc["id"]]))
-    sent = studio.gw.chat_requests[0]["messages"]
+    sent = studio.gw.chat_requests[0]["messages"][1:]
     assert sent == [{"role": "user", "content": '<document name="договор.pdf">\n'
                                                 "Payment is due in 30 days\n\nPenalty 1% per day\n"
                                                 "</document>\n\n" + QUESTION}]
@@ -333,11 +334,11 @@ def test_images_go_as_image_url_parts_up_to_four(studio):
     assert r.status_code == 422 and r.json()["detail"]["code"] == "images"
     assert messages(studio, cid) == []
     sse(turn(studio, cid, "Что на фото?", attachment_ids=[p["id"] for p in pics[:4]]))
-    (content,) = [m["content"] for m in studio.gw.chat_requests[0]["messages"]]
+    (content,) = [m["content"] for m in studio.gw.chat_requests[0]["messages"][1:]]
     assert content[0] == {"type": "text", "text": "Что на фото?"}
     assert [part["type"] for part in content[1:]] == ["image_url"] * 4
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,") for part in content[1:])
-    est = chat.estimate_tokens(studio.gw.chat_requests[0]["messages"])
+    est = chat.estimate_tokens(studio.gw.chat_requests[0]["messages"][1:])
     assert est == 4 + 4000                                                       # ceil(12 / 3) + 1000 × 4
 
 
@@ -348,7 +349,7 @@ def test_images_are_capped_across_the_whole_request(studio):
     for n in range(2):
         pics = [attach(studio, f"p{n}{i}.jpg", png(), "image/jpeg") for i in range(4)]
         sse(turn(studio, cid, f"Ход {n}", attachment_ids=[p["id"] for p in pics]))
-    sent = studio.gw.chat_requests[1]["messages"]
+    sent = studio.gw.chat_requests[1]["messages"][1:]
     assert [m["role"] for m in sent] == ["user", "assistant", "user"]
     assert sent[0]["content"] == [{"type": "text", "text": "Ход 0"}] + [{"type": "text", "text": chat.DROPPED}] * 4
     assert [p["type"] for p in sent[2]["content"]] == ["text"] + ["image_url"] * chat.MAX_IMAGES
@@ -364,7 +365,7 @@ def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
     body = r.json()
     assert body["url"] == "https://cloud.test/v1/chat/completions" and body["model"] == "local-gemma-abl"
-    assert body["messages"] == [{"role": "user", "content": "Привет"}]
+    assert body["messages"][1:] == [{"role": "user", "content": "Привет"}]
     assert not studio.gw.requests                                                # сервер модель не зовёт
     aid, uid_ = body["assistant_message_id"], body["user_message_id"]
     assert messages(studio, cid)[1]["status"] == "streaming"
@@ -377,7 +378,30 @@ def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
     assert studio.c.put(f"/api/chats/{cid}/messages/{uid_}", json={"content": "x", "status": "done"}).status_code == 409
     assert studio.c.put(url, json={"content": "x", "status": "streaming"}).status_code == 422
     # следующий ход видит сохранённый ответ браузера
-    assert turn(studio, cid, "Как дела?").json()["messages"][1] == {"role": "assistant", "content": "Здравствуйте!"}
+    assert turn(studio, cid, "Как дела?").json()["messages"][2] == {"role": "assistant", "content": "Здравствуйте!"}
+
+
+def test_today_line_names_the_moscow_date():
+    assert chat.today_line(1_800_000_000) == "Сегодня пятница, 15 января 2027 года (Москва)."
+    # 2026-10-21T21:00:00Z — в Москве уже полночь следующего дня
+    assert chat.today_line(1_792_616_400) == "Сегодня четверг, 22 октября 2026 года (Москва)."
+
+
+def test_every_chat_request_starts_with_today(studio):
+    today = {"role": "system", "content": chat.today_line(T0)}
+    add_gateway(studio); cid = new_chat(studio)
+    sse(turn(studio, cid, "Привет"))
+    assert studio.gw.chat_requests[0]["messages"] == [today, {"role": "user", "content": "Привет"}]
+    sse(turn(studio, cid, "", regenerate=True))                                 # повтор — тоже
+    assert studio.gw.chat_requests[1]["messages"] == [today, {"role": "user", "content": "Привет"}]
+    # прямое подключение получает сообщения уже с датой
+    direct = add_connection(studio)
+    body = turn(studio, new_chat(studio, connection_id=direct), "Привет").json()
+    assert body["messages"] == [today, {"role": "user", "content": "Привет"}]
+    # описание фото — без даты
+    assert wait_description(studio, describe(studio).json()["id"])["state"] == "done"
+    (desc,) = studio.gw.descriptions
+    assert [m["role"] for m in desc["messages"]] == ["user"]
 
 
 def test_direct_answer_with_a_lone_surrogate_is_refused_in_words(studio):
@@ -399,7 +423,7 @@ def test_regenerate_replaces_the_last_answer(studio):
     msgs = messages(studio, cid)
     assert [(m["role"], m["content"]) for m in msgs] == [("user", "Привет"), ("assistant", "Другой ответ")]
     assert events[0][1]["user_message_id"] == msgs[0]["id"]
-    assert studio.gw.chat_requests[1]["messages"] == [{"role": "user", "content": "Привет"}]
+    assert studio.gw.chat_requests[1]["messages"][1:] == [{"role": "user", "content": "Привет"}]
     empty = new_chat(studio)
     r = turn(studio, empty, "", regenerate=True)
     assert r.status_code == 409
@@ -475,7 +499,7 @@ def test_photos_are_read_off_the_loop(studio, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "read_bytes", spy)
     sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
     assert reads and not any(reads)
-    url = studio.gw.chat_requests[0]["messages"][0]["content"][1]["image_url"]["url"]
+    url = studio.gw.chat_requests[0]["messages"][1]["content"][1]["image_url"]["url"]
     assert url.startswith("data:image/png;base64,")
 
 
@@ -488,7 +512,7 @@ def test_missing_photo_becomes_a_note_not_a_broken_chat(studio, env):
         if p.is_file():
             p.unlink()
     assert sse(turn(studio, cid, "А теперь?"))[-1] == ("done", {"status": "done"})
-    first = studio.gw.chat_requests[1]["messages"][0]["content"]
+    first = studio.gw.chat_requests[1]["messages"][1]["content"]
     assert [part["type"] for part in first] == ["text", "text"] and "фото" in first[1]["text"]
 
 
@@ -781,7 +805,7 @@ def test_transcript_becomes_an_unsent_document_with_its_edits(studio, fake_audio
     assert tuple(row) == (None, tid)
     cid = new_chat(studio)
     sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]]))
-    assert studio.gw.chat_requests[0]["messages"] == [{"role": "user", "content": (
+    assert studio.gw.chat_requests[0]["messages"][1:] == [{"role": "user", "content": (
         f'<document name="Звонок Ивану.txt">\n{TRANSCRIPT_TEXT}\n</document>\n\nИтоги?')}]
     assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": True}
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
