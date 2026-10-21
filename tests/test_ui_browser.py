@@ -994,10 +994,15 @@ EXA_KEY_SET = f"""(async () => {{ const m = {API};
 def test_chat_internet_toggle_search_and_sources(browser, live):
     """«Интернет»: кнопка выключена → включить → ход: строка «Ищу: …», ответ, под ним «Источники» со
     ссылками в новую вкладку без адреса студии; перезагрузка — кнопка включена (хранится у диалога);
-    диалог на прямом подключении — кнопки нет."""
+    диалог на прямом подключении — кнопки нет. Результат с адресом `javascript:` или `data:` — текстом, не
+    ссылкой, и в число «Источников» (ссылки, а не шаги) не идёт."""
+    from fakes import EXA_SEARCH
     live.add_user("webber")
     live.gw.chat_script = [{"tool_calls": [("web_search", json.dumps({"query": "python 3.14"}))]},
                            ["Python 3.14 вышел ", "7 октября."]]
+    live.gw.exa_replies["/search"] = (200, {**EXA_SEARCH, "results": [
+        *EXA_SEARCH["results"], {"title": "Скрипт", "url": "javascript:alert(document.cookie)"},
+        {"title": "Данные", "url": "data:text/html,<script>alert(1)</script>"}]})
     live.gw.chat_delay = 1.5                 # строку хода видно, пока модель молчит после поиска
     searches = len(live.gw.exa_requests)
     try:
@@ -1018,6 +1023,8 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
             ("eval", "steps", f"{LAST_ANSWER}.querySelector('details.web-steps li').textContent"),
             ("eval", "links", f"[...{LAST_ANSWER}.querySelectorAll('details.web-steps a')]"
                               ".map(a => [a.href, a.textContent, a.target, a.rel])"),
+            ("eval", "found", f"[...{LAST_ANSWER}.querySelectorAll('details.web-steps li li')]"
+                              ".map(li => [li.firstChild.tagName, li.firstChild.textContent])"),
             ("eval", "reload", "location.reload()"),
             ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
             ("wait", f"document.querySelectorAll('#messages .msg').length === 2 && {WEB_TOGGLE}"),
@@ -1033,15 +1040,18 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
     finally:
         live.gw.chat_delay = 0
         live.gw.chat_script = []
+        live.gw.exa_replies["/search"] = (200, EXA_SEARCH)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["before"] == ["false", "Интернет"] and v["hint"] == ""
     assert v["progress"] == "Ищу: python 3.14"
     assert v["answer"] == "Python 3.14 вышел 7 октября."
-    assert v["summary"] == "Источники (1)" and "python 3.14" in v["steps"]
+    assert v["summary"] == "Источники (2)" and "python 3.14" in v["steps"]
     assert v["links"] == [
         ["https://www.python.org/downloads/", "Download Python", "_blank", "noopener noreferrer"],
         ["https://docs.python.org/3/whatsnew/", "What's New in Python", "_blank", "noopener noreferrer"]]
+    assert v["found"] == [["A", "Download Python"], ["A", "What's New in Python"], ["SPAN", "Скрипт"],
+                          ["SPAN", "Данные"]]
     assert v["kept"] == [False, "true", True] and v["direct"] == ""
     assert [(p, b["query"], k) for p, b, k in live.gw.exa_requests[searches:]] == [("/search", "python 3.14", "exa-test-key")]
     assert not problems(r), problems(r)
