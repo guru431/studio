@@ -587,6 +587,15 @@ def test_archive_with_the_share_down_is_503_in_words(studio, env, monkeypatch):
     assert r.status_code == 503 and r.json()["detail"]["code"] == "storage"
 
 
+def test_archive_with_the_share_unmounted_is_503_not_an_empty_zip(studio, env, monkeypatch):
+    """Шара не смонтирована — каталога нет (CLAUDE.md): это 503, а не «файла нет» и пустой архив."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "m.mp4")
+    monkeypatch.setattr(state, "CFG", dataclasses.replace(state.CFG, media_dir=env.media_dir / "not-mounted"))
+    r = archive(studio, [mid])
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "storage"
+
+
 def test_archive_read_failure_breaks_the_answer_without_names(studio, env, monkeypatch, caplog):
     """Шара оборвала чтение посреди файла: ответ рвётся (а не кончается «целым» архивом без хвоста),
     в журнале — ни пути, ни id, ни имени."""

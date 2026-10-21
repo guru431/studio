@@ -1966,6 +1966,27 @@ def test_photo_selection_cancel_stops_after_the_current_one(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_photo_two_fingers_do_not_start_the_selection(browser, live):
+    """Щипок (второй палец, затем браузер отменяет касания): таймер первого пальца не остаётся жить."""
+    live.add_user("pinch")
+    pinch = ("eval", "pinch", f"""(async () => {{
+      const at = (sel, id, primary) => {{ const e = document.querySelector(sel); const b = e.getBoundingClientRect();
+        return [e, {{ bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: primary, pointerId: id,
+          clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 }}]; }};
+      const [a, pa] = at('{nth(1, ".card-open")}', 11, true);
+      const [b, pb] = at('{nth(2, ".card-open")}', 12, false);
+      a.dispatchEvent(new PointerEvent('pointerdown', pa));
+      b.dispatchEvent(new PointerEvent('pointerdown', pb));
+      a.dispatchEvent(new PointerEvent('pointercancel', pa));
+      b.dispatchEvent(new PointerEvent('pointercancel', pb));
+      await new Promise(r => setTimeout(r, 700)); return true; }})()""")
+    r = browser.drive(live.url + "/", [*photo_screen("pinch", cards=2), ("wait", done_cards(2)), pinch,
+        ("eval", "mode", selecting()), ("eval", "picked", picked())], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["mode"] is False and r["values"]["picked"] == []
+    assert not problems(r), problems(r)
+
+
 #: media id из тел POST /api/media/archives страницы
 ARCHIVED = """(() => { const real = window.fetch; window.archived = [];
   window.fetch = (url, opts = {}) => {
@@ -2347,6 +2368,20 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
         assert v[f"{view}Viewer"] is False and v[f"{view}Paused"] and v[f"{view}Fits"], view
     assert set(v["previewPicked"]) < set(v["tilesPicked"]) < set(v["tablePicked"])
     assert v["bar"] is (width == 390) and v["label"] == "Скачать"
+    assert not problems(r), problems(r)
+
+
+def test_video_selection_pauses_the_clips(browser, live, ready_clips):
+    """Ролик, запущенный до режима, под слоем выделения не играет дальше (его не остановить нажатием)."""
+    live.add_user("vpause")
+    spy = ("eval", "spyPause", "(() => { window.pausedClips = 0;"
+                               " HTMLMediaElement.prototype.pause = function () { window.pausedClips += 1; }; return true; })()")
+    r = browser.drive(live.url + "/", [*video_screen("vpause"), *make_clips(2), spy,
+        ("click", "#video-select"), ("wait", selecting(".video")),
+        ("eval", "paused", "window.pausedClips"), ("eval", "players", f"document.querySelectorAll('{CLIP} video').length")],
+        width=1280, timeout=20000)
+    assert not r.get("failed"), r
+    assert r["values"]["players"] == 2 and r["values"]["paused"] == 2
     assert not problems(r), problems(r)
 
 

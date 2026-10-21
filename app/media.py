@@ -517,14 +517,16 @@ def _archive_rows(user_id: int, ids: list[str]) -> list:
 
 
 async def _archive_ready(user_id: int, ids: list[str]) -> list:
-    """Строки архива; ни одной — 404, шара не отвечает (stat первого файла) — 503."""
+    """Строки архива; ни одной — 404, шара не отвечает (stat первого файла) или не смонтирована (нет
+    первого файла и каталога шары) — 503."""
     rows = _archive_rows(user_id, ids)
     if not rows:
         raise HTTPException(404, GONE)
     try:
-        await asyncio.to_thread((state.CFG.media_dir / rows[0]["rel_path"]).stat)
-    except FileNotFoundError:
-        pass
+        try:
+            await asyncio.to_thread((state.CFG.media_dir / rows[0]["rel_path"]).stat)
+        except FileNotFoundError:
+            await asyncio.to_thread(state.CFG.media_dir.stat)
     except OSError:
         log.warning("archive: хранилище недоступно")
         raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None

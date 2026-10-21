@@ -148,6 +148,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     if (selecting) return;
     selecting = true;
     ctx.root.setAttribute('data-selecting', '');
+    for (const clip of ctx.feedBox.querySelectorAll('video')) clip.pause();   // под слоем его не остановить
     paint();
   }
 
@@ -279,7 +280,8 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
 
   function onPointerDown(event) {
     swallow = false;
-    if (event.pointerType === 'mouse' || busy) return;
+    cancelPress();                           // второй палец (щипок) — не долгое нажатие
+    if (event.pointerType === 'mouse' || !event.isPrimary || busy) return;
     const card = cardOf(event.target);
     if (!card || !card.hasAttribute('data-pickable')) return;
     const id = card.dataset.id;
