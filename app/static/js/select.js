@@ -7,6 +7,8 @@
  * диапазон, кружок у дня — весь день, «Все» — всё подгруженное; Escape, «✕» и выполненное действие —
  * выход. Отметки живут только у записей ленты: лента сменилась (onChange) — sync() снимает ушедшие.
  * «Все», «Скачать» и «Удалить» — на широком экране в шапке, на телефоне — панелью на месте поля.
+ * «Скачать» — отмеченные с файлом (save.saveMany: ZIP, на iPhone — «Поделиться»); «Удалить» — после
+ * одного подтверждения по одной, «Отмена» окна останавливает после текущей.
  *
  * createSelection({ section, nouns, selectable, mediaOf, remove }): section — 'photo' | 'video'
  * (начало id); nouns — формы слова для plural (['картинку', 'картинки', 'картинок']);
@@ -16,8 +18,10 @@
  * feed, error }), sync(), exit(), destroy() }: button («Выбрать») и tools (✕ и счёт) раздел ставит в
  * шапку, bar — в конец корня раздела; decorate — в конце render карточки, dayTools — опция ленты. */
 import { dayKey } from './feed.js';
+import { saveMany } from './save.js';
 import { button, el, openDialog, plural, words } from './ui.js';
 
+const ARCHIVE_MAX = 1000;        // файлов в одном архиве (media.ARCHIVE_MAX)
 const PRESS_MS = 500;            // долгое нажатие
 const SLOP_PX = 10;              // сдвиг пальца, после которого это уже прокрутка
 const NARROW = '(max-width: 760px)';
@@ -38,6 +42,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
   let ctx = null;                // { root, head, feedBox, feed, error } — attach()
   let alive = true;
   let busy = false;              // идёт групповое действие
+  let note = '';                 // ход «Скачать» на месте счёта
   let stopDeleting = null;       // остановить идущее удаление
   let press = null;              // { id, x, y, timer } — палец на карточке
   let swallow = false;           // хвостовой click долгого нажатия
@@ -92,7 +97,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     if (!ctx) return;
     const all = pickable();
     const full = all.length > 0 && all.every((i) => picked.has(idOf(i)));
-    count.textContent = `Выбрано ${picked.size}`;
+    count.textContent = note || `Выбрано ${picked.size}`;
     allBtn.textContent = full ? 'Снять' : 'Все';
     allBtn.disabled = busy || !all.length;
     deleteBtn.disabled = busy || !picked.size;
@@ -104,8 +109,39 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     }
   }
 
+  /** media id отмеченных с файлом, в порядке ленты. */
+  function pickedFiles() {
+    return shown().filter((i) => picked.has(idOf(i))).map(mediaOf).filter(Boolean);
+  }
+
   function paintDownload() {
-    downloadBtn.disabled = busy || !picked.size;
+    const files = pickedFiles();
+    downloadBtn.textContent = files.length < picked.size ? `Скачать ${files.length}` : 'Скачать';
+    downloadBtn.disabled = busy || !files.length || files.length > ARCHIVE_MAX;
+    downloadBtn.title = files.length > ARCHIVE_MAX ? `Не больше ${ARCHIVE_MAX} за раз` : '';
+  }
+
+  async function downloadPicked() {
+    const files = pickedFiles();
+    if (busy || !files.length || files.length > ARCHIVE_MAX) return;
+    ctx.error.textContent = '';
+    setBusy(true);
+    let failed = null;
+    try {
+      await saveMany(files, ctx.root, (i, n) => {
+        note = `Готовлю ${i} из ${n}…`;
+        count.textContent = note;
+      });
+    } catch (err) {
+      failed = err;
+    }
+    note = '';
+    busy = false;
+    if (!alive) return;
+    if (failed) {
+      ctx.error.textContent = words(failed);
+      paint();
+    } else exit();
   }
 
   function enter() {
@@ -304,8 +340,9 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
   });
   exitBtn.addEventListener('click', () => { if (!busy) exit(); });
   allBtn.addEventListener('click', toggleAll);
+  downloadBtn.addEventListener('click', downloadPicked);
   deleteBtn.addEventListener('click', deletePicked);
 
-  return { button: selectBtn, tools, bar, actions, downloadBtn, decorate, dayTools, attach, sync, exit, destroy,
+  return { button: selectBtn, tools, bar, decorate, dayTools, attach, sync, exit, destroy,
     get selecting() { return selecting; } };
 }

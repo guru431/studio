@@ -1966,6 +1966,103 @@ def test_photo_selection_cancel_stops_after_the_current_one(browser, live):
     assert not problems(r), problems(r)
 
 
+#: media id из тел POST /api/media/archives страницы
+ARCHIVED = """(() => { const real = window.fetch; window.archived = [];
+  window.fetch = (url, opts = {}) => {
+    if (opts.method === 'POST' && String(url) === '/api/media/archives') window.archived.push(JSON.parse(opts.body).media_ids);
+    return real(url, opts);
+  }; return true; })()"""
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_selection_downloads_one_zip(browser, live, width):
+    """Компьютер и Android (не iPhone): отмеченные — одним архивом по ссылке на токен."""
+    login = f"zip{width}"
+    live.add_user(login)
+    first_bytes = ("eval", "zip", """(async () => { const r = await fetch(window.clicked[0][0]);
+      const b = new Uint8Array(await r.arrayBuffer()); return [r.headers.get('content-type'), b[0], b[1]]; })()""")
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=3), ("wait", done_cards(3)),
+        ("eval", "spy", CLICKS), ("eval", "archiving", ARCHIVED),
+        ("click", "#photo-select"), ("click", nth(1)), ("click", nth(3)),
+        ("eval", "label", text_of("#photo-select-download")),
+        ("click", "#photo-select-download"), ("wait", "window.clicked.length === 1"), ("wait", f"!{selecting()}"),
+        ("eval", "clicked", "window.clicked"), ("eval", "archived", "window.archived"), first_bytes],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    (href, download), = v["clicked"]
+    assert re.fullmatch(r"/api/media/archives/[\w-]+", href) and download and v["label"] == "Скачать"
+    newest, _, oldest = v["images"][::-1]                     # лента — новые сверху
+    assert v["archived"] == [[newest, oldest]] and v["zip"] == ["application/zip", 0x50, 0x4B]
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_counts_only_files_to_download(browser, live):
+    uid = live.add_user("zipcount")
+    live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                   " VALUES (?, ?, 'generation', 'lustify', 'упавший кот', '832x1216', 1, 'error', 'шлюз не ответил', ?)",
+             ("e" * 32, uid, time.time() - 60))
+    r = browser.drive(live.url + "/", [*photo_screen("zipcount", cards=1), ("wait", done_cards(1)),
+        ("click", "#photo-select"), ("click", "#photo-select-all"),
+        ("eval", "both", f"[{text_of('#photo-select-count')}, {text_of('#photo-select-download')}]"),
+        ("click", nth(1)),                                     # готовая снята — осталась неудачная
+        ("eval", "failedOnly", "document.querySelector('#photo-select-download').disabled")], width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["both"] == ["Выбрано 2", "Скачать 1"] and r["values"]["failedOnly"] is True
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_photo_selection_on_iphone_shares_all_files(browser, live, fail_first):
+    login = f"iosmany{int(fail_first)}"
+    live.add_user(login)
+    steps = [*photo_screen(login, cards=3), ("wait", done_cards(3)), iphone(fail_first), ("eval", "spy", CLICKS),
+             ("click", "#photo-select"), ("click", "#photo-select-all"), ("click", "#photo-select-download")]
+    if fail_first:
+        steps += [("wait", is_open("#save-dialog")), ("eval", "title", text_of("#save-dialog h2")),
+                  ("click", "#save-again"), ("wait", "!document.querySelector('#save-dialog')")]
+    r = browser.drive(live.url + "/", [*steps, ("wait", "window.shared.length === 1"), ("wait", f"!{selecting()}"),
+        ("eval", "shared", "window.shared"), ("eval", "clicked", "window.clicked.length")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["shared"] == [[[".png", "image/png", True]] * 3] and r["values"]["clicked"] == 0
+    if fail_first:
+        assert r["values"]["title"] == "Файлы готовы"
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_too_big_for_the_iphone_is_a_zip(browser, live):
+    live.add_user("iosmanybig")
+    big = ("eval", "big", """(() => { const real = window.fetch;
+      window.fetch = (url, opts) => /^\\/api\\/media\\/[0-9a-f]{32}$/.test(String(url))
+        ? Promise.resolve(new Response(new Blob([new Uint8Array(8)], { type: 'image/png' }),
+            { headers: { 'Content-Type': 'image/png', 'Content-Length': String(60 * 1024 * 1024) } }))
+        : real(url, opts); return true; })()""")
+    r = browser.drive(live.url + "/", [*photo_screen("iosmanybig", cards=2), ("wait", done_cards(2)), iphone(), big,
+        ("eval", "spy", CLICKS), ("click", "#photo-select"), ("click", "#photo-select-all"),
+        ("click", "#photo-select-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "shared", "window.shared.length"), ("eval", "href", "window.clicked[0][0]")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["shared"] == 0 and r["values"]["href"].startswith("/api/media/archives/")   # 2 × 60 МиБ > 100
+
+
+def test_photo_selection_archive_refusal_is_told(browser, live):
+    live.add_user("ziprefused")
+    refuse = ("eval", "refuse", """(() => { const real = window.fetch;
+      window.fetch = (url, opts = {}) => opts.method === 'POST' && String(url) === '/api/media/archives'
+        ? Promise.resolve(new Response(JSON.stringify({ detail: { code: 'storage', message: 'хранилище недоступно' } }),
+            { status: 503, headers: { 'Content-Type': 'application/json' } }))
+        : real(url, opts); return true; })()""")
+    r = browser.drive(live.url + "/", [*photo_screen("ziprefused", cards=2), ("wait", done_cards(2)), refuse,
+        ("eval", "spy", CLICKS), ("click", "#photo-select"), ("click", "#photo-select-all"),
+        ("click", "#photo-select-download"), ("wait", "document.querySelector('#photo-error').textContent"),
+        ("eval", "error", text_of("#photo-error")), ("eval", "mode", selecting()), ("eval", "picked", picked()),
+        ("eval", "clicked", "window.clicked.length")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["error"] == "Хранилище недоступно" and v["mode"] is True and len(v["picked"]) == 2 and v["clicked"] == 0
+    assert not problems(r), problems(r)
+
+
 def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, live):
     """Тему и вид сменили на другом устройстве учётки: открытая студия берёт их, вернувшись на экран,
     без перезагрузки — тему сразу, вид при следующем открытии раздела."""
