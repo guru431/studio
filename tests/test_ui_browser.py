@@ -707,6 +707,37 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_admin_checks_the_backup(browser, live):
+    """«Хранилище» → «Проверить копию»: итог словами, зелёным, — копия живой базы поднимается."""
+    import sqlite3
+    folder = live.db_path.parent / "media" / "backup"
+    folder.mkdir(exist_ok=True)
+    copy = folder / "studio-20990101.db"
+    src, dst = sqlite3.connect(live.db_path), sqlite3.connect(copy)
+    try:
+        src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        dst.close()
+        src.close()
+    result = "document.querySelector('#admin-backup-result')"
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+            *go("admin"), ("wait", f"{result} && {result}.textContent.startsWith('Ещё не проверялась')"),
+            ("click", "#admin-backup-check"),
+            ("wait", f"{result}.textContent.startsWith('Копия ')"),
+            ("eval", "text", f"{result}.textContent"), ("eval", "ok", f"{result}.classList.contains('ok')"),
+            ("eval", "enabled", "!document.querySelector('#admin-backup-check').disabled")])
+    finally:
+        copy.unlink()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert re.match(r"Копия \d\d\.\d\d \d\d:\d\d — поднимается: схема ", v["text"]), v["text"]
+    assert "целостность в порядке" in v["text"] and "файлов нет на шаре" in v["text"]
+    assert v["ok"] is True and v["enabled"] is True
+    assert not problems(r), problems(r)
+
+
 # ---- чат -----------------------------------------------------------------------
 
 CHAT_ID ="/^#\\/chat\\/[0-9a-f]{32}$/.test(location.hash)"

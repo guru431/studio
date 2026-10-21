@@ -256,10 +256,77 @@ function agoText(sec) {
   return `${Math.round(sec / 86400)} дн назад`;
 }
 
+/* «Проверка копии» (POST/GET /api/admin/backup-check): поднимется ли студия из новейшей копии базы —
+ * итог словами, только числа; пока идёт — опрос раз в CHECK_POLL_MS, пока строка на странице. */
+const CHECK_POLL_MS = 2000;
+
+function count(n) {
+  return n.toLocaleString('ru-RU');
+}
+
+function checkText(r) {
+  if (!r.backup) return r.problems.join('; ');
+  const at = new Date(r.at * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit',
+    minute: '2-digit' }).replace(',', '');
+  const parts = [];
+  if (r.schema_to !== null) parts.push(`схема ${r.schema_from} → ${r.schema_to}`);
+  if (r.integrity === 'ok') parts.push('целостность в порядке');
+  if (r.schema_to !== null) parts.push(`токены расшифрованы ${r.tokens.ok} из ${r.tokens.ok + r.tokens.failed}`);
+  if (r.files.state === 'ok' || r.files.state === 'partial') {
+    parts.push(`файлов нет на шаре ${count(r.files.missing)} из ${count(r.files.total)}`);
+  }
+  if (r.files.state === 'partial') parts.push(`проверено ${count(r.files.checked)} из ${count(r.files.total)}`);
+  const text = `Копия ${at} — ${r.ok ? 'поднимается' : 'не поднимается'}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+  return r.ok ? text : `${text}. ${r.problems.join('; ')}`;
+}
+
+function backupCheck() {
+  const result = el('p', { class: 'status', id: 'admin-backup-result', 'aria-live': 'polite' });
+  const start = button('Проверить копию', { class: 'btn btn-sm', id: 'admin-backup-check' });
+
+  function show(text, kind) {
+    result.textContent = text;
+    result.classList.toggle('ok', kind === 'ok');
+    result.classList.toggle('error', kind === 'error');
+  }
+
+  async function poll() {
+    if (!result.isConnected) return;                       // ушли со страницы — опрос кончен
+    try {
+      const { state, result: r } = await api('GET', '/api/admin/backup-check');
+      start.disabled = state === 'running';
+      if (state === 'running') {
+        show('Проверка идёт: копия копируется и сверяется с шарой — это минуты');
+        setTimeout(poll, CHECK_POLL_MS);
+      } else if (state === 'idle') {
+        show('Ещё не проверялась: копия поднимается в стороне, рабочая база не трогается');
+      } else {
+        show(checkText(r), r.ok ? 'ok' : 'error');
+      }
+    } catch (err) {
+      start.disabled = false;
+      show(words(err), 'error');
+    }
+  }
+
+  start.addEventListener('click', async () => {
+    start.disabled = true;
+    try {
+      await api('POST', '/api/admin/backup-check');
+    } catch (err) {
+      if (err.code !== 'running') show(words(err), 'error');
+    }
+    poll();
+  });
+  return { el: el('div', { class: 'backup-check' }, el('div', { class: 'row' }, el('b', {}, 'Проверка копии'), start),
+    result), poll };
+}
+
 function storageBlock() {
   const list = el('dl', { class: 'storage', id: 'admin-storage' });
   const note = el('p', { class: 'status error', 'aria-live': 'polite' });
   const refresh = button('Обновить', { class: 'btn btn-sm', id: 'admin-storage-refresh' });
+  const check = backupCheck();
 
   const line = (key, name, text, bad) => [el('dt', {}, name),
     el('dd', { 'data-key': key, class: bad ? 'error' : null }, text)];
@@ -288,8 +355,11 @@ function storageBlock() {
   refresh.addEventListener('click', load);
   return {
     el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Хранилище'), refresh),
-      list, note),
-    load,
+      list, note, check.el),
+    load: () => {
+      load();
+      check.poll();
+    },
   };
 }
 
