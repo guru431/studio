@@ -1508,7 +1508,9 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
         # «Оживить» — в раздел видео с картинкой
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
         ("click", "#viewer .act-animate"),
-        ("wait", "location.hash.startsWith('#/video?source=')"),
+        # адрес меняется сразу, а рельс — в render по hashchange, позже: ждать обоих
+        ("wait", "location.hash.startsWith('#/video?source=')"
+                 " && document.querySelector('#rail a[aria-current=page]')?.dataset.section === 'video'"),
         ("eval", "hash", "location.hash"),
         ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
         ("eval", "items", f"(async () => (await {API}.api('GET', '/api/images')).items"
