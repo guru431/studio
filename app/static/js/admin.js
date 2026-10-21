@@ -129,9 +129,11 @@ function usersBlock(host) {
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
-        await api('DELETE', `/api/admin/users/${user.id}`);
+        const { pending_files: left } = await api('DELETE', `/api/admin/users/${user.id}`);
         dialog.close();
         await reload();
+        // хранилище было недоступно: файлы учётки ждут в очереди удаления — сказать как есть
+        if (left) note.textContent = `«${user.login}» удалён, но файлов на хранилище ещё ${left}: удалятся, когда оно станет доступно`;
       } catch (err) {
         fail.textContent = words(err);
         yes.disabled = false;

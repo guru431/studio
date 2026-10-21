@@ -55,5 +55,5 @@ def test_voice_is_private_and_goes_with_delete_and_history(studio, env, fake_aud
     assert studio.c.delete(f"/api/voices/{vid}").status_code == 204
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     create(studio)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0

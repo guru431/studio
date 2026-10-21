@@ -146,21 +146,23 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     return _user_out(uid)
 
 
-@router.delete("/users/{uid}", status_code=204)
+@router.delete("/users/{uid}")
 async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
+    """pending_files — сколько файлов учётки ещё ждут удаления на шаре: очередь переживает учётку."""
     _self(admin, uid)
     _user_out(uid)
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
-    await history.delete_all(uid)
+    pending = await history.delete_all(uid)
     # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;
     # не дождались (images.SETTLE_SEC) — карту освободит конец аренды шлюза
     if not await images.settle_user(uid):
         log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
     state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))   # сессии и подключения — каскадом
-    log.info("администратор %d: пользователь %d удалён вместе с историей", admin.id, uid)
-    return Response(status_code=204)
+    log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
+             admin.id, uid, pending)
+    return {"pending_files": pending}
 
 
 @router.get("/allowlist")

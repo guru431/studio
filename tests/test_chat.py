@@ -382,7 +382,7 @@ def test_chat_deleted_while_the_turn_reads_its_photos_gets_no_model_call(studio,
 def test_history_wipe_while_the_turn_reads_its_photos_gets_no_model_call(studio, monkeypatch):
     """Стирание истории, пока ход читает фото: модели ход уже не зовёт (ревью N2)."""
     _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.delete("/api/history"))
-    assert answers == [204] and r.status_code == 404
+    assert answers == [200] and r.status_code == 404
     assert not studio.gw.chat_requests and not chat.STREAMS
 
 
@@ -481,7 +481,7 @@ def test_history_wipe_stops_a_turn_started_during_it(studio, monkeypatch):
     monkeypatch.setattr(media, "remove_files", racing)
     studio.gw.chat_hold = True
     try:
-        assert studio.c.delete("/api/history").status_code == 204
+        assert studio.c.delete("/api/history").status_code == 200
         (stream,) = streams
         assert stream.task.done() and not chat.STREAMS
     finally:
@@ -534,7 +534,7 @@ def test_history_wipe_stops_the_users_streams(studio):
             assert next(events)[0] == "turn"
             assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
             (stream,) = chat.STREAMS.values()
-        assert studio.c.delete("/api/history").status_code == 204
+        assert studio.c.delete("/api/history").status_code == 200
         assert stream.task.done() and not chat.STREAMS
     finally:
         studio.gw.chat_hold = False

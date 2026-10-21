@@ -509,10 +509,7 @@ async def delete_chat(chat_id: str, request: Request):
     state.DB.execute("DELETE FROM chats WHERE id = ?", (chat_id,))   # сообщения и вложения — каскадом
     for media_id in media_ids:
         if not media.referenced(uid, media_id):
-            try:
-                await media.delete_async(uid, media_id)
-            except OSError:
-                log.warning("чат %s: файл вложения не удалился", chat_id[:8])
+            await media.delete_async(uid, media_id)
     log.info("чат %s: удалён", chat_id[:8])
     return Response(status_code=204)
 
@@ -560,10 +557,7 @@ async def _drop_attachments(rows) -> int:
             continue
         dropped += 1
         if not media.referenced(row["user_id"], row["media_id"]):
-            try:
-                await media.delete_async(row["user_id"], row["media_id"])
-            except OSError:
-                log.warning("вложение %s: файл не удалился", row["id"][:8])
+            await media.delete_async(row["user_id"], row["media_id"])
     return dropped
 
 

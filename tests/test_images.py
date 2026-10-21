@@ -698,7 +698,7 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
     add_gateway(studio)
     job_id = start(studio).json()["id"]
     wait_for(lambda: studio.gw.generations)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     studio.gw.hold = False
     job = wait_job(job_id)
     assert job.state == "cancelled" and "карта освобождена" in job.detail
@@ -722,7 +722,7 @@ def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypa
     monkeypatch.setattr(media, "remove_files", racing)
     media.save(state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0],
                photo(), "image/png", "old.png", thumb=True)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     studio.gw.hold = False
     job = wait_job(jobs[0])
     assert job.state == "cancelled" and job.media_id is None
@@ -748,7 +748,7 @@ def test_deleting_a_user_releases_the_card_once_their_job_ends(studio, env):
     job_id = start(studio).json()["id"]
     wait_for(lambda: studio.gw.requests and studio.gw.requests[-1].url.path == "/slot/images/generations")
     signin(studio, "owner")
-    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 204
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
     job = images.JOBS[job_id]
     assert job.state == "cancelled" and "карта освобождена" in job.detail
     assert studio.gw.releases[-1] == (LUSTIFY, f"Bearer {TOKEN}")
@@ -768,7 +768,7 @@ def test_deleting_a_user_during_their_generation_ends_the_job(studio, env, monke
     job_id = start(studio).json()["id"]
     wait_for(lambda: studio.gw.generations)
     signin(studio, "owner")
-    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 204
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
     studio.gw.hold = False
     job = wait_job(job_id)
     assert job.state == "cancelled" and job.media_id is None

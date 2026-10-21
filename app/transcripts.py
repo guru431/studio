@@ -300,10 +300,7 @@ async def delete(tid: str, request: Request):
     JOBS.pop(tid, None)
     for media_id in {row["source_media_id"], row["result_media_id"]} - {None}:
         if not media.referenced(uid, media_id):
-            try:
-                await media.delete_async(uid, media_id)
-            except OSError:
-                log.warning("расшифровка %s: файл media не удалился", tid[:8])
+            await media.delete_async(uid, media_id)
     return Response(status_code=204)
 
 

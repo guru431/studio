@@ -546,7 +546,7 @@ def test_cancel_and_delete(studio, env, unlinks):
 def test_history_wipe_cancels_running_videos_at_the_gateway(studio, env):
     add_gateway(studio)
     create_video(studio)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     assert studio.gw.video_deleted == [v_gateway_id(studio)]
     assert studio.c.get("/api/videos").json()["items"] == [] and share_files(env) == []
 
@@ -573,7 +573,7 @@ def test_clip_landing_during_the_wipe_leaves_no_orphan(studio, env, monkeypatch)
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     assert polls and media_rows() == 0
     assert state.DB.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 0
     assert share_files(env) == []

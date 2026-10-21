@@ -2,6 +2,7 @@
 import asyncio
 import dataclasses
 import io
+import threading
 
 import pytest
 from fastapi import HTTPException
@@ -155,7 +156,8 @@ def test_history_wipe_removes_files(studio, env, unlinks):
     mine = media.save(uid, png(500, 300), "image/png", "a.png", thumb=True)
     theirs = media.save(bob, DATA, "video/mp4", "b.mp4")
     assert len(files(env.media_dir)) == 3
-    assert studio.c.delete("/api/history").status_code == 204
+    r = studio.c.delete("/api/history")
+    assert r.status_code == 200 and r.json() == {"pending_files": 0}
     assert files(env.media_dir) == [media.path(bob, theirs)]
     assert studio.c.get(f"/api/media/{mine}").status_code == 404
     asyncio.run(media.delete_async(uid, mine))                  # уже нет — не ошибка
@@ -167,7 +169,7 @@ def test_history_wipe_removes_files(studio, env, unlinks):
 
 def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypatch):
     """Тысячи файлов истории — одним вызовом в потоке, не по строке с возвратом на цикл (ревью A2-I2);
-    файл, который не удалился, строки не держит."""
+    файл, который не удалился, строки не держит — его путь ждёт в очереди удаления."""
     uid = make_user(studio, "owner"); signin(studio, "owner")
     ids = {media.save(uid, png(64, 64), "image/png", f"{n}.png", thumb=True) for n in range(3)}
     calls, real = [], media.remove_files
@@ -175,13 +177,14 @@ def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypa
     def spy(rows):
         rows = list(rows)
         calls.append({media_id for media_id, _ in rows})
-        return real(rows[1:]) + 1                    # первая строка «не удалилась»
+        return real(rows[1:]) + rows[:1]             # первая строка «не удалилась»
 
     monkeypatch.setattr(media, "remove_files", spy)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").json() == {"pending_files": 1}
     assert calls == [ids]
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert len(files(env.media_dir)) == 2                       # файл и превью первой строки остались
+    assert state.DB.execute("SELECT COUNT(*) FROM purge").fetchone()[0] == 1
 
 
 def test_attachment_uploaded_during_the_wipe_leaves_no_orphan(studio, env, monkeypatch):
@@ -198,41 +201,161 @@ def test_attachment_uploaded_during_the_wipe_leaves_no_orphan(studio, env, monke
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     assert uploads == [201]
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert files(env.media_dir) == []
 
 
-def test_delete_keeps_the_row_when_the_share_fails(studio, env, monkeypatch, unlinks):
+def broken(*args):
+    raise OSError("share went away")
+
+
+def queued():
+    return [tuple(r) for r in state.DB.execute("SELECT media_id, user_id, tries FROM purge ORDER BY media_id")]
+
+
+def test_delete_queues_the_path_when_the_share_fails(studio, env, monkeypatch, unlinks):
+    """Шара отказала при удалении файла: строки media уже нет (исходником его не взять), путь — в
+    очереди удаления; проход purge доудаляет, когда шара вернулась (находка аудита P1)."""
     uid = make_user(studio, "owner")
     mid = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
     real = media._remove
-
-    def broken(*args):
-        raise OSError("share went away")
-
     monkeypatch.setattr(media, "_remove", broken)
-    with pytest.raises(OSError):
-        asyncio.run(media.delete_async(uid, mid))
-    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 1   # строка — чтобы удалить заново
+    asyncio.run(media.delete_async(uid, mid))                    # не ошибка: путь не потерян
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert queued() == [(mid, uid, 1)] and len(files(env.media_dir)) == 2
+    asyncio.run(media.purge())                                   # шара всё ещё недоступна
+    assert queued() == [(mid, uid, 2)]
     monkeypatch.setattr(media, "_remove", real)
-    asyncio.run(media.delete_async(uid, mid))
-    assert files(env.media_dir) == [] and state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    asyncio.run(media.purge())
+    assert files(env.media_dir) == [] and queued() == []
     assert unlinks and not any(unlinks)
 
 
+def test_wipe_keeps_the_paths_the_share_refused_until_it_is_back(studio, env, monkeypatch):
+    """Шара отказала посреди «Удалить всю историю»: история уходит, пути файлов ждут в очереди, ответ
+    говорит, сколько их; следующее стирание доудаляет (находка аудита P1)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    kept = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
+    media.save(uid, DATA, "video/mp4", "b.mp4")
+    real = media._remove
+
+    def refusing(media_id, rel_path):
+        if media_id == kept:
+            raise OSError("share went away")
+        real(media_id, rel_path)
+
+    monkeypatch.setattr(media, "_remove", refusing)
+    r = studio.c.delete("/api/history")
+    assert r.status_code == 200 and r.json() == {"pending_files": 1}
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert queued() == [(kept, uid, 0)] and len(files(env.media_dir)) == 2     # файл и превью — ещё на шаре
+    assert studio.c.delete("/api/history").json() == {"pending_files": 1}      # шара всё ещё недоступна
+    assert queued() == [(kept, uid, 1)]
+    monkeypatch.setattr(media, "_remove", real)
+    assert studio.c.delete("/api/history").json() == {"pending_files": 0}
+    assert files(env.media_dir) == [] and queued() == []
+
+
+def test_files_of_a_deleted_account_wait_in_the_queue(studio, env, monkeypatch):
+    """Удаление учётки при недоступной шаре: учётки нет, а пути её файлов — в очереди (без каскада),
+    ответ говорит, сколько их; проход purge доудаляет (находка аудита P1)."""
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
+    mid = media.save(bob, png(64, 64), "image/png", "a.png", thumb=True)
+    real = media._remove
+    monkeypatch.setattr(media, "_remove", broken)
+    r = studio.c.delete(f"/api/admin/users/{bob}")
+    assert r.status_code == 200 and r.json() == {"pending_files": 1}
+    assert state.DB.execute("SELECT COUNT(*) FROM users WHERE id = ?", (bob,)).fetchone()[0] == 0
+    assert queued() == [(mid, bob, 0)]
+    monkeypatch.setattr(media, "_remove", real)
+    asyncio.run(media.purge())
+    assert files(env.media_dir) == [] and queued() == []
+
+
+@pytest.mark.parametrize("where", ["before", "between", "after"])
+def test_a_cancelled_save_leaves_no_file_without_a_row(studio, env, monkeypatch, where):
+    """Отмена ожидания save_async поток записи не останавливает: он дописывает оригинал и превью, а
+    строки media нет. Путь ждёт в очереди удаления, проход purge не трогает его, пока поток пишет, и
+    убирает после (находка аудита P2). Отмена — до записи, между оригиналом и превью, после записи."""
+    uid = make_user(studio, "owner")
+    reached, go = threading.Event(), threading.Event()
+
+    def hold():
+        reached.set()
+        go.wait(5)
+
+    if where == "before":
+        real_thumb = media._thumbnail
+        monkeypatch.setattr(media, "_thumbnail", lambda data: (hold(), real_thumb(data))[1])
+    elif where == "between":
+        real_replace, done = media.os.replace, []
+
+        def replace(src, dst):
+            real_replace(src, dst)
+            done.append(dst)
+            if len(done) == 1:
+                hold()
+
+        monkeypatch.setattr(media.os, "replace", replace)
+    else:
+        real_write = media.write
+        monkeypatch.setattr(media, "write", lambda *a, **kw: (real_write(*a, **kw), hold())[0])
+
+    async def scenario():
+        task = asyncio.create_task(media.save_async(uid, png(64, 64), "image/png", "p.png", thumb=True))
+        assert await asyncio.to_thread(reached.wait, 5)
+        await media.purge()                        # запись идёт — проход её не трогает
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        go.set()
+        for _ in range(5000):                      # поток дописывает уже после отмены
+            if not media.SAVING:
+                break
+            await asyncio.sleep(0.001)
+        written = files(env.media_dir)
+        await media.purge()
+        return written
+
+    assert len(asyncio.run(scenario())) == 2
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert files(env.media_dir) == [] and queued() == []
+
+
+def test_a_stream_is_queued_until_its_row_is_in(studio, env):
+    """save_stream: пока строки media нет, путь — в очереди (остановка службы посреди потока оставила
+    бы временный файл — его уберёт проход purge при старте); строка снимает путь с очереди."""
+    uid = make_user(studio, "owner")
+    seen = []
+
+    async def watched():
+        yield DATA[:400]
+        seen.extend(r[0] for r in queued())
+        yield DATA[400:]
+
+    mid = asyncio.run(media.save_stream(uid, watched(), "video/mp4", "clip.mp4", max_bytes=1000))
+    assert seen == [mid] and queued() == []
+    leftover = env.media_dir / f"u{uid}" / "2027" / "01" / ".x.mp4.tmp"       # оборванная запись
+    leftover.write_bytes(b"x")
+    media.queue(uid, [("x", f"u{uid}/2027/01/x.mp4")])
+    asyncio.run(media.purge())
+    assert files(env.media_dir) == [media.path(uid, mid)] and queued() == []
+
+
 def test_bulk_file_removal_needs_no_database(studio, env, monkeypatch):
-    """remove_files идёт в asyncio.to_thread (стирание истории): базы не касается, неудачи считает."""
+    """remove_files идёт в asyncio.to_thread (стирание истории): базы не касается, неудачи возвращает."""
     uid = make_user(studio, "owner")
     ids = [media.save(uid, png(64, 64), "image/png", f"{n}.png", thumb=True) for n in range(3)]
     rows = [tuple(r) for r in state.DB.execute("SELECT id, rel_path FROM media ORDER BY id")]
     rows.append(("gone", f"u{uid}/2027/01/gone.png"))                        # файла нет — не неудача
     db = state.DB
     monkeypatch.setattr(state, "DB", None)
-    assert media.remove_files(rows) == 0
+    assert media.remove_files(rows) == []
     monkeypatch.setattr(state, "DB", db)
     assert files(env.media_dir) == [] and len(ids) == 3
     blocker = env.media_dir / f"u{uid}" / "2027" / "01" / "dir.png"
     blocker.mkdir(parents=True)                                              # каталог не удалить как файл
-    assert media.remove_files([("dir", blocker.relative_to(env.media_dir).as_posix())]) == 1
+    row = ("dir", blocker.relative_to(env.media_dir).as_posix())
+    assert media.remove_files([row]) == [row]

@@ -222,10 +222,7 @@ async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
 
 
 async def _forget(user_id: int, media_id: str) -> None:
-    try:
-        await media.delete_async(user_id, media_id)
-    except OSError:
-        log.warning("ролик пользователя %d: файл media не удалился", user_id)
+    await media.delete_async(user_id, media_id)
 
 
 # ---- API -------------------------------------------------------------------
@@ -348,10 +345,7 @@ async def delete_video(video_id: str, request: Request):
     state.DB.execute("DELETE FROM videos WHERE id = ?", (video_id,))
     for media_id in {row["media_id"], row["source_media_id"]} - {None}:
         if not media.referenced(uid, media_id):
-            try:
-                await media.delete_async(uid, media_id)
-            except OSError:
-                log.warning("ролик %s: файл media не удалился", video_id[:8])
+            await media.delete_async(uid, media_id)
     return Response(status_code=204)
 
 

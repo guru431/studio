@@ -285,8 +285,5 @@ async def delete(sid: str, request: Request):
     state.DB.execute("DELETE FROM speeches WHERE id = ?", (sid,))
     JOBS.pop(sid, None)
     if row["media_id"] and not media.referenced(uid, row["media_id"]):
-        try:
-            await media.delete_async(uid, row["media_id"])
-        except OSError:
-            log.warning("озвучка %s: файл media не удалился", sid[:8])
+        await media.delete_async(uid, row["media_id"])
     return Response(status_code=204)

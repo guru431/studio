@@ -258,9 +258,11 @@ function wipeBlock(host) {
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
-        await api('DELETE', '/api/history');
+        const { pending_files: left } = await api('DELETE', '/api/history');
         dialog.close();
-        say(note, 'История удалена', 'ok');
+        // хранилище было недоступно: файлы ждут в очереди удаления — сказать как есть
+        say(note, left ? `История удалена, но файлов на хранилище ещё ${left}: удалятся, когда оно станет доступно`
+          : 'История удалена', 'ok');
       } catch (err) {
         fail.textContent = words(err);
         confirm.disabled = false;
