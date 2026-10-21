@@ -299,6 +299,30 @@ def test_migrate_adds_the_internet_columns_to_a_version_13_base(env):
     assert conn.execute("SELECT content, tools FROM messages").fetchone()[:] == ("Ответ", None)
 
 
+@pytest.mark.parametrize("stepped", [False, True], ids=["new", "stepped"])
+def test_previous_code_still_works_on_a_version_14_base(env, stepped):
+    """Откат install.sh на код схемы 13 (спека интернета, раздел 9): прежний код пишет строки без новых
+    столбцов и читает `SELECT *` — у новой базы (SCHEMA) и у поднятой шагом 14."""
+    conn = db.connect(env.db_path); db.migrate(conn)
+    if stepped:
+        conn.executescript(f"{DROP_V14} PRAGMA user_version = 13;")
+        db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 14
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
+    conn.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
+                 " VALUES ('c1', 1, NULL, NULL, 'm', 5, 5)")
+    conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
+                 " VALUES ('m1', 'c1', 'assistant', '', 'streaming', 'server', 'm', 6, 6)")
+    conn.execute("UPDATE messages SET content = 'Ответ', status = 'done' WHERE id = 'm1'")
+    chat = dict(conn.execute("SELECT * FROM chats").fetchone())
+    assert (chat["id"], chat["model"], chat["web"], chat["web_consent"]) == ("c1", "m", 0, None)
+    message = dict(conn.execute("SELECT * FROM messages").fetchone())
+    assert (message["content"], message["status"], message["tools"]) == ("Ответ", "done", None)
+    assert dict(conn.execute("SELECT * FROM users").fetchone())["exa_key"] is None
+    conn.execute("DELETE FROM chats WHERE id = 'c1'")                       # каскад прежний
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+
+
 #: строка истории каждой ленты: id, user_id, created
 FEED_ROWS = {
     "images": "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"

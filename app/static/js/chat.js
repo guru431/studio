@@ -268,16 +268,34 @@ async function readBrowser(job, turn) {
 
 /* ---- источники ответа («Интернет») --------------------------------------------- */
 
+function isWebLink(url) {
+  try {
+    return ['http:', 'https:'].includes(new URL(url).protocol);
+  } catch {
+    return false;                                       // не адрес — текстом
+  }
+}
+
 /* ссылка — только http(s) и в новую вкладку без Referer: сайты не узнают адрес студии */
 function sourceLink(url, text) {
-  let web = false;
-  try {
-    web = ['http:', 'https:'].includes(new URL(url).protocol);
-  } catch {
-    // не адрес — текстом
-  }
   const name = text || url || '';
-  return web ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, name) : el('span', {}, name);
+  return isWebLink(url) ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, name)
+    : el('span', {}, name);
+}
+
+/* страница и ролик с ошибкой — адрес, который составила модель (и, может быть, отвергла студия), —
+   текстом, не ссылкой */
+function stepLink(s) {
+  return s.error ? el('span', {}, s.title || s.url || '') : sourceLink(s.url, s.title);
+}
+
+/* «Источники (N)» — число ссылок (найденное поиском, страница, ролик), а не шагов */
+function linkCount(steps) {
+  const urls = steps.flatMap((s) => {
+    if (s.kind === 'search') return (Array.isArray(s.results) ? s.results : []).map((x) => x && x.url);
+    return s.error ? [] : [s.url];
+  });
+  return urls.filter(isWebLink).length;
 }
 
 function duration(sec) {
@@ -297,17 +315,17 @@ function stepNode(s) {
       li.append(el('ul', {}, ...results.map((x) => el('li', {}, sourceLink(x.url, x.title),
         x.published ? el('span', { class: 'muted' }, ` · ${x.published}`) : null))));
     }
-  } else if (s.kind === 'page') li.append('Страница: ', sourceLink(s.url, s.title));
+  } else if (s.kind === 'page') li.append('Страница: ', stepLink(s));
   else if (s.kind === 'youtube') {
     const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
-    li.append('Ролик: ', sourceLink(s.url, s.title), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
+    li.append('Ролик: ', stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else li.append('Инструмент');
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
   return li;
 }
 
 function sourcesNode(steps) {
-  return el('details', { class: 'web-steps' }, el('summary', {}, `Источники (${steps.length})`),
+  return el('details', { class: 'web-steps' }, el('summary', {}, `Источники (${linkCount(steps)})`),
     el('ul', { class: 'web-list' }, ...steps.map(stepNode)));
 }
 

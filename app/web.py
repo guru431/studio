@@ -4,8 +4,9 @@ security.encrypt, как токены подключений); сохраняе�
 журнал не пишется. Неудача инструмента — ToolError со словами для человека.
 
 Exa — постоянный адрес `EXA_URL` через общий клиент state.HTTP, а не upstream: адрес выбирает не
-пользователь и не модель (адрес страницы уходит в Exa данными, сервер по нему не ходит). Наружу — только
-поисковый запрос или адрес страницы и ключ заголовком `x-api-key`. Шаг инструмента — dict: поиск
+пользователь и не модель (адрес страницы уходит в Exa данными, сервер по нему не ходит; и он — только из
+переписки или найденный поиском, `known` у call). Наружу — только поисковый запрос или адрес страницы и ключ
+заголовком `x-api-key`. Шаг инструмента — dict: поиск
 `{"kind": "search", "query", "results": [{"title", "url", "published"}], "text"}`, страница
 `{"kind": "page", "url", "title", "text"}`; `text` — ровно то, что получит модель.
 
@@ -19,6 +20,7 @@ YouTube — общий yt-dlp debian (`/usr/local/bin/yt-dlp`, root обновл
 import asyncio
 import html
 import json
+import os
 import re
 import uuid
 from asyncio.subprocess import DEVNULL, PIPE
@@ -37,9 +39,19 @@ EXA_URL = "https://api.exa.ai"
 EXA_TIMEOUT_SEC = 30
 SEARCH_RESULTS = 10          # базовая цена поиска Exa — до 10 результатов
 PAGE_MAX = 40_000            # знаков текста страницы: ~10 тыс. токенов из 131 072 контекста gemma-abl
+PAGE_CUT = "\n\n[страница обрезана]"
+# пределы аргументов модели: запрос — единственное, что из переписки уходит в Exa, — не больше абзаца
+QUERY_MAX = 500
+URL_MAX = 2048
+NOT_KNOWN = "читаю только ссылки из переписки или найденные поиском"
+_LINK = re.compile(r"https?://[^\s<>\"'«»`]+", re.I)
+_LINK_TAIL = ".,;:!?)]}"
 
 YTDLP = "yt-dlp"
 YTDLP_TIMEOUT_SEC = 60       # на каждый из двух вызовов; дорожка 1,5-часового ролика скачивалась за ~1 с
+# yt-dlp сразу на всю службу: каждый — процесс Python в MemoryMax службы, и YouTube отвечает 429 одному
+# адресу на частые запросы
+YT_SLOTS = asyncio.Semaphore(2)
 SUBS_MAX = 120_000           # знаков субтитров: 1,5 ч — ~94 тыс., ~30 тыс. токенов из 131 072 контекста
 PARAGRAPH_SEC = 30           # абзац с отметкой времени — не чаще раза в 30 с ролика
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
@@ -103,16 +115,24 @@ def exa_key(user_id: int) -> "str | None":
 
 
 def _exa_error(r: httpx.Response) -> str:
-    """Слова для неудачного ответа Exa (коды — exa.ai/docs/admin/error-codes). Не JSON — HTML Cloudflare:
-    Exa закрыт для выхода сервера студии."""
+    """Слова для неудачного ответа Exa — по `tag` тела, затем по коду (exa.ai/docs/reference/error-codes).
+    Не JSON — HTML Cloudflare: Exa закрыт для выхода сервера студии."""
     try:
-        r.json()
+        data = r.json()
     except ValueError:
         return "Exa недоступен с сервера студии"
+    tag = data.get("tag") if isinstance(data, dict) else None
+    tag = tag if isinstance(tag, str) else ""
+    if tag.endswith("_BUDGET_EXCEEDED"):             # API_KEY_… и TEAM_…: предел расходов, а не баланс
+        return "Exa: исчерпан лимит расходов ключа — см. dashboard.exa.ai"
+    if tag in ("NO_CONTENT_FOUND", "FETCH_DOCUMENT_ERROR"):
+        return "страница не прочиталась"
+    if tag == "ROBOTS_FILTER_FAILED":
+        return "сайт запрещает чтение (robots.txt)"
     if r.status_code == 401:
         return "ключ Exa не подходит — проверьте в Настройках"
-    if r.status_code == 402:
-        return "Exa: бесплатный баланс исчерпан, обновится 1-го числа"
+    if r.status_code == 402:                         # NO_MORE_CREDITS
+        return "Exa: баланс исчерпан (бесплатный обновится 1-го числа)"
     if r.status_code == 429:
         return "Exa: слишком часто — попробуйте позже"
     return f"Exa ответил {r.status_code}"
@@ -169,14 +189,24 @@ async def page(key: str, url: str) -> dict:
     results = data.get("results") or []
     if not results:
         raise ToolError("страница не прочиталась")
-    title = results[0].get("title") or ""
-    return {"kind": "page", "url": url, "title": title,
-            "text": f"{title}\n{url}\n\n{results[0].get('text') or ''}"}
+    title, text = results[0].get("title") or "", results[0].get("text") or ""
+    if len(text) >= PAGE_MAX:                    # Exa резал по maxCharacters (или не резал вовсе)
+        text = text[:PAGE_MAX] + PAGE_CUT
+    return {"kind": "page", "url": url, "title": title, "text": f"{title}\n{url}\n\n{text}"}
+
+
+def _env() -> dict:
+    """Окружение yt-dlp: без окружения службы (там STUDIO_DATA_KEY); Windows (тесты) без SYSTEMROOT
+    процессы не запускает."""
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(state.CFG.tmp_dir)}
+    if os.name == "nt":
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return env
 
 
 async def _run(argv: list[str], timeout: float) -> "tuple[int, bytes, bytes]":
     try:
-        proc = await asyncio.create_subprocess_exec(*argv, stdin=DEVNULL, stdout=PIPE, stderr=PIPE)
+        proc = await asyncio.create_subprocess_exec(*argv, stdin=DEVNULL, stdout=PIPE, stderr=PIPE, env=_env())
     except OSError:
         raise ToolError("чтение YouTube на сервере недоступно") from None
     try:
@@ -292,30 +322,31 @@ async def youtube(url: str) -> dict:
     canon = f"https://www.youtube.com/watch?v={vid}"
     base = [YTDLP, "--ignore-config", "--no-playlist", "--no-cache-dir"]
     folder, name = state.CFG.tmp_dir, uuid.uuid4().hex
-    try:
-        code, out, err = await _yt([*base, "-J", canon])
-        if code != 0:
-            raise ToolError(_yt_words(err))
+    async with YT_SLOTS:
         try:
-            info = json.loads(out)
-        except ValueError:
-            info = None
-        if not isinstance(info, dict):
-            raise ToolError("субтитры не получены")
-        track = pick_track(info)
-        if track is None:
-            raise ToolError("у ролика нет субтитров")
-        key, auto = track
-        code, _out, err = await _yt([*base, "--skip-download", "--write-auto-subs" if auto else "--write-subs",
-                                     "--sub-langs", key, "--sub-format", "vtt",
-                                     "-o", f"{folder}/{name}.%(ext)s", canon])
-        path = Path(f"{folder}/{name}.{key}.vtt")
-        if code != 0 or not path.is_file():
-            raise ToolError(_yt_words(err))
-        body = await asyncio.to_thread(lambda: vtt_text(path.read_text(encoding="utf-8", errors="replace")))
-    finally:
-        for f in folder.glob(f"{name}.*"):
-            f.unlink(missing_ok=True)
+            code, out, err = await _yt([*base, "-J", canon])
+            if code != 0:
+                raise ToolError(_yt_words(err))
+            try:                                 # -J — мегабайты (форматы, дорожки всех языков)
+                info = await asyncio.to_thread(json.loads, out)
+            except ValueError:
+                info = None
+            if not isinstance(info, dict):
+                raise ToolError("субтитры не получены")
+            track = pick_track(info)
+            if track is None:
+                raise ToolError("у ролика нет субтитров")
+            key, auto = track
+            code, _out, err = await _yt([*base, "--skip-download", "--write-auto-subs" if auto else "--write-subs",
+                                         "--sub-langs", key, "--sub-format", "vtt",
+                                         "-o", f"{folder}/{name}.%(ext)s", canon])
+            path = Path(f"{folder}/{name}.{key}.vtt")
+            if code != 0 or not path.is_file():
+                raise ToolError(_yt_words(err))
+            body = await asyncio.to_thread(lambda: vtt_text(path.read_text(encoding="utf-8", errors="replace")))
+        finally:
+            for f in folder.glob(f"{name}.*"):
+                f.unlink(missing_ok=True)
     if len(body) > SUBS_MAX:
         body = body[:SUBS_MAX] + "\n\n[субтитры обрезаны]"
     title, channel = info.get("title") or "", info.get("channel") or info.get("uploader") or ""
@@ -365,9 +396,41 @@ def public(step: dict) -> dict:
     return {k: v for k, v in step.items() if k != "text"}
 
 
-async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] | None" = None) -> dict:
+# ---- какие адреса можно читать (read_page) ------------------------------------------------
+# Страница уходит в Exa, а для незнакомого адреса Exa обходит сайт сам: адрес, который составила модель
+# (по просьбе текста страницы или выдержки поиска), унёс бы переписку на чужой сайт. Читаются только адреса из
+# переписки — сообщений пользователя и вложенных документов — и найденные поиском (`results[].url`).
+
+def norm(url: str) -> str:
+    """Адрес для сравнения: без пробелов по краям, фрагмента и одного «/» в конце."""
+    url = url.strip().split("#", 1)[0]
+    return url[:-1] if url.endswith("/") else url
+
+
+def links(text: str) -> set[str]:
+    """Адреса http(s) в тексте (norm); хвостовая пунктуация («…/a).») — и с ней, и без неё: скобка
+    бывает частью адреса."""
+    out = set()
+    for m in _LINK.finditer(text or ""):
+        url = m.group(0)
+        out.add(norm(url))
+        while url and url[-1] in _LINK_TAIL:
+            url = url[:-1]
+            out.add(norm(url))
+    return out
+
+
+def found_links(step: dict) -> set[str]:
+    """Адреса результатов шага поиска (norm)."""
+    return {norm(r["url"]) for r in step.get("results") or [] if isinstance(r, dict) and isinstance(r.get("url"), str)}
+
+
+async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] | None" = None,
+               known: "set[str] | None" = None) -> dict:
     """Шаг инструмента по вызову модели: имя функции и аргументы JSON. Неизвестное имя (или вид не из `kinds`,
     которые модели давали) и битые аргументы — шаг `unknown` с ошибкой; неудача инструмента — шаг с `error`.
+    Запрос длиннее QUERY_MAX, адрес длиннее URL_MAX и страница не из `known` (norm-адреса переписки и поиска;
+    None — без проверки) — шаг-ошибка без вызова.
     Не бросает ToolError (и сбой инструмента — тоже шаг); отмена («Стоп») идёт насквозь."""
     kind = NAMES.get(name)
     if kind is None or (kinds is not None and kind not in kinds):
@@ -377,6 +440,12 @@ async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] |
     if not isinstance(value, str) or not value.strip():
         return {"kind": "unknown", "error": f"модель вызвала {name} с неверными аргументами"}
     value = value.strip()
+    if kind == "search" and len(value) > QUERY_MAX:
+        return {"kind": kind, param: value[:QUERY_MAX], "error": "запрос слишком длинный"}
+    if kind != "search" and len(value) > URL_MAX:
+        return {"kind": kind, param: value[:URL_MAX], "error": "адрес слишком длинный"}
+    if kind == "page" and known is not None and norm(value) not in known:
+        return {"kind": kind, param: value, "error": NOT_KNOWN}
     try:
         if kind == "youtube":
             return await youtube(value)
