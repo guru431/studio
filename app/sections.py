@@ -36,6 +36,7 @@ LEGACY = ("chat", "photo", "video")           # разделы прежнего 
 CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "speech": ["qwen3-tts"],
            "dictation": ["gigaam", "whisperx"]}
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
+LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200
 MODELS_MAX = 200
 
@@ -105,6 +106,12 @@ def default(user_id: int, section: str) -> "tuple[connections.Connection, str] |
         return None
     conn = next((c for c in connections.list_for(user_id) if c.id == row["connection_id"]), None)
     return (conn, row["model"]) if conn is not None else None
+
+
+def is_local(conn: "connections.Connection", model: str) -> bool:
+    """Модель работает на карте srvllm: подключение srvllm через сервер и роль шлюза `local-*`
+    (соглашение llm_routers). Остальные роли того же шлюза облачные, а адрес локальности не доказывает."""
+    return conn.kind == "srvllm" and conn.proxied and model.startswith(LOCAL_PREFIX)
 
 
 def capabilities(user_id: int) -> dict[str, bool]:
@@ -292,7 +299,8 @@ def section_out(user_id: int, section: str, passport: bool = True) -> dict:
     chosen = _default_row(user_id, section)
     return {"id": section, "name": NAMES[section],
             "links": [{"connection": connections.out(l.connection, passport), "models": list(l.models),
-                       "catalog": CATALOG.get(section) if l.connection.kind == "srvllm" else None}
+                       "catalog": CATALOG.get(section) if l.connection.kind == "srvllm" else None,
+                       "local_models": [m for m in l.models if is_local(l.connection, m)]}
                       for l in links(user_id, section)],
             "default": {"connection_id": chosen["connection_id"], "model": chosen["model"]} if chosen else None}
 

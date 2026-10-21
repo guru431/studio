@@ -6,6 +6,7 @@ import logging
 import pytest
 from fastapi import HTTPException
 
+import connections
 import sections
 import state
 from conftest import add_connection, add_gateway, make_user
@@ -134,6 +135,20 @@ def test_admin_edits_a_users_sections(studio):
     assert r.status_code == 200 and r.json()["default"] == {"connection_id": cid, "model": "flux"}
     assert [s["id"] for s in studio.c.get(f"/api/admin/users/{bob}/sections").json()["sections"]] == list(sections.SECTIONS)
     assert studio.c.get("/api/admin/users/9999/sections").status_code == 404
+
+
+def test_local_model_is_a_local_role_of_the_gateway_through_the_server(studio):
+    """Локальна только `local-*` подключения srvllm через сервер: облачная роль того же шлюза и
+    openai-подключение с тем же именем — нет."""
+    gw = add_gateway(studio)
+    cloud = add_connection(studio, chat_models=("local-x",))
+    by_id = {c.id: c for c in connections.list_for(uid_of_owner())}
+    assert sections.is_local(by_id[gw], "local-gemma-abl") and sections.is_local(by_id[gw], "local-chat")
+    for conn, model in ((gw, "gemma4-abl"), (gw, "claude-sonnet"), (gw, "chat"), (cloud, "local-x")):
+        assert not sections.is_local(by_id[conn], model), model
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["gemma4-abl", "local-gemma-abl"]})
+    chat = studio.c.get("/api/sections").json()["sections"][0]
+    assert {l["connection"]["id"]: l["local_models"] for l in chat["links"]} == {gw: ["local-gemma-abl"], cloud: []}
 
 
 def test_section_changes_log_only_ids(studio, caplog):

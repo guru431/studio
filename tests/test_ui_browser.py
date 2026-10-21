@@ -2768,6 +2768,125 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
     assert not problems(r), problems(r)
 
 
+TR_TEXTS = "[...document.querySelectorAll('.tr-view .tr-text')].map(e => e.textContent)"
+TR_TXT = f"""(async () => {{ const id = document.querySelector('.tr-item').dataset.id;
+  return (await fetch('/api/transcripts/' + id + '/export?format=txt')).text(); }})()"""
+
+
+def transcribed(login, seconds=6.0):
+    """Вход, шлюз, загруженная и расшифрованная запись «Звонок.wav» (две реплики шлюза: 0 и 3 с)."""
+    return [*signin(login), ("wait", READY), add_gateway(),
+            *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+            put_audio("#transcribe-add input", wav_of(seconds)),
+            ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2")]
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
+    """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
+    реплике ставит плеер на её начало и подсвечивает её; «Сбросить правки» — исходное распознавание."""
+    login = f"tredit{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        set_value(".tr-turn[data-index='1'] .tr-edit-text", "Добрый вечер."),
+        ("eval", "marked", "!document.querySelector(\".tr-turn[data-index='1'] .tr-mark\").hidden"),
+        ("click", "#tr-save"), ("wait", "!document.querySelector('.tr-edit-text')"),
+        ("click", "#tr-names"), ("wait", is_open("#tr-names-dialog")),
+        set_value("#tr-names-dialog input[data-label='Собеседник 1']", "Иван"),
+        ("click", "#tr-names-save"), ("wait", "!document.querySelector('#tr-names-dialog')"),
+        ("eval", "who", "[...document.querySelectorAll('.tr-view .tr-who')].map(e => e.textContent)"),
+        ("eval", "texts", TR_TEXTS), ("eval", "txt", TR_TXT),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", ".tr-turn[data-index='1'] .tr-text"),
+        ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
+        ("wait", "document.querySelector('.tr-turn[aria-current=true]')?.dataset.index === '1'"),
+        ("click", "#tr-reset"), ("wait", is_open("#tr-reset-dialog")), ("click", "#tr-reset-confirm"),
+        ("wait", "!document.querySelector('#tr-reset')"),
+        ("eval", "after", TR_TEXTS),
+        ("eval", "who_after", "document.querySelector('.tr-view .tr-who').textContent")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["marked"] is True and v["fits"] is True
+    assert v["who"] == ["Иван · 00:00", "Собеседник 2 · 00:03"] and v["texts"] == ["Здравствуйте.", "Добрый вечер."]
+    assert v["txt"] == "Иван · 00:00\nЗдравствуйте.\n\nСобеседник 2 · 00:03\nДобрый вечер.\n"
+    assert v["after"] == ["Здравствуйте.", "Добрый день."] and v["who_after"] == "Собеседник 1 · 00:00"
+    assert not problems(r), problems(r)
+
+
+TURNS_SO_FAR = "performance.getEntriesByType('resource').filter(e => e.name.includes('/turns')).length"
+CHAT_CHIP = "document.querySelector('#composer .att-chip .att-open')"
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_transcript_to_chat_with_the_local_model_and_back(browser, live, width):
+    """«В чат ▾» → «Составить итоги»: новый диалог с вложением «Звонок.txt» (число знаков, текст по
+    нажатию) и вопросом, модель — локальная по умолчанию, ничего не отправлено; после отправки —
+    ссылка «к записи» открывает эту расшифровку."""
+    login = f"trchat{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*transcribed(login, 1.0),
+        ("eval", "tid", "document.querySelector('.tr-item').dataset.id"),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=summary]"),
+        ("wait", CHAT_CHIP), ("eval", "hash", "location.hash"),
+        ("eval", "chip", "document.querySelector('#composer .att-chip').textContent"),
+        ("eval", "question", "document.querySelector('#chat-input').value"),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("eval", "ready", "!document.querySelector('#send').disabled && !document.querySelector('#model-note').textContent"),
+        ("click", "#composer .att-open"), ("wait", is_open("#att-text-dialog")),
+        ("eval", "shown", "document.querySelector('#att-text-dialog .att-text').textContent"),
+        ("eval", "tokens", "document.querySelector('#att-text-dialog p').textContent"),
+        ("click", "#att-text-dialog .dialog-close"), ("wait", "!document.querySelector('#att-text-dialog')"),
+        ("eval", "fits", NO_OVERFLOW), ("eval", "before", TURNS_SO_FAR),
+        ("click", "#send"), ("wait", ANSWERED), ("wait", "document.querySelector('#messages .att-source')"),
+        ("click", "#messages .att-source"),
+        ("wait", "location.hash === '#/transcribe' && document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("eval", "back", "[document.querySelector('.tr-item[aria-current=true]').dataset.id,"
+                         " document.querySelector('.split-main h1').textContent]")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["hash"] == "#/chat" and "Звонок.txt" in v["chip"] and "зн." in v["chip"]
+    assert v["question"] == "Составь краткие итоги этой записи: о чём говорили и к чему пришли."
+    assert v["ready"] is True and v["fits"] is True and v["before"] == 0
+    assert v["shown"].startswith("Расшифровка «Звонок.wav»") and "Собеседник 1 · 00:00\nЗдравствуйте." in v["shown"]
+    assert "тыс. токенов" in v["tokens"]
+    content = live.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert live.gw.chat_requests[-1]["model"] == "local-gemma-abl"
+    assert content.startswith('<document name="Звонок.txt">\nРасшифровка «Звонок.wav»') and content.endswith(v["question"])
+    assert v["back"] == [v["tid"], "Звонок.wav"]          # ?id выбрал запись и ушёл из адреса (как «Открыть» в «В работе»)
+    assert not problems(r), problems(r)
+
+
+def test_transcript_to_chat_without_a_local_model_asks_first(browser, live):
+    """В чате отмечена только облачная роль шлюза: модель не выбрана и «Отправить» закрыто; после
+    явного выбора — окно «уйдёт во внешний сервис», и только «Отправить» в нём шлёт ход."""
+    live.add_user("trcloud")
+    r = browser.drive(live.url + "/", [*transcribed("trcloud", 1.0),
+        ("eval", "cloud_only", f"""(async () => {{ const m = {API}; const s = await m.api('GET', '/api/sections');
+          const link = s.sections.find(x => x.id === 'chat').links[0];
+          await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['gemma4-abl'] }});
+          return true; }})()"""),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=tasks]"),
+        ("wait", CHAT_CHIP),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('модель не выбрана')"),
+        ("eval", "locked", "[document.querySelector('#send').disabled, document.querySelector('#model-note').textContent]"),
+        ("click", "#model-chip"), ("click", "#model-menu .model-option[data-model='gemma4-abl']"),
+        ("eval", "open", "[document.querySelector('#send').disabled, document.querySelector('#model-note').textContent]"),
+        ("click", "#send"), ("wait", is_open("#external-dialog")),
+        ("eval", "asked", "document.querySelector('#external-dialog p').textContent"),
+        ("eval", "before", TURNS_SO_FAR),
+        ("click", "#external-confirm"), ("wait", ANSWERED)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["locked"] == [True, "Запись уйдёт во внешний сервис — выберите модель"] and v["open"] == [False, ""]
+    assert v["asked"] == "Расшифровка уйдёт во внешний сервис «Шлюз» — отправить?" and v["before"] == 0
+    assert live.gw.chat_requests[-1]["model"] == "gemma4-abl"
+    assert live.gw.chat_requests[-1]["messages"][-1]["content"].endswith("сроки, если названы.")
+    assert not problems(r), problems(r)
+
+
 def test_voice_is_added_in_settings(browser, live):
     live.add_user("voicer")
     dialog = "#voice-dialog"

@@ -17,20 +17,28 @@
    событий; файлы и ffmpeg — в потоке и подпроцессе.
 5. JOBS — только идущие задания: кончившееся (и отменённое стиранием истории или удалением учётки)
    уходит из него, убрав временный файл, вместе с записью итога; долговечное — строка `transcripts`.
+6. Правка (спека 2026-10-21-studio-transcript-edit-chat-design): тексты реплик и имена собеседников —
+   JSON `transcripts.edits` поверх файла итога, который не меняется (`raw` в нём — сегменты до склейки,
+   для SRT). Показываемые реплики собирает одна `view` — для GET, выгрузок, «Копировать» и вложения в
+   чат (`POST …/attachments`). Последнее сохранение побеждает; текст и имена в журнал не пишутся.
 """
 import asyncio
 import json
 import logging
+import unicodedata
 import uuid
 from dataclasses import asdict, dataclass
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 import audio
+import chat
 import clock
 import db
+import documents
 import exports
 import forms
 import media
@@ -44,6 +52,8 @@ NAME_MAX = 255
 RETRY_SEC = 15
 WAIT_MAX_SEC = 1800
 TERMINAL = {"done", "error", "cancelled"}
+EDIT_TEXT_MAX = 20_000
+NAME_EDIT_MAX = 60
 INTERRUPTED = "прервано перезапуском студии"
 
 log = logging.getLogger("studio")
@@ -89,12 +99,43 @@ def _row(user_id: int, tid: str):
     return row
 
 
+def edits_of(row) -> dict:
+    """Правки строки: `{"texts": {номер: текст}, "names": {метка: имя}}` (пустые — правок нет)."""
+    data = json.loads(row["edits"]) if row["edits"] else {}
+    return {"texts": dict(data.get("texts") or {}), "names": dict(data.get("names") or {})}
+
+
+def _speakers(row, names: dict) -> "int | None":
+    """Число разных показываемых имён: метки — «Собеседник 1…N» (speech.turns), файл не нужен."""
+    count = row["speakers"]
+    if not count or not names:
+        return count
+    return len({names.get(label, label) for label in (speech.LABEL.format(n) for n in range(1, count + 1))})
+
+
+def view(row, result: dict) -> list[dict]:
+    """Показываемые реплики — распознавание с правками: `{start, end, speaker, label, text, edited}`,
+    у правленой ещё `original`. Одна для GET, выгрузок и вложения в чат."""
+    edits = edits_of(row)
+    out = []
+    for n, s in enumerate(result["segments"]):
+        label, text = s.get("speaker"), edits["texts"].get(str(n))
+        item = {"start": s["start"], "end": s["end"], "speaker": edits["names"].get(label, label) if label else None,
+                "label": label, "text": s["text"] if text is None else text, "edited": text is not None}
+        if text is not None:
+            item["original"] = s["text"]
+        out.append(item)
+    return out
+
+
 def _out(row, segments: "list | None" = None) -> dict:
     job = JOBS.get(row["id"])
+    edits = edits_of(row)
     out = {"id": row["id"], "name": row["name"], "state": row["state"],
            "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
-           "model": row["model"], "duration": row["duration"], "speakers": row["speakers"],
-           "source_media_id": row["source_media_id"], "created": row["created"], "finished": row["finished"]}
+           "model": row["model"], "duration": row["duration"], "speakers": _speakers(row, edits["names"]),
+           "source_media_id": row["source_media_id"], "created": row["created"], "finished": row["finished"],
+           "names": edits["names"], "edited": bool(edits["texts"] or edits["names"])}
     if segments is not None:
         out["segments"] = segments
     return out
@@ -154,10 +195,11 @@ async def run(job: Job) -> None:
                 raise JobError(f"запись длиннее {DURATION_MAX // 60} минут — разделите её")
             await audio.compress(source, tmp)
             await speech.free_card(job.conn)
-            replicas = speech.speakers(await _recognize(job, tmp))
+            replicas, raw = speech.turns(await _recognize(job, tmp))
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
-            payload = json.dumps({"segments": [asdict(s) for s in replicas]}, ensure_ascii=False).encode("utf-8")
+            payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
+                                 ensure_ascii=False).encode("utf-8")
             result = await media.save_async(job.user_id, payload, "application/json", "transcript.json")
             outcome = ("done", "готово", {"result_media_id": result,
                                           "speakers": len({s.speaker for s in replicas if s.speaker})})
@@ -265,24 +307,100 @@ async def list_transcripts(request: Request, before: "float | None" = None,
     return {"items": [_out(r) for r in rows]}
 
 
-async def segments_of(user_id: int, row) -> list:
-    """Реплики готовой расшифровки — с шары; файла нет — 404, шара недоступна — 503."""
+async def result_of(user_id: int, row) -> dict:
+    """Файл итога готовой расшифровки — с шары: `segments` и у новых `raw`; файла нет — 404, шара
+    недоступна — 503."""
     try:
         data = await asyncio.to_thread(media.path(user_id, row["result_media_id"]).read_bytes)
     except FileNotFoundError:
         raise HTTPException(404, media.GONE) from None
     except OSError:
         raise HTTPException(503, forms.STORAGE) from None
-    return json.loads(data)["segments"]
+    return json.loads(data)
+
+
+def _done(user_id: int, tid: str):
+    row = _row(user_id, tid)
+    if row["state"] != "done" or row["result_media_id"] is None:
+        raise HTTPException(409, {"code": "running", "message": "расшифровка ещё не готова"})
+    return row
+
+
+async def _full(user_id: int, row) -> dict:
+    """Ответ GET: готовая — с показываемыми репликами."""
+    if row["state"] != "done" or row["result_media_id"] is None:
+        return _out(row)
+    return _out(row, view(row, await result_of(user_id, row)))
 
 
 @router.get("/{tid}")
 async def get_transcript(tid: str, request: Request):
     uid = request.state.user.id
+    return await _full(uid, _row(uid, tid))
+
+
+class EditIn(BaseModel):
+    texts: dict[str, "str | None"] = Field(default_factory=dict)
+    names: dict[str, "str | None"] = Field(default_factory=dict)
+
+
+def _bad(message: str) -> HTTPException:
+    return HTTPException(422, {"code": "input", "message": message})
+
+
+def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
+    """Правки запроса, проверенные по файлу итога; None — снять правку (и значение, равное исходному)."""
+    texts, names = {}, {}
+    for key, value in body.texts.items():
+        if not (key.isascii() and key.isdigit()) or int(key) >= len(segments):
+            raise _bad("такой реплики нет")
+        original = segments[int(key)]["text"]
+        if value is not None:
+            value = value.strip()
+            if not 1 <= len(value) <= EDIT_TEXT_MAX:
+                raise _bad(f"текст реплики — от 1 до {EDIT_TEXT_MAX} знаков")
+        texts[str(int(key))] = None if value == original else value
+    labels = {s.get("speaker") for s in segments} - {None}
+    for label, value in body.names.items():
+        if label not in labels:
+            raise _bad("такого собеседника нет")
+        if value is not None:
+            value = value.strip()
+            if not 1 <= len(value) <= NAME_EDIT_MAX or any(unicodedata.category(c)[0] == "C" for c in value):
+                raise _bad(f"имя — от 1 до {NAME_EDIT_MAX} знаков, одной строкой")
+        names[label] = None if value == label else value
+    return texts, names
+
+
+@router.patch("/{tid}")
+async def patch_transcript(tid: str, body: EditIn, request: Request):
+    """Правка текстов реплик и имён поверх распознавания; последнее сохранение побеждает."""
+    uid = request.state.user.id
+    result = await result_of(uid, _done(uid, tid))
+    texts, names = _checked(body, result["segments"])
+    row = _done(uid, tid)                            # после чтения файла: свежие правки, без await до UPDATE
+    edits = edits_of(row)
+    for part, changes in (("texts", texts), ("names", names)):
+        for key, value in changes.items():
+            if value is None:
+                edits[part].pop(key, None)
+            else:
+                edits[part][key] = value
+    stored = json.dumps(edits, ensure_ascii=False) if edits["texts"] or edits["names"] else None
+    state.DB.execute("UPDATE transcripts SET edits = ? WHERE id = ?", (stored, tid))
+    log.info("расшифровка %s: правка", tid[:8])
     row = _row(uid, tid)
-    if row["state"] != "done" or row["result_media_id"] is None:
-        return _out(row)
-    return _out(row, await segments_of(uid, row))
+    return _out(row, view(row, result))
+
+
+@router.delete("/{tid}/edits")
+async def reset_edits(tid: str, request: Request):
+    """«Сбросить правки» — снова исходное распознавание."""
+    uid = request.state.user.id
+    _row(uid, tid)
+    state.DB.execute("UPDATE transcripts SET edits = NULL WHERE id = ?", (tid,))
+    log.info("расшифровка %s: правки сброшены", tid[:8])
+    return await _full(uid, _row(uid, tid))
 
 
 @router.post("/{tid}/cancel")
@@ -308,18 +426,48 @@ async def delete(tid: str, request: Request):
     return Response(status_code=204)
 
 
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+@router.post("/{tid}/attachments", status_code=201)
+async def to_chat(tid: str, request: Request):
+    """Расшифровка с правками — неотправленным документом чата («<имя записи>.txt», свой файл): дальше
+    это обычное вложение (крестик, уборка, отправка, предел контекста). Ссылка на запись —
+    `source_transcript_id`; к нелокальной модели его ход пускает только с `external_ok` (chat.create_turn)."""
+    uid = request.state.user.id
+    row = _done(uid, tid)
+    segments = view(row, await result_of(uid, row))
+    head = f"Расшифровка «{row['name']}»" + (f" · {exports.stamp(row['duration'])}" if row["duration"] else "")
+    text = f"{head}\n\n{exports.txt(segments)}"
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise HTTPException(413, {"code": "too_big", "message": (
+            f"расшифровка длиннее {documents.TEXT_MAX_CHARS:,} знаков — в чат её не передать".replace(",", " "))})
+    name = f"{_stem(row['name'])}.txt"
+    try:
+        media_id = await media.save_async(uid, text.encode("utf-8"), "text/plain", name)
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    att_id = uuid.uuid4().hex
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created,"
+                     " source_transcript_id) VALUES (?, ?, NULL, 'document', ?, ?, ?, ?, ?, ?)",
+                     (att_id, uid, name, media_id, text, len(text), clock.NOW(), tid))
+    log.info("вложение %s: из расшифровки %s, %d знаков", att_id[:8], tid[:8], len(text))
+    return {"id": att_id, "kind": "document", "name": name, "chars": len(text), "media_id": media_id, "text": text,
+            "tokens": chat.estimate_tokens([{"role": "user", "content": text}])}
+
+
 @router.get("/{tid}/export")
 async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx|srt)$")):  # noqa: A002
     """Готовая расшифровка файлом: имя — по записи («Звонок.m4a» → «Звонок.docx»)."""
     uid = request.state.user.id
-    row = _row(uid, tid)
-    if row["state"] != "done" or row["result_media_id"] is None:
-        raise HTTPException(409, {"code": "running", "message": "расшифровка ещё не готова"})
-    segments = await segments_of(uid, row)
-    stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
+    row = _done(uid, tid)
+    result = await result_of(uid, row)
+    segments = view(row, result)
+    stem = _stem(row["name"])
     if format == "docx":
         body = exports.docx(segments, stem)
     else:
-        body = (exports.txt(segments) if format == "txt" else exports.srt(segments)).encode("utf-8")
+        body = (exports.txt(segments) if format == "txt" else exports.srt(segments, result.get("raw"))).encode("utf-8")
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})

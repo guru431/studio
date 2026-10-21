@@ -84,6 +84,14 @@
   srvllm его нет. Адрес, убранный из списка, — `connections.dropped` (не прямое): «Проверить» и
   «Обновить модели» говорят это словами; `UpstreamRefused.reason` различает `unlisted`, `internal`,
   `changed`.
+- Правка расшифровки — JSON `transcripts.edits` (`texts` по номеру реплики, `names` по метке
+  «Собеседник N») поверх файла итога, который не переписывается; показываемые реплики для GET,
+  выгрузок и вложения собирает одна `transcripts.view`. Файл итога новых расшифровок несёт ещё `raw` —
+  сегменты до склейки с номером реплики `turn` (`speech.turns`), по ним SRT (`exports.srt`, пределы 7 с
+  и 84 знака); прежний код читает только `segments`. Вложение из расшифровки
+  (`POST /api/transcripts/<id>/attachments`) — обычный документ чата со своим .txt и
+  `attachments.source_transcript_id` (без FK); ход, который привязывает его к модели, не локальной по
+  `sections.is_local` (`local-*` подключения srvllm через сервер), — 409 `external` без `external_ok`.
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.

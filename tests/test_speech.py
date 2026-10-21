@@ -39,6 +39,20 @@ def test_transcribe_asks_whisperx_with_diarization(studio, tmp_path):
         ("Собеседник 1", "Бюро переводов. Здравствуйте.", 0.9, 4.0), ("Собеседник 2", "У меня вопрос.", 4.1, 6.0)]
 
 
+def test_turns_keep_the_recognized_segments_with_their_turn():
+    """Сегменты до склейки (для SRT): метка той же нумерации и номер реплики, в которую склеен сегмент;
+    по времени не сопоставлять — у WhisperX конец реплики и начало следующей совпадают."""
+    Seg = speech.Segment
+    replicas, raw = speech.turns([Seg(0.9, 3.1, "SPEAKER_01", "Бюро переводов."), Seg(3.1, 4.0, "SPEAKER_01", "Здравствуйте."),
+                                  Seg(4.0, 6.0, "SPEAKER_00", "У меня вопрос."), Seg(6.0, 7.0, None, "Шум.")])
+    assert [r.text for r in replicas] == ["Бюро переводов. Здравствуйте.", "У меня вопрос.", "Шум."]
+    assert raw == [{"start": 0.9, "end": 3.1, "speaker": "Собеседник 1", "text": "Бюро переводов.", "turn": 0},
+                   {"start": 3.1, "end": 4.0, "speaker": "Собеседник 1", "text": "Здравствуйте.", "turn": 0},
+                   {"start": 4.0, "end": 6.0, "speaker": "Собеседник 2", "text": "У меня вопрос.", "turn": 1},
+                   {"start": 6.0, "end": 7.0, "speaker": None, "text": "Шум.", "turn": 2}]
+    assert speech.speakers([Seg(0, 1, "A", "Раз.")]) == [Seg(0, 1, "Собеседник 1", "Раз.")]
+
+
 def test_transcribe_without_speakers_keeps_the_segments(studio, tmp_path):
     conn = conn_of(add_gateway(studio))
     studio.gw.asr_reply = {"text": [], "segments": [{"start": 0, "end": 1, "text": "Раз."}, {"start": 1, "end": 2, "text": "Два."}]}

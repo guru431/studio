@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 10).
+"""Соединение SQLite и схема базы (версия 11).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 10
+VERSION = 11
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -60,6 +60,12 @@ CREATE INDEX messages_streaming ON messages(chat_id) WHERE status = 'streaming';
 #: паспорт подключения (checks.py): итог «Проверить» JSON; смена адреса, вида или токена его обнуляет
 PASSPORT_10 = "ALTER TABLE connections ADD COLUMN passport TEXT;\n"
 
+#: правки расшифровки (JSON поверх файла итога, transcripts.py) и расшифровка, из которой сделано
+#: вложение чата (без ссылки на transcripts: запись удаляют, вложение остаётся в диалоге)
+EDITS_11 = """ALTER TABLE transcripts ADD COLUMN edits TEXT;
+ALTER TABLE attachments ADD COLUMN source_transcript_id TEXT;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +108,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -153,6 +159,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     9: INDEXES_9,
     # паспорт подключения: проверка адреса, ключа и возможностей моделей
     10: PASSPORT_10,
+    # правки расшифровки; вложение чата из расшифровки
+    11: EDITS_11,
 }
 
 

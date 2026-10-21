@@ -30,6 +30,7 @@ LITE_TIMEOUT_SEC = 180
 TTS_TIMEOUT_SEC = 720
 EXTERNAL_TIMEOUT_SEC = 600
 TTS_LANGUAGE = "Russian"
+LABEL = "Собеседник {}"          # метка собеседника по порядку первого появления (с 1)
 
 
 class Busy(Exception):
@@ -141,16 +142,24 @@ async def free_card(conn) -> None:
         return
 
 
-def speakers(segments: list[Segment]) -> list[Segment]:
+def turns(segments: list[Segment]) -> tuple[list[Segment], list[dict]]:
     """`SPEAKER_xx` → «Собеседник N» по первому появлению; соседние реплики одного собеседника —
-    одна. Без собеседников сегменты остаются как есть."""
+    одна. Без собеседников сегменты остаются как есть. Второе — сегменты до склейки
+    `{start, end, speaker, text, turn}` (`turn` — номер реплики): по ним SRT."""
     names: dict[str, str] = {}
     out: list[Segment] = []
+    raw: list[dict] = []
     for s in segments:
-        name = names.setdefault(s.speaker, f"Собеседник {len(names) + 1}") if s.speaker is not None else None
+        name = names.setdefault(s.speaker, LABEL.format(len(names) + 1)) if s.speaker is not None else None
         if out and name is not None and out[-1].speaker == name:
             last = out[-1]
             out[-1] = Segment(last.start, s.end, name, f"{last.text} {s.text}")
         else:
             out.append(Segment(s.start, s.end, name, s.text))
-    return out
+        raw.append({"start": s.start, "end": s.end, "speaker": name, "text": s.text, "turn": len(out) - 1})
+    return out, raw
+
+
+def speakers(segments: list[Segment]) -> list[Segment]:
+    """Реплики по собеседникам (turns без сегментов до склейки)."""
+    return turns(segments)[0]

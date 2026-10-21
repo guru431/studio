@@ -1,11 +1,13 @@
 """Расшифровка записей (app/transcripts.py): загрузка потоком на шару, задание в фоне, ожидание
 карты, отмена, перезапуск, удаление; имя файла и текст — не в журнал."""
+import json
 import logging
 import pathlib
 import threading
 from urllib.parse import quote
 
 import clock
+import media
 import state
 import transcripts
 from conftest import T0, add_gateway, make_user, signin
@@ -46,6 +48,27 @@ def test_upload_streams_to_the_share_and_reads_by_speakers(studio, env, fake_aud
     assert NAME not in caplog.text and "Здравствуйте" not in caplog.text
     assert not list((env.db_path.parent / "tmp").iterdir())
     assert transcripts.JOBS == {}                     # кончившееся в памяти не живёт
+
+
+def result_file(tid) -> pathlib.Path:
+    row = state.DB.execute("SELECT user_id, result_media_id FROM transcripts WHERE id = ?", (tid,)).fetchone()
+    return media.path(row["user_id"], row["result_media_id"])
+
+
+def test_result_keeps_the_recognized_segments_and_an_old_one_still_reads(studio, fake_audio):
+    """Файл итога новой расшифровки — ещё и `raw` (сегменты до склейки с номером реплики); старый
+    файл без `raw` читается и выгружается как прежде."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    data = json.loads(result_file(tid).read_bytes())
+    assert [(r["speaker"], r["text"], r["turn"]) for r in data["raw"]] == [("Собеседник 1", "Здравствуйте.", 0),
+                                                                          ("Собеседник 2", "Добрый день.", 1)]
+    del data["raw"]
+    result_file(tid).write_bytes(json.dumps(data).encode())
+    assert [s["text"] for s in studio.c.get(f"/api/transcripts/{tid}").json()["segments"]] == ["Здравствуйте.", "Добрый день."]
+    srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt")
+    assert srt.status_code == 200 and "Собеседник 2: Добрый день." in srt.text
 
 
 def hold_temp_unlink(env, monkeypatch):
@@ -169,6 +192,94 @@ def test_deleting_a_user_drops_their_jobs_from_memory(studio, fake_audio, monkey
     signin(studio, "owner")
     assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
     assert transcripts.JOBS == {}
+
+
+# ---- правка -----------------------------------------------------------------------
+
+def done_tr(s) -> str:
+    add_gateway(s)
+    tid = upload(s).json()["id"]
+    wait_tr(s, tid, {"done"})
+    return tid
+
+
+def edit(s, tid, **body):
+    return s.c.patch(f"/api/transcripts/{tid}", json=body)
+
+
+def shown(body) -> list:
+    return [(x["speaker"], x["text"], x["edited"]) for x in body["segments"]]
+
+
+def test_edit_texts_and_names_over_the_untouched_recognition(studio, fake_audio, caplog):
+    caplog.set_level(logging.DEBUG)
+    tid = done_tr(studio)
+    before = result_file(tid).read_bytes()
+    r = edit(studio, tid, texts={"1": "  Добрый вечер.  "}, names={"Собеседник 1": "Иван"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert shown(body) == [("Иван", "Здравствуйте.", False), ("Собеседник 2", "Добрый вечер.", True)]
+    assert body["segments"][1]["original"] == "Добрый день." and "original" not in body["segments"][0]
+    assert [x["label"] for x in body["segments"]] == ["Собеседник 1", "Собеседник 2"]
+    assert body["names"] == {"Собеседник 1": "Иван"} and body["edited"] is True and body["speakers"] == 2
+    # второй PATCH сливается с первым; GET — то же
+    edit(studio, tid, texts={"0": "Привет."})
+    assert shown(studio.c.get(f"/api/transcripts/{tid}").json()) == [
+        ("Иван", "Привет.", True), ("Собеседник 2", "Добрый вечер.", True)]
+    assert result_file(tid).read_bytes() == before                 # исходное распознавание — как было
+    for secret in ("Добрый вечер", "Привет.", "Иван"):
+        assert secret not in caplog.text, secret
+
+
+def test_null_or_the_original_takes_an_edit_off_and_reset_returns_all(studio, fake_audio):
+    tid = done_tr(studio)
+    edit(studio, tid, texts={"0": "А.", "1": "Б."}, names={"Собеседник 1": "Иван", "Собеседник 2": "Пётр"})
+    body = edit(studio, tid, texts={"0": None, "1": "Добрый день."}, names={"Собеседник 2": "Собеседник 2"}).json()
+    assert shown(body) == [("Иван", "Здравствуйте.", False), ("Собеседник 2", "Добрый день.", False)]
+    assert body["names"] == {"Собеседник 1": "Иван"}
+    body = edit(studio, tid, names={"Собеседник 1": None}).json()
+    assert body["edited"] is False and body["names"] == {}
+    assert state.DB.execute("SELECT edits FROM transcripts").fetchone()[0] is None
+    edit(studio, tid, texts={"1": "Б."}, names={"Собеседник 2": "Пётр"})
+    r = studio.c.delete(f"/api/transcripts/{tid}/edits")
+    assert r.status_code == 200 and shown(r.json()) == [("Собеседник 1", "Здравствуйте.", False),
+                                                       ("Собеседник 2", "Добрый день.", False)]
+    assert r.json()["edited"] is False
+
+
+def test_speakers_count_the_shown_names(studio, fake_audio):
+    tid = done_tr(studio)
+    assert edit(studio, tid, names={"Собеседник 1": "Собеседник 2"}).json()["speakers"] == 1
+    assert studio.c.get("/api/transcripts").json()["items"][0]["speakers"] == 1
+
+
+def test_edit_is_checked_in_words(studio, fake_audio):
+    tid = done_tr(studio)
+    for body in ({"texts": {"2": "x"}}, {"texts": {"-1": "x"}}, {"texts": {"a": "x"}}, {"texts": {"0": "   "}},
+                 {"texts": {"0": "я" * (transcripts.EDIT_TEXT_MAX + 1)}}, {"names": {"Собеседник 3": "x"}},
+                 {"names": {"Собеседник 1": "Иван\nПетров"}}, {"names": {"Собеседник 1": " "}},
+                 {"names": {"Собеседник 1": "я" * (transcripts.NAME_EDIT_MAX + 1)}}):
+        r = edit(studio, tid, **body)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "input", body
+        assert isinstance(r.json()["detail"]["message"], str)
+    assert state.DB.execute("SELECT edits FROM transcripts").fetchone()[0] is None
+    assert edit(studio, tid, texts={"0": "я" * transcripts.EDIT_TEXT_MAX}).status_code == 200
+
+
+def test_running_cannot_be_edited_and_foreign_is_gone(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
+    running = upload(studio).json()["id"]
+    r = edit(studio, running, texts={"0": "x"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "running"
+    studio.c.post(f"/api/transcripts/{running}/cancel")
+    studio.gw.asr_replies = []
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    make_user(studio, "bob"); signin(studio, "bob")
+    for r in (edit(studio, tid, texts={"0": "x"}), studio.c.delete(f"/api/transcripts/{tid}/edits")):
+        assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
 
 
 def test_delete_takes_the_recording_and_the_result(studio, env, fake_audio):

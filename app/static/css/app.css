@@ -249,6 +249,19 @@ label { font-size: 13px; color: var(--muted); }
 .tr-busy p { margin: 0; }
 .tr-turns { display: flex; flex-direction: column; gap: 12px; }
 .tr-turn p { margin: 0; }
+.tr-turn { margin: 0 -8px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.tr-turn:hover { background: var(--panel-2); }
+.tr-turn[aria-current="true"] { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }
+.tr-turn.editing { display: flex; flex-direction: column; gap: 4px; cursor: auto; }
+.tr-turn.editing:hover { background: none; }
+.tr-edit-text { width: 100%; resize: none; overflow: hidden; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; line-height: 1.5; }
+.tr-mark { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.tr-mark[hidden] { display: none; }
+.tr-edit-bar { position: sticky; bottom: 0; display: flex; gap: 6px; padding: 8px 0; background: var(--bg); }
+.tr-name-row { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.tr-name-row span { flex: none; color: var(--muted); }
+.tr-name-row .input { flex: 1; min-width: 0; }
 .tr-who { color: var(--muted); font-size: 13px; font-weight: 600; }
 .sp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .sp-audio { width: 100%; }
@@ -442,6 +455,13 @@ label { font-size: 13px; color: var(--muted); }
 .att-chip.bad { border-color: var(--danger); }
 .att-chip svg.ico { width: 15px; height: 15px; color: var(--muted); }
 .att-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-open { padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px; }
+.att-text { max-height: 60dvh; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;
+  font-size: 14px; line-height: 1.5; }
+.att-source { color: var(--accent); font-size: 12px; white-space: nowrap; }
+.chat-model-note { margin: 0 16px; font-size: 13px; }
+.chat-model-note:empty { display: none; }
 .att-state { font-size: 12px; overflow-wrap: anywhere; }
 .att-chip .icon-btn { width: 24px; height: 24px; border-radius: 7px; }
 .att-chip .icon-btn svg.ico { width: 14px; height: 14px; }
