@@ -141,6 +141,14 @@ label { font-size: 13px; color: var(--muted); }
   display: grid; place-items: center; }
 .hint .badge svg, .empty .badge svg { width: 26px; height: 26px; }
 .hint p, .empty p { margin: 0; color: var(--muted); }
+/* та же подсказка полосой на месте поля создания (раздел без модели, история — над ней) */
+.hint.hint-bar { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: center; max-width: none;
+  margin: 0 16px 16px; padding: 10px 12px; text-align: left; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 16px; }
+.hint.hint-bar .badge { width: 36px; height: 36px; border-radius: 10px; }
+.hint.hint-bar .badge svg { width: 20px; height: 20px; }
+.hint.hint-bar p { flex: 1 1 200px; }
+.split-main .hint.hint-bar { margin-top: 12px; }
 
 /* ---- страницы настроек: профиль и панель --------------------------------------- */
 

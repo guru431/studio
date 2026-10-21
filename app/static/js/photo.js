@@ -15,7 +15,9 @@
  * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
  * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
- * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm. */
+ * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
+ * Раздел без модели (ctx.hint): лента, просмотр, «Скачать» и «Удалить» — как всегда, вместо поля
+ * промпта — подсказка, в просмотре нет «Изменить» и «Повторить». */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
@@ -128,14 +130,14 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }),
       chipTranslate, attachMic(prompt, micNote), go));
-  const root = el('div', { class: 'photo' }, head, status, feedBox, error, form);
+  const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form);
   view.append(root);
 
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
     load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
-    empty: 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
+    empty: ctx.hint ? 'Здесь появятся ваши картинки.' : 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
   });
 
@@ -495,12 +497,13 @@ function build(view, ctx) {
         dialog.close();
         describe({ mediaId: item.media_id });
       })];
-    const actions = el('div', { class: 'viewer-actions' }, starts[0],
+    // без модели раздела «Изменить» и «Повторить» не начать — их нет; «Описать» решает шлюз раздела
+    const actions = el('div', { class: 'viewer-actions' }, ctx.hint ? null : starts[0],
       act('Оживить', 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?source=${encodeURIComponent(item.media_id)}`);
       }),
-      starts[1], starts[2],
+      ctx.hint ? null : starts[1], starts[2],
       act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
       act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);

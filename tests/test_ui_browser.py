@@ -115,20 +115,26 @@ def test_wrong_password_shows_words(browser, live):
 
 @pytest.mark.parametrize("width", [390, 1280])
 def test_photo_without_gateway_shows_the_hint(browser, live, width):
+    """Раздел без модели открывается с лентой; подсказка со ссылкой на настройки — на месте поля промпта."""
     login = f"nogw{width}"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
         ("eval", "go", "location.hash = '#/photo'"),
-        ("wait", "document.querySelector('#view .hint')"),
-        ("eval", "text", "document.querySelector('#view .hint').textContent"),
-        ("eval", "link", "document.querySelector('#view .hint a').getAttribute('href')"),
+        ("wait", "document.querySelector('#view .hint-bar') && document.querySelector('#photo-feed')?.dataset.feed === 'end'"),
+        ("eval", "text", "document.querySelector('#view .hint-bar').textContent"),
+        ("eval", "link", "document.querySelector('#view .hint-bar a').getAttribute('href')"),
+        ("eval", "form", "!!document.querySelector('#photo-composer')"),
+        ("eval", "empty", "document.querySelector('#photo-feed .feed-empty').textContent"),
         ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
-        ("click", "#view .hint a"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        ("click", "#view .hint-bar a"),
         ("wait", "location.hash === '#/settings/photo' && document.querySelector('.section-panel[data-section=photo]')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert "Чтобы генерировать фото, выберите модель в настройках раздела «Фото»" in r["values"]["text"]
-    assert r["values"]["link"] == "#/settings/photo" and r["values"]["current"] == "photo"
+    v = r["values"]
+    assert "Чтобы генерировать фото, выберите модель в настройках раздела «Фото»" in v["text"]
+    assert v["link"] == "#/settings/photo" and v["current"] == "photo"
+    assert v["form"] is False and v["empty"] == "Здесь появятся ваши картинки." and not v["overflow"]
     assert not problems(r), problems(r)
 
 
@@ -926,6 +932,28 @@ def test_direct_answer_longer_than_the_limit_is_saved_cut(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["meta"] == "Ответ слишком длинный — обрезан"
     assert r["values"]["saved"] == ["error", chat.ANSWER_MAX + len(chat.CUT_SIZE), ("x" * 60 + chat.CUT_SIZE)[-60:]]
+    assert not problems(r), problems(r)
+
+
+#: PUT ответа прямого подключения сервер не принял (422)
+REFUSE_PUT = """(() => { const real = window.fetch;
+  window.fetch = (u, o = {}) => o.method === 'PUT' && /\\/messages\\//.test(String(u))
+    ? Promise.resolve(new Response(JSON.stringify({ detail: { code: 'input', message: 'ответ не принят' } }),
+        { status: 422, headers: { 'content-type': 'application/json' } }))
+    : real(u, o);
+  return true; })()"""
+
+
+def test_direct_answer_that_was_not_saved_says_so(browser, live):
+    """Прямое подключение: PUT готового ответа отказал — под ответом «Ответ не сохранился: …», а не пусто."""
+    live.add_user("cloudput")
+    r = browser.drive(live.url + "/", [*signin("cloudput"), ("wait", READY), add_cloud(live.cloud),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+        ("eval", "refuse", REFUSE_PUT), ("type", "#chat-input", "Скажи"), ("press", "Enter"), ("wait", ANSWERED),
+        ("eval", "meta", f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(),"
+                         f" {LAST_ANSWER}.querySelector('.msg-meta').textContent]")])
+    assert not r.get("failed"), r
+    assert r["values"]["meta"] == ["Облако на связи.", "Ответ не сохранился: Ответ не принят"]
     assert not problems(r), problems(r)
 
 
@@ -2291,6 +2319,104 @@ def test_late_answer_of_an_earlier_pick_does_not_take_the_view(browser, live, se
     assert not known_refusals(problems(r), 404), problems(r)      # плеер записи без файла (строки — без media)
 
 
+# ---- история без модели раздела ------------------------------------------------------
+
+def made_history_then_no_connection():
+    """Через API: диалог, картинка, ролик из неё, расшифровка, озвучка; затем подключение удалено —
+    ни у одного раздела нет модели. window.made — id диалога и готовность разделов."""
+    b64, sample64 = base64.b64encode(wav_of(1.0)).decode(), base64.b64encode(wav_of(6.0)).decode()
+    return ("eval", "made", f"""(async () => {{ const m = {API};
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const until = async (path, done) => {{ for (let i = 0; i < 400; i++) {{
+        const x = await m.api('GET', path); if (done(x)) return x; await sleep(50); }} throw new Error(path); }};
+      const conn = (await m.api('GET', '/api/connections')).items[0].id;
+      const chat = await m.api('POST', '/api/chats', {{}});
+      await (await m.api('POST', '/api/chats/' + chat.id + '/turns', {{ text: 'привет' }})).text();
+      const image = await until('/api/images/' + (await m.api('POST', '/api/images', {{ prompt: 'кот', size: 'square' }})).id,
+        x => x.state === 'done');
+      const form = new FormData(); form.append('source_media_id', image.media_id); form.append('seconds', '1');
+      form.append('quality', 'fast'); form.append('smooth', 'false'); form.append('prompt', 'кот моргает');
+      await until('/api/videos/' + (await m.api('POST', '/api/videos', form)).id, x => x.state === 'done');
+      const bytes = Uint8Array.from(atob('{b64}'), c => c.charCodeAt(0));
+      const sent = await fetch('/api/transcripts', {{ method: 'POST', body: bytes, headers: {{ 'content-type': 'audio/wav',
+        'x-studio-name': encodeURIComponent('Звонок.wav'), 'x-studio-csrf': m.me.csrf }} }});
+      await until('/api/transcripts/' + (await sent.json()).id, x => x.state === 'done');
+      const sample = new FormData(); sample.append('name', 'Мой голос'); sample.append('text', 'текст образца');
+      sample.append('audio', new File([Uint8Array.from(atob('{sample64}'), c => c.charCodeAt(0))], 'sample.wav',
+        {{ type: 'audio/wav' }}));
+      const voice = (await m.api('POST', '/api/voices', sample)).id;
+      await until('/api/speeches/' + (await m.api('POST', '/api/speeches', {{ text: 'Привет.', voice }})).id,
+        x => x.state === 'done');
+      await m.api('DELETE', '/api/connections/' + conn);
+      await m.loadMe();
+      window.made = {{ chat: chat.id, caps: m.me.capabilities }};
+      return window.made; }})()""")
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, ready_clips, width):
+    """Подключение удалено — генерации нет, а своя история осталась: прежний диалог читается, фото и ролик
+    скачиваются, фото удаляется, расшифровка выгружается, озвучка скачивается и удаляется; вместо полей
+    создания — подсказка со ссылкой на настройки раздела."""
+    login = f"nomodel{width}"
+    live.add_user(login)
+    mobile = width == 390
+    lists = [("click", "#view .split-toggle")] if mobile else []
+    hint = "document.querySelector('#view .hint-bar a')?.getAttribute('href') ?? null"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), made_history_then_no_connection(),
+        ("eval", "spy", CLICKS), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        # чат: новый диалог — подсказка без поля ввода, прежний — читается
+        *go("chat"), ("wait", "document.querySelector('#messages .hint')"),
+        ("eval", "chatNew", "[document.querySelector('#composer').hidden,"
+                            " document.querySelector('#messages .hint a').getAttribute('href')]"),
+        ("eval", "open", "location.hash = '#/chat/' + window.made.chat"),
+        ("wait", "document.querySelectorAll('#messages .msg').length === 2"),
+        ("eval", "chatOld", "[document.querySelector('#composer').hidden, [...document.querySelectorAll('#messages .msg')]"
+                            ".map(m => m.querySelector('.bubble, .md').textContent.trim())]"),
+        # видео: ролик в ленте, «Скачать»
+        *go("video"), ("wait", f"{VIDEO_FEED_READY} && {clips('done', 1)}"),
+        ("eval", "video", f"[!!document.querySelector('#video-composer'), {hint}]"),
+        ("click", f"{CLIP} .card-download"), ("wait", "window.clicked.length === 1"),
+        # фото: лента, просмотр без «Изменить» и «Повторить», «Скачать», «Удалить»
+        *go("photo"), ("wait", f"{FEED_READY} && document.querySelector('{NEWEST_DONE}')"),
+        ("eval", "photo", f"[!!document.querySelector('#photo-composer'), {hint}]"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("eval", "acts", "[...document.querySelectorAll('#viewer .viewer-actions button')].map(b => b.textContent)"),
+        ("click", "#viewer .act-download"), ("wait", "window.clicked.length === 2"),
+        ("click", "#viewer .act-delete"), ("wait", is_open("#photo-delete-dialog")), ("click", "#photo-delete-confirm"),
+        ("wait", "document.querySelector('#photo-feed .feed-empty')"),
+        # расшифровка: без «Загрузить запись», выгрузка прежней
+        *go("transcribe"), ("wait", "document.querySelector('.tr-item[data-state=done]')"),
+        ("eval", "transcribe", f"[!!document.querySelector('#transcribe-add'), {hint},"
+                               " document.querySelector('.tr-empty').textContent]"),
+        *lists, ("click", ".tr-item[data-state=done]"), ("wait", "document.querySelector('#tr-download')"),
+        ("click", "#tr-download"), ("click", ".tr-formats [data-format=txt]"), ("wait", "window.clicked.length === 3"),
+        ("eval", "export", "fetch(window.clicked[2][0]).then(async r => [r.status, (await r.text()).length > 0])"),
+        # озвучка: без поля текста, «Скачать mp3», «Удалить»
+        *go("speech"), ("wait", "document.querySelector('.sp-item[data-state=done]')"),
+        ("eval", "speech", f"[!!document.querySelector('#speech-composer'), {hint}]"),
+        *lists, ("click", ".sp-item[data-state=done]"), ("wait", "document.querySelector('#sp-download')"),
+        ("click", "#sp-download"), ("wait", "window.clicked.length === 4"),
+        ("click", "#sp-delete"), ("wait", is_open("#sp-delete-dialog")), ("click", "#sp-delete-confirm"),
+        ("wait", "!document.querySelector('.sp-item')"), ("eval", "clicked", "window.clicked.map(c => c[0])")],
+        width=width, mobile=mobile, timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["made"]["caps"] == {s: False for s in v["made"]["caps"]}
+    assert v["chatNew"] == [True, "#/settings/chat"]
+    assert v["chatOld"] == [False, ["привет", "Здравствуйте!"]]
+    assert v["video"] == [False, "#/settings/video"] and v["photo"] == [False, "#/settings/photo"] and not v["overflow"]
+    assert "Изменить" not in v["acts"] and "Повторить с тем же seed" not in v["acts"]
+    assert {"Скачать", "Удалить", "Оживить"} <= set(v["acts"])
+    assert v["transcribe"] == [False, "#/settings/transcribe", "Выберите запись в списке."]
+    assert v["export"] == [200, True] and v["speech"] == [False, "#/settings/speech"]
+    assert [re.sub(r"[0-9a-f]{32}", "<id>", c) for c in v["clicked"]] == [
+        "/api/media/<id>?download=1", "/api/media/<id>?download=1", "/api/transcripts/<id>/export?format=txt",
+        "/api/media/<id>?download=1"]
+    assert not problems(r), problems(r)
+
+
 # ---- блокировка на телефоне (спека 2026-10-21-studio-screen-lock) -----------------
 
 PHONE = {"width": 390, "mobile": True, "touch": True, "authenticator": True}
@@ -2720,6 +2846,58 @@ def test_cold_start_without_the_lock_state_still_opens(browser, live, way):
     assert not r.get("failed"), r
     assert r["values"]["left"] == "0" and r["values"]["me"] == 200
     assert not known_refusals(problems(r), 423), problems(r)
+
+
+#: GET путей из sessionStorage.fail ({путь: сколько раз}) падают «нет связи» с самого старта страницы;
+#: коды ответов на отметки POST /api/lock/alive — в window.marks
+FAIL_GETS = """(() => { const real = window.fetch; window.marks = [];
+  window.fetch = async function (input, init) {
+    const fail = JSON.parse(sessionStorage.getItem('fail') || '{}');
+    if (fail[input] > 0 && (!init || !init.method || init.method === 'GET')) {
+      fail[input] -= 1;
+      sessionStorage.setItem('fail', JSON.stringify(fail));
+      throw new TypeError('Failed to fetch');
+    }
+    const response = await real.call(this, input, init);
+    if (input === '/api/lock/alive') window.marks.push(response.status);
+    return response;
+  }; })();"""
+
+
+def cold_start_offline(login):
+    """Вход, после которого первые GET /api/lock и /api/me студии падают без связи: «Студия не открылась»."""
+    return [("idle",), ("eval", "cut", "sessionStorage.setItem('fail', JSON.stringify({'/api/lock': 1, '/api/me': 1}))"),
+            *signin(login)[1:], ("wait", "document.querySelector('#start-retry')"),
+            ("eval", "note", "document.querySelector('#view').textContent")]
+
+
+@pytest.mark.parametrize("way", ["button", "online"])
+def test_start_without_the_profile_opens_without_a_reload(browser, live, way):
+    """Профиль при запуске не пришёл (нет связи): в PWA обновить страницу нечем — «Повторить» или
+    появление сети открывают студию в той же странице."""
+    login = f"start-{way}"
+    live.add_user(login)
+    retry = ("click", "#start-retry") if way == "button" else ("eval", "online", "window.dispatchEvent(new Event('online'))")
+    r = browser.drive(live.url + "/", [*cold_start_offline(login), retry, ("wait", READY),
+        ("wait", "document.querySelector('#chat-input')"),
+        ("eval", "navigation", "performance.getEntriesByType('navigation')[0].type")], init=FAIL_GETS)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "Студия не открылась: Нет связи с сервером" in v["note"] and "Повторить" in v["note"]
+    assert v["navigation"] == "navigate"
+    assert not problems(r), problems(r)
+
+
+def test_cold_start_mark_takes_the_csrf_first(browser, live):
+    """Холодный старт без связи (GET /api/lock и профиль упали), возвращение на экран: отметка берёт CSRF
+    из GET /api/lock и доходит до сервера, а не получает 403; студия открывается тем же возвращением."""
+    login = "mark-cold"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*cold_start_offline(login), show(), ("wait", f"window.marks.length > 0 && {READY}"),
+        ("eval", "marks", "window.marks")], init=FAIL_GETS)
+    assert not r.get("failed"), r
+    assert r["values"]["marks"] == [200]
+    assert not problems(r), problems(r)
 
 
 def test_curtain_leaves_when_the_mark_hangs(browser, live):
