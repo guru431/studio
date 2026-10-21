@@ -1,6 +1,9 @@
 # Тесты на workstation: .venv/Scripts/python -m pip install -r requirements-dev.txt
 -r requirements.txt
 pytest>=8.0
+# TestClient Starlette — на httpx2 (с httpx он устарел и выйдет из строя); отдельный модуль:
+# httpx службы и MockTransport шлюза в tests/fakes.py он не задевает
+httpx2>=2.16
 # `timeout = 30` в pytest.ini: зависший тест падает с дампом стеков, а не держит прогон
 pytest-timeout>=2.3
 # `-n 4` в pytest.ini: набор — четырьмя процессами
