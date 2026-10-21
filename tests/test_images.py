@@ -6,8 +6,10 @@ import base64
 import io
 import json
 import logging
+import struct
 import threading
 import time
+import zlib
 
 import httpx
 import pytest
@@ -169,13 +171,23 @@ def reply_with(raw: bytes, seed=5) -> tuple:
     return 200, {"data": [{"b64_json": base64.b64encode(raw).decode(), "seed": seed}]}
 
 
+def png_header(width: int, height: int) -> bytes:
+    """Заголовок PNG без пикселей: Image.open читает чанки до первого IDAT, размер — из IHDR."""
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", b""))
+
+
 @pytest.mark.parametrize("raw, limit, words", [
     (b"not an image", None, "сервис вернул не картинку"),
     (PNG_REAL[:len(PNG_REAL) // 2], None, "сервис вернул не картинку"),
     (picture("GIF"), None, "сервис вернул не картинку"),
     (PNG_REAL, ("RESULT_PIXELS", 64 * 48 - 1), "больше предела"),
     (PNG_REAL, ("RESULT_MAX", len(PNG_REAL) - 1), "больше предела"),
-], ids=["text", "truncated", "gif", "pixels", "bytes"])
+    # больше двух MAX_IMAGE_PIXELS Pillow отказывает (DecompressionBombError) ещё в Image.open
+    (png_header(14_000, 14_000), None, "больше предела"),
+], ids=["text", "truncated", "gif", "pixels", "bytes", "bomb"])
 def test_a_reply_that_is_not_a_proper_picture_is_an_error(studio, env, monkeypatch, raw, limit, words):
     """Корректный base64 ещё не картинка: текст, обрезанный файл, чужой формат и картинка больше
     пределов — ошибка словами, а не «готово» с текстом под видом PNG (находка аудита P2)."""

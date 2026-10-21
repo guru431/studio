@@ -247,6 +247,27 @@ def test_gone_listener_gets_no_queue(studio):
     assert (answer["status"], answer["content"]) == ("done", "Здрав" + "x" * 2000)
 
 
+def test_stream_the_client_left_before_its_first_chunk_gets_no_queue():
+    """Клиент ушёл, пока ответ слал заголовки: тело генератора не начиналось, его finally не сработал
+    бы, и очередь ответа копилась бы без читателя (ревью)."""
+    st = chat.StreamTask(user_id=1, chat_id="c", message_id="m", conn=None, model="x", messages=[])
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        raise OSError("клиент ушёл")
+
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "method": "POST", "headers": []}
+    try:
+        asyncio.run(chat._EventStream(st, "u")(scope, receive, send))
+    except Exception:                                  # noqa: BLE001 — Starlette зовёт это ClientDisconnect
+        pass
+    assert st.listening is False
+    st.put("delta", "никто не прочтёт")
+    assert st.queue.qsize() == 0
+
+
 def test_user_streams_are_limited(studio):
     """Не больше USER_STREAMS ответов через сервер у пользователя сразу: следующий ход — 429, в
     диалоге ничего не записано (аудит)."""

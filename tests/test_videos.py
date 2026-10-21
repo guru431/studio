@@ -4,6 +4,7 @@ tests/test_studio.py (прежний server.py); шлюз — FakeGateway, ча�
 Проход наблюдателя идёт в цикле приложения (там живёт state.HTTP) — `poll`."""
 import asyncio
 import io
+import itertools
 import json
 import logging
 
@@ -453,6 +454,32 @@ def test_watcher_polls_at_most_poll_max_connections_at_once(studio, monkeypatch)
         return len(tasks)
 
     assert studio.c.portal.call(run) == 1
+
+
+def test_full_watcher_takes_connections_in_turn_and_forgets_old_pauses(studio, monkeypatch):
+    """Все места заняты — следующий проход начинает другое подключение, а не снова самое старое;
+    истёкшая пауза из PAUSED уходит (ревью)."""
+    monkeypatch.setattr(videos, "POLL_MAX", 1)
+    monkeypatch.setattr(videos, "_TURNS", itertools.count())
+    polled = []
+
+    async def poll_rows(rows):
+        polled.append(rows[0]["connection_id"])
+
+    monkeypatch.setattr(videos, "_poll_rows", poll_rows)
+    add_gateway(studio)
+    create_video(studio)
+    _second_user_gateway(studio)
+    create_video(studio)
+    videos.PAUSED[424242] = studio.clock[0] - 1
+
+    async def run():
+        for _ in range(2):
+            await asyncio.gather(*videos.start_pass())
+
+    studio.c.portal.call(run)
+    assert len(polled) == 2 and polled[0] != polled[1]
+    assert 424242 not in videos.PAUSED
 
 
 def test_stopping_the_watcher_stops_its_polls(studio):

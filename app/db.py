@@ -51,8 +51,11 @@ CREATE INDEX purge_user ON purge(user_id);
 """
 
 #: файлы учётки — по user_id: «Хранилище», стирание истории и каскад удаления учётки шли полным
-#: просмотром media
-MEDIA_INDEX = "CREATE INDEX media_user ON media(user_id);\n"
+#: просмотром media; идущие ответы — частичным индексом: предел chat.USER_STREAMS считает их на
+#: каждом ходу и без него читал бы всю переписку пользователя
+INDEXES_9 = """CREATE INDEX media_user ON media(user_id);
+CREATE INDEX messages_streaming ON messages(chat_id) WHERE status = 'streaming';
+"""
 
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
@@ -96,7 +99,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + MEDIA_INDEX
+""" + INDEXES_9
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -143,8 +146,8 @@ ALTER TABLE sessions ADD COLUMN mobile INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # очередь удаления файлов: не удалившийся или недописанный файл не теряет свой путь
     8: PURGE_TABLES,
-    # индекс файлов по учётке
-    9: MEDIA_INDEX,
+    # индексы: файлы по учётке, идущие ответы
+    9: INDEXES_9,
 }
 
 

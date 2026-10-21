@@ -26,6 +26,7 @@
    имена файлов туда не пишутся.
 """
 import asyncio
+import itertools
 import json
 import logging
 import re
@@ -83,6 +84,8 @@ LOST_UNFOUND = "ролик мог начаться у шлюза, но в его
 WATCHING: "dict[int | None, asyncio.Task]" = {}
 #: id подключения → до какого clock.NOW() его не опрашивать (шлюз не ответил по сети)
 PAUSED: "dict[int, float]" = {}
+#: номер прохода — сдвиг очереди подключений (start_pass)
+_TURNS = itertools.count()
 
 
 class VideoIn(BaseModel):
@@ -506,14 +509,23 @@ async def _poll_rows(rows) -> None:
 
 def start_pass() -> "list[asyncio.Task]":
     """Проход (п. 2 шапки): ролики каждого подключения — своей задачей, не больше POLL_MAX сразу;
-    подключение в работе или на паузе пропускается. Итог — начатые задачи."""
+    подключение в работе или на паузе пропускается. Итог — начатые задачи. Места заняты — подключения
+    берутся по кругу (сдвиг на проход), иначе свободное место снова доставалось бы самому старому."""
+    now = clock.NOW()
+    for conn_id in [c for c, until in PAUSED.items() if until <= now]:
+        del PAUSED[conn_id]                       # пауза кончилась — запись не копится до перезапуска
     rows = state.DB.execute(f"SELECT * FROM videos WHERE {WHERE_ACTIVE} AND gateway_id IS NOT NULL"
                             " ORDER BY created").fetchall()
     by_conn: "dict[int | None, list]" = {}
     for row in rows:
         by_conn.setdefault(row["connection_id"], []).append(row)
+    order = list(by_conn)
+    if order:
+        shift = next(_TURNS) % len(order)
+        order = order[shift:] + order[:shift]
     started = []
-    for conn_id, group in by_conn.items():
+    for conn_id in order:
+        group = by_conn[conn_id]
         if len(WATCHING) >= POLL_MAX:
             break
         if conn_id in WATCHING or _paused(conn_id):

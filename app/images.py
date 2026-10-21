@@ -39,7 +39,6 @@ import json
 import logging
 import secrets
 import uuid
-import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -567,18 +566,20 @@ def _picture(data: bytes) -> str:
                                   f" {RESULT_MAX // (1024 * 1024)} МиБ)")
     if len(data) > RESULT_MAX:
         raise too_big
+    # без warnings.catch_warnings: фильтр предупреждений общий на процесс, а здесь поток — параллельные
+    # задания перепутали бы его. Бомбу отсекает предел пикселей по заголовку; больше двух
+    # MAX_IMAGE_PIXELS Pillow отказывает сам ещё в Image.open
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as image:
-                if image.format not in RESULT_TYPES:
-                    raise JobError("not_image", NOT_PICTURE)
-                if image.width * image.height > RESULT_PIXELS:   # до декодирования: размер — из заголовка
-                    raise too_big
-                image.load()
-                return RESULT_TYPES[image.format]
-    except (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError,
-            Image.DecompressionBombWarning):
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format not in RESULT_TYPES:
+                raise JobError("not_image", NOT_PICTURE)
+            if image.width * image.height > RESULT_PIXELS:   # до декодирования: размер — из заголовка
+                raise too_big
+            image.load()
+            return RESULT_TYPES[image.format]
+    except Image.DecompressionBombError:
+        raise too_big from None
+    except (OSError, ValueError, SyntaxError, EOFError):
         raise JobError("not_image", NOT_PICTURE) from None
 
 

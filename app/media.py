@@ -366,10 +366,15 @@ async def purge(user_id: int | None = None) -> None:
 def waiting(user_id: int | None = None) -> tuple[int, float | None]:
     """Очередь удаления пользователя или вся (панель — только числом): сколько путей ждут и когда
     встал самый старый; пути, которые пишутся сейчас (SAVING), не в счёт."""
-    where, args = ("WHERE user_id = ?", (user_id,)) if user_id is not None else ("", ())
-    queued = [r["queued"] for r in state.DB.execute(f"SELECT media_id, queued FROM purge {where}", args)
-              if r["media_id"] not in SAVING]
-    return len(queued), min(queued, default=None)
+    # счёт — в SQLite: после долгого простоя шары очередь — тысячи путей, а SAVING — единицы
+    saving = list(SAVING)
+    conds, args = (["user_id = ?"], [user_id]) if user_id is not None else ([], [])
+    if saving:
+        conds.append(f"media_id NOT IN ({', '.join('?' * len(saving))})")
+        args += saving
+    where = f"WHERE {' AND '.join(conds)}" if conds else ""
+    count, oldest = state.DB.execute(f"SELECT COUNT(*), MIN(queued) FROM purge {where}", args).fetchone()
+    return count, oldest
 
 
 def pending(user_id: int) -> int:

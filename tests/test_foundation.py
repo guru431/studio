@@ -34,7 +34,7 @@ DROP_V6 = "ALTER TABLE users DROP COLUMN views;"
 DROP_V7 = ("ALTER TABLE users DROP COLUMN screen_lock; ALTER TABLE sessions DROP COLUMN mobile;"
            " ALTER TABLE sessions DROP COLUMN seen; DROP TABLE passkeys;")
 DROP_V8 = "DROP TABLE purge;"
-DROP_V9 = "DROP INDEX media_user;"
+DROP_V9 = "DROP INDEX media_user; DROP INDEX messages_streaming;"
 
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
@@ -170,14 +170,19 @@ def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
     assert conn.execute("SELECT media_id, user_id, tries FROM purge").fetchone()[:] == ("m", 1, 0)
 
 
-def test_migrate_indexes_the_files_of_an_account_in_a_version_8_base(env):
-    """Шаг 9: файлы учётки — по индексу, а не полным просмотром media («Хранилище», стирание истории)."""
+def test_migrate_indexes_files_and_streaming_answers_in_a_version_8_base(env):
+    """Шаг 9: файлы учётки и идущие ответы — по индексу, а не полным просмотром media («Хранилище»,
+    стирание истории) и всей переписки (предел ответов на каждом ходу)."""
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript(f"{DROP_V9} PRAGMA user_version = 8;")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
-    plan = " ".join(r[-1] for r in conn.execute("EXPLAIN QUERY PLAN SELECT size FROM media WHERE user_id = 1"))
-    assert "media_user" in plan
+
+    def plan(sql):
+        return " ".join(r[-1] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
+    assert "media_user" in plan("SELECT size FROM media WHERE user_id = 1")
+    assert "messages_streaming" in plan("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id"
+                                        " WHERE c.user_id = 1 AND m.via = 'server' AND m.status = 'streaming'")
 
 
 #: строка истории каждой ленты: id, user_id, created

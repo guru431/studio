@@ -494,36 +494,39 @@ def _sse(event: str, data: dict) -> str:
 
 
 async def _events(st: StreamTask, user_message_id: str):
-    """Поток SSE хода; закрылся (клиент ушёл, ответ кончился) — очередь ответа больше не пополняется."""
-    try:
-        yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": st.message_id})
-        while True:
-            kind, data = await st.queue.get()
-            if kind == "ping":
-                yield ": ping\n\n"
-            elif kind == "delta":
-                yield _sse("delta", {"text": data})
-            elif kind == "done":
-                yield _sse("done", {"status": data})
-                return
-            else:
-                yield _sse("error", {"message": data})
-                return
-    finally:
-        st.listening = False
-        st.queue = asyncio.Queue()                   # непрочитанное — прочь
+    """События SSE хода из очереди ответа; глушит очередь, когда поток закрылся, — `_EventStream`."""
+    yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": st.message_id})
+    while True:
+        kind, data = await st.queue.get()
+        if kind == "ping":
+            yield ": ping\n\n"
+        elif kind == "delta":
+            yield _sse("delta", {"text": data})
+        elif kind == "done":
+            yield _sse("done", {"status": data})
+            return
+        else:
+            yield _sse("error", {"message": data})
+            return
 
 
 class _EventStream(StreamingResponse):
-    """Поток SSE хода, чей генератор закрывается сразу, как ответ кончился. Отмена (клиент ушёл)
-    застаёт его либо в ожидании очереди — тогда finally `_events` срабатывает сам, — либо в `send`:
-    тогда генератор так и стоял бы на yield до сборщика мусора, и очередь ответа росла бы."""
+    """Поток SSE хода. Закрылся (клиент ушёл, ответ кончился) — очередь ответа больше не пополняется,
+    и глушит её сам ответ, а не finally генератора: отмена может застать ответ в `send` (генератор так и
+    стоял бы на yield до сборщика мусора) или ещё до первого куска (тела генератора не было вовсе)."""
+
+    def __init__(self, st: StreamTask, user_message_id: str):
+        super().__init__(_events(st, user_message_id), media_type="text/event-stream",
+                         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        self.st = st
 
     async def __call__(self, scope, receive, send) -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
-            await self.body_iterator.aclose()       # finally `_events` без await: отмена не мешает
+            self.st.listening = False
+            self.st.queue = asyncio.Queue()              # непрочитанное — прочь
+            await self.body_iterator.aclose()           # генератор без finally: отмена не мешает
 
 
 async def _ended(user_message_id: str, answer_id: str, status: str):
@@ -800,8 +803,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
-    return _EventStream(_events(st, user_mid), media_type="text/event-stream",
-                        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return _EventStream(st, user_mid)
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}")
