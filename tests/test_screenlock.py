@@ -218,6 +218,29 @@ def test_locked_studio_cannot_turn_its_lock_off(studio):
     assert state.DB.execute("SELECT screen_lock FROM users WHERE id = ?", (uid,)).fetchone()[0] == 1
 
 
+def test_password_changed_during_the_check_confirms_nothing(studio, monkeypatch):
+    """Пароль сменили, пока считался хеш: отпирание, выключение блокировки и варианты ключа — отказ (аудит P1)."""
+    uid = locked_owner(studio)
+    computer = second_session(studio)
+    old_hash = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()[0]
+    new_hash, real = security.hash_password("changed-pass-1"), security.verify_password
+
+    def racing(password, stored):
+        ok = real(password, stored)
+        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (new_hash, uid))
+        return ok
+
+    monkeypatch.setattr(security, "verify_password", racing)
+    for client, path, body in ((studio.c, "/api/lock/password", {"password": "password-123"}),
+                               (computer, "/api/me/screen-lock", {"enabled": False, "password": "password-123"}),
+                               (computer, "/api/passkeys/options", {"password": "password-123"})):
+        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (old_hash, uid))
+        r = client.post(path, json=body)
+        assert r.status_code == 403 and code(r) == "password", path
+    assert studio.c.get("/api/me").status_code == 423
+    assert state.DB.execute("SELECT screen_lock FROM users WHERE id = ?", (uid,)).fetchone()[0] == 1
+
+
 def test_lock_events_log_only_ids(studio, caplog):
     caplog.set_level(logging.INFO)
     uid = locked_owner(studio)

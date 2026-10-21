@@ -68,6 +68,37 @@ def test_wrong_password_and_unknown_login_read_the_same(studio):
     assert auth.COOKIE not in studio.c.cookies
 
 
+def racing_verify(monkeypatch, change) -> None:
+    """Проверка пароля, за время которой база меняется (сброс из панели посреди scrypt): scrypt идёт
+    в потоке, цикл событий в это время обслуживает другие запросы."""
+    real = security.verify_password
+
+    def verify(password, stored):
+        ok = real(password, stored)
+        change()
+        return ok
+
+    monkeypatch.setattr(security, "verify_password", verify)
+
+
+RACES = {
+    "reset": lambda: state.DB.execute("UPDATE users SET pw_hash = ?", (security.hash_password("admin-reset-1"),)),
+    "disabled": lambda: state.DB.execute("UPDATE users SET disabled = 1"),
+    "deleted": lambda: state.DB.execute("DELETE FROM users"),
+}
+
+
+@pytest.mark.parametrize("race", RACES)
+def test_login_started_with_the_old_password_opens_no_session(studio, monkeypatch, race):
+    """Пароль сменили, учётку отключили или удалили, пока считался хеш: старый вход сессии не создаёт (аудит P1)."""
+    make_user(studio, "owner")
+    racing_verify(monkeypatch, RACES[race])
+    r = login(studio, "owner", "password-123")
+    assert r.status_code == 401 and "Неверный логин или пароль" in r.text
+    assert state.DB.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert studio.c.get("/api/me").status_code == 401
+
+
 def test_five_failures_lock_the_pair_but_not_the_login_elsewhere(studio):
     make_user(studio, "owner")
     for _ in range(5): login(studio, "owner", "nope", ip="203.0.113.9")
