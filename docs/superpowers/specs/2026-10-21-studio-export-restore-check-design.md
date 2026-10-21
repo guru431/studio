@@ -21,7 +21,7 @@
    все) → «Подготовить» → «Скачать: 1 234 файла, 5,6 ГБ» → загрузка `studio-export-ГГГГ-ММ-ДД.zip`
    начинается сразу.
 2. Внутри: `README.txt`, `manifest.json` (что внутри, sha256 каждого файла), `chats/<id>.json`,
-   `images.json`, `videos.json`, `transcripts.json`, `speeches.json`, `voices.json`,
+   страницы разделов `images/0001.json`, `videos/…`, `transcripts/…`, `speeches/…`, `voices/…`,
    `settings.json`, `files/<media id>.<расширение>`; распаковывается Проводником, macOS и 7-Zip,
    `sha256sum`-проверка по манифесту сходится.
 3. В выгрузке нет токенов подключений, хеша пароля, сессий, ключей passkey, CSRF.
@@ -77,11 +77,16 @@ filename="studio-export-ГГГГ-ММ-ДД.zip"`, `Cache-Control: no-store`, `no
 - `chats/<chat id>.json` — диалог: `{id, title, model, created, updated, messages: [{id, role,
   content, status, model, created, attachments: [{id, kind, name, chars, text, file}]}]}` — по одному
   файлу на диалог (память — на один диалог, а не на все).
-- `images.json` — `[{id, kind, model, prompt, size, seed, strength, state, detail, created,
-  finished, chain, file, source_file, mask_file}]`; `videos.json`, `transcripts.json` (с правками,
-  если они есть в базе), `speeches.json`, `voices.json` — так же, файлы — ссылками `files/…`.
+- `images/0001.json`, `images/0002.json`, … — страницы по `takeout.PAGE` (500) записей
+  `[{id, kind, model, prompt, size, seed, strength, state, detail, created, finished, chain, file,
+  source_file, mask_file}]` (пик памяти — страница, а не раздел; пустой раздел — одна пустая
+  страница, число записей — `manifest.counts`); `videos/…`, `transcripts/…` (с правками),
+  `speeches/…`, `voices/…` — так же, файлы — ссылками `files/…`.
 - `settings.json` — профиль (логин, имя, тема, виды лент), подключения `{id, name, kind, base_url}`
-  без токенов, разделы (`section_links`, `section_defaults`), пресеты (если таблица есть).
+  без токенов и паспорта, разделы (`section_links`, `section_defaults`), пресеты.
+- Сериализация, CRC-32 и sha256 — в потоке (`asyncio.to_thread`), заголовок записи и её данные —
+  отдельными кусками; идёт не больше одной выгрузки на пользователя (вторая — 409 `busy`).
+  Добавлено по ревью 2026-10-21.
 - `files/<media id><расширение>` — все строки `media` пользователя, на которые ссылаются выбранные
   разделы (`media.EXT` по mime), без миниатюр. Файла нет на шаре — пропуск и запись в
   `manifest.missing`.
