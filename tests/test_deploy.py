@@ -97,6 +97,7 @@ def test_vhost_is_public_and_streams_chat():
     v = (DEPLOY / "apache-vhost.conf").read_text(encoding="utf-8")
     assert "ServerName studio.example.com" in v and "Require ip" not in v
     assert v.index("ProxyPass /api/chats/") < v.index("ProxyPass / ")
+    assert v.index("ProxyPass /api/videos ") < v.index("ProxyPass / ")
     assert "flushpackets=on" in v and "studio-backend" in v and "localhost" not in re.sub(r"^#.*$", "", v, flags=re.M)
 
 
@@ -132,10 +133,13 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     """B2-M8: при равных пределах 502 Apache закрывал бы 504 службы словами «шлюз не ответил»."""
     timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))
     release = (len(images.MODELS) + 1) * images.SHORT_TIMEOUT_SEC         # «Освободить карту»: три release
-    video = videos.VIDEO_TIMEOUT_SEC + videos.ADOPT_TIMEOUT_SEC           # создание и поиск потерянного ответа
     saves = 2 * media.SAVE_TIMEOUT_SEC                                    # правка: исходник и маска на шару
     # удаление учётки ждёт её заданий картинок
-    assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC, saves)
+    assert timeout > max(chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC, saves)
+    # создание ролика: исходник на шару, задание шлюзу, поиск потерянного ответа, снятие у шлюза
+    # ролика, чьё фото удалили, пока шлюз его принимал, — подряд, у маршрута свой предел
+    video = media.SAVE_TIMEOUT_SEC + videos.VIDEO_TIMEOUT_SEC + videos.ADOPT_TIMEOUT_SEC + videos.VIDEO_TIMEOUT_SEC
+    assert _route_timeout("/api/videos") > video and _route_timeout("/api/videos/abc/cancel") > video
 
 
 def _route_timeout(path: str) -> int:
