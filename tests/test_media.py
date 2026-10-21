@@ -2,17 +2,22 @@
 import asyncio
 import dataclasses
 import io
+import logging
 import sqlite3
 import threading
 import time
+import uuid
+import zipfile
+from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
 from PIL import Image
 
+import auth
 import media
 import state
-from conftest import make_user, signin
+from conftest import T0, make_user, signin
 
 DATA = bytes(range(250)) * 4               # 1000 байт
 
@@ -475,3 +480,155 @@ def test_bulk_file_removal_needs_no_database(studio, env, monkeypatch):
     blocker.mkdir(parents=True)                                              # каталог не удалить как файл
     row = ("dir", blocker.relative_to(env.media_dir).as_posix())
     assert media.remove_files([row]) == [row]
+
+
+# ---- архив ZIP выделенного ----------------------------------------------------
+
+def archive(studio, ids):
+    return studio.c.post("/api/media/archives", json={"media_ids": ids})
+
+
+def test_archive_streams_the_chosen_files_in_order(studio, caplog):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    a = media.save(uid, png(64, 64), "image/png", "studio-lustify-42.png", thumb=True)
+    b = media.save(uid, DATA, "video/mp4", "studio-video-7.mp4")
+    c = media.save(uid, png(32, 32), "image/png", "studio-lustify-42.png")
+    media.save(uid, DATA, "video/mp4", "not-chosen.mp4")
+    with caplog.at_level(logging.INFO, logger="studio"):
+        r = archive(studio, [b, a, c, a])
+        assert r.status_code == 200 and r.json()["files"] == 3
+        z = studio.c.get(f"/api/media/archives/{r.json()['id']}")
+    assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
+    day = datetime.fromtimestamp(T0).strftime("%Y-%m-%d")
+    assert z.headers["content-disposition"] == f'attachment; filename="studio-{day}.zip"'
+    assert z.headers["cache-control"] == "no-store" and z.headers["x-content-type-options"] == "nosniff"
+    zf = zipfile.ZipFile(io.BytesIO(z.content))
+    assert zf.testzip() is None
+    assert zf.namelist() == ["studio-video-7.mp4", "studio-lustify-42.png", "studio-lustify-42-2.png"]
+    assert {i.compress_type for i in zf.infolist()} == {zipfile.ZIP_STORED}
+    assert zf.read("studio-video-7.mp4") == DATA and zf.read("studio-lustify-42-2.png") == png(32, 32)
+    assert "archive: 3" in caplog.text
+    for secret in ("studio-lustify", "studio-video", a, b, c):
+        assert secret not in caplog.text
+
+
+def test_archive_names_are_safe_inside(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    ids = [media.save(uid, DATA, "application/pdf", name) for name in ("../отчёт\r\n.pdf", ".hidden", "")]
+    token = archive(studio, ids).json()["id"]
+    names = zipfile.ZipFile(io.BytesIO(studio.c.get(f"/api/media/archives/{token}").content)).namelist()
+    assert names == ["__отчёт__.pdf", "_hidden", "file"]          # ведущие точки — одним «_»
+
+
+def test_archive_takes_only_own_known_ids(studio):
+    bob = make_user(studio, "bob"); uid = make_user(studio, "owner"); signin(studio, "owner")
+    mine, theirs = media.save(uid, DATA, "video/mp4", "m.mp4"), media.save(bob, DATA, "video/mp4", "t.mp4")
+    assert archive(studio, [theirs, uuid.uuid4().hex, mine]).json()["files"] == 1
+    r = archive(studio, [theirs])
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_archive_refuses_bad_lists(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mine = media.save(uid, DATA, "video/mp4", "m.mp4")
+    for bad in ([], ["../etc"], [mine.upper()], [uuid.uuid4().hex for _ in range(media.ARCHIVE_MAX + 1)]):
+        r = archive(studio, bad)
+        assert r.status_code == 400 and r.json()["detail"]["code"] == "invalid", bad
+    assert archive(studio, [mine] * (media.ARCHIVE_MAX + 1)).json()["files"] == 1   # повторы схлопнуты
+
+
+def test_archive_token_is_personal_reusable_and_expires(studio):
+    uid = make_user(studio, "owner"); make_user(studio, "bob"); signin(studio, "owner")
+    token = archive(studio, [media.save(uid, DATA, "video/mp4", "m.mp4")]).json()["id"]
+    url = f"/api/media/archives/{token}"
+    assert studio.c.get(url).status_code == 200 and studio.c.get(url).status_code == 200
+    studio.clock[0] += media.ARCHIVE_TTL_SEC + 1
+    assert studio.c.get(url).status_code == 404
+    token = archive(studio, [media.save(uid, DATA, "video/mp4", "n.mp4")]).json()["id"]
+    signin(studio, "bob")
+    r = studio.c.get(f"/api/media/archives/{token}")
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_archive_keeps_few_tokens_per_user(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "m.mp4")
+    tokens = [archive(studio, [mid]).json()["id"] for _ in range(media.ARCHIVE_KEEP + 1)]
+    assert studio.c.get(f"/api/media/archives/{tokens[0]}").status_code == 404
+    assert studio.c.get(f"/api/media/archives/{tokens[-1]}").status_code == 200
+    assert len(media.ARCHIVES) == media.ARCHIVE_KEEP
+
+
+def test_archive_skips_rows_and_files_gone_after_the_list(studio, env):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    a, b, c = (media.save(uid, DATA, "video/mp4", f"{n}.mp4") for n in "abc")
+    token = archive(studio, [a, b, c]).json()["id"]
+    asyncio.run(media.delete_async(uid, a))                      # строка ушла после POST
+    media.path(uid, b).unlink()                                  # файла нет, строка есть
+    names = zipfile.ZipFile(io.BytesIO(studio.c.get(f"/api/media/archives/{token}").content)).namelist()
+    assert names == ["c.mp4"]
+    for mid in (b, c):                                           # строк не осталось — 404
+        asyncio.run(media.delete_async(uid, mid))
+    assert studio.c.get(f"/api/media/archives/{token}").status_code == 404
+
+
+def test_archive_with_the_share_down_is_503_in_words(studio, env, monkeypatch):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "m.mp4")
+    real = media.Path.stat
+
+    def stat(self, **kwargs):
+        if env.media_dir in self.parents:
+            raise OSError("share went away")
+        return real(self, **kwargs)
+
+    monkeypatch.setattr(media.Path, "stat", stat)
+    r = archive(studio, [mid])
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "storage"
+
+
+def test_archive_read_failure_breaks_the_answer_without_names(studio, env, monkeypatch, caplog):
+    """Шара оборвала чтение посреди файла: ответ рвётся (а не кончается «целым» архивом без хвоста),
+    в журнале — ни пути, ни id, ни имени."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA * 200, "video/mp4", "studio-video-9.mp4")
+    token = archive(studio, [mid]).json()["id"]
+    real_open = open
+
+    class Broken:
+        def __init__(self, f):
+            self.f, self.reads = f, 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.f.close()
+
+        def fileno(self):
+            return self.f.fileno()
+
+        def read(self, n):
+            self.reads += 1
+            if self.reads > 1:
+                raise OSError(f"[Errno 5] Input/output error: '{self.f.name}'")
+            return self.f.read(n)
+
+    monkeypatch.setattr(media, "open", lambda file, mode="r": Broken(real_open(file, mode)), raising=False)
+    monkeypatch.setattr(media, "CHUNK", 1000)
+    with caplog.at_level(logging.INFO, logger="studio"), pytest.raises(media.StorageError):
+        studio.c.get(f"/api/media/archives/{token}")
+    assert "оборвало чтение" in caplog.text
+    for secret in (mid, "studio-video", str(env.media_dir)):
+        assert secret not in caplog.text
+
+
+def test_archive_needs_a_session_and_csrf(studio):
+    uid = make_user(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "m.mp4")
+    assert archive(studio, [mid]).status_code == 401
+    csrf = signin(studio, "owner")
+    del studio.c.headers[auth.CSRF_HEADER]
+    assert archive(studio, [mid]).status_code == 403
+    studio.c.headers[auth.CSRF_HEADER] = csrf
+    assert archive(studio, [mid]).status_code == 200

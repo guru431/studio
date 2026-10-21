@@ -17,12 +17,17 @@
 - `GET /api/media/{id}` отдаёт только своё, с диапазонами: Safari на iPhone без `Range` ролик не
   играет. С диска читается только нужный кусок.
 - Имена файлов и содержимое в журнал не пишутся: `download_name` — только в `Content-Disposition`.
+- Выделенное в лентах — одним архивом: `POST /api/media/archives` (список телом) даёт токен,
+  `GET /api/media/archives/<токен>` — ZIP без сжатия на лету, файлами с шары блоками CHUNK.
 """
 import asyncio
 import logging
 import os
 import re
+import secrets
+import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -33,6 +38,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from PIL import Image
+from pydantic import BaseModel
 
 import clock
 import state
@@ -57,6 +63,14 @@ EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/
        "audio/ogg": ".ogg", "audio/webm": ".webm", "audio/flac": ".flac", "audio/aac": ".aac", "video/webm": ".webm",
        "video/quicktime": ".mov", "application/json": ".json"}
 GONE = {"code": "gone", "message": "файла нет"}
+#: Архив выделенного: не больше ARCHIVE_MAX файлов, список живёт ARCHIVE_TTL_SEC (повторный GET в
+#: срок — можно: браузер повторяет загрузку), живых списков у пользователя — не больше ARCHIVE_KEEP.
+ARCHIVE_MAX = 1000
+ARCHIVE_TTL_SEC = 600
+ARCHIVE_KEEP = 5
+HEX = re.compile(r"[0-9a-f]{32}")
+#: токен → (user_id, media id по порядку, время создания); в памяти службы, как задания
+ARCHIVES: dict[str, tuple[int, list[str], float]] = {}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
@@ -485,6 +499,143 @@ def _read(file: Path, start: int, length: int):
                 return
             length -= len(block)
             yield block
+
+
+# ---- архив выделенного ---------------------------------------------------------
+
+class ArchiveIn(BaseModel):
+    media_ids: list[str]
+
+
+def _archive_rows(user_id: int, ids: list[str]) -> list:
+    """Свои строки media из ids в их порядке; чужих и неизвестных нет."""
+    marks = ",".join("?" * len(ids))
+    found = {row["id"]: row for row in state.DB.execute(
+        f"SELECT id, rel_path, download_name, created FROM media WHERE user_id = ? AND id IN ({marks})",
+        (user_id, *ids))}
+    return [found[i] for i in ids if i in found]
+
+
+async def _archive_ready(user_id: int, ids: list[str]) -> list:
+    """Строки архива; ни одной — 404, шара не отвечает (stat первого файла) — 503."""
+    rows = _archive_rows(user_id, ids)
+    if not rows:
+        raise HTTPException(404, GONE)
+    try:
+        await asyncio.to_thread((state.CFG.media_dir / rows[0]["rel_path"]).stat)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.warning("archive: хранилище недоступно")
+        raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
+    return rows
+
+
+def _safe_name(name: str) -> str:
+    """Имя внутри архива: без `/`, `\\` и управляющих, без ведущих точек (одним «_»), пустое — file."""
+    plain = "".join("_" if ch in "/\\" or ch < " " or ch == "\x7f" else ch for ch in name)
+    if plain.startswith("."):
+        plain = "_" + plain.lstrip(".")
+    return plain or "file"
+
+
+def _entry_names(rows) -> list[str]:
+    """download_name строк; совпавшие (без учёта регистра — Windows) — `-2`, `-3` перед расширением."""
+    taken, names = set(), []
+    for row in rows:
+        name = _safe_name(row["download_name"])
+        stem, dot, ext = name.rpartition(".")
+        if not dot or not stem:
+            stem, dot, ext = name, "", ""
+        candidate, n = name, 1
+        while candidate.lower() in taken:
+            n += 1
+            candidate = f"{stem}-{n}{dot}{ext}"
+        taken.add(candidate.lower())
+        names.append(candidate)
+    return names
+
+
+class _Sink:
+    """Несдвигаемый приёмник zipfile (записи — с дескриптором данных): копит записанное, генератор
+    архива забирает его после каждого блока."""
+
+    def __init__(self):
+        self.parts = []
+
+    def write(self, data) -> int:
+        self.parts.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def take(self) -> bytes:
+        data = b"".join(self.parts)
+        self.parts.clear()
+        return data
+
+
+def _zip(entries: list[tuple[str, Path, float]]):
+    """ZIP_STORED на лету; Starlette крутит обычный генератор в пуле потоков. Файла уже нет —
+    пропускается; шара оборвала чтение — исключение без пути: ответ рвётся, браузер покажет сбой."""
+    sink = _Sink()
+    try:
+        with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED) as zf:
+            for name, file, created in entries:
+                try:
+                    f = open(file, "rb")
+                except FileNotFoundError:
+                    continue
+                with f:
+                    info = zipfile.ZipInfo(name, time.localtime(created)[:6])
+                    info.file_size = os.fstat(f.fileno()).st_size
+                    with zf.open(info, "w") as out:
+                        while block := f.read(CHUNK):
+                            out.write(block)
+                            if data := sink.take():
+                                yield data
+                if data := sink.take():
+                    yield data
+    except OSError:
+        log.warning("archive: хранилище оборвало чтение")
+        raise StorageError("хранилище оборвало чтение") from None
+    if data := sink.take():
+        yield data
+
+
+@router.post("/media/archives")
+async def create_archive(body: ArchiveIn, request: Request):
+    """Список выделенного → токен архива. Список едет телом, а не строкой запроса: строка упирается
+    в предел Apache (8190 знаков) и пишется в его журнал."""
+    ids = list(dict.fromkeys(body.media_ids))
+    if not 0 < len(ids) <= ARCHIVE_MAX or not all(HEX.fullmatch(i) for i in ids):
+        raise HTTPException(400, {"code": "invalid", "message": "неверный список файлов"})
+    uid, now = request.state.user.id, clock.NOW()
+    for token in [t for t, (_, _, at) in ARCHIVES.items() if now - at > ARCHIVE_TTL_SEC]:
+        del ARCHIVES[token]
+    rows = await _archive_ready(uid, ids)
+    token = secrets.token_urlsafe(18)
+    ARCHIVES[token] = (uid, [row["id"] for row in rows], now)
+    for old in [t for t, (owner, _, _) in ARCHIVES.items() if owner == uid][:-ARCHIVE_KEEP]:
+        del ARCHIVES[old]
+    return {"id": token, "files": len(rows)}
+
+
+@router.get("/media/archives/{token}")
+async def get_archive(token: str, request: Request):
+    uid = request.state.user.id
+    held = ARCHIVES.get(token)
+    if held is None or held[0] != uid or clock.NOW() - held[2] > ARCHIVE_TTL_SEC:
+        raise HTTPException(404, GONE)
+    rows = await _archive_ready(uid, held[1])
+    log.info("archive: %d файлов", len(rows))
+    entries = [(name, state.CFG.media_dir / row["rel_path"], row["created"])
+               for name, row in zip(_entry_names(rows), rows)]
+    day = datetime.fromtimestamp(clock.NOW()).strftime("%Y-%m-%d")
+    return StreamingResponse(_zip(entries), media_type="application/zip",
+                             headers={"Content-Disposition": disposition(f"studio-{day}.zip"),
+                                      "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/media/{media_id}")

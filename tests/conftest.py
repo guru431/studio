@@ -89,6 +89,7 @@ def studio(env, monkeypatch):
     videos.PAUSED.clear()
     # поток записи, переживший цикл событий прошлого теста, свой id из SAVING уже не снимет
     media.SAVING.clear()
+    media.ARCHIVES.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
