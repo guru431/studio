@@ -11,12 +11,18 @@
   сохраняются, пока паспорт не обнулён (смена адреса, вида или токена — connections.patch).
 - Подключение, убранное из списка (connections.dropped), — паспорт этими словами без запроса; прямое —
   409 `direct`: его проверяет браузер.
+- Прямое подключение проверяет браузер и присылает итог `PUT …/passport`: сервер проверяет форму
+  (пределы), ставит своё время, `source: browser` и сам выводит возможности.
+- «Пробный ответ» (`POST …/probe`, браузером — полем `probes` того же PUT) — единственная тратящая проба:
+  одно короткое сообщение отмеченной модели чата не-srvllm подключения.
 - Журнал — только id и итог одним словом: ни адреса, ни моделей, ни слов сервиса.
 """
 import logging
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 import capabilities
 import clock
@@ -25,7 +31,11 @@ import sections
 import upstream
 
 CHECK_TIMEOUT_SEC = 10
+PROBE_TIMEOUT_SEC = 60
+PROBE_TEXT = "Ответь одним словом: ok"
+PROBE_TOKENS = 16
 MODELS_MAX = 500
+ROUTES_MAX = 4
 WORDS_MAX = 300
 
 log = logging.getLogger("studio")
@@ -36,9 +46,9 @@ def _ms(start: float) -> int:
     return max(0, round((clock.NOW() - start) * 1000))
 
 
-def _down(e: httpx.HTTPError) -> str:
+def _down(e: httpx.HTTPError, seconds: int = CHECK_TIMEOUT_SEC) -> str:
     if isinstance(e, httpx.TimeoutException):
-        why = f"нет ответа за {CHECK_TIMEOUT_SEC} с"
+        why = f"нет ответа за {seconds} с"
     elif isinstance(e, httpx.ConnectError):
         why = "соединение не установлено"
     else:
@@ -175,6 +185,146 @@ def _save(conn, built: dict, found: dict) -> dict:
     return {"passport": built, "found": found}
 
 
+# ---- пробный ответ -----------------------------------------------------------------
+
+def _chat_models(conn) -> list[str]:
+    return next((list(l.models) for l in sections.links(conn.user_id, "chat") if l.connection.id == conn.id), [])
+
+
+def _checked_model(conn, model: str) -> None:
+    if model not in _chat_models(conn):
+        raise HTTPException(422, {"code": "model", "message": "пробный ответ — только у отмеченной модели чата"})
+
+
+def _with_probes(conn, source: str, fresh: dict) -> dict:
+    """Пробы — в паспорт подключения; паспорта нет — паспорт без проверки (`checked` None)."""
+    base = connections.passport_of(conn.id) or {"checked": None, "source": source,
+                                                "profile": capabilities.profile(conn), "routes": [], "models": [],
+                                                "probes": {}}
+    probes = {**(base.get("probes") or {}), **fresh}
+    return base | {"probes": probes, "models": capabilities.with_probes(base["models"], probes)}
+
+
+def _refusal(r: httpx.Response) -> str:
+    reason = upstream.message(r)
+    return f"не ответила: код {r.status_code}" + (f" — {reason}" if reason else "")
+
+
+async def probe(conn, model: str) -> dict:
+    """`chat/completions` одним коротким сообщением — единственная тратящая проба, по отдельной кнопке.
+    У srvllm её нет: роль local-gemma-abl заняла бы карту арендой, а release проверка не делает."""
+    if conn.kind == "srvllm":
+        raise HTTPException(409, {"code": "srvllm", "message": "у шлюза srvllm пробного ответа нет: он занял бы карту"})
+    if connections.dropped(conn):
+        raise connections.refused(conn, upstream.UpstreamRefused("убран"))
+    if not conn.proxied:
+        raise HTTPException(409, {"code": "direct", "message": "пробный ответ прямого подключения отправляет браузер"})
+    _checked_model(conn, model)
+    body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], "max_tokens": PROBE_TOKENS,
+            "stream": False}
+    start = clock.NOW()
+    try:
+        r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
+        if r.status_code == 400 and "max_tokens" in (upstream.message(r) or ""):
+            # модели рассуждений OpenAI: max_tokens не принимают — один повтор
+            body = {k: v for k, v in body.items() if k != "max_tokens"} | {"max_completion_tokens": PROBE_TOKENS}
+            r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
+    except upstream.UpstreamRefused as e:
+        result = {"ok": False, "ms": None, "words": refused_words(e, conn)}
+    except httpx.HTTPError as e:
+        result = {"ok": False, "ms": None, "words": _down(e, PROBE_TIMEOUT_SEC).replace("не отвечает", "не ответила")}
+    else:
+        ms = _ms(start)
+        result = {"ok": r.status_code == 200, "ms": ms,
+                  "words": f"ответила за {ms} мс" if r.status_code == 200 else _refusal(r)[:WORDS_MAX]}
+    result |= {"at": clock.NOW(), "source": "server"}
+    built = _with_probes(conn, "server", {model: result})
+    connections.save_passport(conn.id, built)
+    log.info("пользователь %d: подключение %d — пробный ответ %s", conn.user_id, conn.id,
+             "ok" if result["ok"] else "отказ")
+    return {"passport": built, "probe": result}
+
+
+# ---- паспорт браузера --------------------------------------------------------------
+
+Words = Annotated[str, Field(max_length=WORDS_MAX)]
+ModelId = Annotated[str, Field(min_length=1, max_length=capabilities.ID_MAX)]
+Modality = Annotated[str, Field(max_length=32)]
+
+
+class ReachIn(BaseModel):
+    ok: bool
+    words: Words
+
+
+class KeyIn(BaseModel):
+    state: Literal["accepted", "refused", "limited", "unverified", "unknown"]
+    code: int | None = Field(None, ge=100, le=599)
+    words: Words
+
+
+class RouteIn(BaseModel):
+    path: str = Field(max_length=capabilities.ID_MAX)
+    ms: int | None = Field(None, ge=0, le=3_600_000)
+    status: int | None = Field(None, ge=100, le=599)
+    count: int | None = Field(None, ge=0, le=1_000_000)
+    reach: ReachIn
+    key: KeyIn | None = None
+
+
+class ArchIn(BaseModel):
+    input_modalities: list[Modality] = Field(default_factory=list, max_length=16)
+    output_modalities: list[Modality] = Field(default_factory=list, max_length=16)
+
+
+class ModelIn(BaseModel):
+    id: ModelId
+    context_length: int | None = Field(None, ge=0)
+    architecture: ArchIn | None = None
+
+
+class ProbeIn(BaseModel):
+    ok: bool
+    ms: int | None = Field(None, ge=0, le=3_600_000)
+    words: Words
+
+
+class PassportIn(BaseModel):
+    """Итог проверки браузером; время, источник и возможности ставит сервер."""
+    routes: list[RouteIn] | None = Field(None, max_length=ROUTES_MAX)
+    models: list[ModelIn] | None = Field(None, max_length=MODELS_MAX)
+    probes: dict[ModelId, ProbeIn] | None = Field(None, max_length=16)
+
+
+class ProbeBody(BaseModel):
+    model: ModelId
+
+
+def put_passport(conn, body: PassportIn) -> dict:
+    """Проверка браузером — только у прямого подключения: подключение через сервер (или убранное из
+    списка) браузер «проверенным» не сделает. Присланное — `source: browser`."""
+    if conn.proxied or connections.dropped(conn):
+        raise HTTPException(409, {"code": "server", "message": "это подключение проверяет сервер"})
+    for model in body.probes or {}:
+        _checked_model(conn, model)
+    fresh = {m: p.model_dump() | {"at": clock.NOW(), "source": "browser"} for m, p in (body.probes or {}).items()}
+    found = {}
+    if body.routes is None and body.models is None:
+        built = _with_probes(conn, "browser", fresh)
+    else:
+        probes = {**((connections.passport_of(conn.id) or {}).get("probes") or {}), **fresh}
+        listed = [capabilities.model_entry(m.model_dump(exclude_none=True)) for m in body.models or []]
+        built = passport(conn, "browser", [r.model_dump() for r in body.routes or []],
+                         capabilities.models(conn.kind, listed, None, MODELS_MAX), probes)
+        if body.models is not None:
+            ids = [m["id"] for m in listed]
+            found = found_of(conn, ids, None, ids)
+    connections.save_passport(conn.id, built)
+    log.info("пользователь %d: подключение %d — проверка браузером %s", conn.user_id, conn.id,
+             outcome(built["routes"]) if body.routes is not None else "пробный-ответ")
+    return {"passport": built, "found": found}
+
+
 def _uid(request: Request) -> int:
     return request.state.user.id
 
@@ -182,3 +332,13 @@ def _uid(request: Request) -> int:
 @router.post("/{conn_id}/check")
 async def post_check(conn_id: int, request: Request):
     return await check(connections.get(_uid(request), conn_id))
+
+
+@router.put("/{conn_id}/passport")
+async def put_passport_route(conn_id: int, body: PassportIn, request: Request):
+    return put_passport(connections.get(_uid(request), conn_id), body)
+
+
+@router.post("/{conn_id}/probe")
+async def post_probe(conn_id: int, body: ProbeBody, request: Request):
+    return await probe(connections.get(_uid(request), conn_id), body.model)

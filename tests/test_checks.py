@@ -228,6 +228,140 @@ def test_profiles():
     assert capabilities.profile(c("openai", GW + "/v1")) == "compatible"
 
 
+def test_new_check_keeps_earlier_probes(studio):
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).status_code == 200
+    p = check(studio, cid).json()["passport"]
+    assert p["probes"]["local-gemma-abl"]["ok"] and ("chat", "probe") in caps(by_id(p)["local-gemma-abl"])
+
+
+# ---- паспорт браузера --------------------------------------------------------------
+
+def route(**extra):
+    return {"path": "/v1/models", "ms": 45, "status": 200, "count": 1, "reach": {"ok": True, "words": "отвечает"},
+            "key": {"state": "accepted", "code": 200, "words": "принят"}} | extra
+
+
+def put(s, cid, body):
+    return s.c.put(f"/api/connections/{cid}/passport", json=body)
+
+
+def test_browser_passport_is_stamped_by_the_server(studio):
+    cid = add_connection(studio)                                       # прямое, в чате отмечена local-gemma-abl
+    r = put(studio, cid, {"routes": [route()], "models": [
+        {"id": "gpt-image-1"}, {"id": "acme/eye", "context_length": 8000,
+                                "architecture": {"input_modalities": ["image"], "output_modalities": ["text"]}}],
+        "checked": 1, "source": "server"})
+    assert r.status_code == 200
+    p = r.json()["passport"]
+    assert p["source"] == "browser" and p["checked"] == pytest.approx(studio.clock[0]) and p["profile"] == "compatible"
+    assert p["routes"] == [route()]
+    models = by_id(p)
+    assert caps(models["gpt-image-1"]) == {("generate", "name"), ("edit", "name")}
+    assert caps(models["acme/eye"]) == {("vision", "metadata")} and models["acme/eye"]["context_length"] == 8000
+    assert r.json()["found"] == {"chat": ["gpt-image-1", "acme/eye"]}
+    assert studio.c.get("/api/connections").json()["items"][0]["passport"] == p
+    assert studio.gw.requests == []
+
+
+@pytest.mark.parametrize("body", [
+    {"routes": [route()] * 5},
+    {"models": [{"id": f"m{i}"} for i in range(501)]},
+    {"models": [{"id": "x" * 201}]},
+    {"models": [{"id": ""}]},
+    {"routes": [route(reach={"ok": False, "words": "x" * 301})]},
+    {"routes": [route(key={"state": "great", "code": 200, "words": "ok"})]},
+    {"probes": {"local-gemma-abl": {"ok": True, "ms": 1, "words": "x" * 301}}},
+])
+def test_browser_passport_limits(studio, body):
+    cid = add_connection(studio)
+    r = put(studio, cid, body)
+    assert r.status_code == 422, body
+    assert connections.passport_of(cid) is None
+
+
+def test_browser_passport_only_for_a_direct_connection(studio):
+    for cid in (add_gateway(studio), add_connection(studio, base_url=GW + "/v1", token="k-12345678")):
+        r = put(studio, cid, {"routes": [route()], "models": []})
+        assert r.status_code == 409 and code(r) == "server"
+    cid = add_connection(studio)
+    make_user(studio, "bob"); signin(studio, "bob")
+    assert put(studio, cid, {"routes": [route()]}).status_code == 404
+
+
+def test_browser_probe_merges_into_the_passport(studio):
+    cid = add_connection(studio)
+    put(studio, cid, {"routes": [route()], "models": [{"id": "local-gemma-abl"}]})
+    r = put(studio, cid, {"probes": {"local-gemma-abl": {"ok": True, "ms": 120, "words": "ответила за 120 мс"}}})
+    assert r.status_code == 200
+    p = r.json()["passport"]
+    assert p["routes"] == [route()] and p["source"] == "browser"
+    assert p["probes"]["local-gemma-abl"] == {"ok": True, "ms": 120, "words": "ответила за 120 мс",
+                                              "at": pytest.approx(studio.clock[0]), "source": "browser"}
+    assert caps(by_id(p)["local-gemma-abl"]) == {("chat", "probe")}
+    r = put(studio, cid, {"probes": {"not-checked": {"ok": True, "ms": 1, "words": "ok"}}})
+    assert r.status_code == 422 and code(r) == "model"
+
+
+# ---- пробный ответ -----------------------------------------------------------------
+
+def test_probe_sends_one_short_message(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"})
+    assert r.status_code == 200
+    body, = studio.gw.chat_requests
+    assert body == {"model": "local-gemma-abl", "messages": [{"role": "user", "content": "Ответь одним словом: ok"}],
+                    "max_tokens": 16, "stream": False}
+    probe = r.json()["probe"]
+    assert probe["ok"] and probe["words"].startswith("ответила за ") and probe["source"] == "server"
+    assert r.json()["passport"]["probes"]["local-gemma-abl"] == probe
+    assert r.json()["passport"]["checked"] is None                     # проверки не было — только проба
+    assert ("chat", "probe") in caps(by_id(connections.passport_of(cid))["local-gemma-abl"])
+    assert "Ответь" not in caplog.text and "gemma" not in caplog.text and "192.168" not in caplog.text
+
+
+def test_probe_retries_with_max_completion_tokens(studio):
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+    seen = []
+
+    async def picky(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if "max_tokens" in body:
+            return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'max_tokens'"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+    studio.gw.on["/v1/chat/completions"] = picky
+    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).json()["probe"]
+    assert len(seen) == 2 and seen[1]["max_completion_tokens"] == 16 and "max_tokens" not in seen[1]
+    assert probe["ok"]                                                  # пустой текст — тоже ответ
+
+
+def test_probe_failure_is_told(studio):
+    cid = add_connection(studio, base_url=GW + "/v1", token="wrong-key-123")
+    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).json()["probe"]
+    assert not probe["ok"] and "401" in probe["words"]
+    assert by_id(connections.passport_of(cid)) == {}
+
+
+def test_probe_is_refused_where_it_must_not_go(studio):
+    gw = add_gateway(studio)
+    r = studio.c.post(f"/api/connections/{gw}/probe", json={"model": "local-gemma-abl"})
+    assert r.status_code == 409 and code(r) == "srvllm"
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "gemma4-abl"})     # не отмечена
+    assert r.status_code == 422 and code(r) == "model"
+    direct = add_connection(studio)
+    r = studio.c.post(f"/api/connections/{direct}/probe", json={"model": "local-gemma-abl"})
+    assert r.status_code == 409 and code(r) == "direct"
+    allow()
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"})
+    assert r.status_code == 409 and code(r) == "refused"
+    assert studio.gw.requests == []
+    make_user(studio, "bob"); signin(studio, "bob")
+    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).status_code == 404
+
+
 def test_check_logs_only_the_id_and_the_outcome(studio, caplog):
     caplog.set_level(logging.DEBUG)
     cid = add_gateway(studio)
