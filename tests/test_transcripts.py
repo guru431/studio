@@ -1,12 +1,14 @@
 """Расшифровка записей (app/transcripts.py): загрузка потоком на шару, задание в фоне, ожидание
 карты, отмена, перезапуск, удаление; имя файла и текст — не в журнал."""
 import logging
+import pathlib
+import threading
 from urllib.parse import quote
 
 import clock
 import state
 import transcripts
-from conftest import T0, add_gateway
+from conftest import T0, add_gateway, make_user, signin
 
 NAME = "Звонок Ивану.m4a"
 
@@ -43,6 +45,35 @@ def test_upload_streams_to_the_share_and_reads_by_speakers(studio, env, fake_aud
     assert {"/slot/images/release", "/slot/images/descriptions/release"} <= set(paths[:asr])
     assert NAME not in caplog.text and "Здравствуйте" not in caplog.text
     assert not list((env.db_path.parent / "tmp").iterdir())
+    assert transcripts.JOBS == {}                     # кончившееся в памяти не живёт
+
+
+def hold_temp_unlink(env, monkeypatch):
+    """Удаление временного файла (каталог tmp) ждёт `go`; `unlinking` — оно началось."""
+    tmp_dir, real = env.db_path.parent / "tmp", pathlib.Path.unlink
+    unlinking, go = threading.Event(), threading.Event()
+
+    def held(self, missing_ok=False):
+        if self.parent == tmp_dir:
+            unlinking.set()
+            go.wait(5)
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", held)
+    return unlinking, go
+
+
+def test_done_is_written_after_the_temp_file_is_gone(studio, env, fake_audio, monkeypatch):
+    """Итог пишется после удаления временного mp3: увидев «готово», временного файла не застать
+    (под нагрузкой быстрый набор застал его — находка P3)."""
+    add_gateway(studio)
+    unlinking, go = hold_temp_unlink(env, monkeypatch)
+    tid = upload(studio).json()["id"]
+    assert unlinking.wait(5)
+    assert studio.c.get(f"/api/transcripts/{tid}").json()["state"] == "working"
+    go.set()
+    assert wait_tr(studio, tid, {"done", "error"})["state"] == "done"
+    assert not list((env.db_path.parent / "tmp").iterdir()) and transcripts.JOBS == {}
 
 
 def test_card_busy_waits_and_says_so(studio, fake_audio, monkeypatch):
@@ -80,7 +111,7 @@ def test_cancel_while_waiting_for_the_card(studio, env, fake_audio, monkeypatch)
     assert studio.c.post(f"/api/transcripts/{tid}/cancel").status_code == 200
     item = wait_tr(studio, tid, {"cancelled", "error"})
     assert item["state"] == "cancelled"
-    assert not list((env.db_path.parent / "tmp").iterdir())
+    assert not list((env.db_path.parent / "tmp").iterdir()) and transcripts.JOBS == {}
 
 
 def test_too_big_or_unknown_upload_leaves_nothing(studio, env, fake_audio, monkeypatch):
@@ -124,6 +155,20 @@ def test_one_running_per_user_and_history_wipe_takes_all(studio, env, fake_audio
     assert studio.c.delete("/api/history").status_code == 200
     assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+    assert transcripts.JOBS == {}                     # и задание стёртой истории не держится в памяти
+
+
+def test_deleting_a_user_drops_their_jobs_from_memory(studio, fake_audio, monkeypatch):
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
+    upload(studio)
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    assert transcripts.JOBS == {}
 
 
 def test_delete_takes_the_recording_and_the_result(studio, env, fake_audio):

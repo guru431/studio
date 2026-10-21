@@ -7,7 +7,11 @@
   файлов, которые не удалились (шара отказала), и файлов, которые пишутся сейчас (save_async,
   save_stream: отмена или остановка службы посреди записи оставили бы их без строки) — вставка
   строки снимает путь с очереди той же транзакцией. Очередь проходит purge(): при старте службы и
-  раз в PURGE_SEC (start_purger), при каждом удалении и при стирании истории.
+  раз в PURGE_SEC (start_purger), при каждом удалении и при стирании истории. Строка не встала —
+  файлы удаляются тем же проходом по одному пути (в потоке).
+- Поток записи не остановить: отмена ожидания (и срок SAVE_TIMEOUT_SEC — тогда StorageError «не
+  отвечает») его не бросает — путь остаётся в SAVING, пока поток не кончит, и проход очереди
+  уберёт записанное после.
 - `GET /api/media/{id}` отдаёт только своё, с диапазонами: Safari на iPhone без `Range` ролик не
   играет. С диска читается только нужный кусок.
 - Имена файлов и содержимое в журнал не пишутся: `download_name` — только в `Content-Disposition`.
@@ -34,6 +38,12 @@ import state
 THUMB_SIDE = 384
 CHUNK = 64 << 10
 PURGE_SEC = 300
+#: Сколько запрос ждёт записи на шару (save_async целиком, у save_stream — каждый шаг в потоке).
+#: Зависшая CIFS иначе держала бы запрос до таймаута Apache (ProxyPass timeout=150) и пользователь
+#: видел бы 502 вместо слов службы. Правка фото пишет два файла подряд (исходник и маску): 2×45 = 90 с
+#: оставляют ~60 с на чтение тела и разбор фото. Сверяет test_deploy.
+SAVE_TIMEOUT_SEC = 45
+STALLED = "не удалось сохранить файл: хранилище не отвечает"
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
        "video/mp4": ".mp4", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
@@ -96,8 +106,9 @@ def _thumbnail(data: bytes) -> bytes | None:
 
 
 def _insert(media_id: str, user_id: int, rel: str, mime: str, size: int, has_thumb: bool,
-            download_name: str, written: tuple[Path, ...]) -> None:
-    """Строка media и снятие её пути с очереди удаления — одной транзакцией."""
+            download_name: str) -> None:
+    """Строка media и снятие её пути с очереди удаления — одной транзакцией. Не встала — путь
+    остаётся в очереди (у save — встаёт в неё): файлы удаляет не цикл событий, а проход очереди."""
     state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO media(id, user_id, rel_path, mime, size, has_thumb, download_name, created)"
@@ -107,8 +118,26 @@ def _insert(media_id: str, user_id: int, rel: str, mime: str, size: int, has_thu
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
-        _discard(*written)           # строки нет — файлы без строки никому не нужны (не вышло — очередь)
+        queue(user_id, [(media_id, rel)])
         raise
+
+
+async def _insert_or_purge(media_id: str, user_id: int, rel: str, *row) -> str:
+    """_insert с цикла событий; строка не встала — файлы её пути сразу, в потоке (_purge)."""
+    try:
+        _insert(media_id, user_id, rel, *row)
+    except BaseException:
+        await _purge([(media_id, rel)])
+        raise
+    return media_id
+
+
+def _release_when_done(media_id: str, task: asyncio.Future) -> None:
+    """Снять путь с SAVING, когда запись в потоке кончится (сейчас или после отмены и срока)."""
+    if task.done():
+        SAVING.discard(media_id)
+    else:
+        task.add_done_callback(lambda _: SAVING.discard(media_id))
 
 
 def _storage_failed(user_id: int, e: OSError) -> StorageError:
@@ -126,7 +155,6 @@ class Written:
     size: int
     has_thumb: bool
     download_name: str
-    files: tuple[Path, ...]
 
 
 def write(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False,
@@ -146,14 +174,13 @@ def write(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bo
     except OSError as e:
         _discard(*(p for target, _ in parts for p in (_tmp(target), target)))
         raise _storage_failed(user_id, e) from None
-    return Written(media_id, user_id, rel, mime, len(data), small is not None, download_name,
-                   tuple(target for target, _ in parts))
+    return Written(media_id, user_id, rel, mime, len(data), small is not None, download_name)
 
 
 def insert(written: Written) -> str:
     """Строка media записанных файлов — с цикла событий (или из синхронного кода), не из потока."""
     w = written
-    _insert(w.id, w.user_id, w.rel, w.mime, w.size, w.has_thumb, w.download_name, w.files)
+    _insert(w.id, w.user_id, w.rel, w.mime, w.size, w.has_thumb, w.download_name)
     return w.id
 
 
@@ -163,55 +190,99 @@ def save(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: boo
 
 
 async def save_async(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> str:
-    """Как save: файлы — в потоке, строка — здесь, на цикле событий. Отмена ожидания поток не
-    останавливает, и он допишет файлы, до строки которых дело уже не дойдёт: поэтому путь заранее
-    стоит в очереди удаления (снимает его insert), а проход purge его не трогает, пока поток пишет."""
+    """Как save: файлы — в потоке, строка — здесь, на цикле событий. Отмена ожидания и срок
+    SAVE_TIMEOUT_SEC поток не останавливают, и он допишет файлы, до строки которых дело уже не
+    дойдёт: поэтому путь заранее стоит в очереди удаления (снимает его insert), а проход purge его
+    не трогает, пока поток пишет."""
     plan = _plan(user_id, mime)
     queue(user_id, [plan])
     SAVING.add(plan[0])
     task = asyncio.ensure_future(asyncio.to_thread(write, user_id, data, mime, download_name, thumb=thumb, plan=plan))
     try:
-        return insert(await asyncio.shield(task))
+        written = await asyncio.wait_for(asyncio.shield(task), SAVE_TIMEOUT_SEC)
+    except TimeoutError:
+        log.warning("media пользователя %d: хранилище не ответило за %d с", user_id, SAVE_TIMEOUT_SEC)
+        raise StorageError(STALLED) from None
     finally:
-        if task.done():
-            SAVING.discard(plan[0])
-        else:                                    # отменили посреди записи: очистке — когда поток кончит
-            task.add_done_callback(lambda _: SAVING.discard(plan[0]))
+        _release_when_done(plan[0], task)
+    w = written
+    return await _insert_or_purge(w.id, w.user_id, w.rel, w.mime, w.size, w.has_thumb, w.download_name)
+
+
+def _drop(out, *paths: Path) -> None:
+    """Закрыть недописанный файл и убрать его — в потоке: close ждёт идущую запись."""
+    if out is not None:
+        try:
+            out.close()
+        except OSError:
+            pass
+    _discard(*paths)
+
+
+async def _stream(full: Path, chunks: AsyncIterator[bytes], max_bytes: int, stalled: asyncio.Future) -> int:
+    """Тело save_stream — отдельной задачей: поток во временный файл и на место; отказ или отмена —
+    ни временного, ни итогового файла. Шаг в потоке ждётся до конца и при отмене (отмена выходит
+    наружу после него: иначе уборка обогнала бы перенос файла на место); шаг дольше
+    SAVE_TIMEOUT_SEC отмечает stalled — save_stream ответит, не дожидаясь."""
+    async def step(fn, *args, **kwargs):
+        fut = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kwargs))
+        try:
+            done, _ = await asyncio.wait({fut}, timeout=SAVE_TIMEOUT_SEC)
+            if not done:
+                if not stalled.done():
+                    stalled.set_result(None)
+                await asyncio.wait({fut})
+        except asyncio.CancelledError:
+            await asyncio.wait({fut})
+            raise
+        return fut.result()
+
+    tmp, size, out = _tmp(full), 0, None
+
+    def opened():
+        nonlocal out
+        out = open(tmp, "wb")                    # в потоке: и отменённый шаг оставит, что закрыть
+
+    try:
+        await step(full.parent.mkdir, parents=True, exist_ok=True)
+        await step(opened)
+        async for chunk in chunks:
+            size += len(chunk)
+            if size > max_bytes:
+                raise TooBig("файл больше предела")
+            await step(out.write, chunk)
+        await step(out.close)
+        await step(os.replace, tmp, full)
+    except BaseException:
+        await step(_drop, out, tmp, full)
+        raise
+    return size
 
 
 async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, download_name: str,
                       max_bytes: int) -> str:
     """Как save, но потоком и без превью (ролики); больше max_bytes — StorageError, файла нет.
-    Путь — в очереди удаления, пока строки нет (как у save_async)."""
+    Путь — в очереди удаления, пока строки нет, и в SAVING, пока запись не кончилась (как у
+    save_async): запись — одной задачей (_stream) под защитой от отмены. Отмена ожидания и шаг
+    дольше SAVE_TIMEOUT_SEC отменяют задачу: она доделывает шаг в потоке, убирает свои файлы и
+    только тогда снимает путь с SAVING."""
     media_id, rel = _plan(user_id, mime)
-    full = state.CFG.media_dir / rel
-    tmp, size, out = _tmp(full), 0, None
     queue(user_id, [(media_id, rel)])
     SAVING.add(media_id)
+    stalled = asyncio.get_running_loop().create_future()
+    task = asyncio.ensure_future(_stream(state.CFG.media_dir / rel, chunks, max_bytes, stalled))
     try:
-        await asyncio.to_thread(full.parent.mkdir, parents=True, exist_ok=True)
-        out = await asyncio.to_thread(open, tmp, "wb")
-        async for chunk in chunks:
-            size += len(chunk)
-            if size > max_bytes:
-                raise TooBig("файл больше предела")
-            await asyncio.to_thread(out.write, chunk)
-        await asyncio.to_thread(out.close)
-        await asyncio.to_thread(os.replace, tmp, full)
-    except BaseException as e:
-        if out is not None:
-            try:
-                out.close()
-            except OSError:
-                pass
-        await asyncio.to_thread(_discard, tmp, full)
-        if isinstance(e, OSError):
-            raise _storage_failed(user_id, e) from None
-        raise
+        await asyncio.wait({task, stalled}, return_when=asyncio.FIRST_COMPLETED)
+        if not task.done():
+            log.warning("media пользователя %d: хранилище не ответило за %d с", user_id, SAVE_TIMEOUT_SEC)
+            raise StorageError(STALLED)
+        size = task.result()
+    except OSError as e:
+        raise _storage_failed(user_id, e) from None
     finally:
-        SAVING.discard(media_id)
-    _insert(media_id, user_id, rel, mime, size, False, download_name, (full,))
-    return media_id
+        task.cancel()                            # уже кончилась — ничего; иначе — остановится после шага
+        _release_when_done(media_id, task)
+    return await _insert_or_purge(media_id, user_id, rel, mime, size, False, download_name)
 
 
 # ---- чтение и удаление -----------------------------------------------------

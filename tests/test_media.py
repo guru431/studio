@@ -2,7 +2,9 @@
 import asyncio
 import dataclasses
 import io
+import sqlite3
 import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -342,6 +344,120 @@ def test_a_stream_is_queued_until_its_row_is_in(studio, env):
     media.queue(uid, [("x", f"u{uid}/2027/01/x.mp4")])
     asyncio.run(media.purge())
     assert files(env.media_dir) == [media.path(uid, mid)] and queued() == []
+
+
+@pytest.mark.parametrize("where", ["open", "write", "replace"])
+def test_a_cancelled_stream_leaves_no_file_without_a_row(studio, env, monkeypatch, where):
+    """Отмена save_stream, пока шаг в потоке идёт (создание файла, запись куска, перенос на место), и
+    проход очереди тут же: путь в SAVING, пока поток не кончил, — проход его не трогает, файлы
+    убирает сама запись, а следующий проход — путь (хвост правки очереди удаления)."""
+    uid = make_user(studio, "owner")
+    reached, go = threading.Event(), threading.Event()
+
+    def hold():
+        reached.set()
+        go.wait(5)
+
+    if where == "replace":
+        real_replace = media.os.replace
+        monkeypatch.setattr(media.os, "replace", lambda src, dst: (hold(), real_replace(src, dst)))
+    else:
+        class Held:
+            def __init__(self, f):
+                self.f = f
+
+            def write(self, data):
+                hold()
+                return self.f.write(data)
+
+            def close(self):
+                self.f.close()
+
+        def held_open(path, mode):
+            if where == "open":
+                hold()
+            f = open(path, mode)
+            return Held(f) if where == "write" else f
+
+        monkeypatch.setattr(media, "open", held_open, raising=False)
+
+    async def scenario():
+        task = asyncio.create_task(media.save_stream(uid, chunks(DATA), "video/mp4", "clip.mp4", max_bytes=1000))
+        assert await asyncio.to_thread(reached.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await media.purge()                        # поток ещё идёт — проход путь не трогает
+        go.set()
+        for _ in range(5000):
+            if not media.SAVING:
+                break
+            await asyncio.sleep(0.001)
+        await media.purge()
+
+    asyncio.run(scenario())
+    assert files(env.media_dir) == [] and queued() == []
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("how", ["async", "stream"])
+def test_a_stalled_share_answers_in_time_and_the_queue_takes_the_file_later(studio, env, monkeypatch, how):
+    """Зависшая шара: запись не дождались за SAVE_TIMEOUT_SEC — StorageError «не отвечает» сразу, а не
+    502 Apache через 150 с; поток дописывает сам, проход очереди убирает записанное после него."""
+    uid = make_user(studio, "owner")
+    monkeypatch.setattr(media, "SAVE_TIMEOUT_SEC", 0.05)
+    go = threading.Event()
+    if how == "async":
+        real_write = media.write
+        monkeypatch.setattr(media, "write", lambda *a, **kw: (go.wait(5), real_write(*a, **kw))[1])
+        save = media.save_async(uid, png(64, 64), "image/png", "p.png", thumb=True)
+    else:
+        real_replace = media.os.replace
+        monkeypatch.setattr(media.os, "replace", lambda src, dst: (go.wait(5), real_replace(src, dst)))
+        save = media.save_stream(uid, chunks(DATA), "video/mp4", "clip.mp4", max_bytes=1000)
+
+    async def scenario():
+        with pytest.raises(media.StorageError) as e:
+            await save
+        assert str(e.value) == media.STALLED
+        await media.purge()                        # поток ещё пишет — проход путь не трогает
+        assert queued() and media.SAVING
+        go.set()
+        for _ in range(5000):
+            if not media.SAVING:
+                break
+            await asyncio.sleep(0.001)
+        await media.purge()
+
+    asyncio.run(scenario())
+    assert files(env.media_dir) == [] and queued() == []
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+
+
+def test_a_stalled_share_is_a_503_in_words(studio, monkeypatch):
+    make_user(studio, "owner"); signin(studio, "owner")
+    monkeypatch.setattr(media, "SAVE_TIMEOUT_SEC", 0.05)
+    go, real_write = threading.Event(), media.write
+    monkeypatch.setattr(media, "write", lambda *a, **kw: (go.wait(5), real_write(*a, **kw))[1])
+    r = studio.c.post("/api/attachments", files={"file": ("p.png", png(20, 10), "image/png")})
+    go.set()
+    assert r.status_code == 503 and r.json()["detail"] == {"code": "storage", "message": media.STALLED}
+    for _ in range(5000):                          # поток дописывает, пока цикл службы жив
+        if not media.SAVING:
+            break
+        time.sleep(0.001)
+    assert not media.SAVING
+
+
+def test_a_refused_row_takes_the_files_away_off_the_loop(studio, env, unlinks):
+    """Строка media не встала (учётки уже нет — внешний ключ): файлы удаляются в потоке, не с цикла
+    событий, и путь уходит с очереди (хвост правки очереди удаления)."""
+    for save in (lambda: media.save_async(999, png(64, 64), "image/png", "p.png", thumb=True),
+                 lambda: media.save_stream(999, chunks(DATA), "video/mp4", "clip.mp4", max_bytes=1000)):
+        with pytest.raises(sqlite3.IntegrityError):
+            asyncio.run(save())
+    assert files(env.media_dir) == [] and queued() == []
+    assert unlinks and not any(unlinks)
 
 
 def test_bulk_file_removal_needs_no_database(studio, env, monkeypatch):

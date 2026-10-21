@@ -159,6 +159,61 @@ def test_gateway_read_timeout_is_an_error_not_a_hang(studio):
     assert result["state"] == "error" and "1300" in result["detail"]
 
 
+def picture(fmt) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (64, 48), (200, 30, 90)).save(out, fmt)
+    return out.getvalue()
+
+
+def reply_with(raw: bytes, seed=5) -> tuple:
+    return 200, {"data": [{"b64_json": base64.b64encode(raw).decode(), "seed": seed}]}
+
+
+@pytest.mark.parametrize("raw, limit, words", [
+    (b"not an image", None, "сервис вернул не картинку"),
+    (PNG_REAL[:len(PNG_REAL) // 2], None, "сервис вернул не картинку"),
+    (picture("GIF"), None, "сервис вернул не картинку"),
+    (PNG_REAL, ("RESULT_PIXELS", 64 * 48 - 1), "больше предела"),
+    (PNG_REAL, ("RESULT_MAX", len(PNG_REAL) - 1), "больше предела"),
+], ids=["text", "truncated", "gif", "pixels", "bytes"])
+def test_a_reply_that_is_not_a_proper_picture_is_an_error(studio, env, monkeypatch, raw, limit, words):
+    """Корректный base64 ещё не картинка: текст, обрезанный файл, чужой формат и картинка больше
+    пределов — ошибка словами, а не «готово» с текстом под видом PNG (находка аудита P2)."""
+    if limit is not None:
+        monkeypatch.setattr(images, *limit)
+    studio.gw.image_reply = reply_with(raw)
+    add_gateway(studio)
+    result = wait_state(studio, start(studio).json()["id"], {"done", "error"})
+    assert result["state"] == "error" and words in result["detail"] and result["media_id"] is None
+    assert media_rows() == 0 and share_files(env) == []
+
+
+def test_a_brush_edit_answered_with_garbage_is_an_error_in_words(studio):
+    """Битый ответ правки кистью не доходит до слияния с исходником (там он был бы «сбоем службы»)."""
+    studio.gw.image_reply = reply_with(b"not an image")
+    add_gateway(studio)
+    mask = Image.new("L", (48, 32), 0)
+    mask.paste(255, (0, 0, 8, 8))
+    r = studio.c.post("/api/images", data={"prompt": "x", "size": "original"},
+                      files={"image": ("p.png", photo(), "image/png"), "mask": ("m.png", png(mask), "image/png")})
+    result = wait_state(studio, r.json()["id"], {"done", "error"})
+    assert result["state"] == "error" and "сервис вернул не картинку" in result["detail"]
+
+
+@pytest.mark.parametrize("fmt, mime, ext", [("JPEG", "image/jpeg", ".jpg"), ("WEBP", "image/webp", ".webp")])
+def test_jpeg_and_webp_replies_keep_their_own_type(studio, fmt, mime, ext):
+    """Ответ JPEG или WebP (совместимый сервис) ложится со своим типом и расширением, а не как PNG."""
+    raw = picture(fmt)
+    studio.gw.image_reply = reply_with(raw)
+    add_gateway(studio)
+    body = wait_state(studio, start(studio).json()["id"], {"done", "error"})
+    assert body["state"] == "done", body
+    r = studio.c.get(f"/api/media/{body['media_id']}?download=1")
+    assert r.content == raw and r.headers["content-type"] == mime
+    assert r.headers["content-disposition"] == f'attachment; filename="studio-lustify-5{ext}"'
+    assert studio.c.get(f"/api/media/{body['media_id']}?thumb=1").headers["content-type"] == "image/webp"
+
+
 def test_working_status_shows_the_elapsed_time(studio):
     studio.gw.hold = True
     add_gateway(studio)
@@ -807,6 +862,39 @@ def test_deleting_a_user_during_their_generation_ends_the_job(studio, env, monke
     assert make_user(studio, "carol") == bob and images._active(bob) is None   # новый id не наследует busy
 
 
+def test_deleting_a_user_counts_the_files_queued_while_their_jobs_end(studio, env, monkeypatch):
+    """Картинка, сохранение которой шло, пока стиралась история, отменяется уже во время ожидания
+    заданий учётки: её файл, который шара не удалила, тоже в pending_files (хвост правки очереди)."""
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    settling, writing = threading.Event(), threading.Event()
+    real_write, real_settle = media.write, images.settle_user
+
+    def held_write(*args, **kwargs):
+        writing.set()
+        settling.wait(5)                          # пишется до начала ожидания заданий учётки
+        return real_write(*args, **kwargs)
+
+    async def settle(uid):
+        settling.set()
+        return await real_settle(uid)
+
+    def refused(media_id, rel_path):
+        raise OSError("share went away")
+
+    monkeypatch.setattr(media, "write", held_write)
+    monkeypatch.setattr(images, "settle_user", settle)
+    monkeypatch.setattr(media, "_remove", refused)
+    job_id = start(studio).json()["id"]
+    assert writing.wait(5)
+    signin(studio, "owner")
+    r = studio.c.delete(f"/api/admin/users/{bob}")
+    assert r.status_code == 200 and r.json() == {"pending_files": 1}
+    assert images.JOBS[job_id].state == "cancelled" and media_rows() == 0
+
+
 def test_unexpected_save_failure_ends_the_job_as_an_error(studio, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError(PROMPT)
@@ -1043,6 +1131,16 @@ def test_external_photo_url_answer_is_an_error_and_not_fetched(studio, monkeypat
     studio.gw.on["/v1/images/generations"] = reply
     job = wait_state(studio, start(studio, model="gpt-image-1", connection_id=cid).json()["id"], {"error"})
     assert "ссылку" in job["detail"] and not any(q.url.host == "10.0.0.1" for q in studio.gw.requests)
+
+
+def test_external_photo_garbage_is_an_error(studio, env, monkeypatch):
+    add_gateway(studio); cid = cloud_photo(studio, monkeypatch)
+    async def reply(q):
+        return httpx.Response(200, json=reply_with(b"not an image")[1])
+    studio.gw.on["/v1/images/generations"] = reply
+    job = wait_state(studio, start(studio, model="gpt-image-1", connection_id=cid).json()["id"], {"done", "error"})
+    assert job["state"] == "error" and "сервис вернул не картинку" in job["detail"]
+    assert media_rows() == 0 and share_files(env) == []
 
 
 def test_brush_is_srvllm_only(studio, monkeypatch):

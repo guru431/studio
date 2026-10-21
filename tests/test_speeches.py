@@ -8,8 +8,9 @@ import httpx
 import speeches
 import state
 import upstream
-from conftest import add_connection, add_gateway
+from conftest import add_connection, add_gateway, make_user, signin
 from fakes import WAV_FAKE
+from test_transcripts import hold_temp_unlink
 
 LONG_A = "А" * 150 + "."
 LONG_B = "Б" * 150 + "."
@@ -56,6 +57,20 @@ def test_two_phrases_in_a_cloned_voice_become_one_mp3(studio, fake_audio, caplog
     paths = [q.url.path for q in studio.gw.requests]
     assert "/slot/images/release" in paths[:paths.index("/speech/tts-qwen")]
     assert "А" * 150 not in caplog.text
+    assert speeches.JOBS == {}                        # кончившееся в памяти не живёт
+
+
+def test_done_is_written_after_the_temp_files_are_gone(studio, env, fake_audio, monkeypatch):
+    """Как у расшифровки: «готово» — уже без частей и mp3 во временном каталоге (находка P3)."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    unlinking, go = hold_temp_unlink(env, monkeypatch)
+    sid = studio.c.post("/api/speeches", json={"text": "Привет.", "voice": vid}).json()["id"]
+    assert unlinking.wait(5)
+    assert studio.c.get(f"/api/speeches/{sid}").json()["state"] == "working"
+    go.set()
+    assert wait_sp(studio, sid, {"done", "error"})["state"] == "done"
+    assert not list((env.db_path.parent / "tmp").iterdir()) and speeches.JOBS == {}
 
 
 def test_busy_phrase_is_retried(studio, fake_audio):
@@ -79,7 +94,33 @@ def test_cancel_while_waiting_leaves_no_temp_files(studio, env, fake_audio, monk
         studio.c.get(f"/api/speeches/{sid}")
     assert studio.c.post(f"/api/speeches/{sid}/cancel").status_code == 200
     assert wait_sp(studio, sid, {"cancelled", "error"})["state"] == "cancelled"
-    assert not list((env.db_path.parent / "tmp").iterdir())
+    assert not list((env.db_path.parent / "tmp").iterdir()) and speeches.JOBS == {}
+
+
+def busy_speech(s, fake_audio, monkeypatch) -> str:
+    """Озвучка, которая ждёт карту, пока её не остановят."""
+    vid = voice(s, fake_audio)
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    s.gw.tts_replies = [(503, {"detail": "busy"})]
+    return s.c.post("/api/speeches", json={"text": "Привет.", "voice": vid}).json()["id"]
+
+
+def test_history_wipe_drops_the_jobs_from_memory(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    busy_speech(studio, fake_audio, monkeypatch)
+    assert studio.c.delete("/api/history").status_code == 200
+    assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0 and speeches.JOBS == {}
+
+
+def test_deleting_a_user_drops_their_jobs_from_memory(studio, fake_audio, monkeypatch):
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    busy_speech(studio, fake_audio, monkeypatch)
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    assert speeches.JOBS == {}
 
 
 def test_external_service_speaks_by_voice_name_in_one_request(studio, fake_audio, monkeypatch):

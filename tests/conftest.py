@@ -52,6 +52,7 @@ def studio(env, monkeypatch):
     import clock
     import images
     import main
+    import media
     import screenlock
     import security
     import state
@@ -86,6 +87,8 @@ def studio(env, monkeypatch):
     speeches.JOBS.clear()
     videos.WATCHING.clear()
     videos.PAUSED.clear()
+    # поток записи, переживший цикл событий прошлого теста, свой id из SAVING уже не снимет
+    media.SAVING.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()

@@ -16,6 +16,7 @@ import documents
 import image_upload
 import images
 import manage
+import media
 import videos
 from conftest import DEPLOY, ROOT
 
@@ -132,8 +133,9 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))
     release = (len(images.MODELS) + 1) * images.SHORT_TIMEOUT_SEC         # «Освободить карту»: три release
     video = videos.VIDEO_TIMEOUT_SEC + videos.ADOPT_TIMEOUT_SEC           # создание и поиск потерянного ответа
+    saves = 2 * media.SAVE_TIMEOUT_SEC                                    # правка: исходник и маска на шару
     # удаление учётки ждёт её заданий картинок
-    assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC)
+    assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC, saves)
 
 
 def _route_timeout(path: str) -> int:

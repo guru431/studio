@@ -8,10 +8,13 @@
    (ревью 2026-10-19). Поэтому задание «отменяется», ждёт конца своего запроса, выбрасывает
    картинку и сразу зовёт release модели задания — на 409 повторяет с паузой до
    CANCEL_RELEASE_SEC; новое задание до тех пор получает busy.
-2. Готовая PNG — в media с превью, строка `images` — запись ленты. Описания и переводы промпта в
-   историю не пишутся: текст живёт в памяти, GET отдаёт его и повторно (ответ мог потеряться в пути),
-   пока страница не подтвердит получение (DELETE …/<id>) или не пройдёт TEXT_KEEP_SEC от первой
-   выдачи; невыданный — до KEEP_DONE_SEC. Перевод — тот же путь, что описание (маршрут шлюза
+2. Ответ шлюза или сервиса до сохранения декодируется целиком Pillow (в потоке): только PNG, JPEG
+   или WebP не больше RESULT_PIXELS и RESULT_MAX — иначе задание «ошибка» словами, а не «готово» с
+   чужими байтами. Готовая картинка — в media со своим типом и расширением (итог кисти — PNG) и с
+   превью, строка `images` — запись ленты. Описания и переводы промпта в историю не пишутся: текст
+   живёт в памяти, GET отдаёт его и повторно (ответ мог потеряться в пути), пока страница не
+   подтвердит получение (DELETE …/<id>) или не пройдёт TEXT_KEEP_SEC от первой выдачи; невыданный —
+   до KEEP_DONE_SEC. Перевод — тот же путь, что описание (маршрут шлюза
    `/slot/images/descriptions`, gemma-abl), без картинки.
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
    (`source_media_id`); оба нормализуются normalize_image. Маска (PNG) остаётся в студии: снаружи
@@ -31,16 +34,19 @@
 import asyncio
 import base64
 import binascii
+import io
 import json
 import logging
 import secrets
 import uuid
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
+from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
 
 import auth
@@ -78,6 +84,11 @@ INTERRUPTED = "прервано перезапуском студии"
 JSON_MAX = 512 * 1024
 #: удаление учётки ждёт конца её отменённых заданий: они освобождают карту её подключением
 SETTLE_SEC = 90
+#: картинка ответа (п. 2 шапки): форматы и пределы — с запасом над размерами моделей и gpt-image-1
+RESULT_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+RESULT_PIXELS = 4096 * 4096
+RESULT_MAX = 50 * 1024 * 1024
+NOT_PICTURE = "сервис вернул не картинку (нужен PNG, JPEG или WebP)"
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
 MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
@@ -549,6 +560,28 @@ def _png(body: dict) -> "tuple[bytes, int | None]":
     return png, seed if isinstance(seed, int) and not isinstance(seed, bool) else None
 
 
+def _picture(data: bytes) -> str:
+    """MIME картинки ответа после полного декодирования (п. 2 шапки) — для asyncio.to_thread.
+    Не картинка, чужой формат, обрезанный файл или больше пределов — JobError."""
+    too_big = JobError("too_big", f"сервис вернул картинку больше предела ({RESULT_PIXELS // 1_000_000} Мп,"
+                                  f" {RESULT_MAX // (1024 * 1024)} МиБ)")
+    if len(data) > RESULT_MAX:
+        raise too_big
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format not in RESULT_TYPES:
+                    raise JobError("not_image", NOT_PICTURE)
+                if image.width * image.height > RESULT_PIXELS:   # до декодирования: размер — из заголовка
+                    raise too_big
+                image.load()
+                return RESULT_TYPES[image.format]
+    except (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        raise JobError("not_image", NOT_PICTURE) from None
+
+
 async def _release_others(job: Job) -> None:
     """Release другой модели картинок перед запросом (п. 4 шапки): итог не важен — занятую (409)
     запрос дождётся у шлюза, а недоступный шлюз и убранный адрес назовёт сам запрос."""
@@ -563,7 +596,7 @@ async def _release_others(job: Job) -> None:
             log.info("задание %s: release другой модели — код %s", job.id[:8], r.status_code)
 
 
-async def _generate_external(job: Job) -> "tuple[bytes, int | None]":
+async def _generate_external(job: Job) -> "tuple[bytes, int | None, str]":
     """Внешний сервис OpenAI-стиля (п. 7 шапки)."""
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "response_format": "b64_json"}
     if job.size in EXTERNAL_SIZES:               # «original» — размер фото, у сервиса его нет
@@ -590,10 +623,11 @@ async def _generate_external(job: Job) -> "tuple[bytes, int | None]":
     if "b64_json" not in first and "url" in first:
         raise JobError("url", "сервис вернул ссылку, а не картинку")
     png, _seed = _png(body)
-    return png, None
+    return png, None, await asyncio.to_thread(_picture, png)
 
 
-async def generate(job: Job) -> "tuple[bytes, int | None]":
+async def generate(job: Job) -> "tuple[bytes, int | None, str]":
+    """Картинка ответа, seed шлюза (или None) и её MIME."""
     if job.conn.kind != "srvllm":
         return await _generate_external(job)
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
@@ -617,9 +651,10 @@ async def generate(job: Job) -> "tuple[bytes, int | None]":
     if r.status_code != 200:
         raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
     png, seed = _png(upstream.json_body(r))
+    mime = await asyncio.to_thread(_picture, png)       # до слияния: битое там было бы «сбоем службы»
     if job.mask is not None:
-        png = await asyncio.to_thread(restrict_edit, job.image, png, job.mask)
-    return png, seed
+        png, mime = await asyncio.to_thread(restrict_edit, job.image, png, job.mask), "image/png"
+    return png, seed, mime
 
 
 async def describe(job: Job):
@@ -692,8 +727,9 @@ async def release_after_cancel(job: Job, *, cancelled=True) -> str:
         await clock.SLEEP(RELEASE_PAUSE_SEC)
 
 
-async def _save(job: Job, png: bytes, seed: int) -> str:
-    return await media.save_async(job.user_id, png, "image/png", f"studio-{job.model}-{seed}.png", thumb=True)
+async def _save(job: Job, picture: "tuple[bytes, str]", seed: int) -> str:
+    data, mime = picture
+    return await media.save_async(job.user_id, data, mime, f"studio-{job.model}-{seed}{media.EXT[mime]}", thumb=True)
 
 
 async def run_job(job: Job) -> None:
@@ -704,8 +740,8 @@ async def run_job(job: Job) -> None:
                 await describe(job)
                 outcome = ("done", TEXT_WORDS[job.kind][0], None, None)
             else:
-                png, seed = await generate(job)
-                outcome = ("done", "готово", png, seed)
+                data, seed, mime = await generate(job)
+                outcome = ("done", "готово", (data, mime), seed)
         except JobError as e:
             outcome = ("error", str(e), None, None)
             log.warning("задание %s: ошибка %s", job.id[:8], e.code)
@@ -717,10 +753,10 @@ async def run_job(job: Job) -> None:
             description_cleanup = await release_after_cancel(job, cancelled=job.state == "cancelling")
             if outcome[0] == "done":
                 outcome = ("done", description_cleanup, None, None)
-        state_, detail, png, seed = outcome
-        if png is not None and job.state != "cancelling":
+        state_, detail, picture, seed = outcome
+        if picture is not None and job.state != "cancelling":
             try:
-                job.media_id = await _save(job, png, seed if seed is not None else job.seed)
+                job.media_id = await _save(job, picture, seed if seed is not None else job.seed)
             except media.StorageError as e:
                 state_, detail = "error", str(e)
                 log.warning("задание %s: картинка не сохранена", job.id[:8])
