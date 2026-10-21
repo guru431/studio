@@ -10,6 +10,8 @@
    итог — media `audio/mpeg`. Одно идущее задание на пользователя; отмена, перезапуск — как у
    transcripts.py.
 3. Журнал — только id и коды: текст и звук туда не пишутся.
+4. JOBS — только идущие задания, как у transcripts.py: кончившееся уходит из него, убрав временные
+   файлы, вместе с записью итога; долговечное — строка `speeches`.
 """
 import asyncio
 import logging
@@ -152,6 +154,8 @@ async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
 
 
 async def run(job: Job) -> None:
+    """Итог — в строку последним, после уборки временных файлов (п. 4 шапки)."""
+    outcome = ("error", INTERRUPTED, {})              # остановка службы
     try:
         try:
             srvllm = job.conn.kind == "srvllm"
@@ -178,24 +182,27 @@ async def run(job: Job) -> None:
             duration = await audio.probe(out)
             data = await asyncio.to_thread(out.read_bytes)
             media_id = await media.save_async(job.user_id, data, "audio/mpeg", f"speech-{job.id[:8]}.mp3")
-            _finish(job, "done", "готово", media_id=media_id, duration=duration)
+            outcome = ("done", "готово", {"media_id": media_id, "duration": duration})
             log.info("озвучка %s: готова", job.id[:8])
         except (JobError, audio.AudioError, speech.SpeechError, media.StorageError) as e:
-            _finish(job, "error", str(e))
+            outcome = ("error", str(e), {})
             log.info("озвучка %s: ошибка %s", job.id[:8], type(e).__name__)
         except Exception as e:                       # noqa: BLE001 — задание не должно висеть
-            _finish(job, "error", f"сбой службы: {type(e).__name__}")
+            outcome = ("error", f"сбой службы: {type(e).__name__}", {})
             log.warning("озвучка %s: сбой %s", job.id[:8], type(e).__name__)
     except asyncio.CancelledError:
-        if job.by_user:
-            _finish(job, "cancelled", "отменено")
-        else:
-            _finish(job, "error", INTERRUPTED)
+        if not job.by_user:
             raise
+        outcome = ("cancelled", "отменено", {})
     finally:
-        for f in job.files:
-            await asyncio.to_thread(f.unlink, missing_ok=True)
         job.text = ""
+        try:
+            for f in job.files:
+                await asyncio.to_thread(f.unlink, missing_ok=True)
+        finally:                                     # и вторая отмена посреди уборки итог не теряет
+            state_, detail, extra = outcome
+            _finish(job, state_, detail, **extra)
+            JOBS.pop(job.id, None)
 
 
 def recover() -> None:
@@ -283,7 +290,6 @@ async def delete(sid: str, request: Request):
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
     state.DB.execute("DELETE FROM speeches WHERE id = ?", (sid,))
-    JOBS.pop(sid, None)
     if row["media_id"] and not media.referenced(uid, row["media_id"]):
         await media.delete_async(uid, row["media_id"])
     return Response(status_code=204)
