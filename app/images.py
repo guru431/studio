@@ -596,6 +596,24 @@ async def image_status(image_id: str, request: Request):
     return _out(_row(request.state.user.id, image_id))
 
 
+@router.get("/{image_id}/variants")
+async def variants(image_id: str, request: Request):
+    """«Варианты» просмотра (п. 9 шапки): свои готовые с файлом — из того же исходника (кроме этой) и
+    сделанные из этой; новые сверху, не больше VARIANTS_MAX в каждом ряду."""
+    uid = request.state.user.id
+    row = _row(uid, image_id)
+
+    def made_from(media_id: "str | None") -> list[dict]:
+        if media_id is None:
+            return []
+        rows = state.DB.execute("SELECT * FROM images WHERE user_id = ? AND source_media_id = ? AND id != ?"
+                                " AND state = 'done' AND media_id IS NOT NULL ORDER BY created DESC, id DESC LIMIT ?",
+                                (uid, media_id, image_id, VARIANTS_MAX))
+        return [_out(r, with_chain=False) for r in rows]
+
+    return {"siblings": made_from(row["source_media_id"]), "children": made_from(row["media_id"])}
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str, request: Request):
     """Запрос к шлюзу не обрывается (обрыв до slot-gate не доходит): задание ждёт его конца,

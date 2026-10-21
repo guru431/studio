@@ -1429,6 +1429,56 @@ def test_deleting_a_user_during_a_series_ends_it(studio, env, monkeypatch):
     assert media_rows() == 0 and share_files(env) == []
 
 
+# ---- варианты ----------------------------------------------------------------
+
+def edit_of(s, media_id, prompt="x", **extra):
+    return wait_state(s, start(s, prompt=prompt, size="original", model="flux", source_media_id=media_id, **extra)
+                      .json()["id"], {"done"})
+
+
+def test_variants_are_siblings_and_children(studio):
+    add_gateway(studio)
+    g = wait_state(studio, start(studio).json()["id"], {"done"})
+    studio.clock[0] += 1
+    a = edit_of(studio, g["media_id"], "a")
+    studio.clock[0] += 1
+    b = edit_of(studio, g["media_id"], "b")
+    studio.clock[0] += 1
+    c = edit_of(studio, a["media_id"], "c")
+    studio.gw.image_reply = (500, {"error": {"message": "boom"}})
+    wait_state(studio, start(studio, size="original", source_media_id=g["media_id"]).json()["id"], {"error"})
+    ids = lambda xs: [x["id"] for x in xs]  # noqa: E731
+    va = studio.c.get(f"/api/images/{a['id']}/variants").json()
+    assert ids(va["siblings"]) == [b["id"]] and ids(va["children"]) == [c["id"]]
+    assert "chain" not in va["siblings"][0] and va["siblings"][0]["prompt"] == "b" and va["siblings"][0]["media_id"]
+    vg = studio.c.get(f"/api/images/{g['id']}/variants").json()
+    assert vg == {"siblings": [], "children": vg["children"]} and ids(vg["children"]) == [b["id"], a["id"]]
+    vc = studio.c.get(f"/api/images/{c['id']}/variants").json()
+    assert vc == {"siblings": [], "children": []}
+
+
+def test_variants_of_another_user_are_404(studio):
+    add_gateway(studio)
+    g = wait_state(studio, start(studio).json()["id"], {"done"})
+    edit_of(studio, g["media_id"])
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    r = studio.c.get(f"/api/images/{g['id']}/variants")
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
+def test_variants_are_capped(studio):
+    add_gateway(studio)
+    g = wait_state(studio, start(studio).json()["id"], {"done"})
+    uid = state.DB.execute("SELECT user_id FROM images").fetchone()[0]
+    for i in range(images.VARIANTS_MAX + 1):          # строками: 25 правок через шлюз — дольше секунды
+        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, source_media_id, media_id,"
+                         " state, detail, created) VALUES (?, ?, 'edit', 'flux', 'p', '64x48', 1, ?, ?, 'done', 'готово', ?)",
+                         (f"{i:032x}", uid, g["media_id"], f"{i + 100:032x}", T0 + i))
+    children = studio.c.get(f"/api/images/{g['id']}/variants").json()["children"]
+    assert len(children) == images.VARIANTS_MAX == 24 and children[0]["id"] == f"{images.VARIANTS_MAX:032x}"
+
+
 # ---- пресеты -----------------------------------------------------------------
 
 PRESET = {"model": "lustify", "connection_id": None, "size": "portrait", "seed": 7, "strength": 0.4,
