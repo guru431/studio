@@ -89,6 +89,15 @@ def test_docx_is_a_valid_word_file_with_the_text_escaped():
     assert texts[0] == "Звонок Ивану" and "Собеседник 2 · 01:05" in texts and "Бюро <переводов> & Co." in texts
 
 
+def test_control_characters_break_neither_srt_nor_docx():
+    """Пустая строка внутри субтитра — для плеера его конец; \\x0b в XML делает DOCX недействительным."""
+    segs = [{"speaker": "Иван\x0b", "start": 0.0, "end": 3.0, "text": "Раз.\n\nДва\x0bтри\x00.", "edited": True}]
+    assert cues(exports.srt(segs)) == [(0.0, 3.0, "Иван: Раз. Два три .")]
+    with zipfile.ZipFile(io.BytesIO(exports.docx(segs, "Звонок\x01"))) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    assert [t.text for t in root.iter(f"{W}t")] == ["Звонок ", "Иван  · 00:00", "Раз.  Два три ."]
+
+
 def test_export_route_names_the_file_after_the_recording(studio, fake_audio):
     add_gateway(studio)
     tid = upload(studio).json()["id"]

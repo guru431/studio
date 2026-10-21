@@ -256,14 +256,38 @@ def test_speakers_count_the_shown_names(studio, fake_audio):
 def test_edit_is_checked_in_words(studio, fake_audio):
     tid = done_tr(studio)
     for body in ({"texts": {"2": "x"}}, {"texts": {"-1": "x"}}, {"texts": {"a": "x"}}, {"texts": {"0": "   "}},
-                 {"texts": {"0": "я" * (transcripts.EDIT_TEXT_MAX + 1)}}, {"names": {"Собеседник 3": "x"}},
+                 {"texts": {"0": "я" * (len("Здравствуйте.") + transcripts.EDIT_TEXT_MAX + 1)}},
+                 {"texts": {"0": "\n\x0b\t"}}, {"names": {"Собеседник 3": "x"}},
                  {"names": {"Собеседник 1": "Иван\nПетров"}}, {"names": {"Собеседник 1": " "}},
+                 {"names": {"Собеседник 1": "Ив\x0bан"}}, {"names": {"Собеседник 1": "Иван Петров"}},
+                 {"names": {"Собеседник 1": "Иван Петров"}},
                  {"names": {"Собеседник 1": "я" * (transcripts.NAME_EDIT_MAX + 1)}}):
         r = edit(studio, tid, **body)
         assert r.status_code == 422 and r.json()["detail"]["code"] == "input", body
         assert isinstance(r.json()["detail"]["message"], str)
     assert state.DB.execute("SELECT edits FROM transcripts").fetchone()[0] is None
     assert edit(studio, tid, texts={"0": "я" * transcripts.EDIT_TEXT_MAX}).status_code == 200
+
+
+def test_a_long_replica_edits_within_its_own_length(studio, fake_audio, monkeypatch):
+    """Реплика одного говорящего за 20+ минут длиннее EDIT_TEXT_MAX: предел — от исходной длины."""
+    tid = done_tr(studio)
+    monkeypatch.setattr(transcripts, "EDIT_TEXT_MAX", 5)          # «Здравствуйте.» — 13 знаков
+    assert edit(studio, tid, texts={"0": "Здравствуйте, Иван"}).status_code == 200      # 13 + 5
+    r = edit(studio, tid, texts={"0": "Здравствуйте, Иван!"})
+    assert r.status_code == 422 and "18" in r.json()["detail"]["message"]
+
+
+def test_edit_text_is_one_line_and_a_name_keeps_format_characters(studio, fake_audio):
+    """Пустая строка в правке — разделитель реплик TXT и конец субтитра SRT, \\x0b ломает DOCX: текст —
+    одной строкой. Имя отвергает только управляющие и разделители строк: ZWJ-эмодзи и мягкий перенос — можно."""
+    tid = done_tr(studio)
+    name = "Анна 👩‍💻 Пере­водчик"
+    body = edit(studio, tid, texts={"0": " Первая\n\nвторая\x0bтретья\t  конец\r\n"},
+                names={"Собеседник 1": name}).json()
+    assert shown(body)[0] == (name, "Первая вторая третья конец", True)
+    txt = studio.c.get(f"/api/transcripts/{tid}/export", params={"format": "txt"}).text
+    assert txt.split("\n\n")[0] == f"{name} · 00:00\nПервая вторая третья конец"
 
 
 def test_running_cannot_be_edited_and_foreign_is_gone(studio, fake_audio, monkeypatch):
