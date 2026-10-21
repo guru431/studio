@@ -54,7 +54,10 @@
   По адресам вне списка сервер не ходит (с учётом перенаправлений и разрешения имён). Запись
   списка — IP:порт или имя:порт; имя — только https, при каждом запросе все его адреса должны быть
   публичными (`ipaddress.is_global`), соединение — с проверенным адресом (SNI и `Host` — имя,
-  `upstream.RESOLVE`). Правило путей `PROXIED_PATHS` — только для IP-записей.
+  `upstream.RESOLVE`). Правило путей `PROXIED_PATHS` — только для IP-записей. Задания держат
+  снимок `Connection`: `connections.token` отдаёт ключ, только если владелец, вид и адрес строки
+  совпали со снимком, иначе `upstream.ConnectionChanged` (слова — `upstream.refused_words`) — новый
+  ключ прежнему адресу не уходит.
 - Разделы (`chat`, `photo`, `video`, `transcribe`, `speech`, `dictation`) — таблицы `section_links`
   (подключение в разделе и его отмеченные модели) и `section_defaults`; встроенный перечень srvllm —
   `sections.CATALOG`. Старые `connections.sections` и `users.default_*` остаются для отката и
