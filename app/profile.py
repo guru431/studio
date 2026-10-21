@@ -1,5 +1,6 @@
 """Профиль у каждого: `/api/me` (с токеном CSRF сессии, готовностью разделов и умолчанием чата из
-sections.py), тема и вид ленты разделов (общие для всех устройств учётки), смена пароля, удаление
+sections.py), тема и вид ленты разделов (общие для всех устройств учётки), ключ Exa чата (`PUT/DELETE
+/api/me/exa-key`, шифром; наружу — только «есть/нет»), смена пароля, удаление
 всей своей истории (спека, раздел 7.9; ответ — число файлов в очереди удаления, media.py), объём
 своих файлов и очередь удаления (`GET /api/me/storage`)."""
 import asyncio
@@ -21,6 +22,7 @@ THEMES = ("auto", "dark", "light")
 VIEWS = ("preview", "tiles", "table")       # views.js
 VIEW_SECTIONS = ("photo", "video")
 PASSWORD_MAX = 1024
+EXA_KEY_MAX = 200                           # ключ Exa — знаков после strip
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
@@ -29,6 +31,10 @@ router = APIRouter(prefix="/api")
 class MePatch(BaseModel):
     theme: str | None = None
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
+
+
+class ExaKey(BaseModel):
+    key: str
 
 
 class PasswordChange(BaseModel):
@@ -44,14 +50,15 @@ def check_password(password: str) -> None:
 def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
-    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock FROM users WHERE id = ?",
-                           (uid,)).fetchone()
+    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
+                           " exa_key IS NOT NULL AS exa_key FROM users WHERE id = ?", (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "theme": row["theme"], "views": json.loads(row["views"]),
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
-            "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"])}
+            "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
+            "exa_key": bool(row["exa_key"])}
 
 
 @router.get("/me")
@@ -97,6 +104,26 @@ async def change_password(body: PasswordChange, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     log.info("пользователь %d: пароль сменён, прочие сессии закрыты", uid)
+    return Response(status_code=204)
+
+
+@router.put("/me/exa-key", status_code=204)
+async def put_exa_key(body: ExaKey, request: Request):
+    """Ключ Exa — шифром; запросом к Exa не проверяется (тратил бы баланс): неверный скажет первый поиск."""
+    uid = request.state.user.id
+    key = body.key.strip()
+    if not 1 <= len(key) <= EXA_KEY_MAX:
+        raise HTTPException(422, {"code": "exa_key", "message": f"ключ Exa — от 1 до {EXA_KEY_MAX} знаков"})
+    state.DB.execute("UPDATE users SET exa_key = ? WHERE id = ?", (security.encrypt(key), uid))
+    log.info("пользователь %d: ключ Exa сохранён", uid)
+    return Response(status_code=204)
+
+
+@router.delete("/me/exa-key", status_code=204)
+async def delete_exa_key(request: Request):
+    uid = request.state.user.id
+    state.DB.execute("UPDATE users SET exa_key = NULL WHERE id = ?", (uid,))
+    log.info("пользователь %d: ключ Exa убран", uid)
     return Response(status_code=204)
 
 

@@ -47,11 +47,13 @@ SEARCH_TRIGGERS = ("search_images_ai", "search_images_ad", "search_videos_ai", "
                    "search_speeches_ad", "search_users_ad")
 DROP_V13 = ("".join(f"DROP TRIGGER {t}; " for t in SEARCH_TRIGGERS)
             + "DROP TABLE search; DROP TABLE search_docs; ALTER TABLE transcripts DROP COLUMN text;")
+DROP_V14 = ("ALTER TABLE chats DROP COLUMN web; ALTER TABLE chats DROP COLUMN web_consent;"
+            " ALTER TABLE users DROP COLUMN exa_key; ALTER TABLE messages DROP COLUMN tools;")
 
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 14
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -61,7 +63,7 @@ def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN mask_media_id; ALTER TABLE messages DROP COLUMN alive_at;"
                        " ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 1;")
+                       f" {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 1;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
@@ -75,7 +77,7 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
     """База прода — версии 2: шаг добавляет столбцы цепочки, строки остаются без неё."""
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 2;")
+                       f" {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 2;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
@@ -88,7 +90,7 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
 def test_migrate_links_a_version_3_base_to_every_section(env):
     """Шаг 4: srvllm — во всех шести разделах с перечнем, чат — с моделью пользователя; openai — в чате."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 3;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 3;")
     ins = ("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
            " VALUES (?, 1, 'c', ?, ?, x'00', ?, 0)")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
@@ -138,7 +140,7 @@ def test_token_encryption_needs_the_same_key(env, monkeypatch):
 
 def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 4;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 4;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -150,7 +152,7 @@ def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
 def test_migrate_gives_a_version_5_base_an_empty_view_choice(env):
     """Шаг 6: вид ленты — в учётке; у прежних учёток выбора нет — разделы берут свой вид по умолчанию."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 5;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 5;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -160,7 +162,7 @@ def test_migrate_gives_a_version_5_base_an_empty_view_choice(env):
 def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
     """Шаг 7: блокировка на телефоне выключена у прежних учёток, прежние сессии — без отметок."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 6;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 6;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d', 1, 'c', 9e12, 0)")
     db.migrate(conn)
@@ -173,7 +175,7 @@ def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
 def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
     """Шаг 8: очередь удаления файлов — пустая и без ссылки на учётку: удаление учётки путь не уносит."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 7;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 7;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -186,7 +188,7 @@ def test_migrate_indexes_files_and_streaming_answers_in_a_version_8_base(env):
     """Шаг 9: файлы учётки и идущие ответы — по индексу, а не полным просмотром media («Хранилище»,
     стирание истории) и всей переписки (предел ответов на каждом ходу)."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V9} {DROP_V10} PRAGMA user_version = 8;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V9} {DROP_V10} PRAGMA user_version = 8;")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
 
@@ -200,7 +202,7 @@ def test_migrate_indexes_files_and_streaming_answers_in_a_version_8_base(env):
 def test_migrate_adds_the_passport_to_a_version_9_base(env):
     """Шаг 10: паспорт подключения (checks.py) — у прежних подключений пуст: «не проверено»."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} {DROP_V10} PRAGMA user_version = 9;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V10} PRAGMA user_version = 9;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
                  " VALUES (1, 'c', 'openai', 'https://cloud.test/v1', x'00', '[]', 0)")
@@ -214,7 +216,7 @@ def test_migrate_adds_the_passport_to_a_version_9_base(env):
 def test_migrate_adds_transcript_edits_to_a_version_10_base(env):
     """Шаг 11: правки расшифровки и ссылка вложения на расшифровку; прежние строки — без них."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} {DROP_V11} PRAGMA user_version = 10;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} PRAGMA user_version = 10;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
                  " VALUES ('t1', 1, 'whisperx', 'a.m4a', 'm', 'done', 'готово', 0)")
@@ -230,7 +232,7 @@ def test_migrate_adds_transcript_edits_to_a_version_10_base(env):
 def test_migrate_adds_presets_and_the_source_index_to_a_version_11_base(env):
     """Шаг 12 (фото): пресеты учётки (каскад с ней) и индекс вариантов — картинки по исходнику."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} {DROP_V12} PRAGMA user_version = 11;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} {DROP_V12} PRAGMA user_version = 11;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -249,7 +251,7 @@ def test_migrate_adds_the_search_index_to_a_version_12_base(env):
     отправленные документы, расшифровки по имени, озвучки; идущий ответ и неотправленный документ — нет.
     Текст расшифровки (`transcripts.text`) пуст: его заполнит фон по файлу итога."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V13} PRAGMA user_version = 12;")
+    conn.executescript(f"{DROP_V14} {DROP_V13} PRAGMA user_version = 12;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'generation', 'lustify', 'Кошка на крыше', '64x48', 1, 'done', 'готово', 1)")
@@ -279,6 +281,22 @@ def test_migrate_adds_the_search_index_to_a_version_12_base(env):
     assert found("пишется") == []
     assert found("договор") == [("chat", "c1", "a1")]
     assert conn.execute("SELECT text FROM transcripts").fetchone()[0] is None
+
+
+def test_migrate_adds_the_internet_columns_to_a_version_13_base(env):
+    """Шаг 14 (интернет в чате): у прежних диалогов «Интернет» выключен и подтверждения нет, у учёток
+    нет ключа Exa, у сообщений — шагов инструментов; строки целы."""
+    conn = db.connect(env.db_path); db.migrate(conn)
+    conn.executescript(f"{DROP_V14} PRAGMA user_version = 13;")
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
+    conn.execute("INSERT INTO chats(id, user_id, title, model, created, updated) VALUES ('c1', 1, 'Про отпуск', 'm', 5, 5)")
+    conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                 " VALUES ('m1', 'c1', 'assistant', 'Ответ', 'done', 'server', 'm', 6)")
+    db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+    assert conn.execute("SELECT id, title, web, web_consent FROM chats").fetchone()[:] == ("c1", "Про отпуск", 0, None)
+    assert conn.execute("SELECT login, exa_key FROM users").fetchone()[:] == ("u", None)
+    assert conn.execute("SELECT content, tools FROM messages").fetchone()[:] == ("Ответ", None)
 
 
 #: строка истории каждой ленты: id, user_id, created

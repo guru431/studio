@@ -221,16 +221,19 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None
     out["users"] = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if not out["users"]:
         problems.append("в копии нет ни одной учётки")
-    key, tokens = Fernet(cfg.data_key), out["tokens"]
-    for (blob,) in conn.execute("SELECT token_enc FROM connections"):
-        try:
-            key.decrypt(blob)                    # значение не держится и не печатается
-            tokens["ok"] += 1
-        except InvalidToken:
-            tokens["failed"] += 1
-    if tokens["failed"]:
-        problems.append(f"токены подключений не расшифрованы: {tokens['failed']} из "
-                        f"{tokens['ok'] + tokens['failed']} — STUDIO_DATA_KEY не тот, что у копии")
+    key = Fernet(cfg.data_key)
+    for sql, name, words in (("SELECT token_enc FROM connections", "tokens", "токены подключений"),
+                             ("SELECT exa_key FROM users WHERE exa_key IS NOT NULL", "exa_keys", "ключи Exa")):
+        count = out[name]
+        for (blob,) in conn.execute(sql):
+            try:
+                key.decrypt(blob)                # значение не держится и не печатается
+                count["ok"] += 1
+            except InvalidToken:
+                count["failed"] += 1
+        if count["failed"]:
+            problems.append(f"{words} не расшифрованы: {count['failed']} из "
+                            f"{count['ok'] + count['failed']} — STUDIO_DATA_KEY не тот, что у копии")
     files = out["files"]
     rels = [row[0] for row in conn.execute("SELECT rel_path FROM media")]
     files["total"] = len(rels)
@@ -263,13 +266,13 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     копируется файлом `verify-<случайное>.db` в tmp_dir (локальный диск; файл, а не каталог: каталог
     уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
     копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
-    токены текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
+    токены подключений и ключи Exa учёток текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
     обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
     out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
-           "users": None, "tokens": {"ok": 0, "failed": 0},
+           "users": None, "tokens": {"ok": 0, "failed": 0}, "exa_keys": {"ok": 0, "failed": 0},
            "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
            "ok": False, "took": 0, "problems": []}
     try:
