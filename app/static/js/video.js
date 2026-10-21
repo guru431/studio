@@ -12,7 +12,7 @@
  * Текст сервера — только textContent. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
-import { createFeed } from './feed.js';
+import { createFeed, pageQuery } from './feed.js';
 import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
@@ -115,7 +115,7 @@ function build(view, ctx) {
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
-    load: async (before) => (await api('GET', `/api/videos?limit=${PAGE}${before === undefined ? '' : `&before=${before}`}`)).items,
+    load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
     head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
   });

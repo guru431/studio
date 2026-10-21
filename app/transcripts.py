@@ -28,6 +28,7 @@ from fastapi.responses import Response
 
 import audio
 import clock
+import db
 import exports
 import forms
 import media
@@ -249,14 +250,10 @@ async def upload(request: Request):
 
 
 @router.get("")
-async def list_transcripts(request: Request, before: "float | None" = None, limit: int = Query(60, ge=1, le=100)):
-    uid = request.state.user.id
-    if before is None:
-        rows = state.DB.execute("SELECT * FROM transcripts WHERE user_id = ? ORDER BY created DESC, id DESC LIMIT ?",
-                                (uid, limit))
-    else:
-        rows = state.DB.execute("SELECT * FROM transcripts WHERE user_id = ? AND created < ?"
-                                " ORDER BY created DESC, id DESC LIMIT ?", (uid, before, limit))
+async def list_transcripts(request: Request, before: "float | None" = None,
+                           before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
+    rows = db.page(state.DB, "transcripts", request.state.user.id, before, before_id, limit)
     return {"items": [_out(r) for r in rows]}
 
 

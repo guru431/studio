@@ -5,8 +5,10 @@
  * «модель» (отмеченные модели раздела) и «голос»: у шлюза srvllm — свои голоса по образцу (их
  * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
+ * Список и выбор — как у «Расшифровки»: страницы по PAGE с «Показать ещё», выбор по номеру.
  * Текст сервера — только textContent. */
 import { api } from './api.js';
+import { pageQuery, withFirstPage } from './feed.js';
 import { attachMic } from './mic.js';
 import { modelLabel } from './settings.js';
 import { el, openDialog, words } from './ui.js';
@@ -42,6 +44,12 @@ function build(view) {
   let voices = [];
   let alive = true;
   let poll = null;
+  let done = false;            // старше подгруженных записей нет
+  let paging = false;
+  let listing = 0;             // номер чтения первой страницы: запоздавшее прежнее не ляжет
+  let removals = 0;            // удаления: страница, начатая до удаления, не вернёт удалённую
+  let picking = 0;             // номер выбора: запоздалый ответ прежнего вид не займёт
+  let wanted = null;           // id последнего выбора
 
   const list = el('nav', { class: 'tr-list sp-list', 'aria-label': 'Озвучки' });
   const aside = el('aside', { class: 'split-aside', id: 'sp-aside' }, list);
@@ -140,13 +148,24 @@ function build(view) {
       });
       nodes.push(link);
     }
+    if (!done) {
+      const next = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'sp-more', disabled: paging },
+        paging ? 'Загружаю…' : 'Показать ещё');
+      next.addEventListener('click', more);
+      nodes.push(next);
+    }
     list.replaceChildren(...nodes);
   }
 
   async function loadList() {
+    const mine = ++listing;
     try {
-      items = (await api('GET', `/api/speeches?limit=${PAGE}`)).items;
+      const first = (await api('GET', `/api/speeches?limit=${PAGE}`)).items;
+      if (mine !== listing) return;
+      items = withFirstPage(first, items, PAGE);
+      if (first.length < PAGE) done = true;
     } catch (err) {
+      if (mine !== listing) return;
       error.textContent = words(err);
     }
     paintList();
@@ -154,22 +173,45 @@ function build(view) {
     if (alive && items.some((i) => RUNNING.has(i.state))) poll = setTimeout(refresh, POLL_MS);
   }
 
+  async function more() {
+    if (paging || done || !items.length) return;
+    paging = true;
+    const removed = removals;
+    paintList();
+    try {
+      const got = (await api('GET', `/api/speeches?limit=${PAGE}${pageQuery(items[items.length - 1])}`)).items;
+      if (removed === removals) {
+        const ids = new Set(items.map((x) => x.id));
+        items = [...items, ...got.filter((x) => !ids.has(x.id))];
+        done = got.length < PAGE;
+      }
+    } catch (err) {
+      error.textContent = words(err);
+    }
+    paging = false;
+    if (alive) paintList();
+  }
+
   async function refresh() {
     await loadList();
-    if (current) {
+    if (current && wanted === current.id) {           // выбор другой записи в пути — его не перебивать
       const fresh = items.find((i) => i.id === current.id);
       if (fresh && (fresh.state !== current.state || fresh.detail !== current.detail)) await select(current.id);
     }
   }
 
   async function select(id) {
+    const mine = ++picking;
+    wanted = id;
+    let got;
     try {
-      current = await api('GET', `/api/speeches/${id}`);
+      got = await api('GET', `/api/speeches/${id}`);
     } catch (err) {
-      error.textContent = words(err);
+      if (mine === picking) error.textContent = words(err);
       return;
     }
-    if (!alive) return;
+    if (!alive || mine !== picking) return;
+    current = got;
     paintList();
     paintView();
   }
@@ -184,6 +226,10 @@ function build(view) {
       try {
         await api('DELETE', `/api/speeches/${item.id}`);
         dialog.close();
+        removals += 1;
+        items = items.filter((x) => x.id !== item.id);
+        picking += 1;                                     // выбор, начатый до удаления, вид не займёт
+        wanted = null;
         current = null;
         paintView();
         await loadList();

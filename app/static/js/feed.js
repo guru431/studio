@@ -1,13 +1,16 @@
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
- * createFeed(el, { load, render, key, empty, head }): el — прокручиваемый контейнер ленты; load(before) —
- * Promise страницы записей новее-сверху, следующая — before = created последней (секунды unix),
- * первая — before undefined, пустая страница — конец; render(item) — узел карточки; key(item) —
- * id записи; empty — текст пустой ленты, head — узел над днями (оба необязательны). Записи несут `created`.
+ * createFeed(el, { load, render, key, empty, head }): el — прокручиваемый контейнер ленты; load(last) —
+ * Promise страницы записей новее-сверху, следующая — после last, последней записи ленты (запрос —
+ * pageQuery(last)), первая — last undefined, пустая страница — конец; render(item) — узел карточки;
+ * key(item) — id записи; empty — текст пустой ленты, head — узел над днями (оба необязательны). Записи
+ * несут `created` (секунды unix) и `id`.
  * Ответ — { prepend(item), update(item), remove(id), reload(), redraw() }; reload() — Promise первой
  * страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка — на месте.
- * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты). */
+ * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
+ *
+ * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки». */
 import { button, el as make, words } from './ui.js';
 
 const NEAR_PX = 600;             // ближе к низу — подгрузить следующую страницу
@@ -29,6 +32,22 @@ function dayTitle(created) {
   const opts = { day: 'numeric', month: 'long' };
   if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
   return d.toLocaleDateString('ru-RU', opts);
+}
+
+/** Курсор страницы истории после записи last (её created и id): у записей бывает одно время, и по
+ * одному created записи того же времени за краем страницы пропали бы. Первая страница — ''. */
+export function pageQuery(last) {
+  return last === undefined ? '' : `&before=${last.created}&before_id=${encodeURIComponent(last.id)}`;
+}
+
+/** Свежая первая страница (size записей) поверх подгруженного списка items: подгруженные старше её
+ * края остаются, как и порядок ленты — created, затем id по убыванию. */
+export function withFirstPage(first, items, size) {
+  if (first.length < size) return first;                  // вся история — на первой странице
+  const edge = first[first.length - 1];
+  const ids = new Set(first.map((x) => x.id));
+  return [...first, ...items.filter((x) => !ids.has(x.id)
+    && (x.created < edge.created || (x.created === edge.created && x.id < edge.id)))];
 }
 
 export function createFeed(el, { load, render, key, empty = '', head = null }) {
@@ -87,7 +106,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
     setState('loading');
     let got;
     try {
-      got = await load(items.length ? items[items.length - 1].created : undefined);
+      got = await load(items.length ? items[items.length - 1] : undefined);
     } catch (err) {
       if (mine !== generation) return;
       loading = false;

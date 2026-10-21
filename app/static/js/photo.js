@@ -9,9 +9,10 @@
  * страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать», «EN» и действия
  * просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
  * «Повторить» правки кистью идёт с её маской (mask_media_id).
- * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
- * окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ заменяет
- * промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
+ * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id>: потерянный ответ опрос
+ * повторяет, а текст, вставленный в поле, подтверждается DELETE …/descriptions/<id> — сервер его
+ * стирает; окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ
+ * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
  * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm. */
@@ -19,7 +20,7 @@ import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
 import { attachMic } from './mic.js';
-import { createFeed } from './feed.js';
+import { createFeed, pageQuery } from './feed.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -133,7 +134,7 @@ function build(view, ctx) {
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
-    load: async (before) => (await api('GET', `/api/images?limit=${PAGE}${before === undefined ? '' : `&before=${before}`}`)).items,
+    load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
   });
@@ -624,6 +625,7 @@ function build(view, ctx) {
         if (r.state === 'done') {
           stop();
           text.value = r.text;
+          api('DELETE', `/api/images/descriptions/${jobId}`).catch(() => {});    // получено — сервер стирает
           text.disabled = false;
           make.disabled = false;
           if (r.truncated) fail.textContent = 'Достигнут лимит ответа модели; описание можно дополнить вручную.';
@@ -706,6 +708,7 @@ function build(view, ctx) {
             prompt.value = r.text;
             autosize();
           }
+          api('DELETE', `/api/images/translations/${job.id}`).catch(() => {});   // получен — сервер стирает
           break;
         }
         if (r.state === 'error') throw new Error(`Перевод не получился: ${r.detail}`);

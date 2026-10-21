@@ -190,13 +190,14 @@ def test_photo_edit_description_and_video_through_the_studio(studio):
     difference.paste((0, 0, 0), area)
     assert difference.getbbox() is None, "pixels outside the mask changed"
 
-    # 3. Description by gemma-abl of the generated picture; the text is given once, with «done»
+    # 3. Description by gemma-abl of the generated picture; the text comes with «done» until received
     job = submit(c, STUDIO + "/api/images/descriptions", 202,
                  files={"source_media_id": (None, generated["media_id"])})
     made.descriptions.append(job["id"])
     described = poll(c, f"{STUDIO}/api/images/descriptions/{job['id']}", finished, IMAGE_SEC)
     assert described["state"] == "done", described
     assert len(described["text"]) >= 300, described["text"][:300]
+    assert c.delete(f"{STUDIO}/api/images/descriptions/{job['id']}").status_code == 204
 
     # 4. A 1 s clip of the generated picture; the server watcher brings it into history
     r = c.post(STUDIO + "/api/videos", data={"prompt": "slow camera pan over the hills", "seconds": "1",
