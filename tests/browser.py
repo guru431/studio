@@ -53,11 +53,13 @@ class Browser:
         self.node, self.port = node, port
 
     def drive(self, url: str, steps=(), *, width: int = 1280, height: int = 900,
-              mobile: bool = False, touch: bool = False, authenticator: bool = False, timeout: int = 15000) -> dict:
+              mobile: bool = False, touch: bool = False, authenticator: bool = False, init: str | None = None,
+              timeout: int = 15000) -> dict:
         """Открыть адрес во вкладке, пройти шаги, вернуть ответ драйвера. touch — касание вместо мыши
-        (`pointer: coarse`), authenticator — виртуальный ключ WebAuthn вкладки (Face ID «проходит» сам)."""
+        (`pointer: coarse`), authenticator — виртуальный ключ WebAuthn вкладки (Face ID «проходит» сам),
+        init — сценарий до скриптов каждой страницы вкладки."""
         job = {"port": self.port, "url": url, "width": width, "height": height, "mobile": mobile,
-               "touch": touch, "authenticator": authenticator,
+               "touch": touch, "authenticator": authenticator, "init": init,
                "timeout": timeout, "steps": [list(step) for step in steps]}
         out = subprocess.run([self.node, str(DRIVER)], input=json.dumps(job), capture_output=True,
                              encoding="utf-8", timeout=90)

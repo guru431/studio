@@ -105,7 +105,8 @@ class TurnIn(BaseModel):
 
 
 class AnswerIn(BaseModel):
-    content: str = Field(max_length=ANSWER_MAX)
+    # как у ответа через сервер: до ANSWER_MAX знаков и пометка обрезки (длиннейшая — CUT_SIZE)
+    content: str = Field(max_length=ANSWER_MAX + len(CUT_SIZE))
     status: Literal["done", "stopped", "error"]
 
 

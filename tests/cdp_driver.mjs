@@ -4,7 +4,9 @@
  * Копия драйвера панели llm_routers (dashboard/tests/cdp_driver.mjs) на 2026-10-19.
  * Зависимостей нет: `fetch` и `WebSocket` встроены в node 22+.
  *
- * Задание: { port, url, width, height, mobile, touch, authenticator, timeout, steps, probe, writes }.
+ * Задание: { port, url, width, height, mobile, touch, authenticator, init, timeout, steps, probe, writes }.
+ * `init` — сценарий, который вкладка выполняет до скриптов каждой загруженной страницы (подмена fetch
+ * с самого старта, в том числе после перезагрузки).
  * `writes` — пути, куда вкладке можно писать (запрос не GET); остальную запись
  * браузер обрывает сам. Нет поля — запись не ограничена.
  * `touch` — касание вместо мыши (`pointer: coarse`); `authenticator` — виртуальный ключ WebAuthn
@@ -187,6 +189,7 @@ async function run(job) {
       await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',
         hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
     }
+    if (job.init) await tab.send('Page.addScriptToEvaluateOnNewDocument', { source: job.init });
     const opened = await tab.send('Page.navigate', { url: job.url });
 
     // Пока страница сменяется (вход, переход), выражение вычислить негде: это «ещё нет», а не отказ.

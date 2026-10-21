@@ -19,7 +19,7 @@
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
-import { addPasskey, isTouch, passkeyOptions } from './lock.js';
+import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
@@ -115,7 +115,8 @@ function day(ts) {
 
 /* «Блокировка»: переключатель (выключить — только с паролем учётки), ключи учётки с «Удалить» и — на
  * телефоне и планшете — «Добавить Face ID / отпечаток»: пароль и «Далее» готовят варианты, и нажатие
- * «Добавить» сразу зовёт navigator.credentials.create (Safari без нажатия Face ID не покажет). */
+ * «Добавить» сразу зовёт navigator.credentials.create (Safari без нажатия Face ID не покажет). Варианты
+ * старше FRESH_SEC — снова к паролю и «Далее»: вызов на сервере истекает через 120 с. */
 function lockBlock() {
   const note = status('screen-lock-status');
   const enabled = el('input', { type: 'checkbox', id: 'lock-enabled', checked: !!me.screen_lock });
@@ -192,16 +193,27 @@ function lockBlock() {
     const create = button('Добавить Face ID / отпечаток этого устройства', { class: 'btn btn-accent', id: 'passkey-add',
       hidden: true });
     let options = null;
+    let optionsAt = 0;
+    let stale = null;
     const restart = () => {
+      clearTimeout(stale);
       options = null;
       create.hidden = true;
       ask.hidden = false;
+    };
+    // вызов на сервере живёт 120 с: позже устройство создало бы ключ, который сервер не примет (сирота в «Паролях»)
+    const expire = () => {
+      restart();
+      say(note, 'Прошло больше полутора минут — введите пароль ещё раз');
     };
     next.addEventListener('click', async () => {
       next.disabled = true;
       say(note, '');
       try {
         options = await passkeyOptions(password.value);
+        optionsAt = Date.now();
+        clearTimeout(stale);
+        stale = setTimeout(expire, FRESH_SEC * 1000);
         password.value = '';
         ask.hidden = true;
         create.hidden = false;
@@ -212,6 +224,10 @@ function lockBlock() {
       }
     });
     create.addEventListener('click', async () => {
+      if (Date.now() - optionsAt >= FRESH_SEC * 1000) {    // таймер мог не успеть (телефон спал)
+        expire();
+        return;
+      }
       const pending = addPasskey(options);           // create — до первого await (Safari)
       create.disabled = true;
       try {
@@ -327,14 +343,21 @@ function voicesBlock(host) {
         return;
       }
       try {
-        recording = await startRecording(15, (sec) => { recNote.textContent = `Запись · ${clock(sec)} — нажмите ещё раз, чтобы остановить`; });
+        recording = await startRecording(15, (sec) => { recNote.textContent = `Запись · ${clock(sec)} — нажмите ещё раз, чтобы остановить`; }, rec);
       } catch (err) {
         recNote.textContent = words(err);
         return;
       }
+      if (!recording) return;                        // окно закрыли, пока браузер спрашивал разрешение
       rec.textContent = 'Остановить';
-      recorded = await recording.done;
+      const sample = await recording.done;
       recording = null;
+      if (!sample) {                                 // отменена (окно закрыли, ушли из раздела)
+        rec.textContent = recorded ? 'Записать заново' : 'Записать с микрофона';
+        recNote.textContent = '';
+        return;
+      }
+      recorded = sample;
       rec.textContent = 'Записать заново';
       recNote.textContent = 'Запись готова';
       file.value = '';
