@@ -131,13 +131,9 @@ def _url(conn: Connection, gateway_id: str, tail: str = "") -> str:
     return connections.slot_url(conn, f"/videos/{gateway_id}{tail}")
 
 
-def _refused_words(conn: Connection) -> str:
-    return f"адрес подключения «{conn.name}» убран из списка администратора"
-
-
 def _unreachable(e: Exception, conn: Connection) -> HTTPException:
     if isinstance(e, upstream.UpstreamRefused):
-        return HTTPException(409, {"code": "refused", "message": _refused_words(conn)})
+        return HTTPException(409, {"code": "refused", "message": upstream.refused_words(e, conn)})
     if isinstance(e, httpx.TimeoutException):
         return HTTPException(504, {"code": "timeout", "message": f"шлюз не ответил за {VIDEO_TIMEOUT_SEC} с"})
     return HTTPException(502, {"code": "gateway", "message": f"шлюз недоступен: {type(e).__name__}"})
@@ -443,8 +439,8 @@ async def _poll(row) -> None:
         return
     try:
         r = await upstream.request(conn, "GET", _url(conn, row["gateway_id"]), timeout=VIDEO_TIMEOUT_SEC)
-    except upstream.UpstreamRefused:
-        await _fail(row, _refused_words(conn))
+    except upstream.UpstreamRefused as e:
+        await _fail(row, upstream.refused_words(e, conn))
         return
     except httpx.HTTPError as e:
         log.info("ролик %s: шлюз недоступен (%s) — следующий проход", row["id"][:8], type(e).__name__)

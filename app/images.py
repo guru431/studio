@@ -513,8 +513,9 @@ async def release_description(conn: Connection) -> httpx.Response:
     return await _slot(conn, "/images/descriptions/release", SHORT_TIMEOUT_SEC, json={"model": DESCRIPTION_MODEL})
 
 
-def _refused(conn: Connection) -> JobError:
-    return JobError("refused", f"адрес подключения «{conn.name}» убран из списка администратора")
+def _refused(conn: Connection, e: upstream.UpstreamRefused) -> JobError:
+    return JobError("connection" if isinstance(e, upstream.ConnectionChanged) else "refused",
+                    upstream.refused_words(e, conn))
 
 
 def _png(body: dict) -> "tuple[bytes, int | None]":
@@ -559,8 +560,8 @@ async def _generate_external(job: Job) -> "tuple[bytes, int | None]":
         raise JobError("timeout", f"сервис не ответил за {GENERATE_TIMEOUT_SEC} с")
     except httpx.HTTPError as e:
         raise JobError("gateway", f"сервис недоступен: {type(e).__name__}")
-    except upstream.UpstreamRefused:
-        raise _refused(job.conn) from None
+    except upstream.UpstreamRefused as e:
+        raise _refused(job.conn, e) from None
     if r.status_code != 200:
         raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
     body = upstream.json_body(r)
@@ -591,8 +592,8 @@ async def generate(job: Job) -> "tuple[bytes, int | None]":
         raise JobError("timeout", f"шлюз не ответил за {GENERATE_TIMEOUT_SEC} с")
     except httpx.HTTPError as e:
         raise JobError("gateway", f"шлюз недоступен: {type(e).__name__}")
-    except upstream.UpstreamRefused:
-        raise _refused(job.conn) from None
+    except upstream.UpstreamRefused as e:
+        raise _refused(job.conn, e) from None
     if r.status_code != 200:
         raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
     png, seed = _png(upstream.json_body(r))
@@ -608,12 +609,8 @@ async def describe(job: Job):
             response = await release(job.conn, model)
         except httpx.HTTPError as e:
             raise JobError("gateway", f"шлюз недоступен: {type(e).__name__}") from None
-        except upstream.UpstreamRefused:
-            raise _refused(job.conn) from None
-        except Exception:
-            if state.DB.execute("SELECT 1 FROM connections WHERE id = ?", (job.conn.id,)).fetchone() is not None:
-                raise
-            raise JobError("connection", f"подключение «{job.conn.name}» удалено из профиля") from None
+        except upstream.UpstreamRefused as e:     # и подключение удалили или сменили (ConnectionChanged)
+            raise _refused(job.conn, e) from None
         if response.status_code != 200:
             raise JobError("release", "не удалось подготовить карту: " + upstream.gateway_error(response, job.conn.name))
     if job.kind == "translation":
@@ -631,8 +628,8 @@ async def describe(job: Job):
         raise JobError("timeout", "шлюз не дождался описания") from None
     except httpx.HTTPError:
         raise JobError("gateway", "шлюз недоступен") from None
-    except upstream.UpstreamRefused:
-        raise _refused(job.conn) from None
+    except upstream.UpstreamRefused as e:
+        raise _refused(job.conn, e) from None
     if response.status_code != 200:
         raise JobError(f"http_{response.status_code}", upstream.gateway_error(response, job.conn.name))
     choices = upstream.json_body(response).get("choices") or []

@@ -8,7 +8,8 @@
   снимается, только когда новый токен сохранён при прямом. Пока он стоит, `/token` — отказ,
   даже если адрес потом убрали из списка.
 - Смена вида, схемы, хоста, порта или пути адреса (или того, идёт ли подключение через сервер) —
-  только с новым токеном: иначе ключ шлюза ушёл бы на другой адрес или в браузер.
+  только с новым токеном: иначе ключ шлюза ушёл бы на другой адрес или в браузер. Снимок
+  подключения у задания после такой смены (и после удаления) ключа не получает — token().
 - Через сервер путь IP-адреса фиксирован: srvllm — без пути, openai — без пути или `/v1`; у имени
   из списка (публичный https-хост) путь любой.
 - srvllm — всегда через сервер: вне списка такое подключение не сохраняется.
@@ -100,7 +101,15 @@ def get(user_id: int, conn_id: int) -> Connection:
 
 
 def token(conn: Connection) -> str:
-    row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ?", (conn.id,)).fetchone()
+    """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
+    Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
+    ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно."""
+    row = state.DB.execute("SELECT user_id, kind, base_url, token_enc FROM connections WHERE id = ?",
+                           (conn.id,)).fetchone()
+    if row is None or row["user_id"] != conn.user_id:
+        raise upstream.ConnectionChanged(conn, deleted=True)
+    if row["kind"] != conn.kind or _address(row["base_url"]) != _address(conn.base_url):
+        raise upstream.ConnectionChanged(conn, deleted=False)
     return security.decrypt(row["token_enc"])
 
 

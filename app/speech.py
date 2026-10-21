@@ -55,8 +55,8 @@ async def _post(conn, url: str, timeout: float, **kw) -> httpx.Response:
         raise SpeechError("служба речи не ответила вовремя") from None
     except httpx.HTTPError as e:
         raise SpeechError(f"служба речи недоступна: {type(e).__name__}") from None
-    except upstream.UpstreamRefused:
-        raise SpeechError(f"адрес подключения «{conn.name}» убран из списка администратора") from None
+    except upstream.UpstreamRefused as e:
+        raise SpeechError(upstream.refused_words(e, conn)) from None
     if r.status_code == 503:
         raise Busy(upstream.message(r) or "карта занята")
     if r.status_code != 200:
