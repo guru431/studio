@@ -63,8 +63,10 @@ class Browser:
         job = {"port": self.port, "url": url, "width": width, "height": height, "mobile": mobile,
                "touch": touch, "authenticator": authenticator, "init": init,
                "timeout": timeout, "steps": [list(step) for step in steps]}
+        # весь сценарий — до 180 с: в длинном прогоне отдельный сценарий шёл 76 с (обычно 4 с) — машина
+        # на миг тормозит запуск и файлы браузера; шаг ждёт до timeout, сценарий — с запасом на несколько
         out = subprocess.run([self.node, str(DRIVER)], input=json.dumps(job), capture_output=True,
-                             encoding="utf-8", timeout=90)
+                             encoding="utf-8", timeout=180)
         assert out.returncode == 0, f"драйвер упал: {out.stderr[-800:]}"
         return json.loads(out.stdout)
 

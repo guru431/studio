@@ -20,7 +20,8 @@ from browser import launch
 from fakes import PNG_REAL, TOKEN as GW_TOKEN, VIDEO_MODEL, video_object
 from live_app import start_live_app
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+#: срок теста — больше срока одного сценария драйвера (180 с, browser.py), иначе он оборвал бы сценарий раньше
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 READY = "document.documentElement.dataset.ready === '1'"
 
