@@ -5,7 +5,8 @@
  * медиа — мимо него, из сети. Но HTTP-кэш браузера медиа держит: картинки и ролики идут с
  * `Cache-Control: private, max-age=86400` (media.py, иначе перемотка ролика качает его заново) и
  * остаются на диске устройства до суток — и после «Удалить всю историю» и выхода. Навигация — из
- * сети, без связи — /offline.html. Новая версия удаляет кэш прежних. */
+ * сети, без связи — /offline.html. Новая версия удаляет кэш прежних. Ещё — нажатие на уведомление
+ * «В работе» (notificationclick): push здесь нет, уведомления показывает открытая студия. */
 const CACHE = `studio-shell-${VERSION}`;
 const SHELL = [
   '/offline.html',
@@ -26,6 +27,18 @@ self.addEventListener('activate', (event) => {
     .then((keys) => Promise.all(keys.filter((k) => k.startsWith('studio-shell-') && k !== CACHE)
       .map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
+});
+
+/* Нажатие на уведомление «В работе» (jobs.js): открытое окно студии — на передний план и адрес записи
+ * ему сообщением (оболочка переходит сама), окна нет — новое прямо на записи. */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const href = (event.notification.data && event.notification.data.href) || '';
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+    const studio = windows.find((w) => new URL(w.url).pathname === '/');
+    if (!studio) return self.clients.openWindow(`/#/${href}`);
+    return studio.focus().catch(() => studio).then(() => studio.postMessage({ jobs: href }));
+  }));
 });
 
 self.addEventListener('fetch', (event) => {

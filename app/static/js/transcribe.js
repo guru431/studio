@@ -12,9 +12,11 @@
  * «Показать ещё»; опрос обновляет первую страницу, подгруженные остаются. Выбор — по номеру:
  * запоздалый ответ прежнего выбора вид не занимает (всё это — createPicker, feed.js). Раздел без
  * модели (ctx.hint): записи читаются, скачиваются и удаляются, вместо «Загрузить запись» — подсказка.
- * Текст сервера — только textContent. */
+ * #/transcribe?id=<id> («Открыть» в «В работе», jobs.js) выбирает запись; принятая запись зовёт
+ * jobs.kick(). Текст сервера — только textContent. */
 import { api, hooks, me } from './api.js';
 import { createPicker } from './feed.js';
+import { kick } from './jobs.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -246,6 +248,7 @@ function build(view, ctx) {
         // не JSON — ниже словами по коду
       }
       if (xhr.status === 202 && answer) {
+        kick();
         await records.load();
         await select(answer.id);
         return;
@@ -271,6 +274,11 @@ function build(view, ctx) {
   backdrop.addEventListener('click', () => panel(false));
   paintView();
   records.load();
+  const wanted = ctx.query.get('id');          // из «В работе»: выбрать запись, ?id из адреса убрать
+  if (wanted) {
+    history.replaceState(null, '', '#/transcribe');
+    select(wanted);
+  }
 
   return {
     destroy() {

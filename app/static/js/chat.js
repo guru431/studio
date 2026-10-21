@@ -22,6 +22,7 @@
  * подсказка вместо поля ввода, в прежнем поле ввода есть (ход его пару не перепроверяет).
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api } from './api.js';
+import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
 import { attachMic } from './mic.js';
 import { CORS } from './settings.js';
@@ -737,7 +738,10 @@ function build(view, ctx) {
       atts = atts.filter((a) => !sent.includes(a));
     }
     loadList();
-    if (reply instanceof Response) readServer(job, reply);
+    if (reply instanceof Response) {
+      kick();                                      // ответ через сервер — в «В работе»
+      readServer(job, reply);
+    }
     else readBrowser(job, reply);
   }
 

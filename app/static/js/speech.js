@@ -7,9 +7,11 @@
  * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
  * выбор по номеру. Раздел без модели (ctx.hint): озвучки слушаются, скачиваются и удаляются, вместо
- * поля текста — подсказка. Текст сервера — только textContent. */
+ * поля текста — подсказка. #/speech?id=<id> («Открыть» в «В работе», jobs.js) выбирает озвучку;
+ * принятая озвучка зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
 import { createPicker } from './feed.js';
+import { kick } from './jobs.js';
 import { attachMic } from './mic.js';
 import { modelLabel } from './settings.js';
 import { el, openDialog, words } from './ui.js';
@@ -240,6 +242,7 @@ function build(view, ctx) {
       const { connection_id: connectionId, model } = chosen();
       const created = await api('POST', '/api/speeches', { text: value, voice,
         ...(model ? { connection_id: connectionId, model } : {}) });
+      kick();
       text.value = '';
       count.textContent = `0 / ${TEXT_MAX}`;
       await records.load();
@@ -255,6 +258,11 @@ function build(view, ctx) {
   paintView();
   loadChoices();
   records.load();
+  const wanted = ctx.query.get('id');          // из «В работе»: выбрать озвучку, ?id из адреса убрать
+  if (wanted) {
+    history.replaceState(null, '', '#/speech');
+    select(wanted);
+  }
 
   return {
     destroy() {

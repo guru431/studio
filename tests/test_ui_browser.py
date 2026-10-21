@@ -3428,3 +3428,186 @@ def test_curtain_leaves_when_the_mark_hangs(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["asked"][:1] == [8000] and r["values"]["lock"] is False
     assert not problems(r), problems(r)
+
+
+# ---- «В работе» и уведомления (спека 2026-10-21-studio-jobs-panel) ----------------------------
+
+JOBS_POLLED = "document.querySelector('#jobs').dataset.polled === '1'"
+JOBS_PLACED = """(() => { const j = document.querySelector('#jobs').getBoundingClientRect();
+  const apart = (s) => { const b = document.querySelector(s).getBoundingClientRect();
+    return j.right <= b.left || b.right <= j.left || j.bottom <= b.top || b.bottom <= j.top; };
+  return j.left >= 0 && j.top >= 0 && j.right <= innerWidth && j.bottom <= innerHeight
+    && apart('#theme-toggle') && apart('#avatar'); })()"""
+JOBS_SHEET_INSIDE = """(() => { const b = document.querySelector('#jobs-panel').getBoundingClientRect();
+  return b.left >= 0 && b.top >= 0 && b.right <= innerWidth + 0.5 && b.bottom <= innerHeight + 0.5; })()"""
+JOBS_ROWS = """[...document.querySelectorAll('{list} .jobs-row')].map((r) => [r.dataset.section,
+  r.querySelector('.jobs-title').textContent, r.classList.contains('new'), r.dataset.state])"""
+
+
+def reload_page(name="reload"):
+    """Перезагрузка; ждать новую страницу (у старой метка window.before ещё стоит)."""
+    return [("eval", name, "window.before = 1; location.reload()"), ("wait", f"!window.before && {READY}")]
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_jobs_badge_counts_a_running_picture(browser, live, width):
+    """Запустил картинку — у значка «1» сразу (jobs.kick), панель: «Идёт» — «Картинка · Lustify» с ходом,
+    «Готово за час» — пусто; значок в окне и не на теме и аватаре."""
+    login = f"jobs-run{width}"
+    live.add_user(login)
+    live.gw.hold = True
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("wait", JOBS_POLLED),
+            ("eval", "before", "document.querySelector('#jobs').dataset.running"),
+            ("type", "#photo-prompt", "секретный кот"), ("click", "#photo-go"),
+            ("wait", "document.querySelector('#jobs').dataset.running === '1'"),
+            ("eval", "count", "document.querySelector('#jobs .jobs-count').textContent"),
+            ("eval", "label", "document.querySelector('#jobs').getAttribute('aria-label')"),
+            ("eval", "placed", JOBS_PLACED),
+            ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+            ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-running")),
+            ("eval", "detail", "document.querySelector('#jobs-running .jobs-detail').textContent"),
+            ("eval", "finished", "document.querySelector('#jobs-finished').textContent"),
+            ("eval", "inside", JOBS_SHEET_INSIDE),
+            ("press", "Escape"), ("wait", "!" + is_open("#jobs-panel")),
+            ("eval", "overflow", f"!({NO_OVERFLOW})")],
+            width=width, mobile=width == 390)
+    finally:
+        live.gw.hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == "0" and v["count"] == "1" and v["label"] == "В работе: 1" and v["placed"]
+    assert v["rows"] == [["photo", "Картинка · Lustify", False, "running"]]
+    assert re.fullmatch(r"жду карту или генерирую · \d+:\d\d", v["detail"]), v["detail"]
+    assert v["finished"] == "За час ничего не закончилось" and v["inside"] and not v["overflow"]
+    assert not problems(r), problems(r)
+
+
+def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
+    """Готовое до открытия страницы — в «Готово за час» с точкой у значка; открытая панель снимает точку
+    (и после перезагрузки: отметка на устройстве), «Открыть» ведёт в «Фото» к просмотру картинки."""
+    login = "jobs-ready"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), *reload_page(),
+        ("wait", "document.querySelector('#jobs').dataset.new === '1'"),
+        ("eval", "dot", "!document.querySelector('#jobs .jobs-dot').hidden"),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-finished")),
+        ("eval", "running", "document.querySelector('#jobs-running').textContent"),
+        ("eval", "dotOpen", "document.querySelector('#jobs').dataset.new || ''"),
+        ("click", "#jobs-finished .jobs-row .jobs-open"),
+        ("wait", is_open("#viewer")),
+        ("eval", "hash", "location.hash"), ("eval", "panel", is_open("#jobs-panel")),
+        *reload_page("again"), ("wait", JOBS_POLLED),
+        ("eval", "dotAfter", "document.querySelector('#jobs').dataset.new || ''")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["dot"] is True and v["rows"] == [["photo", "Картинка · Lustify", True, "done"]]
+    assert v["running"] == "Сейчас ничего не идёт" and v["dotOpen"] == ""
+    assert v["hash"] == "#/photo" and v["panel"] is False and v["dotAfter"] == ""
+    assert not problems(r), problems(r)
+
+
+def test_jobs_open_selects_records_in_every_section(browser, live):
+    """#/<раздел>?id=<запись>: расшифровка и озвучка выбраны в списке, карточка ролика подсвечена; ?id
+    из адреса убран. Записи готовы за час — они же в «Готово за час»."""
+    login = "jobs-open"
+    uid = live.add_user(login)
+    now = time.time()
+    live_sql(live, "INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created,"
+                   " finished) VALUES ('tr-jobs', ?, 'whisperx', 'Звонок.m4a', 'nope', 'error', 'не вышло', ?, ?)",
+             (uid, now - 60, now - 30))
+    live_sql(live, "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created, finished)"
+                   " VALUES ('sp-jobs', ?, 'qwen3-tts', 'v', 'Привет', 'error', 'не вышло', ?, ?)",
+             (uid, now - 60, now - 20))
+    live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                   " state, progress, detail, created, finished) VALUES ('vd-jobs', ?, 1, 'nope', '', 5, 'standard',"
+                   " 1, 'failed', 0, 'ролик не получился', ?, ?)", (uid, now - 60, now - 10))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("eval", "badge", "document.querySelector('#jobs').dataset.new"),
+        *go("transcribe?id=tr-jobs"),
+        ("wait", "document.querySelector('.tr-item[data-id=\"tr-jobs\"][aria-current=true]')"),
+        ("eval", "trHash", "location.hash"),
+        *go("speech?id=sp-jobs"),
+        ("wait", "document.querySelector('.sp-item[data-id=\"sp-jobs\"][aria-current=true]')"),
+        ("eval", "spHash", "location.hash"),
+        *go("video?id=vd-jobs"),
+        ("wait", "document.querySelector('.video-card[data-id=\"vd-jobs\"].jobs-focus')"),
+        ("eval", "vdHash", "location.hash"),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-finished"))])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["badge"] == "1"
+    assert (v["trHash"], v["spHash"], v["vdHash"]) == ("#/transcribe", "#/speech", "#/video")
+    assert v["rows"] == [["video", "Ролик · 5 с", True, "error"], ["speech", "Озвучка · Привет", True, "error"],
+                         ["transcribe", "Расшифровка «Звонок.m4a»", True, "error"]]
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
+#: уведомления без настоящего разрешения: Notification.permission и requestPermission — из
+#: sessionStorage.perm (по умолчанию granted), showNotification регистрации пишет в window.shown
+NOTIFY_INIT = """(() => {
+  window.shown = [];
+  if (!window.Notification) window.Notification = function () { throw new TypeError('Illegal constructor'); };
+  Object.defineProperty(Notification, 'permission', { configurable: true,
+    get: () => sessionStorage.getItem('perm') || 'granted' });
+  Notification.requestPermission = async () => sessionStorage.getItem('perm') || 'granted';
+  if (window.ServiceWorkerRegistration) ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+    window.shown.push({ title, options: JSON.parse(JSON.stringify(options)) }); return Promise.resolve(); };
+})();"""
+
+
+def picture_job(name):
+    """Картинка через API страницы и опрос «В работе» сразу; id — под именем `name`."""
+    return ("eval", name, f"""(async () => {{ const m = {API};
+      const job = await m.api('POST', '/api/images', {{ prompt: 'секретный кот', size: 'square' }});
+      (await import('/static/js/jobs.js')).kick(); return job.id; }})()""")
+
+
+def notify_settings(login):
+    return [*signin(login), ("wait", READY), add_gateway(), *go("settings/other"),
+            ("wait", "document.querySelector('#notify-enabled')")]
+
+
+def test_notification_only_when_hidden_and_without_content(browser, live):
+    """«Прочее» → «Уведомления» включает флаг устройства; готовое при видимой странице — без
+    уведомления, при скрытой — одно: «Студия: картинка готова», tag — id, data.href — запись, без промпта."""
+    login = "notify-on"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*notify_settings(login),
+        ("eval", "disabled", "document.querySelector('#notify-enabled').disabled"),
+        ("click", "#notify-enabled"),
+        ("wait", "document.querySelector('#notify-status').textContent.includes('включены')"),
+        ("eval", "stored", "localStorage.getItem('studio-notify')"),
+        picture_job("first"),
+        ("wait", "document.querySelector('#jobs').dataset.new === '1' && document.querySelector('#jobs').dataset.running === '0'"),
+        ("eval", "whileVisible", settled("window.shown.length")),
+        hide(), picture_job("second"),
+        ("wait", "window.shown.length === 1"),
+        ("eval", "shown", settled("window.shown", 500)),
+        show()], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["disabled"] is False and v["stored"] == "1" and v["whileVisible"] == 0
+    assert v["shown"] == [{"title": "Студия: картинка готова", "options": {
+        "tag": v["second"], "icon": "/static/icons/icon-192.png", "data": {"href": f"photo?id={v['second']}"}}}]
+    assert "секретный" not in json.dumps(v["shown"], ensure_ascii=False)
+    assert not problems(r), problems(r)
+
+
+def test_notify_toggle_explains_a_refusal(browser, live):
+    """Браузер не разрешил уведомления: переключатель снят, флага нет, слова — что сделать."""
+    login = "notify-denied"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [("idle",), ("eval", "deny", "sessionStorage.setItem('perm', 'denied')"),
+        *notify_settings(login), ("click", "#notify-enabled"),
+        ("wait", "document.querySelector('#notify-status').textContent !== ''"),
+        ("eval", "note", "document.querySelector('#notify-status').textContent"),
+        ("eval", "checked", "document.querySelector('#notify-enabled').checked"),
+        ("eval", "stored", "localStorage.getItem('studio-notify')")], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["note"] == "Браузер запретил уведомления — разрешите их в настройках сайта"
+    assert v["checked"] is False and v["stored"] is None
+    assert not problems(r), problems(r)
