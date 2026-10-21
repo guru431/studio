@@ -24,6 +24,7 @@ import { openEditor } from './editor.js';
 import { attachMic } from './mic.js';
 import { createFeed, pageQuery } from './feed.js';
 import { saveMedia } from './save.js';
+import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
@@ -96,13 +97,16 @@ function build(view, ctx) {
   const toggle = iconButton('more', 'Ещё', { id: 'photo-menu-toggle', 'aria-haspopup': 'true', 'aria-expanded': 'false',
     'aria-controls': 'photo-menu' });
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
+  const selection = createSelection({ section: 'photo', nouns: ['картинку', 'картинки', 'картинок'],
+    selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
+    remove: (item) => remove(item) });
   const layout = viewSwitch('photo', 'tiles', (name) => {
     feedBox.dataset.view = name;
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), el('span', { class: 'grow' }), layout.node,
-    el('div', { class: 'photo-menu-wrap' }, toggle, menu));
+  const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), selection.tools, el('span', { class: 'grow' }),
+    selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu));
 
   const sourceImg = el('img', { alt: 'Исходное фото' });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -130,7 +134,8 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }),
       chipTranslate, attachMic(prompt, micNote), go));
-  const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form);
+  const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
+    selection.bar);
   view.append(root);
 
   const feed = createFeed(feedBox, {
@@ -139,7 +144,10 @@ function build(view, ctx) {
     load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши картинки.' : 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
+    onChange: () => selection.sync(),
+    dayTools: selection.dayTools,
   });
+  selection.attach({ root, head, feedBox, feed, error });
 
   /* меню чипов и раздела */
   function chipMenu(id, initial, get, set) {
@@ -365,7 +373,7 @@ function build(view, ctx) {
   function card(item) {
     watch(item);
     const node = el('div', { class: 'card photo-card', 'data-id': item.id, 'data-state': item.state });
-    if (layout.value === 'table') return row(item, node);
+    if (layout.value === 'table') return selection.decorate(row(item, node), item);
     if (item.state === 'done' && item.media_id) {
       // «Скачать» — рядом с .card-open, а не внутри: кнопка в кнопке недопустима
       node.append(openButton(item, picture(item),
@@ -384,7 +392,7 @@ function build(view, ctx) {
       node.append(el('div', { class: 'card-info' }, el('p', { class: 'card-prompt', title: item.prompt }, item.prompt),
         el('p', { class: 'card-meta' }, [...params(item), timeOf(item.created)].filter(Boolean).join(' · '))));
     }
-    return node;
+    return selection.decorate(node, item);
   }
 
   const tick = setInterval(() => {
@@ -798,6 +806,7 @@ function build(view, ctx) {
   return {
     destroy() {
       alive = false;
+      selection.destroy();
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
       clearInterval(tick);

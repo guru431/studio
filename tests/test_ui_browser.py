@@ -1760,6 +1760,212 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
     assert not problems(r), problems(r)
 
 
+# ---- выделение нескольких записей ленты (select.js) ---------------------------------
+
+PHOTO_CARD = "#photo-feed .photo-card"
+
+
+def nth(i, inner="", card=PHOTO_CARD):
+    """i-я карточка ленты (все записи теста — «Сегодня», одна сетка дня) или элемент в ней."""
+    return f"{card}:nth-child({i}){' ' + inner if inner else ''}"
+
+
+def ids(feed="#photo-feed"):
+    return f"[...document.querySelectorAll('{feed} .card[data-id]')].map(c => c.dataset.id)"
+
+
+def picked(feed="#photo-feed"):
+    return f"[...document.querySelectorAll('{feed} .card[data-selected=true]')].map(c => c.dataset.id)"
+
+
+def selecting(root=".photo"):
+    return f"document.querySelector('{root}').hasAttribute('data-selecting')"
+
+
+def text_of(selector):
+    return f"document.querySelector({selector!r}).textContent"
+
+
+def long_press(selector):
+    """Палец на карточке 650 мс без сдвига, затем отпустить; следом браузер шлёт click (хвост касания)."""
+    return ("eval", "pressed", f"""(async () => {{ const e = document.querySelector({selector!r});
+      e.scrollIntoView({{ block: 'center' }}); const b = e.getBoundingClientRect();
+      const at = {{ bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, pointerId: 7,
+        clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 }};
+      e.dispatchEvent(new PointerEvent('pointerdown', at));
+      await new Promise(r => setTimeout(r, 650));
+      e.dispatchEvent(new PointerEvent('pointerup', at));
+      e.click(); return true; }})()""")
+
+
+def shift_click(selector):
+    return ("eval", "shift", f"""(() => {{ document.querySelector({selector!r}).dispatchEvent(
+      new MouseEvent('click', {{ bubbles: true, cancelable: true, shiftKey: true }})); return true; }})()""")
+
+
+def deletes(mode):
+    """DELETE /api/images/<id> страницы: второй — 503 «хранилище недоступно» (fail) или ждёт window.release() (hold)."""
+    return ("eval", "deletes", f"""(() => {{ const real = window.fetch; let n = 0;
+      window.fetch = (url, opts = {{}}) => {{
+        if (opts.method === 'DELETE' && String(url).startsWith('/api/images/') && ++n === 2) {{
+          if ('{mode}' === 'fail') return Promise.resolve(new Response(JSON.stringify(
+            {{ detail: {{ code: 'storage', message: 'хранилище недоступно' }} }}),
+            {{ status: 503, headers: {{ 'Content-Type': 'application/json' }} }}));
+          return new Promise((done) => {{ window.release = () => done(real(url, opts)); }});
+        }}
+        return real(url, opts);
+      }}; return true; }})()""")
+
+
+SERVER_IMAGES = f"(async () => (await {API}.api('GET', '/api/images')).items.map(i => String(i.id)))()"
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, width):
+    login = f"sel{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=4), ("wait", done_cards(4)),
+        ("eval", "all", ids()),
+        ("click", "#photo-select"), ("wait", selecting()),
+        ("click", nth(1)), ("click", nth(3)),
+        ("eval", "viewer", "!!document.querySelector('#viewer')"),
+        ("eval", "count", text_of("#photo-select-count")),
+        ("eval", "picked", picked()),
+        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
+        ("eval", "pickedTable", picked()),
+        ("eval", "fits", NO_OVERFLOW),
+        ("eval", "bar", "getComputedStyle(document.querySelector('.photo .select-bar')).display !== 'none'"
+                        " && getComputedStyle(document.querySelector('#photo-composer')).display === 'none'"),
+        ("eval", "inHead", "!!document.querySelector('.photo .head #photo-select-delete')"),
+        ("click", "#photo-view-tiles"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'tiles'"),
+        ("eval", "pickedTiles", picked()),
+        ("click", "#photo-select-delete"), ("wait", is_open("#photo-select-delete-dialog")),
+        ("eval", "title", text_of("#photo-select-delete-dialog h2")),
+        ("click", "#photo-select-delete-confirm"),
+        ("wait", f"document.querySelectorAll('{PHOTO_CARD}').length === 2 && !{selecting()}"),
+        ("eval", "left", ids()), ("eval", "server", SERVER_IMAGES)],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    first, second, third, fourth = v["all"]
+    assert v["viewer"] is False and v["count"] == "Выбрано 2"
+    assert sorted(v["picked"]) == sorted(v["pickedTable"]) == sorted(v["pickedTiles"]) == sorted([first, third])
+    assert v["title"] == "Удалить 2 картинки?"
+    assert v["left"] == [second, fourth] and sorted(v["server"]) == sorted([second, fourth])
+    if width == 390:
+        assert v["fits"] and v["bar"] and not v["inHead"]
+    else:
+        assert v["inHead"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_selection_by_long_press_hover_shift_and_day(browser, live, width):
+    login = f"pick{width}"
+    live.add_user(login)
+    steps = [*photo_screen(login, cards=4), ("wait", done_cards(4)), ("eval", "all", ids())]
+    if width == 390:
+        steps += [long_press(nth(3, ".card-open")), ("wait", selecting()),
+                  ("eval", "viewer", "!!document.querySelector('#viewer')"), ("eval", "first", picked())]
+    else:
+        steps += [("click", nth(1, ".card-pick")), ("wait", selecting()),
+                  ("eval", "viewer", "!!document.querySelector('#viewer')"), ("eval", "first", picked()),
+                  shift_click(nth(4)), ("eval", "range", picked())]
+    steps += [("click", "#photo-feed .day-pick"), ("eval", "day1", picked()),
+              ("click", "#photo-feed .day-pick"), ("eval", "day2", picked()),
+              ("eval", "allLabel", text_of("#photo-select-all")),
+              ("click", "#photo-select-all"), ("eval", "afterAll", picked()),
+              ("eval", "allLabel2", text_of("#photo-select-all")),
+              ("press", "Escape"), ("wait", f"!{selecting()}"), ("eval", "cleared", picked())]
+    r = browser.drive(live.url + "/", steps, width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    every = v["all"]
+    assert v["viewer"] is False and v["cleared"] == []
+    if width == 390:                      # третья → день целиком → день снят → «Все» отмечает всё
+        assert v["first"] == [every[2]]
+        assert v["day1"] == every and v["day2"] == []
+        assert (v["allLabel"], v["afterAll"], v["allLabel2"]) == ("Все", every, "Снять")
+    else:                                 # первая → Shift до четвёртой → день снят и снова отмечен → «Снять»
+        assert v["first"] == [every[0]] and v["range"] == every
+        assert v["day1"] == [] and v["day2"] == every
+        assert (v["allLabel"], v["afterAll"], v["allLabel2"]) == ("Снять", [], "Все")
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_survives_a_new_card_and_counts_gone_as_deleted(browser, live):
+    live.add_user("selnew")
+    gone_elsewhere = ("eval", "gone", f"""(async () => {{ const id = document.querySelector('{nth(1)}').dataset.id;
+      await {API}.api('DELETE', '/api/images/' + id); return id; }})()""")
+    r = browser.drive(live.url + "/", [*photo_screen("selnew", cards=3), ("wait", done_cards(3)),
+        ("eval", "all", ids()),
+        ("click", "#photo-select"), ("click", nth(1)), ("click", nth(2)),
+        gone_elsewhere,                                          # удалена в другой вкладке
+        ("type", "#photo-prompt", "новый кот"), ("click", "#photo-go"), ("wait", done_cards(4)),
+        ("eval", "newest", f"(() => {{ const c = document.querySelector('{nth(1)}');"
+                           " return [c.dataset.id, !!c.querySelector('.card-pick'), c.dataset.selected]; })()"),
+        ("eval", "count", text_of("#photo-select-count")),
+        ("click", "#photo-select-delete"), ("wait", is_open("#photo-select-delete-dialog")),
+        ("eval", "title", text_of("#photo-select-delete-dialog h2")),
+        ("click", "#photo-select-delete-confirm"), ("wait", f"!{selecting()}"),
+        ("eval", "error", text_of("#photo-error")), ("eval", "left", ids())], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    newest, has_pick, selected = v["newest"]
+    assert has_pick and selected == "false" and v["count"] == "Выбрано 2"
+    assert v["title"] == "Удалить 2 картинки?" and v["error"] == ""
+    assert v["left"] == [newest, v["all"][2]]
+    assert not known_refusals(problems(r), 404), problems(r)   # DELETE уже удалённой — 404 gone
+
+
+def test_photo_selection_escape_in_the_dialog_keeps_the_mode(browser, live):
+    live.add_user("selesc")
+    r = browser.drive(live.url + "/", [*photo_screen("selesc", cards=1), ("wait", done_cards(1)),
+        ("click", "#photo-select"), ("click", nth(1)),
+        ("click", "#photo-select-delete"), ("wait", is_open("#photo-select-delete-dialog")),
+        ("press", "Escape"), ("wait", f"!{is_open('#photo-select-delete-dialog')}"),
+        ("eval", "mode", selecting()), ("eval", "count", text_of("#photo-select-count"))], width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["mode"] is True and r["values"]["count"] == "Выбрано 1"
+    assert not problems(r), problems(r)
+
+
+def test_photo_selection_failure_is_told_and_keeps_the_failed_picked(browser, live):
+    live.add_user("selfail")
+    r = browser.drive(live.url + "/", [*photo_screen("selfail", cards=3), ("wait", done_cards(3)),
+        ("eval", "all", ids()), deletes("fail"),
+        ("click", "#photo-select"), ("click", "#photo-select-all"),
+        ("click", "#photo-select-delete"), ("click", "#photo-select-delete-confirm"),
+        ("wait", "document.querySelector('#photo-error').textContent"),
+        ("eval", "error", text_of("#photo-error")), ("eval", "mode", selecting()),
+        ("eval", "picked", picked()), ("eval", "left", ids())], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["error"] == "Не удалось удалить 1 из 3: Хранилище недоступно"
+    assert v["mode"] is True and v["picked"] == v["left"] == [v["all"][1]]
+    assert not known_refusals(problems(r), 503), problems(r)
+
+
+def test_photo_selection_cancel_stops_after_the_current_one(browser, live):
+    live.add_user("selstop")
+    r = browser.drive(live.url + "/", [*photo_screen("selstop", cards=3), ("wait", done_cards(3)),
+        ("eval", "all", ids()), deletes("hold"),
+        ("click", "#photo-select"), ("click", "#photo-select-all"),
+        ("click", "#photo-select-delete"), ("click", "#photo-select-delete-confirm"),
+        ("wait", "typeof window.release === 'function'"),
+        ("eval", "progress", "document.querySelector('#photo-select-delete-dialog').textContent.includes('Удаляю 2 из 3')"),
+        ("click", "#photo-select-delete-dialog .dialog-close"), ("wait", f"!{is_open('#photo-select-delete-dialog')}"),
+        ("eval", "released", "window.release() || true"),
+        ("wait", "document.querySelector('#photo-error').textContent"),
+        ("eval", "error", text_of("#photo-error")), ("eval", "picked", picked()),
+        ("eval", "left", ids()), ("eval", "server", SERVER_IMAGES)], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["progress"] and v["error"] == "Удалено 2 из 3, остальные не тронуты"
+    assert v["picked"] == v["left"] == v["server"] == [v["all"][2]]
+    assert not problems(r), problems(r)
+
+
 def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, live):
     """Тему и вид сменили на другом устройстве учётки: открытая студия берёт их, вернувшись на экран,
     без перезагрузки — тему сразу, вид при следующем открытии раздела."""

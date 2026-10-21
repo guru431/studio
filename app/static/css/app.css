@@ -683,6 +683,47 @@ label.chip { cursor: pointer; }
   [data-view="table"] .cell-act { grid-area: act; }
 }
 
+/* ---- выделение нескольких записей ленты (select.js; data-selecting — у корня раздела) ---- */
+
+.select-btn svg.ico { width: 17px; height: 17px; }
+.select-tools, .select-actions, .select-bar { display: none; }
+[data-selecting] :is(.select-tools, .select-actions) { display: flex; align-items: center; gap: 8px; }
+[data-selecting] .head > :is(h1, .select-btn, .photo-menu-wrap) { display: none; }
+.select-tools .icon-btn svg.ico { width: 18px; height: 18px; }
+.select-count { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* долгое нажатие — выделение: без меню картинки iPhone и выделения текста */
+.photo-feed .card, .video-feed .card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.card-pick, .day-pick { place-items: center; padding: 0; border: 2px solid #fff; border-radius: 50%; background: rgba(0, 0, 0, .3);
+  color: transparent; }
+.card-pick { position: absolute; z-index: 6; top: 6px; left: 6px; display: grid; width: 26px; height: 26px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+.card-pick svg.ico, .day-pick svg.ico { width: 15px; height: 15px; stroke-width: 3; }
+:is(.card-pick, .day-pick)[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+:is(.photo, .video):not([data-selecting]) .card-pick { display: none; }
+@media (hover: hover) {
+  :is(.photo, .video):not([data-selecting]) .card-pick { display: grid; opacity: 0; transition: opacity .15s; }
+  :is(.photo, .video):not([data-selecting]) :is(.card:hover .card-pick, .card-pick:focus-visible) { opacity: 1; }
+}
+.day-pick { display: none; width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px; border-color: var(--muted);
+  background: none; }
+[data-selecting] .day-pick { display: inline-grid; }
+/* в режиме нажатие — отметка: слой поверх карточки, кнопки карточки скрыты; isolation — слой не выше шапки таблицы */
+[data-selecting] .card[data-pickable] { isolation: isolate; cursor: pointer; }
+[data-selecting] .card[data-pickable]::after { content: ''; position: absolute; inset: 0; z-index: 5; }
+[data-selecting] :is(.card-save, .card-delete, .card-cancel, .card-chain, .card-download) { visibility: hidden; }
+[data-selecting] .card[data-selected="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }
+[data-view="table"] .card-pick { top: 8px; left: 6px; width: 20px; height: 20px; }
+[data-view="table"] .card-pick svg.ico { width: 12px; height: 12px; }
+[data-selecting] [data-view="table"] .card[data-selected="true"] { outline: 0; background: var(--panel-2); }
+@media (max-width: 760px) {
+  .select-btn { width: 34px; padding: 0; }
+  .select-btn .select-label { display: none; }
+  [data-selecting] .select-bar { display: flex; flex: none; margin: 0 12px 12px; padding: 8px 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 16px; }
+  [data-selecting] .select-bar .select-actions { flex: 1; justify-content: space-between; }
+  [data-selecting] :is(.composer, .hint-bar) { display: none; }
+}
+
 /* ---- вход и «Нет связи» ------------------------------------------------------ */
 
 body.solo { display: grid; place-items: center; padding: 16px; }

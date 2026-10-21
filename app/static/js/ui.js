@@ -36,6 +36,15 @@ export function showError(box, err, codes, fallback) {
   if (target) target.textContent = words(err);
 }
 
+/** Форма слова для числа: forms — [1 картинку, 2 картинки, 5 картинок]; 11–14 — третья. */
+export function plural(n, [one, few, many]) {
+  const tens = n % 100;
+  const units = n % 10;
+  if (tens >= 11 && tens <= 14) return many;
+  if (units === 1) return one;
+  return units >= 2 && units <= 4 ? few : many;
+}
+
 /** Кнопка; `onClick` получает событие. */
 export function button(text, attrs = {}, onClick) {
   const node = el('button', { type: 'button', class: 'btn', ...attrs }, text);

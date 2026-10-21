@@ -1,13 +1,16 @@
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
- * createFeed(el, { load, render, key, empty, head }): el — прокручиваемый контейнер ленты; load(last) —
- * Promise страницы записей новее-сверху, следующая — после last, последней записи ленты (запрос —
- * pageQuery(last)), первая — last undefined, пустая страница — конец; render(item) — узел карточки;
- * key(item) — id записи; empty — текст пустой ленты, head — узел над днями (оба необязательны). Записи
- * несут `created` (секунды unix) и `id`.
- * Ответ — { prepend(item), update(item), remove(id), reload(), redraw() }; reload() — Promise первой
- * страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка — на месте.
+ * createFeed(el, { load, render, key, empty, head, onChange, dayTools }): el — прокручиваемый
+ * контейнер ленты; load(last) — Promise страницы записей новее-сверху, следующая — после last,
+ * последней записи ленты (запрос — pageQuery(last)), первая — last undefined, пустая страница — конец;
+ * render(item) — узел карточки; key(item) — id записи; empty — текст пустой ленты, head — узел над
+ * днями; onChange() — после каждой смены показанных записей (страница, prepend, update, remove,
+ * redraw; reload — когда легла его первая страница); dayTools(день) — узел в начало заголовка дня
+ * (выделение, select.js). Необязательны все пять. Записи несут `created` (секунды unix) и `id`.
+ * Ответ — { prepend(item), update(item), remove(id), reload(), redraw(), items() }; reload() — Promise
+ * первой страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка —
+ * на месте; items() — копия записей в порядке ленты.
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
  *
  * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
@@ -17,7 +20,7 @@ import { button, el as make, words } from './ui.js';
 
 const NEAR_PX = 600;             // ближе к низу — подгрузить следующую страницу
 
-function dayKey(created) {
+export function dayKey(created) {
   const d = new Date(created * 1000);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
@@ -142,7 +145,7 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail }) 
   return s;
 }
 
-export function createFeed(el, { load, render, key, empty = '', head = null }) {
+export function createFeed(el, { load, render, key, empty = '', head = null, onChange = () => {}, dayTools = null }) {
   const items = [];              // записи по порядку ленты
   const nodes = new Map();       // id → узел карточки
   const groups = new Map();      // день → { box, grid }
@@ -167,8 +170,8 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
     let g = groups.get(k);
     if (!g) {
       const grid = make('div', { class: 'feed-grid' });
-      g = { box: make('section', { class: 'feed-day', 'data-day': k }, make('h2', { class: 'feed-day-title' }, dayTitle(created)), grid),
-        grid };
+      const title = make('h2', { class: 'feed-day-title' }, dayTools ? dayTools(k) : null, dayTitle(created));
+      g = { box: make('section', { class: 'feed-day', 'data-day': k }, title, grid), grid };
       groups.set(k, g);
       if (atTop) days.prepend(g.box);
       else days.append(g.box);
@@ -214,6 +217,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
     }
     done = !got.length;
     setState(done ? 'end' : 'ready');
+    onChange();
     if (!done && near()) page();      // страница не заполнила экран — следующую сразу
   }
 
@@ -224,6 +228,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
     if (!place(item, true)) return;
     items.unshift(item);
     if (el.dataset.feed !== 'loading') setState(done ? 'end' : 'ready');
+    onChange();
   }
 
   function update(item) {
@@ -235,6 +240,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
     nodes.set(id, node);
     const i = items.findIndex((x) => key(x) === id);
     if (i >= 0) items[i] = { ...item, created: items[i].created };
+    onChange();
   }
 
   function remove(id) {
@@ -251,6 +257,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
       box.remove();
     }
     if (el.dataset.feed !== 'loading') setState(done ? 'end' : 'ready');
+    onChange();
   }
 
   function redraw() {
@@ -260,6 +267,7 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
       nodes.get(id).replaceWith(node);
       nodes.set(id, node);
     }
+    onChange();
     if (near()) page();
   }
 
@@ -276,5 +284,5 @@ export function createFeed(el, { load, render, key, empty = '', head = null }) {
   }
 
   page();
-  return { prepend, update, remove, reload, redraw };
+  return { prepend, update, remove, reload, redraw, items: () => items.slice() };
 }
