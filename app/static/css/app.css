@@ -263,6 +263,9 @@ label { font-size: 13px; color: var(--muted); }
 .tr-name-row span { flex: none; color: var(--muted); }
 .tr-name-row .input { flex: 1; min-width: 0; }
 .tr-who { color: var(--muted); font-size: 13px; font-weight: 600; }
+.tr-seek { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px; }
+.tr-seek:hover, .tr-seek:focus-visible { color: var(--accent); }
 .sp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .sp-audio { width: 100%; }
 .speech .composer { margin: 0 16px 12px; }

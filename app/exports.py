@@ -5,6 +5,8 @@
 docx — минимальный OOXML без новых зависимостей: три части zip (`[Content_Types].xml`, `_rels/.rels`,
 `word/document.xml`), заголовок — имя записи, на реплику — строка «Собеседник N · мм:сс» жирным и
 абзац текста. Текст экранируется (xml.sax.saxutils): в расшифровке бывают `<`, `>` и `&`.
+Управляющих знаков (CONTROL) в SRT и DOCX нет: пустая строка внутри субтитра для плеера — его
+конец, а `\\x0b` и прочие C0 делают XML DOCX недействительным.
 Сегмент — словарь `{"speaker", "start", "end", "text"}` (итог transcripts.py)."""
 import io
 import math
@@ -15,6 +17,7 @@ from xml.sax.saxutils import escape
 SRT_MAX_SEC = 7
 SRT_MAX_CHARS = 84               # две строки по 42
 SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")    # Unicode Cc
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TYPES = {"txt": "text/plain; charset=utf-8", "srt": "application/x-subrip; charset=utf-8", "docx": DOCX_MIME}
 
@@ -43,6 +46,11 @@ def _head(seg: dict) -> str:
 
 def txt(segments: list[dict]) -> str:
     return "\n".join(f"{_head(s)}\n{s['text']}\n" for s in segments)
+
+
+def _line(text: str) -> str:
+    """Текст субтитра — одной строкой: управляющие знаки — пробелом, пробелы схлопнуты."""
+    return " ".join(CONTROL.sub(" ", text).split())
 
 
 def _srt_time(seconds: float) -> str:
@@ -103,8 +111,8 @@ def srt(segments: list[dict], raw: "list[dict] | None" = None) -> str:
     cues: list[tuple[float, float, str]] = []
     for n, seg in enumerate(segments):
         own = [] if seg.get("edited") else by_turn.get(n, [])
-        spans = [(r["start"], r["end"], r["text"]) for r in own] or [(seg["start"], seg["end"], seg["text"])]
-        prefix = f"{seg['speaker']}: " if seg.get("speaker") else ""
+        spans = [(r["start"], r["end"], _line(r["text"])) for r in own] or [(seg["start"], seg["end"], _line(seg["text"]))]
+        prefix = f"{_line(seg['speaker'])}: " if seg.get("speaker") else ""
         for k, (start, end, text) in enumerate(spans):
             cues += _pieces(start, end, prefix + text if k == 0 else text)
     blocks, edge = [], 0.0
@@ -121,7 +129,7 @@ def srt(segments: list[dict], raw: "list[dict] | None" = None) -> str:
 def _paragraph(text: str, bold: bool = False, size: "int | None" = None) -> str:
     props = ("<w:b/>" if bold else "") + (f'<w:sz w:val="{size}"/>' if size else "")
     run_props = f"<w:rPr>{props}</w:rPr>" if props else ""
-    return f'<w:p><w:r>{run_props}<w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>'
+    return f'<w:p><w:r>{run_props}<w:t xml:space="preserve">{escape(CONTROL.sub(" ", text))}</w:t></w:r></w:p>'
 
 
 def docx(segments: list[dict], title: str) -> bytes:

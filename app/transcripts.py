@@ -54,6 +54,7 @@ WAIT_MAX_SEC = 1800
 TERMINAL = {"done", "error", "cancelled"}
 EDIT_TEXT_MAX = 20_000
 NAME_EDIT_MAX = 60
+NAME_BANNED = {"Cc", "Zl", "Zp"}             # имя — одной строкой; знаки формата (Cf: ZWJ, мягкий перенос) — можно
 INTERRUPTED = "прервано перезапуском студии"
 
 log = logging.getLogger("studio")
@@ -349,16 +350,21 @@ def _bad(message: str) -> HTTPException:
 
 
 def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
-    """Правки запроса, проверенные по файлу итога; None — снять правку (и значение, равное исходному)."""
+    """Правки запроса, проверенные по файлу итога; None — снять правку (и значение, равное исходному).
+    Текст реплики — одной строкой: управляющие знаки — пробелом, пробелы схлопнуты (пустая строка —
+    разделитель реплик TXT и конец субтитра SRT, C0 ломает DOCX); предел — от длины исходной реплики
+    (EDIT_TEXT_MAX сверх неё): реплика одного говорящего за 20+ минут длиннее EDIT_TEXT_MAX.
+    Имя — без управляющих и разделителей строк; знаки формата (ZWJ эмодзи, мягкий перенос) — можно."""
     texts, names = {}, {}
     for key, value in body.texts.items():
         if not (key.isascii() and key.isdigit()) or int(key) >= len(segments):
             raise _bad("такой реплики нет")
         original = segments[int(key)]["text"]
         if value is not None:
-            value = value.strip()
-            if not 1 <= len(value) <= EDIT_TEXT_MAX:
-                raise _bad(f"текст реплики — от 1 до {EDIT_TEXT_MAX} знаков")
+            value = " ".join(exports.CONTROL.sub(" ", value).split())
+            limit = len(original) + EDIT_TEXT_MAX
+            if not 1 <= len(value) <= limit:
+                raise _bad(f"текст реплики — от 1 до {limit} знаков")
         texts[str(int(key))] = None if value == original else value
     labels = {s.get("speaker") for s in segments} - {None}
     for label, value in body.names.items():
@@ -366,7 +372,7 @@ def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
             raise _bad("такого собеседника нет")
         if value is not None:
             value = value.strip()
-            if not 1 <= len(value) <= NAME_EDIT_MAX or any(unicodedata.category(c)[0] == "C" for c in value):
+            if not 1 <= len(value) <= NAME_EDIT_MAX or any(unicodedata.category(c) in NAME_BANNED for c in value):
                 raise _bad(f"имя — от 1 до {NAME_EDIT_MAX} знаков, одной строкой")
         names[label] = None if value == label else value
     return texts, names

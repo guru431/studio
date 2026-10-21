@@ -847,6 +847,38 @@ def test_transcript_goes_to_a_cloud_model_only_when_confirmed(studio, fake_audio
         assert secret not in caplog.text, secret
 
 
+def test_transcript_in_the_history_asks_again_after_the_model_changes(studio, fake_audio):
+    """Ход (и «Ответить заново») уносит модели всю историю: расшифровка из прежнего хода к облачной
+    модели — тоже только с подтверждением. Подтверждение помнит ответ той же модели после вложения."""
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl", "chat"]})
+    cid = new_chat(studio, connection_id=gw, model="local-gemma-abl")
+    a = from_transcript(studio, tid).json()
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]]))                 # локальная — без вопроса
+    view = studio.c.get(f"/api/chats/{cid}").json()["chat"]
+    assert (view["local"], view["external"]) == (True, False)
+    view = studio.c.patch(f"/api/chats/{cid}", json={"model": "gemma4-abl"}).json()
+    assert (view["local"], view["external"]) == (False, True)
+    for body in ({"text": "ещё"}, {"regenerate": True}):
+        r = studio.c.post(f"/api/chats/{cid}/turns", json=body)
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "external", body
+    assert len(studio.gw.chat_requests) == 1 and len(messages(studio, cid)) == 2   # отказ ничего не тронул
+    sse(studio.c.post(f"/api/chats/{cid}/turns", json={"regenerate": True, "external_ok": True}))
+    assert studio.gw.chat_requests[-1]["model"] == "gemma4-abl"
+    assert studio.c.get(f"/api/chats/{cid}").json()["chat"]["external"] is False
+    sse(turn(studio, cid, "ещё"))                                              # подтверждено для этой модели
+    sse(studio.c.post(f"/api/chats/{cid}/turns", json={"regenerate": True}))
+    studio.c.patch(f"/api/chats/{cid}", json={"model": "chat"})                # другая облачная — снова вопрос
+    r = turn(studio, cid, "и ещё")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "external"
+    studio.c.patch(f"/api/chats/{cid}", json={"model": "local-gemma-abl"})
+    sse(turn(studio, cid, "и ещё"))
+    # обычный диалог без расшифровки — без вопроса и с признаками в ответе
+    plain = studio.c.post("/api/chats", json={"connection_id": gw, "model": "chat"}).json()
+    assert (plain["local"], plain["external"]) == (False, False)
+    sse(turn(studio, plain["id"], "Привет"))
+
+
 def test_new_chat_takes_the_sections_default(studio):
     cid = add_gateway(studio)
     studio.c.put(f"/api/sections/chat/links/{cid}", json={"models": ["local-gemma-abl", "gemma4-abl"]})

@@ -15,12 +15,15 @@
  *
  * Правка (спека 2026-10-21-studio-transcript-edit-chat-design, раздел 9): «Править» делает тексты
  * реплик полями, «Сохранить» шлёт PATCH только изменённых номеров (ошибка — словами, черновик цел);
- * черновик `editing` переживает перерисовку того же id (опрос, повторный выбор). «Имена» — окно меток,
- * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст) ставит
- * плеер на её начало, играющая — aria-current по timeupdate. «В чат ▾» → #/chat?transcript=<id>&ask=…;
- * #/transcribe?id=<id> («Открыть» в «В работе», ссылка «к записи» из чата) выбирает запись после
- * загрузки списка (нет её — список как обычно), ?id из адреса уходит; принятая запись зовёт
- * jobs.kick(). Текст сервера — только textContent. */
+ * черновик `editing` переживает перерисовку того же id (опрос, повторный выбор); ответ, пришедший,
+ * когда выбрана уже другая запись, вид не занимает. Пока идёт правка, «Копировать», «Скачать» и
+ * «В чат» спрятаны (взяли бы сохранённый текст, «В чат» увёл бы от черновика). «Имена» — окно меток,
+ * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст) или по
+ * её времени (кнопка — и с клавиатуры) ставит плеер на её начало, играющая — aria-current по
+ * timeupdate. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
+ * ссылка «к записи» из чата) выбирает запись после загрузки списка, если её не выбрали сами (нет её —
+ * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
+ * textContent. */
 import { api, hooks, me } from './api.js';
 import { createPicker } from './feed.js';
 import { kick } from './jobs.js';
@@ -70,6 +73,7 @@ export function asText(segments) {
 function build(view, ctx) {
   let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
+  let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
   const records = createPicker({ url: '/api/transcripts', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
@@ -127,6 +131,7 @@ function build(view, ctx) {
       el('span', { class: 'tr-name' }, item.name), el('span', { class: 'tr-state' }, state));
       link.addEventListener('click', () => {
         panel(false);
+        picked = true;
         select(item.id);
       });
       nodes.push(link);
@@ -167,6 +172,7 @@ function build(view, ctx) {
 
   /* правка */
   function adopt(got) {                              // ответ PATCH и DELETE — как GET
+    if (!records.current || records.current.id !== got.id) return;   // пока сохраняли, выбрали другую
     records.current = got;
     paintView();
   }
@@ -224,10 +230,10 @@ function build(view, ctx) {
     error.textContent = '';
     try {
       const got = await api('PATCH', `/api/transcripts/${item.id}`, { texts });
-      editing = null;
+      if (editing && editing.id === item.id) editing = null;   // черновик другой записи — не трогать
       adopt(got);
     } catch (err) {
-      error.textContent = words(err);                // черновик остаётся
+      if (records.current && records.current.id === item.id) error.textContent = words(err);   // черновик остаётся
       save.disabled = false;
     }
   }
@@ -238,14 +244,22 @@ function build(view, ctx) {
   }
 
   function turnNode(s, i) {
-    const who = el('p', { class: 'tr-who' }, `${s.speaker ? `${s.speaker} · ` : ''}${clock(s.start)}`);
+    const speaker = s.speaker ? `${s.speaker} · ` : '';
     const original = s.edited ? s.original : s.text;
     if (!editing) {
-      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, who, el('p', { class: 'tr-text' }, s.text),
-        s.edited ? el('p', { class: 'tr-mark' }, 'изменено') : null);
+      // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике
+      const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': `Слушать с ${clock(s.start)}` },
+        clock(s.start));
+      time.addEventListener('click', (event) => {
+        event.stopPropagation();
+        seek(s.start);
+      });
+      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, el('p', { class: 'tr-who' }, speaker, time),
+        el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, 'изменено') : null);
       node.addEventListener('click', () => seek(s.start));
       return node;
     }
+    const who = el('p', { class: 'tr-who' }, `${speaker}${clock(s.start)}`);
     const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': `Реплика ${i + 1}` });
     area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
     const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, 'вернуть');
@@ -354,7 +368,9 @@ function build(view, ctx) {
       }));
       const more = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-download', 'aria-haspopup': 'true' }, 'Скачать ▾');
       more.addEventListener('click', () => { formats.hidden = !formats.hidden; });
-      acts.append(copy, el('div', { class: 'tr-download-wrap' }, more, formats));
+      // во время правки «Копировать», «Скачать» и «В чат» взяли бы сохранённый текст, а не черновик,
+      // и «В чат» молча увёл бы от него — их нет до «Сохранить» или «Отмена»
+      if (!editing) acts.append(copy, el('div', { class: 'tr-download-wrap' }, more, formats));
       if (item.segments && !editing) {
         const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, 'Править');
         edit.addEventListener('click', () => {
@@ -373,7 +389,7 @@ function build(view, ctx) {
         reset.addEventListener('click', () => confirmReset(item));
         acts.append(reset);
       }
-      acts.append(chatMenu(item));
+      if (!editing) acts.append(chatMenu(item));
     }
     if (!RUNNING.has(item.state)) {
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, 'Удалить');
@@ -427,6 +443,7 @@ function build(view, ctx) {
       }
       if (xhr.status === 202 && answer) {
         kick();
+        picked = true;
         await records.load();
         await select(answer.id);
         return;
@@ -453,7 +470,8 @@ function build(view, ctx) {
   paintView();
   const wanted = ctx.query && ctx.query.get('id');     // «Открыть» в «В работе», «к записи» из чата
   if (wanted) history.replaceState(null, '', '#/transcribe');
-  records.load().then(() => { if (wanted) select(wanted, true); });
+  // пока шёл первый список, запись могли выбрать сами (загрузка, список другого чтения) — её не перебивать
+  records.load().then(() => { if (wanted && !picked) select(wanted, true); });
 
   return {
     destroy() {

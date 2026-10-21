@@ -17,8 +17,11 @@
    ждёт его, как ответ сервера.
 4. Вложение, которое так и не отправили, удаляется крестиком (`DELETE /api/attachments/{id}`) или
    уборкой (`sweep_attachments`) через ORPHAN_SEC.
-5. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
-6. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
+5. Вложение из расшифровки (`source_transcript_id`) в истории диалога — ход и повтор к нелокальной
+   модели (sections.is_local) только с `external_ok`, иначе 409 `external`; подтверждённым считается
+   диалог, где после последнего такого вложения уже есть ответ этой модели тем же путём (`_needs_consent`).
+6. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
+7. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
 """
 import asyncio
 import base64
@@ -127,6 +130,38 @@ def _chat_row(user_id: int, chat_id: str):
 def _chat_out(row) -> dict:
     return {"id": row["id"], "title": row["title"], "connection_id": row["connection_id"], "model": row["model"],
             "updated": row["updated"]}
+
+
+def _needs_consent(chat_id: str, model: str, via: str) -> bool:
+    """В истории диалога (её ход уносит модели целиком) есть вложение из расшифровки, а после
+    последнего такого сообщения нет ответа ассистента этой модели тем же путём (`via`). Такой ответ и
+    есть след подтверждения: ход с расшифровкой к нелокальной модели без `external_ok` не проходит.
+    Подключение сообщение не хранит (схема прежняя) — пара сводится к модели и пути: та же модель
+    другого подключения того же пути считается подтверждённой."""
+    last = state.DB.execute(
+        "SELECT m.created, m.rowid FROM messages m JOIN attachments a ON a.message_id = m.id"
+        " WHERE m.chat_id = ? AND a.source_transcript_id IS NOT NULL ORDER BY m.created DESC, m.rowid DESC LIMIT 1",
+        (chat_id,)).fetchone()
+    return last is not None and state.DB.execute(
+        "SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND model = ? AND via = ?"
+        " AND (created, rowid) > (?, ?) LIMIT 1", (chat_id, model, via, last[0], last[1])).fetchone() is None
+
+
+def _chat_view(user_id: int, row) -> dict:
+    """Диалог для страницы (GET, POST, PATCH одного): ещё `local` — модель диалога локальная
+    (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
+    подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`)."""
+    out, conn = _chat_out(row), None
+    if row["connection_id"] is not None:
+        try:
+            conn = connections.get(user_id, row["connection_id"])
+        except HTTPException:                        # подключение удалено — ход ответит 404
+            pass
+    model = row["model"] or manage.DEFAULT_MODEL
+    out["local"] = conn is not None and sections.is_local(conn, model)
+    out["external"] = conn is not None and not out["local"] and _needs_consent(
+        row["id"], model, "server" if conn.proxied else "browser")
+    return out
 
 
 def _chat_pair(user_id: int, conn_id: "int | None", model: "str | None") -> tuple[Connection, str]:
@@ -562,14 +597,15 @@ async def create_chat(body: ChatIn, request: Request):
     state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
                      " VALUES (?, ?, NULL, ?, ?, ?, ?)", (chat_id, user.id, conn.id, model, now, now))
     log.info("чат %s: создан", chat_id[:8])
-    return _chat_out(_chat_row(user.id, chat_id))
+    return _chat_view(user.id, _chat_row(user.id, chat_id))
 
 
 @router.get("/chats/{chat_id}")
 async def get_chat(chat_id: str, request: Request):
-    row = _chat_row(request.state.user.id, chat_id)
+    uid = request.state.user.id
+    row = _chat_row(uid, chat_id)
     atts = _attachments(chat_id)
-    return {"chat": _chat_out(row), "messages": [_message_out(m, atts.get(m["id"], [])) for m in _messages(chat_id)]}
+    return {"chat": _chat_view(uid, row), "messages": [_message_out(m, atts.get(m["id"], [])) for m in _messages(chat_id)]}
 
 
 @router.patch("/chats/{chat_id}")
@@ -587,7 +623,7 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))
-    return _chat_out(_chat_row(uid, chat_id))
+    return _chat_view(uid, _chat_row(uid, chat_id))
 
 
 @router.delete("/chats/{chat_id}", status_code=204)
@@ -746,12 +782,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
-    if any(a["source_transcript_id"] for a in atts) and not body.external_ok and not sections.is_local(conn, model):
-        raise HTTPException(409, {"code": "external",
-                                  "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
     limit = await _limit(conn, model)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     via = "server" if conn.proxied else "browser"
+    free = body.external_ok or sections.is_local(conn, model)
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -760,7 +794,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         # живой ответ сюда не доходит: его ждёт _busy
         state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
                          " AND status = 'streaming'", (chat_id,))
+        # расшифровка в истории (и в этом ходе) к нелокальной модели — только с подтверждением; у повтора
+        # след подтверждения ищется до удаления прежнего ответа: он мог быть им
         if body.regenerate:
+            ask = not free and _needs_consent(chat_id, model, via)
             user_mid = _drop_last_answer(chat_id)
         else:
             user_mid = uuid.uuid4().hex
@@ -770,6 +807,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 if state.DB.execute("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL",
                                     (user_mid, a["id"])).rowcount != 1:
                     raise _gone("вложения нет или оно уже отправлено")
+            ask = not free and _needs_consent(chat_id, model, via)
+        if ask:
+            raise HTTPException(409, {"code": "external",
+                                      "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
         messages = compose(chat_id, user_mid)
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:
