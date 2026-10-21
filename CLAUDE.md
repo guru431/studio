@@ -69,6 +69,17 @@
   держатся согласованными (`sections._sync_legacy`) — новая логика их не читает. Ход начатого
   диалога пару не перепроверяет (`chat.create_turn` — `connections.get`, план section-connections,
   Task 4): галочки — правило выбора для нового, не запрет старого (README «Подключения и разделы»).
+- Проверка подключения — `checks.py` (спека 2026-10-21-studio-connection-check-design): паспорт —
+  `connections.passport` (JSON: строки `routes` по запросам, модели с возможностями и источником —
+  `capabilities.py`, пробы), обнуляется сменой адреса, вида или токена; зеркала панели его убирают.
+  Пробы через сервер (`POST …/check`) — только `GET` через `upstream`: srvllm — `/v1/models` и
+  `/slot/models`, openai — `models_url` и он же без ключа (`upstream.request(keyless=True)`),
+  OpenRouter — `…/key`; ни генерации, ни release, ни `GET /slot/videos` (сторожит `test_checks.py`).
+  Прямое проверяет браузер (`passport.js`) → `PUT …/passport` (`source: browser`, пределы формы,
+  возможности выводит сервер). «Пробный ответ» (`POST …/probe`) — единственная тратящая проба, у
+  srvllm его нет. Адрес, убранный из списка, — `connections.dropped` (не прямое): «Проверить» и
+  «Обновить модели» говорят это словами; `UpstreamRefused.reason` различает `unlisted`, `internal`,
+  `changed`.
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.
