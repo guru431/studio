@@ -230,7 +230,9 @@ async def confirm_password(uid: int, password: str, what: str, message: str = "�
         raise HTTPException(429, {"code": "locked", "message": "слишком много попыток — подождите 15 минут"})
     attempt = clock.NOW()
     FAILS.setdefault(key, []).append(attempt)       # до хеша: параллельная пачка не пройдёт разом
-    stored = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()["pw_hash"]
+    row = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()
+    # учётку удалили после проверки сессии — отказ, как неверному паролю (still_valid её не найдёт)
+    stored = row["pw_hash"] if row else security.DUMMY_HASH
     if not await asyncio.to_thread(security.verify_password, password, stored) or not still_valid(uid, stored):
         log.warning("пользователь %d: %s — неверный пароль", uid, what)
         raise HTTPException(403, {"code": "password", "message": message})

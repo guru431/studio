@@ -99,6 +99,14 @@ def test_login_started_with_the_old_password_opens_no_session(studio, monkeypatc
     assert studio.c.get("/api/me").status_code == 401
 
 
+def test_password_of_an_account_deleted_after_the_session_check_is_refused(studio):
+    """Учётку удалили между проверкой сессии и подтверждением паролем: 403, а не 500 на пустой строке."""
+    import asyncio
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(auth.confirm_password(424242, "password-123", "проверка"))
+    assert e.value.status_code == 403 and e.value.detail["code"] == "password"
+
+
 def test_five_failures_lock_the_pair_but_not_the_login_elsewhere(studio):
     make_user(studio, "owner")
     for _ in range(5): login(studio, "owner", "nope", ip="203.0.113.9")
