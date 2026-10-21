@@ -185,19 +185,25 @@ def _answer_lost(s, error=httpx.ReadTimeout, accepted=True):
     s.gw.on["/slot/videos"] = create
 
 
-def _foreign(s, seed, quality="standard"):
+def _foreign(s, seed, quality="standard", prompt=None):
     """Задание в очереди шлюза, которого у студии нет (скрипт или другой клиент того же ключа)."""
     gid = f"video_{len(s.gw.videos) + 900:024x}"
     s.gw.videos[gid] = seed
-    s.gw.video_fields[gid] = {"seconds": "5", "quality": quality, "smooth": "true"}
+    s.gw.video_fields[gid] = {"seconds": "5", "quality": quality, "smooth": "true"} | (
+        {"prompt": prompt} if prompt else {})
     return gid
+
+
+def _studio_seed(monkeypatch, seed):
+    """Seed, который «выберет» студия, когда пользователь его не задал."""
+    monkeypatch.setattr(videos.secrets, "randbelow", lambda _n: seed)
 
 
 @pytest.mark.parametrize("error", [httpx.ReadTimeout, httpx.RemoteProtocolError])
 def test_video_whose_answer_was_lost_is_found_in_the_gateway_list(studio, error):
     add_gateway(studio)
     _answer_lost(studio, error)
-    r = create_video(studio, seconds="7", quality="high")
+    r = create_video(studio, prompt=PROMPT, seconds="7", quality="high")
     assert r.status_code == 201, r.text
     v = r.json()
     gid = v_gateway_id(studio)
@@ -208,22 +214,44 @@ def test_video_whose_answer_was_lost_is_found_in_the_gateway_list(studio, error)
     assert item(studio, v["id"])["state"] == "done" and studio.gw.video_deleted == [gid]
 
 
-def test_lost_answer_adopts_only_its_own_job(studio):
-    """Шлюз задание не принял, а в его списке — тот же seed у ролика другой строки студии и у
-    чужого задания другого качества: ни одно не своё — 504, исходник не остаётся, чужое не тронуто.
-    Два подходящих чужих — тоже не своё: не угадываем."""
+def test_lost_answer_adopts_only_its_own_job(studio, monkeypatch):
+    """Шлюз задание не принял, а в его списке — seed студии у ролика другой строки, у чужого задания
+    другого качества и у чужого с другим промптом: ни одно не своё — 504 со словами о неясном
+    исходе, исходник не остаётся, чужое не тронуто. Два подходящих чужих — тоже не своё: не угадываем."""
+    _studio_seed(monkeypatch, 7)
     add_gateway(studio)
-    first = create_video(studio, seed="7").json()
-    _foreign(studio, 7, quality="fast")
+    first = create_video(studio, prompt=PROMPT).json()
+    _foreign(studio, 7, quality="fast", prompt=PROMPT)
+    _foreign(studio, 7, prompt="чужой промпт")
     _answer_lost(studio, accepted=False)
-    r = create_video(studio, seed="7")
-    assert r.status_code == 504 and "не ответил" in r.json()["detail"]["message"]
+    r = create_video(studio, prompt=PROMPT)
+    message = r.json()["detail"]["message"]
+    assert r.status_code == 504 and "не ответил" in message and "мог начаться" in message
     assert [c["method"] for c in studio.gw.video_calls][-2:] == ["POST", "GET"]
     assert [x["id"] for x in studio.c.get("/api/videos").json()["items"]] == [first["id"]]
     assert media_rows() == 1 and studio.gw.video_deleted == []
+    _studio_seed(monkeypatch, 8)
     _foreign(studio, 8), _foreign(studio, 8)
-    assert create_video(studio, seed="8").status_code == 504
+    assert create_video(studio).status_code == 504
     assert media_rows() == 1
+
+
+@pytest.mark.parametrize("error, code", [(httpx.ReadTimeout, 504), (httpx.RemoteProtocolError, 502)])
+def test_lost_answer_with_the_users_seed_adopts_nothing(studio, error, code):
+    """Seed задал пользователь — его повторяют скрипты и другие учётки (42 и т. п.): единственное
+    подходящее задание в общем списке шлюза своим не доказано (аудит 2026-10-21, P1). Список не
+    читается, чужое не скачано и не снято, ответ — неопределённый исход словами."""
+    add_gateway(studio)
+    gid = _foreign(studio, 42)
+    _answer_lost(studio, error, accepted=False)
+    r = create_video(studio, seed="42")
+    message = r.json()["detail"]["message"]
+    assert r.status_code == code and "мог начаться" in message and "без seed" in message
+    assert [(q.method, q.url.path) for q in studio.gw.requests] == [("POST", "/slot/videos")]
+    assert studio.c.get("/api/videos").json()["items"] == [] and media_rows() == 0
+    studio.gw.video_status = "completed"
+    poll(studio)
+    assert gid in studio.gw.videos and studio.gw.video_deleted == []
 
 
 def test_unsent_video_is_not_looked_up(studio):
@@ -341,25 +369,173 @@ def test_lifespan_runs_the_watcher_by_itself(studio, monkeypatch):
 
 
 def test_watcher_survives_a_gateway_outage(studio, caplog):
+    """Шлюз не ответил по сети — его подключение ждёт PAUSE_SEC: второй ролик того же подключения
+    не ждёт второго таймаута, следующие проходы его не трогают (аудит 2026-10-21, P2)."""
     add_gateway(studio)
     v = create_video(studio, prompt=PROMPT).json()
+    other = create_video(studio).json()
     studio.gw.down = True
+    sent = len(studio.gw.requests)
     poll(studio)                                                       # исключения наружу нет
-    assert item(studio, v["id"]) == v
+    assert item(studio, v["id"]) == v and len(studio.gw.requests) == sent + 1
     studio.gw.down = False
     studio.gw.video_status = "completed"
+    studio.clock[0] += videos.PAUSE_SEC - 1
+    poll(studio)
+    assert len(studio.gw.requests) == sent + 1                         # пауза ещё идёт
+    studio.clock[0] += 1
+    poll(studio)
+    assert item(studio, v["id"])["state"] == "done" and item(studio, other["id"])["state"] == "done"
+    assert PROMPT not in caplog.text
+
+
+def _second_user_gateway(s):
+    """Вторая учётка со своим подключением к шлюзу; клиент дальше ходит ею."""
+    make_user(s, "guest")
+    signin(s, "guest")
+    return add_gateway(s)
+
+
+def _hang_on(s, path):
+    """Шлюз молчит на этот путь (до отмены задачи), как недоступный адрес до таймаута."""
+    async def hang(request):
+        s.gw.hung.append(request.url.path)
+        await asyncio.sleep(30)
+
+    s.gw.hung = []
+    s.gw.on[path] = hang
+
+
+def _video_state(video_id):
+    return state.DB.execute("SELECT state FROM videos WHERE id = ?", (video_id,)).fetchone()["state"]
+
+
+def test_a_hung_gateway_does_not_hold_up_another_connections_clip(studio):
+    """Подключение, которое не отвечает, держит только свои ролики: готовый ролик другого
+    подключения ложится в историю, пока первое висит; висящее проход не начинает второй раз
+    (аудит 2026-10-21, P2)."""
+    add_gateway(studio)
+    stuck = create_video(studio).json()
+    _hang_on(studio, f"/slot/videos/{v_gateway_id(studio)}")
+    _second_user_gateway(studio)
+    ready = create_video(studio).json()
+    studio.gw.video_status = "completed"
+
+    async def run():
+        tasks = videos.start_pass()
+        for _ in range(3000):
+            if _video_state(ready["id"]) == "done":
+                break
+            await asyncio.sleep(0.001)
+        again = videos.start_pass()                # висящее подключение в работе — второй задачи нет
+        hung = sum(not t.done() for t in tasks)
+        for task in tasks + again:
+            task.cancel()
+        await asyncio.gather(*tasks, *again, return_exceptions=True)
+        return len(tasks), again, hung
+
+    started, again, hung = studio.c.portal.call(run)
+    assert (started, again, hung) == (2, [], 1)
+    assert _video_state(ready["id"]) == "done" and _video_state(stuck["id"]) == "queued"
+    assert studio.gw.hung == [f"/slot/videos/{studio.gw.video_ids[0]}"] and videos.WATCHING == {}
+
+
+def test_watcher_polls_at_most_poll_max_connections_at_once(studio, monkeypatch):
+    monkeypatch.setattr(videos, "POLL_MAX", 1)
+    add_gateway(studio)
+    create_video(studio)
+    _second_user_gateway(studio)
+    create_video(studio)
+
+    async def run():
+        tasks = videos.start_pass()
+        await asyncio.gather(*tasks)
+        return len(tasks)
+
+    assert studio.c.portal.call(run) == 1
+
+
+def test_stopping_the_watcher_stops_its_polls(studio):
+    """Остановка службы гасит наблюдателя вместе с его задачами: ни один опрос не переживает
+    закрытия state.HTTP и базы."""
+    add_gateway(studio)
+    create_video(studio)
+    _hang_on(studio, f"/slot/videos/{v_gateway_id(studio)}")
+
+    async def run():
+        watcher = videos.start_watcher()
+        for _ in range(3000):
+            if studio.gw.hung:
+                break
+            await asyncio.sleep(0.001)
+        child, = videos.WATCHING.values()
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+        return child
+
+    child = studio.c.portal.call(run)
+    assert child.cancelled() and videos.WATCHING == {}
+
+
+def test_slow_download_gives_up_by_the_whole_clip_deadline(studio, env, monkeypatch):
+    """Срок на кусок медленную передачу не ограничивает: весь mp4 — за FETCH_SEC, иначе скачанное
+    выброшено и строка ждёт следующего прохода (аудит 2026-10-21, P2)."""
+    monkeypatch.setattr(videos, "FETCH_SEC", 0.05)
+    add_gateway(studio)
+    v = create_video(studio).json()
+    before = share_files(env)
+
+    async def trickle():
+        yield MP4[:10]
+        await asyncio.sleep(30)
+        yield MP4[10:]
+
+    async def slow(request):
+        return httpx.Response(200, content=trickle(), headers={"content-type": "video/mp4"})
+
+    path = f"/slot/videos/{v_gateway_id(studio)}/content"
+    studio.gw.on[path] = slow
+    studio.gw.video_status = "completed"
+    poll(studio)
+    assert item(studio, v["id"])["state"] == "queued" and share_files(env) == before and media_rows() == 1
+    assert studio.gw.video_deleted == []
+    del studio.gw.on[path]
     poll(studio)
     assert item(studio, v["id"])["state"] == "done"
-    assert PROMPT not in caplog.text
+
+
+@pytest.mark.parametrize("change, words", [
+    ("UPDATE connections SET base_url = 'http://10.77.1.16:4000'", "подключение «srvllm» изменено — запустите заново"),
+    ("DELETE FROM connections", "подключение «srvllm» удалено из профиля")], ids=["changed", "deleted"])
+def test_connection_changed_before_the_download_ends_the_clip_in_words(studio, caplog, change, words):
+    """Подключение сменили или удалили между опросом и скачиванием: ключ не уходит (connections.token),
+    ролик кончается словами, а не «сбоем прохода»."""
+    add_gateway(studio)
+    v = create_video(studio).json()
+    gid = v_gateway_id(studio)
+
+    async def status(request):
+        response = await studio.gw.builtin(request)
+        state.DB.execute(change)
+        return response
+
+    studio.gw.on[f"/slot/videos/{gid}"] = status
+    studio.gw.video_status = "completed"
+    poll(studio)
+    got = state.DB.execute("SELECT state, detail FROM videos WHERE id = ?", (v["id"],)).fetchone()
+    assert (got["state"], got["detail"]) == ("failed", words)
+    assert [c["path"] for c in studio.gw.video_calls][-1] == f"/slot/videos/{gid}"   # mp4 не запрошен
+    assert "сбой прохода" not in caplog.text
 
 
 def test_watcher_loop_logs_a_failed_pass_and_goes_on(studio, monkeypatch, caplog):
     passes = []
 
-    async def flaky():
+    def flaky():
         passes.append(1)
         if len(passes) == 1:
             raise RuntimeError(PROMPT)
+        return []
 
     async def run():
         task = videos.start_watcher()
@@ -369,7 +545,7 @@ def test_watcher_loop_logs_a_failed_pass_and_goes_on(studio, monkeypatch, caplog
         await asyncio.gather(task, return_exceptions=True)
         return task
 
-    monkeypatch.setattr(videos, "poll_once", flaky)
+    monkeypatch.setattr(videos, "start_pass", flaky)
     task = studio.c.portal.call(run)
     assert task.cancelled() and studio.sleeps[:2] == [videos.POLL_SEC] * 2
     assert "RuntimeError" in caplog.text and PROMPT not in caplog.text

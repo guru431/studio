@@ -195,12 +195,14 @@ class FakeGateway:
             self.video_fields[video_id] = fields
             return httpx.Response(200, json=video_object(video_id, seed=self.videos[video_id]))
         if path == "/slot/videos" and method == "GET":
-            # список шлюза — как у переводчика: все задания всех ключей, с длительностью, качеством, дорисовкой
+            # список шлюза — как у переводчика: все задания всех ключей, с длительностью, качеством,
+            # дорисовкой и промптом (свой — `given`)
             data = []
             for vid, seed in self.videos.items():
                 f = self.video_fields.get(vid, {})
                 data.append(video_object(vid, status=self.video_status, seed=seed, seconds=f.get("seconds", "5"),
-                                         quality=f.get("quality", "standard"), smooth=f.get("smooth", "true") == "true"))
+                                         quality=f.get("quality", "standard"), smooth=f.get("smooth", "true") == "true",
+                                         prompt=f.get("prompt"), prompt_source="given" if f.get("prompt") else "auto"))
             return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
         video_id, _, tail = path.removeprefix("/slot/videos/").partition("/")
         if video_id not in self.videos:
