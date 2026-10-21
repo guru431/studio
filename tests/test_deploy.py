@@ -134,6 +134,25 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC)
 
 
+def _route_timeout(path: str) -> int:
+    """Таймаут ProxyPass, которому достанется путь: mod_proxy берёт первое совпавшее правило."""
+    for prefix, timeout in re.findall(r"^\s*ProxyPass (\S+) \S+ timeout=(\d+)", uncommented(VHOST), re.M):
+        if path.startswith(prefix):
+            return int(timeout)
+    raise AssertionError(f"{path}: нет ProxyPass")
+
+
+def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
+    """Голосовой ввод и образец голоса отвечают в том же запросе: вся операция службы (а не один
+    вызов шлюза — у WhisperX там 2460 с) уложена в бюджет меньше таймаута маршрута, иначе Apache
+    оборвал бы запрос раньше службы и текст диктовки пропал бы."""
+    import dictation
+    import voices
+    assert dictation.BUDGET_SEC < _route_timeout("/api/dictation")
+    assert voices.BUDGET_SEC < _route_timeout("/api/voices")
+    assert _route_timeout("/api/chats/1/messages") == 600 and _route_timeout("/api/images") == 150
+
+
 def test_backup_unit_is_bounded_and_never_owns_the_socket_directory():
     """B2-M4: копия, повисшая на CIFS, не держит юнит сутками (таймер бы его не перезапустил).
     B2-M10: RuntimeDirectory у oneshot удалял бы /run/studio с сокетом службы при каждой остановке."""
