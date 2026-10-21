@@ -1,6 +1,6 @@
 """Профиль у каждого: `/api/me` (с токеном CSRF сессии, готовностью разделов и умолчанием чата из
 sections.py), тема и вид ленты разделов (общие для всех устройств учётки), смена пароля, удаление
-всей своей истории (спека, раздел 7.9)."""
+всей своей истории (спека, раздел 7.9; ответ — число файлов в очереди удаления, media.py)."""
 import asyncio
 import json
 import logging
@@ -98,7 +98,7 @@ async def change_password(body: PasswordChange, request: Request):
     return Response(status_code=204)
 
 
-@router.delete("/history", status_code=204)
+@router.delete("/history")
 async def delete_history(request: Request):
-    await history.delete_all(request.state.user.id)
-    return Response(status_code=204)
+    """pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница так и скажет."""
+    return {"pending_files": await history.delete_all(request.state.user.id)}

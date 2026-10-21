@@ -278,10 +278,7 @@ def _multipart(request: Request) -> bool:
 async def _discard(user_id: int, media_ids: list[str]) -> None:
     """Файлы, записанные запросом, который потом отказал."""
     for media_id in media_ids:
-        try:
-            await media.delete_async(user_id, media_id)
-        except OSError:
-            log.warning("исходник или маска пользователя %d: файл не удалился", user_id)
+        await media.delete_async(user_id, media_id)
 
 
 # ---- API -------------------------------------------------------------------
@@ -492,10 +489,7 @@ async def delete_image(image_id: str, request: Request):
     JOBS.pop(image_id, None)
     for media_id in {row["media_id"], row["source_media_id"], row["mask_media_id"]} - {None}:
         if not media.referenced(uid, media_id):
-            try:
-                await media.delete_async(uid, media_id)
-            except OSError:
-                log.warning("картинка %s: файл media не удалился", image_id[:8])
+            await media.delete_async(uid, media_id)
     return Response(status_code=204)
 
 
@@ -713,10 +707,7 @@ async def run_job(job: Job) -> None:
                 # ссылка снимается до await: остановка службы посреди удаления не оставит строку
                 # images, указывающую на файл, которого уже нет
                 mid, job.media_id = job.media_id, None
-                try:
-                    await media.delete_async(job.user_id, mid)
-                except OSError:
-                    log.warning("задание %s: файл отменённой картинки не удалился", job.id[:8])
+                await media.delete_async(job.user_id, mid)
             # запрос кончился (картинкой или ошибкой) — картинку не выдаём, карту освобождаем
             job.detail = "запрос завершён — освобождаю карту"
             _store(job)

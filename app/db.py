@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 7).
+"""Соединение SQLite и схема базы (версия 8).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 7
+VERSION = 8
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -42,7 +42,15 @@ CREATE TABLE passkeys(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES u
 CREATE INDEX passkeys_user ON passkeys(user_id);
 """
 
-SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + """
+#: очередь удаления файлов (media.py): путь media, чьей строки уже (удаление) или ещё (запись) нет.
+#: user_id — без ссылки на users: удаление учётки путь не уносит, файл доудалится, когда шара вернётся
+PURGE_TABLES = """
+CREATE TABLE purge(media_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, rel_path TEXT NOT NULL,
+      queued REAL NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX purge_user ON purge(user_id);
+"""
+
+SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
@@ -129,6 +137,8 @@ SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FRO
     7: """ALTER TABLE users ADD COLUMN screen_lock INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN mobile INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
+    # очередь удаления файлов: не удалившийся или недописанный файл не теряет свой путь
+    8: PURGE_TABLES,
 }
 
 

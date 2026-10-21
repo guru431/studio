@@ -121,7 +121,7 @@ def test_one_running_per_user_and_history_wipe_takes_all(studio, env, fake_audio
     r = upload(studio)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
     assert studio.c.delete(f"/api/transcripts/{first}").status_code == 409        # идущую — сначала отменить
-    assert studio.c.delete("/api/history").status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
     assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 

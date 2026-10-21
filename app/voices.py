@@ -107,9 +107,6 @@ async def delete_voice(voice_id: str, request: Request):
     row = _row(uid, voice_id)
     state.DB.execute("DELETE FROM voices WHERE id = ?", (voice_id,))
     if not media.referenced(uid, row["media_id"]):
-        try:
-            await media.delete_async(uid, row["media_id"])
-        except OSError:
-            log.warning("голос %s: файл media не удалился", voice_id[:8])
+        await media.delete_async(uid, row["media_id"])
     log.info("пользователь %d: голос %s удалён", uid, voice_id[:8])
     return Response(status_code=204)

@@ -64,6 +64,13 @@
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.
+- Путь файла без строки `media` не теряется — очередь удаления `purge` (без FK на `users`, переживает
+  удаление учётки): туда идут файлы, которые шара не дала удалить, и файлы, которые пишутся сейчас
+  (`save_async`/`save_stream` ставят путь до записи, строка `media` снимает его той же транзакцией, —
+  отмена и остановка службы посреди записи не оставят файл без записи). Проходит её `media.purge()`:
+  при старте и раз в `PURGE_SEC` (`start_purger`), в каждом `delete_async` и в начале стирания
+  истории; пишущиеся (`media.SAVING`) пропускает. `DELETE /api/history` и `/api/admin/users/<id>`
+  отвечают `{"pending_files": N}` — сколько файлов ещё ждут, страница это говорит.
 
 ## Правила
 
@@ -117,7 +124,8 @@
   `manage.py backup`: `sqlite3` backup во временный файл рядом с базой, затем на шару
   `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних; юнит ограничен
   `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт ещё
-  до 7 дней. Восстановление —
+  до 7 дней, а файлы, которые шара не дала удалить, — пока их не доудалит очередь `purge`.
+  Восстановление —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
   `studio:www-data`, удалить `-wal`/`-shm`), запустить.
 - Apache: vhost [deploy/apache-vhost.conf](deploy/apache-vhost.conf) (`*:8443` за прозрачным

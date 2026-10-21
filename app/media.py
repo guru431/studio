@@ -3,6 +3,11 @@
 - Путь `u{user_id}/{YYYY}/{MM}/{id}{ext}`, превью — `{id}.thumb.webp` рядом. Файл пишется во
   временный рядом и встаёт на место `os.replace`; строка `media` появляется только после файлов.
   Шара недоступна — `StorageError`, ни строки, ни временного файла.
+- Путь без строки `media` не теряется: очередь удаления `purge` (без ссылки на учётку) держит пути
+  файлов, которые не удалились (шара отказала), и файлов, которые пишутся сейчас (save_async,
+  save_stream: отмена или остановка службы посреди записи оставили бы их без строки) — вставка
+  строки снимает путь с очереди той же транзакцией. Очередь проходит purge(): при старте службы и
+  раз в PURGE_SEC (start_purger), при каждом удалении и при стирании истории.
 - `GET /api/media/{id}` отдаёт только своё, с диапазонами: Safari на iPhone без `Range` ролик не
   играет. С диска читается только нужный кусок.
 - Имена файлов и содержимое в журнал не пишутся: `download_name` — только в `Content-Disposition`.
@@ -28,6 +33,7 @@ import state
 
 THUMB_SIDE = 384
 CHUNK = 64 << 10
+PURGE_SEC = 300
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
        "video/mp4": ".mp4", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
@@ -52,11 +58,11 @@ class TooBig(StorageError):
 
 # ---- запись ----------------------------------------------------------------
 
-def _target(user_id: int, media_id: str, mime: str) -> tuple[str, Path]:
-    """(rel_path, полный путь) нового файла; дата каталога — по clock.NOW() в UTC."""
+def _plan(user_id: int, mime: str) -> tuple[str, str]:
+    """(id, rel_path) нового файла; дата каталога — по clock.NOW() в UTC."""
+    media_id = uuid.uuid4().hex
     day = datetime.fromtimestamp(clock.NOW(), timezone.utc)
-    rel = f"u{user_id}/{day:%Y}/{day:%m}/{media_id}{EXT.get(mime, '.bin')}"
-    return rel, state.CFG.media_dir / rel
+    return media_id, f"u{user_id}/{day:%Y}/{day:%m}/{media_id}{EXT.get(mime, '.bin')}"
 
 
 def _thumb_of(full: Path, media_id: str) -> Path:
@@ -91,12 +97,17 @@ def _thumbnail(data: bytes) -> bytes | None:
 
 def _insert(media_id: str, user_id: int, rel: str, mime: str, size: int, has_thumb: bool,
             download_name: str, written: tuple[Path, ...]) -> None:
+    """Строка media и снятие её пути с очереди удаления — одной транзакцией."""
+    state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO media(id, user_id, rel_path, mime, size, has_thumb, download_name, created)"
                          " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                          (media_id, user_id, rel, mime, size, int(has_thumb), download_name, clock.NOW()))
+        state.DB.execute("DELETE FROM purge WHERE media_id = ?", (media_id,))
+        state.DB.execute("COMMIT")
     except BaseException:
-        _discard(*written)           # строки нет — файлы без строки никому не нужны
+        state.DB.execute("ROLLBACK")
+        _discard(*written)           # строки нет — файлы без строки никому не нужны (не вышло — очередь)
         raise
 
 
@@ -118,11 +129,13 @@ class Written:
     files: tuple[Path, ...]
 
 
-def write(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> Written:
+def write(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False,
+          plan: tuple[str, str] | None = None) -> Written:
     """Файл и превью (Pillow и запись на шару) без базы — можно в asyncio.to_thread. База — нет:
-    одно соединение SQLite общее, вставка из потока попала бы в чужую транзакцию запроса."""
-    media_id = uuid.uuid4().hex
-    rel, full = _target(user_id, media_id, mime)
+    одно соединение SQLite общее, вставка из потока попала бы в чужую транзакцию запроса.
+    plan — (id, rel_path) из _plan, уже поставленный в очередь удаления (save_async)."""
+    media_id, rel = plan or _plan(user_id, mime)
+    full = state.CFG.media_dir / rel
     small = _thumbnail(data) if thumb else None
     parts = [(full, data)] + ([(_thumb_of(full, media_id), small)] if small is not None else [])
     try:
@@ -150,16 +163,31 @@ def save(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: boo
 
 
 async def save_async(user_id: int, data: bytes, mime: str, download_name: str, *, thumb: bool = False) -> str:
-    """Как save: файлы — в потоке, строка — здесь, на цикле событий."""
-    return insert(await asyncio.to_thread(write, user_id, data, mime, download_name, thumb=thumb))
+    """Как save: файлы — в потоке, строка — здесь, на цикле событий. Отмена ожидания поток не
+    останавливает, и он допишет файлы, до строки которых дело уже не дойдёт: поэтому путь заранее
+    стоит в очереди удаления (снимает его insert), а проход purge его не трогает, пока поток пишет."""
+    plan = _plan(user_id, mime)
+    queue(user_id, [plan])
+    SAVING.add(plan[0])
+    task = asyncio.ensure_future(asyncio.to_thread(write, user_id, data, mime, download_name, thumb=thumb, plan=plan))
+    try:
+        return insert(await asyncio.shield(task))
+    finally:
+        if task.done():
+            SAVING.discard(plan[0])
+        else:                                    # отменили посреди записи: очистке — когда поток кончит
+            task.add_done_callback(lambda _: SAVING.discard(plan[0]))
 
 
 async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, download_name: str,
                       max_bytes: int) -> str:
-    """Как save, но потоком и без превью (ролики); больше max_bytes — StorageError, файла нет."""
-    media_id = uuid.uuid4().hex
-    rel, full = _target(user_id, media_id, mime)
+    """Как save, но потоком и без превью (ролики); больше max_bytes — StorageError, файла нет.
+    Путь — в очереди удаления, пока строки нет (как у save_async)."""
+    media_id, rel = _plan(user_id, mime)
+    full = state.CFG.media_dir / rel
     tmp, size, out = _tmp(full), 0, None
+    queue(user_id, [(media_id, rel)])
+    SAVING.add(media_id)
     try:
         await asyncio.to_thread(full.parent.mkdir, parents=True, exist_ok=True)
         out = await asyncio.to_thread(open, tmp, "wb")
@@ -180,6 +208,8 @@ async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, dow
         if isinstance(e, OSError):
             raise _storage_failed(user_id, e) from None
         raise
+    finally:
+        SAVING.discard(media_id)
     _insert(media_id, user_id, rel, mime, size, False, download_name, (full,))
     return media_id
 
@@ -205,33 +235,83 @@ def path(user_id: int, media_id: str, thumb: bool = False) -> Path:
 
 
 def _remove(media_id: str, rel_path: str) -> None:
-    """Файл и превью; нет файла — не ошибка, прочая OSError — наружу. Без базы — для asyncio.to_thread."""
+    """Файл и превью, и их временные (запись оборвалась); нет файла — не ошибка, прочая OSError —
+    наружу. Без базы — для asyncio.to_thread."""
     full = state.CFG.media_dir / rel_path
-    full.unlink(missing_ok=True)
-    _thumb_of(full, media_id).unlink(missing_ok=True)
+    thumb = _thumb_of(full, media_id)
+    for p in (full, thumb, _tmp(full), _tmp(thumb)):
+        p.unlink(missing_ok=True)
 
 
-def remove_files(rows) -> int:
+def remove_files(rows) -> list:
     """Файлы многих строк media `(id, rel_path)` одним вызовом в asyncio.to_thread (стирание
-    истории); базы не касается. Возвращает число строк, чьи файлы не удалились."""
-    failed = 0
+    истории, очередь удаления); базы не касается. Возвращает строки, чьи файлы не удалились."""
+    failed = []
     for media_id, rel_path in rows:
         try:
             _remove(media_id, rel_path)
         except OSError:
-            failed += 1
+            failed.append((media_id, rel_path))
     return failed
 
 
-#: id media, чьи файлы сейчас удаляет delete_async: пока удаление ждёт поток, новое задание взять их
-#: исходником не должно (иначе его строка сослалась бы на файл, которого не станет) — см. alive()
-DELETING: set[str] = set()
+# ---- очередь удаления ------------------------------------------------------
+
+#: id media, чьи файлы сейчас пишет поток save_async / save_stream: путь уже в очереди, но проход
+#: purge его не трогает, пока запись не кончилась (строку вставят — путь уйдёт из очереди)
+SAVING: set[str] = set()
+
+
+def queue(user_id: int, rows) -> None:
+    """Пути `(id, rel_path)` — в очередь удаления; с цикла событий (внутри транзакции зовущего — тоже)."""
+    state.DB.executemany("INSERT OR IGNORE INTO purge(media_id, user_id, rel_path, queued) VALUES (?, ?, ?, ?)",
+                         [(media_id, user_id, rel, clock.NOW()) for media_id, rel in rows])
+
+
+async def _purge(rows: list) -> None:
+    """Файлы путей очереди — в потоке; удалённые снимаются с очереди, прочие ждут следующего прохода."""
+    failed = {media_id for media_id, _ in await asyncio.to_thread(remove_files, rows)}
+    state.DB.executemany("DELETE FROM purge WHERE media_id = ?", [(m,) for m, _ in rows if m not in failed])
+    state.DB.executemany("UPDATE purge SET tries = tries + 1 WHERE media_id = ?", [(m,) for m in failed])
+    if failed:
+        log.warning("очередь удаления: не удалилось файлов — %d", len(failed))
+
+
+async def purge(user_id: int | None = None) -> None:
+    """Проход очереди удаления — вся (start_purger) или одного пользователя (стирание его истории);
+    пути, которые ещё пишутся (SAVING), пропускаются."""
+    where, args = ("WHERE user_id = ?", (user_id,)) if user_id is not None else ("", ())
+    rows = [(r["media_id"], r["rel_path"]) for r in
+            state.DB.execute(f"SELECT media_id, rel_path FROM purge {where}", args) if r["media_id"] not in SAVING]
+    if rows:
+        await _purge(rows)
+
+
+def pending(user_id: int) -> int:
+    """Сколько файлов пользователя ждут в очереди удаления (кроме тех, что пишутся сейчас)."""
+    return sum(r["media_id"] not in SAVING for r in
+               state.DB.execute("SELECT media_id FROM purge WHERE user_id = ?", (user_id,)))
+
+
+async def _purge_loop() -> None:
+    while True:
+        try:
+            await purge()
+        except Exception as e:                    # noqa: BLE001 — очередь не должна вставать
+            log.warning("очередь удаления: сбой прохода (%s)", type(e).__name__)
+        await clock.SLEEP(PURGE_SEC)
+
+
+def start_purger() -> asyncio.Task:
+    """Первый проход — сразу: при старте службы доудаляется оставшееся от прошлой (в том числе
+    недописанное до остановки)."""
+    return asyncio.create_task(_purge_loop())
 
 
 def alive(user_id: int, media_id: str) -> bool:
-    """Строка media есть и её файлы не удаляются. С цикла событий — сразу перед INSERT строки,
-    которая на неё сошлётся, без await между ними."""
-    return media_id not in DELETING and state.DB.execute(
+    """Строка media есть (удаление снимает её до того, как ждать шару). С цикла событий — сразу перед
+    INSERT строки, которая на неё сошлётся, без await между ними."""
+    return state.DB.execute(
         "SELECT 1 FROM media WHERE id = ? AND user_id = ?", (media_id, user_id)).fetchone() is not None
 
 
@@ -249,18 +329,24 @@ def referenced(user_id: int, media_id: str) -> bool:
 
 
 async def delete_async(user_id: int, media_id: str) -> None:
-    """Файлы — в потоке (зависшая шара не останавливает службу), затем строка — здесь, на цикле.
-    Нет файла или строки — не ошибка. Прочая OSError — наружу, строка остаётся."""
+    """Строка уходит сразу, её путь — в очередь удаления (одной транзакцией, до всякого await):
+    новое задание исходником файл уже не возьмёт (alive), а путь не потеряется. Файлы — в потоке
+    (зависшая шара не останавливает службу); не удалились — доудалит проход очереди, не ошибка.
+    Нет файла или строки — тоже не ошибка."""
     row = state.DB.execute("SELECT id, rel_path FROM media WHERE id = ? AND user_id = ?",
                            (media_id, user_id)).fetchone()
     if row is None:
         return
-    DELETING.add(media_id)
+    rows = [(row["id"], row["rel_path"])]
+    state.DB.execute("BEGIN")
     try:
-        await asyncio.to_thread(_remove, row["id"], row["rel_path"])
+        queue(user_id, rows)
         state.DB.execute("DELETE FROM media WHERE id = ? AND user_id = ?", (media_id, user_id))
-    finally:
-        DELETING.discard(media_id)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    await _purge(rows)
 
 
 def byte_range(header: str, size: int) -> "tuple[int, int] | None":
