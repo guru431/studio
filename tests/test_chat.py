@@ -147,6 +147,108 @@ def test_gateway_refusal_ends_the_stream_with_error(studio):
     assert messages(studio, cid)[1]["status"] == "error"
 
 
+def test_stream_cut_without_an_ending_is_not_a_finished_answer(studio):
+    """Поток кончился без `[DONE]` и `finish_reason` — ответ оборван, а не готов (аудит): прочитанное
+    сохраняется ошибкой. Так же — 200 с HTML вместо потока и пустой ответ."""
+    import httpx
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_ending = None
+    events = sse(turn(studio, cid))
+    assert "".join(d["text"] for e, d in events if e == "delta") == "Здравствуйте!"
+    assert events[-1][0] == "error" and "без признака конца" in events[-1][1]["message"]
+    assert (messages(studio, cid)[1]["status"], messages(studio, cid)[1]["content"]) == ("error", "Здравствуйте!")
+    for reply in (httpx.Response(200, text="<html><body>Bad gateway</body></html>", headers={"content-type": "text/html"}),
+                  httpx.Response(200, headers={"content-type": "text/event-stream"})):
+        async def odd(request, reply=reply):
+            return reply
+        studio.gw.on["/v1/chat/completions"] = odd
+        events = sse(turn(studio, cid))
+        assert events[-1][0] == "error" and "без признака конца" in events[-1][1]["message"]
+        assert (messages(studio, cid)[-1]["status"], messages(studio, cid)[-1]["content"]) == ("error", "")
+
+
+def test_answer_cut_by_the_models_length_limit_is_marked(studio):
+    """finish_reason `length` — ответ обрезан пределом длины модели: ошибка с пометкой в тексте."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_ending = "length"
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("error", {"message": "ответ обрезан пределом длины модели"})
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("error", "Здравствуйте!" + chat.CUT_LENGTH)
+
+
+def test_server_answer_is_capped_by_size(studio, monkeypatch):
+    """Ответ через сервер — не больше ANSWER_MAX знаков (как PUT ответа браузера): дальше модель не
+    читается, прочитанное — ошибкой с пометкой (аудит)."""
+    monkeypatch.setattr(chat, "ANSWER_MAX", 25)
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_reply = ["0123456789"] * 50
+    events = sse(turn(studio, cid))
+    assert events[-1][0] == "error" and "длинный" in events[-1][1]["message"]
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("error", ("0123456789" * 3)[:25] + chat.CUT_SIZE)
+    assert sum(e == "delta" for e, _ in events) == 3                           # дальше модель не читалась
+
+
+def test_server_answer_is_capped_by_time(studio):
+    """Модель шлёт данные, но ответ идёт дольше STREAM_TOTAL_SEC: чтение кончается, прочитанное —
+    ошибкой с пометкой (read timeout такую модель не ловит; аудит)."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_hold = True
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            ids = next(events)[1]
+            assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+            stream = chat.STREAMS[ids["assistant_message_id"]]
+            stream.deadline = studio.clock[0] - 1                               # срок вышел
+            studio.gw.chat_hold = False
+            rest = [(e, d) for e, d in events if e != "ping"]
+    finally:
+        studio.gw.chat_hold = False
+    assert rest[-1] == ("error", {"message": "ответ шёл слишком долго — обрезан"})
+    assert chat.CUT_TIME == "\n\n[ответ обрезан: шёл дольше 30 минут]"
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("error", "Здрав" + chat.CUT_TIME)
+
+
+def test_gone_listener_gets_no_queue(studio):
+    """Клиент ушёл: ответ дочитывается и сохраняется, но события в очередь, которую никто не читает,
+    больше не копятся (аудит)."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.chat_hold = True
+    studio.gw.chat_reply = ["Здрав"] + ["x" * 100] * 20
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            ids = next(events)[1]
+            assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+            stream = chat.STREAMS[ids["assistant_message_id"]]
+        assert stream.listening is False
+    finally:
+        studio.gw.chat_hold = False
+    wait(studio, stream)
+    assert stream.queue.qsize() == 0
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("done", "Здрав" + "x" * 2000)
+
+
+def test_user_streams_are_limited(studio):
+    """Не больше USER_STREAMS ответов через сервер у пользователя сразу: следующий ход — 429, в
+    диалоге ничего не записано (аудит)."""
+    add_gateway(studio)
+    for n in range(chat.USER_STREAMS):                    # идущие ответы других диалогов
+        other = new_chat(studio)
+        _row(other, f"u{n}", "user", "?", "done", 1)
+        _row(other, f"a{n}", "assistant", "", "streaming", 2)
+    cid = new_chat(studio)
+    r = turn(studio, cid)
+    assert r.status_code == 429 and r.json()["detail"]["code"] == "streams"
+    assert messages(studio, cid) == [] and not studio.gw.chat_requests
+    state.DB.execute("UPDATE messages SET status = 'done' WHERE id = 'a0'")
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+
+
 # ---- контекст ----------------------------------------------------------------
 
 def test_document_goes_in_full_before_the_question(studio):
@@ -202,6 +304,23 @@ def test_images_go_as_image_url_parts_up_to_four(studio):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,") for part in content[1:])
     est = chat.estimate_tokens(studio.gw.chat_requests[0]["messages"])
     assert est == 4 + 4000                                                       # ceil(12 / 3) + 1000 × 4
+
+
+def test_images_are_capped_across_the_whole_request(studio):
+    """Два хода по четыре фото с ответом между ними: предел MAX_IMAGES — на весь запрос, а не на
+    сообщение (аудит). Картинки — последнего хода, фото прежнего — пометкой, в истории — все."""
+    add_gateway(studio); cid = new_chat(studio)
+    for n in range(2):
+        pics = [attach(studio, f"p{n}{i}.jpg", png(), "image/jpeg") for i in range(4)]
+        sse(turn(studio, cid, f"Ход {n}", attachment_ids=[p["id"] for p in pics]))
+    sent = studio.gw.chat_requests[1]["messages"]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+    assert sent[0]["content"] == [{"type": "text", "text": "Ход 0"}] + [{"type": "text", "text": chat.DROPPED}] * 4
+    assert [p["type"] for p in sent[2]["content"]] == ["text"] + ["image_url"] * chat.MAX_IMAGES
+    assert [len(m["attachments"]) for m in messages(studio, cid)] == [4, 0, 4, 0]
+    # прямое подключение получает тот же собранный контекст
+    assert sum(p["type"] == "image_url" for m in chat.compose(cid, messages(studio, cid)[2]["id"])
+               if isinstance(m["content"], list) for p in m["content"]) == chat.MAX_IMAGES
 
 
 def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
@@ -415,7 +534,8 @@ def test_compose_merges_user_messages_left_without_an_answer(studio):
     assert [m["role"] for m in out] == ["user", "assistant", "user"]
     last = out[2]["content"]
     assert last[0] == {"type": "text", "text": "Что на них?"}
-    assert [p["type"] for p in last[1:]] == ["image_url"] * chat.MAX_IMAGES
+    assert [p["type"] for p in last[1:]] == ["text", "text"] + ["image_url"] * chat.MAX_IMAGES
+    assert {p["text"] for p in last[1:3]} == {chat.DROPPED}
 
 
 def test_new_turn_ends_a_browser_answer_nobody_saves(studio):

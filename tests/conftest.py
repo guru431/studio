@@ -1,5 +1,6 @@
 """Общее для тестов студии: пути проекта, окружение службы, приложение main.app."""
 import asyncio
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,6 +72,9 @@ def studio(env, monkeypatch):
         await asyncio.sleep(0.001)
 
     monkeypatch.setattr(clock, "SLEEP", fast_sleep)
+    # пинги чата двигают часы на PING_SEC за миллисекунду: удержанный шлюз (chat_hold) «шёл» бы
+    # дольше срока ответа; срок сверяет test_server_answer_is_capped_by_time
+    monkeypatch.setattr(chat, "STREAM_TOTAL_SEC", math.inf)
     monkeypatch.setattr(state, "make_http", lambda: httpx.AsyncClient(transport=httpx.MockTransport(gw.handler)))
     monkeypatch.setattr(state, "WATCHER", False)
     auth.FAILS.clear()

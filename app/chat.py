@@ -1,12 +1,15 @@
 """Чат (спека 2026-10-19-studio-pwa, раздел 7.7): диалоги, вложения (документы и фото), сборка
 контекста и ход диалога.
 
-1. Ход: сообщение пользователя и его вложения, сборка контекста (`compose`) и проверка предела
-   модели — одной транзакцией без await внутри; не помещается — 413 и в базе ничего нет.
+1. Ход: сообщение пользователя и его вложения, сборка контекста (`compose`, картинок — не больше
+   MAX_IMAGES на весь запрос) и проверка предела модели — одной транзакцией без await внутри; не
+   помещается — 413 и в базе ничего нет.
 2. Подключение из списка администратора (`proxied`) — модель зовёт сервер. Запрос ведёт фоновая
    `StreamTask`: читает модель до конца и сохраняет ответ, даже если клиент ушёл; поток SSE
-   ответа только читает её очередь. Пока данных нет, раз в PING_SEC в поток идёт `: ping` —
-   холодная модель грузится минутами, а Apache рвёт молчащую линию.
+   ответа только читает её очередь (клиент ушёл — очередь не пополняется). Пока данных нет, раз в
+   PING_SEC в поток идёт `: ping` — холодная модель грузится минутами, а Apache рвёт молчащую
+   линию. Ответ — до ANSWER_MAX знаков и STREAM_TOTAL_SEC, конец — `[DONE]` или `finish_reason`
+   (без них — ошибка), у пользователя сразу — не больше USER_STREAMS таких ответов (429).
 3. Прямое подключение — браузер зовёт модель сам: ход отдаёт ему адрес и сообщения, готовый
    ответ браузер кладёт `PUT .../messages/{id}`. Пока читает, раз в ~15 с шлёт признак жизни
    (`POST .../messages/{id}/alive`, время — в `alive_at`): ответ без признака дольше ALIVE_SEC —
@@ -51,6 +54,13 @@ TITLE_CHARS = 60
 
 # холодная модель грузится до ~290 с, Apache держит линию /api/chats/ до 600 с
 STREAM_READ_SEC = 600
+# весь ответ через сервер: долгий ответ gemma-abl — минуты (~30 ток/с — десятки тысяч токенов за
+# полчаса), а модель, что шлёт данные без конца, read timeout не ловит — держала бы карту и память
+# службы вечно. Пинги держат линию Apache и дольше 600 с, поток SSE живёт и после ухода клиента.
+STREAM_TOTAL_SEC = 1800
+# ответов через сервер у одного пользователя сразу: каждый держит в памяти до ANSWER_MAX знаков
+# (и очередь событий), а MemoryMax службы — 2 ГБ на всех
+USER_STREAMS = 3
 MODELS_TIMEOUT_SEC = 10
 SAVE_SEC = 5                     # идущий ответ — в базу не чаще (перезапуск оставит прочитанное)
 # признак жизни ответа из браузера: вкладка шлёт его раз в ~15 с, а фоновой вкладке браузер
@@ -62,8 +72,13 @@ TEXT_MAX = 200_000
 ANSWER_MAX = 2_000_000
 MODEL_MAX = 200
 INTERRUPTED = "\n\n[прервано перезапуском студии]"
+# пометки обрезанного ответа: он — ошибка, в контекст следующих ходов не идёт (compose)
+CUT_LENGTH = "\n\n[ответ обрезан пределом длины модели]"
+CUT_SIZE = "\n\n[ответ обрезан: слишком длинный для студии]"
+CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_SEC // 60} минут]"
 STORAGE = "хранилище недоступно"
 NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
+DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
@@ -167,11 +182,11 @@ def recover() -> None:
 # ---- контекст ------------------------------------------------------------------
 
 def _content(text: str, atts: list):
-    """Текст пользователя с документами перед ним; с картинками — части OpenAI (не больше MAX_IMAGES):
-    картинка — пока только id media, данные ставит fill_photos."""
+    """Текст пользователя с документами перед ним; с картинками — части OpenAI: картинка — пока
+    только id media, данные ставит fill_photos."""
     docs = "".join(f'<document name="{a["name"]}">\n{a["text"]}\n</document>\n\n'
                    for a in atts if a["kind"] == "document")
-    pics = [a for a in atts if a["kind"] == "image"][:MAX_IMAGES]
+    pics = [a for a in atts if a["kind"] == "image"]
     if not pics:
         return docs + text
     return [{"type": "text", "text": docs + text}] + [{"type": "image_url", "media_id": a["media_id"]} for a in pics]
@@ -179,18 +194,36 @@ def _content(text: str, atts: list):
 
 def _merge(first, second):
     """Два сообщения пользователя подряд (ответ между ними — ошибка или пустой): одно — тексты через
-    пустую строку, картинки — последние MAX_IMAGES. Шаблоны Gemma требуют чередования ролей."""
+    пустую строку, картинки — по порядку. Шаблоны Gemma требуют чередования ролей."""
     if isinstance(first, str) and isinstance(second, str):
         return "\n\n".join(t for t in (first, second) if t)
     parts = [p for c in (first, second) for p in ([{"type": "text", "text": c}] if isinstance(c, str) else c)]
     text = "\n\n".join(p["text"] for p in parts if p["type"] == "text" and p["text"])
-    return [{"type": "text", "text": text}] + [p for p in parts if p["type"] != "text"][-MAX_IMAGES:]
+    return [{"type": "text", "text": text}] + [p for p in parts if p["type"] != "text"]
+
+
+def _cap_images(messages: list[dict]) -> None:
+    """Не больше MAX_IMAGES картинок на весь запрос (gemma-abl больше не примет): остаются самые
+    свежие, прежние — пометкой DROPPED, чтобы модель знала о пропуске; в истории диалога фото целы."""
+    left = MAX_IMAGES
+    for m in reversed(messages):
+        if not isinstance(m["content"], list):
+            continue
+        parts = []
+        for p in reversed(m["content"]):
+            if p["type"] == "image_url":
+                if left:
+                    left -= 1
+                else:
+                    p = {"type": "text", "text": DROPPED}
+            parts.append(p)
+        m["content"] = parts[::-1]
 
 
 def compose(chat_id: str, upto: str) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
-    пользователя подряд сливаются. Синхронно и без файлов (идёт в транзакции хода): картинки —
-    частями с id media, данные — fill_photos после COMMIT."""
+    пользователя подряд сливаются, картинок — не больше MAX_IMAGES на весь запрос. Синхронно и без
+    файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT."""
     atts = _attachments(chat_id)
     out = []
     for row in _messages(chat_id):
@@ -205,6 +238,7 @@ def compose(chat_id: str, upto: str) -> list[dict]:
                 out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
             break
+    _cap_images(out)
     return out
 
 
@@ -292,7 +326,8 @@ def _too_big(tokens: int, limit: int) -> HTTPException:
 @dataclass(eq=False)
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
-    ("delta", текст), ("done", статус) или ("error", слова)."""
+    ("delta", текст), ("done", статус) или ("error", слова). Поток SSE закрылся (клиент ушёл) —
+    `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется."""
     user_id: int
     chat_id: str
     message_id: str
@@ -301,22 +336,28 @@ class StreamTask:
     messages: list
     content: str = ""
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    listening: bool = True
     task: asyncio.Task | None = None
     fresh: bool = False          # данные с прошлого маркера пингов
     saved: float = 0.0
+    deadline: float = math.inf   # срок всего ответа (STREAM_TOTAL_SEC), ставит _read
     shutdown: bool = False
+
+    def put(self, kind: str, data) -> None:
+        if self.listening:
+            self.queue.put_nowait((kind, data))
 
     async def _pings(self) -> None:
         while True:
             self.fresh = False
             await clock.SLEEP(PING_SEC)
             if not self.fresh:
-                self.queue.put_nowait(("ping", None))
+                self.put("ping", None)
 
     def _delta(self, text: str) -> None:
         self.content += text
         self.fresh = True
-        self.queue.put_nowait(("delta", text))
+        self.put("delta", text)
         now = clock.NOW()
         if now - self.saved >= SAVE_SEC:
             self.saved = now
@@ -324,8 +365,12 @@ class StreamTask:
                              (self.content, self.message_id))
 
     async def _read(self) -> str | None:
-        """Ответ модели до конца; итог — слова ошибки или None."""
+        """Ответ модели до конца; итог — слова ошибки или None. Конец — `[DONE]` или `finish_reason`:
+        поток, кончившийся без них (обрыв, HTML с кодом 200, пустой ответ), — ошибка, а не готовый
+        ответ. Обрезанный пределом длины модели, объёма (ANSWER_MAX) или срока (STREAM_TOTAL_SEC) —
+        ошибка с пометкой в тексте; прочитанное сохраняется."""
         payload, self.messages = {"model": self.model, "messages": self.messages, "stream": True}, []
+        self.deadline, ending = clock.NOW() + STREAM_TOTAL_SEC, None
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
@@ -333,10 +378,14 @@ class StreamTask:
                     await r.aread()
                     return upstream.gateway_error(r, self.conn.name)
                 async for line in r.aiter_lines():
+                    if clock.NOW() > self.deadline:
+                        self.content += CUT_TIME
+                        return "ответ шёл слишком долго — обрезан"
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
                     if data == "[DONE]":
+                        ending = ending or "stop"
                         break
                     try:
                         chunk = json.loads(data)
@@ -349,16 +398,28 @@ class StreamTask:
                         words = error.get("message") if isinstance(error, dict) else error
                         return f"модель прервала ответ: {str(words)[:300]}"
                     for choice in chunk.get("choices") or []:
-                        delta = choice.get("delta") if isinstance(choice, dict) else None
+                        if not isinstance(choice, dict):
+                            continue
+                        delta = choice.get("delta")
                         text = delta.get("content") if isinstance(delta, dict) else None
                         if isinstance(text, str) and text:
                             self._delta(text)
+                        if isinstance(choice.get("finish_reason"), str) and choice["finish_reason"]:
+                            ending = choice["finish_reason"]
+                    if len(self.content) > ANSWER_MAX:
+                        self.content = self.content[:ANSWER_MAX] + CUT_SIZE
+                        return "ответ слишком длинный — обрезан"
         except upstream.UpstreamRefused as e:
             return upstream.refused_words(e, self.conn)
         except httpx.TimeoutException:
             return f"шлюз не ответил за {STREAM_READ_SEC} с"
         except httpx.HTTPError as e:
             return f"шлюз недоступен: {type(e).__name__}"
+        if ending is None:
+            return "модель оборвала ответ: поток кончился без признака конца"
+        if ending == "length":
+            self.content += CUT_LENGTH
+            return "ответ обрезан пределом длины модели"
         return None
 
     async def run(self) -> None:
@@ -377,7 +438,7 @@ class StreamTask:
         if STREAMS.get(self.message_id) is self:
             del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
-        self.queue.put_nowait(("error", error) if error is not None else ("done", status))
+        self.put(*(("error", error) if error is not None else ("done", status)))
 
 
 STREAMS: dict[str, StreamTask] = {}
@@ -395,7 +456,7 @@ async def _cancel(streams: list[StreamTask]) -> None:
     for st in streams:
         status = "error" if st.shutdown else "stopped"
         if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status):
-            st.queue.put_nowait(("done", status))
+            st.put("done", status)
         if STREAMS.get(st.message_id) is st:
             del STREAMS[st.message_id]
 
@@ -432,19 +493,36 @@ def _sse(event: str, data: dict) -> str:
 
 
 async def _events(st: StreamTask, user_message_id: str):
-    yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": st.message_id})
-    while True:
-        kind, data = await st.queue.get()
-        if kind == "ping":
-            yield ": ping\n\n"
-        elif kind == "delta":
-            yield _sse("delta", {"text": data})
-        elif kind == "done":
-            yield _sse("done", {"status": data})
-            return
-        else:
-            yield _sse("error", {"message": data})
-            return
+    """Поток SSE хода; закрылся (клиент ушёл, ответ кончился) — очередь ответа больше не пополняется."""
+    try:
+        yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": st.message_id})
+        while True:
+            kind, data = await st.queue.get()
+            if kind == "ping":
+                yield ": ping\n\n"
+            elif kind == "delta":
+                yield _sse("delta", {"text": data})
+            elif kind == "done":
+                yield _sse("done", {"status": data})
+                return
+            else:
+                yield _sse("error", {"message": data})
+                return
+    finally:
+        st.listening = False
+        st.queue = asyncio.Queue()                   # непрочитанное — прочь
+
+
+class _EventStream(StreamingResponse):
+    """Поток SSE хода, чей генератор закрывается сразу, как ответ кончился. Отмена (клиент ушёл)
+    застаёт его либо в ожидании очереди — тогда finally `_events` срабатывает сам, — либо в `send`:
+    тогда генератор так и стоял бы на yield до сборщика мусора, и очередь ответа росла бы."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self.body_iterator.aclose()       # finally `_events` без await: отмена не мешает
 
 
 async def _ended(user_message_id: str, answer_id: str, status: str):
@@ -680,6 +758,14 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
             raise _too_big(tokens, limit)
+        # идущие ответы через сервер — по строкам `streaming` (и те, чей поток ещё не запущен)
+        if via == "server" and state.DB.execute(
+                "SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?"
+                " AND m.via = 'server' AND m.status = 'streaming'", (uid,)).fetchone()[0] >= USER_STREAMS:
+            log.info("чат %s: ход отклонён — у пользователя идёт предел ответов", chat_id[:8])
+            raise HTTPException(429, {"code": "streams", "message": (
+                f"Сразу идёт не больше {USER_STREAMS} ответов в разных диалогах — дождитесь одного из них"
+                " или остановите")})
         state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
                          " VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?, ?)",
                          (answer_id, chat_id, via, model, now, now))
@@ -713,8 +799,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
-    return StreamingResponse(_events(st, user_mid), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return _EventStream(_events(st, user_mid), media_type="text/event-stream",
+                        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}")

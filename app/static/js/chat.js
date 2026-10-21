@@ -7,7 +7,8 @@
  * Ход: вложения — POST /api/attachments по одному, затем POST /api/chats/<id>/turns. Подключение
  * через сервер отвечает потоком SSE (turn, delta, done, error); прямое — JSON с адресом и
  * сообщениями: браузер зовёт модель сам с токеном из /api/connections/<id>/token (токен — только
- * в памяти вкладки) и кладёт итог PUT .../messages/<id>. «Остановить»: через сервер — POST .../stop,
+ * в памяти вкладки) и кладёт итог PUT .../messages/<id>; поток без [DONE] и finish_reason — ошибка
+ * с прочитанным текстом, а не готовый ответ. «Остановить»: через сервер — POST .../stop,
  * прямое — обрыв запроса и PUT со статусом stopped.
  *
  * Ответы, которые читает эта вкладка (`jobs`), живут дольше экрана: ушли в другой диалог или
@@ -30,6 +31,7 @@ const POLL_MS = 2000;
 const BEAT_MS = 15000;           // признак жизни ответа из браузера; сервер ждёт его 90 с (ALIVE_SEC)
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
 const COPIED_MS = 1500;
+const CUT_LENGTH = '\n\n[ответ обрезан пределом длины модели]';   // как chat.CUT_LENGTH сервера
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
@@ -161,18 +163,30 @@ async function readBrowser(job, turn) {
     }
     if (response.status === 401 || response.status === 403) tokens.delete(job.connId);
     if (!response.ok) throw new Error(await serviceRefusal(response));
+    // конец ответа — [DONE] или finish_reason; поток без них (обрыв, HTML вместо потока, пустой
+    // ответ) — ошибка, а не готовый ответ; `length` — обрезан пределом длины модели
+    let ending = null;
     try {
       for await (const { data } of readSSE(response)) {
-        if (data === '[DONE]') break;
+        if (data === '[DONE]') {
+          ending ||= 'stop';
+          break;
+        }
         if (!data || typeof data !== 'object') continue;
         if (data.error) throw new Error(`Модель прервала ответ: ${String(data.error.message || data.error).slice(0, 300)}`);
         for (const choice of data.choices || []) {
           const text = choice && choice.delta && choice.delta.content;
           if (typeof text === 'string' && text) append(job, text);
+          if (choice && typeof choice.finish_reason === 'string' && choice.finish_reason) ending = choice.finish_reason;
         }
       }
     } catch (err) {
       throw err instanceof TypeError ? new Error('Связь с сервисом оборвалась') : err;
+    }
+    if (!ending) throw new Error('Модель оборвала ответ: поток кончился без признака конца');
+    if (ending === 'length') {
+      job.message.content += CUT_LENGTH;
+      throw new Error('Ответ обрезан пределом длины модели');
     }
   } catch (err) {
     if (err && err.name === 'AbortError') status = 'stopped';
