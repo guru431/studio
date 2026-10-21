@@ -57,7 +57,8 @@ export function withFirstPage(first, items, size) {
 
 /** Список с выбором «Расшифровки» и «Озвучки»: записи url страницами по size, старше — more();
  * идущие (running(item)) — опрос первой страницы раз в pollMs, подгруженные остаются; выбранная —
- * GET url/<id>. Номера чтений и выбора: запоздалый ответ прежнего не ляжет и вид не займёт.
+ * GET url/<id> (select(id, quiet): quiet — отказ молча, запись по ссылке могли удалить).
+ * Номера чтений и выбора: запоздалый ответ прежнего не ляжет и вид не займёт.
  * paint() — перерисовать список, show() — выбор занял вид (current), fail(err) — ошибка.
  * Ответ — { items, current, done, paging, load, more, refresh, select, forget(id), stop };
  * forget(id) — запись удалена на сервере (дальше — вид и load()). */
@@ -114,14 +115,14 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail }) 
     }
   }
 
-  async function select(id) {
+  async function select(id, quiet = false) {
     const mine = ++picking;
     wanted = id;
     let got;
     try {
-      got = await api('GET', `${url}/${id}`);
+      got = await api('GET', `${url}/${encodeURIComponent(id)}`);
     } catch (err) {
-      if (mine === picking) fail(err);
+      if (mine === picking && !quiet) fail(err);
       return;
     }
     if (!alive || mine !== picking) return;

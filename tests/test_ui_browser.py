@@ -2667,6 +2667,53 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
     assert not problems(r), problems(r)
 
 
+TR_TEXTS = "[...document.querySelectorAll('.tr-view .tr-text')].map(e => e.textContent)"
+TR_TXT = f"""(async () => {{ const id = document.querySelector('.tr-item').dataset.id;
+  return (await fetch('/api/transcripts/' + id + '/export?format=txt')).text(); }})()"""
+
+
+def transcribed(login, seconds=6.0):
+    """Вход, шлюз, загруженная и расшифрованная запись «Звонок.wav» (две реплики шлюза: 0 и 3 с)."""
+    return [*signin(login), ("wait", READY), add_gateway(),
+            *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+            put_audio("#transcribe-add input", wav_of(seconds)),
+            ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2")]
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
+    """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
+    реплике ставит плеер на её начало и подсвечивает её; «Сбросить правки» — исходное распознавание."""
+    login = f"tredit{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        set_value(".tr-turn[data-index='1'] .tr-edit-text", "Добрый вечер."),
+        ("eval", "marked", "!document.querySelector(\".tr-turn[data-index='1'] .tr-mark\").hidden"),
+        ("click", "#tr-save"), ("wait", "!document.querySelector('.tr-edit-text')"),
+        ("click", "#tr-names"), ("wait", is_open("#tr-names-dialog")),
+        set_value("#tr-names-dialog input[data-label='Собеседник 1']", "Иван"),
+        ("click", "#tr-names-save"), ("wait", "!document.querySelector('#tr-names-dialog')"),
+        ("eval", "who", "[...document.querySelectorAll('.tr-view .tr-who')].map(e => e.textContent)"),
+        ("eval", "texts", TR_TEXTS), ("eval", "txt", TR_TXT),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", ".tr-turn[data-index='1'] .tr-text"),
+        ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
+        ("wait", "document.querySelector('.tr-turn[aria-current=true]')?.dataset.index === '1'"),
+        ("click", "#tr-reset"), ("wait", is_open("#tr-reset-dialog")), ("click", "#tr-reset-confirm"),
+        ("wait", "!document.querySelector('#tr-reset')"),
+        ("eval", "after", TR_TEXTS),
+        ("eval", "who_after", "document.querySelector('.tr-view .tr-who').textContent")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["marked"] is True and v["fits"] is True
+    assert v["who"] == ["Иван · 00:00", "Собеседник 2 · 00:03"] and v["texts"] == ["Здравствуйте.", "Добрый вечер."]
+    assert v["txt"] == "Иван · 00:00\nЗдравствуйте.\n\nСобеседник 2 · 00:03\nДобрый вечер.\n"
+    assert v["after"] == ["Здравствуйте.", "Добрый день."] and v["who_after"] == "Собеседник 1 · 00:00"
+    assert not problems(r), problems(r)
+
+
 def test_voice_is_added_in_settings(browser, live):
     live.add_user("voicer")
     dialog = "#voice-dialog"

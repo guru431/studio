@@ -12,6 +12,13 @@
  * «Показать ещё»; опрос обновляет первую страницу, подгруженные остаются. Выбор — по номеру:
  * запоздалый ответ прежнего выбора вид не занимает (всё это — createPicker, feed.js). Раздел без
  * модели (ctx.hint): записи читаются, скачиваются и удаляются, вместо «Загрузить запись» — подсказка.
+ *
+ * Правка (спека 2026-10-21-studio-transcript-edit-chat-design, раздел 9): «Править» делает тексты
+ * реплик полями, «Сохранить» шлёт PATCH только изменённых номеров (ошибка — словами, черновик цел);
+ * черновик `editing` переживает перерисовку того же id (опрос, повторный выбор). «Имена» — окно меток,
+ * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст) ставит
+ * плеер на её начало, играющая — aria-current по timeupdate. «В чат ▾» → #/chat?transcript=<id>&ask=…;
+ * #/transcribe?id=<id> выбирает запись после загрузки списка (нет её — список как обычно).
  * Текст сервера — только textContent. */
 import { api, hooks, me } from './api.js';
 import { createPicker } from './feed.js';
@@ -23,6 +30,7 @@ const UPLOAD_MAX = 200 * 1024 * 1024;
 const ACCEPT = 'audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac';
 const RUNNING = new Set(['working', 'cancelling']);
 const FORMATS = [['txt', 'Текст .txt'], ['docx', 'Word .docx'], ['srt', 'Субтитры .srt']];
+const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Составить итоги'], ['tasks', 'Выделить решения и задачи']];
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -58,11 +66,14 @@ export function asText(segments) {
 }
 
 function build(view, ctx) {
+  let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
+  let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
   const records = createPicker({ url: '/api/transcripts', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
     show() {
       error.textContent = '';
+      if (editing && editing.id !== records.current.id) editing = null;
       paintList();
       paintView();
     },
@@ -152,10 +163,149 @@ function build(view, ctx) {
     });
   }
 
+  /* правка */
+  function adopt(got) {                              // ответ PATCH и DELETE — как GET
+    records.current = got;
+    paintView();
+  }
+
+  function confirmReset(item) {
+    const fail = el('p', { class: 'error' });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-reset-confirm' }, 'Сбросить');
+    const dialog = openDialog(root, { id: 'tr-reset-dialog', title: 'Сбросить правки?', actions: [yes],
+      body: [el('p', {}, 'Тексты реплик и имена вернутся к исходному распознаванию.'), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        const got = await api('DELETE', `/api/transcripts/${item.id}/edits`);
+        dialog.close();
+        editing = null;
+        adopt(got);
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  function namesDialog(item) {
+    const labels = [...new Set(item.segments.map((s) => s.label).filter(Boolean))];
+    const inputs = labels.map((label) => el('input', { class: 'input', 'data-label': label, maxlength: '60',
+      placeholder: label, 'aria-label': `Имя: ${label}`, value: item.names[label] || '' }));
+    const fail = el('p', { class: 'error' });
+    const save = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-names-save' }, 'Сохранить');
+    const dialog = openDialog(root, { id: 'tr-names-dialog', title: 'Имена собеседников', actions: [save],
+      body: [...labels.map((label, i) => el('label', { class: 'tr-name-row' }, el('span', {}, `${label} →`), inputs[i])), fail] });
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const names = Object.fromEntries(inputs.map((input) => [input.dataset.label, input.value.trim() || null]));
+      try {
+        const got = await api('PATCH', `/api/transcripts/${item.id}`, { names });
+        dialog.close();
+        adopt(got);
+      } catch (err) {
+        fail.textContent = words(err);
+        save.disabled = false;
+      }
+    });
+  }
+
+  async function saveEdits(item, save) {
+    const texts = {};
+    for (const [i, text] of editing.drafts) if (text !== item.segments[i].text) texts[i] = text;
+    if (!Object.keys(texts).length) {
+      editing = null;
+      paintView();
+      return;
+    }
+    save.disabled = true;
+    error.textContent = '';
+    try {
+      const got = await api('PATCH', `/api/transcripts/${item.id}`, { texts });
+      editing = null;
+      adopt(got);
+    } catch (err) {
+      error.textContent = words(err);                // черновик остаётся
+      save.disabled = false;
+    }
+  }
+
+  function grow(area) {
+    area.style.height = 'auto';
+    area.style.height = `${area.scrollHeight}px`;
+  }
+
+  function turnNode(s, i) {
+    const who = el('p', { class: 'tr-who' }, `${s.speaker ? `${s.speaker} · ` : ''}${clock(s.start)}`);
+    const original = s.edited ? s.original : s.text;
+    if (!editing) {
+      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, who, el('p', { class: 'tr-text' }, s.text),
+        s.edited ? el('p', { class: 'tr-mark' }, 'изменено') : null);
+      node.addEventListener('click', () => seek(s.start));
+      return node;
+    }
+    const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': `Реплика ${i + 1}` });
+    area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
+    const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, 'вернуть');
+    const mark = el('p', { class: 'tr-mark' }, 'изменено', revert);
+    const paintMark = () => { mark.hidden = area.value === original; };
+    area.addEventListener('input', () => {
+      editing.drafts.set(i, area.value);
+      grow(area);
+      paintMark();
+    });
+    revert.addEventListener('click', () => {
+      area.value = original;
+      area.dispatchEvent(new Event('input'));
+    });
+    paintMark();
+    return el('div', { class: 'tr-turn editing', 'data-index': String(i) }, who, area, mark);
+  }
+
+  /* плеер */
+  function seek(start) {
+    if (String(getSelection() || '')) return;      // выделяют текст — не перематывать
+    audio.currentTime = start;
+    audio.play().catch(() => {});                  // нет звука или запрет браузера — только перемотка
+  }
+
+  function playing() {
+    const segments = (records.current && records.current.segments) || [];
+    let at = -1;
+    if (audio && (audio.currentTime > 0 || !audio.paused)) {
+      segments.forEach((s, i) => { if (s.start <= audio.currentTime) at = i; });
+    }
+    for (const node of body.querySelectorAll('.tr-turn')) {
+      if (Number(node.dataset.index) === at) node.setAttribute('aria-current', 'true');
+      else node.removeAttribute('aria-current');
+    }
+  }
+
+  function playerOf(item) {
+    if (!audio || audio.dataset.id !== item.id) {
+      audio = el('audio', { class: 'tr-audio', controls: true, preload: 'metadata', 'data-id': item.id,
+        src: `/api/media/${encodeURIComponent(item.source_media_id)}` });
+      audio.addEventListener('timeupdate', playing);
+    }
+    return audio;
+  }
+
+  function chatMenu(item) {
+    const menu = el('div', { class: 'tr-formats tr-chat-menu', hidden: true }, ...ASKS.map(([ask, label]) => {
+      const b = el('button', { type: 'button', class: 'btn btn-sm', 'data-ask': ask }, label);
+      b.addEventListener('click', () => ctx.navigate(`chat?transcript=${encodeURIComponent(item.id)}&ask=${ask}`));
+      return b;
+    }));
+    const open = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-chat', 'aria-haspopup': 'true' }, 'В чат ▾');
+    open.addEventListener('click', () => { menu.hidden = !menu.hidden; });
+    return el('div', { class: 'tr-download-wrap' }, open, menu);
+  }
+
   function paintView() {
     const item = records.current;
     title.textContent = item ? item.name : 'Расшифровка';
     if (!item) {
+      editing = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите запись в списке.'
         : 'Загрузите запись разговора — студия расшифрует её по собеседникам.'));
       return;
@@ -203,6 +353,25 @@ function build(view, ctx) {
       const more = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-download', 'aria-haspopup': 'true' }, 'Скачать ▾');
       more.addEventListener('click', () => { formats.hidden = !formats.hidden; });
       acts.append(copy, el('div', { class: 'tr-download-wrap' }, more, formats));
+      if (item.segments && !editing) {
+        const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, 'Править');
+        edit.addEventListener('click', () => {
+          editing = { id: item.id, drafts: new Map() };
+          paintView();
+        });
+        acts.append(edit);
+      }
+      if (item.segments && item.segments.some((s) => s.label)) {
+        const names = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-names' }, 'Имена');
+        names.addEventListener('click', () => namesDialog(item));
+        acts.append(names);
+      }
+      if (item.edited) {
+        const reset = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-reset' }, 'Сбросить правки');
+        reset.addEventListener('click', () => confirmReset(item));
+        acts.append(reset);
+      }
+      acts.append(chatMenu(item));
     }
     if (!RUNNING.has(item.state)) {
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, 'Удалить');
@@ -210,14 +379,23 @@ function build(view, ctx) {
       acts.append(del);
     }
     nodes.push(acts);
-    nodes.push(el('audio', { class: 'tr-audio', controls: true, preload: 'metadata',
-      src: `/api/media/${encodeURIComponent(item.source_media_id)}` }));
+    nodes.push(playerOf(item));
     if (item.segments) {
-      nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map((s) => el('div', { class: 'tr-turn' },
-        el('p', { class: 'tr-who' }, `${s.speaker ? `${s.speaker} · ` : ''}${clock(s.start)}`),
-        el('p', { class: 'tr-text' }, s.text)))));
+      nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map(turnNode)));
+      if (editing) {
+        const save = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'tr-save' }, 'Сохранить');
+        const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit-cancel' }, 'Отмена');
+        save.addEventListener('click', () => saveEdits(item, save));
+        cancel.addEventListener('click', () => {
+          editing = null;
+          paintView();
+        });
+        nodes.push(el('div', { class: 'tr-edit-bar' }, save, cancel));
+      }
     }
     body.replaceChildren(...nodes);
+    for (const area of body.querySelectorAll('.tr-edit-text')) grow(area);
+    playing();
   }
 
   /* загрузка */
@@ -270,7 +448,8 @@ function build(view, ctx) {
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   paintView();
-  records.load();
+  const linked = ctx.query && ctx.query.get('id');     // #/transcribe?id=<id> — ссылка «к записи» из чата
+  records.load().then(() => { if (linked) select(linked, true); });
 
   return {
     destroy() {
