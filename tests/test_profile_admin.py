@@ -1,11 +1,15 @@
 """Профиль (app/profile.py), панель администратора (app/admin.py), удаление истории (app/history.py)."""
+import logging
+
 import pytest
+from cryptography.fernet import Fernet
 
 import auth
 import clock
 import sections
 import security
 import state
+import web
 from conftest import add_connection, add_gateway, login, make_user, signin
 
 
@@ -59,9 +63,9 @@ def test_me_carries_csrf_and_profile(studio):
     me = studio.c.get("/api/me").json()
     assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
-    assert me["screen_lock"] is False
+    assert me["screen_lock"] is False and me["exa_key"] is False
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
-                       "csrf", "capabilities", "screen_lock"}
+                       "csrf", "capabilities", "screen_lock", "exa_key"}
 
 
 def test_theme_is_validated(studio):
@@ -157,6 +161,61 @@ def test_history_wipe_takes_only_ones_own(studio, env):
     assert studio.c.delete("/api/history").status_code == 200
     assert history_rows(uid) == 0 and not mine.exists()
     assert history_rows(other) == len(HISTORY) and theirs.exists()
+
+
+EXA_KEY = "exa-secret-0123456789abcdef"
+
+
+def stored_exa_key(uid):
+    return state.DB.execute("SELECT exa_key FROM users WHERE id = ?", (uid,)).fetchone()[0]
+
+
+def test_exa_key_is_stored_encrypted_and_never_returned(studio, caplog):
+    """Ключ Exa (спека internet, 6.2) — шифром, как токены подключений; наружу — только «есть/нет»,
+    в журнал — только событие с id."""
+    uid = make_user(studio, "owner"); bob = make_user(studio, "bob"); signin(studio, "owner")
+    with caplog.at_level(logging.INFO, logger="studio"):
+        r = studio.c.put("/api/me/exa-key", json={"key": f"  {EXA_KEY} "})
+        assert r.status_code == 204
+        blob = stored_exa_key(uid)
+        assert EXA_KEY.encode() not in blob and security.decrypt(blob) == EXA_KEY
+        assert web.has_exa_key(uid) and web.exa_key(uid) == EXA_KEY
+        me = studio.c.get("/api/me")
+        assert me.json()["exa_key"] is True and EXA_KEY not in me.text
+        for bad in ("", "   ", "k" * 201):
+            r = studio.c.put("/api/me/exa-key", json={"key": bad})
+            assert r.status_code == 422 and code(r) == "exa_key" and "k" * 201 not in r.text
+        assert security.decrypt(stored_exa_key(uid)) == EXA_KEY             # отказ ключ не трогает
+        assert studio.c.put("/api/me/exa-key", json={"key": "k" * 200}).status_code == 204
+        signin(studio, "bob")
+        assert studio.c.get("/api/me").json()["exa_key"] is False and stored_exa_key(bob) is None
+        assert not web.has_exa_key(bob) and web.exa_key(bob) is None
+        signin(studio, "owner")
+        assert studio.c.delete("/api/me/exa-key").status_code == 204
+        assert studio.c.get("/api/me").json()["exa_key"] is False and stored_exa_key(uid) is None
+    assert EXA_KEY not in caplog.text and "k" * 200 not in caplog.text
+    assert f"пользователь {uid}: ключ Exa сохранён" in caplog.text and f"пользователь {uid}: ключ Exa убран" in caplog.text
+
+
+def test_exa_key_that_does_not_decrypt_says_so(studio, monkeypatch):
+    """Смена STUDIO_DATA_KEY: ключ есть, но не читается — слова для человека, а не 500."""
+    uid = make_user(studio, "owner")
+    state.DB.execute("UPDATE users SET exa_key = ? WHERE id = ?",
+                     (Fernet(Fernet.generate_key()).encrypt(EXA_KEY.encode()), uid))
+    assert web.has_exa_key(uid)
+    with pytest.raises(web.ToolError) as e:
+        web.exa_key(uid)
+    assert e.value.args[0] == "ключ Exa не читается — введите его заново в Настройках"
+
+
+def test_exa_key_survives_the_history_wipe(studio, env):
+    """Ключ — настройка, а не история (как пресеты): «Удалить всю историю» его не трогает."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    add_history(studio, env, uid)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    assert studio.c.delete("/api/history").status_code == 200
+    assert history_rows(uid) == 0 and web.exa_key(uid) == EXA_KEY
+    assert studio.c.get("/api/me").json()["exa_key"] is True
 
 
 # ---- панель администратора -------------------------------------------------

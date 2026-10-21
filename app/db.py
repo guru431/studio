@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 13).
+"""Соединение SQLite и схема базы (версия 14).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 13
+VERSION = 14
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -174,6 +174,15 @@ CREATE TRIGGER search_users_ad AFTER DELETE ON users BEGIN
   DELETE FROM search_docs WHERE user_id = old.id; END;
 """
 
+#: интернет в чате (web.py, спека 2026-10-21-studio-chat-internet, 6.1): кнопка «Интернет» диалога, время
+#: подтверждения «расшифровка и Exa» (NULL — не было), ключ Exa учётки шифром security.encrypt (NULL — нет;
+#: настройка, а не история), шаги инструментов ответа ассистента JSON (NULL — без инструментов)
+INTERNET_14 = """ALTER TABLE chats ADD COLUMN web INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chats ADD COLUMN web_consent REAL;
+ALTER TABLE users ADD COLUMN exa_key BLOB;
+ALTER TABLE messages ADD COLUMN tools TEXT;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -216,7 +225,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -273,6 +282,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     12: PHOTO_12,
     # поиск по истории: документы, FTS5 и триггеры; текст расшифровок
     13: SEARCH_13,
+    # интернет в чате: кнопка и подтверждение диалога, ключ Exa учётки, шаги инструментов ответа
+    14: INTERNET_14,
 }
 
 

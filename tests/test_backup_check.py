@@ -74,7 +74,7 @@ def test_verify_backup_of_a_whole_copy(base, env, monkeypatch):
     assert out["backup"] == "studio-20261020.db" and out["size"] == copy.stat().st_size
     assert out["at"] == copy.stat().st_mtime
     assert out["integrity"] == "ok" and out["schema_from"] == out["schema_to"] == db.VERSION and out["users"] == 1
-    assert out["tokens"] == {"ok": 3, "failed": 0}
+    assert out["tokens"] == {"ok": 3, "failed": 0} and out["exa_keys"] == {"ok": 0, "failed": 0}
     assert out["files"] == {"state": "ok", "present": 2, "missing": 1, "checked": 3, "total": 3}
     assert digest(env.db_path) == working                          # рабочая база не тронута
     assert tmp_files(env) == []                                    # временной копии не осталось
@@ -142,6 +142,20 @@ def test_verify_backup_with_another_key_cannot_read_the_tokens(base, env, monkey
     out = manage.verify_backup()
     assert out["ok"] is False and out["tokens"] == {"ok": 0, "failed": 3}
     assert any("STUDIO_DATA_KEY" in p for p in out["problems"])
+
+
+def test_verify_backup_checks_the_exa_keys_too(base, env, monkeypatch):
+    """Ключи Exa учёток — тем же STUDIO_DATA_KEY: чужим ключом зашифрованный — провал словами, без значения."""
+    add_rows(base, users=3, files=())
+    ids = [r[0] for r in base.execute("SELECT id FROM users ORDER BY id")]
+    base.execute("UPDATE users SET exa_key = ? WHERE id = ?", (security.encrypt("exa-good-key"), ids[0]))
+    base.execute("UPDATE users SET exa_key = ? WHERE id = ?",
+                 (Fernet(Fernet.generate_key()).encrypt(b"exa-alien-key"), ids[1]))
+    backup_of(base, env, monkeypatch)
+    out = manage.verify_backup()
+    assert out["ok"] is False and out["exa_keys"] == {"ok": 1, "failed": 1} and out["tokens"] == {"ok": 3, "failed": 0}
+    assert "ключи Exa не расшифрованы: 1 из 2 — STUDIO_DATA_KEY не тот, что у копии" in out["problems"]
+    assert "exa-" not in json.dumps(out, ensure_ascii=False)
 
 
 def test_verify_backup_with_the_share_down(base, env, monkeypatch, tmp_path):
