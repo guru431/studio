@@ -2,12 +2,16 @@
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
- * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query }, id — хвост адреса
+ * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
  * (#/video?source=<media_id> — «Оживить» из раздела фото). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
- * Раздел без готовой модели (me.capabilities.photo === false) открывается подсказкой со ссылкой
- * на настройки раздела. Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты).
+ * Раздел без готовой модели (me.capabilities.photo === false) открывается всё равно — история
+ * читается, скачивается и удаляется; hint(cls) — подсказка со ссылкой на настройки раздела, её
+ * раздел ставит вместо поля создания (у готового раздела hint — null). Готовность
+ * берётся при открытии раздела: открытый не пересобирается, когда профиль перечитан.
+ * Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты). Профиль при запуске
+ * не пришёл (нет связи) — «Повторить», и сам повтор при появлении сети и возвращении на экран.
  *
  * Тема — кнопкой #theme-toggle над аватаром: из «auto» первое нажатие ставит противоположную видимой,
  * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. Тема и вид ленты — в учётке: вернувшись
@@ -81,14 +85,12 @@ function notice(iconName, text, kind, link) {
   return box;
 }
 
-function hintModule(section) {
-  return {
-    mount(node) {
-      node.replaceChildren(head(SECTIONS[section].title),
-        notice(section, HINTS[section], 'hint', { href: `#/settings/${section}`, text: 'Открыть настройки' }));
-    },
-    unmount() {},
-  };
+/** Подсказка раздела без модели: новый узел на каждый вызов, `hint-bar` — полосой на месте поля
+ * создания, без него — во весь пустой вид; раздел готов — null. */
+function hintOf(section) {
+  if (!(section in HINTS) || me.capabilities[section]) return null;
+  return (cls = '') => notice(section, HINTS[section], `hint ${cls}`.trim(),
+    { href: `#/settings/${section}`, text: 'Открыть настройки' });
 }
 
 function navigate(path) {
@@ -180,7 +182,7 @@ async function render() {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
-  const ctx = { me, navigate, id: route.id, query: route.query };
+  const ctx = { me, navigate, id: route.id, query: route.query, hint: hintOf(route.section) };
   if (current && current.section === route.section && current.module.update) {
     current.module.update(ctx);
     return;
@@ -188,8 +190,7 @@ async function render() {
   const mine = ++renders;
   let module;
   try {
-    module = route.section in HINTS && !me.capabilities[route.section]
-      ? hintModule(route.section) : await SECTIONS[route.section].load();
+    module = await SECTIONS[route.section].load();
   } catch {
     module = { mount(node) { node.replaceChildren(head(SECTIONS[route.section].title),
       notice('wait', 'Раздел не загрузился. Проверьте связь и обновите страницу.', 'empty')); }, unmount() {} };
@@ -238,11 +239,44 @@ async function start() {
   try {
     await loadMe();
   } catch (err) {
-    if (err.code !== 'login') {
-      view.replaceChildren(notice('wait', `Студия не открылась: ${err.message}. Обновите страницу.`, 'empty'));
-    }
+    if (err.code !== 'login') retryLater(err, worker);
     return;
   }
+  await enter(worker);
+}
+
+/** Профиль не пришёл (нет связи): в PWA обновить страницу нечем — «Повторить», а ещё сам повтор при
+ * появлении сети и возвращении на экран. По таймеру не повторяет: без связи запросы не копятся. */
+function retryLater(first, worker) {
+  let asking = false;
+  const say = (err) => {
+    const box = notice('wait', `Студия не открылась: ${err.message}.`, 'empty');
+    const again = el('button', { type: 'button', class: 'btn btn-accent', id: 'start-retry' }, 'Повторить');
+    again.addEventListener('click', retry);
+    box.append(again);
+    view.replaceChildren(box);
+  };
+  async function retry() {
+    if (asking || document.visibilityState !== 'visible') return;
+    asking = true;
+    try {
+      await loadMe();
+    } catch (err) {
+      asking = false;
+      if (err.code !== 'login') say(err);
+      return;
+    }
+    window.removeEventListener('online', retry);
+    document.removeEventListener('visibilitychange', retry);
+    await enter(worker);
+  }
+  say(first);
+  window.addEventListener('online', retry);
+  document.addEventListener('visibilitychange', retry);
+}
+
+/** Профиль есть: тема, меню, раздел по адресу. */
+async function enter(worker) {
   applyTheme(me.theme);
   setupMenu();
   setupTheme();

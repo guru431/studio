@@ -9,6 +9,7 @@
  * из раздела «Фото» адресом #/video?source=<media_id>). Ведёт ролик наблюдатель службы; идущие
  * ролики ленты (queued, in_progress) страница опрашивает GET /api/videos/<id> раз в POLL_MS — и
  * найденные после перезагрузки тоже. Роликов может идти несколько: очередь — у шлюза.
+ * Раздел без модели (ctx.hint): лента и просмотр — как всегда, вместо поля промпта — подсказка.
  * Текст сервера — только textContent. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
@@ -109,14 +110,14 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, modelPick, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
       el('span', { class: 'grow' }), attachMic(prompt, micNote), go));
-  const root = el('div', { class: 'video' }, head, feedBox, error, form);
+  const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form);
   view.append(root);
 
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
     load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
-    empty: 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
+    empty: ctx.hint ? 'Здесь появятся ваши ролики.' : 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
     head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
   });
 

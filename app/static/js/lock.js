@@ -15,7 +15,7 @@
  * Отметка без ответа дольше MARK_SEC — как без связи. Под шторкой запись голоса отменяется
  * (mic.js), при запирании плееры встают на паузу; после отпирания картинки и плееры /api/media/…,
  * получившие 423 мимо api.js, грузятся заново. CSRF до профиля — из GET /api/lock; не пришёл
- * (холодный старт без связи) — подготовка входа и пароль берут его заново.
+ * (холодный старт без связи) — отметка, подготовка входа и пароль берут его заново.
  *
  * iOS 16+: без PublicKeyCredential.parse*FromJSON и toJSON (они с iOS 18.4) — свои base64url.
  * navigator.credentials.* зовётся прямо в обработчике нажатия, без ожидания сети перед ним: Safari
@@ -155,6 +155,7 @@ async function lockState() {
 async function mark() {
   if (waiting) return null;
   try {
+    if (!me && !token) await lockState();          // холодный старт без связи: без CSRF отметка получила бы 403
     const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch() },
       { signal: AbortSignal.timeout(MARK_SEC * 1000) });
     if (locked) waitOpen();

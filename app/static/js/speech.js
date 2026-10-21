@@ -6,6 +6,7 @@
  * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
  * Список и выбор — как у «Расшифровки»: страницы по PAGE с «Показать ещё», выбор по номеру.
+ * Раздел без модели (ctx.hint): озвучки слушаются, скачиваются и удаляются, вместо поля текста — подсказка.
  * Текст сервера — только textContent. */
 import { api } from './api.js';
 import { pageQuery, withFirstPage } from './feed.js';
@@ -37,7 +38,7 @@ function day(ts) {
   return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
-function build(view) {
+function build(view, ctx) {
   let items = [];
   let current = null;
   let links = [];
@@ -70,7 +71,7 @@ function build(view) {
   const micNote = el('div', { class: 'mic-note' });
   const form = el('form', { class: 'composer', id: 'speech-composer' }, text, micNote, hint,
     el('div', { class: 'row' }, modelPick, voiceBox, count, el('span', { class: 'grow' }), attachMic(text, micNote), go));
-  const main = el('section', { class: 'split-main' }, head, error, body, form);
+  const main = el('section', { class: 'split-main' }, head, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
 
@@ -243,7 +244,8 @@ function build(view) {
   function paintView() {
     const item = current;
     if (!item) {
-      body.replaceChildren(el('p', { class: 'muted tr-empty' }, 'Напишите или продиктуйте текст внизу и нажмите «Озвучить».'));
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите озвучку в списке.'
+        : 'Напишите или продиктуйте текст внизу и нажмите «Озвучить».'));
       return;
     }
     const nodes = [el('p', { class: 'sp-text' }, item.text)];
@@ -326,8 +328,8 @@ function build(view) {
   };
 }
 
-export function mount(view) {
-  screen = build(view);
+export function mount(view, ctx) {
+  screen = build(view, ctx);
 }
 
 export function unmount() {

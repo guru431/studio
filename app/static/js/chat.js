@@ -18,6 +18,8 @@
  * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
  * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>).
+ * Раздел без модели (ctx.hint): диалоги читаются, переименовываются и удаляются; новый диалог —
+ * подсказка вместо поля ввода, в прежнем поле ввода есть (ход его пару не перепроверяет).
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
@@ -207,7 +209,10 @@ async function readBrowser(job, turn) {
   try {
     await api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, { content: job.message.content, status });
   } catch (err) {
-    if (err.code !== 'state' && err.code !== 'gone') job.message.error = `Ответ не сохранился: ${words(err)}`;
+    if (err.code !== 'state' && err.code !== 'gone') {
+      job.message.status = 'error';                 // готовый, но не сохранённый — иначе строка под ним пуста
+      job.message.error = `Ответ не сохранился: ${words(err)}`;
+    }
   }
   finish(job);
 }
@@ -592,9 +597,10 @@ function build(view, ctx) {
     }
     syncBusy();
     paintChip();
+    form.hidden = id === null && !!ctx.hint;         // без модели новый диалог не начать; прежний — по правилам сервера
     if (id === null) {
-      feed.replaceChildren(emptyNote());
-      input.focus();
+      feed.replaceChildren(ctx.hint ? ctx.hint() : emptyNote());
+      if (!ctx.hint) input.focus();
       return;
     }
     feed.replaceChildren(el('p', { class: 'muted feed-note' }, 'Загружаю диалог…'));

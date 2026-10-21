@@ -10,7 +10,8 @@
  * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Идущие записи опрашиваются
  * раз в POLL_MS. Список — страницами по PAGE (курсор — created и id последней, feed.js), старше —
  * «Показать ещё»; опрос обновляет первую страницу, подгруженные остаются. Выбор — по номеру:
- * запоздалый ответ прежнего выбора вид не занимает. Текст сервера — только textContent. */
+ * запоздалый ответ прежнего выбора вид не занимает. Раздел без модели (ctx.hint): записи читаются,
+ * скачиваются и удаляются, вместо «Загрузить запись» — подсказка. Текст сервера — только textContent. */
 import { api, hooks, me } from './api.js';
 import { pageQuery, withFirstPage } from './feed.js';
 import { el, openDialog, words } from './ui.js';
@@ -71,7 +72,8 @@ function build(view, ctx) {
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), 'Загрузить запись', input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': 'Записи' });
-  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, add, progress, list);
+  // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
+  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Записи',
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'));
@@ -79,7 +81,7 @@ function build(view, ctx) {
   const head = el('header', { class: 'head' }, toggle, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
-  const main = el('section', { class: 'split-main' }, head, error, body);
+  const main = el('section', { class: 'split-main' }, head, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
 
@@ -220,7 +222,8 @@ function build(view, ctx) {
     const item = current;
     title.textContent = item ? item.name : 'Расшифровка';
     if (!item) {
-      body.replaceChildren(el('p', { class: 'muted tr-empty' }, 'Загрузите запись разговора — студия расшифрует её по собеседникам.'));
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите запись в списке.'
+        : 'Загрузите запись разговора — студия расшифрует её по собеседникам.'));
       return;
     }
     const nodes = [];
