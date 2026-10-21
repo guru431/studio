@@ -99,7 +99,7 @@ def exa_key(user_id: int) -> "str | None":
     try:
         return security.decrypt(row[0])
     except InvalidToken:
-        raise ToolError("ключ Exa не читается — введите его заново в Настройках") from None
+        raise ToolError(NO_KEY) from None
 
 
 def _exa_error(r: httpx.Response) -> str:
@@ -323,3 +323,61 @@ async def youtube(url: str) -> dict:
     return {"kind": "youtube", "id": vid, "url": canon, "title": title, "channel": channel,
             "duration": duration, "lang": lang,
             "text": f"{title} — {channel}, {_clock(duration)}, язык {lang}\n{canon}\n\n{body}"}
+
+
+# ---- вызов инструмента моделью -----------------------------------------------------------
+
+LABEL_MAX = 200
+NO_KEY = "ключ Exa не читается — введите его заново в Настройках"
+
+
+def args_of(arguments: str) -> "dict | None":
+    """Аргументы вызова модели: JSON-объект; иначе None."""
+    try:
+        args = json.loads(arguments)
+    except ValueError:
+        return None
+    return args if isinstance(args, dict) else None
+
+
+def label(kind: str, args: dict) -> str:
+    """Что показать, пока идёт инструмент: запрос, адрес или «субтитры <адрес>», до LABEL_MAX знаков."""
+    value = args.get(_SPECS[kind][2]) if kind in _SPECS else None
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    value = " ".join(value.split())
+    return (f"субтитры {value}" if kind == "youtube" else value)[:LABEL_MAX]
+
+
+def for_model(step: dict) -> str:
+    """Результат шага, как его получает модель (`role: tool`)."""
+    return f"Ошибка инструмента: {step['error']}" if "error" in step else step["text"]
+
+
+def public(step: dict) -> dict:
+    """Шаг для страницы — без текста для модели."""
+    return {k: v for k, v in step.items() if k != "text"}
+
+
+async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] | None" = None) -> dict:
+    """Шаг инструмента по вызову модели: имя функции и аргументы JSON. Неизвестное имя (или вид не из `kinds`,
+    которые модели давали) и битые аргументы — шаг `unknown` с ошибкой; неудача инструмента — шаг с `error`.
+    Не бросает ToolError (и сбой инструмента — тоже шаг); отмена («Стоп») идёт насквозь."""
+    kind = NAMES.get(name)
+    if kind is None or (kinds is not None and kind not in kinds):
+        return {"kind": "unknown", "error": "модель вызвала инструмент, которого у неё нет"}
+    args, param = args_of(arguments), _SPECS[kind][2]
+    value = args.get(param) if args is not None else None
+    if not isinstance(value, str) or not value.strip():
+        return {"kind": "unknown", "error": f"модель вызвала {name} с неверными аргументами"}
+    value = value.strip()
+    try:
+        if kind == "youtube":
+            return await youtube(value)
+        if key is None:
+            raise ToolError(NO_KEY)
+        return await (search(key, value) if kind == "search" else page(key, value))
+    except ToolError as e:
+        return {"kind": kind, param: value, "error": e.args[0]}
+    except Exception as e:                       # noqa: BLE001 — сбой инструмента не рвёт ответ
+        return {"kind": kind, param: value, "error": f"сбой инструмента: {type(e).__name__}"}

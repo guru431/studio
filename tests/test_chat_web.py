@@ -1,8 +1,15 @@
 """Кнопка «Интернет» диалога (`chats.web`) и описания инструментов (спека 2026-10-21-studio-chat-internet,
-6.3 и 6.8)."""
+6.3 и 6.8), цикл инструментов в ответе через сервер (6.3, 6.4, 6.7, 6.9)."""
+import asyncio
+import json
+import logging
+
+import chat
+import state
 import web
-from conftest import add_connection, add_gateway, make_user, signin
-from test_chat import new_chat
+from conftest import T0, add_connection, add_gateway, make_user, signin
+from test_chat import events_of, messages, new_chat, sse, turn
+from test_web import CANON, FakeYtDlp
 
 EXA_KEY = "exa-test-key"
 
@@ -83,3 +90,299 @@ def test_specs_are_openai_functions_with_one_required_string():
         assert schema["type"] == "object" and list(schema["properties"]) == [p] and schema["required"] == [p]
         assert schema["properties"][p]["type"] == "string" and schema["properties"][p]["description"].strip()
     assert web.specs([]) == []
+
+
+# ---- цикл инструментов в ответе через сервер ------------------------------------------------
+
+ALL = "web_search, read_page, youtube_subtitles"
+
+
+def web_chat(s, key=True) -> str:
+    """Диалог шлюза с включённым «Интернетом»; key — с ключом Exa у учётки."""
+    add_gateway(s)
+    if key:
+        assert s.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    cid = new_chat(s)
+    patch(s, cid, web=True)
+    return cid
+
+
+def call(name, **args) -> tuple[str, str]:
+    return name, json.dumps(args, ensure_ascii=False)
+
+
+def steps_of(answer_id) -> "list | None":
+    raw = state.DB.execute("SELECT tools FROM messages WHERE id = ?", (answer_id,)).fetchone()[0]
+    return None if raw is None else json.loads(raw)
+
+
+def noted(tools=ALL) -> dict:
+    return {"role": "system", "content": f"{chat.today_line(T0)}\n\n" + chat.WEB_NOTE.format(tools=tools)}
+
+
+def names(request) -> list[str]:
+    return [t["function"]["name"] for t in request.get("tools", [])]
+
+
+def test_web_note_goes_only_with_tools(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="новости")]}, ["Готово."]]
+    sse(turn(studio, cid, "Что нового?"))
+    first, second = studio.gw.chat_requests
+    assert first["messages"][0] == second["messages"][0] == noted()      # одна строка: история не тронута
+    assert names(first) == names(second) == ALL.split(", ") and first["tool_choice"] == "auto"
+    patch(studio, cid, web=False)
+    sse(turn(studio, cid, "А ещё?"))
+    third = studio.gw.chat_requests[2]
+    assert "tools" not in third and "tool_choice" not in third
+    assert third["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
+
+
+def test_web_off_sends_no_tools_and_calls_nothing(studio, monkeypatch):
+    """Анти-цель 1: «Интернет» выключен — ни `tools`, ни Exa, ни yt-dlp, даже если в тексте ссылка YouTube и
+    модель сама шлёт вызовы."""
+    fake = FakeYtDlp()
+    monkeypatch.setattr(web, "RUN", fake)
+    add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"text": ["Смотрю"], "tool_calls": [call("youtube_subtitles", url=CANON),
+                                                                 call("web_search", query="ролик")]}]
+    events = sse(turn(studio, cid, f"Перескажи {CANON}"))
+    (request,) = studio.gw.chat_requests
+    assert "tools" not in request and "tool_choice" not in request
+    assert request["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
+    assert studio.gw.exa_requests == [] and fake.calls == []
+    assert "tool" not in [e for e, _ in events]
+    answer = messages(studio, cid)[1]
+    assert answer["tools"] == [] and steps_of(answer["id"]) is None
+
+
+def test_model_searches_and_answers(studio):
+    cid = web_chat(studio)
+    query = "последняя версия Python"
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query=query)]}, ["Python ", "3.14."]]
+    events = [(e, d) for e, d in sse(turn(studio, cid, "Какая сейчас версия Python? Мой пароль 12345"))
+              if e != "ping"]
+    assert [e for e, _ in events] == ["turn", "tool", "delta", "delta", "done"]
+    assert events[1][1] == {"kind": "search", "label": query} and events[-1][1] == {"status": "done"}
+    # в Exa — только запрос модели и ключ
+    assert studio.gw.exa_requests == [("/search", {"query": query, "type": "auto", "numResults": web.SEARCH_RESULTS,
+                                                   "contents": {"highlights": True}}, EXA_KEY)]
+    answer = messages(studio, cid)[1]
+    (step,) = steps_of(answer["id"])
+    assert step["kind"] == "search" and step["query"] == query and "error" not in step
+    first, second = studio.gw.chat_requests
+    assistant, result = second["messages"][2:]
+    (tc,) = assistant["tool_calls"]
+    assert assistant == {"role": "assistant", "content": None, "tool_calls": [
+        {"id": tc["id"], "type": "function", "function": {"name": "web_search", "arguments": json.dumps(
+            {"query": query}, ensure_ascii=False)}}]}
+    assert tc["id"].startswith("chatcmpl-tool-")
+    assert result == {"role": "tool", "tool_call_id": tc["id"], "content": step["text"]}
+    assert "Download Python" in step["text"]
+    assert (answer["status"], answer["content"]) == ("done", "Python 3.14.")
+    assert answer["tools"] == [web.public(step)] and "text" not in answer["tools"][0]
+    assert first["messages"][1:] == [{"role": "user", "content": "Какая сейчас версия Python? Мой пароль 12345"}]
+
+
+def test_answer_without_search_when_not_needed(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [["Привет!"]]
+    events = sse(turn(studio, cid, "Привет"))
+    (request,) = studio.gw.chat_requests
+    assert names(request) == ALL.split(", ") and "tool" not in [e for e, _ in events]
+    assert studio.gw.exa_requests == []
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"], answer["tools"]) == ("done", "Привет!", [])
+    assert steps_of(answer["id"]) is None
+
+
+def test_broken_or_unknown_calls_are_error_steps_and_the_model_goes_on(studio):
+    """Review Focus 1: битый JSON аргументов, неизвестное имя, не та форма — шаг-ошибка словами, модель отвечает
+    дальше; битые аргументы в запрос не возвращаются (vLLM разбирает их и ответил бы 400)."""
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [("web_search", '{"query": '), ("delete_everything", '{"x": 1}'),
+                                             ("read_page", '{"url": 42}'), ("web_search", '["a"]'),
+                                             ("web_search", '{"query": "  "}')]},
+                             ["Не вышло."]]
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("done", {"status": "done"})
+    answer = messages(studio, cid)[1]
+    steps = steps_of(answer["id"])
+    assert [s["kind"] for s in steps] == ["unknown"] * 5 and all(s["error"] for s in steps)
+    assert studio.gw.exa_requests == []
+    second = studio.gw.chat_requests[1]["messages"]
+    assistant, results = second[2], second[3:]
+    assert [tc["function"]["arguments"] for tc in assistant["tool_calls"]] == [
+        "{}", '{"x": 1}', '{"url": 42}', "{}", '{"query": "  "}']
+    assert [r["tool_call_id"] for r in results] == [tc["id"] for tc in assistant["tool_calls"]]
+    assert all(r["content"].startswith("Ошибка инструмента: ") for r in results)
+    assert (answer["status"], answer["content"]) == ("done", "Не вышло.")
+
+
+def test_calls_of_one_round_run_in_order_each_with_its_id(studio):
+    """Review Focus 2: несколько вызовов в одном круге — по порядку, каждому свой `role: tool`."""
+    cid = web_chat(studio)
+    url = "https://example.test/a"
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q1"), call("read_page", url=url)]}, ["ok"]]
+    events = sse(turn(studio, cid))
+    assert [d for e, d in events if e == "tool"] == [{"kind": "search", "label": "q1"}, {"kind": "page", "label": url}]
+    assert [p for p, _, _ in studio.gw.exa_requests] == ["/search", "/contents"]
+    assert studio.gw.exa_requests[1][1]["urls"] == [url]
+    steps = steps_of(messages(studio, cid)[1]["id"])
+    assert [s["kind"] for s in steps] == ["search", "page"]
+    second = studio.gw.chat_requests[1]["messages"]
+    ids = [tc["id"] for tc in second[2]["tool_calls"]]
+    assert len(set(ids)) == 2
+    assert second[3:] == [{"role": "tool", "tool_call_id": i, "content": s["text"]} for i, s in zip(ids, steps)]
+
+
+def test_text_before_the_calls_stays_apart_from_the_answer(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"text": ["Сейчас поищу."], "tool_calls": [call("web_search", query="q")]}, ["Нашёл."]]
+    events = sse(turn(studio, cid))
+    assert "".join(d["text"] for e, d in events if e == "delta") == "Сейчас поищу.\n\nНашёл."
+    assert messages(studio, cid)[1]["content"] == "Сейчас поищу.\n\nНашёл."
+    assistant = studio.gw.chat_requests[1]["messages"][2]
+    assert assistant["role"] == "assistant" and assistant["content"] == "Сейчас поищу."
+
+
+def test_rounds_are_capped(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query=f"q{n}")]} for n in range(chat.TOOL_ROUNDS)]
+    events = sse(turn(studio, cid))
+    requests = studio.gw.chat_requests
+    assert len(requests) == chat.TOOL_ROUNDS + 1
+    assert all(names(r) == ALL.split(", ") and r["messages"][0] == noted() for r in requests[:-1])
+    assert "tools" not in requests[-1] and "tool_choice" not in requests[-1]
+    assert requests[-1]["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
+    assert sum(m["role"] == "tool" for m in requests[-1]["messages"]) == chat.TOOL_ROUNDS
+    answer = messages(studio, cid)[1]
+    assert len(steps_of(answer["id"])) == chat.TOOL_ROUNDS
+    assert (answer["status"], answer["content"]) == ("done", "Здравствуйте!") and events[-1][0] == "done"
+
+
+def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
+    """Review Focus 4: страница не помещается в остаток контекста модели — обрезка с пометкой, а не 400 модели;
+    шаг хранит то, что получила модель. Остатка нет вовсе — ошибка инструмента словами."""
+    limit = chat.RESERVE_TOKENS + 1000
+    monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": limit})
+    cid = web_chat(studio)
+    studio.gw.exa_page_text = "слово " * 5000
+    studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
+    assert sse(turn(studio, cid, "Прочитай"))[-1] == ("done", {"status": "done"})
+    sent = studio.gw.chat_requests[1]["messages"]
+    assert sent[-1]["content"].endswith(chat.CUT_CONTEXT) and len(sent[-1]["content"]) > 500
+    assert chat.estimate_tokens(sent) <= limit - chat.RESERVE_TOKENS
+    (step,) = steps_of(messages(studio, cid)[1]["id"])
+    assert step["text"] == sent[-1]["content"]
+
+    monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": chat.RESERVE_TOKENS + 150})
+    other = new_chat(studio)
+    patch(studio, other, web=True)
+    studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Не влезло."]]
+    assert sse(turn(studio, other, "Прочитай"))[-1] == ("done", {"status": "done"})
+    assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == (
+        "Ошибка инструмента: не помещается в контекст модели")
+    (step,) = steps_of(messages(studio, other)[1]["id"])
+    assert step["error"] == "не помещается в контекст модели" and "text" not in step
+
+
+def test_model_without_tools_answers_in_words(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_error = (400, {"error": {"message": "\"auto\" tool choice requires --enable-auto-tool-choice"}})
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("error", {"message": chat.NO_TOOLS})
+    assert messages(studio, cid)[1]["status"] == "error"
+    patch(studio, cid, web=False)                                         # без tools — прежние слова шлюза
+    events = sse(turn(studio, cid))
+    assert events[-1][0] == "error" and events[-1][1]["message"].startswith("шлюз отклонил запрос")
+
+
+def test_stop_during_a_tool_keeps_the_done_steps(studio, monkeypatch):
+    killed = []
+
+    async def hanging(argv, timeout):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            killed.append(argv[-1])
+            raise
+
+    monkeypatch.setattr(web, "RUN", hanging)
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q"), call("youtube_subtitles", url=CANON)]}]
+    with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+        events = events_of(r.iter_lines())
+        assert next(events)[0] == "turn"
+        tools = []
+        for e, d in events:
+            tools += [d] if e == "tool" else []
+            if len(tools) == 2:
+                break
+        assert tools[1] == {"kind": "youtube", "label": f"субтитры {CANON}"}
+        live = messages(studio, cid)[1]
+        assert [s["kind"] for s in live["tools"]] == ["search"] and "text" not in live["tools"][0]
+        assert studio.c.post(f"/api/chats/{cid}/stop").status_code == 204
+        rest = [(e, d) for e, d in events if e != "ping"]
+    assert rest == [("done", {"status": "stopped"})]
+    assert killed == [CANON]
+    answer = messages(studio, cid)[1]
+    (step,) = steps_of(answer["id"])
+    assert answer["status"] == "stopped" and step["kind"] == "search" and answer["tools"] == [web.public(step)]
+    assert not chat.STREAMS
+
+
+def test_web_never_reaches_the_log(studio, monkeypatch, caplog):
+    from test_web import VID
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(web, "RUN", FakeYtDlp())
+    cid = web_chat(studio)
+    studio.gw.exa_page_text = "Секретный текст страницы"
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="тайный запрос"),
+                                             call("read_page", url="https://secret-host.test/private"),
+                                             call("youtube_subtitles", url=CANON)]}, ["ok"]]
+    sse(turn(studio, cid))
+    studio.gw.exa_replies["/search"] = (401, {"error": "Invalid API key", "tag": "INVALID_API_KEY"})
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="второй тайный запрос")]}, ["ok"]]
+    sse(turn(studio, cid))
+    for secret in ("тайный запрос", "secret-host", "Секретный текст", EXA_KEY, "Download Python", VID, "Интенсив",
+                   "Академия", "Invalid API key", "ключ Exa не подходит"):
+        assert secret not in caplog.text, secret
+    for kind, result in (("search", "ok"), ("page", "ok"), ("youtube", "ok"), ("search", "ошибка")):
+        assert f"шаг {kind}: {result}" in caplog.text
+
+
+def test_without_a_key_only_youtube_is_offered(studio):
+    cid = web_chat(studio, key=False)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["ok"]]
+    sse(turn(studio, cid))
+    first = studio.gw.chat_requests[0]
+    assert names(first) == ["youtube_subtitles"] and first["messages"][0] == noted("youtube_subtitles")
+    (step,) = steps_of(messages(studio, cid)[1]["id"])                    # не предложенный — не исполняется
+    assert step["kind"] == "unknown" and step["error"] and studio.gw.exa_requests == []
+
+
+def test_unreadable_exa_key_answers_in_words(studio):
+    """Сменили STUDIO_DATA_KEY — ключ Exa не расшифровывается: шаг говорит это, Exa не зовётся."""
+    cid = web_chat(studio)
+    state.DB.execute("UPDATE users SET exa_key = ?", (b"not-a-fernet-token",))
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["ok"]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert names(studio.gw.chat_requests[0]) == ALL.split(", ")
+    (step,) = steps_of(messages(studio, cid)[1]["id"])
+    assert step["error"] == "ключ Exa не читается — введите его заново в Настройках"
+    assert studio.gw.exa_requests == []
+
+
+def test_labels_and_model_text_of_steps():
+    assert web.label("search", {"query": "  новости\n  Python "}) == "новости Python"
+    assert web.label("page", {"url": "https://example.test/" + "a" * 300}) == ("https://example.test/" + "a" * 300)[:200]
+    assert web.label("youtube", {"url": CANON}) == f"субтитры {CANON}"
+    assert web.label("unknown", {}) == "" and web.label("search", {"query": 42}) == ""
+    assert web.for_model({"kind": "page", "url": "u", "text": "текст"}) == "текст"
+    assert web.for_model({"kind": "page", "url": "u", "error": "страница не найдена"}) == (
+        "Ошибка инструмента: страница не найдена")
+    assert web.public({"kind": "page", "url": "u", "title": "t", "text": "текст"}) == {
+        "kind": "page", "url": "u", "title": "t"}
