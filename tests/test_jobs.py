@@ -66,7 +66,7 @@ def test_running_jobs_of_every_section(studio):
     image(uid, "i1")
     image(uid, "i2", state_="cancelling", kind="edit", model="flux", detail="отменяю")
     image(uid, "i3", state_="queued", detail="в очереди серии")
-    images.JOBS["i1"] = SimpleNamespace(state="working", detail="жду карту или генерирую", task=None)
+    images.JOBS["i1"] = SimpleNamespace(state="working", detail="жду карту или генерирую", task=None, started=T0 - 30)
     video(uid, "v1")
     video(uid, "v2", state_="in_progress", progress=40, detail="генерирую кадры")
     transcript(uid, "t1")

@@ -1379,6 +1379,87 @@ def test_series_keeps_the_slot_until_the_last(studio):
     assert start(studio).status_code == 202
 
 
+def second_of_series_held(s, count=2):
+    """Серия, первая строка которой готова, а вторая висит на запросе к шлюзу: (ids, поднять)."""
+    add_gateway(s)
+    go, calls = threading.Event(), []
+
+    async def second_held(request):
+        calls.append(1)
+        while len(calls) == 2 and not go.is_set():
+            await asyncio.sleep(0.001)
+        return await s.gw.builtin(request)
+
+    s.gw.on["/slot/images/generations"] = second_held
+    ids = start(s, series={"count": count, "vary": "seed"}).json()["ids"]
+    wait_state(s, ids[0], {"done"})
+    wait_for(lambda: len(calls) == 2)
+    return ids, go
+
+
+def test_series_row_time_counts_from_its_own_start(studio):
+    """Время строки серии — от её перехода из очереди в работу, а не от создания серии: и в ленте,
+    и в «В работе»."""
+    add_gateway(studio)
+    go, calls = threading.Event(), []
+
+    async def first_held(request):
+        calls.append(1)
+        while len(calls) == 1 and not go.is_set():
+            await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/generations"] = first_held
+    studio.gw.hold = False
+    ids = start(studio, series={"count": 2, "vary": "seed"}).json()["ids"]
+    wait_for(lambda: calls)
+    studio.clock[0] = T0 + 40                                   # первая строка шла 40 с
+    hold_second = threading.Event()
+
+    async def second_held(request):
+        calls.append(1)
+        while not hold_second.is_set():
+            await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/images/generations"] = second_held
+    go.set()
+    wait_state(studio, ids[0], {"done"})
+    wait_for(lambda: len(calls) == 2)
+    studio.clock[0] = T0 + 45
+    second = studio.c.get(f"/api/images/{ids[1]}").json()
+    assert second["state"] == "working" and second["elapsed"] == 5
+    assert [i["elapsed"] for i in studio.c.get("/api/images").json()["items"] if i["id"] == ids[1]] == [5]
+    running = {i["id"]: i for i in studio.c.get("/api/jobs").json()["running"]}
+    assert running[ids[1]]["started"] == T0 + 40
+    hold_second.set()
+    wait_state(studio, ids[1], {"done"})
+
+
+def test_cancel_on_a_just_finished_series_row_stops_the_rest(studio):
+    """«Отменить» на строке, которая только что кончилась: остаток серии снимается, кончившаяся —
+    как есть."""
+    ids, go = second_of_series_held(studio, count=3)
+    assert studio.c.post(f"/api/images/{ids[0]}/cancel").json() == {"state": "done"}
+    assert [r[0] for r in rows_of(ids)] == ["done", "cancelling", "cancelled"]
+    go.set()
+    assert wait_state(studio, ids[1], images.TERMINAL)["state"] == "cancelled"
+    assert rows_of(ids)[0][0] == "done" and len(studio.gw.generations) == 2
+
+
+def test_deeply_nested_series_field_is_refused(studio, env):
+    """Поле `series` с глубокой вложенностью — 422, а не 500 (RecursionError json.loads)."""
+    add_gateway(studio)
+    deep = "[" * 50_000 + "]" * 50_000                          # 100 КБ — в пределе поля формы
+    form = {"prompt": "x", "size": "original", "model": "lustify", "strength": "0.25", "series": deep}
+    r = studio.c.post("/api/images", data=form, files={"image": ("p.png", photo(), "image/png")})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "series", r.text
+    assert media_rows() == 0 and share_files(env) == [] and not images.JOBS
+    r = studio.c.post("/api/images", content='{"prompt": "x", "size": "square", "series": ' + deep + "}",
+                      headers={"content-type": "application/json"})
+    assert r.status_code == 422, r.text
+
+
 def test_queued_row_cannot_be_deleted(studio):
     ids, go = series_held(studio, count=2)
     r = studio.c.delete(f"/api/images/{ids[1]}")

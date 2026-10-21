@@ -2446,6 +2446,11 @@ def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, 
         ("click", "#photo-series-panel [data-vary=strength]"),
         set_value("#photo-series-to", "0.75"),
         ("eval", "values", values), ("eval", "label", text_of("#chip-series")),
+        # сила «от» — ползунок поля: строка значений меню идёт за ним и при закрытом меню
+        ("click", "#chip-series"), set_value("#photo-strength", "0.4"), ("click", "#chip-series"),
+        ("eval", "moved", values),
+        set_value("#photo-strength", "0.7"), ("eval", "movedNarrow", values),
+        set_value("#photo-strength", "0.25"),
         set_value("#photo-series-to", "0.3"), ("eval", "narrow", values),
         set_value("#photo-series-to", "0.75"),
         ("type", "#photo-prompt", "акварель"), ("click", "#photo-go"), ("wait", done_cards(3)),
@@ -2462,6 +2467,7 @@ def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, 
     assert not r.get("failed"), r
     v = r["values"]
     assert v["values"] == "0.25 · 0.50 · 0.75" and v["label"] == "×3 · сила"
+    assert v["moved"] == "0.40 · 0.60 · 0.75" and v["movedNarrow"] == "слишком узкий диапазон для 3 вариантов"
     assert v["narrow"] == "слишком узкий диапазон для 3 вариантов"
     assert v["editValues"] == "0.25 · 0.50" and v["brushHides"]
     first, edit = (f["form"] for f in v["forms"])
@@ -2556,6 +2562,32 @@ def test_photo_external_model_hides_the_seed(browser, live):
     v = r["values"]
     assert v["onGateway"] is False and v["external"] is True and v["back"] is False
     assert "gpt-image-1" in v["row"] and "123456" not in v["row"] and "seed" not in v["row"]
+    assert not problems(r), problems(r)
+
+
+def test_photo_external_series_offers_no_seed(browser, live):
+    """Серия внешнему сервису — N независимых картинок: чип «×3» без «меняется: seed», и в «Изменить»."""
+    login = "extseries"
+    live.add_user(login)
+    cloud = ("eval", "cloud", f"""(async () => {{ const m = {API};
+      const c = await m.api('POST', '/api/connections', {{ name: 'Облако', kind: 'openai',
+        base_url: {GATEWAY_URL + '/v1'!r}, token: 'cloud-key', sections: ['photo'] }});
+      await m.api('PUT', '/api/sections/photo/links/' + c.id, {{ models: ['gpt-image-1'] }});
+      await m.loadMe(); return c.id; }})()""")
+    vary_hidden = "document.querySelector('#{}-series-vary').hidden"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make_images(1), cloud,
+        *go("photo"), ("wait", FEED_READY), ("wait", done_cards(1)),
+        ("wait", "document.querySelector('#chip-model-menu [data-value$=\":gpt-image-1\"]')"),
+        ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':gpt-image-1']"),
+        ("click", "#chip-series"), ("click", "#photo-series-panel [data-count='3']"),
+        ("eval", "varyHidden", vary_hidden.format("photo")), ("eval", "label", text_of("#chip-series")),
+        ("click", "#chip-series"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        ("click", "#edit-series-panel [data-count='3']"),
+        ("eval", "editVaryHidden", vary_hidden.format("edit"))], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["varyHidden"] is True and v["label"] == "×3" and v["editVaryHidden"] is True
     assert not problems(r), problems(r)
 
 

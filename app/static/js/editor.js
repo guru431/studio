@@ -41,7 +41,8 @@ function show(host, item, choice, photo, onCreated) {
     value: STRENGTH });
   const strengthLabel = el('label', { id: 'edit-strength-label', class: 'field', hidden: !lustify },
     el('span', {}, 'Сила перерисовки'), strength);
-  const series = seriesControl({ prefix: 'edit-series', canStrength: () => lustify, from: () => strength.value });
+  const series = seriesControl({ prefix: 'edit-series', canStrength: () => lustify, canSeed: () => gateway,
+    from: () => strength.value });
   const seriesBox = el('div', { id: 'edit-series', class: 'field' }, el('span', {}, 'Серия'), series.panel);
   strength.addEventListener('input', () => series.refresh());
   const local = el('input', { id: 'edit-local', type: 'checkbox' });
