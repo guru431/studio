@@ -1,4 +1,4 @@
-/* Раздел «Панель» (#/admin, только администратору): пользователи и список разрешённых адресов.
+/* Раздел «Панель» (#/admin, только администратору): пользователи, список разрешённых адресов и хранилище.
  *
  * Пользователи — таблица `#users` (логин, имя, админ, отключён, подключений) с действиями строки:
  * «Изменить» (логин и имя; себя тоже — тогда страница перезагружается за новым логином в меню),
@@ -6,7 +6,7 @@
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, me } from './api.js';
-import { settingsView } from './settings.js';
+import { momentText, queueText, settingsView, sizeText } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 const COLUMNS = [['login', 'Логин'], ['name', 'Имя'], ['admin', 'Админ'], ['disabled', 'Отключён'],
@@ -246,6 +246,53 @@ function allowlistBlock() {
   };
 }
 
+/* «Хранилище»: шара (доступна — свободное место; недоступна или не отвечает — словами сервера), возраст
+ * последней копии базы (старше STALE_SEC — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
+const STALE_SEC = 36 * 3600;          // копия — раз в сутки в 04:30: старше полутора суток — пропущена
+
+function agoText(sec) {
+  if (sec < 3600) return `${Math.max(1, Math.round(sec / 60))} мин назад`;
+  if (sec < 48 * 3600) return `${Math.round(sec / 3600)} ч назад`;
+  return `${Math.round(sec / 86400)} дн назад`;
+}
+
+function storageBlock() {
+  const list = el('dl', { class: 'storage', id: 'admin-storage' });
+  const note = el('p', { class: 'status error', 'aria-live': 'polite' });
+  const refresh = button('Обновить', { class: 'btn btn-sm', id: 'admin-storage-refresh' });
+
+  const line = (key, name, text, bad) => [el('dt', {}, name),
+    el('dd', { 'data-key': key, class: bad ? 'error' : null }, text)];
+
+  async function load() {
+    refresh.disabled = true;
+    note.textContent = '';
+    try {
+      const { share, backup, pending } = await api('GET', '/api/admin/storage');
+      const shareText = share.state === 'ok' ? `доступна, свободно ${sizeText(share.free)} из ${sizeText(share.total)}`
+        : share.message;
+      const backupText = backup.state === 'ok'
+        ? `${agoText(backup.age)} (${momentText(backup.at)}), копий — ${backup.copies}`
+        : backup.state === 'none' ? 'копий нет' : 'неизвестно: хранилище не прочитано';
+      const [queue] = queueText(pending);
+      list.replaceChildren(...line('share', 'Шара', shareText, share.state !== 'ok'),
+        ...line('backup', 'Копия базы', backupText, backup.state !== 'ok' || backup.age > STALE_SEC),
+        ...line('queue', 'Удаление', queue, false));
+    } catch (err) {
+      note.textContent = words(err);
+    } finally {
+      refresh.disabled = false;
+    }
+  }
+
+  refresh.addEventListener('click', load);
+  return {
+    el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Хранилище'), refresh),
+      list, note),
+    load,
+  };
+}
+
 export function mount(view, ctx) {
   if (!me.is_admin) {
     ctx.navigate('chat');
@@ -254,10 +301,12 @@ export function mount(view, ctx) {
   const root = el('div', { class: 'page wide' });
   const users = usersBlock(root);
   const allow = allowlistBlock();
-  root.append(users.el, allow.el);
+  const storage = storageBlock();
+  root.append(users.el, allow.el, storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, 'Панель')), root);
   users.reload();
   allow.load();
+  storage.load();
 }
 
 export function unmount() {}

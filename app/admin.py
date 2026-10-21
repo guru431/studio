@@ -1,13 +1,21 @@
-"""Панель администратора (спека, раздел 7.10): пользователи, их подключения и разделы, список разрешённых адресов.
+"""Панель администратора (спека, раздел 7.10): пользователи, их подключения и разделы, список разрешённых
+адресов, хранилище (шара, копия базы, очередь удаления числом).
 
-Чужую историю панель не отдаёт: ответы о пользователях — только поля учётки и число подключений.
-Журнал — только id: логины, имена и пароли туда не пишутся.
+Чужую историю панель не отдаёт: ответы о пользователях — только поля учётки и число подключений,
+о хранилище — без пользователей, путей и объёмов чужих файлов.
+Журнал — только id: логины, имена, пароли и пути туда не пишутся.
 """
 import asyncio
+import concurrent.futures
+import fnmatch
 import json
 import logging
+import os
 import re
+import shutil
 import sqlite3
+import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -18,6 +26,7 @@ import clock
 import connections
 import history
 import images
+import manage
 import media
 import profile
 import sections
@@ -165,6 +174,72 @@ async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)
     return {"pending_files": pending}
+
+
+#: проба шары — не дольше; ответ панели — словами
+PROBE_SEC = 5
+#: идущая проба (concurrent.futures.Future): пока висит, новая не начинается — зависшая CIFS держит
+#: один поток, а не по потоку на каждое «Обновить»
+PROBE: "concurrent.futures.Future | None" = None
+
+
+def _probe(media_dir: Path) -> dict:
+    """В потоке: место на шаре и копии базы (manage.backup). Каталога медиа нет (шара не
+    смонтирована) — OSError наружу; каталога копий нет — копий нет; список не прочитался — неизвестно."""
+    disk = shutil.disk_usage(media_dir)
+    share = {"state": "ok", "free": disk.free, "total": disk.total}
+    try:
+        names = sorted(e.name for e in os.scandir(media_dir / "backup")
+                       if fnmatch.fnmatchcase(e.name, manage.BACKUP_GLOB))
+        newest = (media_dir / "backup" / names[-1]).stat().st_mtime if names else None
+    except FileNotFoundError:
+        names, newest = [], None
+    except OSError as e:
+        log.warning("хранилище: список копий базы не прочитан (%s)", type(e).__name__)
+        return {"share": share, "backup": {"state": "unknown"}}
+    return {"share": share, "backup": {"state": "ok", "copies": len(names), "at": newest} if names else {"state": "none"}}
+
+
+def _start_probe(media_dir: Path) -> concurrent.futures.Future:
+    """Свой поток-демон, а не пул asyncio.to_thread: зависший не занимает пул службы и не держит её остановку."""
+    fut = concurrent.futures.Future()
+
+    def run():
+        try:
+            fut.set_result(_probe(media_dir))
+        except BaseException as e:            # noqa: BLE001 — итог пробы (и отказ) забирает запрос
+            fut.set_exception(e)
+
+    threading.Thread(target=run, name="studio-probe", daemon=True).start()
+    return fut
+
+
+@router.get("/storage")
+async def get_storage():
+    """Хранилище без чужой истории: доступность шары и свободное место, возраст последней копии базы,
+    очередь удаления — только числом (без пользователей и путей). Шара не ответила за PROBE_SEC —
+    «не отвечает», а не ожидание до таймаута Apache."""
+    global PROBE
+    if PROBE is None or PROBE.done():
+        PROBE = _start_probe(state.CFG.media_dir)
+    files, since = media.waiting()
+    out = {"pending": {"files": files, "since": since}}
+    probe = asyncio.wrap_future(PROBE)
+    done, _ = await asyncio.wait({probe}, timeout=PROBE_SEC)
+    if not done:
+        # отказ, пришедший позже, забрать здесь: иначе asyncio запишет в журнал его текст — с путём
+        probe.add_done_callback(lambda f: f.cancelled() or f.exception())
+        log.warning("хранилище: проба не ответила за %s с", PROBE_SEC)
+        return out | {"share": {"state": "stalled", "message": "хранилище не отвечает"}, "backup": {"state": "unknown"}}
+    try:
+        found = probe.result()
+    except OSError as e:
+        log.warning("хранилище: недоступно (%s)", type(e).__name__)
+        return out | {"share": {"state": "down", "message": "хранилище недоступно"}, "backup": {"state": "unknown"}}
+    backup = found["backup"]                  # итог пробы общий для запросов, ждавших её: не править
+    if backup.get("at") is not None:
+        backup = backup | {"age": clock.NOW() - backup["at"]}
+    return out | {"share": found["share"], "backup": backup}
 
 
 @router.get("/allowlist")

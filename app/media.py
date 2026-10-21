@@ -12,6 +12,8 @@
 - Поток записи не остановить: отмена ожидания (и срок SAVE_TIMEOUT_SEC — тогда StorageError «не
   отвечает») его не бросает — путь остаётся в SAVING, пока поток не кончит, и проход очереди
   уберёт записанное после.
+- Объём своих файлов (usage) и очередь (waiting) — для «Хранилища» (`GET /api/me/storage`,
+  profile.py): только из базы, без обхода шары.
 - `GET /api/media/{id}` отдаёт только своё, с диапазонами: Safari на iPhone без `Range` ролик не
   играет. С диска читается только нужный кусок.
 - Имена файлов и содержимое в журнал не пишутся: `download_name` — только в `Content-Disposition`.
@@ -45,9 +47,12 @@ PURGE_SEC = 300
 SAVE_TIMEOUT_SEC = 45
 STALLED = "не удалось сохранить файл: хранилище не отвечает"
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+#: виды файлов «Хранилища» в «Прочем» (usage): по началу mime; документы — ещё PDF, DOCX и JSON итогов расшифровки
+KINDS = ("image", "video", "audio", "document", "other")
 EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
        "video/mp4": ".mp4", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
-       "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+       DOCX: ".docx",
        "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/wav": ".wav", "audio/x-wav": ".wav",
        "audio/ogg": ".ogg", "audio/webm": ".webm", "audio/flac": ".flac", "audio/aac": ".aac", "video/webm": ".webm",
        "video/quicktime": ".mov", "application/json": ".json"}
@@ -358,10 +363,30 @@ async def purge(user_id: int | None = None) -> None:
         await _purge(rows)
 
 
+def waiting(user_id: int | None = None) -> tuple[int, float | None]:
+    """Очередь удаления пользователя или вся (панель — только числом): сколько путей ждут и когда
+    встал самый старый; пути, которые пишутся сейчас (SAVING), не в счёт."""
+    where, args = ("WHERE user_id = ?", (user_id,)) if user_id is not None else ("", ())
+    queued = [r["queued"] for r in state.DB.execute(f"SELECT media_id, queued FROM purge {where}", args)
+              if r["media_id"] not in SAVING]
+    return len(queued), min(queued, default=None)
+
+
 def pending(user_id: int) -> int:
     """Сколько файлов пользователя ждут в очереди удаления (кроме тех, что пишутся сейчас)."""
-    return sum(r["media_id"] not in SAVING for r in
-               state.DB.execute("SELECT media_id FROM purge WHERE user_id = ?", (user_id,)))
+    return waiting(user_id)[0]
+
+
+def usage(user_id: int) -> dict:
+    """Свои файлы по видам KINDS — из строк media (размер оригинала, превью не в счёт), шару не трогает."""
+    found = {r["kind"]: (r["files"], r["bytes"]) for r in state.DB.execute(
+        "SELECT CASE WHEN mime LIKE 'image/%' THEN 'image' WHEN mime LIKE 'video/%' THEN 'video'"
+        " WHEN mime LIKE 'audio/%' THEN 'audio'"
+        " WHEN mime LIKE 'text/%' OR mime IN ('application/pdf', 'application/json', ?) THEN 'document'"
+        " ELSE 'other' END AS kind, COUNT(*) AS files, SUM(size) AS bytes FROM media WHERE user_id = ?"
+        " GROUP BY kind", (DOCX, user_id))}
+    kinds = [{"kind": k, "files": found.get(k, (0, 0))[0], "bytes": found.get(k, (0, 0))[1]} for k in KINDS]
+    return {"kinds": kinds, "total": {"files": sum(k["files"] for k in kinds), "bytes": sum(k["bytes"] for k in kinds)}}
 
 
 async def _purge_loop() -> None:

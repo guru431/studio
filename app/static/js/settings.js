@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, хранилище, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -255,7 +255,62 @@ function lockBlock() {
     offBox, list, ...adding, note);
 }
 
-function wipeBlock(host) {
+/* «Хранилище»: свои файлы по видам (из базы: размер оригиналов, без миниатюр), итог и очередь удаления —
+ * «ждут удаления: N (с …)» или «очередь пуста». Квот и автоудаления нет. Панель берёт отсюда же подписи. */
+const KIND_NAMES = { image: 'Картинки', video: 'Ролики', audio: 'Звук', document: 'Документы и расшифровки', other: 'Прочее' };
+const UNITS = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ'];
+
+export function sizeText(bytes) {
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < UNITS.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${i ? n.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : n} ${UNITS[i]}`;
+}
+
+export function filesText(n) {
+  const tens = n % 100;
+  const ones = n % 10;
+  const word = tens >= 11 && tens <= 14 ? 'файлов' : ones === 1 ? 'файл' : ones >= 2 && ones <= 4 ? 'файла' : 'файлов';
+  return `${n} ${word}`;
+}
+
+export function momentText(ts) {
+  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Очередь удаления словами: пуста — kind 'ok'. */
+export function queueText(pending) {
+  return pending.files ? [`Ждут удаления на хранилище: ${filesText(pending.files)} (с ${momentText(pending.since)}) — `
+    + 'удалятся, когда оно станет доступно', ''] : ['Очередь удаления пуста: удалённое стёрто и с хранилища', 'ok'];
+}
+
+function storageBlock() {
+  const list = el('dl', { class: 'storage', id: 'storage' });
+  const queue = status('storage-queue');
+
+  async function reload() {
+    try {
+      const { kinds, total, pending } = await api('GET', '/api/me/storage');
+      const line = (key, name, n) => [el('dt', {}, name),
+        el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
+      list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
+        ...line('total', 'Всего', total));
+      say(queue, ...queueText(pending));
+    } catch (err) {
+      say(queue, words(err), 'error');
+    }
+  }
+
+  reload();
+  return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, 'Хранилище'), list, queue,
+    el('p', { class: 'muted small' }, 'Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: '
+      + 'удалённое из неё ещё около недели остаётся в ежедневных копиях базы.')) };
+}
+
+function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
@@ -279,6 +334,7 @@ function wipeBlock(host) {
         // хранилище было недоступно: файлы ждут в очереди удаления — сказать как есть
         say(note, left ? `История удалена, но файлов на хранилище ещё ${left}: удалятся, когда оно станет доступно`
           : 'История удалена', 'ok');
+        onWiped();
       } catch (err) {
         fail.textContent = words(err);
         confirm.disabled = false;
@@ -581,8 +637,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'other') {
+      const storage = storageBlock();
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), wipeBlock(host)));
+        lockBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;
     }
     const s = sectionOf(shown);

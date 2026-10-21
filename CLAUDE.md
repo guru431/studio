@@ -78,6 +78,12 @@
   при старте и раз в `PURGE_SEC` (`start_purger`), в каждом `delete_async` и в начале стирания
   истории; пишущиеся (`media.SAVING`) пропускает. `DELETE /api/history` и `/api/admin/users/<id>`
   отвечают `{"pending_files": N}` — сколько файлов ещё ждут, страница это говорит.
+- Хранилище: `GET /api/me/storage` (`profile`, «Прочее» → «Хранилище») — свои файлы по видам
+  `media.KINDS` из строк `media` (`media.usage`, шару не обходит) и своя очередь (`media.waiting`:
+  число и самый старый `queued`); `GET /api/admin/storage` (`admin`) — проба шары
+  (`shutil.disk_usage`) и возраст новейшей копии `backup/<manage.BACKUP_GLOB>` в своём потоке-демоне
+  со сроком `admin.PROBE_SEC`, одна проба за раз (`admin.PROBE`: зависшая CIFS держит один поток, а не
+  пул `to_thread`), очередь — числом. Чужой истории (и объёмов по пользователям) панель не получает.
 
 ## Правила
 
