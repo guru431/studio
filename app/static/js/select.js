@@ -10,10 +10,13 @@
  * «Скачать» — отмеченные с файлом (save.saveMany: ZIP, на iPhone — «Поделиться»); «Удалить» — после
  * одного подтверждения по одной, «Отмена» окна останавливает после текущей.
  *
- * createSelection({ section, nouns, selectable, mediaOf, remove }): section — 'photo' | 'video'
- * (начало id); nouns — формы слова для plural (['картинку', 'картинки', 'картинок']);
+ * createSelection({ section, nouns, selectable, mediaOf, remove, extraActions }): section — 'photo' |
+ * 'video' (начало id); nouns — формы слова для plural (['картинку', 'картинки', 'картинок']);
  * selectable(item) — можно ли отметить; mediaOf(item) — media id файла или null; remove(item) —
- * Promise удаления записи разделом (DELETE, «уже удалена» — успех, запись уходит из ленты).
+ * Promise удаления записи разделом (DELETE, «уже удалена» — успех, запись уходит из ленты);
+ * extraActions — необязательные действия раздела [{ id, label, shown(items), run(items) }]: кнопка
+ * рядом с «Скачать» видна, только пока shown(отмеченные в порядке ленты); run режим не закрывает
+ * («Сравнить» у фото).
  * Ответ — { button, tools, bar, decorate(node, item), dayTools(day), attach({ root, head, feedBox,
  * feed, error }), sync(), exit(), destroy() }: button («Выбрать») и tools (✕ и счёт) раздел ставит в
  * шапку, bar — в конец корня раздела; decorate — в конце render карточки, dayTools — опция ленты. */
@@ -35,7 +38,7 @@ function svg(name) {
   return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
 }
 
-export function createSelection({ section, nouns, selectable, mediaOf, remove }) {
+export function createSelection({ section, nouns, selectable, mediaOf, remove, extraActions = [] }) {
   const picked = new Set();      // id отмеченных (строки, как data-id)
   let selecting = false;
   let anchor = null;             // последняя отмеченная — начало диапазона Shift
@@ -59,7 +62,15 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
   const allBtn = button('Все', { class: 'btn btn-sm', id: `${section}-select-all` });
   const downloadBtn = button('Скачать', { class: 'btn btn-sm', id: `${section}-select-download` });
   const deleteBtn = button('Удалить', { class: 'btn btn-sm btn-danger', id: `${section}-select-delete` });
-  const actions = el('div', { class: 'select-actions' }, allBtn, downloadBtn, deleteBtn);
+  const extras = extraActions.map((a) => {
+    const b = button(a.label, { class: 'btn btn-sm', id: a.id, hidden: true });
+    b.addEventListener('click', () => {
+      const items = pickedItems();
+      if (!busy && a.shown(items)) a.run(items);
+    });
+    return { action: a, node: b };
+  });
+  const actions = el('div', { class: 'select-actions' }, allBtn, ...extras.map((x) => x.node), downloadBtn, deleteBtn);
   const bar = el('div', { class: 'select-bar' });
   const narrow = matchMedia(NARROW);
 
@@ -103,12 +114,18 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove })
     allBtn.textContent = full ? 'Снять' : 'Все';
     allBtn.disabled = busy || !all.length;
     deleteBtn.disabled = busy || !picked.size;
+    for (const { action, node } of extras) node.hidden = busy || !action.shown(pickedItems());
     paintDownload();
     for (const node of ctx.feedBox.querySelectorAll('.card[data-pickable]')) mark(node, picked.has(node.dataset.id));
     for (const box of ctx.feedBox.querySelectorAll('.day-pick')) {
       const day = all.filter((i) => dayKey(i.created) === box.dataset.day);
       box.setAttribute('aria-checked', String(day.length > 0 && day.every((i) => picked.has(idOf(i)))));
     }
+  }
+
+  /** Отмеченные записи в порядке ленты. */
+  function pickedItems() {
+    return shown().filter((i) => picked.has(idOf(i)));
   }
 
   /** media id отмеченных с файлом, в порядке ленты. */

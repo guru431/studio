@@ -143,6 +143,7 @@ def test_admin_storage_with_a_stalled_share_answers_in_time_and_probes_once(stud
     assert calls == [1]
     go.set()
     admin.PROBE.result(5)
+    monkeypatch.setattr(admin, "PROBE_SEC", 30)       # срок — настоящее время: свежей пробе под нагрузкой мало 50 мс
     assert studio.c.get("/api/admin/storage").json()["share"]["state"] == "ok"
     assert calls == [1, 1]
     assert "media" not in caplog.text

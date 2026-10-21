@@ -29,7 +29,15 @@
 7. Подключение и модель — из раздела «Фото» (sections.resolve). Внешний сервис (`openai`):
    `/images/generations` и `/images/edits` без seed и силы, размеры — EXTERNAL_SIZES, ответ — только
    `b64_json` (по ссылке из ответа сервер не ходит). Кисть, «Описать», «Освободить карту» и release —
-   только у шлюза srvllm.
+   только у шлюза srvllm. Сила пишется в строку только у Lustify (FLUX её не получает).
+8. Серия (поле `series`, спека 2026-10-21-studio-photo-presets-compare-series, раздел 7): `count`
+   строк сразу — первая `working`, остальные `queued` со своими seed и силой; одна задача
+   (run_series) ведёт их по одной тем же run_job, так что серия держит слот пользователя до
+   последней (`queued` — не TERMINAL). Ошибка одной не останавливает следующую. Отмена любой строки
+   снимает весь остаток: идущую — как одиночную (release_after_cancel), строки в очереди — сразу
+   `cancelled`. Строки в очереди при остановке службы — `error` самой остановкой (stop), при старте —
+   recover. Связь строк — только в памяти (Job.series).
+9. Варианты (`GET /<id>/variants`): свои готовые картинки с тем же исходником и сделанные из этой.
 """
 import asyncio
 import base64
@@ -37,6 +45,7 @@ import binascii
 import io
 import json
 import logging
+import math
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -78,6 +87,11 @@ SHORT_TIMEOUT_SEC = 30
 CANCEL_RELEASE_SEC = 60
 RELEASE_PAUSE_SEC = 2
 TERMINAL = {"done", "error", "cancelled"}
+WORKING = "жду карту или генерирую"
+#: серия (п. 8 шапки): строк в одном запросе — не больше
+SERIES_MAX = 4
+#: «Варианты» просмотра: не больше в каждом ряду
+VARIANTS_MAX = 24
 CANCELLING = "отменяю — карта освободится сразу после текущей картинки (если шлюз ещё ждёт карту — после её получения и картинки)"
 INTERRUPTED = "прервано перезапуском студии"
 JSON_MAX = 512 * 1024
@@ -135,7 +149,7 @@ class Job:
     seed: int
     started: float
     state: str = "working"
-    detail: str = "жду карту или генерирую"
+    detail: str = WORKING
     finished_at: "float | None" = None
     task: "asyncio.Task | None" = None
     image: bytes | None = None
@@ -149,6 +163,7 @@ class Job:
     source_media_id: str | None = None
     media_id: str | None = None              # готовая картинка в media (вместо прежнего png в памяти)
     mask_media_id: str | None = None
+    series: "list[Job] | None" = None        # все строки серии по порядку (п. 8 шапки)
 
     @property
     def gateway_model(self) -> str:
@@ -165,6 +180,12 @@ class JobError(Exception):
         self.code = code
 
 
+class SeriesIn(BaseModel):
+    count: int = Field(ge=2, le=SERIES_MAX)
+    vary: Literal["seed", "strength"]
+    strength_to: "float | None" = Field(default=None, ge=0.05, le=1)
+
+
 class JobIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=24000)
     size: Literal["portrait", "square", "landscape", "original"]
@@ -174,6 +195,34 @@ class JobIn(BaseModel):
     strength: float = Field(default=0.65, ge=0.05, le=1)
     source_media_id: "str | None" = Field(default=None, max_length=64)
     mask_media_id: "str | None" = Field(default=None, max_length=64)    # маска прежней правки (повтор)
+    series: "SeriesIn | None" = None
+
+
+def series_strengths(start: float, end: float, count: int) -> list[float]:
+    """`count` сил поровну от start до end включительно, округлённые до 0.05 (целыми двадцатыми — как
+    series.js на странице); повтор после округления — ValueError."""
+    steps = [math.floor((start + (end - start) * i / (count - 1)) * 20 + 0.5) for i in range(count)]
+    if len(set(steps)) != count:
+        raise ValueError(count)
+    return [n / 20 for n in steps]
+
+
+def _seeds(seed: "int | None", count: int, vary: str) -> list[int]:
+    """seed, seed+1, … (по модулю 2³²) серии по seed; пусто — случайные разные. Серия по силе — один seed."""
+    if vary != "seed":
+        one = seed if seed is not None else secrets.randbelow(2**32)
+        return [one] * count
+    if seed is not None:
+        return [(seed + i) % 2**32 for i in range(count)]
+    out: list[int] = []
+    while len(out) < count:
+        if (s := secrets.randbelow(2**32)) not in out:
+            out.append(s)
+    return out
+
+
+def _series_refused(message: str) -> HTTPException:
+    return HTTPException(422, {"code": "series", "message": message})
 
 
 class TranslationIn(BaseModel):
@@ -253,22 +302,38 @@ def _status(job: Job) -> dict:
 def recover() -> None:
     """После перезапуска идущих заданий нет: их строки — ошибка «прервано перезапуском»."""
     count = state.DB.execute("UPDATE images SET state = 'error', detail = ?, finished = ?"
-                             " WHERE state IN ('working', 'cancelling')", (INTERRUPTED, clock.NOW())).rowcount
+                             " WHERE state IN ('working', 'cancelling', 'queued')", (INTERRUPTED, clock.NOW())).rowcount
     if count:
         log.warning("картинки: %d заданий прервано перезапуском", count)
 
 
+def _end_queued(job: Job, state_: str, detail: str) -> None:
+    """Строка серии в очереди кончается, не начавшись (отмена, остановка службы)."""
+    job.state, job.detail, job.finished_at = state_, detail, clock.NOW()
+    job.image = job.mask = None
+    job.prompt = ""
+    _store(job)
+
+
+def _cancel(job: Job) -> None:
+    """Идущее — «отменяется» (run_job дождётся запроса и освободит карту), в очереди — сразу «отменено»."""
+    if job.state == "working":
+        job.state, job.detail = "cancelling", CANCELLING
+        _store(job)
+        log.info("задание %s: отменяется", job.id[:8])
+    elif job.state == "queued":
+        _end_queued(job, "cancelled", "отменено")
+
+
 def forget_user(user_id: int) -> None:
     """Стирание истории, удаление или отключение учётки: идущие задания пользователя отменяются —
-    картинку, пришедшую после, путь отмены run_job выбросит и освободит карту; невыданные описания
-    забываются."""
+    картинку, пришедшую после, путь отмены run_job выбросит и освободит карту; строки серии в
+    очереди не начнутся; невыданные описания забываются."""
     for job in JOBS.values():
         if job.user_id != user_id:
             continue
         job.description = None
-        if job.state == "working":
-            job.state, job.detail = "cancelling", CANCELLING
-            _store(job)
+        _cancel(job)
 
 
 async def settle_user(user_id: int) -> bool:
@@ -283,11 +348,16 @@ async def settle_user(user_id: int) -> bool:
 
 
 async def stop() -> None:
-    """Остановка службы: идущие задания отменяются и успевают записать итог до закрытия базы."""
-    tasks = [j.task for j in JOBS.values() if j.task and not j.task.done()]
+    """Остановка службы: идущие задания отменяются и успевают записать итог до закрытия базы; строки
+    серии в очереди — «прервано перезапуском» здесь же: откат install.sh вернул бы код, чей recover()
+    о `queued` не знает, и строки остались бы неудаляемыми."""
+    tasks = {j.task for j in JOBS.values() if j.task and not j.task.done()}   # у серии задача одна на все строки
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    for job in JOBS.values():
+        if job.state == "queued":
+            _end_queued(job, "error", INTERRUPTED)
 
 
 # ---- ввод: форма, фото, маска --------------------------------------------------
@@ -318,9 +388,13 @@ async def create_job(request: Request):
                 with_mask=True)
             if fields.get("seed") == "":
                 fields.pop("seed")
+            if "series" in fields:                   # серия в форме — строкой JSON
+                fields["series"] = json.loads(fields["series"])
             body = JobIn.model_validate(fields)
         else:
             body = JobIn.model_validate_json(await forms.read_body(request, JSON_MAX))
+        if body.series is not None and (mask is not None or body.mask_media_id is not None):
+            raise _series_refused("серия — без кисти: правка по маске — только одиночная")
         image = await forms.photo(uid, upload, body.source_media_id)
         if body.mask_media_id is not None:
             if mask is not None:
@@ -332,14 +406,27 @@ async def create_job(request: Request):
             raise HTTPException(422, {"code": "image", "message": "для исходного размера нужно фото"})
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
-    except ValidationError:
+    except (ValidationError, json.JSONDecodeError):
         raise HTTPException(422, {"code": "input", "message": "проверьте промпт, модель, размер, seed и силу изменения"}) from None
     conn, model = sections.resolve(uid, "photo", body.connection_id, body.model)
     if mask is not None and conn.kind != "srvllm":
         raise HTTPException(422, {"code": "brush", "message": "правка кистью — только через шлюз srvllm"})
+    lustify_edit = image is not None and conn.kind == "srvllm" and model == "lustify"
+    count, vary = (body.series.count, body.series.vary) if body.series else (1, "seed")
+    strengths = [body.strength if lustify_edit else None] * count
+    if vary == "strength":
+        if not lustify_edit:
+            raise _series_refused("серия по силе — только Lustify с исходным фото")
+        if body.series.strength_to is None:
+            raise _series_refused("для серии по силе нужна сила «до»")
+        try:
+            strengths = series_strengths(body.strength, body.series.strength_to, count)
+        except ValueError:
+            raise _series_refused(f"слишком узкий диапазон для {count} вариантов") from None
     # Parsing uploads yields to other requests: recheck before inserting the job.
     ensure_idle(uid)
-    seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
+    seeds = _seeds(body.seed, count, vary)
+    seed = seeds[0]
     size = "{}x{}".format(*image_size(image)) if body.size == "original" else SIZES[body.size]
     source_id, mask_id = body.source_media_id, body.mask_media_id
     saved = []                                   # файлы этого запроса: отказ ниже их удаляет
@@ -361,21 +448,32 @@ async def create_job(request: Request):
         await _discard(uid, saved)
         raise
     now = clock.NOW()
-    job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=model, prompt=body.prompt, size=size,
-              seed=seed, started=now, kind="generation" if image is None else "edit", image=image,
-              strength=body.strength, mask=mask, source_media_id=source_id, mask_media_id=mask_id)
-    strength = body.strength if image is not None and conn.kind == "srvllm" else None
-    chain = chains.of_source(uid, source_id) + [chains.image_step(
-        image_id=job.id, kind="brush" if mask_id else job.kind, model=job.model, prompt=job.prompt, size=size,
-        seed=seed, strength=strength, created=now)]
-    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
-                     " mask_media_id, state, detail, created, chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (job.id, uid, job.kind, job.model, job.prompt, size, seed, strength, source_id, mask_id,
-                      job.state, job.detail, now, json.dumps(chain, ensure_ascii=False)))
-    JOBS[job.id] = job
-    job.task = asyncio.create_task(run_job(job))
-    log.info("задание %s: %s", job.id[:8], job.size)
-    return {"id": job.id, "seed": seed}
+    before = chains.of_source(uid, source_id)
+    jobs = []
+    for i in range(count):
+        # строки серии — по порядку ленты: первая сверху (created на миллисекунду новее следующей)
+        created = now - i * 0.001
+        job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=model, prompt=body.prompt, size=size,
+                  seed=seeds[i], started=created, kind="generation" if image is None else "edit", image=image,
+                  strength=strengths[i] if strengths[i] is not None else body.strength, mask=mask,
+                  source_media_id=source_id, mask_media_id=mask_id)
+        if i:
+            job.state, job.detail = "queued", f"в очереди серии · {i + 1} из {count}"
+        chain = before + [chains.image_step(
+            image_id=job.id, kind="brush" if mask_id else job.kind, model=job.model, prompt=job.prompt, size=size,
+            seed=job.seed, strength=strengths[i], created=created)]
+        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
+                         " mask_media_id, state, detail, created, chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (job.id, uid, job.kind, job.model, job.prompt, size, job.seed, strengths[i], source_id, mask_id,
+                          job.state, job.detail, created, json.dumps(chain, ensure_ascii=False)))
+        JOBS[job.id] = job
+        jobs.append(job)
+    task = asyncio.create_task(run_series(jobs) if count > 1 else run_job(jobs[0]))
+    for job in jobs:
+        job.series = jobs if count > 1 else None
+        job.task = task
+    log.info("задание %s: %s, строк — %d", jobs[0].id[:8], size, count)
+    return {"id": jobs[0].id, "seed": seed, "ids": [j.id for j in jobs]}
 
 
 @router.get("")
@@ -498,6 +596,24 @@ async def image_status(image_id: str, request: Request):
     return _out(_row(request.state.user.id, image_id))
 
 
+@router.get("/{image_id}/variants")
+async def variants(image_id: str, request: Request):
+    """«Варианты» просмотра (п. 9 шапки): свои готовые с файлом — из того же исходника (кроме этой) и
+    сделанные из этой; новые сверху, не больше VARIANTS_MAX в каждом ряду."""
+    uid = request.state.user.id
+    row = _row(uid, image_id)
+
+    def made_from(media_id: "str | None") -> list[dict]:
+        if media_id is None:
+            return []
+        rows = state.DB.execute("SELECT * FROM images WHERE user_id = ? AND source_media_id = ? AND id != ?"
+                                " AND state = 'done' AND media_id IS NOT NULL ORDER BY created DESC, id DESC LIMIT ?",
+                                (uid, media_id, image_id, VARIANTS_MAX))
+        return [_out(r, with_chain=False) for r in rows]
+
+    return {"siblings": made_from(row["source_media_id"]), "children": made_from(row["media_id"])}
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str, request: Request):
     """Запрос к шлюзу не обрывается (обрыв до slot-gate не доходит): задание ждёт его конца,
@@ -507,10 +623,9 @@ async def cancel_job(job_id: str, request: Request):
     job = JOBS.get(job_id)
     if job is None or job.user_id != uid:
         return {"state": _row(uid, job_id)["state"]}          # закончилось до перезапуска или забыто
-    if job.state == "working":
-        job.state, job.detail = "cancelling", CANCELLING
-        _store(job)
-        log.info("задание %s: отменяется", job.id[:8])
+    if job.state in ("working", "queued"):
+        for j in job.series or [job]:                         # серия — весь её остаток (п. 8 шапки)
+            _cancel(j)
     return {"state": job.state}
 
 
@@ -731,6 +846,18 @@ async def release_after_cancel(job: Job, *, cancelled=True) -> str:
 async def _save(job: Job, picture: "tuple[bytes, str]", seed: int) -> str:
     data, mime = picture
     return await media.save_async(job.user_id, data, mime, f"studio-{job.model}-{seed}{media.EXT[mime]}", thumb=True)
+
+
+async def run_series(jobs: list[Job]) -> None:
+    """Строки серии по одной (п. 8 шапки): следующая — после конца предыдущей и без await между ними,
+    так что слот пользователя не пустеет ни на миг. Отменённые и снятые строки пропускаются."""
+    for i, job in enumerate(jobs):
+        if i:
+            if job.state != "queued":
+                continue
+            job.state, job.detail = "working", WORKING
+            _store(job)
+        await run_job(job)
 
 
 async def run_job(job: Job) -> None:

@@ -2312,6 +2312,293 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
 
 # ---- видео ---------------------------------------------------------------------
 
+# ---- фото: серии, пресеты, сравнение, варианты (спека 2026-10-21-studio-photo-presets-compare-series) ----
+
+#: элемент целиком в окне по ширине (или скрыт)
+FITS = """(sel) => [...document.querySelectorAll(sel)].every(e => { const b = e.getBoundingClientRect();
+  return b.width === 0 || (b.left >= 0 && b.right <= innerWidth); })"""
+
+
+def slow_first(live, prompt, seconds=2.0):
+    """Первая генерация с промптом `prompt` идёт `seconds`: страница успевает увидеть строки «в очереди»."""
+    seen = []
+
+    async def slow(request):
+        body = request.content
+        if prompt.encode() in body and not seen:
+            seen.append(1)
+            await asyncio.sleep(seconds)
+        return await live.gw.builtin(request)
+
+    return slow
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
+    """Критерий 4: «×3 · seed» → три карточки, две «в очереди серии», готовые встают по одной; чип — снова «×1»."""
+    login = f"series{width}"
+    live.add_user(login)
+    g0 = len(live.gw.generations)
+    queued = "#photo-feed .photo-card[data-state=queued]"
+    live.gw.on["/slot/images/generations"] = slow_first(live, "серия котов")
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+            ("type", "#photo-prompt", "серия котов"), ("type", "#photo-seed", "7"),
+            ("click", "#chip-series"), ("wait", "!document.querySelector('#chip-series-menu').hidden"),
+            ("eval", "noStrength", "document.querySelector('#photo-series-panel [data-vary=strength]').hidden"),
+            ("click", "#photo-series-panel [data-count='3']"),
+            ("eval", "label", text_of("#chip-series")),
+            ("eval", "menuFits", f"({FITS})('#chip-series-menu')"),
+            ("click", "#photo-go"),
+            ("wait", f"document.querySelectorAll('{queued}').length === 2"),
+            ("eval", "queued", f"[...document.querySelectorAll('{queued}')].map(c => [c.textContent, !!c.querySelector('.card-cancel')])"),
+            ("eval", "after", text_of("#chip-series")),
+            ("eval", "goBusy", "document.querySelector('#photo-go').disabled"),
+            ("wait", done_cards(3)),
+            ("eval", "free", "!document.querySelector('#photo-go').disabled"),
+            ("eval", "feed", ids()),
+            ("eval", "forms", "window.sentForms")], width=width, height=900, mobile=width == 390, timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/generations", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["noStrength"] and v["label"] == "×3 · seed" and v["menuFits"] and v["after"] == "×1"
+    assert [q[1] for q in v["queued"]] == [True, True]
+    assert sorted("2 из 3" in q[0] or "3 из 3" in q[0] for q in v["queued"]) == [True, True]
+    assert all(q[0].startswith("В очереди серии") for q in v["queued"])
+    assert v["goBusy"] and v["free"]
+    assert v["forms"][0]["form"]["series"] == {"count": 3, "vary": "seed"} and v["forms"][0]["form"]["seed"] == 7
+    assert [g[0]["seed"] for g in live.gw.generations[g0:]] == [7, 8, 9]
+    assert not problems(r), problems(r)
+
+
+def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, live):
+    """Критерий 5: Lustify с фото — «сила» от 0.25 до 0.75, 3 варианта: значения видны до запуска; и в «Изменить»."""
+    login = "strengths"
+    live.add_user(login)
+    e0 = len(live.gw.edits)
+    values = "document.querySelector('#photo-series-values').textContent"
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+        put_file("#photo-file", png_of(40, 30, "blue")),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth === 40"),
+        ("click", "#chip-series"), ("click", "#photo-series-panel [data-count='3']"),
+        ("click", "#photo-series-panel [data-vary=strength]"),
+        set_value("#photo-series-to", "0.75"),
+        ("eval", "values", values), ("eval", "label", text_of("#chip-series")),
+        set_value("#photo-series-to", "0.3"), ("eval", "narrow", values),
+        set_value("#photo-series-to", "0.75"),
+        ("type", "#photo-prompt", "акварель"), ("click", "#photo-go"), ("wait", done_cards(3)),
+        # «Изменить»: серия по силе, с кистью — без серии
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        ("click", "#edit-series-panel [data-count='2']"), ("click", "#edit-series-panel [data-vary=strength]"),
+        set_value("#edit-series-to", "0.5"),
+        ("eval", "editValues", text_of("#edit-series-values")),
+        ("click", "#edit-local"), ("eval", "brushHides", "document.querySelector('#edit-series').hidden"),
+        ("click", "#edit-local"),
+        ("type", "#edit-prompt", "ярче"), ("click", "#edit-submit"),
+        ("wait", f"!{is_open('#editor')} && {done_cards(5)}"),
+        ("eval", "forms", "window.sentForms")], width=1280, height=900, timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["values"] == "0.25 · 0.50 · 0.75" and v["label"] == "×3 · сила"
+    assert v["narrow"] == "слишком узкий диапазон для 3 вариантов"
+    assert v["editValues"] == "0.25 · 0.50" and v["brushHides"]
+    first, edit = (f["form"] for f in v["forms"])
+    assert json.loads(first["series"]) == {"count": 3, "vary": "strength", "strength_to": 0.75}
+    assert json.loads(edit["series"]) == {"count": 2, "vary": "strength", "strength_to": 0.5} and "mask" not in edit
+    assert [e[0]["strength"] for e in live.gw.edits[e0:]] == ["0.25", "0.5", "0.75", "0.25", "0.5"]
+    assert not problems(r), problems(r)
+
+
+def test_photo_preset_saves_and_applies(browser, live):
+    """Критерий 1: «★» → «Сохранить как пресет…» → в меню; применение ставит модель, формат, seed, силу и
+    промпт; в непустое поле — после вопроса; то же имя — замена, «×» — удаление."""
+    login = "presets"
+    live.add_user(login)
+    prompt = "document.querySelector('#photo-prompt').value"
+    chips = "[document.querySelector('#chip-model').textContent, document.querySelector('#chip-size').textContent," \
+            " document.querySelector('#photo-seed').value, document.querySelector('#photo-strength').value]"
+    r = browser.drive(live.url + "/", [*photo_screen(login),
+        ("type", "#photo-prompt", "портрет у окна"), ("type", "#photo-seed", "42"),
+        ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=landscape]"),
+        set_value("#photo-strength", "0.6"),
+        ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu').hidden"),
+        ("eval", "empty", text_of("#chip-preset-menu .preset-list")),
+        ("click", "#preset-save"), ("wait", is_open("#preset-dialog")),
+        ("eval", "checks", "[document.querySelector('#preset-with-prompt').checked, document.querySelector('#preset-with-seed').checked]"),
+        ("type", "#preset-name", "Портрет студия"), ("click", "#preset-save-confirm"),
+        ("wait", f"!{is_open('#preset-dialog')}"),
+        ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/images/presets')).items.map(p => [p.name, p.params]))()"),
+        # всё другое — и пресет возвращает
+        set_value("#photo-prompt", ""), set_value("#photo-seed", ""), set_value("#photo-strength", "0.25"),
+        ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=portrait]"),
+        ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':flux']"),
+        ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
+        ("click", "#chip-preset-menu .preset-apply"),
+        ("eval", "prompt", prompt), ("eval", "chips", chips),
+        # своё в поле — вопрос; «Оставить свой» ставит остальное
+        set_value("#photo-prompt", "свой текст"), set_value("#photo-seed", "1"),
+        ("click", "#chip-preset"), ("click", "#chip-preset-menu .preset-apply"),
+        ("wait", is_open("#preset-prompt-dialog")), ("click", "#preset-prompt-keep"),
+        ("wait", f"!{is_open('#preset-prompt-dialog')}"),
+        ("eval", "kept", prompt), ("eval", "seedAfterKeep", "document.querySelector('#photo-seed').value"),
+        # то же имя — окно говорит, что заменит
+        ("click", "#chip-preset"), ("click", "#preset-save"), ("wait", is_open("#preset-dialog")),
+        ("type", "#preset-name", "Портрет студия"),
+        ("eval", "replace", f"[{text_of('#preset-replace-note')}, {text_of('#preset-save-confirm')}]"),
+        ("press", "Escape"), ("wait", f"!{is_open('#preset-dialog')}"),
+        # «×» — удаление с подтверждением
+        ("click", "#chip-preset"), ("click", "#chip-preset-menu .preset-delete"),
+        ("wait", is_open("#preset-delete-dialog")), ("click", "#preset-delete-confirm"),
+        ("wait", f"!{is_open('#preset-delete-dialog')}"), ("idle",),
+        ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu .preset-apply')"),
+        ("eval", "gone", text_of("#chip-preset-menu .preset-list"))], width=1280, height=900)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["empty"] == "Пресетов пока нет" and v["checks"] == [True, True]
+    (name, params), = v["saved"]
+    assert name == "Портрет студия" and params["model"] == "lustify" and params["size"] == "landscape"
+    assert params["seed"] == 42 and params["strength"] == 0.6 and params["prompt"] == "портрет у окна"
+    assert v["prompt"] == "портрет у окна"
+    model, size, seed, strength = v["chips"]
+    assert "Lustify" in model and "Альбом" in size and seed == "42" and strength == "0.6"
+    assert v["kept"] == "свой текст" and v["seedAfterKeep"] == "42"
+    assert "уже есть" in v["replace"][0] and v["replace"][1] == "Заменить"
+    assert v["gone"] == "Пресетов пока нет"
+    assert not problems(r), problems(r)
+
+
+def test_photo_external_model_hides_the_seed(browser, live):
+    """Критерий 7: у внешнего сервиса seed нет — чип seed скрыт, в таблице seed его картинок не показан."""
+    login = "extseed"
+    uid = live.add_user(login)
+    live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                   " VALUES (?, ?, 'generation', 'gpt-image-1', 'облако', '1024x1024', 123456, 'error', 'нет', ?)",
+             ("5eed" * 8, uid, time.time()))
+    # внешний сервис картинок ходит через сервер — адрес из списка администратора (сам он не зовётся)
+    cloud = ("eval", "cloud", f"""(async () => {{ const m = {API};
+      const c = await m.api('POST', '/api/connections', {{ name: 'Облако', kind: 'openai',
+        base_url: {GATEWAY_URL + '/v1'!r}, token: 'cloud-key', sections: ['photo'] }});
+      await m.api('PUT', '/api/sections/photo/links/' + c.id, {{ models: ['gpt-image-1'] }});
+      await m.loadMe(); return c.id; }})()""")
+    seed_hidden = "document.querySelector('#chip-seed').hidden"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), cloud, *go("photo"),
+        ("wait", FEED_READY), ("wait", "document.querySelector('#chip-model-menu [data-value$=\":gpt-image-1\"]')"),
+        ("eval", "onGateway", seed_hidden),
+        ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':gpt-image-1']"),
+        ("eval", "external", seed_hidden),
+        ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':lustify']"),
+        ("eval", "back", seed_hidden),
+        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
+        ("eval", "row", text_of(PHOTO_CARD))], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["onGateway"] is False and v["external"] is True and v["back"] is False
+    assert "gpt-image-1" in v["row"] and "123456" not in v["row"] and "seed" not in v["row"]
+    assert not problems(r), problems(r)
+
+
+#: генерация «кот» (seed 5) и правка FLUX «ярче» из неё через API страницы
+MAKE_CHAIN = f"""(async () => {{ const m = {API};
+  const wait = async (id) => {{ for (let t = 0; t < 200; t++) {{ const i = await m.api('GET', '/api/images/' + id);
+    if (i.state === 'done') return i; await new Promise(r => setTimeout(r, 30)); }} }};
+  const gen = await wait((await m.api('POST', '/api/images', {{ prompt: 'кот', size: 'square', seed: 5 }})).id);
+  const edit = await wait((await m.api('POST', '/api/images', {{ prompt: 'ярче', size: 'original', model: 'flux',
+    source_media_id: gen.media_id }})).id);
+  return [gen.media_id, edit.media_id]; }})()"""
+COMPARE_SIDES = ("[...document.querySelectorAll('#compare .compare-img')].map(i => i.getAttribute('src'))"
+                 ".concat([...document.querySelectorAll('#compare .compare-label')].map(l => l.textContent))")
+#: перетаскивание по рамке сравнения мышью: нажать на 80 %, вести до 60 %, отпустить
+DRAG = """(() => { const f = document.querySelector('#compare .compare-frame'); const b = f.getBoundingClientRect();
+  const at = (x) => ({ bubbles: true, cancelable: true, pointerType: 'mouse', isPrimary: true, pointerId: 1,
+    clientX: b.left + b.width * x, clientY: b.top + b.height / 2 });
+  f.dispatchEvent(new PointerEvent('pointerdown', at(0.8))); f.dispatchEvent(new PointerEvent('pointermove', at(0.6)));
+  f.dispatchEvent(new PointerEvent('pointerup', at(0.6)));
+  return [Number(document.querySelector('#compare-range').value),
+    document.querySelector('#compare .compare-line').style.left]; })()"""
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_photo_compare_from_the_viewer_and_the_selection(browser, live, width):
+    """Критерии 2–3: «Сравнить с исходником» в просмотре правки (исходник слева) и «Сравнить» при двух отмеченных."""
+    login = f"compare{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), ("eval", "made", MAKE_CHAIN),
+        *go("photo"), ("wait", FEED_READY), ("wait", done_cards(2)),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("wait", "document.querySelector('#viewer .act-compare')"),
+        ("click", "#viewer .act-compare"), ("wait", is_open("#compare")),
+        ("eval", "sides", COMPARE_SIDES),
+        set_value("#compare-range", "30"),
+        ("eval", "clip", "[document.querySelector('#compare .compare-right').style.clipPath,"
+                         " document.querySelector('#compare .compare-line').style.left]"),
+        ("eval", "drag", DRAG),
+        ("eval", "fits", f"{NO_OVERFLOW} && ({FITS})('#compare button, #compare input')"),
+        ("click", "#compare-swap"), ("eval", "swapped", COMPARE_SIDES),
+        ("press", "Escape"), ("wait", f"!document.querySelector('#compare') && {is_open('#viewer')}"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#viewer')"),
+        # выделение: одна — «Сравнить» нет, две — есть, режим остаётся
+        ("click", "#photo-select"), ("wait", selecting()), ("click", nth(1)),
+        ("eval", "one", "document.querySelector('#photo-select-compare').hidden"),
+        ("click", nth(2)),
+        ("eval", "two", "document.querySelector('#photo-select-compare').hidden"),
+        ("click", "#photo-select-compare"), ("wait", is_open("#compare")),
+        ("eval", "picked", COMPARE_SIDES),
+        ("press", "Escape"), ("wait", "!document.querySelector('#compare')"),
+        ("eval", "stillSelecting", selecting())], width=width, height=900, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    gen, edit = v["made"]
+    assert v["sides"][:2] == [f"/api/media/{gen}", f"/api/media/{edit}"]
+    assert v["sides"][2].startswith("1. Lustify · 1024×1024 · seed 5") and v["sides"][3].startswith("2. FLUX · 64×48")
+    assert "сила" not in v["sides"][3]                                   # у FLUX силы нет
+    assert "30%" in v["clip"][0] and v["clip"][1] == "30%"
+    assert 55 <= v["drag"][0] <= 65 and v["drag"][1].endswith("%")
+    assert v["fits"] and v["swapped"][:2] == v["sides"][:2][::-1]
+    assert v["one"] is True and v["two"] is False and v["stillSelecting"]
+    assert sorted(v["picked"][:2]) == sorted(f"/api/media/{m}" for m in (gen, edit))
+    assert not problems(r), problems(r)
+
+
+def test_photo_variants_open_a_variant(browser, live):
+    """Критерий 6: «Варианты» в просмотре — соседи по исходнику и сделанные из этой; нажатие открывает вариант."""
+    login = "variants"
+    live.add_user(login)
+    make = ("eval", "made", f"""(async () => {{ const m = {API};
+      const wait = async (id) => {{ for (let t = 0; t < 200; t++) {{ const i = await m.api('GET', '/api/images/' + id);
+        if (i.state === 'done') return i; await new Promise(r => setTimeout(r, 30)); }} }};
+      const gen = await wait((await m.api('POST', '/api/images', {{ prompt: 'кот', size: 'square', seed: 5 }})).id);
+      const out = [gen.id];
+      for (const p of ['синий', 'красный']) out.push((await wait((await m.api('POST', '/api/images',
+        {{ prompt: p, size: 'original', model: 'flux', source_media_id: gen.media_id }})).id)).id);
+      out.push((await wait((await m.api('POST', '/api/images', {{ prompt: 'одинокий', size: 'square' }})).id)).id);
+      window.made = out; return out; }})()""")
+    open_made = ("eval", "openGen", "(() => { document.querySelector(`#photo-feed .photo-card[data-id='${window.made[0]}']"
+                                    " .card-open`).click(); return true; })()")
+    open_blue = ("eval", "openBlue", "(() => { document.querySelector(`#viewer .variant-open[data-id='${window.made[1]}']`)"
+                                     ".click(); return true; })()")
+    variants = "[...document.querySelectorAll('#viewer .variant-open')].map(b => b.dataset.id)"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make, *go("photo"),
+        ("wait", FEED_READY), ("wait", done_cards(4)),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("idle",),
+        ("eval", "lonely", "document.querySelector('#viewer .viewer-variants').hidden"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#viewer')"),
+        open_made, ("wait", is_open("#viewer")),
+        ("wait", "document.querySelectorAll('#viewer .variants-children .variant-open').length === 2"),
+        ("eval", "children", variants), ("eval", "noSiblings", "!document.querySelector('#viewer .variants-siblings')"),
+        open_blue,
+        ("wait", "document.querySelectorAll('#viewer .chain-step').length === 2"
+                 " && document.querySelector('#viewer .variants-siblings')"),
+        ("eval", "opened", "document.querySelector('#viewer .chain-step.now .chain-prompt').textContent"),
+        ("eval", "siblings", variants)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    gen, blue, red, lonely = v["made"]
+    assert v["lonely"] is True
+    assert v["children"] == [red, blue] and v["noSiblings"]
+    assert v["opened"] == "синий" and v["siblings"] == [red]
+    assert not problems(r), problems(r)
+
+
 CLIP = "#video-feed .video-card"
 VIDEO_FEED_READY = ("document.querySelector('#video-feed')?.dataset.feed"
                     " && document.querySelector('#video-feed').dataset.feed !== 'loading'")

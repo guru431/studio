@@ -53,7 +53,16 @@
   фото и видео (превью, плитка, таблица) — `views.js`, выбор, как и тема, — в учётке (`users.views`,
   `PATCH /api/me`); вернувшись на экран, оболочка перечитывает `/api/me`. Выделение нескольких
   записей ленты фото и видео (отметки, долгое нажатие, «Скачать» и «Удалить» пачкой) —
-  `select.js`, групповое сохранение — `save.js` `saveMany`. Иконки (PNG и
+  `select.js` (действия раздела — `extraActions`: «Сравнить» у фото), групповое сохранение —
+  `save.js` `saveMany`. Фото (спека 2026-10-21-studio-photo-presets-compare-series): пресеты —
+  `presets.py` (таблица `presets`, роутер `/api/images/presets` подключён раньше `images`; не
+  история — стирание их не трогает, учётка уносит каскадом) и `presets.js` (чип «★»); серия —
+  поле `series` у `POST /api/images` (`images.run_series`: строки `queued` по одной в слоте
+  пользователя, отмена любой снимает весь остаток; `stop()` и `recover()` переводят `queued` в
+  `error`) и `series.js` (чип «×1» и панель в «Изменить»); варианты —
+  `GET /api/images/<id>/variants` (индекс `images_user_source`); сравнение — `compare.js`
+  (`#compare`); параметры по модели — `chain.js` (`strengthOf` только Lustify, `seedOf` — не у
+  внешнего сервиса; в строку сила пишется только у Lustify). Иконки (PNG и
   `favicon.ico`) — `tools/make_icons.py` по геометрии `icons/icon.svg`: правка рисунка — в обоих,
   PNG коммитятся.
 - Схема базы — `db.VERSION`; новая база получает `SCHEMA` сразу, база прода — шаги `db.STEPS`

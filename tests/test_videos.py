@@ -527,6 +527,7 @@ def test_slow_download_gives_up_by_the_whole_clip_deadline(studio, env, monkeypa
     assert item(studio, v["id"])["state"] == "queued" and share_files(env) == before and media_rows() == 1
     assert studio.gw.video_deleted == []
     del studio.gw.on[path]
+    monkeypatch.setattr(videos, "FETCH_SEC", 30)     # срок — настоящее время: 50 мс под нагрузкой не хватало и обычной передаче
     poll(studio)
     assert item(studio, v["id"])["state"] == "done"
 
