@@ -7,6 +7,8 @@ from datetime import datetime
 
 import auth
 import chat
+import db
+import search as search_api
 import state
 import transcripts
 from conftest import T0, add_gateway, make_user, signin
@@ -73,6 +75,49 @@ def test_index_follows_changed_prompts_titles_and_texts(studio):
     assert found("сред") == found("звонок") == [("transcribe", "t1", "")]
 
 
+def test_a_chat_title_row_follows_the_model_of_the_chat(studio):
+    """Строка названия несёт модель диалога: сменили модель — фильтр по модели находит по новой."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(CHAT, ("c1", uid, "Планы", "old-model", T0, T0))
+    state.DB.execute("UPDATE chats SET model = 'new-model' WHERE id = 'c1'")
+    assert hits(search(studio, model="new-model")) == [("chat", "c1")]
+    assert hits(search(studio, model="old-model")) == []
+
+
+def test_large_documents_and_transcripts_are_indexed_by_their_start(studio):
+    """Документ на 2 млн знаков и длинная расшифровка — в индексе первые INDEX_CHARS знаков: триггеры
+    токенизируют в транзакции хода (цикл событий), и удаление — тот же текст."""
+    uid = make_user(studio, "owner")
+    big = "начало " + "слово " * (db.INDEX_CHARS // 6) + "хвост " + "слово " * 300_000
+    state.DB.execute(CHAT, ("c1", uid, "Отчёт", "m", 1, 1))
+    state.DB.execute(MESSAGE, ("m1", "c1", "user", "вот", "m", 2))
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, created)"
+                     " VALUES ('a1', ?, NULL, 'document', 'отчёт.txt', 'x', ?, 3)", (uid, big))
+    state.DB.execute("UPDATE attachments SET message_id = 'm1' WHERE id = 'a1'")
+    state.DB.execute(TRANSCRIPT, ("t1", uid, "Звонок.m4a", 4, big))
+    assert found("начал") == [("chat", "c1", "a1"), ("transcribe", "t1", "")]
+    assert found("хвост") == []
+    assert state.DB.execute("SELECT MAX(length(body)) FROM search_docs").fetchone()[0] <= db.INDEX_CHARS + 20
+    state.DB.execute("DELETE FROM chats WHERE id = 'c1'")
+    state.DB.execute("DELETE FROM transcripts WHERE id = 't1'")
+    state.DB.execute("INSERT INTO search(search) VALUES ('integrity-check')")    # удаление — тем же текстом
+    assert found("начал") == [] and found("слово") == []
+
+
+def test_reindex_repairs_the_index_and_keeps_yo_where_rebuild_loses_it(studio):
+    """Ремонт индекса: штатный 'rebuild' FTS5 берёт тело search_docs как есть и теряет «ё» = «е»;
+    search.reindex — 'delete-all' и вставка с той же заменой, что у триггеров."""
+    uid = make_user(studio, "owner")
+    seed(uid)
+    state.DB.execute("INSERT INTO search(search) VALUES ('rebuild')")
+    assert found("елк") == []                                 # ловушка, ради которой reindex
+    search_api.reindex(state.DB)
+    assert found("елк") == [("speech", "s", ""), ("video", "v", "")]
+    state.DB.execute("INSERT INTO search(search) VALUES ('integrity-check')")
+    state.DB.execute("DELETE FROM videos WHERE id = 'v'")
+    assert found("елк") == [("speech", "s", "")] and len(found("кош")) == 4
+
+
 def test_answer_is_indexed_once_it_is_done_not_while_it_streams(studio):
     """Ход пишет текст ответа каждые SAVE_SEC со статусом streaming — индекс только по готовому."""
     add_gateway(studio); cid = new_chat(studio)
@@ -133,6 +178,58 @@ def test_backfill_fills_the_text_of_old_transcripts_from_their_files(studio, fak
     texts = dict(state.DB.execute("SELECT id, text FROM transcripts").fetchall())
     assert texts == {tids[0]: "Алло, слышно? Добрый день.", tids[1]: None, tids[2]: "Здравствуйте. Добрый день."}
     assert found("алло") == [("transcribe", tids[0], "")]
+
+
+def test_reset_with_the_share_gone_keeps_the_edits_and_the_text_together(studio, fake_audio, monkeypatch):
+    """«Сбросить правки» читает файл итога до записи: шары нет — 503, а правки и текст для поиска прежние
+    (иначе правки сняты, а текст с ними навсегда: фон заполняет только пустой)."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    assert studio.c.patch(f"/api/transcripts/{tid}", json={"texts": {"1": "Добрый вечер."}}).status_code == 200
+    real = pathlib.Path.read_bytes
+
+    def gone(self):
+        raise OSError("share is gone")
+    monkeypatch.setattr(pathlib.Path, "read_bytes", gone)
+    assert studio.c.delete(f"/api/transcripts/{tid}/edits").status_code == 503
+    monkeypatch.setattr(pathlib.Path, "read_bytes", real)
+    edits, text = state.DB.execute("SELECT edits, text FROM transcripts").fetchone()
+    assert edits is not None and text == "Здравствуйте. Добрый вечер." and found("вечер") == [("transcribe", tid, "")]
+    assert studio.c.delete(f"/api/transcripts/{tid}/edits").status_code == 200
+    assert found("вечер") == [] and found("день") == [("transcribe", tid, "")]
+
+
+def test_backfill_refreshes_the_text_of_transcripts_edited_by_the_old_code(studio, fake_audio):
+    """Откат install.sh: прежний код правит edits, а text не трогает — новый старт пересчитывает текст
+    правленых (их мало), неизменный — не переписывает."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    state.DB.execute("UPDATE transcripts SET edits = ? WHERE id = ?",
+                     ('{"texts": {"1": "Добрый вечер."}, "names": {}}', tid))
+    assert found("вечер") == []
+    assert studio.c.portal.call(transcripts.backfill_text) == 1
+    assert found("вечер") == [("transcribe", tid, "")] and found("день") == []
+    assert studio.c.portal.call(transcripts.backfill_text) == 0
+
+
+def test_transcript_rows_for_the_feed_leave_the_search_text_behind(studio, fake_audio, monkeypatch):
+    """Лента, опрос раз в 3 с и строка записи текст для поиска не тянут — он нужен только индексу."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    uid = state.DB.execute("SELECT user_id FROM transcripts").fetchone()[0]
+    assert "text" not in transcripts._row(uid, tid).keys()
+    listed, real = [], db.page
+
+    def spy(*args, **kwargs):
+        rows = real(*args, **kwargs).fetchall()
+        listed.extend(rows)
+        return rows
+    monkeypatch.setattr(db, "page", spy)
+    assert studio.c.get("/api/transcripts").status_code == 200
+    assert listed and all("text" not in r.keys() for r in listed)
 
 
 # ---- POST /api/search ---------------------------------------------------------
@@ -244,6 +341,16 @@ def test_a_chat_comes_once_by_its_latest_match(studio):
     assert seen == ["c1", "i1", "i2"]
 
 
+def test_a_question_and_its_answer_of_one_time_show_the_answer(studio):
+    """Ход пишет вопрос и ответ с одним created: «последнее совпадение» диалога — ответ (он позже в
+    индексе), а не случайный из двух по id."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(CHAT, ("c1", uid, None, "m", T0, T0))
+    state.DB.execute(MESSAGE, ("mz", "c1", "user", "где кошка", "m", T0 + 1))      # id вопроса — больше
+    state.DB.execute(MESSAGE, ("ma", "c1", "assistant", "кошка на крыше", "m", T0 + 1))
+    assert [i["part"] for i in search(studio, q="кошк").json()["items"]] == ["ma"]
+
+
 def test_deleted_records_chats_and_the_wiped_history_are_gone_at_once(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     seed(uid)
@@ -274,6 +381,10 @@ def test_refusals_need_words_or_a_filter_a_session_and_csrf(studio):
     assert search(studio, q="к" * 201).status_code == 422
     assert search(studio, section="voices").status_code == 422
     assert search(studio, since="2027-02-30").status_code == 422
+    for days in ({"until": "9999-12-31"}, {"since": "9999-12-31"}, {"since": "0001-01-01"}, {"until": "1999-12-31"}):
+        r = search(studio, **days)                   # иначе OverflowError (Linux) / OSError (Windows) — 500
+        assert r.status_code == 422 and r.json()["detail"]["message"] == search_api.DAYS_WORDS, days
+    assert search(studio, since="2000-01-01", until="2100-12-31").status_code == 200
     assert search(studio, q="кошк", limit=51).status_code == 422
     csrf = studio.c.headers.pop(auth.CSRF_HEADER)
     assert search(studio, q="кошк").status_code == 403
@@ -306,3 +417,24 @@ def test_search_of_twenty_thousand_rows_is_quick(studio):
             spent.append(time.perf_counter() - started)
         assert min(spent) < 0.2, (body, spent)
     assert hits(search(studio, q="номер 19999")) == [("photo", "i19999")]
+
+
+def test_one_letter_over_a_large_vocabulary_is_quick(studio):
+    """Короткое начало слова: snippet() по «к»* без индекса префиксов сливал списки позиций всех слов
+    на «к» на каждую строку выдачи (150 000 разных слов — 1,4 с в цикле событий); с prefix='1 2 3' —
+    миллисекунды."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(                                # 3000 промптов по 50 разных слов на «к»
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 2999),"
+        " w(j) AS (SELECT 0 UNION ALL SELECT j + 1 FROM w WHERE j < 49)"
+        " INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+        " SELECT printf('i%05d', i), ?, 'generation', 'flux',"
+        " (SELECT group_concat('к' || lower(hex(randomblob(3))), ' ') FROM w WHERE i >= 0),"
+        " '1024x1024', 1, 'done', 'готово', ? + i FROM n", (uid, T0))
+    spent = []
+    for _ in range(2):                               # лучшее из двух: соседние процессы набора делят ядра
+        started = time.perf_counter()
+        r = search(studio, q="к")
+        spent.append(time.perf_counter() - started)
+        assert r.status_code == 200 and len(r.json()["items"]) == 30 and "\u0002" in r.json()["items"][0]["snippet"]
+    assert min(spent) < 0.2, spent
