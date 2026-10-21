@@ -18,7 +18,8 @@
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
  * Раздел без модели (ctx.hint): лента, просмотр, «Скачать» и «Удалить» — как всегда, вместо поля
  * промпта — подсказка, в просмотре нет «Изменить» и «Повторить».
- * #/photo?id=<id> («Открыть» в «В работе», jobs.js): готовая — просмотр, иначе — её карточка; запуск
+ * #/photo?id=<id> («Открыть» в «В работе», jobs.js): готовая — просмотр, иначе — её карточка; в уже
+ * открытом разделе — update, без пересборки (промпт, исходник, серия, выделение целы); запуск
  * задания зовёт jobs.kick().
  *
  * Спека 2026-10-21-studio-photo-presets-compare-series: чип «★» — пресеты (presets.js); чип «×1» —
@@ -194,22 +195,28 @@ function build(view, ctx) {
     const node = focusId && feedBox.querySelector(`.photo-card[data-id="${CSS.escape(focusId)}"]`);
     if (!node) return;
     focusId = null;
+    for (const old of feedBox.querySelectorAll('.jobs-focus')) old.classList.remove('jobs-focus');
     node.classList.add('jobs-focus');
     node.scrollIntoView({ block: 'center' });
   }
 
-  const wanted = ctx.query.get('id');
-  if (wanted) {
+  /** ?id адреса — при сборке и при переходе внутри раздела (update): прочее состояние не трогает. */
+  function follow(wanted) {
+    if (!wanted) return;
     history.replaceState(null, '', '#/photo');
     api('GET', `/api/images/${encodeURIComponent(wanted)}`).then((item) => {
       if (!alive) return;
-      if (item.state === 'done' && item.media_id) openViewer(item);
-      else {
+      if (item.state === 'done' && item.media_id) {
+        const shown = root.querySelector('#viewer');
+        if (shown) shown.close();                       // просмотр один: прежний уступает
+        openViewer(item);
+      } else {
         focusId = item.id;
         focusCard();
       }
     }, (err) => { if (alive) error.textContent = words(err); });
   }
+  follow(ctx.query.get('id'));
 
   /* меню чипов и раздела */
   function chipMenu(id, initial, get, set) {
@@ -983,6 +990,7 @@ function build(view, ctx) {
   }, (err) => say(words(err), true));
 
   return {
+    follow,
     destroy() {
       alive = false;
       selection.destroy();
@@ -998,6 +1006,11 @@ function build(view, ctx) {
 
 export function mount(view, ctx) {
   screen = build(view, ctx);
+}
+
+/** Переход внутри открытого раздела (#/photo?id=…): только ?id — промпт, исходник, серия и выделение целы. */
+export function update(ctx) {
+  if (screen) screen.follow(ctx.query.get('id'));
 }
 
 export function unmount() {

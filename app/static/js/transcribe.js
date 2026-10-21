@@ -467,13 +467,21 @@ function build(view, ctx) {
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
+  /** ?id адреса («Открыть» в «В работе», «к записи» из чата) — при сборке и при переходе внутри раздела
+   * (update): черновик правки той же записи цел (show его не трогает). */
+  function follow(wanted) {
+    if (wanted) {
+      history.replaceState(null, '', '#/transcribe');
+      picked = false;
+    }
+    // пока шёл список, запись могли выбрать сами (загрузка, список другого чтения) — её не перебивать
+    records.load().then(() => { if (wanted && !picked) select(wanted, true); });
+  }
   paintView();
-  const wanted = ctx.query && ctx.query.get('id');     // «Открыть» в «В работе», «к записи» из чата
-  if (wanted) history.replaceState(null, '', '#/transcribe');
-  // пока шёл первый список, запись могли выбрать сами (загрузка, список другого чтения) — её не перебивать
-  records.load().then(() => { if (wanted && !picked) select(wanted, true); });
+  follow(ctx.query && ctx.query.get('id'));
 
   return {
+    follow,
     destroy() {
       records.stop();
     },
@@ -482,6 +490,12 @@ function build(view, ctx) {
 
 export function mount(view, ctx) {
   screen = build(view, ctx);
+}
+
+/** Переход внутри открытого раздела (#/transcribe?id=…): только ?id — правка и прочее состояние целы. */
+export function update(ctx) {
+  const wanted = ctx.query && ctx.query.get('id');
+  if (screen && wanted) screen.follow(wanted);
 }
 
 export function unmount() {

@@ -257,14 +257,18 @@ function build(view, ctx) {
   backdrop.addEventListener('click', () => panel(false));
   paintView();
   loadChoices();
-  records.load();
-  const wanted = ctx.query.get('id');          // из «В работе»: выбрать озвучку, ?id из адреса убрать
-  if (wanted) {
+  /** Список и ?id «В работе»: выбрать озвучку, ?id из адреса убрать — при сборке и при переходе внутри
+   * раздела (update; список заново — запись могла начаться на другом устройстве). */
+  function follow(wanted) {
+    records.load();
+    if (!wanted) return;
     history.replaceState(null, '', '#/speech');
     select(wanted);
   }
+  follow(ctx.query.get('id'));
 
   return {
+    follow,
     destroy() {
       records.stop();
     },
@@ -273,6 +277,12 @@ function build(view, ctx) {
 
 export function mount(view, ctx) {
   screen = build(view, ctx);
+}
+
+/** Переход внутри открытого раздела (#/speech?id=…): только ?id — набранный текст и голос целы. */
+export function update(ctx) {
+  const wanted = ctx.query.get('id');
+  if (screen && wanted) screen.follow(wanted);
 }
 
 export function unmount() {
