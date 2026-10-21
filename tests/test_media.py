@@ -1,5 +1,6 @@
 """Файлы истории на шаре (app/media.py): запись, превью, чтение с диапазонами, удаление."""
 import asyncio
+import builtins
 import dataclasses
 import io
 import logging
@@ -593,6 +594,27 @@ def test_archive_skips_rows_and_files_gone_after_the_list(studio, env):
     for mid in (b, c):                                           # строк не осталось — 404
         asyncio.run(media.delete_async(uid, mid))
     assert studio.c.get(f"/api/media/archives/{token}").status_code == 404
+
+
+def test_archive_keeps_a_file_that_vanishes_after_it_was_opened(studio, monkeypatch):
+    """Файл открывается один раз: CRC и данные — с одного дескриптора (на Linux удалённый открытый файл
+    читается), а не «заголовок отдан, второе открытие — FileNotFoundError»."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "m.mp4")
+    token = archive(studio, [mid]).json()["id"]
+    target, real, opened = str(media.path(uid, mid)), builtins.open, []
+
+    def gone_after_first(file, *args, **kwargs):
+        if str(file) == target:
+            opened.append(1)
+            if len(opened) > 1:
+                raise FileNotFoundError(target)
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", gone_after_first)
+    zf = zipfile.ZipFile(io.BytesIO(studio.c.get(f"/api/media/archives/{token}").content))
+    assert zf.testzip() is None and zf.namelist() == ["m.mp4"] and zf.read("m.mp4") == DATA
+    assert len(opened) == 1
 
 
 def test_archive_with_the_share_down_is_503_in_words(studio, env, monkeypatch):

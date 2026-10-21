@@ -4,12 +4,18 @@
   в памяти службы (EXPORTS, как media.ARCHIVES) на EXPORT_TTL_SEC, живых — не больше EXPORT_KEEP на
   пользователя; files и bytes — оценка по строкам media выбранных разделов.
 - `GET /api/me/export/<токен>` — ZIP_STORED потоком (писатель — media.ZipWriter): README.txt,
-  settings.json, `chats/<id>.json` (диалог — своим файлом), images/videos/transcripts/speeches/voices.json,
-  `files/<media id><расширение>`, последним — manifest.json с sha256 всего записанного.
+  settings.json, `chats/<id>.json` (диалог — своим файлом), разделы страницами по PAGE записей
+  (`images/0001.json` …; пустой раздел — одна пустая страница), `files/<media id><расширение>`,
+  последним — manifest.json с sha256 всего записанного. Идёт не больше одной выгрузки у пользователя
+  (RUNNING): вторая загрузка, пока идёт первая, — 409 `busy` словами.
 - Всё — своё (`user_id` сессии). Нет токенов подключений, хеша пароля, сессий, CSRF, passkey.
-- База — только с цикла событий (одна state.DB): генератор асинхронный, строки читает по одной
-  записи; файлы — в потоке (asyncio.to_thread): первый проход — CRC-32 и sha256, второй — данные.
-  Это не снимок: строка, ушедшая во время выгрузки, пропускается, её файл — в manifest.missing.
+- База — только с цикла событий (одна state.DB): генератор асинхронный, строки читает порциями —
+  диалог, страница раздела. JSON, CRC-32 и sha256 — в потоке (asyncio.to_thread, `_pack`): страница
+  картинок с цепочками — мегабайты, и цикл событий (потоки чата всех) их не ждёт; заголовок записи и
+  её данные уходят разными кусками, без склейки. Файл открывается один раз (media.open_summed):
+  первый проход — суммы, второй — данные с того же дескриптора.
+- Это не снимок: строка, ушедшая во время выгрузки, пропускается, её файл — в manifest.missing. Файла
+  нет и каталога шары тоже нет (шару отмонтировали) — обрыв ответа, а не «целый» архив без файлов.
 - Шару проверяют, только если есть файлы: выгрузка одних диалогов законна и без неё.
 - Журнал — «export: N файлов» и предупреждение на сбой, без имён, путей и промптов.
 """
@@ -18,9 +24,9 @@ import hashlib
 import json
 import logging
 import secrets
+import weakref
 import zlib
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -38,8 +44,12 @@ EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2
 #: блок чтения файла — один шаг потока
 CHUNK = 1 << 20
+#: записей раздела на страницу JSON: пик памяти — страница (10k картинок с цепочками — 64 МиБ JSON)
+PAGE = 500
 #: токен → (user_id, разделы, время создания)
 EXPORTS: dict[str, tuple[int, tuple[str, ...], float]] = {}
+#: user_id → метка идущей выгрузки: одна за раз (снимает конец генератора или его уход из памяти)
+RUNNING: dict[int, object] = {}
 #: раздел → (таблица, столбцы со ссылкой на media, условие); таблицы и столбцы — из кода
 REFS = {
     "chat": ("attachments", ("media_id",), " AND message_id IS NOT NULL"),
@@ -50,19 +60,22 @@ REFS = {
     "voices": ("voices", ("media_id",), ""),
 }
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
+BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
 
 README = """Выгрузка истории студии
 
 Что внутри:
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
-  (подключения и отмеченные модели, умолчания) и пресеты, если они есть.
+  (подключения и отмеченные модели, умолчания) и пресеты.
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл).
-- images.json — картинки: промпт, модель, размер, seed, цепочка промптов, файлы итога, исходника, маски.
-- videos.json — ролики, transcripts.json — расшифровки (и правки, если были), speeches.json — озвучки,
-  voices.json — образцы голосов. Файлы — ссылками «files/…».
+- images/0001.json, images/0002.json … — картинки страницами по 500: промпт, модель, размер, seed,
+  цепочка промптов, файлы итога, исходника, маски.
+- videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
+  образцы голосов, так же страницами. Файлы — ссылками «files/…».
 - files/<id>.<расширение> — сами файлы (без миниатюр).
-- manifest.json — последним: что в архиве, sha256 каждого файла (files) и каждой записи JSON и этого
-  описания (entries), id файлов, которых на хранилище уже не было (missing).
+- manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
+  (files) и каждой записи JSON и этого описания (entries), id файлов, которых на хранилище уже не
+  было (missing).
 
 Ключей подключений, пароля и сессий в выгрузке нет. Обратно в студию выгрузка не загружается —
 это формат для чтения и хранения. Время — секунды Unix (UTC).
@@ -77,15 +90,6 @@ class ExportIn(BaseModel):
 
 
 # ---- чтение базы (цикл событий) --------------------------------------------------
-
-def _has_table(name: str) -> bool:
-    return state.DB.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                            (name,)).fetchone() is not None
-
-
-def _has_column(table: str, column: str) -> bool:
-    return any(row["name"] == column for row in state.DB.execute(f"PRAGMA table_info({table})"))
-
 
 def _maybe_json(text):
     try:
@@ -112,7 +116,7 @@ def _file_name(row) -> str:
 def _settings(user_id: int) -> dict:
     user = state.DB.execute("SELECT login, name, theme, views, screen_lock FROM users WHERE id = ?",
                             (user_id,)).fetchone()
-    out = {
+    return {
         "profile": {"login": user["login"], "name": user["name"], "theme": user["theme"],
                     "views": _maybe_json(user["views"]), "screen_lock": bool(user["screen_lock"])},
         "connections": [{"id": r["id"], "name": r["name"], "kind": r["kind"], "base_url": r["base_url"]}
@@ -125,12 +129,10 @@ def _settings(user_id: int) -> dict:
             "defaults": [dict(r) for r in state.DB.execute("SELECT section, connection_id, model FROM section_defaults"
                                                            " WHERE user_id = ? ORDER BY section", (user_id,))],
         },
+        "presets": [{k: _maybe_json(r[k]) if k == "params" else r[k] for k in r.keys() if k != "user_id"}
+                    for r in state.DB.execute("SELECT * FROM presets WHERE user_id = ? ORDER BY created, id",
+                                              (user_id,))],
     }
-    if _has_table("presets"):
-        out["presets"] = [{k: _maybe_json(r[k]) if k == "params" else r[k] for k in r.keys() if k != "user_id"}
-                          for r in state.DB.execute("SELECT * FROM presets WHERE user_id = ? ORDER BY created, id",
-                                                    (user_id,))]
-    return out
 
 
 def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
@@ -152,139 +154,157 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
     return {**dict(chat), "messages": messages}
 
 
-def _rows(table: str, user_id: int) -> list:
-    return state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ? ORDER BY created, id", (user_id,)).fetchall()
+def _pages(table: str, user_id: int):
+    """Строки раздела страницами по PAGE — курсором (created, id) последней строки, без OFFSET: у записей
+    бывает одно время. Пустой раздел — одна пустая страница."""
+    where, args = "", ()
+    while True:
+        rows = state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ?{where} ORDER BY created, id LIMIT ?",
+                                (user_id, *args, PAGE)).fetchall()
+        if rows or not args:
+            yield rows
+        if len(rows) < PAGE:
+            return
+        where = " AND (created > ? OR (created = ? AND id > ?))"
+        args = (rows[-1]["created"], rows[-1]["created"], rows[-1]["id"])
 
 
 def _pick(row, *keys) -> dict:
     return {k: row[k] for k in keys}
 
 
-def _images(user_id: int, files: dict) -> list:
+def _images(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "kind", "model", "prompt", "size", "seed", "strength", "state", "detail", "created",
                   "finished")
             | {"chain": chains.of_image(user_id, r), "file": files.get(r["media_id"]),
                "source_file": files.get(r["source_media_id"]), "mask_file": files.get(r["mask_media_id"])}
-            for r in _rows("images", user_id)]
+            for r in rows]
 
 
-def _videos(user_id: int, files: dict) -> list:
+def _videos(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "prompt", "prompt_source", "seconds", "quality", "smooth", "seed", "state", "progress",
                   "detail", "created", "finished")
             | {"chain": chains.of_video(user_id, r), "file": files.get(r["media_id"]),
                "source_file": files.get(r["source_media_id"])}
-            for r in _rows("videos", user_id)]
+            for r in rows]
 
 
-def _transcripts(user_id: int, files: dict) -> list:
-    edits = _has_column("transcripts", "edits")           # правки расшифровки — если они уже есть в базе
+def _transcripts(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "model", "name", "duration", "speakers", "state", "detail", "created", "finished")
-            | {"file": files.get(r["source_media_id"]), "result_file": files.get(r["result_media_id"])}
-            | ({"edits": _maybe_json(r["edits"])} if edits else {})
-            for r in _rows("transcripts", user_id)]
+            | {"file": files.get(r["source_media_id"]), "result_file": files.get(r["result_media_id"]),
+               "edits": _maybe_json(r["edits"])}
+            for r in rows]
 
 
-def _speeches(user_id: int, files: dict) -> list:
+def _speeches(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "model", "voice", "text", "duration", "state", "detail", "created", "finished")
-            | {"file": files.get(r["media_id"])} for r in _rows("speeches", user_id)]
+            | {"file": files.get(r["media_id"])} for r in rows]
 
 
-def _voices(user_id: int, files: dict) -> list:
+def _voices(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "name", "ref_text", "duration", "created") | {"file": files.get(r["media_id"])}
-            for r in _rows("voices", user_id)]
+            for r in rows]
 
 
-#: раздел → (имя JSON, сборщик); чат — отдельно, по файлу на диалог
+#: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
 TABLES = {"photo": ("images", _images), "video": ("videos", _videos), "transcribe": ("transcripts", _transcripts),
           "speech": ("speeches", _speeches), "voices": ("voices", _voices)}
 
 
-# ---- файлы (поток) -----------------------------------------------------------------
-
-def _sums(file: Path) -> tuple[int, int, str]:
-    """CRC-32, размер и sha256 — одним чтением: заголовок записи уходит раньше её данных."""
-    crc = size = 0
-    digest = hashlib.sha256()
-    with open(file, "rb") as f:
-        while block := f.read(CHUNK):
-            crc = zlib.crc32(block, crc)
-            digest.update(block)
-            size += len(block)
-    return crc, size, digest.hexdigest()
-
-
-async def _blocks(file: Path, size: int):
-    f = await asyncio.to_thread(open, file, "rb")
-    try:
-        left = size
-        while left > 0:
-            block = await asyncio.to_thread(f.read, min(CHUNK, left))
-            if not block:
-                raise OSError("файл стал короче")
-            left -= len(block)
-            yield block
-    finally:
-        f.close()
-
+# ---- запись: JSON и суммы — в потоке ------------------------------------------------
 
 def _json(value) -> bytes:
     return json.dumps(value, ensure_ascii=False, indent=1).encode("utf-8")
 
 
-async def _stream(user_id: int, sections: tuple[str, ...], rows: list):
+def _pack(value) -> tuple[bytes, int, str]:
+    """Байты записи (JSON или готовые), CRC-32 и sha256 — в потоке: данные — уже словари, базы здесь нет."""
+    data = value if isinstance(value, bytes) else _json(value)
+    return data, zlib.crc32(data), hashlib.sha256(data).hexdigest()
+
+
+def _release(user_id: int, mark: object) -> None:
+    if RUNNING.get(user_id) is mark:
+        del RUNNING[user_id]
+
+
+async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: object):
     out, now = media.ZipWriter(), clock.NOW()
     files = {r["id"]: _file_name(r) for r in rows}
     entries, counts = [], {}
 
-    def record(name: str, data: bytes) -> bytes:
-        entries.append({"path": name, "sha256": hashlib.sha256(data).hexdigest()})
-        return out.entry(name, now, zlib.crc32(data), len(data)) + data
+    async def record(name: str, value, listed: bool = True):
+        """Заголовок записи и её данные — разными кусками: склейка — ещё одна копия страницы."""
+        data, crc, digest = await asyncio.to_thread(_pack, value)
+        if listed:
+            entries.append({"path": name, "sha256": digest})
+        yield out.entry(name, now, crc, len(data))
+        yield data
 
-    yield record("README.txt", README.encode("utf-8"))
-    yield record("settings.json", _json(_settings(user_id)))
-    if "chat" in sections:
-        ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? ORDER BY created, id",
-                                                 (user_id,))]
-        counts["chats"] = 0
-        for chat_id in ids:
-            chat = _chat(user_id, chat_id, files)
-            if chat is not None:
-                counts["chats"] += 1
-                yield record(f"chats/{chat_id}.json", _json(chat))
-    for section, (name, collect) in TABLES.items():
-        if section in sections:
-            items = collect(user_id, files)
-            counts[name] = len(items)
-            yield record(f"{name}.json", _json(items))
-    listed, missing = [], []
     try:
-        for row in rows:
-            alive = state.DB.execute("SELECT rel_path FROM media WHERE id = ? AND user_id = ?",
-                                     (row["id"], user_id)).fetchone()
-            file = state.CFG.media_dir / alive["rel_path"] if alive is not None else None
-            try:
-                if file is None:
-                    raise FileNotFoundError
-                crc, size, digest = await asyncio.to_thread(_sums, file)
-            except FileNotFoundError:
-                missing.append(row["id"])
-                continue
-            yield out.entry(files[row["id"]], row["created"], crc, size)
-            async for block in _blocks(file, size):
-                yield block
-            listed.append({"path": files[row["id"]], "media_id": row["id"], "mime": row["mime"], "size": size,
-                           "sha256": digest, "download_name": row["download_name"], "created": row["created"]})
-    except OSError:
-        log.warning("export: хранилище оборвало чтение")
-        raise media.StorageError("хранилище оборвало чтение") from None
-    counts["files"] = len(listed)
-    user = state.DB.execute("SELECT login, name FROM users WHERE id = ?", (user_id,)).fetchone()
-    manifest = {"format": "studio-export", "version": 1, "created": now, "schema": db.VERSION,
-                "user": {"login": user["login"], "name": user["name"]}, "sections": list(sections), "counts": counts,
-                "files": listed, "entries": entries, "missing": missing}
-    data = _json(manifest)
-    yield out.entry("manifest.json", now, zlib.crc32(data), len(data)) + data
-    yield out.end()
+        async for piece in record("README.txt", README.encode("utf-8")):
+            yield piece
+        async for piece in record("settings.json", _settings(user_id)):
+            yield piece
+        if "chat" in sections:
+            ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? ORDER BY created, id",
+                                                     (user_id,))]
+            counts["chats"] = 0
+            for chat_id in ids:
+                chat = _chat(user_id, chat_id, files)
+                if chat is not None:
+                    counts["chats"] += 1
+                    async for piece in record(f"chats/{chat_id}.json", chat):
+                        yield piece
+        for section, (name, collect) in TABLES.items():
+            if section in sections:
+                counts[name] = 0
+                for n, page in enumerate(_pages(name, user_id), 1):
+                    counts[name] += len(page)
+                    async for piece in record(f"{name}/{n:04d}.json", collect(user_id, page, files)):
+                        yield piece
+        listed, missing = [], []
+        try:
+            for row in rows:
+                alive = state.DB.execute("SELECT rel_path FROM media WHERE id = ? AND user_id = ?",
+                                         (row["id"], user_id)).fetchone()
+                if alive is None:                              # строка ушла во время выгрузки
+                    missing.append(row["id"])
+                    continue
+                try:
+                    f, crc, size, digest = await asyncio.to_thread(
+                        media.open_summed, state.CFG.media_dir / alive["rel_path"], CHUNK, True)
+                except FileNotFoundError:
+                    # каталога шары нет (отмонтировали) — OSError и обрыв, а не «missing» у всех остальных
+                    await asyncio.to_thread(state.CFG.media_dir.stat)
+                    missing.append(row["id"])
+                    continue
+                try:
+                    yield out.entry(files[row["id"]], row["created"], crc, size)
+                    left = size
+                    while left > 0:
+                        block = await asyncio.to_thread(f.read, min(CHUNK, left))
+                        if not block:
+                            raise OSError("файл стал короче")
+                        left -= len(block)
+                        yield block
+                finally:
+                    f.close()
+                listed.append({"path": files[row["id"]], "media_id": row["id"], "mime": row["mime"], "size": size,
+                               "sha256": digest, "download_name": row["download_name"], "created": row["created"]})
+        except OSError:
+            log.warning("export: хранилище оборвало чтение")
+            raise media.StorageError("хранилище оборвало чтение") from None
+        counts["files"] = len(listed)
+        user = state.DB.execute("SELECT login, name FROM users WHERE id = ?", (user_id,)).fetchone()
+        manifest = {"format": "studio-export", "version": 1, "created": now, "schema": db.VERSION,
+                    "user": {"login": user["login"], "name": user["name"]}, "sections": list(sections),
+                    "counts": counts, "files": listed, "entries": entries, "missing": missing}
+        async for piece in record("manifest.json", manifest, listed=False):
+            yield piece
+        yield out.end()
+    finally:
+        _release(user_id, mark)
 
 
 # ---- маршруты ----------------------------------------------------------------------
@@ -324,8 +344,15 @@ async def get_export(token: str, request: Request):
     rows = _media_rows(uid, held[1])
     if rows:
         await _share_ready()
+    # проверка и метка — без await между ними: две загрузки разом не проскочат обе
+    if uid in RUNNING:
+        raise HTTPException(409, BUSY)
+    mark = object()
+    RUNNING[uid] = mark
+    body = _stream(uid, held[1], rows, mark)
+    weakref.finalize(body, _release, uid, mark)            # ответ так и не начался — метку снимет уход из памяти
     log.info("export: %d файлов", len(rows))
     day = datetime.fromtimestamp(clock.NOW()).strftime("%Y-%m-%d")
-    return StreamingResponse(_stream(uid, held[1], rows), media_type="application/zip",
+    return StreamingResponse(body, media_type="application/zip",
                              headers={"Content-Disposition": media.disposition(f"studio-export-{day}.zip"),
                                       "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

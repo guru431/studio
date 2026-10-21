@@ -1,12 +1,19 @@
 """Выгрузка своей истории одним ZIP (app/takeout.py, спека 2026-10-21-studio-export-restore-check)."""
 import asyncio
+import builtins
 import dataclasses
+import gc
 import hashlib
 import io
 import json
 import logging
+import struct
 import zipfile
 from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 import auth
 import db
@@ -106,8 +113,8 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     assert names[0] == "README.txt" and names[-1] == "manifest.json"
     files = {f"files/{mid}{media.EXT[mime]}" for mid, mime in
              ((r["id"], r["mime"]) for r in state.DB.execute("SELECT id, mime FROM media"))}
-    assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images.json",
-                          "videos.json", "transcripts.json", "speeches.json", "voices.json", "manifest.json"} | files
+    assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images/0001.json",
+                          "videos/0001.json", "transcripts/0001.json", "speeches/0001.json", "voices/0001.json", "manifest.json"} | files
     assert {zipfile.ZIP_STORED} == {i.compress_type for i in zf.infolist()}
     chat = json.loads(zf.read("chats/minechat1.json"))
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
@@ -115,16 +122,16 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     att = chat["messages"][0]["attachments"]
     assert att == [{"id": "mineatt", "kind": "document", "name": "mine.pdf", "chars": 5, "text": "mine doc text",
                     "file": f"files/{m['doc']}.pdf"}]
-    image = json.loads(zf.read("images.json"))[0]
+    image = json.loads(zf.read("images/0001.json"))[0]
     assert image["prompt"] == "mine prompt" and image["file"] == f"files/{m['img']}.png"
     assert image["source_file"] == f"files/{m['src']}.jpg" and image["mask_file"] == f"files/{m['mask']}.png"
     assert image["chain"][-1]["prompt"] == "mine prompt"
-    video = json.loads(zf.read("videos.json"))[0]
+    video = json.loads(zf.read("videos/0001.json"))[0]
     assert video["file"] == f"files/{m['clip']}.mp4" and video["source_file"] == f"files/{m['img']}.png"
-    tr = json.loads(zf.read("transcripts.json"))[0]
+    tr = json.loads(zf.read("transcripts/0001.json"))[0]
     assert tr["name"] == "mine meeting" and tr["file"].endswith(".mp3") and tr["result_file"].endswith(".json")
-    assert json.loads(zf.read("speeches.json"))[0]["text"] == "mine spoken"
-    assert json.loads(zf.read("voices.json"))[0]["ref_text"] == "mine ref text"
+    assert json.loads(zf.read("speeches/0001.json"))[0]["text"] == "mine spoken"
+    assert json.loads(zf.read("voices/0001.json"))[0]["ref_text"] == "mine ref text"
     assert zf.read(f"files/{m['clip']}.mp4") == DATA + b"clip"
     manifest = json.loads(zf.read("manifest.json"))
     assert manifest["format"] == "studio-export" and manifest["version"] == 1 and manifest["schema"] == db.VERSION
@@ -150,7 +157,7 @@ def test_export_takes_only_chosen_sections(studio):
     names = unzip(z).namelist()
     assert est["files"] == 3 and sorted(n for n in names if n.startswith("files/")) == sorted(
         f"files/{m[k]}{'.jpg' if k == 'src' else '.png'}" for k in ("img", "src", "mask"))
-    assert {n for n in names if not n.startswith("files/")} == {"README.txt", "settings.json", "images.json",
+    assert {n for n in names if not n.startswith("files/")} == {"README.txt", "settings.json", "images/0001.json",
                                                                "manifest.json"}
     assert json.loads(unzip(z).read("manifest.json"))["sections"] == ["photo"]
 
@@ -272,10 +279,10 @@ def test_export_read_failure_breaks_the_answer_without_names(studio, env, monkey
     history(uid, "mine")
     token = prepare(studio).json()["id"]
 
-    def broken(file):
+    def broken(file, *args, **kwargs):
         raise OSError(f"[Errno 5] Input/output error: '{file}'")
 
-    monkeypatch.setattr(takeout, "_sums", broken)
+    monkeypatch.setattr(media, "open_summed", broken)
     with caplog.at_level(logging.INFO, logger="studio"):
         try:
             studio.c.get(f"/api/me/export/{token}")
@@ -287,8 +294,8 @@ def test_export_read_failure_breaks_the_answer_without_names(studio, env, monkey
     assert str(env.media_dir) not in caplog.text and "mine" not in caplog.text
 
 
-def test_export_holds_transcript_edits_and_presets_when_the_base_has_them(studio):
-    """Правки расшифровки (шаг 11) и пресеты фото (шаг 12) есть в базе — есть и в выгрузке, чужие — нет."""
+def test_export_holds_transcript_edits_and_presets(studio):
+    """Правки расшифровки и пресеты фото — в выгрузке, чужие — нет."""
     bob = make_user(studio, "bob")
     uid = make_user(studio, "owner"); signin(studio, "owner")
     history(uid, "mine")
@@ -297,17 +304,145 @@ def test_export_holds_transcript_edits_and_presets_when_the_base_has_them(studio
     put("INSERT INTO presets VALUES ('p2', ?, 'photo', 'theirs', '{}', ?)", bob, T0)
     _, z = download(studio)
     zf = unzip(z)
-    assert json.loads(zf.read("transcripts.json"))[0]["edits"] == {"segments": {"0": "fixed"}}
+    assert json.loads(zf.read("transcripts/0001.json"))[0]["edits"] == {"segments": {"0": "fixed"}}
     assert json.loads(zf.read("settings.json"))["presets"] == [
         {"id": "p1", "section": "photo", "name": "night", "params": {"model": "lustify"}, "created": T0}]
 
 
-def test_export_without_edits_and_presets_says_nothing_of_them(studio):
-    """База без столбца правок и таблицы пресетов (как до шагов 11 и 12) выгружается без них."""
+def as_user(uid):
+    return SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)))
+
+
+def drain(uid, token, on_piece=lambda piece: None) -> list:
+    """Куски ответа GET выгрузки — прямо из генератора, как их отдаёт Starlette."""
+    async def go():
+        pieces = []
+        async for piece in (await takeout.get_export(token, as_user(uid))).body_iterator:
+            pieces.append(piece)
+            on_piece(piece)
+        return pieces
+    return asyncio.run(go())
+
+
+def test_export_builds_json_off_the_event_loop(studio, monkeypatch):
+    """JSON разделов, диалогов, настроек и манифеста — в потоке: 64 МиБ картинок не стоят чату цикл."""
     uid = make_user(studio, "owner"); signin(studio, "owner")
     history(uid, "mine")
-    state.DB.executescript("ALTER TABLE transcripts DROP COLUMN edits; DROP TABLE presets;")
-    _, z = download(studio)
-    zf = unzip(z)
-    assert "edits" not in json.loads(zf.read("transcripts.json"))[0]
-    assert "presets" not in json.loads(zf.read("settings.json"))
+    calls, real = [], takeout._json
+
+    def watched(value):
+        try:
+            asyncio.get_running_loop()
+            calls.append("loop")
+        except RuntimeError:
+            calls.append("thread")
+        return real(value)
+
+    monkeypatch.setattr(takeout, "_json", watched)
+    download(studio)
+    assert calls and set(calls) == {"thread"}, calls
+
+
+def test_export_sends_entry_headers_apart_from_their_data(studio):
+    """Заголовок записи и её данные — разными кусками: склейка — ещё одна копия страницы в памяти."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    history(uid, "mine")
+    pieces = drain(uid, prepare(studio).json()["id"])
+    headers = [p for p in pieces if p[:4] == b"PK\x03\x04"]
+    assert len(headers) == 19                    # README, settings, 2 диалога, 5 разделов, 9 файлов, манифест
+    for p in headers:
+        name_len, extra_len = struct.unpack_from("<HH", p, 26)
+        assert len(p) == 30 + name_len + extra_len, p[30:30 + name_len]
+    zf = zipfile.ZipFile(io.BytesIO(b"".join(pieces)))
+    assert zf.testzip() is None
+
+
+def test_export_pages_big_sections(studio, monkeypatch):
+    """Раздел — страницами по PAGE записей (`images/0001.json` …): память — на страницу, а не на раздел."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    history(uid, "mine")
+    for n in range(4):                                   # то же время создания — порядок по id
+        put("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id, media_id,"
+            " state, detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'generation', 'lustify', ?,"
+            " '1024x1024', 1, NULL, NULL, NULL, 'error', 'x', ?, ?, NULL, NULL)", f"extra{n}", uid, f"p{n}", T0, T0)
+    monkeypatch.setattr(takeout, "PAGE", 2)
+    zf = unzip(download(studio, ["photo", "voices"])[1])
+    names = zf.namelist()
+    assert [n for n in names if n.startswith("images/")] == ["images/0001.json", "images/0002.json", "images/0003.json"]
+    assert [n for n in names if n.startswith("voices/")] == ["voices/0001.json"]
+    pages = [json.loads(zf.read(n)) for n in names if n.startswith("images/")]
+    assert [len(p) for p in pages] == [2, 2, 1]
+    assert sorted(x["id"] for p in pages for x in p) == sorted(["mineimg", *(f"extra{n}" for n in range(4))])
+    manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["counts"]["images"] == 5 and manifest["counts"]["voices"] == 1
+    assert {"images/0001.json", "images/0003.json"} <= {e["path"] for e in manifest["entries"]}
+
+
+def test_export_of_an_empty_section_is_one_empty_page(studio):
+    make_user(studio, "owner"); signin(studio, "owner")
+    zf = unzip(download(studio, ["speech"])[1])
+    assert json.loads(zf.read("speeches/0001.json")) == []
+    assert json.loads(zf.read("manifest.json"))["counts"]["speeches"] == 0
+
+
+def test_export_runs_one_at_a_time_per_user(studio):
+    """Вторая загрузка, пока идёт первая, — 409 словами; кончилась первая — можно снова; другим не мешает."""
+    uid = make_user(studio, "owner"); bob = make_user(studio, "bob"); signin(studio, "owner")
+    history(uid, "mine")
+    token = prepare(studio).json()["id"]
+    signin(studio, "bob")
+    theirs = prepare(studio, ["chat"]).json()["id"]
+
+    async def go():
+        first = (await takeout.get_export(token, as_user(uid))).body_iterator
+        await first.__anext__()
+        with pytest.raises(HTTPException) as busy:
+            await takeout.get_export(token, as_user(uid))
+        other = await takeout.get_export(theirs, as_user(bob))               # у другого пользователя — своя
+        await first.aclose()
+        again = await takeout.get_export(token, as_user(uid))
+        return (busy.value.status_code, busy.value.detail), other.status_code, again.status_code
+
+    busy, other, again = asyncio.run(go())
+    assert busy[0] == 409 and busy[1]["code"] == "busy" and "выгрузка" in busy[1]["message"]
+    assert other == again == 200
+    gc.collect()                                         # не начатый ответ отпускает очередь, уходя из памяти
+    assert not takeout.RUNNING
+    assert zipfile.ZipFile(io.BytesIO(b"".join(drain(uid, token)))).testzip() is None
+
+
+def test_export_keeps_a_file_that_vanishes_after_it_was_opened(studio, monkeypatch):
+    """Файл открывается один раз: суммы и данные — с одного дескриптора (на Linux удалённый открытый файл
+    читается). Второе открытие пропавшего файла рвало бы всю выгрузку."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    m = history(uid, "mine")
+    target = str(media.path(uid, m["clip"]))
+    real, opened = builtins.open, []
+
+    def gone_after_first(file, *args, **kwargs):
+        if str(file) == target:
+            opened.append(1)
+            if len(opened) > 1:
+                raise FileNotFoundError(target)
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", gone_after_first)
+    zf = unzip(download(studio)[1])
+    assert zf.read(f"files/{m['clip']}.mp4") == DATA + b"clip" and len(opened) == 1
+    assert json.loads(zf.read("manifest.json"))["missing"] == []
+
+
+def test_export_with_the_share_gone_midway_breaks_the_answer(studio, env, monkeypatch, caplog):
+    """Шару отмонтировали посреди выгрузки: остальные файлы — не «missing» в «целом» архиве, а обрыв."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    history(uid, "mine")
+    token = prepare(studio).json()["id"]
+
+    def unmount(piece):
+        if piece[:4] == b"PK\x03\x04" and piece[30:36] == b"files/":
+            monkeypatch.setattr(state, "CFG", dataclasses.replace(state.CFG, media_dir=env.media_dir / "gone"))
+
+    with caplog.at_level(logging.INFO, logger="studio"), pytest.raises(media.StorageError):
+        drain(uid, token, unmount)
+    assert "export: хранилище" in caplog.text and str(env.media_dir) not in caplog.text
+    assert not takeout.RUNNING                           # оборванная выгрузка очередь не держит

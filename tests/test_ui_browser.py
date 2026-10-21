@@ -839,6 +839,33 @@ def test_admin_checks_the_backup(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_admin_backup_check_start_failure_stays_said(browser, live):
+    """Запуск проверки отклонён (не 409): ошибка остаётся словами, кнопка снова доступна, опроса нет —
+    иначе он затёр бы её «Ещё не проверялась…» или прошлым итогом зелёным."""
+    result = "document.querySelector('#admin-backup-result')"
+    stub = """(() => { const real = window.fetch; window.checkGets = 0;
+      window.fetch = (u, o = {}) => {
+        if (String(u) === '/api/admin/backup-check') {
+          if ((o.method || 'GET') === 'GET') window.checkGets += 1;
+          else return Promise.resolve(new Response(JSON.stringify({ detail: { code: 'storage',
+            message: 'хранилище недоступно' } }), { status: 503, headers: { 'content-type': 'application/json' } }));
+        }
+        return real(u, o); };
+      return true; })()"""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        # «Ещё не проверялась…» или итог прошлой проверки (служба общая с test_admin_checks_the_backup)
+        *go("admin"), ("wait", f"{result} && {result}.textContent"
+                               " && !document.querySelector('#admin-backup-check').disabled"),
+        ("eval", "stub", stub), ("click", "#admin-backup-check"),
+        ("wait", f"{result}.classList.contains('error')"),
+        ("eval", "later", f"""new Promise((done) => setTimeout(() => done([{result}.textContent,
+          {result}.classList.contains('error'), !document.querySelector('#admin-backup-check').disabled,
+          window.checkGets]), 600))""")])
+    assert not r.get("failed"), r
+    text, error, enabled, gets = r["values"]["later"]
+    assert text == "Хранилище недоступно" and error is True and enabled is True and gets == 0, r["values"]
+
+
 # ---- чат -----------------------------------------------------------------------
 
 CHAT_ID ="/^#\\/chat\\/[0-9a-f]{32}$/.test(location.hash)"
