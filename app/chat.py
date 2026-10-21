@@ -47,6 +47,7 @@ import media
 import sections
 import state
 import upstream
+import web
 from connections import Connection
 from image_upload import MAX_UPLOAD, UploadError, normalize_image
 
@@ -104,6 +105,7 @@ class ChatPatch(BaseModel):
     title: str | None = Field(None, max_length=200)
     connection_id: int | None = None
     model: str | None = Field(None, max_length=MODEL_MAX)
+    web: bool | None = None              # кнопка «Интернет»; null — не трогать
 
 
 class TurnIn(BaseModel):
@@ -155,7 +157,9 @@ def _needs_consent(chat_id: str, model: str, via: str) -> bool:
 def _chat_view(user_id: int, row) -> dict:
     """Диалог для страницы (GET, POST, PATCH одного): ещё `local` — модель диалога локальная
     (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
-    подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`)."""
+    подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`); `web` — кнопка
+    «Интернет» и `web_tools` — виды инструментов, которые она даст на этом подключении (web.tools_for; пусто
+    — кнопку не показывать: у прямого подключения `web` хранится, но не действует)."""
     out, conn = _chat_out(row), None
     if row["connection_id"] is not None:
         try:
@@ -166,6 +170,8 @@ def _chat_view(user_id: int, row) -> dict:
     out["local"] = conn is not None and sections.is_local(conn, model)
     out["external"] = conn is not None and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
+    out["web"] = bool(row["web"])
+    out["web_tools"] = web.tools_for(conn, web.has_exa_key(user_id))
     return out
 
 
@@ -635,6 +641,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         conn_id = body.connection_id if body.connection_id is not None else row["connection_id"]
         conn, model = _chat_pair(uid, conn_id, body.model if (body.model or "").strip() else row["model"])
         changes["connection_id"], changes["model"] = conn.id, model
+    if body.web is not None:
+        changes["web"] = int(body.web)
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))
