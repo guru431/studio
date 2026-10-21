@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 8).
+"""Соединение SQLite и схема базы (версия 9).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 8
+VERSION = 9
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -50,6 +50,10 @@ CREATE TABLE purge(media_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, rel_path
 CREATE INDEX purge_user ON purge(user_id);
 """
 
+#: файлы учётки — по user_id: «Хранилище», стирание истории и каскад удаления учётки шли полным
+#: просмотром media
+MEDIA_INDEX = "CREATE INDEX media_user ON media(user_id);\n"
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -92,7 +96,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-"""
+""" + MEDIA_INDEX
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -139,6 +143,8 @@ ALTER TABLE sessions ADD COLUMN mobile INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # очередь удаления файлов: не удалившийся или недописанный файл не теряет свой путь
     8: PURGE_TABLES,
+    # индекс файлов по учётке
+    9: MEDIA_INDEX,
 }
 
 

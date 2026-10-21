@@ -34,11 +34,12 @@ DROP_V6 = "ALTER TABLE users DROP COLUMN views;"
 DROP_V7 = ("ALTER TABLE users DROP COLUMN screen_lock; ALTER TABLE sessions DROP COLUMN mobile;"
            " ALTER TABLE sessions DROP COLUMN seen; DROP TABLE passkeys;")
 DROP_V8 = "DROP TABLE purge;"
+DROP_V9 = "DROP INDEX media_user;"
 
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 9
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -48,12 +49,12 @@ def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN mask_media_id; ALTER TABLE messages DROP COLUMN alive_at;"
                        " ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} PRAGMA user_version = 1;")
+                       f" {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 1;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT id, mask_media_id FROM images").fetchone()[:] == ("i1", None)
     assert "alive_at" in [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
 
@@ -62,12 +63,12 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
     """База прода — версии 2: шаг добавляет столбцы цепочки, строки остаются без неё."""
     conn = db.connect(env.db_path); db.migrate(conn)
     conn.executescript("ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} PRAGMA user_version = 2;")
+                       f" {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 2;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT id, chain IS NULL FROM images").fetchone()[:] == ("i1", 1)
     assert "chain" in [r[1] for r in conn.execute("PRAGMA table_info(videos)")]
 
@@ -75,7 +76,7 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
 def test_migrate_links_a_version_3_base_to_every_section(env):
     """Шаг 4: srvllm — во всех шести разделах с перечнем, чат — с моделью пользователя; openai — в чате."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} PRAGMA user_version = 3;")
+    conn.executescript(f"{DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 3;")
     ins = ("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
            " VALUES (?, 1, 'c', ?, ?, x'00', ?, 0)")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
@@ -83,7 +84,7 @@ def test_migrate_links_a_version_3_base_to_every_section(env):
     conn.execute(ins, (8, "openai", "https://cloud.test/v1", '["chat"]'))
     conn.execute("UPDATE users SET default_connection_id = 7, default_model = 'gemma4-abl'")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     links = {(r[0], r[1]): json.loads(r[2]) for r in conn.execute("SELECT connection_id, section, models FROM section_links")}
     assert links == {(7, "chat"): ["gemma4-abl"], (7, "photo"): ["lustify", "flux"], (7, "video"): ["wan"],
                      (7, "transcribe"): ["whisperx"], (7, "speech"): ["qwen3-tts"], (7, "dictation"): ["gigaam", "whisperx"],
@@ -125,10 +126,10 @@ def test_token_encryption_needs_the_same_key(env, monkeypatch):
 
 def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} PRAGMA user_version = 4;")
+    conn.executescript(f"{DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 4;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"transcripts", "voices", "speeches"} <= tables
     assert conn.execute("SELECT count(*) FROM users").fetchone()[0] == 1
@@ -137,21 +138,21 @@ def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
 def test_migrate_gives_a_version_5_base_an_empty_view_choice(env):
     """Шаг 6: вид ленты — в учётке; у прежних учёток выбора нет — разделы берут свой вид по умолчанию."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V6} {DROP_V7} {DROP_V8} PRAGMA user_version = 5;")
+    conn.executescript(f"{DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 5;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT views FROM users").fetchone()[0] == "{}"
 
 
 def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
     """Шаг 7: блокировка на телефоне выключена у прежних учёток, прежние сессии — без отметок."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V7} {DROP_V8} PRAGMA user_version = 6;")
+    conn.executescript(f"{DROP_V7} {DROP_V8} {DROP_V9} PRAGMA user_version = 6;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d', 1, 'c', 9e12, 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT screen_lock FROM users").fetchone()[0] == 0
     assert conn.execute("SELECT mobile, seen IS NULL FROM sessions").fetchone()[:] == (0, 1)
     assert conn.execute("SELECT count(*) FROM passkeys").fetchone()[0] == 0
@@ -160,13 +161,23 @@ def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
 def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
     """Шаг 8: очередь удаления файлов — пустая и без ссылки на учётку: удаление учётки путь не уносит."""
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V8} PRAGMA user_version = 7;")
+    conn.executescript(f"{DROP_V8} {DROP_V9} PRAGMA user_version = 7;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO purge(media_id, user_id, rel_path, queued) VALUES ('m', 1, 'u1/2027/01/m.png', 0)")
     conn.execute("DELETE FROM users WHERE id = 1")
     assert conn.execute("SELECT media_id, user_id, tries FROM purge").fetchone()[:] == ("m", 1, 0)
+
+
+def test_migrate_indexes_the_files_of_an_account_in_a_version_8_base(env):
+    """Шаг 9: файлы учётки — по индексу, а не полным просмотром media («Хранилище», стирание истории)."""
+    conn = db.connect(env.db_path); db.migrate(conn)
+    conn.executescript(f"{DROP_V9} PRAGMA user_version = 8;")
+    db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+    plan = " ".join(r[-1] for r in conn.execute("EXPLAIN QUERY PLAN SELECT size FROM media WHERE user_id = 1"))
+    assert "media_user" in plan
 
 
 #: строка истории каждой ленты: id, user_id, created

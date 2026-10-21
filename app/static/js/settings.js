@@ -307,7 +307,7 @@ function storageBlock() {
   reload();
   return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, 'Хранилище'), list, queue,
     el('p', { class: 'muted small' }, 'Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: '
-      + 'удалённое из неё ещё около недели остаётся в ежедневных копиях базы.')) };
+      + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).')) };
 }
 
 function wipeBlock(host, onWiped) {
