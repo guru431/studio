@@ -1,4 +1,6 @@
 """Выкладка на debian (deploy/): юнит, vhost Apache, копия базы и скрипты договорены друг с другом."""
+import hashlib
+import os
 import re
 import shutil
 import sqlite3
@@ -24,7 +26,7 @@ TIMER = (DEPLOY / "studio-backup.timer").read_text(encoding="utf-8")
 INSTALL = (DEPLOY / "install.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
 SOCK = "/run/studio/web.sock"
-EXEC_START = ("ExecStart=/opt/services/studio/.venv/bin/uvicorn main:app --app-dir /opt/services/studio/app "
+EXEC_START = ("ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app "
               f"--uds {SOCK} --no-access-log --no-proxy-headers")
 
 
@@ -84,7 +86,7 @@ def test_state_and_media_paths_are_writable_in_the_sandbox():
 def test_install_checks_the_share_by_a_real_write():
     """B2-M2: у cifs с noperm `test -w` верен при любых правах, а локальный каталог с тем же путём
     прошёл бы его без шары: путь — на cifs, и studio там правда создаёт и удаляет файл."""
-    check = INSTALL[INSTALL.index('probe="$MEDIA/'):INSTALL.index("# Среда — до подмены кода")]
+    check = INSTALL[INSTALL.index('probe="$MEDIA/'):INSTALL.index("# Среда Python")]
     assert 'findmnt -n -o FSTYPE -T "$MEDIA"' in check and "grep -qx cifs" in check
     assert 'sudo -u studio touch "$probe"' in check and 'sudo -u studio rm -f "$probe"' in check
     assert "test -w" not in uncommented(INSTALL)
@@ -132,6 +134,25 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     video = videos.VIDEO_TIMEOUT_SEC + videos.ADOPT_TIMEOUT_SEC           # создание и поиск потерянного ответа
     # удаление учётки ждёт её заданий картинок
     assert timeout > max(video, chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC)
+
+
+def _route_timeout(path: str) -> int:
+    """Таймаут ProxyPass, которому достанется путь: mod_proxy берёт первое совпавшее правило."""
+    for prefix, timeout in re.findall(r"^\s*ProxyPass (\S+) \S+ timeout=(\d+)", uncommented(VHOST), re.M):
+        if path.startswith(prefix):
+            return int(timeout)
+    raise AssertionError(f"{path}: нет ProxyPass")
+
+
+def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
+    """Голосовой ввод и образец голоса отвечают в том же запросе: вся операция службы (а не один
+    вызов шлюза — у WhisperX там 2460 с) уложена в бюджет меньше таймаута маршрута, иначе Apache
+    оборвал бы запрос раньше службы и текст диктовки пропал бы."""
+    import dictation
+    import voices
+    assert dictation.BUDGET_SEC < _route_timeout("/api/dictation")
+    assert voices.BUDGET_SEC < _route_timeout("/api/voices")
+    assert _route_timeout("/api/chats/1/messages") == 600 and _route_timeout("/api/images") == 150
 
 
 def test_backup_unit_is_bounded_and_never_owns_the_socket_directory():
@@ -291,11 +312,12 @@ def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():
              "systemctl() { echo 'studio-web.service: activating (auto-restart)'; return 3; }\n"
              "journalctl() { echo 'Traceback: boom'; }\n"
              "R=/r; OLD=/r/.previous; UNIT=studio-web.service; ENV_FILE=/etc/studio/studio.env\n"
-             "PARTS=(app deploy requirements.txt); code=000\n")
+             "PARTS=(app deploy requirements.txt); SWAP=(\"${PARTS[@]}\" .venv); code=000\n")
     r = subprocess.run([bash, "-c", stubs + _function("health_failed") + "health_failed\necho unreachable\n"],
                        capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert r.returncode == 1 and "unreachable" not in r.stdout, r
     assert "auto-restart" in r.stderr and "Traceback: boom" in r.stderr
+    assert "for p in app deploy requirements.txt .venv; do" in r.stderr     # и прежняя среда Python
     assert "install -m 0644 /r/deploy/studio-web.service /etc/systemd/system/studio-web.service" in r.stderr
     assert "systemctl daemon-reload" in r.stderr and "чинить вперёд" not in r.stderr
 
@@ -314,7 +336,7 @@ def test_install_restore_puts_the_previous_tree_back(tmp_path):
     (old / "app").mkdir(parents=True)
     (old / "app" / "f").write_text("old")
     (old / "requirements.txt").write_text("old")
-    script = (f"set -euo pipefail\nR={root.as_posix()}; OLD={old.as_posix()}; PARTS=(app deploy requirements.txt)\n"
+    script = (f"set -euo pipefail\nR={root.as_posix()}; OLD={old.as_posix()}; SWAP=(app deploy requirements.txt)\n"
               + _function("restore") + "restore\n")
     r = subprocess.run([bash, "-c", script], capture_output=True, text=True, timeout=20)
     assert r.returncode == 0, r.stderr
@@ -356,6 +378,104 @@ def test_install_configtest_refusal_shows_the_output_and_blames_no_file():
     assert "line 1" in r.stderr and "other.conf" in r.stderr     # вывод целиком, не хвост
     assert "Apache не проходит configtest (вывод выше" in r.stderr
     assert "apache-vhost.conf" not in r.stderr
+
+
+def test_install_builds_the_environment_apart_and_swaps_it_with_the_code():
+    """Находка аудита: pip ставил пакеты в .venv работающей службы — откат кода не возвращал
+    прежние пакеты. Новая среда собирается в $NEW/.venv до подмены и переезжает вместе с кодом;
+    откат и подсказка отката возвращают и её. Переезд ломает абсолютный shebang скриптов bin/ —
+    поэтому всё запускается интерпретатором среды (`python -m`), а не bin/pip и bin/uvicorn."""
+    code = uncommented(INSTALL)
+    build = code.index('"$NEW/.venv/bin/python" -m pip install')
+    assert code.index('python3 -m venv "$NEW/.venv"') < build < code.index('for p in "${SWAP[@]}"; do')
+    assert "SWAP+=(.venv)" in code and "bin/pip" not in code
+    assert '"$PY" -m compileall -q "$NEW/app"' in code
+    assert 'for p in "${SWAP[@]}"; do' in _function("restore") and "${SWAP[*]}" in _function("health_failed")
+    for unit in (UNIT, BACKUP):
+        assert all(e.startswith("/opt/services/studio/.venv/bin/python ") for e in directives(unit, "ExecStart"))
+    assert '"$R/.venv/bin/python" "$R/app/manage.py"' in code
+
+
+FAKE_PY = '#!/bin/bash\necho "$0 $*" >> "$LOG"\n[ "$1 $2" != "-m pip" ] || [ -z "${FAIL_PIP:-}" ]\n'
+
+
+def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
+    """Блок среды install.sh (от «# Среда Python» до подмены кода) на заглушках: python3 и python
+    среды — скрипт, пишущий вызовы в журнал; root, chown и install -d хоста не нужны."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    root = tmp_path / "r"
+    for base, text in ((root, "old"), (root / ".incoming", "new")):
+        (base / "app").mkdir(parents=True)
+        (base / "app" / "f").write_text(text)
+        (base / "deploy").mkdir()
+        (base / "requirements.txt").write_text("a==1\n", newline="\n")
+    fake, log = tmp_path / "python", tmp_path / "log"
+    fake.write_text(FAKE_PY, newline="\n")
+    if old_venv is not None:
+        (root / ".venv" / "bin").mkdir(parents=True)
+        shutil.copy(fake, root / ".venv" / "bin" / "python")
+        (root / ".venv" / ".studio-requirements").write_text(old_venv + "\n", newline="\n")
+    start = INSTALL.index("# Среда Python")
+    block = INSTALL[start:INSTALL.index('rm -rf "$NEW"\n', start) + len('rm -rf "$NEW"\n')]
+    script = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming; OLD=$R/.previous\n"
+              "PARTS=(app deploy requirements.txt)\n"
+              "python3() { case \"$1\" in -V) echo 'Python 3.13.5' ;; -m) mkdir -p \"$3/bin\"; cp \"$FAKE\" \"$3/bin/python\" ;; esac; }\n"
+              "chown() { :; }; chmod() { :; }; install() { mkdir -p \"${@: -1}\"; }\n"
+              + _function("restore") + block + then)
+    env = {**os.environ, "LOG": log.as_posix(), "FAKE": fake.as_posix(), **({"FAIL_PIP": "1"} if fail_pip else {})}
+    r = subprocess.run([bash, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=20, env=env)
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return r, root, calls
+
+
+def _stamp(venv) -> str:
+    return (venv / ".studio-requirements").read_text().strip()
+
+
+SAME = hashlib.sha256(b"a==1\n").hexdigest() + " Python 3.13.5"
+
+
+@pytest.mark.integration                   # bash с заглушками: 1–3 с на Windows (каждый mv — процесс)
+@pytest.mark.parametrize("first", [False, True], ids=["update", "first-install"])
+def test_install_swaps_a_fresh_environment_and_restore_brings_the_old_one_back(tmp_path, first):
+    r, root, calls = _run_env(tmp_path, old_venv=None if first else "old", then="echo swapped; restore\n")
+    assert r.returncode == 0 and "swapped" in r.stdout, r.stderr
+    new_py = root.as_posix() + "/.incoming/.venv/bin/python"
+    assert calls == [f"{new_py} -m pip install --quiet --disable-pip-version-check --root-user-action=ignore "
+                     f"-r {root.as_posix()}/.incoming/requirements.txt",
+                     f"{new_py} -m compileall -q {root.as_posix()}/.incoming/app"]
+    assert (root / "app" / "f").read_text() == "old"           # откат: прежний код
+    if first:
+        assert not (root / ".venv").exists()
+    else:
+        assert _stamp(root / ".venv") == "old"                 # откат: прежняя среда
+
+
+@pytest.mark.integration
+def test_install_swaps_the_new_environment_in_with_the_code(tmp_path):
+    r, root, _calls = _run_env(tmp_path, old_venv="old")
+    assert r.returncode == 0, r.stderr
+    assert _stamp(root / ".venv") == SAME and _stamp(root / ".previous" / ".venv") == "old"
+    assert (root / "app" / "f").read_text() == "new" and not (root / ".incoming").exists()
+
+
+@pytest.mark.integration
+def test_install_keeps_the_environment_when_requirements_did_not_change(tmp_path):
+    r, root, calls = _run_env(tmp_path, old_venv=SAME, then="restore\n")
+    assert r.returncode == 0, r.stderr
+    assert calls == [f"{root.as_posix()}/.venv/bin/python -m compileall -q {root.as_posix()}/.incoming/app"]
+    assert _stamp(root / ".venv") == SAME and not (root / ".previous" / ".venv").exists()
+
+
+@pytest.mark.integration
+def test_install_failed_pip_leaves_the_running_code_and_environment(tmp_path):
+    r, root, calls = _run_env(tmp_path, old_venv="old", fail_pip=True)
+    assert r.returncode != 0 and "pip" in r.stderr
+    assert len(calls) == 1 and "-m pip install" in calls[0]
+    assert (root / "app" / "f").read_text() == "old" and _stamp(root / ".venv") == "old"
+    assert not (root / ".incoming" / ".venv").exists() and not (root / ".previous").exists()
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():

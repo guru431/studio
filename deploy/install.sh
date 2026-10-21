@@ -67,22 +67,42 @@ fi
 # Звук студии (расшифровка, озвучка) — ffmpeg debian; до подмены кода: не встал — работает прежний
 command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg >/dev/null
 
-# Среда — до подмены кода: упади pip, работать останется прежний код
-[ -x "$R/.venv/bin/python" ] || python3 -m venv "$R/.venv"
-"$R/.venv/bin/pip" install --quiet --disable-pip-version-check --root-user-action=ignore -r "$NEW/requirements.txt"
-"$R/.venv/bin/python" -m compileall -q "$NEW/app"     # __pycache__ служба сама не запишет
+# Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
+# Собирается в $NEW/.venv, только если сменились requirements.txt или python3 (штамп в самой
+# среде; не сменились — действующая остаётся, её никто не трогал), и переезжает на место вместе с
+# кодом; прежняя уходит в $OLD, откат возвращает и её. Упал pip — недособранная среда убрана,
+# прежние код и среда не тронуты. Переезд ломает абсолютный shebang скриптов bin/ — поэтому служба,
+# копия базы и manage.py запускаются интерпретатором среды (`.venv/bin/python -m …`), pip — тоже.
+STAMP=.studio-requirements
+want="$(sha256sum < "$NEW/requirements.txt" | cut -d' ' -f1) $(python3 -V 2>&1)"
+SWAP=("${PARTS[@]}")
+PY=$R/.venv/bin/python
+if ! [ -x "$PY" ] || [ "$(cat "$R/.venv/$STAMP" 2>/dev/null)" != "$want" ]; then
+    rm -rf "$NEW/.venv"
+    python3 -m venv "$NEW/.venv"
+    if ! "$NEW/.venv/bin/python" -m pip install --quiet --disable-pip-version-check --root-user-action=ignore \
+            -r "$NEW/requirements.txt"; then
+        rm -rf "$NEW/.venv"
+        echo "ОШИБКА: pip не поставил зависимости — прежние код и среда не тронуты" >&2
+        exit 1
+    fi
+    printf '%s\n' "$want" > "$NEW/.venv/$STAMP"
+    SWAP+=(.venv)
+    PY=$NEW/.venv/bin/python
+fi
+"$PY" -m compileall -q "$NEW/app"     # __pycache__ служба сама не запишет
 chown -R root:root "$NEW"
 chmod -R u=rwX,go=rX "$NEW"
 rm -rf "$OLD"
 install -d -o root -g root -m 0700 "$OLD"
-for p in "${PARTS[@]}"; do      # убранные из репозитория файлы уходят вместе с прежним каталогом
+for p in "${SWAP[@]}"; do       # убранные из репозитория файлы уходят вместе с прежним каталогом
     if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/"; fi
     mv "$NEW/$p" "$R/$p"
 done
 rm -rf "$NEW"
 
-restore() {     # прежнее дерево — на место нового (первая установка: прежнего нет)
-    for p in "${PARTS[@]}"; do
+restore() {     # прежние дерево и среда — на место новых (первая установка: прежних нет)
+    for p in "${SWAP[@]}"; do
         rm -rf "${R:?}/$p"
         if [ -e "$OLD/$p" ]; then mv "$OLD/$p" "$R/$p"; fi
     done
@@ -108,8 +128,8 @@ health_failed() {
     echo "ОШИБКА: $UNIT не ответил 200 на /health за 20 с (от www-data, последний код $code)" >&2
     systemctl status "$UNIT" --no-pager 2>&1 | tail -n 15 >&2 || true
     journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
-    echo "Откат: прежние код и юнит — в $OLD:" >&2
-    echo "  for p in ${PARTS[*]}; do rm -rf $R/\$p; [ ! -e $OLD/\$p ] || mv $OLD/\$p $R/; done" >&2
+    echo "Откат: прежние код, юнит и (если менялась) среда Python — в $OLD:" >&2
+    echo "  for p in ${SWAP[*]}; do rm -rf $R/\$p; [ ! -e $OLD/\$p ] || mv $OLD/\$p $R/; done" >&2
     echo "  install -m 0644 $R/deploy/$UNIT /etc/systemd/system/$UNIT; systemctl daemon-reload; systemctl restart $UNIT" >&2
     if [ -f "$OLD/deploy/$UNIT" ] && grep -q ' server:app' "$OLD/deploy/$UNIT"; then
         echo "Но это переход со старой студии (server:app): в $ENV_FILE уже только STUDIO_DATA_KEY," \

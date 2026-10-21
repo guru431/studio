@@ -37,7 +37,9 @@ WorkingDirectory=/opt/services/studio
 # его не дольше 10 с, затем снимает задачи и закрывает базу (chat.stop_all, images.stop); после
 # старта недописанное помечают chat.recover() и images.recover(). Предел меньше TimeoutStopSec,
 # иначе каждая выкладка кончалась бы SIGKILL.
-ExecStart=/opt/services/studio/.venv/bin/uvicorn main:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers --timeout-graceful-shutdown 10
+# `python -m uvicorn`, а не bin/uvicorn: install.sh собирает среду рядом и переносит её на место,
+# а у перенесённой среды скрипты bin/ хранят прежний абсолютный путь интерпретатора.
+ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers --timeout-graceful-shutdown 10
 TimeoutStopSec=30
 # Ролик отдаётся с шары кусками (Range), загрузки — до 21 МиБ
 MemoryMax=2G

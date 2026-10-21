@@ -44,6 +44,26 @@ def test_short_sample_and_bad_fields_are_refused(studio, fake_audio):
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 
 
+def test_sample_that_outlasts_its_budget_is_refused_by_the_studio(studio, monkeypatch):
+    """ffmpeg образца дольше BUDGET_SEC — 504 словами от службы раньше таймаута маршрута Apache
+    (сверяет test_deploy); голоса и файла нет, временные файлы убраны."""
+    import audio
+    add_gateway(studio)
+
+    async def slow(src, dst, *, max_sec):
+        await asyncio.sleep(5)
+        return 8.0
+
+    monkeypatch.setattr(voices, "BUDGET_SEC", 0.05)
+    monkeypatch.setattr(audio, "to_wav", slow)
+    r = create(studio)
+    assert r.status_code == 504 and r.json()["detail"]["code"] == "timeout"
+    assert "ещё раз" in r.json()["detail"]["message"]
+    assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+    assert list(state.CFG.tmp_dir.iterdir()) == []
+
+
 def test_voice_is_private_and_goes_with_delete_and_history(studio, env, fake_audio):
     add_gateway(studio)
     fake_audio.duration = 8.0

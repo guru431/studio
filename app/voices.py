@@ -1,7 +1,9 @@
 """Голоса озвучки по образцу (спека 2026-10-20-studio-sections-voice-design, 6.4): запись 5–15 с,
 её текст и имя. Образец — WAV моно 24 кГц в media (audio.to_wav; длиннее SAMPLE_MAX — обрезается),
 принадлежит пользователю, удаляется им и вместе с историей. Его WAV и текст берёт озвучка srvllm
-(Qwen3-TTS `/clone`). Текст образца в списке не отдаётся — только в карточке голоса.
+(Qwen3-TTS `/clone`). Текст образца в списке не отдаётся — только в карточке голоса. Образец
+обрабатывается в запросе, поэтому ffmpeg ограничен BUDGET_SEC (а не audio.TIMEOUT_SEC фоновой
+расшифровки) — дольше: 504 словами; таймаут маршрута Apache больше (сверяет tests/test_deploy.py).
 Журнал — только id: имя голоса, текст и звук туда не пишутся."""
 import asyncio
 import logging
@@ -21,6 +23,7 @@ AUDIO_MAX = 10 * 1024 * 1024
 SAMPLE_MIN, SAMPLE_MAX = 4.5, 15.5
 NAME_MAX = 64
 TEXT_MAX = 500
+BUDGET_SEC = 60                 # WAV и длительность образца (до 10 МиБ записи) — ffmpeg за секунды
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/voices")
@@ -70,12 +73,16 @@ async def create(request: Request):
     src, dst = audio.temp(media.EXT.get(mime, ".bin")), audio.temp(".wav")
     try:
         await asyncio.to_thread(src.write_bytes, data)
-        duration = await audio.to_wav(src, dst, max_sec=SAMPLE_MAX)
+        duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=SAMPLE_MAX), BUDGET_SEC)
         if duration < SAMPLE_MIN:
             raise _bad("short", "образец — 5–15 секунд речи")
         wav = await asyncio.to_thread(dst.read_bytes)
     except audio.AudioError as e:
         raise _bad("audio", str(e)) from None
+    except TimeoutError:
+        log.info("пользователь %d: образец голоса — дольше %d с", uid, BUDGET_SEC)
+        raise HTTPException(504, {"code": "timeout", "message": "образец обрабатывается слишком долго — "
+                                  "попробуйте ещё раз"}) from None
     finally:
         for f in (src, dst):
             await asyncio.to_thread(f.unlink, missing_ok=True)
