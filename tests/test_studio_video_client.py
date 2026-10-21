@@ -294,12 +294,22 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
     run_script(runner, fake, tmp_path)
     assert fake.log == []
 
-    # -Redo: снова все три; у B и c теперь свой промпт из .auto.txt
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_redo_makes_everything_again_with_the_saved_auto_prompt(runner, service, tmp_path):
+    """Отдельно от прогона папки: три запуска скрипта в одном тесте выходили за секунду."""
+    fake = service()
+    (tmp_path / "a.png").write_bytes(b"img-a")
+    (tmp_path / "a.txt").write_text("slow turn", encoding="utf-8")
+    (tmp_path / "B.jpg").write_bytes(b"img-b")
+    run_script(runner, fake, tmp_path)
+
+    # -Redo: снова обе; у B теперь свой промпт из .auto.txt
     run_script(runner, fake, tmp_path, "-Redo")
-    assert len(fake.posts) == 6
-    assert [p.get("prompt") for p in fake.posts[3:]] == [b"slow turn\tto camera", b"auto motion 2", b"auto motion 3"]
+    assert len(fake.posts) == 4
+    assert [p.get("prompt") for p in fake.posts[2:]] == [b"slow turn", b"auto motion 2"]
     rows = manifest_rows(tmp_path)
-    assert len(rows) == 6 and [r["prompt_source"] for r in rows[3:]] == ["file", "auto", "auto"]
+    assert len(rows) == 4 and [r["prompt_source"] for r in rows[2:]] == ["file", "auto"]
     # BOM (для Excel) — только у PowerShell-версии и только в начале; на Linux журнал без BOM
     assert (tmp_path / "video-manifest.tsv").read_bytes().count(b"\xef\xbb\xbf") == (1 if runner == "ps" else 0)
 

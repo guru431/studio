@@ -14,7 +14,7 @@ import pytest
 
 # PowerShell стартует секунды — integration; Python-клиент — в быстром наборе
 RUNNERS = [pytest.param("ps", marks=pytest.mark.integration), "py"]
-# Вывод клиента — UTF-8 и в трубу Windows (иначе cp1251 не примет «→»)
+# Вывод клиента — UTF-8 и в трубу Windows (иначе cp1251 заменит «→» на «?», а тесты ищут слова)
 UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 
