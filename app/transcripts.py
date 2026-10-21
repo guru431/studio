@@ -56,6 +56,9 @@ EDIT_TEXT_MAX = 20_000
 NAME_EDIT_MAX = 60
 NAME_BANNED = {"Cc", "Zl", "Zp"}             # имя — одной строкой; знаки формата (Cf: ZWJ, мягкий перенос) — можно
 INTERRUPTED = "прервано перезапуском студии"
+#: столбцы строки для ленты, опроса и ответов — без `text` (весь текст записи, нужен только индексу поиска)
+COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, result_media_id, duration, speakers, state,"
+           " detail, created, finished, edits")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/transcripts")
@@ -94,7 +97,7 @@ def detail(job: Job) -> str:
 
 
 def _row(user_id: int, tid: str):
-    row = state.DB.execute("SELECT * FROM transcripts WHERE id = ? AND user_id = ?", (tid, user_id)).fetchone()
+    row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE id = ? AND user_id = ?", (tid, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такой расшифровки нет"})
     return row
@@ -261,13 +264,15 @@ async def stop() -> None:
 
 
 async def backfill_text() -> int:
-    """Текст для поиска готовым расшифровкам без него (до шага схемы 13 и сделанным прежним кодом после
-    отката): файл итога — по одному, в потоке. Файла или строки media нет — пропуск; шара недоступна —
-    конец, остальное дождётся следующего старта. Итог — сколько заполнено."""
+    """Текст для поиска при старте: готовым расшифровкам без него (до шага схемы 13 и сделанным прежним
+    кодом после отката) и правленым — прежний код при откате правит edits, а text не трогает (правленых
+    мало). Файл итога — по одному, в потоке. Файла или строки media нет — пропуск; шара недоступна —
+    конец, остальное дождётся следующего старта. Итог — сколько текстов записано (верный не переписывается)."""
     filled, last = 0, ""
     while True:
-        row = state.DB.execute("SELECT * FROM transcripts WHERE state = 'done' AND result_media_id IS NOT NULL"
-                               " AND text IS NULL AND id > ? ORDER BY id LIMIT 1", (last,)).fetchone()
+        row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE state = 'done' AND result_media_id IS NOT NULL"
+                               " AND (text IS NULL OR edits IS NOT NULL) AND id > ? ORDER BY id LIMIT 1",
+                               (last,)).fetchone()
         if row is None:
             break
         last = row["id"]
@@ -279,10 +284,11 @@ async def backfill_text() -> int:
         except OSError:
             log.warning("расшифровки: текст для поиска — хранилище недоступно, дальше при следующем старте")
             break
-        fresh = state.DB.execute("SELECT * FROM transcripts WHERE id = ? AND text IS NULL", (last,)).fetchone()
+        fresh = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE id = ?", (last,)).fetchone()
         if fresh is not None:                        # без await до UPDATE: свежие правки
-            state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(fresh, result), last))
-            filled += 1
+            text = text_of(fresh, result)
+            filled += state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ? AND text IS NOT ?",
+                                       (text, last, text)).rowcount
     if filled:
         log.info("расшифровки: текст для поиска — %d", filled)
     return filled
@@ -344,7 +350,7 @@ async def upload(request: Request):
 async def list_transcripts(request: Request, before: "float | None" = None,
                            before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
     """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "transcripts", request.state.user.id, before, before_id, limit)
+    rows = db.page(state.DB, "transcripts", request.state.user.id, before, before_id, limit, COLUMNS)
     return {"items": [_out(r) for r in rows]}
 
 
@@ -442,17 +448,19 @@ async def patch_transcript(tid: str, body: EditIn, request: Request):
 
 @router.delete("/{tid}/edits")
 async def reset_edits(tid: str, request: Request):
-    """«Сбросить правки» — снова исходное распознавание (и текст для поиска — по нему)."""
+    """«Сбросить правки» — снова исходное распознавание (и текст для поиска — по нему). Файл итога —
+    до записи: шара недоступна — 503, а правки и текст прежние; затем то и другое одним UPDATE."""
     uid = request.state.user.id
-    _row(uid, tid)
-    state.DB.execute("UPDATE transcripts SET edits = NULL WHERE id = ?", (tid,))
-    log.info("расшифровка %s: правки сброшены", tid[:8])
     row = _row(uid, tid)
     if row["state"] != "done" or row["result_media_id"] is None:
-        return _out(row)
+        state.DB.execute("UPDATE transcripts SET edits = NULL WHERE id = ?", (tid,))
+        return _out(_row(uid, tid))
     result = await result_of(uid, row)
-    row = _row(uid, tid)                             # после чтения файла: свежие правки, без await до UPDATE
-    state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(row, result), tid))
+    _row(uid, tid)                                   # после чтения файла: запись ещё есть, без await до UPDATE
+    state.DB.execute("UPDATE transcripts SET edits = NULL, text = ? WHERE id = ?",
+                     (text_of({"edits": None}, result), tid))
+    log.info("расшифровка %s: правки сброшены", tid[:8])
+    row = _row(uid, tid)
     return _out(row, view(row, result))
 
 

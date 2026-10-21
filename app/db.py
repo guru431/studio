@@ -75,20 +75,29 @@ CREATE INDEX images_user_source ON images(user_id, source_media_id);
 """
 
 #: «ё» = «е» в индексе: unicode61 их не сворачивает; содержимое search_docs — исходное (snippet() выделяет
-#: по номерам токенов, а их замена не меняет)
-_YO = "replace(replace({}, 'ё', 'е'), 'Ё', 'Е')"
+#: по номерам токенов, а их замена не меняет). Поэтому FTS5 расходится с search_docs намеренно, и ремонт —
+#: только search.reindex ('delete-all' и вставка с этой заменой): штатный 'rebuild' берёт тело как есть и
+#: молча теряет «ё» = «е», а ('integrity-check', 1) сверяет с содержимым и пишет «malformed»
+YO = "replace(replace({}, 'ё', 'е'), 'Ё', 'Е')"
+#: документ чата и текст расшифровки — в индексе первые INDEX_CHARS знаков: триггеры токенизируют в
+#: транзакции хода и удаления (цикл событий), документ на 2 млн знаков — 0,65 с; удаление — то же тело
+INDEX_CHARS = 200_000
 _CHAT_MESSAGE = ("INSERT INTO search_docs(section, item, part, user_id, model, created, body)"
                  " SELECT 'chat', new.chat_id, new.id, c.user_id, new.model, new.created, new.content"
                  " FROM chats c WHERE c.id = new.chat_id")
 _CHAT_DOCUMENT = ("INSERT INTO search_docs(section, item, part, user_id, model, created, body)"
-                  " SELECT 'chat', m.chat_id, new.id, new.user_id, m.model, m.created, new.name || ' ' || new.text"
+                  " SELECT 'chat', m.chat_id, new.id, new.user_id, m.model, m.created,"
+                  f" new.name || ' ' || substr(new.text, 1, {INDEX_CHARS})"
                   " FROM messages m WHERE m.id = new.message_id")
+_TRANSCRIPT = f"new.name || ' ' || substr(COALESCE(new.text, ''), 1, {INDEX_CHARS})"
 _DOC = "INSERT INTO search_docs(section, item, part, user_id, model, created, body) VALUES"
 
 #: поиск по истории (search.py): документ — промпт, название диалога, сообщение, отправленный документ,
 #: расшифровка (имя и текст), озвучка; part — '' у записей разделов, у чата — 'title', id сообщения или
 #: вложения. Индекс держат триггеры таблиц истории — верен и при прежнем коде (откат install.sh).
 #: FTS5 — с внешним содержимым: удаление и фильтры идут по индексам search_docs, а не просмотром FTS.
+#: prefix='1 2 3' — индексы начал слов: без них snippet() по «к»* сливает списки позиций всех слов на «к»
+#: на каждую строку выдачи (150 000 разных слов — 1,4 с в цикле событий).
 #: transcripts.text — реплики с правками одной строкой (transcripts.py; старым — фон backfill_text)
 SEARCH_13 = f"""ALTER TABLE transcripts ADD COLUMN text TEXT;
 CREATE TABLE search_docs(id INTEGER PRIMARY KEY, section TEXT NOT NULL, item TEXT NOT NULL, part TEXT NOT NULL,
@@ -97,20 +106,21 @@ CREATE UNIQUE INDEX search_docs_key ON search_docs(section, item, part);
 CREATE INDEX search_docs_user ON search_docs(user_id, created);
 CREATE INDEX search_docs_part ON search_docs(part);
 CREATE VIRTUAL TABLE search USING fts5(body, content='search_docs', content_rowid='id',
-            tokenize='unicode61 remove_diacritics 2');
+            tokenize='unicode61 remove_diacritics 2', prefix='1 2 3');
 CREATE TRIGGER search_docs_ai AFTER INSERT ON search_docs BEGIN
-  INSERT INTO search(rowid, body) VALUES (new.id, {_YO.format('new.body')}); END;
+  INSERT INTO search(rowid, body) VALUES (new.id, {YO.format('new.body')}); END;
 CREATE TRIGGER search_docs_ad AFTER DELETE ON search_docs BEGIN
-  INSERT INTO search(search, rowid, body) VALUES ('delete', old.id, {_YO.format('old.body')}); END;
+  INSERT INTO search(search, rowid, body) VALUES ('delete', old.id, {YO.format('old.body')}); END;
 INSERT INTO search_docs(section, item, part, user_id, model, created, body)
 SELECT 'photo', id, '', user_id, model, created, prompt FROM images
 UNION ALL SELECT 'video', id, '', user_id, 'wan', created, prompt FROM videos
 UNION ALL SELECT 'chat', id, 'title', user_id, model, created, title FROM chats WHERE title IS NOT NULL
 UNION ALL SELECT 'chat', m.chat_id, m.id, c.user_id, m.model, m.created, m.content
             FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.status != 'streaming'
-UNION ALL SELECT 'chat', m.chat_id, a.id, a.user_id, m.model, m.created, a.name || ' ' || a.text
+UNION ALL SELECT 'chat', m.chat_id, a.id, a.user_id, m.model, m.created, a.name || ' ' || substr(a.text, 1, {INDEX_CHARS})
             FROM attachments a JOIN messages m ON m.id = a.message_id WHERE a.kind = 'document' AND a.text IS NOT NULL
-UNION ALL SELECT 'transcribe', id, '', user_id, model, created, name || ' ' || COALESCE(text, '') FROM transcripts
+UNION ALL SELECT 'transcribe', id, '', user_id, model, created, name || ' ' || substr(COALESCE(text, ''), 1, {INDEX_CHARS})
+            FROM transcripts
 UNION ALL SELECT 'speech', id, '', user_id, model, created, text FROM speeches;
 CREATE TRIGGER search_images_ai AFTER INSERT ON images BEGIN
   {_DOC} ('photo', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
@@ -125,7 +135,8 @@ CREATE TRIGGER search_videos_ad AFTER DELETE ON videos BEGIN
   DELETE FROM search_docs WHERE section = 'video' AND item = old.id; END;
 CREATE TRIGGER search_chats_ai AFTER INSERT ON chats WHEN new.title IS NOT NULL BEGIN
   {_DOC} ('chat', new.id, 'title', new.user_id, new.model, new.created, new.title); END;
-CREATE TRIGGER search_chats_au AFTER UPDATE OF title ON chats WHEN old.title IS NOT new.title BEGIN
+CREATE TRIGGER search_chats_au AFTER UPDATE OF title, model ON chats
+  WHEN old.title IS NOT new.title OR old.model IS NOT new.model BEGIN
   DELETE FROM search_docs WHERE section = 'chat' AND item = old.id AND part = 'title';
   INSERT INTO search_docs(section, item, part, user_id, model, created, body)
   SELECT 'chat', new.id, 'title', new.user_id, new.model, new.created, new.title WHERE new.title IS NOT NULL; END;
@@ -148,13 +159,11 @@ CREATE TRIGGER search_attachments_au AFTER UPDATE OF message_id ON attachments
 CREATE TRIGGER search_attachments_ad AFTER DELETE ON attachments WHEN old.message_id IS NOT NULL BEGIN
   DELETE FROM search_docs WHERE part = old.id AND section = 'chat'; END;
 CREATE TRIGGER search_transcripts_ai AFTER INSERT ON transcripts BEGIN
-  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, new.name || ' ' || COALESCE(new.text, ''));
-  END;
+  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, {_TRANSCRIPT}); END;
 CREATE TRIGGER search_transcripts_au AFTER UPDATE OF name, text ON transcripts
   WHEN old.name IS NOT new.name OR old.text IS NOT new.text BEGIN
   DELETE FROM search_docs WHERE section = 'transcribe' AND item = old.id;
-  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, new.name || ' ' || COALESCE(new.text, ''));
-  END;
+  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, {_TRANSCRIPT}); END;
 CREATE TRIGGER search_transcripts_ad AFTER DELETE ON transcripts BEGIN
   DELETE FROM search_docs WHERE section = 'transcribe' AND item = old.id; END;
 CREATE TRIGGER search_speeches_ai AFTER INSERT ON speeches BEGIN
@@ -277,18 +286,18 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def page(conn: sqlite3.Connection, table: str, user_id: int, before: "float | None", before_id: "str | None",
-         limit: int) -> sqlite3.Cursor:
+         limit: int, columns: str = "*") -> sqlite3.Cursor:
     """Страница ленты истории (images, videos, transcripts, speeches): новые сверху — created, затем id по
     убыванию. Курсор — created и id последней записи прежней страницы: у записей бывает одно время.
     Без before_id (вкладка до выкладки составного курсора) — только created, записи того же времени
-    пропадают. table — из кода, не из запроса."""
+    пропадают. table и columns — из кода, не из запроса."""
     if before is None:
         where, args = "", ()
     elif before_id is None:
         where, args = " AND created < ?", (before,)
     else:
         where, args = " AND (created < ? OR (created = ? AND id < ?))", (before, before, before_id)
-    return conn.execute(f"SELECT * FROM {table} WHERE user_id = ?{where} ORDER BY created DESC, id DESC LIMIT ?",
+    return conn.execute(f"SELECT {columns} FROM {table} WHERE user_id = ?{where} ORDER BY created DESC, id DESC LIMIT ?",
                         (user_id, *args, limit))
 
 

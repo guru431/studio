@@ -4543,3 +4543,31 @@ def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, li
     assert v["kept"] == ["коты", "transcribe"] and not v["overflow"]
     assert v["opened"] == "#/photo"
     assert not problems(r), problems(r)
+
+
+def test_search_more_right_after_typing_starts_the_new_query(browser, live):
+    """«Показать ещё» в паузе после ввода: новый запрос ещё не ушёл — кнопка начинает его заново, а не
+    дописывает его страницу курсором прежнего к прежнему списку."""
+    login = "search-more"
+    uid = live.add_user(login)
+    for word, at in (("кот", time.time() - 7200), ("пёс", time.time() - 3600)):
+        live_sql(live, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 30)"
+                       " INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                       " SELECT ? || i, ?, 'generation', 'flux', ? || ' ' || i, '1024x1024', 1, 'done', 'готово', ? + i"
+                       " FROM n", (f"{word}-{uid}-", uid, word, at))
+    titles = "[...document.querySelectorAll('#search-results .search-title')].map((t) => t.textContent)"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        *go("search"), ("wait", "document.querySelector('#search-q')"),
+        set_value("#search-q", "кот"),
+        ("wait", f"{search_ready(30)} && !document.querySelector('#search-more').hidden"),
+        ("eval", "typed", "(() => { const q = document.querySelector('#search-q'); q.value = 'пёс';"
+                          " q.dispatchEvent(new Event('input', {bubbles: true}));"
+                          " document.querySelector('#search-more').click();"
+                          " return document.querySelector('#search-results').dataset.state; })()"),
+        ("wait", "document.querySelector('#search-results').dataset.state === 'ready'"),
+        ("eval", "titles", settled(titles, 500))])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["typed"] == "loading"
+    assert len(v["titles"]) == 30 and all(t.startswith("пёс ") for t in v["titles"]), v["titles"]
+    assert not problems(r), problems(r)

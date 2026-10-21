@@ -5,10 +5,12 @@
 - `POST /api/search` — телом, а не строкой запроса (её пишет журнал Apache): `{q?, section?, model?,
   since?, until?, before?, limit?}`. Слова — буквы и цифры Unicode (прочее — разделитель, синтаксис
   FTS5 не проходит), до WORDS_MAX, каждое — начало слова, все вместе; «ё» = «е». Ни слов, ни фильтров —
-  400. Дни — по часам хоста, «по» включительно.
-- Новые сверху (created, затем item и part по убыванию); диалог — один раз, последним по времени
-  совпадением (сообщение, документ или название). Курсор `before` — `{created, item, part}` последней
-  строки страницы.
+  400. Дни — по часам хоста, «по» включительно, годы YEARS (иначе 422 словами). Документ чата и текст
+  расшифровки — первые db.INDEX_CHARS знаков.
+- Новые сверху (created, затем item по убыванию, у одной записи — позже проиндексированная); диалог —
+  один раз, последним по времени совпадением (сообщение, документ или название; при одном времени —
+  ответ, а не вопрос). Курсор `before` — `{created, item, part}` последней строки страницы.
+- Ремонт индекса — `reindex`, не 'rebuild' FTS5 (он теряет «ё» = «е», db.YO).
 - Ответ: `{items: [{section, id, part, title, snippet, model, created, href}], more}`; snippet — FTS5
   с маркерами MARK вокруг найденного (страница строит выделение узлами), без слов — пусто.
 - `GET /api/search/models` — разные модели своей истории по разделам.
@@ -23,6 +25,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import db
 import state
 
 Q_MAX = 200
@@ -33,6 +36,8 @@ SNIPPET_TOKENS = 16
 MARK = ("\u0002", "\u0003")
 WORD = re.compile(r"[^\W_]+")
 DAY = r"^\d{4}-\d{2}-\d{2}$"
+YEARS = (2000, 2100)
+DAYS_WORDS = f"дни — с {YEARS[0]} по {YEARS[1]} год"
 #: раздел → заголовок записи (таблица и столбец — из кода)
 TITLES = {"chat": ("chats", "title"), "photo": ("images", "prompt"), "video": ("videos", "prompt"),
           "transcribe": ("transcripts", "name"), "speech": ("speeches", "text")}
@@ -64,11 +69,29 @@ def words(q: str) -> list[str]:
     return [w.replace("ё", "е").replace("Ё", "Е") for w in found][:WORDS_MAX]
 
 
-def _day(value: str) -> float:
+def _day(value: str) -> datetime:
+    """День запроса; годы — YEARS: за краями timestamp() и «+1 день» — OverflowError (Linux) или OSError
+    (Windows), то есть 500."""
     try:
-        return datetime.strptime(value, "%Y-%m-%d").timestamp()
+        day = datetime.strptime(value, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(422, {"code": "invalid", "message": "неверные данные запроса"}) from None
+    if not YEARS[0] <= day.year <= YEARS[1]:
+        raise HTTPException(422, {"code": "invalid", "message": DAYS_WORDS})
+    return day
+
+
+def reindex(conn) -> None:
+    """Ремонт индекса: FTS5 заново из search_docs с той же заменой «ё», что у триггеров (db.YO), одной
+    транзакцией. Штатный 'rebuild' — никогда: он берёт тело как есть, и «елка» перестаёт находить «Ёлку»."""
+    conn.execute("BEGIN")
+    try:
+        conn.execute("INSERT INTO search(search) VALUES ('delete-all')")
+        conn.execute(f"INSERT INTO search(rowid, body) SELECT id, {db.YO.format('body')} FROM search_docs")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def _title(section: str, item: str, user_id: int) -> str:
@@ -97,10 +120,10 @@ async def find(body: SearchIn, request: Request):
             args.append(value)
     if body.since:
         where.append("d.created >= ?")
-        args.append(_day(body.since))
+        args.append(_day(body.since).timestamp())
     if body.until:
         where.append("d.created < ?")
-        args.append((datetime.fromtimestamp(_day(body.until)) + timedelta(days=1)).timestamp())
+        args.append((_day(body.until) + timedelta(days=1)).timestamp())
     match = " AND ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
     if terms:
         source = "search JOIN search_docs d ON d.id = search.rowid"
@@ -118,10 +141,13 @@ async def find(body: SearchIn, request: Request):
             f"SELECT DISTINCT d.item FROM {source} WHERE {cond} AND d.section = 'chat'"
             " AND (d.created, d.item, d.part) >= (?, ?, ?)", (*args, *tail))}
     # по порядку, без LIMIT: строки читаются, пока страница не наберётся; диалог — первым (последним по
-    # времени) совпадением. Окно row_number() по всем совпадениям — впятеро дольше
+    # времени) совпадением. Окно row_number() по всем совпадениям — впятеро дольше. При одном created
+    # строки одной записи — по d.id (порядку в индексе): ход пишет вопрос и ответ с одним временем, ответ
+    # индексируется после «готово» — он и «последний». Курсор (created, item, part) этим не сбит: строка
+    # другой записи отличается created или item, а прочие строки диалога курсора — в shown
     rows = []
     found = state.DB.execute(f"SELECT d.id AS doc, d.section, d.item, d.part, d.model, d.created FROM {source}"
-                             f" WHERE {cond}{cursor} ORDER BY d.created DESC, d.item DESC, d.part DESC", (*args, *tail))
+                             f" WHERE {cond}{cursor} ORDER BY d.created DESC, d.item DESC, d.id DESC", (*args, *tail))
     try:
         for row in found:
             if row["section"] == "chat":
