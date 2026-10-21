@@ -29,6 +29,7 @@ import connections
 import db
 import dictation
 import images
+import jobs
 import media
 import profile
 import screenlock
@@ -113,6 +114,7 @@ app.include_router(dictation.router)
 app.include_router(transcripts.router)
 app.include_router(voices.router)
 app.include_router(speeches.router)
+app.include_router(jobs.router)
 
 
 @app.exception_handler(RequestValidationError)
