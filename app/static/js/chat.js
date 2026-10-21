@@ -8,7 +8,8 @@
  * через сервер отвечает потоком SSE (turn, delta, done, error); прямое — JSON с адресом и
  * сообщениями: браузер зовёт модель сам с токеном из /api/connections/<id>/token (токен — только
  * в памяти вкладки) и кладёт итог PUT .../messages/<id>; поток без [DONE] и finish_reason — ошибка
- * с прочитанным текстом, а не готовый ответ. «Остановить»: через сервер — POST .../stop,
+ * с прочитанным текстом, а не готовый ответ; длиннее ANSWER_MAX — как у сервера: дальше не читается,
+ * обрезан с пометкой CUT_SIZE и сохранён ошибкой. «Остановить»: через сервер — POST .../stop,
  * прямое — обрыв запроса и PUT со статусом stopped.
  *
  * Ответы, которые читает эта вкладка (`jobs`), живут дольше экрана: ушли в другой диалог или
@@ -32,6 +33,8 @@ const BEAT_MS = 15000;           // признак жизни ответа из 
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
 const COPIED_MS = 1500;
 const CUT_LENGTH = '\n\n[ответ обрезан пределом длины модели]';   // как chat.CUT_LENGTH сервера
+const CUT_SIZE = '\n\n[ответ обрезан: слишком длинный для студии]';   // как chat.CUT_SIZE сервера
+const ANSWER_MAX = 2000000;      // как chat.ANSWER_MAX: длиннее PUT ответа не примет
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
@@ -178,6 +181,10 @@ async function readBrowser(job, turn) {
           const text = choice && choice.delta && choice.delta.content;
           if (typeof text === 'string' && text) append(job, text);
           if (choice && typeof choice.finish_reason === 'string' && choice.finish_reason) ending = choice.finish_reason;
+        }
+        if (job.message.content.length > ANSWER_MAX) {     // как сервер: дальше не читать, прочитанное — ошибкой
+          job.message.content = job.message.content.slice(0, ANSWER_MAX) + CUT_SIZE;
+          throw new Error('Ответ слишком длинный — обрезан');
         }
       }
     } catch (err) {

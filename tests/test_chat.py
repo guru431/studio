@@ -190,6 +190,20 @@ def test_server_answer_is_capped_by_size(studio, monkeypatch):
     assert sum(e == "delta" for e, _ in events) == 3                           # дальше модель не читалась
 
 
+def test_browser_cuts_a_direct_answer_like_the_server():
+    """Прямое подключение (chat.js readBrowser) обрезает ответ тем же пределом и пометкой, что и сервер,
+    а PUT принимает обрезанный с пометкой: иначе длинный ответ получал 422 и пропадал."""
+    from pathlib import Path
+    import re
+    js = (Path(chat.__file__).parent / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+    consts = {name: value for name, value in re.findall(r"^const (CUT_\w+|ANSWER_MAX) = (.+?);", js, re.M)}
+    assert int(consts["ANSWER_MAX"]) == chat.ANSWER_MAX
+    for name in ("CUT_SIZE", "CUT_LENGTH"):
+        assert json.loads(consts[name].replace("'", '"')) == getattr(chat, name)
+    longest = chat.ANSWER_MAX + max(len(chat.CUT_SIZE), len(chat.CUT_LENGTH))
+    chat.AnswerIn(content="x" * longest, status="error")
+
+
 def test_server_answer_is_capped_by_time(studio):
     """Модель шлёт данные, но ответ идёт дольше STREAM_TOTAL_SEC: чтение кончается, прочитанное —
     ошибкой с пометкой (read timeout такую модель не ловит; аудит)."""

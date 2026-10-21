@@ -906,6 +906,29 @@ def test_direct_stream_without_an_ending_is_saved_as_cut(browser, live):
                               ["assistant", "error", "Облако на связи." + chat.CUT_LENGTH])
 
 
+def test_direct_answer_longer_than_the_limit_is_saved_cut(browser, live):
+    """Ответ прямого подключения длиннее ANSWER_MAX — как у сервера: обрезан с пометкой и сохранён
+    ошибкой, а не потерян отказом PUT (422)."""
+    import chat
+    live.add_user("cloudbig")
+    saved, live.cloud.chat_reply = live.cloud.chat_reply, ["x" * 700_000] * 3 + ["лишнее"]
+    measured = f"""(async () => {{ const m = {API}; const id = location.hash.split('/')[2];
+      const last = (await m.api('GET', '/api/chats/' + id)).messages.at(-1);
+      return [last.status, last.content.length, last.content.slice(-60)]; }})()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin("cloudbig"), ("wait", READY), add_cloud(live.cloud),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("type", "#chat-input", "Много"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "meta", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+            ("eval", "saved", measured)], timeout=40000)
+    finally:
+        live.cloud.chat_reply = saved
+    assert not r.get("failed"), r
+    assert r["values"]["meta"] == "Ответ слишком длинный — обрезан"
+    assert r["values"]["saved"] == ["error", chat.ANSWER_MAX + len(chat.CUT_SIZE), ("x" * 60 + chat.CUT_SIZE)[-60:]]
+    assert not problems(r), problems(r)
+
+
 def test_chat_list_renames_and_deletes(browser, live):
     item = "document.querySelector('.chat-item[data-id=\"' + window.made + '\"]')"
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
