@@ -6,14 +6,20 @@
    нормализованное normalize_image, уходит шлюзу формой с именем файла `input.png` — имя с
    устройства дальше студии не идёт. Строка появляется только после ответа шлюза с его id.
    Seed выбирает студия (пусто — случайный): ответ на создание потерялся (таймаут, обрыв, 502/504
-   перед шлюзом), а шлюз задание мог принять — студия ищет его в списке шлюза по seed, длительности,
-   качеству и времени (`_adopt`) и берёт, только если такое ровно одно и его нет у другой строки.
-   Больше список шлюза (`GET /slot/videos`) студия не читает: чужие задания в ленту не попадают.
-2. Наблюдатель службы (`start_watcher`) раз в POLL_SEC опрашивает шлюз по всем идущим строкам —
-   вкладка не нужна, после перезапуска опрос продолжается. Готовый mp4 (до VIDEO_CONTENT_MAX)
-   идёт потоком со шлюза на шару (`media.save_stream`) и снимается у шлюза. Шлюз или шара
-   недоступны — строка не меняется до следующего прохода; 401 — `failed` со словами о профиле,
-   сессия студии жива.
+   перед шлюзом), а шлюз задание мог принять. Список шлюза (`GET /slot/videos`) общий для всех
+   ключей, поэтому признак своего — только seed, который выбрала сама студия (случайный 32-битный,
+   чужой его не повторит): по нему, длительности, качеству, дорисовке, промпту и времени студия
+   ищет задание (`_adopt`) и берёт, только если такое ровно одно и его нет у другой строки. Seed
+   задал пользователь (скрипты и другие учётки ставят те же 42) — список не читается, ответ —
+   неопределённый исход словами (`LOST_MANUAL`). Больше список шлюза студия не читает.
+2. Наблюдатель службы (`start_watcher`) раз в POLL_SEC начинает проход (`start_pass`): ролики
+   каждого подключения — своей задачей, по очереди, не больше POLL_MAX подключений сразу; у
+   подключения, чья задача ещё идёт, проход ничего не начинает. Вкладка не нужна, после
+   перезапуска опрос продолжается. Готовый mp4 (до VIDEO_CONTENT_MAX, целиком за FETCH_SEC) идёт
+   потоком со шлюза на шару (`media.save_stream`) и снимается у шлюза. Шлюз или шара недоступны —
+   строка не меняется до следующего прохода; шлюз не ответил по сети — его подключение ждёт
+   PAUSE_SEC и не держит ни свои остальные ролики, ни чужие; 401 — `failed` со словами о профиле,
+   сессия студии жива. Остановка наблюдателя гасит и его задачи.
 3. Отмена и удаление идущего ролика сначала снимают его у шлюза. Строки меняются условием
    «ещё идёт»: отмена посреди скачивания выбрасывает скачанное.
 4. База — только с цикла событий. Журнал — только id и коды: промпт, токен, картинки, ролики и
@@ -56,13 +62,26 @@ ADOPT_TIMEOUT_SEC = 20
 # часы шлюза и студии разные: задание считается созданным этим запросом с таким запасом
 ADOPT_SKEW_SEC = 300
 VIDEO_CONTENT_MAX = 300 * 1024 * 1024
+# mp4 целиком: срок на кусок (VIDEO_TIMEOUT_SEC) медленную передачу не ограничивает
+FETCH_SEC = 600
 POLL_SEC = 5
+POLL_MAX = 8                  # подключений наблюдается сразу
+PAUSE_SEC = 60                # подключение, не ответившее по сети, столько не опрашивается
 BODY_MAX = VIDEO_UPLOAD + (MAX_BODY - MAX_UPLOAD)
 ACTIVE = ("queued", "in_progress")
 WHERE_ACTIVE = "state IN ('queued', 'in_progress')"
 FORGOTTEN = "шлюз забыл задание"
 RETRYING = "не удалось сохранить файл — повторяю"
 UNSAVED = "не удалось сохранить файл: хранилище недоступно"
+LOST_MANUAL = ("ролик мог начаться у шлюза, но в ленту не попадёт: с seed, заданным вручную, его не отличить "
+               "от чужого в общей очереди шлюза. Шлюз сам снимет его по сроку; повторите — без seed студия "
+               "находит такой ролик сама")
+LOST_UNFOUND = "ролик мог начаться у шлюза, но в его очереди не найден; шлюз сам снимет его по сроку"
+
+#: задачи наблюдателя: id подключения → задача его роликов (одна на подключение)
+WATCHING: "dict[int | None, asyncio.Task]" = {}
+#: id подключения → до какого clock.NOW() его не опрашивать (шлюз не ответил по сети)
+PAUSED: "dict[int, float]" = {}
 
 
 class VideoIn(BaseModel):
@@ -201,8 +220,9 @@ def _video_connection(user_id: int, connection_id: "int | None" = None, model: "
 
 
 async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
-    """Задание этого запроса в списке шлюза (п. 1 шапки): тот же seed, длительность, качество и
-    дорисовка, создано не раньше запроса и не принадлежит другой строке. Не ровно одно — None."""
+    """Задание этого запроса в списке шлюза (п. 1 шапки; seed — только выбранный студией): тот же
+    seed, длительность, качество, дорисовка и промпт (свой — `given`, пустой — не `given`), создано
+    не раньше запроса и не принадлежит другой строке. Не ровно одно — None."""
     try:
         r = await upstream.request(conn, "GET", connections.slot_url(conn, "/videos"), timeout=ADOPT_TIMEOUT_SEC)
     except (httpx.HTTPError, upstream.UpstreamRefused):
@@ -212,6 +232,8 @@ async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
              if isinstance(v, dict) and isinstance(v.get("id"), str) and VIDEO_ID_RE.fullmatch(v["id"])
              and str(v.get("seed")) == form["seed"] and str(v.get("seconds")) == form["seconds"]
              and v.get("quality") == form["quality"] and v.get("smooth") is (form["smooth"] == "true")
+             and ((v.get("prompt"), v.get("prompt_source")) == (form["prompt"], "given") if "prompt" in form
+                  else v.get("prompt_source") != "given")
              and _int(v.get("created_at"), 0) >= since - ADOPT_SKEW_SEC
              and state.DB.execute("SELECT 1 FROM videos WHERE gateway_id = ?", (v["id"],)).fetchone() is None]
     return found[0] if len(found) == 1 else None
@@ -246,7 +268,8 @@ async def create_video(request: Request):
             source_id = await media.save_async(uid, image, "image/png", "studio-video-source.png", thumb=True)
         except media.StorageError as e:
             raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
-    seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
+    chosen = body.seed is None                   # seed выбрала студия — по нему можно найти своё задание
+    seed = secrets.randbelow(2**32) if chosen else body.seed
     form = {"model": VIDEO_MODEL, "seconds": str(body.seconds), "quality": body.quality,
             "smooth": "true" if body.smooth else "false", "seed": str(seed)}
     if body.prompt.strip():
@@ -267,9 +290,14 @@ async def create_video(request: Request):
             lost = r.status_code in (502, 504)          # отказ прокси перед переводчиком
         elif not isinstance(answer.get("id"), str) or not VIDEO_ID_RE.fullmatch(answer["id"]):
             failure = HTTPException(502, {"code": "gateway", "message": "шлюз вернул ролик без id"})
-    if lost and (found := await _adopt(conn, form, started)) is not None:
-        log.warning("ролик пользователя %d: ответ шлюза потерялся — задание найдено в его списке", uid)
-        failure, answer = None, found
+    if lost:
+        # seed пользователя в общем списке шлюза ничего не доказывает: ищем только по seed студии
+        if chosen and (found := await _adopt(conn, form, started)) is not None:
+            log.warning("ролик пользователя %d: ответ шлюза потерялся — задание найдено в его списке", uid)
+            failure, answer = None, found
+        else:
+            failure = HTTPException(failure.status_code, {"code": failure.detail["code"], "message":
+                                    f"{failure.detail['message']} — {LOST_UNFOUND if chosen else LOST_MANUAL}"})
     if failure is not None:
         log.warning("ролик пользователя %d не создан: %s", uid, failure.status_code)
         if upload is not None:
@@ -394,8 +422,8 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
     uid, gateway_id = row["user_id"], row["gateway_id"]
     name = f"studio-video-{seed if seed is not None else gateway_id}.mp4"
     try:
-        async with upstream.stream(conn, "GET", _url(conn, gateway_id, "/content"),
-                                   timeout=VIDEO_TIMEOUT_SEC) as r:
+        async with asyncio.timeout(FETCH_SEC), upstream.stream(conn, "GET", _url(conn, gateway_id, "/content"),
+                                                               timeout=VIDEO_TIMEOUT_SEC) as r:
             if r.status_code != 200:
                 await r.aread()
                 if r.status_code == 404:
@@ -407,6 +435,12 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
                 return
             media_id = await media.save_stream(uid, _limited(r.aiter_bytes()), "video/mp4", name,
                                                max_bytes=VIDEO_CONTENT_MAX)
+    except upstream.UpstreamRefused as e:        # адрес убран или подключение сменили после опроса
+        await _fail(row, upstream.refused_words(e, conn))
+        return
+    except TimeoutError:                          # save_stream уже убрал недописанный файл
+        log.info("ролик %s: mp4 не скачан за %d с — следующий проход", row["id"][:8], FETCH_SEC)
+        return
     except TooBig:
         log.warning("ролик %s: mp4 больше %d МиБ", row["id"][:8], VIDEO_CONTENT_MAX >> 20)
         await _fail(row, f"ролик больше {VIDEO_CONTENT_MAX >> 20} МиБ — в историю не взят", conn)
@@ -437,7 +471,9 @@ async def _poll(row) -> None:
         await _fail(row, upstream.refused_words(e, conn))
         return
     except httpx.HTTPError as e:
-        log.info("ролик %s: шлюз недоступен (%s) — следующий проход", row["id"][:8], type(e).__name__)
+        PAUSED[conn.id] = clock.NOW() + PAUSE_SEC
+        log.info("ролик %s: шлюз недоступен (%s) — подключение %d ждёт %d с", row["id"][:8], type(e).__name__,
+                 conn.id, PAUSE_SEC)
         return
     if r.status_code == 404:
         await _fail(row, _forgotten(row))
@@ -456,24 +492,60 @@ async def _poll(row) -> None:
         await _fail(row, _failure_words(body), conn)
 
 
-async def poll_once() -> None:
-    """Один проход по всем идущим роликам; сбой одного не мешает остальным."""
-    rows = state.DB.execute(f"SELECT * FROM videos WHERE {WHERE_ACTIVE} AND gateway_id IS NOT NULL"
-                            " ORDER BY created").fetchall()
+def _paused(conn_id: "int | None") -> bool:
+    return PAUSED.get(conn_id, 0) > clock.NOW()
+
+
+async def _poll_rows(rows) -> None:
+    """Ролики одного подключения — по очереди; сбой одного не мешает остальным, а шлюз, не
+    ответивший по сети, не ждёт таймаута на каждом."""
     for row in rows:
+        if _paused(row["connection_id"]):
+            return
         try:
             await _poll(row)
         except Exception as e:                    # noqa: BLE001 — наблюдатель не должен вставать
             log.warning("ролик %s: сбой прохода (%s)", row["id"][:8], type(e).__name__)
 
 
+def start_pass() -> "list[asyncio.Task]":
+    """Проход (п. 2 шапки): ролики каждого подключения — своей задачей, не больше POLL_MAX сразу;
+    подключение в работе или на паузе пропускается. Итог — начатые задачи."""
+    rows = state.DB.execute(f"SELECT * FROM videos WHERE {WHERE_ACTIVE} AND gateway_id IS NOT NULL"
+                            " ORDER BY created").fetchall()
+    by_conn: "dict[int | None, list]" = {}
+    for row in rows:
+        by_conn.setdefault(row["connection_id"], []).append(row)
+    started = []
+    for conn_id, group in by_conn.items():
+        if len(WATCHING) >= POLL_MAX:
+            break
+        if conn_id in WATCHING or _paused(conn_id):
+            continue
+        task = WATCHING[conn_id] = asyncio.create_task(_poll_rows(group))
+        task.add_done_callback(lambda t, key=conn_id: WATCHING.pop(key) if WATCHING.get(key) is t else None)
+        started.append(task)
+    return started
+
+
+async def poll_once() -> None:
+    """Один проход до конца его задач (тесты; наблюдатель их не ждёт)."""
+    await asyncio.gather(*start_pass())
+
+
 async def _watch() -> None:
-    while True:
-        try:
-            await poll_once()
-        except Exception as e:                    # noqa: BLE001 — наблюдатель не должен вставать
-            log.warning("наблюдатель роликов: сбой прохода (%s)", type(e).__name__)
-        await clock.SLEEP(POLL_SEC)
+    try:
+        while True:
+            try:
+                start_pass()
+            except Exception as e:                # noqa: BLE001 — наблюдатель не должен вставать
+                log.warning("наблюдатель роликов: сбой прохода (%s)", type(e).__name__)
+            await clock.SLEEP(POLL_SEC)
+    finally:                                      # остановка службы: опросы и скачивания — тоже
+        tasks = list(WATCHING.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def start_watcher() -> asyncio.Task:

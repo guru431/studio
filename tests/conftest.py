@@ -57,6 +57,7 @@ def studio(env, monkeypatch):
     import state
     import speeches
     import transcripts
+    import videos
     from fakes import FakeGateway
 
     # scrypt N=16384 — ~0.1 с на хеш; здесь дешёвый (настоящие параметры сверяет test_foundation)
@@ -83,6 +84,8 @@ def studio(env, monkeypatch):
     chat.STREAMS.clear()
     transcripts.JOBS.clear()
     speeches.JOBS.clear()
+    videos.WATCHING.clear()
+    videos.PAUSED.clear()
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
