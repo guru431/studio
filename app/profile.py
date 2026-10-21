@@ -121,8 +121,17 @@ async def put_exa_key(body: ExaKey, request: Request):
 
 @router.delete("/me/exa-key", status_code=204)
 async def delete_exa_key(request: Request):
+    """Ключ убран — и «Интернет» во всех диалогах учётки выключен: без ключа он не включается (chat.patch_chat),
+    и включённым не остаётся. Сохранение ключа ничего не включает."""
     uid = request.state.user.id
-    state.DB.execute("UPDATE users SET exa_key = NULL WHERE id = ?", (uid,))
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("UPDATE users SET exa_key = NULL WHERE id = ?", (uid,))
+        state.DB.execute("UPDATE chats SET web = 0 WHERE user_id = ? AND web <> 0", (uid,))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
     log.info("пользователь %d: ключ Exa убран", uid)
     return Response(status_code=204)
 

@@ -388,8 +388,8 @@ function exaBlock() {
   remove.addEventListener('click', () => change('DELETE'));
   show();
   return el('section', { class: 'block exa-block' }, el('h2', {}, 'Интернет'),
-    el('p', { class: 'muted small' }, 'Кнопка «Интернет» в чате: поиск и чтение страниц — через Exa по вашему ключу, '
-      + 'субтитры YouTube — и без него. Ключ — на ',
+    el('p', { class: 'muted small' }, 'Кнопка «Интернет» в чате — поиск и чтение страниц через Exa по вашему ключу и '
+      + 'субтитры YouTube — включается только с ключом; убранный ключ выключает её во всех диалогах. Ключ — на ',
     el('a', { href: EXA_KEYS, target: '_blank', rel: 'noopener noreferrer' }, 'dashboard.exa.ai'),
     ': бесплатно $10 в месяц, без привязанной карты перерасхода нет. Поисковые запросы и адреса страниц видит Exa.'),
     field('Ключ Exa', key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
