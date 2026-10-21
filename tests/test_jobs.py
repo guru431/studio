@@ -86,7 +86,7 @@ def test_running_jobs_of_every_section(studio):
     assert run["i3"]["detail"] == "в очереди серии"
     assert run["v1"]["title"] == "Ролик · 5 с" and run["v1"]["href"] == "video?id=v1" and run["v1"]["progress"] == 0
     assert run["v2"]["progress"] == 40 and run["v2"]["detail"] == "генерирую кадры"
-    assert run["t1"]["title"] == f"Расшифровка «{NAME}»" and run["t1"]["detail"] == "распознаю · 1:05"
+    assert run["t1"]["title"] == f"Расшифровка «{NAME}»" and run["t1"]["detail"] == "распознаю"   # время одно — у страницы
     assert run["t1"]["href"] == "transcribe?id=t1"
     assert run["s1"]["title"] == "Озвучка · " + TEXT[:40].rstrip() + "…" and run["s1"]["detail"] == "озвучиваю 2 из 5"
     assert run["s1"]["href"] == "speech?id=s1"
