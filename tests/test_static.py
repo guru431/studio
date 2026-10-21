@@ -8,10 +8,17 @@ from conftest import APP, make_user, signin
 STATIC = APP / "static"
 
 
+#: ссылки, по которым человек уходит сам (новая вкладка, без Referer), — не загрузка чужого ресурса
+LINKS = ("https://dashboard.exa.ai/api-keys",)
+
+
 def test_static_has_no_external_urls():
     for p in STATIC.rglob("*"):
         if p.suffix in {".html", ".js", ".css", ".webmanifest"} and "vendor" not in p.parts:
-            assert not re.search(r"https?://(?!localhost)", p.read_text(encoding="utf-8")), p
+            text = p.read_text(encoding="utf-8")
+            for link in LINKS:
+                text = text.replace(f"'{link}'", "''")
+            assert not re.search(r"https?://(?!localhost)", text), p
 
 
 def test_static_has_no_lan_addresses():

@@ -30,8 +30,15 @@
  * диалога — признак `local` сервера), — после окна «уйдёт во внешний сервис» (ход с `external_ok`;
  * 409 `external` сервера — то же окно). Ничего не отправляется само. У отправленного вложения из
  * расшифровки — ссылка «к записи».
- * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
-import { api } from './api.js';
+ *
+ * «Интернет» (спека 2026-10-21-studio-chat-internet, 6.8 и 6.10): кнопка #web-toggle рядом со скрепкой —
+ * `web` диалога (PATCH {web}); у нового диалога — в памяти до создания, затем тем же PATCH. Видна, если
+ * подключение даёт инструменты (`web_tools` диалога; у нового — путь через сервер, без ключа Exa только
+ * YouTube); без `search` — подсказка про ключ Exa. Событие SSE `tool` — строка хода («Ищу: …»), ответ с
+ * ходом перечитывается: под ним `tools` — «Источники» ссылками в новую вкладку без адреса студии. Ход, чьи
+ * запросы к Exa модель составит из расшифровки (`external_web` диалога или новое вложение из неё), — после
+ * окна #web-dialog (ход с `web_ok`; 409 `external_web` — то же окно); окно внешней модели — первым. */
+import { api, me } from './api.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
 import { attachMic } from './mic.js';
@@ -54,7 +61,12 @@ const ASKS = {                   // вопрос в поле диалога из
   tasks: 'Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы.',
 };
 const EXTERNAL_NOTE = 'Запись уйдёт во внешний сервис — выберите модель';
+const WEB_HINT = 'поиск и страницы — после ключа Exa в Настройках';
+const WEB_TITLE = 'Интернет: поиск, страницы и субтитры YouTube';
+const WEB_ASK = 'Запросы, составленные из расшифровки, могут уйти в Exa — отправить?';
+const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субтитры' };   // строка хода по виду инструмента
 const ICONS = {
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
   send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
@@ -116,8 +128,17 @@ function finish(job) {
 
 function append(job, text) {
   job.first = true;
+  job.tool = null;                 // модель снова пишет — инструмент кончился
   job.message.content += text;
   notify(job, false);
+}
+
+/* строка хода инструмента: «Ищу: запрос»; подпись YouTube сервер начинает словом «субтитры» */
+function toolLine({ kind, label }) {
+  const what = TOOL_WORDS[kind] || 'Инструмент';
+  let text = String(label || '');
+  if (kind === 'youtube') text = text.replace(/^субтитры\s+/, '');
+  return text ? `${what}: ${text}` : `${what}…`;
 }
 
 function adoptIds(job, data) {
@@ -132,7 +153,11 @@ async function readServer(job, response) {
     for await (const { event, data } of readSSE(response)) {
       if (event === 'turn') adoptIds(job, data);
       else if (event === 'delta' && data && typeof data.text === 'string') append(job, data.text);
-      else if (event === 'done' || event === 'error') {
+      else if (event === 'tool' && data && typeof data.kind === 'string') {
+        job.tool = data;
+        job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
+        notify(job, false);
+      } else if (event === 'done' || event === 'error') {
         job.message.status = event === 'done' ? data.status : 'error';
         if (event === 'error') job.message.error = data.message;
         cut = false;
@@ -241,6 +266,51 @@ async function readBrowser(job, turn) {
   finish(job);
 }
 
+/* ---- источники ответа («Интернет») --------------------------------------------- */
+
+/* ссылка — только http(s) и в новую вкладку без Referer: сайты не узнают адрес студии */
+function sourceLink(url, text) {
+  let web = false;
+  try {
+    web = ['http:', 'https:'].includes(new URL(url).protocol);
+  } catch {
+    // не адрес — текстом
+  }
+  const name = text || url || '';
+  return web ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, name) : el('span', {}, name);
+}
+
+function duration(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rest = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`;
+}
+
+function stepNode(s) {
+  const li = el('li', { class: `web-step web-${s.kind}` });
+  if (s.kind === 'search') {
+    li.append(`Поиск: «${s.query || ''}»`);
+    const results = Array.isArray(s.results) ? s.results : [];
+    if (results.length) {
+      li.append(el('ul', {}, ...results.map((x) => el('li', {}, sourceLink(x.url, x.title),
+        x.published ? el('span', { class: 'muted' }, ` · ${x.published}`) : null))));
+    }
+  } else if (s.kind === 'page') li.append('Страница: ', sourceLink(s.url, s.title));
+  else if (s.kind === 'youtube') {
+    const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
+    li.append('Ролик: ', sourceLink(s.url, s.title), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
+  } else li.append('Инструмент');
+  if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
+  return li;
+}
+
+function sourcesNode(steps) {
+  return el('details', { class: 'web-steps' }, el('summary', {}, `Источники (${steps.length})`),
+    el('ul', { class: 'web-list' }, ...steps.map(stepNode)));
+}
+
 /* ---- экран -------------------------------------------------------------------- */
 
 function build(view, ctx) {
@@ -251,6 +321,7 @@ function build(view, ctx) {
   let draft = null;            // { connection_id, model } нового диалога
   let atts = [];               // вложения поля ввода: { file, meta, error, busy, transcript }; из расшифровки — без file
   let needModel = false;       // диалог из расшифровки без локальной модели: «Отправить» — после явного выбора
+  let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
   let sending = false;
   let stick = true;
   let opened = 0;              // медленный ответ прежнего диалога не перебьёт новый
@@ -289,8 +360,12 @@ function build(view, ctx) {
   const stop = el('button', { type: 'button', id: 'stop', class: 'send', 'aria-label': 'Остановить', title: 'Остановить',
     hidden: true }, icon('stop'));
   const micNote = el('div', { class: 'mic-note' });
+  const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
+    title: WEB_TITLE, hidden: true }, icon('globe'), 'Интернет');
+  const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input, micNote,
-    el('div', { class: 'row' }, clip, attachMic(input, micNote), el('span', { class: 'grow' }), send, stop));
+    el('div', { class: 'row' }, clip, webToggle, attachMic(input, micNote), el('span', { class: 'grow' }), send, stop),
+    webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
@@ -430,6 +505,48 @@ function build(view, ctx) {
     const link = links.find((l) => l.connection.id === connId);
     connName.textContent = link ? link.connection.name : '';
     paintGuard();
+    paintWeb();
+  }
+
+  /* «Интернет»: виды инструментов, которые ход даст модели (у открытого диалога — сервер, web.tools_for;
+   * у нового — так же по подключению из чипа и ключу Exa профиля) и состояние кнопки */
+  function webTools() {
+    if (chat) return chat.chat.web_tools || [];
+    const link = links.find((l) => l.connection.id === chosen().connection_id);
+    if (!link || !link.connection.proxied) return [];
+    return me && me.exa_key ? ['search', 'page', 'youtube'] : ['youtube'];
+  }
+
+  function webOn() {
+    return chat ? !!chat.chat.web : draftWeb;
+  }
+
+  function paintWeb() {
+    const kinds = webTools();
+    const on = webOn();
+    const hint = kinds.length && !kinds.includes('search') ? WEB_HINT : '';
+    webToggle.hidden = !kinds.length;
+    webToggle.setAttribute('aria-pressed', String(on));
+    webToggle.title = hint || WEB_TITLE;
+    webNote.textContent = hint && on ? hint : '';
+  }
+
+  async function switchWeb() {
+    if (!chat) {
+      draftWeb = !draftWeb;
+      paintWeb();
+      return;
+    }
+    webToggle.disabled = true;
+    try {
+      chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { web: !chat.chat.web });
+      notice.textContent = '';
+    } catch (err) {
+      notice.textContent = words(err);
+    } finally {
+      webToggle.disabled = false;
+    }
+    paintWeb();
   }
 
   /* правило локальной модели для расшифровки: пара нового диалога — из отмеченных (`local_models`
@@ -446,6 +563,14 @@ function build(view, ctx) {
     const fresh = !regenerate && atts.some((a) => a.transcript);
     if (chat) return !!chat.chat.external || (fresh && !chat.chat.local);
     return fresh && !isLocal(chosen());
+  }
+
+  /* ход даст модели Exa, а запросы она составит из расшифровки без подтверждения: в истории (`external_web`
+   * сервера; он не считает неотправленное вложение) или в этом ходе (новое вложение из расшифровки) */
+  function needsWebConsent(regenerate) {
+    if (!webOn() || !webTools().includes('search')) return false;
+    const fresh = !regenerate && atts.some((a) => a.transcript);
+    return fresh || (!!chat && !!chat.chat.external_web);
   }
 
   function localPair() {
@@ -466,14 +591,25 @@ function build(view, ctx) {
     send.disabled = sending || blocked();
   }
 
-  function askExternal(regenerate) {
+  /* окна подтверждений — по очереди: сначала внешняя модель, затем Exa; каждое несёт уже данное другое */
+  function askExternal(regenerate, webOk) {
     const link = links.find((l) => l.connection.id === chosen().connection_id);
     const confirm = button('Отправить', { class: 'btn btn-accent', id: 'external-confirm' });
     const dialog = openDialog(root, { id: 'external-dialog', title: 'Отправить расшифровку?', actions: [confirm],
       body: [el('p', {}, `Расшифровка уйдёт во внешний сервис «${link ? link.connection.name : 'подключение диалога'}» — отправить?`)] });
     confirm.addEventListener('click', () => {
       dialog.close();
-      submit(regenerate, true);
+      submit(regenerate, true, webOk);
+    });
+  }
+
+  function askWeb(regenerate, externalOk) {
+    const confirm = button('Отправить', { class: 'btn btn-accent', id: 'web-confirm' });
+    const dialog = openDialog(root, { id: 'web-dialog', title: 'Расшифровка и интернет', actions: [confirm],
+      body: [el('p', {}, WEB_ASK)] });
+    confirm.addEventListener('click', () => {
+      dialog.close();
+      submit(regenerate, externalOk, true);
     });
   }
 
@@ -578,8 +714,9 @@ function build(view, ctx) {
     const md = el('div', { class: 'md' });
     const meta = el('p', { class: 'msg-meta' });
     const actions = el('div', { class: 'msg-actions' });
+    const steps = Array.isArray(m.tools) && m.tools.length ? sourcesNode(m.tools) : null;
     const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, md, meta, actions));
+      el('div', { class: 'msg-body' }, md, steps, meta, actions));
     parts.set(m, { md, meta, actions, last, shown: null });
     paint(m);
     return node;
@@ -596,7 +733,7 @@ function build(view, ctx) {
     let text = '';
     let kind = '';
     if (m.status === 'streaming') {
-      if (job) text = job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;
+      if (job) text = job.tool ? toolLine(job.tool) : job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;
       else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
       else text = 'ответ ещё идёт…';
     } else if (m.status === 'stopped') text = 'остановлено';
@@ -692,6 +829,7 @@ function build(view, ctx) {
     const mine = ++opened;
     chatId = id;
     chat = null;
+    draftWeb = false;
     clearTimeout(poll);
     notice.textContent = '';
     let listed = false;
@@ -781,12 +919,16 @@ function build(view, ctx) {
     }
   }
 
-  async function submit(regenerate, externalOk = false) {
+  async function submit(regenerate, externalOk = false, webOk = false) {
     const text = input.value;
     if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
     if (!regenerate && blocked()) return;
     if (!externalOk && needsConsent(regenerate)) {
-      askExternal(regenerate);
+      askExternal(regenerate, webOk);
+      return;
+    }
+    if (!webOk && needsWebConsent(regenerate)) {
+      askWeb(regenerate, externalOk);
       return;
     }
     sending = true;
@@ -794,9 +936,11 @@ function build(view, ctx) {
     syncBusy();
     paintAtts();
     try {
-      await turn(regenerate, text, externalOk);
+      await turn(regenerate, text, externalOk, webOk);
     } catch (err) {
-      if (err.code === 'external') askExternal(regenerate);   // вкладка не знала (другая вкладка сменила модель)
+      // вкладка не знала (другая вкладка сменила модель, включила «Интернет», ключ Exa появился)
+      if (err.code === 'external') askExternal(regenerate, webOk);
+      else if (err.code === 'external_web') askWeb(regenerate, externalOk);
       else notice.textContent = words(err);
     } finally {
       sending = false;
@@ -805,7 +949,7 @@ function build(view, ctx) {
     }
   }
 
-  async function turn(regenerate, text, externalOk) {
+  async function turn(regenerate, text, externalOk, webOk) {
     if (!chatId) {
       const created = await api('POST', '/api/chats', draft || {});
       ++opened;
@@ -814,6 +958,11 @@ function build(view, ctx) {
       draft = null;
       history.replaceState(null, '', `#/chat/${created.id}`);
       loadList();
+      if (draftWeb) {                              // «Интернет», включённый до создания диалога
+        draftWeb = false;
+        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
+        paintWeb();
+      }
     }
     const id = chatId;
     const sent = regenerate ? [] : atts.slice();
@@ -837,7 +986,7 @@ function build(view, ctx) {
     try {
       reply = await api('POST', `/api/chats/${id}/turns`, {
         ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
-        ...(externalOk ? { external_ok: true } : {}) });
+        ...(externalOk ? { external_ok: true } : {}), ...(webOk ? { web_ok: true } : {}) });
     } catch (err) {
       jobs.delete(id);
       if (chatId === id) {
@@ -848,6 +997,7 @@ function build(view, ctx) {
       throw err;
     }
     if (chatId === id && externalOk) chat.chat.external = false;   // ответ этой модели — след подтверждения
+    if (chatId === id && webOk) chat.chat.external_web = false;    // сервер записал время подтверждения
     if (chatId === id && !regenerate) {
       input.value = '';
       autosize();
@@ -884,7 +1034,7 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(false);
     loadList();
-    if (job.lost) reload();
+    if (job.lost || job.tooled) reload();          // источники ответа — с сервера
   }
 
   /* события */
@@ -912,6 +1062,7 @@ function build(view, ctx) {
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   chip.addEventListener('click', () => openModels(modelMenu.hidden));
+  webToggle.addEventListener('click', switchWeb);
   scroller.addEventListener('scroll', () => {
     stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }, { passive: true });

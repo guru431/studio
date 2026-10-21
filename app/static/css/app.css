@@ -482,6 +482,15 @@ label { font-size: 13px; color: var(--muted); }
 .send:disabled { opacity: .5; cursor: default; }
 .send svg.ico { width: 18px; height: 18px; }
 
+/* «Интернет»: кнопка у скрепки, подсказка под полем, источники под ответом */
+.web-note { margin: 0; }
+.web-note:empty { display: none; }
+.web-steps { font-size: 13px; color: var(--muted); }
+.web-steps summary { cursor: pointer; width: fit-content; }
+.web-list, .web-list ul { margin: 4px 0 0; padding-left: 18px; }
+.web-list li { overflow-wrap: anywhere; line-height: 1.5; }
+.web-steps a { color: var(--accent); }
+
 @media (max-width: 760px) {
   .chats { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw);
     padding-top: calc(12px + env(safe-area-inset-top, 0px)); transform: translateX(-100%); visibility: hidden;
