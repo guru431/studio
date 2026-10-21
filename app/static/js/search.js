@@ -6,7 +6,8 @@
  * фильтры живут только в памяти этого модуля (`memory`) — переживают уход в раздел и возврат, но не
  * перезагрузку; ни в адресе, ни в localStorage их нет.
  *
- * Выдача — новые сверху, по дням (как ленты), «Показать ещё» — курсором последней строки. Строка —
+ * Выдача — новые сверху, по дням (как ленты), «Показать ещё» — курсором последней строки, если запрос
+ * тот же, что у выдачи (иначе — новый поиск: ввод ещё ждал паузы). Строка —
  * значок раздела, заголовок, кусок текста с найденным (маркеры \u0002…\u0003 → <mark> узлами, не
  * HTML), модель и время; нажатие — ctx.navigate(href) (адрес проверяет HREF jobs.js). Номер запроса:
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
@@ -65,6 +66,7 @@ function mountScreen(view, ctx) {
   let asked = 0;               // номер запроса: запоздалый ответ прежнего не ляжет
   let timer = null;
   let items = [];
+  let shown = '';              // запрос выдачи (без курсора): «Показать ещё» дописывает только к нему
   let more = false;
   let models = null;           // модели своей истории по разделам; пока не пришли — выбор не сбрасывается
 
@@ -128,8 +130,13 @@ function mountScreen(view, ctx) {
     clearTimeout(timer);
     const mine = ++asked;
     const body = wanted();
+    const key = JSON.stringify(body);
+    // новый запрос ещё ждал паузы после ввода — «Показать ещё» начинает его заново, а не дописывает
+    // его страницу (курсором прежнего) к прежнему списку
+    if (key !== shown) append = false;
     if (!HAS_WORD.test(memory.q) && !memory.section && !memory.model && !memory.since && !memory.until) {
       items = [];
+      shown = '';
       more = false;
       paint();
       status.textContent = 'Введите слова или выберите раздел, модель или период';
@@ -146,6 +153,7 @@ function mountScreen(view, ctx) {
       const out = await api('POST', '/api/search', body);
       if (mine !== asked) return;
       items = append ? [...items, ...out.items] : out.items;
+      shown = key;
       more = out.more;
       paint();
       status.textContent = items.length ? '' : 'Ничего не нашлось';
