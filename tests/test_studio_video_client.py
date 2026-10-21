@@ -6,6 +6,7 @@
 (studio-video.local.ps1) — в .gitignore. Прогоны обеих версий идут против подставной службы
 на 127.0.0.1: она отвечает «готово» с первого опроса, поэтому скрипт не ждёт свои 5 с.
 """
+import hashlib
 import json
 import re
 import shutil
@@ -92,11 +93,12 @@ def test_powershell_parses_script_and_defaults_match_contract():
 class FakeVideos:
     """Подставная служба видео: задание готово с первого опроса, журнал всех запросов."""
 
-    def __init__(self, busy_posts=(), fail_names=()):
+    def __init__(self, busy_posts=(), fail_names=(), reject_posts=False):
         self.log = []            # (метод, путь) по порядку
         self.posts = []          # поля multipart принятых заданий
         self.post_attempts = 0
         self.busy_posts = set(busy_posts)    # номера попыток POST, на которые 429
+        self.reject_posts = reject_posts     # все создания — 400
         self.fail_names = set(fail_names)    # картинки (по содержимому), задания которых падают
         self.jobs = {}
         self.release = []
@@ -137,6 +139,8 @@ class FakeVideos:
                     fake.post_attempts += 1
                     if fake.post_attempts in fake.busy_posts:
                         return self.reply(429, {"error": {"message": "очередь полна", "type": "rate_limit"}})
+                    if fake.reject_posts:
+                        return self.reply(400, {"error": {"message": "модель не та", "type": "invalid_request"}})
                     mime = BytesParser(policy=policy.default).parsebytes(
                         b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + raw)
                     fields = {p.get_param("name", header="content-disposition"): p.get_payload(decode=True)
@@ -198,19 +202,31 @@ def service():
         thread.join(1)
 
 
-def run_script(runner, fake, folder, *extra):
+def run_script(runner, fake, folder, *extra, code=0):
+    """code — ожидаемый код выхода: 0 — всё готово или уже было, 3 — хотя бы один ролик не вышел."""
     r = run_client(runner, SCRIPT, ["-Folder", str(folder), "-Token", "test-key", "-Url", fake.url, *extra])
-    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
-    assert r.returncode == 0, out
+    enc = "oem" if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
+    out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
+    assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
     return out
 
 
+HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt", "model",
+          "fingerprint"]
+
+
 def manifest_rows(folder):
     lines = (folder / "video-manifest.tsv").read_text(encoding="utf-8-sig").splitlines()
-    header = lines[0].split("\t")
-    assert header == ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt"]
-    return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
+    assert lines[0].split("\t") == HEADER
+    return [dict(zip(HEADER, line.split("\t"))) for line in lines[1:]]
+
+
+def fingerprint(image, prompt="", seed=None, seconds=5, quality="standard", smooth="true", variant=1, model=MODEL):
+    """Отпечаток запроса по формуле шапки скрипта — независимо от обеих версий: так они сходятся."""
+    parts = [hashlib.sha256(image).hexdigest(), model, "" if seed is None else str(seed), str(seconds), quality,
+             smooth, str(variant), prompt]
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
@@ -226,8 +242,9 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
     with open(tmp_path / "huge.png", "wb") as f:     # больше 20 МБ — пропуск с предупреждением
         f.truncate(21 * 1024 * 1024)
 
-    run_script(runner, fake, tmp_path)
+    out = run_script(runner, fake, tmp_path, code=3)    # huge.png не вышла
 
+    assert "не вышло 1" in out
     assert [p["input_reference"] for p in fake.posts] == [b"img-a", b"img-b", b"img-c"]
     first = fake.posts[0]
     assert first["prompt"] == b"slow turn\tto camera"
@@ -241,7 +258,10 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
     assert (tmp_path / "c.auto.txt").read_bytes() == b"auto motion 3"
     assert not (tmp_path / "a.auto.txt").exists()
 
-    names = [f"a_5s_s{seeds[0]}.mp4", f"B_5s_s{seeds[1]}.mp4", f"c_5s_s{seeds[2]}.mp4"]
+    # Отпечаток: свой промпт входит, промпт службы — нет; seed — только заданный явно
+    keys = [fingerprint(b"img-a", "slow turn\tto camera"), fingerprint(b"img-b"), fingerprint(b"img-c")]
+    names = [f"a_5s_s{seeds[0]}_{keys[0][:8]}.mp4", f"B_5s_s{seeds[1]}_{keys[1][:8]}.mp4",
+             f"c_5s_s{seeds[2]}_{keys[2][:8]}.mp4"]
     for n, name in enumerate(names, 1):
         assert (tmp_path / name).read_bytes() == b"mp4-video_%024x" % n
         content = fake.log.index(("GET", "/slot/videos/video_%024x/content" % n))
@@ -253,11 +273,15 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
         ("a.png", names[0], str(seeds[0]), "file"), ("B.jpg", names[1], str(seeds[1]), "auto"),
         ("c.webp", names[2], str(seeds[2]), "auto")]
     assert rows[0]["prompt"] == "slow turn to camera" and rows[1]["prompt"] == "auto motion 2"
-    assert {(r["seconds"], r["quality"], r["smooth"], r["variant"]) for r in rows} == {("5", "standard", "true", "1")}
+    assert {(r["seconds"], r["quality"], r["smooth"], r["variant"], r["model"]) for r in rows} == {
+        ("5", "standard", "true", "1", MODEL)}
+    assert [r["fingerprint"] for r in rows] == keys
     assert fake.log[-1] == ("POST", "/slot/images/release") and fake.release == [{"model": MODEL}]
 
-    # Повторный запуск: всё в журнале и файлы на месте — ни одного запроса, карта не трогается
+    # Повторный запуск: всё в журнале и файлы на месте — ни одного запроса, карта не трогается;
+    # промпт B и c теперь из .auto.txt, но отпечаток тот же. Пропуск — не отказ: код 0
     fake.log.clear()
+    (tmp_path / "huge.png").unlink()
     run_script(runner, fake, tmp_path)
     assert fake.log == []
 
@@ -299,7 +323,8 @@ def test_variants_use_consecutive_seeds_and_options(runner, service, tmp_path):
 
     assert [(p["seed"], p["seconds"], p["quality"], p["smooth"], p["prompt"]) for p in fake.posts] == [
         (b"10", b"3", b"fast", b"false", b"common move"), (b"11", b"3", b"fast", b"false", b"common move")]
-    assert (tmp_path / "x_3s_s10.mp4").exists() and (tmp_path / "x_3s_s11.mp4").exists()
+    keys = [fingerprint(b"img-x", "common move", seed, 3, "fast", "false", k) for k, seed in ((1, 10), (2, 11))]
+    assert (tmp_path / f"x_3s_s10_{keys[0][:8]}.mp4").exists() and (tmp_path / f"x_3s_s11_{keys[1][:8]}.mp4").exists()
     rows = manifest_rows(tmp_path)
     assert [(r["variant"], r["seed"], r["smooth"], r["prompt_source"]) for r in rows] == [
         ("1", "10", "false", "common"), ("2", "11", "false", "common")]
@@ -312,10 +337,81 @@ def test_failed_job_is_deleted_and_not_recorded(runner, service, tmp_path):
     (tmp_path / "bad.png").write_bytes(b"bad")
     (tmp_path / "good.png").write_bytes(b"good")
 
-    run_script(runner, fake, tmp_path)
+    run_script(runner, fake, tmp_path, code=3)      # частичный провал — не успех
 
     assert ("DELETE", "/slot/videos/video_%024x" % 1) in fake.log
     assert ("GET", "/slot/videos/video_%024x/content" % 1) not in fake.log
     assert [r["image"] for r in manifest_rows(tmp_path)] == ["good.png"]
-    assert [p.name for p in tmp_path.glob("*.mp4")] == [f"good_5s_s{int(fake.posts[1]['seed'])}.mp4"]
+    assert [p.name for p in tmp_path.glob("*.mp4")] == [
+        f"good_5s_s{int(fake.posts[1]['seed'])}_{fingerprint(b'good')[:8]}.mp4"]
     assert fake.jobs == {}
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_all_jobs_rejected_exits_with_failure(runner, service, tmp_path):
+    fake = service(reject_posts=True)
+    (tmp_path / "a.png").write_bytes(b"img-a")
+
+    out = run_script(runner, fake, tmp_path, code=3)
+
+    assert "модель не та" in out and "готово 0, не вышло 1" in out
+    assert manifest_rows(tmp_path) == [] and not list(tmp_path.glob("*.mp4"))
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_same_name_images_and_taken_names_keep_every_result(runner, service, tmp_path):
+    # Две картинки с одним именем и один seed: раньше обе ложились в photo_5s_s42.mp4
+    fake = service()
+    (tmp_path / "photo.jpg").write_bytes(b"img-jpg")
+    (tmp_path / "photo.png").write_bytes(b"img-png")
+    keys = [fingerprint(b"img-jpg", seed=42), fingerprint(b"img-png", seed=42)]
+    # Имя уже занято (так выходит у -Redo с тем же seed): прежний файл не перезаписывается, новому — «-2»
+    taken = tmp_path / f"photo_5s_s42_{keys[0][:8]}.mp4"
+    taken.write_bytes(b"earlier")
+
+    run_script(runner, fake, tmp_path, "-Seed", "42", "-KeepCard")
+
+    names = [f"photo_5s_s42_{keys[0][:8]}-2.mp4", f"photo_5s_s42_{keys[1][:8]}.mp4"]
+    rows = manifest_rows(tmp_path)
+    assert [(r["image"], r["video"], r["fingerprint"]) for r in rows] == [
+        ("photo.jpg", names[0], keys[0]), ("photo.png", names[1], keys[1])]
+    assert [(tmp_path / n).read_bytes() for n in names] == [b"mp4-video_%024x" % n for n in (1, 2)]
+    assert taken.read_bytes() == b"earlier" and not list(tmp_path.glob("*.part"))
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_changed_request_is_made_again(runner, service, tmp_path):
+    # Пропуск — только по отпечатку: новое содержимое картинки под тем же именем — новый ролик
+    fake = service()
+    image = tmp_path / "x.png"
+    image.write_bytes(b"img-old")
+    args = ("-Seed", "7", "-Prompt", "move", "-Model", "wan-other", "-Quality", "fast", "-KeepCard")
+
+    run_script(runner, fake, tmp_path, *args)
+    image.write_bytes(b"img-new")
+    run_script(runner, fake, tmp_path, *args)
+
+    keys = [fingerprint(b"img-old", "move", 7, quality="fast", model="wan-other"),
+            fingerprint(b"img-new", "move", 7, quality="fast", model="wan-other")]
+    rows = manifest_rows(tmp_path)
+    assert [(r["video"], r["model"], r["fingerprint"]) for r in rows] == [
+        (f"x_5s_s7_{keys[0][:8]}.mp4", "wan-other", keys[0]), (f"x_5s_s7_{keys[1][:8]}.mp4", "wan-other", keys[1])]
+    assert [p["input_reference"] for p in fake.posts] == [b"img-old", b"img-new"]
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_old_manifest_rows_are_matched_by_name_with_a_warning(runner, service, tmp_path):
+    # Журнал прежней версии: 9 столбцов, без модели и отпечатка
+    fake = service()
+    (tmp_path / "x.png").write_bytes(b"img-x")
+    (tmp_path / "x_5s_s1.mp4").write_bytes(b"old-mp4")
+    old = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt"]
+    (tmp_path / "video-manifest.tsv").write_text(
+        "\t".join(old) + "\n" + "x.png\tx_5s_s1.mp4\t1\t5\tstandard\ttrue\t1\tcommon\told move\n", encoding="utf-8")
+
+    out = run_script(runner, fake, tmp_path, "-Prompt", "new move")
+
+    assert fake.log == [], "строка без отпечатка сверяется по имени картинки и параметрам"
+    assert "без отпечатка" in out and "-redo" in out.lower()
+    rows = manifest_rows(tmp_path)     # шапка дополнена новыми столбцами, строка — как была
+    assert [(r["video"], r["prompt"], r.get("fingerprint")) for r in rows] == [("x_5s_s1.mp4", "old move", None)]

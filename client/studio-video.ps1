@@ -8,17 +8,26 @@
 
   Берутся картинки .jpg .jpeg .png .webp прямо в -Folder (без подпапок), по имени; файлы
   больше 20 МБ пропускаются с предупреждением. Ролики ложатся рядом с картинкой под именами
-  <имя>_<N>s_s<seed>.mp4, рядом — журнал video-manifest.tsv (картинка, ролик, seed,
-  длительность, качество, дорисовка, вариант, откуда промпт, промпт).
+  <имя>_<N>s_s<seed>_<отпечаток>.mp4 (занятое имя не перезаписывается — к нему добавляется
+  -2, -3, …), рядом — журнал video-manifest.tsv (картинка, ролик, seed, длительность, качество,
+  дорисовка, вариант, откуда промпт, промпт, модель, отпечаток).
 
   Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе -Prompt → иначе <имя>.auto.txt
   (промпт, придуманный службой в прошлый раз) → иначе пусто: служба опишет движение по фото
   сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
 
   Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
-  ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролики, уже
-  записанные в журнал с той же картинкой, длительностью, качеством, дорисовкой и номером
-  варианта (если файл ролика на месте); -Redo — сделать заново.
+  ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролик, если в журнале
+  есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
+  модели, seed (если задан -Seed), длительности, качества, дорисовки, номера варианта и своего
+  промпта (<имя>.txt или -Prompt; промпт службы и <имя>.auto.txt в него не входят): смена
+  любого из них — новый ролик. Строки журнала прежней версии (без отпечатка) сверяются только
+  по имени картинки, длительности, качеству, дорисовке и варианту — смены промпта, seed, модели
+  и содержимого картинки по ним не видно, скрипт об этом предупреждает. -Redo — сделать заново.
+
+  Код выхода: 0 — все ролики готовы или уже были; 3 — хотя бы один не вышел (не отправлен,
+  не сделан службой, не скачался, картинка больше 20 МБ или промпт длиннее предела); 1 — скрипт
+  остановился с ошибкой (нет ключа, папки, картинок) или неверные параметры.
 
   Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     powershell -ExecutionPolicy Bypass -File studio-video.ps1 -MakeLocal
@@ -306,13 +315,19 @@ function Update-Video($Job, $Listing) {
         return $true
     }
     $seedOut = if ($null -ne $obj.seed) { [long]$obj.seed } else { $Job.Seed }
-    $file = '{0}_{1}s_s{2}.mp4' -f $Job.Base, $Seconds, $seedOut
-    [IO.File]::WriteAllBytes((Join-Path $Folder $file), $c.Bytes)
+    # Отпечаток в имени разводит картинки с одним именем и разные запросы; занятое имя не
+    # перезаписывается (-Redo с тем же seed), а недописанный файл не ляжет под именем ролика
+    $stem = '{0}_{1}s_s{2}_{3}' -f $Job.Base, $Seconds, $seedOut, $Job.Key.Substring(0, 8)
+    $file = "$stem.mp4"
+    for ($n = 2; Test-Path -LiteralPath (Join-Path $Folder $file); $n++) { $file = "$stem-$n.mp4" }
+    $path = Join-Path $Folder $file
+    [IO.File]::WriteAllBytes("$path.part", $c.Bytes)
+    [IO.File]::Move("$path.part", $path)
     Remove-Video $Job
     $promptOut = if ($Job.Prompt) { $Job.Prompt } else { "$($obj.prompt)" }
     $sourceOut = if ($Job.Source) { $Job.Source } elseif ($obj.prompt_source) { "$($obj.prompt_source)" } else { 'auto' }
     Add-ManifestLine @($Job.Image.Name, $file, "$seedOut", "$Seconds", $Quality, $smoothText, "$($Job.Variant)",
-                       $sourceOut, $promptOut)
+                       $sourceOut, $promptOut, $Model, $Job.Key)
     $script:done++
     $from = if ($Job.Running) { $Job.Running } else { $Job.Sent }
     Write-Host "$(Get-Label $Job): готово за $(Format-Span ((Get-Date) - $from)) → $file"
@@ -320,18 +335,30 @@ function Update-Video($Job, $Listing) {
 }
 
 $manifest = Join-Path $Folder 'video-manifest.tsv'
+$header = @('image', 'video', 'seed', 'seconds', 'quality', 'smooth', 'variant', 'prompt_source', 'prompt', 'model',
+            'fingerprint')
 $recorded = @{}
+$legacy = @{}
 if (Test-Path -LiteralPath $manifest) {
-    foreach ($row in [IO.File]::ReadAllLines($manifest, [Text.Encoding]::UTF8)) {
+    $rows = [IO.File]::ReadAllLines($manifest, [Text.Encoding]::UTF8)
+    if ($rows.Count -gt 0 -and $rows[0] -ceq ($header[0..8] -join "`t")) {
+        # Журнал прежней версии (без модели и отпечатка): шапку — с новыми столбцами, строки как есть
+        $rows[0] = $header -join "`t"
+        [IO.File]::WriteAllLines("$manifest.part", $rows, $Utf8Bom)
+        Move-Item -LiteralPath "$manifest.part" -Destination $manifest -Force
+    }
+    foreach ($row in $rows) {
         $c = $row.Split("`t")
         if ($c.Count -lt 9 -or $c[0] -eq 'image') { continue }
-        if (Test-Path -LiteralPath (Join-Path $Folder $c[1]) -PathType Leaf) {
-            $recorded[(@($c[0], $c[3], $c[4], $c[5], $c[6]) -join "`t")] = $true
-        }
+        if (-not (Test-Path -LiteralPath (Join-Path $Folder $c[1]) -PathType Leaf)) { continue }
+        if ($c.Count -ge 11 -and $c[10]) { $recorded[$c[10]] = $true }
+        else { $legacy[(@($c[0], $c[3], $c[4], $c[5], $c[6]) -join "`t")] = $true }
     }
 } else {
-    Add-ManifestLine @('image', 'video', 'seed', 'seconds', 'quality', 'smooth', 'variant', 'prompt_source', 'prompt')
+    Add-ManifestLine $header
 }
+$sha = [Security.Cryptography.SHA256]::Create()
+function Get-Sha256([byte[]]$Bytes) { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '').ToLowerInvariant() }
 
 $images = @(Get-ChildItem -LiteralPath $Folder -File |
     Where-Object { $Mime.ContainsKey($_.Extension.ToLowerInvariant()) } |
@@ -341,6 +368,7 @@ if ($images.Count -eq 0) { throw "В папке $Folder нет картинок 
 $done = 0
 $failed = 0
 $skipped = 0
+$legacySkipped = 0
 $todo = New-Object Collections.ArrayList
 $smoothLabel = if ($NoSmooth) { 'без дорисовки' } else { 'с дорисовкой' }
 Write-Host "Папка $Folder`: картинок $($images.Count); $Seconds с, $Quality, $smoothLabel, вариантов $Count"
@@ -367,22 +395,38 @@ foreach ($img in $images) {
         $failed += $Count
         continue
     }
+    # Отпечаток запроса (тот же у Python-версии): промпт — только свой; придуманный
+    # службой и <имя>.auto.txt не входят, иначе повтор переделывал бы готовое
+    $digest = Get-Sha256 ([IO.File]::ReadAllBytes($img.FullName))
+    $ownPrompt = if ($source -eq 'file' -or $source -eq 'common') { $text -replace "\r\n?", "`n" } else { '' }
     $added = 0
     for ($k = 1; $k -le $Count; $k++) {
-        if (-not $Redo -and $recorded.ContainsKey((@($img.Name, "$Seconds", $Quality, $smoothText, "$k") -join "`t"))) {
+        $seedValue = if ($null -ne $Seed) { [long]$Seed + $k - 1 } else { New-Seed }
+        $seedKey = if ($null -ne $Seed) { "$seedValue" } else { '' }
+        $key = Get-Sha256 ([Text.Encoding]::UTF8.GetBytes((@($digest, $Model, $seedKey, "$Seconds", $Quality,
+            $smoothText, "$k", $ownPrompt) -join "`n")))
+        if (-not $Redo -and $recorded.ContainsKey($key)) {
             $skipped++
             continue
         }
-        $seedValue = if ($null -ne $Seed) { [long]$Seed + $k - 1 } else { New-Seed }
+        if (-not $Redo -and $legacy.ContainsKey((@($img.Name, "$Seconds", $Quality, $smoothText, "$k") -join "`t"))) {
+            $skipped++
+            $legacySkipped++
+            continue
+        }
         [void]$todo.Add([pscustomobject]@{ N = $todo.Count + 1; Image = $img; Base = $base; Variant = $k
-                                           Seed = $seedValue; Prompt = $text; Source = $source; Id = ''
-                                           Detail = ''; Sent = $null; Running = $null; Tries = 0 })
+                                           Seed = $seedValue; Prompt = $text; Source = $source; Key = $key
+                                           Id = ''; Detail = ''; Sent = $null; Running = $null; Tries = 0 })
         $added++
     }
     if ($added) { Write-Host "  $($img.Name): роликов $added, промпт — $label" }
 }
 $total = $todo.Count
 if ($skipped) { Write-Host "Уже в журнале — пропущено: $skipped (-Redo — сделать заново)" }
+if ($legacySkipped) {
+    Write-Warning ("из них $legacySkipped — по строкам журнала прежней версии без отпечатка: смена промпта, " +
+        'seed, модели или содержимого картинки по ним не видна; -Redo — сделать заново')
+}
 
 $active = New-Object Collections.ArrayList
 $autoSaved = @{}
@@ -453,3 +497,4 @@ try {
     Write-Host ("Итого: готово {0}, не вышло {1}, пропущено {2}, {3:N0} мин. Папка: {4}" -f $done, $failed,
         $skipped, ((Get-Date) - $started).TotalMinutes, $Folder)
 }
+if ($failed) { exit 3 }    # хотя бы один ролик не вышел: внешний запуск должен это видеть
