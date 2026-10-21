@@ -122,12 +122,15 @@
   подключений нерасшифровываемыми — их вводят заново.
 - Копия базы — `studio-backup.timer` (04:30, `Persistent=true`) → `studio-backup.service` →
   `manage.py backup`: `sqlite3` backup во временный файл рядом с базой, затем на шару
-  `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних; юнит ограничен
-  `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт ещё
-  до 7 дней, а файлы, которые шара не дала удалить, — пока их не доудалит очередь `purge`.
+  `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних успешных: старые убирает
+  только успешная новая копия (`BACKUP_KEEP` — число копий, а не дней); юнит ограничен
+  `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт, пока
+  его не вытеснят 7 более новых успешных копий — без календарного срока: пропуски копирования его
+  продлевают; файлы, которые шара не дала удалить, — пока их не доудалит очередь `purge`.
   Восстановление —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
-  `studio:www-data`, удалить `-wal`/`-shm`), запустить.
+  `studio:www-data`, удалить `-wal`/`-shm`), запустить. Файлов, удалённых после даты копии, на шаре
+  уже нет: их строки `media` отвечают 404.
 - Apache: vhost [deploy/apache-vhost.conf](deploy/apache-vhost.conf) (`*:8443` за прозрачным
   `sslh`, wildcard `/etc/letsencrypt/live/example.net/`) подключён в конце `/opt/services/apache/apache2.conf`
   строкой `IncludeOptional /opt/services/studio/deploy/apache-vhost.conf`. Правка vhost — выкладка:
