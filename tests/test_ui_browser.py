@@ -2315,6 +2315,61 @@ def test_video_layout_fits_390(browser, live, ready_clips):
     assert not problems(r), problems(r)
 
 
+def make_clips(n):
+    """n готовых роликов из одного фото (шлюз теста готов с первого опроса)."""
+    steps = [put_file("#video-file", png_of(48, 64, "olive")),
+             ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48")]
+    for i in range(1, n + 1):
+        steps += [("click", "#video-go"), ("wait", clips("done", i))]
+    return steps
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_video_selection_in_every_view(browser, live, ready_clips, width):
+    login = f"vsel{width}"
+    live.add_user(login)
+    steps = [*video_screen(login), *make_clips(3), ("click", "#video-select"), ("wait", selecting(".video"))]
+    for i, view in enumerate(("preview", "tiles", "table"), 1):   # по ролику в каждом виде, отметки копятся
+        steps += [("click", f"#video-view-{view}"),
+                  ("wait", f"document.querySelector('#video-feed').dataset.view === '{view}'"),
+                  ("click", nth(i, card=CLIP)),
+                  ("eval", f"{view}Picked", picked("#video-feed")),
+                  ("eval", f"{view}Viewer", "!!document.querySelector('#video-viewer')"),
+                  ("eval", f"{view}Paused", f"[...document.querySelectorAll('{CLIP} video')].every(v => v.paused)"),
+                  ("eval", f"{view}Fits", NO_OVERFLOW)]
+    steps += [("eval", "bar", "getComputedStyle(document.querySelector('.video .select-bar')).display !== 'none'"),
+              ("eval", "label", text_of("#video-select-download"))]
+    r = browser.drive(live.url + "/", steps, width=width, mobile=width == 390, timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    for n, view in enumerate(("preview", "tiles", "table"), 1):
+        assert len(v[f"{view}Picked"]) == n, view
+        assert v[f"{view}Viewer"] is False and v[f"{view}Paused"] and v[f"{view}Fits"], view
+    assert set(v["previewPicked"]) < set(v["tilesPicked"]) < set(v["tablePicked"])
+    assert v["bar"] is (width == 390) and v["label"] == "Скачать"
+    assert not problems(r), problems(r)
+
+
+def test_video_selection_deletes_and_downloads(browser, live, ready_clips):
+    live.add_user("vseldel")
+    r = browser.drive(live.url + "/", [*video_screen("vseldel"), *make_clips(3), ("eval", "all", ids("#video-feed")),
+        ("click", "#video-select"), ("click", nth(1, card=CLIP)), ("click", nth(2, card=CLIP)),
+        ("click", "#video-select-delete"), ("wait", is_open("#video-select-delete-dialog")),
+        ("eval", "title", text_of("#video-select-delete-dialog h2")),
+        ("click", "#video-select-delete-confirm"),
+        ("wait", f"document.querySelectorAll('{CLIP}').length === 1 && !{selecting('.video')}"),
+        ("eval", "spy", CLICKS), ("eval", "archiving", ARCHIVED),
+        ("click", "#video-select"), ("click", nth(1, card=CLIP)),
+        ("click", "#video-select-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "href", "window.clicked[0][0]"), ("eval", "archived", "window.archived"),
+        ("eval", "left", ids("#video-feed"))], width=1280, timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"] == "Удалить 2 ролика?" and v["left"] == [v["all"][2]]
+    assert v["href"].startswith("/api/media/archives/") and len(v["archived"]) == 1 and len(v["archived"][0]) == 1
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_clips, width):
     login = f"vviews{width}"

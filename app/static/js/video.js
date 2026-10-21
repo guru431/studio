@@ -16,6 +16,7 @@ import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
 import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
+import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
@@ -69,12 +70,16 @@ function build(view, ctx) {
 
   /* разметка */
   const feedBox = el('div', { id: 'video-feed', class: 'video-feed' });
+  const selection = createSelection({ section: 'video', nouns: ['ролик', 'ролика', 'роликов'],
+    selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
+    remove: (item) => remove(item) });
   const layout = viewSwitch('video', 'preview', (name) => {
     feedBox.dataset.view = name;
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Видео'), el('span', { class: 'grow' }), layout.node);
+  const head = el('header', { class: 'head' }, el('h1', {}, 'Видео'), selection.tools, el('span', { class: 'grow' }),
+    selection.button, layout.node);
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
   const pick = el('label', { class: 'video-pick', id: 'video-pick' }, icon('clip'),
@@ -110,7 +115,8 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt, micNote,
     el('div', { class: 'row' }, modelPick, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
       el('span', { class: 'grow' }), attachMic(prompt, micNote), go));
-  const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form);
+  const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
+    selection.bar);
   view.append(root);
 
   const feed = createFeed(feedBox, {
@@ -119,7 +125,10 @@ function build(view, ctx) {
     load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши ролики.' : 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
     head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
+    onChange: () => selection.sync(),
+    dayTools: selection.dayTools,
   });
+  selection.attach({ root, head, feedBox, feed, error });
 
   /* чип качества */
   function paintQuality() {
@@ -318,8 +327,8 @@ function build(view, ctx) {
   function card(item) {
     watch(item);
     const node = el('article', { class: 'card video-card', 'data-id': item.id, 'data-state': item.state });
-    if (layout.value === 'table') return row(item, node);
-    return layout.value === 'tiles' ? tileCard(item, node) : previewCard(item, node);
+    if (layout.value === 'table') return selection.decorate(row(item, node), item);
+    return selection.decorate(layout.value === 'tiles' ? tileCard(item, node) : previewCard(item, node), item);
   }
 
   /* просмотр ролика (плитка и таблица): плеер, параметры, цепочка, «Скачать», «Удалить» */
@@ -517,6 +526,7 @@ function build(view, ctx) {
   return {
     destroy() {
       alive = false;
+      selection.destroy();
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
       clearInterval(tick);
