@@ -37,6 +37,7 @@ GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
 BACKUP_KEEP = 7
+BACKUP_GLOB = "studio-????????.db"          # копии в $STUDIO_MEDIA_DIR/backup; их возраст видит панель (admin.py)
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -166,7 +167,7 @@ def backup() -> int:
     print(f"копия базы: {target}")
     try:
         # и .part суток, что упали, пока его уборки не было (своя копия к этому месту уже на месте)
-        stale = sorted(folder.glob("studio-????????.db"))[:-BACKUP_KEEP] + list(folder.glob(".studio-????????.db.part"))
+        stale = sorted(folder.glob(BACKUP_GLOB))[:-BACKUP_KEEP] + list(folder.glob(".studio-????????.db.part"))
         for old in stale:
             old.unlink()
     except OSError as e:

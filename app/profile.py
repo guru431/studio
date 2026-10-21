@@ -1,6 +1,7 @@
 """Профиль у каждого: `/api/me` (с токеном CSRF сессии, готовностью разделов и умолчанием чата из
 sections.py), тема и вид ленты разделов (общие для всех устройств учётки), смена пароля, удаление
-всей своей истории (спека, раздел 7.9; ответ — число файлов в очереди удаления, media.py)."""
+всей своей истории (спека, раздел 7.9; ответ — число файлов в очереди удаления, media.py), объём
+своих файлов и очередь удаления (`GET /api/me/storage`)."""
 import asyncio
 import json
 import logging
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 
 import auth
 import history
+import media
 import sections
 import security
 import state
@@ -96,6 +98,15 @@ async def change_password(body: PasswordChange, request: Request):
         raise
     log.info("пользователь %d: пароль сменён, прочие сессии закрыты", uid)
     return Response(status_code=204)
+
+
+@router.get("/me/storage")
+async def get_storage(request: Request):
+    """«Хранилище» в «Прочем»: свои файлы по видам и сколько их путей ждут в очереди удаления (с какого
+    времени) — из базы, без путей и имён; шару не трогает. Квот и автоудаления нет."""
+    uid = request.state.user.id
+    files, since = media.waiting(uid)
+    return {**media.usage(uid), "pending": {"files": files, "since": since}}
 
 
 @router.delete("/history")

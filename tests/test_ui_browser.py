@@ -7,6 +7,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import re
 import socket
 import time
@@ -609,9 +610,70 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     assert not problems(r), problems(r)
 
 
+def live_sql(live, sql, args=()):
+    """Строка в базу живой студии своим соединением (WAL), как LiveApp.add_user."""
+    import db
+    conn = db.connect(live.db_path)
+    try:
+        conn.execute(sql, args)
+    finally:
+        conn.close()
+
+
+STORAGE_TEXTS = """[...document.querySelectorAll('#storage dd')].map((d) => [d.dataset.kind, d.textContent])"""
+
+
+def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, live):
+    """«Прочее» → «Хранилище»: свои файлы по видам и итог, очередь удаления с датой; после «Удалить всю
+    историю» — пусто и «очередь пуста»."""
+    uid = live.add_user("keeper")
+    for media_id, mime, size in (("k-img", "image/png", 2048), ("k-vid", "video/mp4", 3 << 20)):
+        live_sql(live, "INSERT INTO media(id, user_id, rel_path, mime, size, has_thumb, download_name, created)"
+                       " VALUES (?, ?, ?, ?, ?, 0, 'x', ?)", (media_id, uid, f"u{uid}/{media_id}", mime, size, time.time()))
+    live_sql(live, "INSERT INTO purge(media_id, user_id, rel_path, queued) VALUES ('k-gone', ?, ?, ?)",
+             (uid, f"u{uid}/k-gone.png", time.time() - 3600))
+    r = browser.drive(live.url + "/", [*signin("keeper"), ("wait", READY),
+        *go("settings/other"), ("wait", "document.querySelector('#storage dd[data-kind=\"total\"]')"),
+        ("eval", "before", STORAGE_TEXTS), ("eval", "queue", "document.querySelector('#storage-queue').textContent"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")), ("click", "#wipe-next"),
+        ("wait", "!document.querySelector('#wipe-confirm').hidden"), ("click", "#wipe-confirm"),
+        ("wait", "document.querySelector('#storage-queue').textContent.startsWith('Очередь удаления пуста')"),
+        ("eval", "after", STORAGE_TEXTS)], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == [["image", "1 файл · 2 КиБ"], ["video", "1 файл · 3 МиБ"], ["total", "2 файла · 3 МиБ"]]
+    assert v["queue"].startswith("Ждут удаления на хранилище: 1 файл (с ") and v["fits"] is True
+    assert v["after"] == [["total", "0 файлов · 0 Б"]]
+    assert not problems(r), problems(r)
+
+
+def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
+    folder = live.db_path.parent / "media" / "backup"
+    folder.mkdir(exist_ok=True)
+    copy = folder / "studio-20270114.db"
+    copy.write_bytes(b"db")
+    made = time.time() - 3 * 3600 - 60
+    os.utime(copy, (made, made))
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+            *go("admin"), ("wait", "document.querySelector('#admin-storage dd[data-key=\"queue\"]')"),
+            ("eval", "lines", "[...document.querySelectorAll('#admin-storage dd')].map((d) => [d.dataset.key,"
+                              " d.textContent, d.classList.contains('error')])")])
+    finally:
+        copy.unlink()
+    assert not r.get("failed"), r
+    share, backup, queue = r["values"]["lines"]
+    assert share[0] == "share" and share[1].startswith("доступна, свободно ") and share[2] is False
+    assert backup[0] == "backup" and backup[1].startswith("3 ч назад (") and backup[1].endswith("копий — 1")
+    assert backup[2] is False
+    assert queue[0] == "queue" and queue[1].startswith(("Очередь удаления пуста", "Ждут удаления"))
+    assert not problems(r), problems(r)
+
+
 # ---- чат -----------------------------------------------------------------------
 
-CHAT_ID = "/^#\\/chat\\/[0-9a-f]{32}$/.test(location.hash)"
+CHAT_ID ="/^#\\/chat\\/[0-9a-f]{32}$/.test(location.hash)"
 #: ответ кончился: снова «Отправить», у ответа — кнопки
 ANSWERED = ("!document.querySelector('#send').hidden && document.querySelector('#stop').hidden"
             " && document.querySelector('#messages .msg.assistant:last-child .msg-actions button')")
