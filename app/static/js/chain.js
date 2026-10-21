@@ -1,21 +1,46 @@
 /* Цепочка промптов картинки или ролика (item.chain, спека 2026-10-20, раздел 6.6): шаги по порядку,
  * текущий выделен. У шага — миниатюра (нажатие открывает картинку шага), вид, модель, размер, seed
  * или сила, дата, промпт и «Копировать». Удалённая картинка — «удалена», миниатюра не нажимается.
- * Текст сервера — только textContent. */
+ * Текст сервера — только textContent.
+ *
+ * Параметры по модели (спека 2026-10-21-studio-photo-presets-compare-series, раздел 9) — общие для
+ * цепочки, карточек и сравнения: сила — только у Lustify (у старых строк FLUX она записана, но FLUX
+ * её не получал), seed — не у внешнего сервиса (модель не из перечня шлюза). */
 import { el } from './ui.js';
 
 const KINDS = { generation: 'Генерация', upload: 'Фото с устройства', edit: 'Правка', brush: 'Правка кистью',
   video: 'Ролик' };
-const NAMES = { lustify: 'Lustify', flux: 'FLUX' };
+export const NAMES = { lustify: 'Lustify', flux: 'FLUX' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
+
+/** Модель внешнего сервиса: не из перечня шлюза (images.MODELS). */
+export function isExternal(model) {
+  return !!model && !Object.hasOwn(NAMES, model);
+}
+
+/** Seed, который стоит показывать (null — нет: внешний сервис его не получает). */
+export function seedOf(step) {
+  return step.seed !== undefined && step.seed !== null && !isExternal(step.model) ? step.seed : null;
+}
+
+/** Сила, которую стоит показывать: только у Lustify. */
+export function strengthOf(step) {
+  return step.model === 'lustify' && step.strength !== undefined && step.strength !== null ? step.strength : null;
+}
+
+/** Модель, размер, seed и сила шага или записи — части подписи. */
+export function paramParts(step) {
+  const seed = seedOf(step);
+  const strength = strengthOf(step);
+  return [step.model && (NAMES[step.model] || step.model), step.size && String(step.size).replace('x', '×'),
+    seed !== null ? `seed ${seed}` : '', strength !== null ? `сила ${strength}` : ''];
+}
 
 function meta(step, n) {
   const date = step.created ? new Date(step.created * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
   const parts = step.kind === 'video'
     ? [`${step.seconds} с`, RESOLUTION[step.quality] || step.quality]
-    : [step.model && (NAMES[step.model] || step.model), step.size && String(step.size).replace('x', '×'),
-      step.seed !== undefined && step.seed !== null ? `seed ${step.seed}` : '',
-      step.strength !== undefined && step.strength !== null ? `сила ${step.strength}` : ''];
+    : paramParts(step);
   return [`${n}. ${KINDS[step.kind] || step.kind}`, ...parts, date].filter(Boolean).join(' · ');
 }
 

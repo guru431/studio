@@ -17,14 +17,24 @@
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
  * Раздел без модели (ctx.hint): лента, просмотр, «Скачать» и «Удалить» — как всегда, вместо поля
- * промпта — подсказка, в просмотре нет «Изменить» и «Повторить». */
+ * промпта — подсказка, в просмотре нет «Изменить» и «Повторить».
+ *
+ * Спека 2026-10-21-studio-photo-presets-compare-series: чип «★» — пресеты (presets.js); чип «×1» —
+ * серия (series.js; ответ несёт ids — лента берёт все строки сразу, строка `queued` — «в очереди
+ * серии» без таймера, с «Отменить»); сравнение двух картинок (compare.js) — «Сравнить с исходником»
+ * в просмотре и «Сравнить» в режиме выделения при двух отмеченных; «Варианты» в просмотре —
+ * GET /api/images/<id>/variants. Параметры по модели — chain.js: силы нет у FLUX, seed — у внешнего
+ * сервиса (его чип seed скрыт, «Повторить с тем же seed» — просто «Повторить»). */
 import { api } from './api.js';
-import { chainList } from './chain.js';
+import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
+import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
 import { attachMic } from './mic.js';
 import { createFeed, pageQuery } from './feed.js';
+import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
+import { seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
@@ -39,8 +49,8 @@ const SEED_MAX = 4294967295;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const SIZES = [['portrait', 'Портрет 832×1216', '832x1216'], ['square', 'Квадрат 1024×1024', '1024x1024'],
   ['landscape', 'Альбом 1216×832', '1216x832']];
-const NAMES = { lustify: 'Lustify', flux: 'FLUX', 'gemma-abl': 'gemma-abl' };
-const RUNNING = new Set(['working', 'cancelling']);
+const RUNNING = new Set(['working', 'cancelling', 'queued']);
+const CANCELLABLE = new Set(['working', 'queued']);
 const ICONS = {
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
@@ -99,7 +109,12 @@ function build(view, ctx) {
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
   const selection = createSelection({ section: 'photo', nouns: ['картинку', 'картинки', 'картинок'],
     selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
-    remove: (item) => remove(item) });
+    remove: (item) => remove(item),
+    // ровно две отмеченные с файлом — сравнение; режим выделения остаётся
+    extraActions: [{ id: 'photo-select-compare', label: 'Сравнить',
+      shown: (items) => items.length === 2 && items.every((i) => i.state === 'done' && i.media_id),
+      run: ([a, b]) => openCompare(root, { media_id: a.media_id, label: paramParts(a).filter(Boolean).join(' · ') },
+        { media_id: b.media_id, label: paramParts(b).filter(Boolean).join(' · ') }) }] });
   const layout = viewSwitch('photo', 'tiles', (name) => {
     feedBox.dataset.view = name;
     feed.redraw();
@@ -127,12 +142,29 @@ function build(view, ctx) {
   const seed = el('input', { id: 'photo-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
     'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
   const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-seed' }, el('span', {}, 'seed'), seed);
+  const seriesName = el('span', { class: 'chip-name' }, '×1');
+  const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series', 'aria-haspopup': 'true',
+    'aria-expanded': 'false', 'aria-controls': 'chip-series-menu', title: 'Серия: несколько вариантов подряд' }, seriesName);
+  const series = seriesControl({ prefix: 'photo-series', canStrength: () => isLustify() && !!source,
+    from: () => strength.value, onChange: () => {
+      seriesName.textContent = series ? series.label() : '×1';
+      chipSeries.classList.toggle('on', !!(series && series.value()));
+    } });
+  const seriesMenu = el('div', { class: 'chip-menu series-menu', id: 'chip-series-menu', role: 'menu', hidden: true },
+    series.panel);
+  chipSeries.addEventListener('click', () => popup(chipSeries, seriesMenu, seriesMenu.hidden));
+  popups.push({ chip: chipSeries, menu: seriesMenu });
+  const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say,
+    close: () => popup(null, null, false) });
+  presets.chip.addEventListener('click', () => popup(presets.chip, presets.menu, presets.menu.hidden));
+  popups.push({ chip: presets.chip, menu: presets.menu });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate' }, 'EN');
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
   const micNote = el('div', { class: 'mic-note' });
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
-    el('div', { class: 'row' }, chipPhoto, chipModel.wrap, chipSize.wrap, chipSeed, el('span', { class: 'grow' }),
+    el('div', { class: 'row' }, chipPhoto, presets.wrap, chipModel.wrap, chipSize.wrap, chipSeed,
+      el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu), el('span', { class: 'grow' }),
       chipTranslate, attachMic(prompt, micNote), go));
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);
@@ -177,7 +209,7 @@ function build(view, ctx) {
     chip.addEventListener('click', () => popup(chip, list, list.hidden));
     popups.push({ chip, menu: list });
     fill(initial);
-    return { wrap: el('div', { class: 'chip-wrap' }, chip, list), fill };
+    return { wrap: el('div', { class: 'chip-wrap' }, chip, list), fill, paint };
   }
 
   function choiceKey(c) {
@@ -228,6 +260,70 @@ function build(view, ctx) {
   function paintSource() {
     sourceBox.hidden = !source;
     strengthLabel.hidden = !isLustify();
+    chipSeed.hidden = !!choice && choice.kind !== 'srvllm';      // внешний сервис seed не получает
+    series.refresh();
+  }
+
+  /* пресеты: снимок поля и чипов, применение пресета */
+  function seedValue() {
+    const text = seed.value.trim();
+    return /^\d+$/.test(text) && Number(text) <= SEED_MAX ? Number(text) : null;
+  }
+
+  function snapshot() {
+    return { model: choice ? choice.model : null, connection_id: choice ? choice.connection_id : null, size,
+      seed: chipSeed.hidden ? null : seedValue(), strength: Number(strength.value), prompt: prompt.value.trim() || null };
+  }
+
+  /** Модель — если пара есть среди отмеченных моделей раздела; формат, seed, сила — всегда; промпт —
+   * в пустое поле, в непустое — после вопроса («Оставить свой» ставит всё, кроме промпта). */
+  function applyPreset(p) {
+    const rest = () => {
+      if (p.model) {
+        const found = choices.find(([, , c]) => c.model === p.model
+          && (p.connection_id === null || p.connection_id === undefined || c.connection_id === p.connection_id));
+        if (found) {
+          choice = found[2];
+          chipModel.paint();
+          say('', false);
+        } else {
+          say(`модели «${modelLabel(p.model)}» нет в разделе — выбрана текущая`, false);
+        }
+      }
+      if (SIZES.some((s) => s[0] === p.size)) {
+        size = p.size;
+        chipSize.paint();
+      }
+      seed.value = p.seed === null || p.seed === undefined ? '' : String(p.seed);
+      if (p.strength !== null && p.strength !== undefined) {
+        strength.value = String(p.strength);
+        strengthValue.textContent = Number(strength.value).toFixed(2);
+      }
+      paintSource();
+    };
+    if (!p.prompt || !prompt.value.trim() || prompt.value.trim() === p.prompt) {
+      if (p.prompt) {
+        prompt.value = p.prompt;
+        autosize();
+      }
+      rest();
+      return;
+    }
+    const replace = button('Заменить', { class: 'btn btn-accent', id: 'preset-prompt-replace' });
+    const keep = button('Оставить свой', { class: 'btn', id: 'preset-prompt-keep' });
+    const dialog = openDialog(root, { id: 'preset-prompt-dialog', title: 'Заменить промпт пресетом?',
+      body: [el('p', { class: 'muted small' }, 'В поле уже есть промпт. Модель, формат, seed и силу пресет поставит в любом случае.')],
+      actions: [keep, replace] });
+    replace.addEventListener('click', () => {
+      prompt.value = p.prompt;
+      autosize();
+      dialog.close();
+      rest();
+    });
+    keep.addEventListener('click', () => {
+      dialog.close();
+      rest();
+    });
   }
 
   /* занятость: одно задание за раз */
@@ -300,6 +396,7 @@ function build(view, ctx) {
 
   function busyText(entry) {
     const item = entry.item;
+    if (item.state === 'queued') return cap(item.detail);      // «в очереди серии · 2 из 3» — без таймера
     const spent = clock(item.elapsed + (Date.now() - entry.at) / 1000);
     return `${item.state === 'cancelling' ? 'Отменяю' : 'Генерирую'} · ${spent}`;
   }
@@ -349,9 +446,10 @@ function build(view, ctx) {
     return item.state === 'cancelled' ? cap(item.detail) || 'Отменено' : `Ошибка: ${item.detail || 'картинка не получена'}`;
   }
 
+  /** Модель, размер и seed — столбцы таблицы (seed внешнего сервиса не показывается). */
   function params(item) {
-    return [NAMES[item.model] || item.model, String(item.size || '').replace('x', '×'),
-      item.seed !== null && item.seed !== undefined ? `seed ${item.seed}` : ''];
+    const shown = seedOf(item);
+    return [NAMES[item.model] || item.model, String(item.size || '').replace('x', '×'), shown !== null ? `seed ${shown}` : ''];
   }
 
   /** Строка вида «Таблица»: миниатюра, промпт, модель, размер, seed, время или ход, действие. */
@@ -365,7 +463,7 @@ function build(view, ctx) {
       : el('span', { class: 'row-thumb' }, busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
     el('p', { class: 'cell-prompt', title: item.prompt }, item.prompt),
     el('span', { class: 'cell-meta' }, ...params(item).map((p) => el('span', {}, p)), el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, done ? saveButton(item) : busy ? (item.state === 'working' ? cancelButton(item) : null)
+    el('span', { class: 'cell-act' }, done ? saveButton(item) : busy ? (CANCELLABLE.has(item.state) ? cancelButton(item) : null)
       : deleteButton(item)));
     return node;
   }
@@ -381,7 +479,7 @@ function build(view, ctx) {
     } else if (RUNNING.has(item.state)) {
       node.append(el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
         el('b', { class: 'card-time' }, busyText(running.get(item.id))),
-        item.state === 'working' ? cancelButton(item) : el('p', { class: 'small' }, cap(item.detail))));
+        CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(item.detail))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
         deleteButton(item)));
@@ -390,7 +488,7 @@ function build(view, ctx) {
       const [w, h] = String(item.size).split('x').map(Number);
       if (w > 0 && h > 0) node.style.setProperty('--ratio', `${w} / ${h}`);
       node.append(el('div', { class: 'card-info' }, el('p', { class: 'card-prompt', title: item.prompt }, item.prompt),
-        el('p', { class: 'card-meta' }, [...params(item), timeOf(item.created)].filter(Boolean).join(' · '))));
+        el('p', { class: 'card-meta' }, [...paramParts(item), timeOf(item.created)].filter(Boolean).join(' · '))));
     }
     return selection.decorate(node, item);
   }
@@ -403,9 +501,11 @@ function build(view, ctx) {
   }, 1000);
 
   /* задание */
-  async function adopt(id) {
+  /** Новые записи — в ленту сразу все (строки серии — по порядку, первая сверху). */
+  async function adopt(ids) {
     try {
-      feed.prepend(await api('GET', `/api/images/${id}`));
+      const items = await Promise.all(ids.map((id) => api('GET', `/api/images/${id}`)));
+      for (const item of items.reverse()) feed.prepend(item);
     } catch {
       feed.reload();
     }
@@ -417,7 +517,8 @@ function build(view, ctx) {
     error.textContent = '';
     syncBusy();
     try {
-      await adopt((await api('POST', '/api/images', body)).id);
+      const out = await api('POST', '/api/images', body);
+      await adopt(out.ids || [out.id]);
       return true;
     } catch (err) {
       error.textContent = words(err);
@@ -436,13 +537,18 @@ function build(view, ctx) {
       throw new Error(`Seed — целое число от 0 до ${SEED_MAX}; пусто — случайный`);
     }
     const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
-    if (!withSource || !source) return { prompt: text, size, ...picked, seed: seedText === '' ? null : Number(seedText) };
+    const sent = chipSeed.hidden ? '' : seedText;                // внешнему сервису seed не уходит
+    const many = withSource ? series.value() : null;
+    if (!withSource || !source) {
+      return { prompt: text, size, ...picked, seed: sent === '' ? null : Number(sent), ...(many ? { series: many } : {}) };
+    }
     if (source.file.size > PHOTO_MAX) throw new Error('Фото больше 10 МиБ');
     const body = new FormData();
-    for (const [k, v] of Object.entries({ prompt: text, size, ...picked, seed: seedText })) {
+    for (const [k, v] of Object.entries({ prompt: text, size, ...picked, seed: sent })) {
       if (v !== '') body.append(k, String(v));
     }
     if (isLustify()) body.append('strength', strength.value);
+    if (many) body.append('series', JSON.stringify(many));
     body.append('image', source.file, source.file.name);
     return body;
   }
@@ -460,7 +566,8 @@ function build(view, ctx) {
       error.textContent = words(err);
       return;
     }
-    create(body);
+    const many = withSource && series.value();
+    create(body).then((ok) => { if (ok && many) series.reset(); });   // серия — на один запуск
   }
 
   function repeatBody(item) {
@@ -495,9 +602,9 @@ function build(view, ctx) {
     const starts = [
       act('Изменить', 'act-edit', () => {
         dialog.close();
-        openEditor(item, choice, (created) => adopt(created.id));
+        openEditor(item, choice, (created) => adopt(created.ids || [created.id]));
       }),
-      act('Повторить с тем же seed', 'act-repeat', () => {
+      act(isExternal(item.model) ? 'Повторить' : 'Повторить с тем же seed', 'act-repeat', () => {
         dialog.close();
         create(repeatBody(item));
       }),
@@ -527,17 +634,45 @@ function build(view, ctx) {
       }
     };
     // цепочка — у записи из GET /api/images/<id>; у записи ленты её нет — догрузить
-    let chain = item.chain ? chainList(item.chain, { current: item.id, onOpen }) : el('ol', { class: 'viewer-chain' });
-    if (!item.chain) {
+    let chain = el('ol', { class: 'viewer-chain' });
+    const showChain = (steps) => {
+      const next = chainList(steps, { current: item.id, onOpen });
+      chain.replaceWith(next);
+      chain = next;
+      // исходник с файлом — предыдущий шаг цепочки (удалённая строка файл не уносит, пока на него ссылаются)
+      const at = steps.findIndex((s) => s.image_id === item.id);
+      const before = at > 0 ? steps[at - 1] : null;
+      if (before && before.media_id) {
+        actions.prepend(act('Сравнить с исходником', 'act-compare', () => openCompare(root,
+          { media_id: before.media_id, label: stepLabel(before, at) }, { media_id: item.media_id, label: stepLabel(steps[at], at + 1) })));
+      }
+    };
+    if (item.chain) showChain(item.chain);
+    else {
       api('GET', `/api/images/${encodeURIComponent(item.id)}`).then((full) => {
-        if (!dialog.open) return;
-        const next = chainList(full.chain, { current: item.id, onOpen });
-        chain.replaceWith(next);
-        chain = next;
+        if (dialog.open) showChain(full.chain);
       }, (err) => { missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err); });
     }
+    const variants = el('div', { class: 'viewer-variants', hidden: true });
+    api('GET', `/api/images/${encodeURIComponent(item.id)}/variants`).then(({ siblings, children }) => {
+      if (!dialog.open || (!siblings.length && !children.length)) return;
+      const strip = (title, list, cls) => (list.length ? el('div', { class: `variants-row ${cls}` },
+        el('p', { class: 'variants-title' }, title), el('div', { class: 'variants-list' }, ...list.map((v) => {
+          const open = el('button', { type: 'button', class: 'variant-open', 'data-id': v.id,
+            'aria-label': 'Открыть вариант', title: paramParts(v).filter(Boolean).join(' · ') },
+          el('img', { src: media(v.media_id, '?thumb=1'), alt: '', loading: 'lazy', decoding: 'async' }));
+          open.addEventListener('click', () => {
+            dialog.close();
+            openViewer(v);
+          });
+          return open;
+        }))) : null);
+      variants.replaceChildren(strip('Из того же исходника', siblings, 'variants-siblings'),
+        strip('Сделаны из этой', children, 'variants-children'));
+      variants.hidden = false;
+    }, () => {});                                       // варианты — подсказка: без них просмотр тот же
     dialog.append(el('div', { class: 'viewer-top' }, close), stage,
-      el('div', { class: 'viewer-bar' }, chain, missing, actions));
+      el('div', { class: 'viewer-bar' }, chain, variants, missing, actions));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       for (const b of starts) gated.delete(b);
@@ -554,6 +689,12 @@ function build(view, ctx) {
     stage.addEventListener('click', (event) => { if (event.target === stage) dialog.close(); });
     root.append(dialog);
     dialog.showModal();
+  }
+
+  /** Подпись картинки в сравнении: номер шага цепочки и модель · seed · сила (загрузка — «фото с устройства»). */
+  function stepLabel(step, n) {
+    const parts = paramParts(step).filter(Boolean);
+    return `${n}. ${parts.length ? parts.join(' · ') : 'Фото с устройства'}`;
   }
 
   function confirmDelete(item, viewer) {
@@ -799,6 +940,7 @@ function build(view, ctx) {
     if (!go.disabled) submit(true);
   });
   syncBusy();
+  if (!ctx.hint) presets.load();
   api('GET', '/api/sections').then(({ sections }) => {
     if (alive) loadModels(sections.find((s) => s.id === 'photo'));
   }, (err) => say(words(err), true));

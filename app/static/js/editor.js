@@ -3,12 +3,14 @@
  *
  * openEditor(item, choice, onCreated): item — готовая запись ленты (media_id), choice — модель,
  * выбранная в разделе ({ connection_id, model, kind } или null — умолчание раздела); onCreated({ id,
- * seed }) — задание принято. Отправка — POST /api/images формой: connection_id, model, size=original,
+ * seed, ids }) — задание принято (ids — все строки серии). Серия (series.js) — и здесь: правку
+ * подбирают серией по силе; поле `series` уходит строкой JSON; с кистью выбора серии нет. Отправка — POST /api/images формой: connection_id, model, size=original,
  * prompt, source_media_id, strength (только Lustify) и mask (PNG: белое — менять, чёрное — взять из
  * исходника), если включено «Изменить только выделенную область» — кисть только у шлюза srvllm.
  * Маска снимается копией до первого await: штрих после нажатия в запрос не попадёт. */
 import { api } from './api.js';
 import { attachMic } from './mic.js';
+import { seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 
@@ -39,6 +41,9 @@ function show(host, item, choice, photo, onCreated) {
     value: STRENGTH });
   const strengthLabel = el('label', { id: 'edit-strength-label', class: 'field', hidden: !lustify },
     el('span', {}, 'Сила перерисовки'), strength);
+  const series = seriesControl({ prefix: 'edit-series', canStrength: () => lustify, from: () => strength.value });
+  const seriesBox = el('div', { id: 'edit-series', class: 'field' }, el('span', {}, 'Серия'), series.panel);
+  strength.addEventListener('input', () => series.refresh());
   const local = el('input', { id: 'edit-local', type: 'checkbox' });
   const brush = el('input', { id: 'edit-brush', type: 'range', min: '8', max: '120', value: '40' });
   const clear = button('Очистить выделение', { class: 'btn btn-sm', id: 'edit-clear-mask' });
@@ -58,7 +63,7 @@ function show(host, item, choice, photo, onCreated) {
       : lustify
         ? 'Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.'
         : 'FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.'),
-    strengthLabel,
+    strengthLabel, seriesBox,
     el('label', { class: 'check', hidden: !gateway }, local, 'Изменить только выделенную область'),
     tools, error))] });
 
@@ -100,6 +105,7 @@ function show(host, item, choice, photo, onCreated) {
   local.addEventListener('change', () => {
     drawing = null;
     tools.hidden = mask.hidden = !local.checked;
+    seriesBox.hidden = local.checked;                // кистью серии нет
   });
   clear.addEventListener('click', clearSelection);
   mask.addEventListener('pointerdown', (event) => {
@@ -139,6 +145,8 @@ function show(host, item, choice, photo, onCreated) {
     body.append('prompt', text);
     body.append('source_media_id', item.media_id);
     if (lustify) body.append('strength', strength.value);
+    const many = local.checked ? null : series.value();
+    if (many) body.append('series', JSON.stringify(many));
     let snapshot = null;
     if (local.checked) {
       snapshot = document.createElement('canvas');
