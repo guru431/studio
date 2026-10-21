@@ -58,7 +58,9 @@
 - Разделы (`chat`, `photo`, `video`, `transcribe`, `speech`, `dictation`) — таблицы `section_links`
   (подключение в разделе и его отмеченные модели) и `section_defaults`; встроенный перечень srvllm —
   `sections.CATALOG`. Старые `connections.sections` и `users.default_*` остаются для отката и
-  держатся согласованными (`sections._sync_legacy`) — новая логика их не читает.
+  держатся согласованными (`sections._sync_legacy`) — новая логика их не читает. Ход начатого
+  диалога пару не перепроверяет (`chat.create_turn` — `connections.get`, план section-connections,
+  Task 4): галочки — правило выбора для нового, не запрет старого (README «Подключения и разделы»).
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.
