@@ -35,9 +35,10 @@ const NOTICES = {
   transcribe: ['расшифровка готова', 'расшифровка не получилась'],
   speech: ['озвучка готова', 'озвучка не получилась'],
 };
-/** Адрес записи из ответа или от service worker: иное не открывается. */
-const HREF = /^(?:(?:photo|video|transcribe|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
-const ICONS = {
+/** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. */
+export const HREF = /^(?:(?:photo|video|transcribe|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
+/** Значки разделов (и у строк «Поиска», search.js). */
+export const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
   photo: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',

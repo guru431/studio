@@ -1,7 +1,7 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
- * служебный работник.
+ * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/settings, #/settings/<раздел>, #/admin (только
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/search, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -53,6 +53,7 @@ const SECTIONS = {
   video: { title: 'Видео', load: () => import('./video.js') },
   transcribe: { title: 'Расшифровка', load: () => import('./transcribe.js') },
   speech: { title: 'Озвучка', load: () => import('./speech.js') },
+  search: { title: 'Поиск', load: () => import('./search.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
 };
@@ -181,7 +182,7 @@ async function render() {
     route = { section: 'chat', id: null, query: new URLSearchParams() };
     history.replaceState(null, '', '#/chat');
   }
-  for (const tab of document.querySelectorAll('#rail .tab')) {
+  for (const tab of document.querySelectorAll('#rail .tab, #search-open')) {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }

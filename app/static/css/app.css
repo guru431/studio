@@ -53,7 +53,7 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
 #rail .spacer { flex: 1; }
-#avatar, .theme-toggle, .jobs-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
+#avatar, .theme-toggle, .jobs-toggle, .search-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
   color: var(--text); font-weight: 600; font-size: 13px; display: grid; place-items: center; padding: 0; }
 .theme-toggle { color: var(--muted); }
 .theme-toggle:hover { color: var(--text); }
@@ -86,6 +86,11 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
 .jobs-detail.error { color: var(--danger); }
 .jobs-empty { padding: 4px 8px; }
 .jobs-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* лупа «Поиска» (search.js) — над «В работе» */
+.search-toggle { color: var(--muted); }
+.search-toggle:hover, .search-toggle[aria-current="page"] { color: var(--text); }
+.search-toggle[aria-current="page"] { border-color: var(--accent); }
+.search-toggle svg.ico { width: 18px; height: 18px; }
 #view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; padding-bottom: var(--tabs-h); }
 
 /* меню аватара */
@@ -116,12 +121,13 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .theme-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
   .jobs-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
+  .search-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 138px; }
   .jobs-dot { border-color: var(--bubble); }
   .jobs-panel { inset: auto 0 0 0; width: 100%; max-width: none; max-height: 80dvh; border-radius: 16px 16px 0 0;
     border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .jobs-panel::backdrop { background: var(--backdrop); }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
-  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 142px; }
+  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 184px; }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }
 }
@@ -850,6 +856,29 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .lock-password .input { flex: 1 1 auto; min-width: 0; }
 .lock .status { max-width: 340px; }
 .lock form { margin: 0; }
+/* «Поиск» (search.js): поле, чипы раздела, модель и период, выдача по дням */
+.search-page { gap: 10px; }
+.search-field .input { flex: 1; min-width: 0; }
+.search-chips, .search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.search-filters label { color: var(--muted); }
+.search-date { width: auto; min-width: 0; padding: 5px 8px; font-size: 13px; }
+.search-page #search-status:empty { display: none; }
+.search-page #search-status { margin: 0; }
+.search-day + .search-day { margin-top: 14px; }
+.search-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.search-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: 10px;
+  background: none; color: var(--text); text-align: left; }
+.search-row:hover { background: var(--panel-2); }
+.search-ico { flex: none; color: var(--muted); display: grid; padding-top: 1px; }
+.search-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.search-title, .search-snippet { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; }
+.search-title { font-weight: 600; font-size: 14px; -webkit-line-clamp: 2; line-clamp: 2; }
+.search-snippet { font-size: 14px; -webkit-line-clamp: 3; line-clamp: 3; }
+.search-meta { color: var(--muted); font-size: 12px; }
+.search-row mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+#search-more { align-self: center; }
+
 /* заперто или под шторкой: содержимое скрыто и в миг, когда окно закрыли силой, а lock.js ещё не открыл его снова */
 html.shrouded #view, html.shrouded #rail, html.shrouded #menu,
 html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }

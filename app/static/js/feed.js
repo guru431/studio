@@ -25,7 +25,7 @@ export function dayKey(created) {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
-function dayTitle(created) {
+export function dayTitle(created) {
   const d = new Date(created * 1000);
   const today = new Date();
   today.setHours(0, 0, 0, 0);

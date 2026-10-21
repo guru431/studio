@@ -35,6 +35,7 @@ import media
 import presets
 import profile
 import screenlock
+import search
 import sections
 import speeches
 import state
@@ -73,7 +74,8 @@ async def lifespan(_app):
     transcripts.recover()
     speeches.recover()
     state.HTTP = state.make_http()
-    loops = [videos.start_watcher(), chat.start_sweeper(), media.start_purger()] if state.WATCHER else []
+    loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill()]
+             if state.WATCHER else [])
     try:
         yield
     finally:
@@ -120,6 +122,7 @@ app.include_router(transcripts.router)
 app.include_router(voices.router)
 app.include_router(speeches.router)
 app.include_router(jobs.router)
+app.include_router(search.router)
 app.include_router(takeout.router)
 
 

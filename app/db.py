@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 12).
+"""Соединение SQLite и схема базы (версия 13).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 12
+VERSION = 13
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -74,6 +74,97 @@ CREATE INDEX presets_user ON presets(user_id, section);
 CREATE INDEX images_user_source ON images(user_id, source_media_id);
 """
 
+#: «ё» = «е» в индексе: unicode61 их не сворачивает; содержимое search_docs — исходное (snippet() выделяет
+#: по номерам токенов, а их замена не меняет)
+_YO = "replace(replace({}, 'ё', 'е'), 'Ё', 'Е')"
+_CHAT_MESSAGE = ("INSERT INTO search_docs(section, item, part, user_id, model, created, body)"
+                 " SELECT 'chat', new.chat_id, new.id, c.user_id, new.model, new.created, new.content"
+                 " FROM chats c WHERE c.id = new.chat_id")
+_CHAT_DOCUMENT = ("INSERT INTO search_docs(section, item, part, user_id, model, created, body)"
+                  " SELECT 'chat', m.chat_id, new.id, new.user_id, m.model, m.created, new.name || ' ' || new.text"
+                  " FROM messages m WHERE m.id = new.message_id")
+_DOC = "INSERT INTO search_docs(section, item, part, user_id, model, created, body) VALUES"
+
+#: поиск по истории (search.py): документ — промпт, название диалога, сообщение, отправленный документ,
+#: расшифровка (имя и текст), озвучка; part — '' у записей разделов, у чата — 'title', id сообщения или
+#: вложения. Индекс держат триггеры таблиц истории — верен и при прежнем коде (откат install.sh).
+#: FTS5 — с внешним содержимым: удаление и фильтры идут по индексам search_docs, а не просмотром FTS.
+#: transcripts.text — реплики с правками одной строкой (transcripts.py; старым — фон backfill_text)
+SEARCH_13 = f"""ALTER TABLE transcripts ADD COLUMN text TEXT;
+CREATE TABLE search_docs(id INTEGER PRIMARY KEY, section TEXT NOT NULL, item TEXT NOT NULL, part TEXT NOT NULL,
+            user_id INTEGER NOT NULL, model TEXT, created REAL NOT NULL, body TEXT NOT NULL);
+CREATE UNIQUE INDEX search_docs_key ON search_docs(section, item, part);
+CREATE INDEX search_docs_user ON search_docs(user_id, created);
+CREATE INDEX search_docs_part ON search_docs(part);
+CREATE VIRTUAL TABLE search USING fts5(body, content='search_docs', content_rowid='id',
+            tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER search_docs_ai AFTER INSERT ON search_docs BEGIN
+  INSERT INTO search(rowid, body) VALUES (new.id, {_YO.format('new.body')}); END;
+CREATE TRIGGER search_docs_ad AFTER DELETE ON search_docs BEGIN
+  INSERT INTO search(search, rowid, body) VALUES ('delete', old.id, {_YO.format('old.body')}); END;
+INSERT INTO search_docs(section, item, part, user_id, model, created, body)
+SELECT 'photo', id, '', user_id, model, created, prompt FROM images
+UNION ALL SELECT 'video', id, '', user_id, 'wan', created, prompt FROM videos
+UNION ALL SELECT 'chat', id, 'title', user_id, model, created, title FROM chats WHERE title IS NOT NULL
+UNION ALL SELECT 'chat', m.chat_id, m.id, c.user_id, m.model, m.created, m.content
+            FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.status != 'streaming'
+UNION ALL SELECT 'chat', m.chat_id, a.id, a.user_id, m.model, m.created, a.name || ' ' || a.text
+            FROM attachments a JOIN messages m ON m.id = a.message_id WHERE a.kind = 'document' AND a.text IS NOT NULL
+UNION ALL SELECT 'transcribe', id, '', user_id, model, created, name || ' ' || COALESCE(text, '') FROM transcripts
+UNION ALL SELECT 'speech', id, '', user_id, model, created, text FROM speeches;
+CREATE TRIGGER search_images_ai AFTER INSERT ON images BEGIN
+  {_DOC} ('photo', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
+CREATE TRIGGER search_images_ad AFTER DELETE ON images BEGIN
+  DELETE FROM search_docs WHERE section = 'photo' AND item = old.id; END;
+CREATE TRIGGER search_videos_ai AFTER INSERT ON videos BEGIN
+  {_DOC} ('video', new.id, '', new.user_id, 'wan', new.created, new.prompt); END;
+CREATE TRIGGER search_videos_au AFTER UPDATE OF prompt ON videos WHEN old.prompt IS NOT new.prompt BEGIN
+  DELETE FROM search_docs WHERE section = 'video' AND item = old.id;
+  {_DOC} ('video', new.id, '', new.user_id, 'wan', new.created, new.prompt); END;
+CREATE TRIGGER search_videos_ad AFTER DELETE ON videos BEGIN
+  DELETE FROM search_docs WHERE section = 'video' AND item = old.id; END;
+CREATE TRIGGER search_chats_ai AFTER INSERT ON chats WHEN new.title IS NOT NULL BEGIN
+  {_DOC} ('chat', new.id, 'title', new.user_id, new.model, new.created, new.title); END;
+CREATE TRIGGER search_chats_au AFTER UPDATE OF title ON chats WHEN old.title IS NOT new.title BEGIN
+  DELETE FROM search_docs WHERE section = 'chat' AND item = old.id AND part = 'title';
+  INSERT INTO search_docs(section, item, part, user_id, model, created, body)
+  SELECT 'chat', new.id, 'title', new.user_id, new.model, new.created, new.title WHERE new.title IS NOT NULL; END;
+CREATE TRIGGER search_chats_ad AFTER DELETE ON chats BEGIN
+  DELETE FROM search_docs WHERE section = 'chat' AND item = old.id; END;
+CREATE TRIGGER search_messages_ai AFTER INSERT ON messages WHEN new.status != 'streaming' BEGIN
+  {_CHAT_MESSAGE}; END;
+CREATE TRIGGER search_messages_au AFTER UPDATE OF content, status ON messages
+  WHEN old.status != 'streaming' OR new.status != 'streaming' BEGIN
+  DELETE FROM search_docs WHERE section = 'chat' AND item = old.chat_id AND part = old.id;
+  {_CHAT_MESSAGE} AND new.status != 'streaming'; END;
+CREATE TRIGGER search_messages_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM search_docs WHERE section = 'chat' AND item = old.chat_id AND part = old.id; END;
+CREATE TRIGGER search_attachments_ai AFTER INSERT ON attachments
+  WHEN new.message_id IS NOT NULL AND new.kind = 'document' AND new.text IS NOT NULL BEGIN
+  {_CHAT_DOCUMENT}; END;
+CREATE TRIGGER search_attachments_au AFTER UPDATE OF message_id ON attachments
+  WHEN old.message_id IS NULL AND new.message_id IS NOT NULL AND new.kind = 'document' AND new.text IS NOT NULL BEGIN
+  {_CHAT_DOCUMENT}; END;
+CREATE TRIGGER search_attachments_ad AFTER DELETE ON attachments WHEN old.message_id IS NOT NULL BEGIN
+  DELETE FROM search_docs WHERE part = old.id AND section = 'chat'; END;
+CREATE TRIGGER search_transcripts_ai AFTER INSERT ON transcripts BEGIN
+  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, new.name || ' ' || COALESCE(new.text, ''));
+  END;
+CREATE TRIGGER search_transcripts_au AFTER UPDATE OF name, text ON transcripts
+  WHEN old.name IS NOT new.name OR old.text IS NOT new.text BEGIN
+  DELETE FROM search_docs WHERE section = 'transcribe' AND item = old.id;
+  {_DOC} ('transcribe', new.id, '', new.user_id, new.model, new.created, new.name || ' ' || COALESCE(new.text, ''));
+  END;
+CREATE TRIGGER search_transcripts_ad AFTER DELETE ON transcripts BEGIN
+  DELETE FROM search_docs WHERE section = 'transcribe' AND item = old.id; END;
+CREATE TRIGGER search_speeches_ai AFTER INSERT ON speeches BEGIN
+  {_DOC} ('speech', new.id, '', new.user_id, new.model, new.created, new.text); END;
+CREATE TRIGGER search_speeches_ad AFTER DELETE ON speeches BEGIN
+  DELETE FROM search_docs WHERE section = 'speech' AND item = old.id; END;
+CREATE TRIGGER search_users_ad AFTER DELETE ON users BEGIN
+  DELETE FROM search_docs WHERE user_id = old.id; END;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -116,7 +207,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -171,6 +262,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     11: EDITS_11,
     # фото: пресеты учётки, индекс картинок по исходнику
     12: PHOTO_12,
+    # поиск по истории: документы, FTS5 и триггеры; текст расшифровок
+    13: SEARCH_13,
 }
 
 

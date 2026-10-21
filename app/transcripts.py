@@ -129,6 +129,12 @@ def view(row, result: dict) -> list[dict]:
     return out
 
 
+def text_of(row, result: dict) -> str:
+    """Текст для поиска (`transcripts.text`, спека 2026-10-21-studio-history-search): показываемые
+    реплики одной строкой."""
+    return " ".join(s["text"] for s in view(row, result))
+
+
 def _out(row, segments: "list | None" = None) -> dict:
     job = JOBS.get(row["id"])
     edits = edits_of(row)
@@ -203,7 +209,8 @@ async def run(job: Job) -> None:
                                  ensure_ascii=False).encode("utf-8")
             result = await media.save_async(job.user_id, payload, "application/json", "transcript.json")
             outcome = ("done", "готово", {"result_media_id": result,
-                                          "speakers": len({s.speaker for s in replicas if s.speaker})})
+                                          "speakers": len({s.speaker for s in replicas if s.speaker}),
+                                          "text": " ".join(s.text for s in replicas)})
             log.info("расшифровка %s: готова", job.id[:8])
         except (JobError, audio.AudioError, speech.SpeechError, media.StorageError) as e:
             outcome = ("error", str(e), {})
@@ -251,6 +258,39 @@ async def stop() -> None:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def backfill_text() -> int:
+    """Текст для поиска готовым расшифровкам без него (до шага схемы 13 и сделанным прежним кодом после
+    отката): файл итога — по одному, в потоке. Файла или строки media нет — пропуск; шара недоступна —
+    конец, остальное дождётся следующего старта. Итог — сколько заполнено."""
+    filled, last = 0, ""
+    while True:
+        row = state.DB.execute("SELECT * FROM transcripts WHERE state = 'done' AND result_media_id IS NOT NULL"
+                               " AND text IS NULL AND id > ? ORDER BY id LIMIT 1", (last,)).fetchone()
+        if row is None:
+            break
+        last = row["id"]
+        try:
+            data = await asyncio.to_thread(media.path(row["user_id"], row["result_media_id"]).read_bytes)
+            result = json.loads(data)
+        except (HTTPException, FileNotFoundError, ValueError):
+            continue
+        except OSError:
+            log.warning("расшифровки: текст для поиска — хранилище недоступно, дальше при следующем старте")
+            break
+        fresh = state.DB.execute("SELECT * FROM transcripts WHERE id = ? AND text IS NULL", (last,)).fetchone()
+        if fresh is not None:                        # без await до UPDATE: свежие правки
+            state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(fresh, result), last))
+            filled += 1
+    if filled:
+        log.info("расшифровки: текст для поиска — %d", filled)
+    return filled
+
+
+def start_backfill() -> asyncio.Task:
+    """Старт службы: фон не держит старт."""
+    return asyncio.create_task(backfill_text())
 
 
 # ---- API -------------------------------------------------------------------
@@ -396,17 +436,24 @@ async def patch_transcript(tid: str, body: EditIn, request: Request):
     state.DB.execute("UPDATE transcripts SET edits = ? WHERE id = ?", (stored, tid))
     log.info("расшифровка %s: правка", tid[:8])
     row = _row(uid, tid)
+    state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(row, result), tid))
     return _out(row, view(row, result))
 
 
 @router.delete("/{tid}/edits")
 async def reset_edits(tid: str, request: Request):
-    """«Сбросить правки» — снова исходное распознавание."""
+    """«Сбросить правки» — снова исходное распознавание (и текст для поиска — по нему)."""
     uid = request.state.user.id
     _row(uid, tid)
     state.DB.execute("UPDATE transcripts SET edits = NULL WHERE id = ?", (tid,))
     log.info("расшифровка %s: правки сброшены", tid[:8])
-    return await _full(uid, _row(uid, tid))
+    row = _row(uid, tid)
+    if row["state"] != "done" or row["result_media_id"] is None:
+        return _out(row)
+    result = await result_of(uid, row)
+    row = _row(uid, tid)                             # после чтения файла: свежие правки, без await до UPDATE
+    state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(row, result), tid))
+    return _out(row, view(row, result))
 
 
 @router.post("/{tid}/cancel")
