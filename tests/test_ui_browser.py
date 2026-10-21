@@ -1540,9 +1540,9 @@ FEED_MODULE = """(async () => {
   const calls = [];
   const card = (item) => { const n = document.createElement('div'); n.className = 'card';
     n.style.height = '1000px'; n.textContent = item.id + (item.tag || ''); return n; };
-  const feed = createFeed(box, { key: (item) => item.id, render: card, load: async (before) => {
-    calls.push(before ?? null);
-    return all.filter(x => before === undefined || x.created < before).slice(0, 10); } });
+  const feed = createFeed(box, { key: (item) => item.id, render: card, load: async (last) => {
+    calls.push(last?.id ?? null);
+    return all.filter(x => last === undefined || x.created < last.created).slice(0, 10); } });
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   for (let i = 0; i < 100 && box.dataset.feed !== 'end'; i++) { box.scrollTop = box.scrollHeight; await sleep(30); }
   const titles = () => [...box.querySelectorAll('.feed-day-title')].map(t => t.textContent);
@@ -1566,7 +1566,7 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
     assert f["end"] == "end" and f["count"] == 25
     assert f["titles"][:2] == ["Сегодня", "Вчера"] and len(f["titles"]) == 3
     assert f["titles"][2][0].isdigit()                       # «15 октября»
-    assert f["calls"][0] is None and len(f["calls"]) == 4    # три страницы и пустая
+    assert f["calls"] == [None, "i9", "i19", "i24"]          # три страницы и пустая — после последней записи
     assert f["after"] == {"first": "new", "updated": "i0*", "titles": ["Сегодня", f["titles"][2]], "count": 21}
     assert f["reloaded"]["count"] == 10 and f["reloaded"]["calls"] == 5
     assert not problems(r), problems(r)
@@ -2115,6 +2115,112 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
     assert v["audio"].startswith("/api/media/") and v["text"] == "Привет. Как дела?"
     assert v["clicked"][0].endswith("?download=1") and v["clicked"][1] and not v["overflow"]
     assert not problems(r), problems(r)
+
+
+# ---- списки расшифровки и озвучки: страницы и выбор --------------------------------
+
+#: раздел → (приставка id кнопок, таблица, строка: id, user_id, имя или текст, состояние, created)
+LISTS = {
+    "transcribe": ("tr", "transcripts", "INSERT INTO transcripts(id, user_id, model, name, source_media_id, state,"
+                                        " detail, created) VALUES (?, ?, 'whisperx', ?, 'm', ?, 'ошибка', ?)"),
+    "speech": ("sp", "speeches", "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created)"
+                                 " VALUES (?, ?, 'qwen3-tts', 'v', ?, ?, 'ошибка', ?)"),
+}
+
+
+def seed_list(live, section, uid, n, running_newest=False) -> list:
+    """n записей раздела ошибкой (без файлов), новые — с большим номером; у шести старейших одно
+    время — на краю первой страницы (60) при n = 62. Новейшая идущая — список опрашивается."""
+    import db
+    sql, base, ids = LISTS[section][2], time.time() - 3600, []
+    conn = db.connect(live.db_path)
+    try:
+        for i in range(n):
+            row_id = f"{uid:08x}{i:024x}"
+            state = "working" if running_newest and i == n - 1 else "error"
+            conn.execute(sql, (row_id, uid, f"Запись {i}", state, base + max(i, 5)))
+            ids.append(row_id)
+    finally:
+        conn.close()
+    return ids
+
+
+#: страница после курсора идёт 3.5 с (опрос первой страницы — раз в 3 с — успевает пройти)
+SLOW_PAGE = """(() => { window.lists = { first: 0, paged: 0 }; const real = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (/^\\/api\\/(transcripts|speeches)\\?/.test(u)) {
+      if (!u.includes('before_id=')) window.lists.first += 1;
+      else { await new Promise(r => setTimeout(r, 3500)); window.lists.paged += 1; }
+    }
+    return real(url, opts); }; return true; })()"""
+ITEMS = "[...document.querySelectorAll('.tr-list .tr-item')]"
+
+
+@pytest.mark.parametrize("section", LISTS)
+def test_list_pages_past_sixty_through_a_poll_and_a_delete(browser, live, section):
+    """62 записи: первая страница — 60 и «Показать ещё», затем две записи того же времени, что край
+    страницы; опрос первой страницы во время подгрузки её не теряет; удаление последней записи
+    первой страницы не возвращает «Показать ещё» и не двоит записи."""
+    p = LISTS[section][0]
+    login = f"pages{section}"
+    ids = seed_list(live, section, live.add_user(login), 62, running_newest=True)
+    edge = ids[2]                                        # последняя первой страницы
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+        ("wait", "document.querySelector('.settings-nav')"), *go(section),
+        ("wait", f"{ITEMS}.length === 60 && document.querySelector('#{p}-more')"),
+        ("eval", "spy", SLOW_PAGE), ("eval", "first0", "window.lists.first"),
+        ("click", f"#{p}-more"),
+        ("wait", f"{ITEMS}.length === 62 && !document.querySelector('#{p}-more')"),
+        ("eval", "lists", "window.lists"),
+        ("eval", "paged", f"{ITEMS}.map(e => e.dataset.id)"),
+        ("click", f".tr-item[data-id='{edge}']"), ("wait", f"document.querySelector('#{p}-delete')"),
+        ("click", f"#{p}-delete"), ("wait", is_open(f"#{p}-delete-dialog")), ("click", f"#{p}-delete-confirm"),
+        ("wait", f"{ITEMS}.length === 61"),
+        ("eval", "left", f"{ITEMS}.map(e => e.dataset.id)"),
+        ("eval", "more", f"!!document.querySelector('#{p}-more')")], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["lists"]["paged"] == 1 and v["lists"]["first"] > v["first0"]
+    assert v["paged"] == ids[::-1]
+    assert v["left"] == [i for i in ids[::-1] if i != edge] and not v["more"]
+    assert not known_refusals(problems(r), 404), problems(r)      # плеер записи без файла (строки — без media)
+
+
+#: чтение записи `id` идёт 1.5 с; window.late — сколько таких ответов уже пришло
+SLOW_READ = """((id) => { window.late = 0; const real = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    if ((opts.method || 'GET') !== 'GET' || !String(url).endsWith('/' + id)) return real(url, opts);
+    await new Promise(r => setTimeout(r, 1500));
+    try { return await real(url, opts); } finally { setTimeout(() => { window.late += 1; }, 300); }
+  }; return true; })"""
+
+
+@pytest.mark.parametrize("section", LISTS)
+def test_late_answer_of_an_earlier_pick_does_not_take_the_view(browser, live, section):
+    """Выбор A (ответ запаздывает), затем B: остаётся B. Выбор A во время удаления B: запоздалый A
+    пустой вид после удаления не занимает."""
+    p = LISTS[section][0]
+    login = f"pick{section}"
+    a, b = seed_list(live, section, live.add_user(login), 2)
+    shown = ("document.querySelector('.split-main h1').textContent" if section == "transcribe"
+             else "document.querySelector('.sp-text')?.textContent ?? ''")
+    current = "document.querySelector('.tr-item[aria-current=true]')?.dataset.id ?? null"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+        ("wait", "document.querySelector('.settings-nav')"), *go(section),
+        ("wait", f"{ITEMS}.length === 2"), ("eval", "spy", f"{SLOW_READ}({a!r})"),
+        ("click", f".tr-item[data-id='{a}']"), ("click", f".tr-item[data-id='{b}']"),
+        ("wait", "window.late === 1"),
+        ("eval", "picked", f"[{shown}, {current}]"),
+        ("click", f".tr-item[data-id='{a}']"), ("click", f"#{p}-delete"),
+        ("wait", is_open(f"#{p}-delete-dialog")), ("click", f"#{p}-delete-confirm"),
+        ("wait", f"{ITEMS}.length === 1 && window.late === 2"),
+        ("eval", "after", f"[!!document.querySelector('.tr-empty'), {current}]")], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["picked"] == ["Запись 1", b]
+    assert v["after"] == [True, None]
+    assert not known_refusals(problems(r), 404), problems(r)      # плеер записи без файла (строки — без media)
 
 
 # ---- блокировка на телефоне (спека 2026-10-21-studio-screen-lock) -----------------

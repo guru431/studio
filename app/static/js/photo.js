@@ -19,7 +19,7 @@ import { api } from './api.js';
 import { chainList } from './chain.js';
 import { openEditor } from './editor.js';
 import { attachMic } from './mic.js';
-import { createFeed } from './feed.js';
+import { createFeed, pageQuery } from './feed.js';
 import { saveMedia } from './save.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -133,7 +133,7 @@ function build(view, ctx) {
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
-    load: async (before) => (await api('GET', `/api/images?limit=${PAGE}${before === undefined ? '' : `&before=${before}`}`)).items,
+    load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
   });

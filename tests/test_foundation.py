@@ -167,3 +167,35 @@ def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
     conn.execute("INSERT INTO purge(media_id, user_id, rel_path, queued) VALUES ('m', 1, 'u1/2027/01/m.png', 0)")
     conn.execute("DELETE FROM users WHERE id = 1")
     assert conn.execute("SELECT media_id, user_id, tries FROM purge").fetchone()[:] == ("m", 1, 0)
+
+
+#: строка истории каждой ленты: id, user_id, created
+FEED_ROWS = {
+    "images": "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+              " VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, 'done', 'готово', ?)",
+    "videos": "INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+              " state, detail, created) VALUES (?, ?, 1, 'm', 'p', 1, 'fast', 0, 'completed', 'готово', ?)",
+    "transcripts": "INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
+                   " VALUES (?, ?, 'whisperx', 'a.m4a', 'm', 'done', 'готово', ?)",
+    "speeches": "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created)"
+                " VALUES (?, ?, 'qwen3-tts', 'v', 't', 'done', 'готово', ?)",
+}
+
+
+@pytest.mark.parametrize("table", FEED_ROWS)
+def test_feed_page_keeps_rows_of_the_same_time_at_its_edge(studio, table):
+    """Курсор ленты — created и id последней записи: строки с тем же временем на границе страницы не
+    теряются. Один created (вкладка до выкладки) по-прежнему отвечает — строки того же времени пропускает."""
+    from conftest import T0, make_user, signin
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    a, b, c, old = "a" * 32, "b" * 32, "c" * 32, "0" * 32
+    for row_id, created in ((a, T0), (b, T0), (c, T0), (old, T0 - 1)):
+        state.DB.execute(FEED_ROWS[table], (row_id, uid, created))
+    url = f"/api/{table}?limit=2"
+    page = studio.c.get(url).json()["items"]
+    assert [x["id"] for x in page] == [c, b]
+    last = page[-1]
+    rest = studio.c.get(f"{url}&before={last['created']}&before_id={last['id']}").json()["items"]
+    assert [x["id"] for x in rest] == [a, old]
+    assert [x["id"] for x in studio.c.get(f"{url}&before={last['created']}").json()["items"]] == [old]

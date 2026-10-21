@@ -151,6 +151,22 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def page(conn: sqlite3.Connection, table: str, user_id: int, before: "float | None", before_id: "str | None",
+         limit: int) -> sqlite3.Cursor:
+    """Страница ленты истории (images, videos, transcripts, speeches): новые сверху — created, затем id по
+    убыванию. Курсор — created и id последней записи прежней страницы: у записей бывает одно время.
+    Без before_id (вкладка до выкладки составного курсора) — только created, записи того же времени
+    пропадают. table — из кода, не из запроса."""
+    if before is None:
+        where, args = "", ()
+    elif before_id is None:
+        where, args = " AND created < ?", (before,)
+    else:
+        where, args = " AND (created < ? OR (created = ? AND id < ?))", (before, before, before_id)
+    return conn.execute(f"SELECT * FROM {table} WHERE user_id = ?{where} ORDER BY created DESC, id DESC LIMIT ?",
+                        (user_id, *args, limit))
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current >= VERSION:

@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field, ValidationError
 import chains
 import clock
 import connections
+import db
 import forms
 import media
 import sections
@@ -297,15 +298,10 @@ async def create_video(request: Request):
 
 
 @router.get("")
-async def list_videos(request: Request, before: "float | None" = None, limit: int = Query(60, ge=1, le=100)):
-    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created последней>."""
-    uid = request.state.user.id
-    if before is None:
-        rows = state.DB.execute("SELECT * FROM videos WHERE user_id = ? ORDER BY created DESC, id DESC LIMIT ?",
-                                (uid, limit))
-    else:
-        rows = state.DB.execute("SELECT * FROM videos WHERE user_id = ? AND created < ?"
-                                " ORDER BY created DESC, id DESC LIMIT ?", (uid, before, limit))
+async def list_videos(request: Request, before: "float | None" = None,
+                      before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней."""
+    rows = db.page(state.DB, "videos", request.state.user.id, before, before_id, limit)
     return {"items": [_out(r, with_chain=False) for r in rows]}
 
 
