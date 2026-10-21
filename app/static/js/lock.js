@@ -2,10 +2,13 @@
  * «на экране» и помощники passkey.
  *
  * Запирает сервер (auth.guard: 423 на всё /api/*, кроме запросов блокировки); здесь — экран и
- * согласие с сервером. Устройство с `pointer: coarse` шлёт отметку при старте, при возвращении и раз
- * в ALIVE_SEC, пока студия на экране. Ушла с экрана (при включённой блокировке) — сразу шторка;
- * вернулась через AWAY_SEC и больше — «заперто» серверу и экран блокировки, раньше — отметка решает,
- * убрать ли шторку. Любой ответ 423 ждёт одного общего отпирания (api.js hooks.locked) и повторяется.
+ * согласие с сервером. Видимая вкладка шлёт отметку при старте, при возвращении и раз в ALIVE_SEC
+ * (touch — основной указатель палец: сервер защёлкивает по нему сессию как мобильную). Отметки шлёт
+ * и компьютер: сессия, защёлкнутая в режиме планшета, иначе запиралась бы посреди работы. Ушла с
+ * экрана (телефон, блокировка включена) — сразу шторка; вернулась через AWAY_SEC и больше —
+ * «заперто» серверу и экран блокировки, раньше — отметка решает, убрать ли шторку. Со скрытой
+ * студии шторка не снимается никогда. Любой ответ 423 ждёт одного общего отпирания (api.js
+ * hooks.locked) и повторяется.
  * Шторка и экран — <dialog> через showModal: поверх открытых окон просмотра, остальное — inert;
  * Escape их не закрывает (cancel отменён, а закрытое силой окно открывается снова).
  *
@@ -118,9 +121,9 @@ function guarded() {
 
 /** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи. */
 async function mark() {
-  if (!isTouch() || waiting) return null;
+  if (waiting) return null;
   try {
-    const { locked } = await api('POST', '/api/lock/alive', { touch: true });
+    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch() });
     if (locked) waitOpen();
     return locked;
   } catch {
@@ -200,7 +203,7 @@ async function opened() {
     // нет связи — профиль прежний
   }
   if (!waiting) screen.close();
-  cover(false);
+  if (document.visibilityState === 'visible') cover(false);     // скрытая — под шторкой до возвращения
   passwordInput.value = '';
   if (done) done.resolve();
 }
@@ -250,7 +253,7 @@ async function openWithPassword(event) {
 
 async function onVisibility() {
   if (document.visibilityState !== 'visible') {
-    if (guarded() && !waiting) {
+    if (guarded()) {                   // и при открытом экране блокировки: отпирание могло пройти уже без человека
       hiddenAt = Date.now();
       cover(true);
     }
@@ -259,6 +262,7 @@ async function onVisibility() {
   const since = hiddenAt;
   hiddenAt = null;
   if (waiting) {                       // уже заперта: варианты passkey могли истечь, пока экран был погашен
+    cover(false);
     if (keys && screen.open) prepare();
     return;
   }
@@ -271,11 +275,11 @@ async function onVisibility() {
     return;
   }
   const locked = await mark();
-  if (!locked) cover(false);           // «не заперто» или нет связи — шторку убрать
+  // «не заперто» или нет связи — шторку убрать, если студия всё ещё на экране и не заперлась
+  if (!locked && !waiting && document.visibilityState === 'visible') cover(false);
 }
 
 async function begin() {
-  if (!isTouch()) return;
   try {
     const state = await api('GET', '/api/lock');      // CSRF до профиля: отметка — запрос POST
     useCsrf(state.csrf);

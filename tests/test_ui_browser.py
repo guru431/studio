@@ -525,6 +525,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("wait", f"document.querySelector('{rid} td[data-col=disabled]').textContent === 'да'"),
         ("eval", "toggle", f"document.querySelector('{rid} .user-toggle').textContent"),
         ("eval", "selfDelete", "document.querySelector('#users tr[data-login=owner] .user-delete').disabled"),
+        ("eval", "selfReset", "document.querySelector('#users tr[data-login=owner] .user-reset').disabled"),
         # удаление — только с логином
         ("click", f"{rid} .user-delete"), ("wait", is_open("#delete-dialog")),
         ("eval", "deleteLocked", "document.querySelector('#delete-confirm').disabled"),
@@ -552,6 +553,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["pathError"] == "Адрес через сервер — без пути"
     assert v["conn"] == ["через сервер", ["local-gemma-abl"]]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
+    assert v["selfReset"] is True                  # свой пароль — в «Прочем», с текущим
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
     assert v["saved"] == ["10.77.1.15:4000", entry]
     assert not v["overflow"]
@@ -2150,12 +2152,16 @@ ME_STATUS = "fetch('/api/me').then(r => r.status)"
 PASSKEY_READY = "document.querySelector('#lock-open').dataset.ready === '1'"
 
 
-def visibility(state):
-    """Студия ушла с экрана (hidden) или вернулась (visible): подмена document и событие, как у браузера."""
-    return ("eval", state, f"""(() => {{
+def visibility_js(state):
+    """Выражение: студия ушла с экрана (hidden) или вернулась (visible) — подмена document и событие."""
+    return f"""(() => {{
       Object.defineProperty(document, 'visibilityState', {{ configurable: true, get: () => '{state}' }});
       Object.defineProperty(document, 'hidden', {{ configurable: true, get: () => {str(state == 'hidden').lower()} }});
-      document.dispatchEvent(new Event('visibilitychange')); return true; }})()""")
+      document.dispatchEvent(new Event('visibilitychange')); return true; }})()"""
+
+
+def visibility(state):
+    return ("eval", state, visibility_js(state))
 
 
 def hide():
@@ -2289,4 +2295,58 @@ def test_open_calls_the_passkey_without_waiting_for_the_network(browser, live):
         ("wait", f"!{LOCK_OPEN}")], **PHONE)
     assert not r.get("failed"), r
     assert r["values"]["atGet"] == 0
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_marks_come_from_every_visible_tab(browser, live):
+    """Сессия, защёлкнутая телефоном, на устройстве, где палец перестал быть основным указателем
+    (сенсорный ноутбук вне режима планшета), без отметок запиралась бы каждые 75 с посреди работы."""
+    login = "lk-marks"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), hide(), show(), ("idle",)], width=1280)
+    assert not r.get("failed"), r
+    assert "POST /api/lock/alive" in r["sent"], r["sent"]
+    assert not problems(r), problems(r)
+
+
+def test_leaving_while_it_opens_keeps_the_curtain(browser, live):
+    """Ушла с экрана, пока шло отпирание: шторка остаётся, уход считается — через минуту снова заперто."""
+    login = "lk-leave"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("click", "#lock-use-password"),
+        ("type", "#lock-password", "password-123"),
+        ("eval", "leave", f"(() => {{ document.querySelector('#lock-password-go').click(); return {visibility_js('hidden')}; }})()"),
+        ("wait", f"!{LOCK_OPEN}"), ("eval", "covered", settled(CURTAIN_OPEN)),
+        later(61000), show(), ("wait", LOCK_OPEN), ("wait", f"{ME_STATUS}.then(s => s === 423)")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["covered"] is True
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_leaving_again_during_the_mark_keeps_the_curtain(browser, live):
+    """Вернулась раньше минуты и сразу ушла: ответ отметки не снимает шторку со скрытой студии."""
+    login = "lk-flip"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), hide(), ("wait", CURTAIN_OPEN), later(30000),
+        ("eval", "flip", f"(() => {{ {visibility_js('visible')}; return {visibility_js('hidden')}; }})()"),
+        ("eval", "covered", settled(CURTAIN_OPEN, 800))], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["covered"] is True
+    assert not problems(r), problems(r)
+
+
+def test_upload_chosen_while_locked_goes_after_opening(browser, live):
+    """Окно выбора файла дольше минуты — уход с экрана (спека, раздел 7): выбранная запись уходит после
+    отпирания, а не падает «Студия заперта»."""
+    login = "lk-upload"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), add_gateway(),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        hide(), ("wait", CURTAIN_OPEN), later(61000), show(), ("wait", LOCK_OPEN),
+        ("wait", f"{ME_STATUS}.then(s => s === 423)"),
+        put_audio("#transcribe-add input", wav_of(1.0)), ("eval", "early", settled("document.querySelector('.tr-view .tr-turn') === null", 800)),
+        ("wait", PASSKEY_READY), ("click", "#lock-open"),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["early"] is True
     assert not known_refusals(problems(r), 423), problems(r)

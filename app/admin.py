@@ -9,7 +9,7 @@ import logging
 import re
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -105,10 +105,14 @@ async def create_user(body: UserCreate, admin: auth.User = Depends(auth.require_
 
 
 @router.patch("/users/{uid}")
-async def patch_user(uid: int, body: UserPatch, request: Request, admin: auth.User = Depends(auth.require_admin)):
+async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.require_admin)):
     _user_out(uid)                                            # нет такого — 404 до всяких проверок
     if body.disabled or body.is_admin is False:
         _self(admin, uid)
+    if body.password is not None and uid == admin.id:
+        # свой — только с текущим (POST /api/me/password): иначе получивший телефон открытым на минуту
+        # сменил бы пароль и потом открывал бы запертую студию сам (спека screen-lock, раздел 4)
+        raise HTTPException(409, {"code": "self", "message": "свой пароль меняют в «Настройках» → «Прочее»"})
     changes = {}
     if body.login is not None:
         changes["login"] = _login(body.login)               # сессии — по id: переименование их не гасит
@@ -127,9 +131,7 @@ async def patch_user(uid: int, body: UserPatch, request: Request, admin: auth.Us
             cols = ", ".join(f"{k} = ?" for k in changes)    # имена — из кода выше, не из запроса
             state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))
         if body.disabled or body.password is not None:
-            # свой пароль из панели не выкидывает из текущей сессии
-            keep = security.digest(request.cookies[auth.COOKIE]) if uid == admin.id else None
-            auth.end_sessions(uid, keep_digest=keep)
+            auth.end_sessions(uid)               # себя отключить и сменить себе пароль отсюда нельзя
         state.DB.execute("COMMIT")
     except sqlite3.IntegrityError:
         state.DB.execute("ROLLBACK")

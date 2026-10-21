@@ -6,9 +6,10 @@
  * На телефоне список выезжает сбоку, как диалоги чата.
  *
  * Загрузка — XMLHttpRequest (ход в процентах): тело — сама запись, имя — заголовком X-Studio-Name
- * (encodeURIComponent; строка запроса попала бы в журнал Apache). Идущие записи опрашиваются
+ * (encodeURIComponent; строка запроса попала бы в журнал Apache); 423 запертой студии (XHR идёт
+ * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Идущие записи опрашиваются
  * раз в POLL_MS. Текст сервера — только textContent. */
-import { api, me } from './api.js';
+import { api, hooks, me } from './api.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -267,6 +268,11 @@ function build(view, ctx) {
       }
       if (xhr.status === 401) location.href = '/login';
       const detail = answer && answer.detail;
+      if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
+        await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
+        send(file);
+        return;
+      }
       error.textContent = words((detail && detail.message) || (xhr.status ? `Ошибка сервера (${xhr.status})` : 'Нет связи с сервером'));
     });
     xhr.send(file);

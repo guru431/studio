@@ -219,6 +219,16 @@ def test_reset_password_and_disable_end_sessions(studio):
     assert login(studio, "bob", "reset-password").status_code == 303
 
 
+def test_admin_cannot_reset_own_password_from_the_panel(studio):
+    """Свой пароль — только «Прочее → Пароль» с текущим: иначе получивший телефон открытым на минуту
+    сменил бы его из панели и потом открывал бы запертую студию сам (спека screen-lock, раздел 4)."""
+    owner = make_user(studio, "owner", is_admin=True); signin(studio, "owner")
+    r = studio.c.patch(f"/api/admin/users/{owner}", json={"password": "stolen-password"})
+    assert r.status_code == 409 and code(r) == "self"
+    assert login(studio, "owner", "stolen-password").status_code == 401
+    assert login(studio, "owner", "password-123").status_code == 303
+
+
 def test_disabling_a_user_stops_their_work_but_keeps_history(studio):
     """Отключение учётки останавливает её задание картинки (карта освобождается её подключением),
     поток чата и ролик у шлюза; история остаётся (ревью A1-M13)."""
