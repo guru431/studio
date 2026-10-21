@@ -88,6 +88,12 @@ CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_S
 # «Интернет» (спека 2026-10-21-studio-chat-internet, 6.3): кругов с инструментами на ответ, затем последний
 # запрос без tools — модель отвечает по найденному
 TOOL_ROUNDS = 5
+# вызовов в одном круге: каждый — до 30 с Exa или 2×60 с yt-dlp и деньги ключа Exa; лишние — шаг-ошибка
+CALLS_PER_ROUND = 4
+TOO_MANY = f"не больше {CALLS_PER_ROUND} вызовов за раз"
+WEB_OFF = "Интернет выключен"
+TIME_WORDS = "ответ шёл слишком долго — обрезан"
+NO_ANSWER = "модель не ответила по найденному — переспросите"
 CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"
 NO_ROOM = "не помещается в контекст модели"
 NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
@@ -107,7 +113,7 @@ WEEKDAYS = ("понедельник", "вторник", "среда", "четв�
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
           "октября", "ноября", "декабря")
 
-log =logging.getLogger("studio")
+log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
 
 
@@ -458,7 +464,10 @@ class StreamTask:
     (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
-    зовёт их кругами (не больше TOOL_ROUNDS), шаги — в `steps` и сразу в `messages.tools`."""
+    зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
+    `messages.tools`. Перед каждым вызовом — срок ответа и `chats.web` заново: выключили — вызова нет, и
+    дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
+    поиском этого ответа)."""
     user_id: int
     chat_id: str
     message_id: str
@@ -477,6 +486,7 @@ class StreamTask:
     exa_key: str | None = field(default=None, repr=False)
     limit: int | None = None     # предел контекста модели (chat._limit); None — без обрезки результатов
     steps: list[dict] = field(default_factory=list)
+    known: set[str] = field(default_factory=set, repr=False)
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -524,20 +534,20 @@ class StreamTask:
 
     async def _round(self, payload: dict, offer: bool) -> "tuple[str | None, str | None, list[ToolCall], str]":
         """Один запрос к модели потоком: (слова ошибки или None, finish_reason, вызовы инструментов по
-        `index`, текст круга). Текст идёт пользователю дельтами (`_delta`). Отказ 400, когда запрос впервые
-        несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS."""
+        `index`, текст круга). Текст идёт пользователю дельтами (`_delta`). Отказ 400 о tools, когда запрос
+        впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS (vLLM: «"auto" tool choice
+        requires…», LiteLLM называет `tools`); прочий 400 (контекст, картинка) — словами шлюза."""
         ending, calls, text = None, {}, ""
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
                 if r.status_code != 200:
                     await r.aread()
-                    return (NO_TOOLS if offer and r.status_code == 400 else upstream.gateway_error(r, self.conn.name),
-                            None, [], text)
+                    no_tools = offer and r.status_code == 400 and "tool" in r.text.lower()
+                    return NO_TOOLS if no_tools else upstream.gateway_error(r, self.conn.name), None, [], text
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:
-                        self.content += CUT_TIME
-                        return "ответ шёл слишком долго — обрезан", None, [], text
+                        return self._cut_time(), None, [], text
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
@@ -592,8 +602,20 @@ class StreamTask:
         if isinstance(fn.get("arguments"), str):
             call.arguments += fn["arguments"]
 
-    async def _tools(self, calls: list[ToolCall], text: str) -> None:
-        """Вызовы круга — по порядку: событие `tool`, шаг в `steps` и в базу, ответ модели `role: tool`."""
+    def _cut_time(self) -> str:
+        """Срок ответа (STREAM_TOTAL_SEC) вышел: пометка в текст, слова ошибки."""
+        self.content += CUT_TIME
+        return TIME_WORDS
+
+    def _web_on(self) -> bool:
+        """«Интернет» диалога ещё включён (кнопку могли нажать посреди ответа, диалог — удалить)."""
+        row = state.DB.execute("SELECT web FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
+        return row is not None and bool(row[0])
+
+    async def _tools(self, calls: list[ToolCall], text: str) -> "str | None":
+        """Вызовы круга — по порядку: событие `tool`, шаг в `steps` и в базу, ответ модели `role: tool` (и
+        вызову без исполнения: id пар должны сойтись). Сверх CALLS_PER_ROUND — шаг TOO_MANY; «Интернет»
+        выключили — шаг WEB_OFF, и tools дальше не идут. Итог — слова ошибки ответа (срок вышел) или None."""
         for n, c in enumerate(calls):
             c.id = c.id or f"call_{len(self.steps)}_{n}"
         # битые аргументы — не назад в запрос: vLLM их разбирает и ответил бы 400
@@ -601,16 +623,26 @@ class StreamTask:
             {"id": c.id, "type": "function",
              "function": {"name": c.name, "arguments": c.arguments if web.args_of(c.arguments) is not None else "{}"}}
             for c in calls]})
-        for c in calls:
+        for n, c in enumerate(calls):
+            if clock.NOW() > self.deadline:
+                return self._cut_time()
             kind = web.NAMES.get(c.name, "unknown")
-            self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
-            step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools))
+            if n >= CALLS_PER_ROUND:
+                step = {"kind": kind, "error": TOO_MANY}
+            elif not self.tools or not self._web_on():
+                self.tools = []
+                step = {"kind": kind, "error": WEB_OFF}
+            else:
+                self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
+                step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools, self.known))
+                self.known |= web.found_links(step)
             self.steps.append(step)
             state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
                              (json.dumps(self.steps, ensure_ascii=False), self.message_id))
             log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
                      "ошибка" if "error" in step else "ok")
             self.messages.append({"role": "tool", "tool_call_id": c.id, "content": web.for_model(step)})
+        return None
 
     async def _read(self) -> str | None:
         """Ответ модели до конца; итог — слова ошибки или None. Конец — `[DONE]` или `finish_reason`:
@@ -618,9 +650,12 @@ class StreamTask:
         ответ. Обрезанный пределом длины модели, объёма (ANSWER_MAX) или срока (STREAM_TOTAL_SEC) —
         ошибка с пометкой в тексте; прочитанное сохраняется. С `tools` — круги: модель кончила вызовами
         (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после TOOL_ROUNDS кругов
-        запрос без tools. Срок — один на весь ответ."""
+        запрос без tools. Срок — один на весь ответ: проверяется и перед каждым кругом и вызовом. Последний
+        круг кончился вызовами, которые уже не исполнялись, без текста — ошибка NO_ANSWER, а не пустой ответ."""
         self.deadline, rounds = clock.NOW() + STREAM_TOTAL_SEC, 0
         while True:
+            if clock.NOW() > self.deadline:
+                return self._cut_time()
             offer = bool(self.tools) and rounds < TOOL_ROUNDS
             payload = {"model": self.model, "messages": self._request(offer), "stream": True}
             if offer:
@@ -632,11 +667,15 @@ class StreamTask:
             if not (offer and ending == "tool_calls" and calls):
                 break
             rounds += 1
-            await self._tools(calls, text)
+            error = await self._tools(calls, text)
+            if error is not None:
+                return error
             if text and not text[-1].isspace():          # текст до вызовов и ответ — не слитно
                 self._delta("\n\n")
         if ending is None:
             return "модель оборвала ответ: поток кончился без признака конца"
+        if ending == "tool_calls" and not text.strip():
+            return NO_ANSWER
         if ending == "length":
             self.content += CUT_LENGTH
             return "ответ обрезан пределом длины модели"
@@ -941,6 +980,22 @@ def _drop_last_answer(chat_id: str) -> str:
     return last["id"]
 
 
+def _known_links(chat_id: str) -> set[str]:
+    """Адреса, которые read_page может читать в ходе (web.norm, спека 6.4): из сообщений пользователя и
+    вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`). Синхронно — в
+    транзакции хода."""
+    known = set()
+    for row in state.DB.execute("SELECT role, content, tools FROM messages WHERE chat_id = ?", (chat_id,)):
+        if row["role"] == "user":
+            known |= web.links(row["content"])
+        for step in json.loads(row["tools"] or "[]"):
+            known |= web.found_links(step)
+    for row in state.DB.execute("SELECT a.text FROM attachments a JOIN messages m ON m.id = a.message_id"
+                                " WHERE m.chat_id = ? AND a.kind = 'document'", (chat_id,)):
+        known |= web.links(row["text"])
+    return known
+
+
 def _title(text: str) -> str | None:
     lines = text.strip().splitlines()
     if not lines:
@@ -964,17 +1019,20 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     via = "server" if conn.proxied else "browser"
     free = body.external_ok or sections.is_local(conn, model)
-    # инструменты «Интернета» этого хода (прямому подключению — никаких); ключ Exa не расшифровался —
-    # шаги поиска скажут это словами (web.NO_KEY)
-    kinds = web.tools_for(conn, web.has_exa_key(uid)) if row["web"] else []
-    try:
-        exa_key = web.exa_key(uid) if "search" in kinds else None
-    except web.ToolError:
-        exa_key = None
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
     try:
+        # инструменты «Интернета» этого хода — по кнопке, какой она стала к ходу (`row` прочитан до await
+        # _limit); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
+        fresh = state.DB.execute("SELECT web FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        if fresh is None:
+            raise _gone()
+        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] else []
+        try:
+            exa_key = web.exa_key(uid) if "search" in kinds else None
+        except web.ToolError:
+            exa_key = None
         # ответ прямого подключения, который так и не сохранили (вкладку закрыли), — не вечная загрузка;
         # живой ответ сюда не доходит: его ждёт _busy
         state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
@@ -1006,6 +1064,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 raise HTTPException(409, {"code": "external_web", "message": (
                     "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         messages = compose(chat_id, user_mid)
+        known = _known_links(chat_id) if "page" in kinds else set()
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
@@ -1049,7 +1108,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
-                    tools=kinds, exa_key=exa_key, limit=limit)
+                    tools=kinds, exa_key=exa_key, limit=limit, known=known)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid)

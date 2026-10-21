@@ -62,7 +62,18 @@ def test_page_reads_text_with_the_limit_in_the_request(studio):
     assert step["title"] == "Страница example.test"
     head, _, text = step["text"].partition("\n\n")
     assert head == "Страница example.test\nhttps://example.test/article"
-    assert text == "я" * web.PAGE_MAX
+    assert text == "я" * web.PAGE_MAX + "\n\n[страница обрезана]"         # модель знает, что текст не весь
+
+
+def test_page_longer_than_asked_is_cut_here_and_shorter_is_whole(studio):
+    """Exa не послушал maxCharacters — студия режет сама и с той же пометкой; короткая — без пометки."""
+    import web
+    studio.gw.exa_replies["/contents"] = (200, {"results": [
+        {"url": "https://example.test/", "title": "T", "text": "ж" * (web.PAGE_MAX * 2)}]})
+    text = run(studio, web.page, KEY, "https://example.test/")["text"]
+    assert text == "T\nhttps://example.test/\n\n" + "ж" * web.PAGE_MAX + web.PAGE_CUT
+    studio.gw.exa_replies["/contents"] = (200, {"results": [{"title": "T", "text": "коротко"}]})
+    assert run(studio, web.page, KEY, "https://example.test/")["text"].endswith("\n\nкоротко")
 
 
 @pytest.mark.parametrize("url", ["ftp://example.test/file", "file:///etc/passwd", "javascript:alert(1)",
@@ -87,18 +98,34 @@ def test_page_status_error_becomes_words(studio, tag, words):
     assert e.value.args[0] == words
 
 
-@pytest.mark.parametrize("code, words", [
-    (401, "ключ Exa не подходит — проверьте в Настройках"),
-    (402, "Exa: бесплатный баланс исчерпан, обновится 1-го числа"),
-    (429, "Exa: слишком часто — попробуйте позже"),
-    (500, "Exa ответил 500"),
+@pytest.mark.parametrize("code, tag, words", [
+    (401, "INVALID_API_KEY", "ключ Exa не подходит — проверьте в Настройках"),
+    (402, "NO_MORE_CREDITS", "Exa: баланс исчерпан (бесплатный обновится 1-го числа)"),
+    (402, "API_KEY_BUDGET_EXCEEDED", "Exa: исчерпан лимит расходов ключа — см. dashboard.exa.ai"),
+    (402, "TEAM_BUDGET_EXCEEDED", "Exa: исчерпан лимит расходов ключа — см. dashboard.exa.ai"),
+    (429, "RATE_LIMIT_EXCEEDED", "Exa: слишком часто — попробуйте позже"),
+    (500, "T", "Exa ответил 500"),
 ])
-def test_exa_error_words(studio, code, words):
+def test_exa_error_words(studio, code, tag, words):
+    """Слова — по `tag` тела (exa.ai/docs/reference/error-codes), затем по коду."""
     import web
-    assert web._exa_error(httpx.Response(code, json={"error": "x", "tag": "T"})) == words
-    studio.gw.exa_replies["/search"] = (code, {"requestId": "r", "error": "x", "tag": "T"})
+    assert web._exa_error(httpx.Response(code, json={"error": "x", "tag": tag})) == words
+    studio.gw.exa_replies["/search"] = (code, {"requestId": "r", "error": "x", "tag": tag})
     with pytest.raises(web.ToolError) as e:
         run(studio, web.search, KEY, "запрос")
+    assert e.value.args[0] == words
+
+
+@pytest.mark.parametrize("code, tag, words", [
+    (400, "NO_CONTENT_FOUND", "страница не прочиталась"),
+    (422, "FETCH_DOCUMENT_ERROR", "страница не прочиталась"),
+    (403, "ROBOTS_FILTER_FAILED", "сайт запрещает чтение (robots.txt)"),
+])
+def test_page_refusals_of_exa_become_words(studio, code, tag, words):
+    import web
+    studio.gw.exa_replies["/contents"] = (code, {"requestId": "r", "error": "Секретное тело Exa", "tag": tag})
+    with pytest.raises(web.ToolError) as e:
+        run(studio, web.page, KEY, "https://example.test/")
     assert e.value.args[0] == words
 
 
@@ -415,3 +442,86 @@ def test_run_returns_code_and_both_streams(studio):
     code, out, err = run(studio, web.RUN, [sys.executable, "-c",
                                            "import sys; print('o'); print('e', file=sys.stderr); sys.exit(3)"], 10)
     assert (code, out.strip(), err.strip()) == (3, b"o", b"e")
+
+
+def test_run_gives_yt_dlp_no_environment_of_the_service(studio, monkeypatch):
+    """yt-dlp — сторонний и обновляется ночью: окружения службы (STUDIO_DATA_KEY) он не видит."""
+    import state
+    import web
+    monkeypatch.setenv("STUDIO_DATA_KEY", "секрет-службы")
+    code, out, _err = run(studio, web.RUN, [sys.executable, "-c",
+                                            "import json, os; print(json.dumps(dict(os.environ)))"], 10)
+    env = json.loads(out)
+    assert code == 0 and "STUDIO_DATA_KEY" not in env
+    assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin" and env["LANG"] == "C.UTF-8"
+    assert env["HOME"] == str(state.CFG.tmp_dir)
+    assert set(env) - {"PATH", "LANG", "HOME", "SYSTEMROOT"} <= {"COMSPEC", "PATHEXT", "WINDIR"}   # Windows дописывает свои
+
+
+def test_youtube_runs_no_more_than_two_at_once(studio, monkeypatch):
+    import web
+    monkeypatch.setattr(web, "YT_SLOTS", asyncio.Semaphore(web.YT_SLOTS._value))
+    fake, running, peak = FakeYtDlp(), [0], [0]
+
+    async def counting(argv, timeout):
+        running[0] += 1
+        peak[0] = max(peak[0], running[0])
+        await asyncio.sleep(0.01)
+        running[0] -= 1
+        return await fake(argv, timeout)
+
+    monkeypatch.setattr(web, "RUN", counting)
+
+    async def five():
+        return await asyncio.gather(*(web.youtube(CANON) for _ in range(5)))
+
+    assert [s["id"] for s in run(studio, five)] == [VID] * 5
+    assert peak[0] == 2
+
+
+# --- вызов модели: пределы аргументов и адреса страниц (спека 6.4) -------------------------------
+
+def test_long_query_or_address_is_refused_without_a_call(studio, monkeypatch):
+    import web
+    yt = FakeYtDlp()
+    monkeypatch.setattr(web, "RUN", yt)
+    q, url = "я" * (web.QUERY_MAX + 1), "https://example.test/" + "a" * web.URL_MAX
+    step = run(studio, web.call, "web_search", json.dumps({"query": q}), KEY)
+    assert step == {"kind": "search", "query": q[:web.QUERY_MAX], "error": "запрос слишком длинный"}
+    step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, {web.norm(url)})
+    assert step == {"kind": "page", "url": url[:web.URL_MAX], "error": "адрес слишком длинный"}
+    step = run(studio, web.call, "youtube_subtitles", json.dumps({"url": CANON + "&x=" + "a" * web.URL_MAX}), KEY)
+    assert step["error"] == "адрес слишком длинный"
+    assert studio.gw.exa_requests == [] and yt.calls == []
+    ok = run(studio, web.call, "web_search", json.dumps({"query": "я" * web.QUERY_MAX}), KEY)
+    assert "error" not in ok and len(studio.gw.exa_requests) == 1
+
+
+def test_links_are_found_in_text_with_light_normalisation():
+    import web
+    text = ("Смотри https://Example.test/a/, и (https://en.wikipedia.org/wiki/Python_(language)). "
+            "[док](https://docs.test/x#part) <a href=\"https://html.test/p\">x</a> «https://q.test/?a=1&b=2» "
+            "ftp://no.test/ javascript:alert(1)")
+    found = web.links(text)
+    for url in ("https://Example.test/a", "https://en.wikipedia.org/wiki/Python_(language)", "https://docs.test/x",
+                "https://html.test/p", "https://q.test/?a=1&b=2"):
+        assert url in found, url
+    assert not any("no.test" in u or "alert" in u for u in found)
+    assert web.norm("  https://a.test/x/#top ") == web.norm("https://a.test/x") == "https://a.test/x"
+    assert web.norm("https://a.test//") == "https://a.test/"                   # один «/», не все
+    assert web.found_links({"kind": "search", "results": [{"url": "https://r.test/"}, {"title": "без адреса"}]}) == {
+        "https://r.test"}
+    assert web.found_links({"kind": "page", "url": "https://p.test/"}) == set()
+
+
+def test_page_outside_the_known_addresses_is_refused_without_exa(studio):
+    import web
+    known = web.links("прочитай https://example.test/article/")
+    for url in ("https://example.test/article", " https://example.test/article/#intro"):
+        step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, known)
+        assert "error" not in step, url
+    for url in ("https://attacker.test/?d=секрет", "https://example.test/article/other", "https://example.test/"):
+        step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, known)
+        assert step == {"kind": "page", "url": url, "error": "читаю только ссылки из переписки или найденные поиском"}
+    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [["https://example.test/article"],
+                                                                   ["https://example.test/article/#intro"]]
