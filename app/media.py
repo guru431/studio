@@ -606,10 +606,34 @@ def _zip_end(count: int, start: int, size: int) -> bytes:
                              min(size, 0xFFFFFFFF), min(start, 0xFFFFFFFF), 0)
 
 
+class ZipWriter:
+    """Учёт потокового ZIP_STORED — общий у архива выделенного (_zip) и выгрузки истории (takeout.py):
+    локальный заголовок записи по CRC, размеру и времени, смещения, центральный каталог, конец архива.
+    Данные записи вызывающий отдаёт сам, сразу после заголовка, ровно `size` байт."""
+
+    def __init__(self):
+        self.offset, self.central = 0, []
+
+    @property
+    def count(self) -> int:
+        return len(self.central)
+
+    def entry(self, name: str, created: float, crc: int, size: int) -> bytes:
+        raw = name.encode()
+        local, row = _zip_entry(raw, 0 if raw.isascii() else 0x800, _dos_time(created), crc, size, self.offset)
+        self.central.append(row)
+        self.offset += len(local) + size
+        return local
+
+    def end(self) -> bytes:
+        table = b"".join(self.central)
+        return table + _zip_end(len(self.central), self.offset, len(table))
+
+
 def _zip(entries: list[tuple[str, Path, float]]):
     """ZIP_STORED на лету; Starlette крутит обычный генератор в пуле потоков. Файла уже нет —
     пропускается; шара оборвала чтение — исключение без пути: ответ рвётся, браузер покажет сбой."""
-    offset, central = 0, []
+    out = ZipWriter()
     try:
         for name, file, created in entries:
             try:
@@ -617,10 +641,8 @@ def _zip(entries: list[tuple[str, Path, float]]):
                 f = open(file, "rb")
             except FileNotFoundError:
                 continue
-            raw = name.encode()
-            local, row = _zip_entry(raw, 0 if raw.isascii() else 0x800, _dos_time(created), crc, size, offset)
             with f:
-                yield local
+                yield out.entry(name, created, crc, size)
                 left = size
                 while left > 0:
                     block = f.read(min(CHUNK, left))
@@ -628,13 +650,10 @@ def _zip(entries: list[tuple[str, Path, float]]):
                         raise OSError("файл стал короче")
                     left -= len(block)
                     yield block
-            central.append(row)
-            offset += len(local) + size
     except OSError:
         log.warning("archive: хранилище оборвало чтение")
         raise StorageError("хранилище оборвало чтение") from None
-    table = b"".join(central)
-    yield table + _zip_end(len(central), offset, len(table))
+    yield out.end()
 
 
 @router.post("/media/archives")
