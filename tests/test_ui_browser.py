@@ -254,7 +254,7 @@ def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser,
                   "pwned": 0, "highlighted": True, "copy": "Копировать"}
     assert r["values"]["sse"]["out"] == ["Облако ", "на связи.", "", "[DONE]"]
     assert r["values"]["sse"]["parsed"] == [{"event": "delta", "data": {"a": 1}}, {"event": "message", "data": "tail"}]
-    assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "привет"}]
+    assert live.cloud.chat_requests[-1]["messages"][1:] == [{"role": "user", "content": "привет"}]
 
 
 def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
@@ -930,7 +930,7 @@ def test_chat_streams_through_the_server_and_survives_reload(browser, live):
     assert v["conn"] == "srvllm" and v["answer"] == "Здравствуйте!" and v["id"] is True
     assert v["input"] == "" and v["bubble"] == "Привет, студия" and v["group"] == "Сегодня" and v["retry"]
     assert v["after"] == ["Привет, студия", "Здравствуйте!"]
-    assert live.gw.chat_requests[-1]["messages"] == [{"role": "user", "content": "Привет, студия"}]
+    assert live.gw.chat_requests[-1]["messages"][1:] == [{"role": "user", "content": "Привет, студия"}]
     assert not problems(r), problems(r)
 
 
@@ -1038,7 +1038,7 @@ def test_direct_cloud_chat_saves_the_answer(browser, live):
     assert v["saved"] == ["assistant", "done", "Облако на связи."] and v["free"]
     assert v["otherActions"] == 0 and v["leftRetry"]
     assert live.cloud.chat_requests[-1]["model"] == "cloud-chat"
-    assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "Ты здесь?"}]
+    assert live.cloud.chat_requests[-1]["messages"][1:] == [{"role": "user", "content": "Ты здесь?"}]
     assert live.cloud.chat_auth[-1] == f"Bearer {live.cloud.TOKEN}"
     assert not problems(r), problems(r)
 

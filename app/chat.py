@@ -30,6 +30,7 @@ import logging
 import math
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Literal
 
@@ -85,8 +86,12 @@ DROPPED = f"[фото убрано из контекста: модели — н�
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+MSK = timezone(timedelta(hours=3))               # Москва без перехода на летнее время
+WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
+          "октября", "ноября", "декабря")
 
-log = logging.getLogger("studio")
+log =logging.getLogger("studio")
 router = APIRouter(prefix="/api")
 
 
@@ -325,6 +330,16 @@ async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[
 
     return [{**m, "content": [part(p) for p in m["content"]]} if isinstance(m["content"], list) else m
             for m in messages]
+
+
+def today_line(now: float) -> str:
+    d = datetime.fromtimestamp(now, MSK)
+    return f"Сегодня {WEEKDAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]} {d.year} года (Москва)."
+
+
+def with_date(messages: list[dict]) -> list[dict]:
+    """Запрос к модели — с сегодняшней датой первым системным сообщением (модель её не знает)."""
+    return [{"role": "system", "content": today_line(clock.NOW())}, *messages]
 
 
 def estimate_tokens(messages: list[dict]) -> int:
@@ -834,7 +849,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     try:
-        messages = await fill_photos(chat_id, uid, messages)    # файлы — после COMMIT и в потоке
+        messages = with_date(await fill_photos(chat_id, uid, messages))    # файлы — после COMMIT и в потоке
     except BaseException as e:
         # строка ответа уже в базе: без итога диалог считался бы занятым (см. _busy)
         _finish(answer_id, chat_id, STORAGE if isinstance(e, OSError) else "", "error")
