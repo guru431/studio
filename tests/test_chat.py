@@ -380,6 +380,17 @@ def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
     assert turn(studio, cid, "Как дела?").json()["messages"][1] == {"role": "assistant", "content": "Здравствуйте!"}
 
 
+def test_direct_answer_with_a_lone_surrogate_is_refused_in_words(studio):
+    """Половина эмодзи (одиночный суррогат \\ud83d) в PUT ответа браузера: json.loads её примет, а
+    sqlite3 закодировать не сможет — отказ 422 словами, а не 500; ответ остаётся `streaming`."""
+    add_connection(studio); cid = new_chat(studio)
+    aid = turn(studio, cid, "Привет").json()["assistant_message_id"]
+    r = studio.c.put(f"/api/chats/{cid}/messages/{aid}", content='{"content": "ok \\ud83d", "status": "error"}',
+                     headers={"Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json()["detail"]["message"], r.text
+    assert messages(studio, cid)[1]["status"] == "streaming"
+
+
 def test_regenerate_replaces_the_last_answer(studio):
     add_gateway(studio); cid = new_chat(studio)
     sse(turn(studio, cid, "Привет"))
