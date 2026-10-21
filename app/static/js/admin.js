@@ -314,7 +314,11 @@ function backupCheck() {
     try {
       await api('POST', '/api/admin/backup-check');
     } catch (err) {
-      if (err.code !== 'running') show(words(err), 'error');
+      if (err.code !== 'running') {            // не запустилась — ошибка остаётся, опрос её не затрёт
+        start.disabled = false;
+        show(words(err), 'error');
+        return;
+      }
     }
     poll();
   });
