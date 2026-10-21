@@ -18,6 +18,7 @@ import clock
 import connections
 import history
 import images
+import media
 import profile
 import sections
 import security
@@ -154,11 +155,12 @@ async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
-    pending = await history.delete_all(uid)
+    await history.delete_all(uid)
     # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;
     # не дождались (images.SETTLE_SEC) — карту освободит конец аренды шлюза
     if not await images.settle_user(uid):
         log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
+    pending = media.pending(uid)          # после ожидания: и файлы заданий, отменённых в это время
     state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))   # сессии и подключения — каскадом
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)

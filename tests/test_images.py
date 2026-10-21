@@ -831,6 +831,39 @@ def test_deleting_a_user_during_their_generation_ends_the_job(studio, env, monke
     assert make_user(studio, "carol") == bob and images._active(bob) is None   # новый id не наследует busy
 
 
+def test_deleting_a_user_counts_the_files_queued_while_their_jobs_end(studio, env, monkeypatch):
+    """Картинка, сохранение которой шло, пока стиралась история, отменяется уже во время ожидания
+    заданий учётки: её файл, который шара не удалила, тоже в pending_files (хвост правки очереди)."""
+    make_user(studio, "owner", is_admin=True)
+    bob = make_user(studio, "bob")
+    signin(studio, "bob")
+    add_gateway(studio)
+    settling, writing = threading.Event(), threading.Event()
+    real_write, real_settle = media.write, images.settle_user
+
+    def held_write(*args, **kwargs):
+        writing.set()
+        settling.wait(5)                          # пишется до начала ожидания заданий учётки
+        return real_write(*args, **kwargs)
+
+    async def settle(uid):
+        settling.set()
+        return await real_settle(uid)
+
+    def refused(media_id, rel_path):
+        raise OSError("share went away")
+
+    monkeypatch.setattr(media, "write", held_write)
+    monkeypatch.setattr(images, "settle_user", settle)
+    monkeypatch.setattr(media, "_remove", refused)
+    job_id = start(studio).json()["id"]
+    assert writing.wait(5)
+    signin(studio, "owner")
+    r = studio.c.delete(f"/api/admin/users/{bob}")
+    assert r.status_code == 200 and r.json() == {"pending_files": 1}
+    assert images.JOBS[job_id].state == "cancelled" and media_rows() == 0
+
+
 def test_unexpected_save_failure_ends_the_job_as_an_error(studio, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError(PROMPT)
