@@ -108,6 +108,9 @@ class FakeGateway:
         self.chat_requests = []          # тела запросов /v1/chat/completions
         self.chat_auth = []              # их заголовки авторизации
         self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели
+        #: ответы на очередные потоковые запросы: list[str] — куски текста, dict {"text": [...],
+        #: "tool_calls": [(имя, аргументы JSON), …]} — ещё и вызовы инструментов; пусто — chat_reply
+        self.chat_script = []
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
@@ -182,6 +185,14 @@ class FakeGateway:
                                                                       "content": "".join(self.chat_reply)},
                                                           "finish_reason": "stop"}]})
 
+        step = self.chat_script.pop(0) if self.chat_script else self.chat_reply
+        pieces, calls = (step.get("text", []), step.get("tool_calls", [])) if isinstance(step, dict) else (step, [])
+        number = len(self.chat_requests)
+
+        def data(delta, ending=None):
+            chunk = {"choices": [{"index": 0, "delta": delta, "finish_reason": ending}]}
+            return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+
         async def chunks():
             # Молчание считается по часам студии, сам шлюз их не двигает: дальше его ведёт только
             # тот, кто ждёт (пинги чата) — без гонки двух пауз за одни часы. Предел проходов: без
@@ -191,14 +202,21 @@ class FakeGateway:
                 if clock.NOW() - start >= self.chat_delay:
                     break
                 await asyncio.sleep(0.001)
-            for i, piece in enumerate(self.chat_reply):
-                delta = {"choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]}
-                yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n".encode()
+            for i, piece in enumerate(pieces):
+                yield data({"content": piece})
                 while i == 0 and self.chat_hold:
                     await asyncio.sleep(0.001)
-            if self.chat_ending is not None:
-                end = {"choices": [{"index": 0, "delta": {}, "finish_reason": self.chat_ending}]}
-                yield f"data: {json.dumps(end)}\n\n".encode()
+            # вызовы — как vLLM gemma-abl через шлюз (проба 2026-10-21): имя с id и index, затем
+            # аргументы кусками; конец — finish_reason "tool_calls"
+            for i, (name, arguments) in enumerate(calls):
+                yield data({"tool_calls": [{"index": i, "id": f"chatcmpl-tool-{number}-{i}", "type": "function",
+                                            "function": {"name": name}}]})
+                half = len(arguments) // 2
+                for part in (arguments[:half], arguments[half:]):
+                    yield data({"tool_calls": [{"index": i, "function": {"arguments": part}}]})
+            ending = "tool_calls" if calls else self.chat_ending
+            if ending is not None:
+                yield data({}, ending)
                 yield b"data: [DONE]\n\n"
 
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=chunks())

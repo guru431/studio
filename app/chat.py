@@ -10,6 +10,8 @@
    PING_SEC в поток идёт `: ping` — холодная модель грузится минутами, а Apache рвёт молчащую
    линию. Ответ — до ANSWER_MAX знаков и STREAM_TOTAL_SEC, конец — `[DONE]` или `finish_reason`
    (без них — ошибка), у пользователя сразу — не больше USER_STREAMS таких ответов (429).
+   С «Интернетом» (`chats.web`, спека 2026-10-21-studio-chat-internet) запрос несёт tools, и ответ идёт
+   кругами: вызовы модели исполняет web.call, шаги — в `messages.tools` по одному (событие SSE `tool`).
 3. Прямое подключение — браузер зовёт модель сам: ход отдаёт ему адрес и сообщения, готовый
    ответ браузер кладёт `PUT .../messages/{id}`. Пока читает, раз в ~15 с шлёт признак жизни
    (`POST .../messages/{id}/alive`, время — в `alive_at`): ответ без признака дольше ALIVE_SEC —
@@ -81,6 +83,17 @@ INTERRUPTED = "\n\n[прервано перезапуском студии]"
 CUT_LENGTH = "\n\n[ответ обрезан пределом длины модели]"
 CUT_SIZE = "\n\n[ответ обрезан: слишком длинный для студии]"
 CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_SEC // 60} минут]"
+# «Интернет» (спека 2026-10-21-studio-chat-internet, 6.3): кругов с инструментами на ответ, затем последний
+# запрос без tools — модель отвечает по найденному
+TOOL_ROUNDS = 5
+CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"
+NO_ROOM = "не помещается в контекст модели"
+NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
+# к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
+# памяти (проба 2026-10-21, спека раздел 8)
+WEB_NOTE = ("У тебя есть доступ к интернету через инструменты: {tools}. Если пользователь просит найти что-то в "
+            "интернете, прочитать ссылку или ролик YouTube или нужны свежие данные — вызови инструмент, а не "
+            "отвечай по памяти.")
 STORAGE = "хранилище недоступно"
 NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
 DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
@@ -202,11 +215,14 @@ def _alive(row) -> bool:
 
 
 def _message_out(row, atts: list) -> dict:
+    """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public)."""
     live = STREAMS.get(row["id"])
+    steps = live.steps if live else json.loads(row["tools"] or "[]")
     return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
-            "attachments": [_attachment_out(a) for a in atts]}
+            "attachments": [_attachment_out(a) for a in atts],
+            "tools": [web.public(s) for s in steps]}
 
 
 def _attachment_out(a) -> dict:
@@ -352,6 +368,9 @@ def estimate_tokens(messages: list[dict]) -> int:
     chars, pics = 0, 0
     for m in messages:
         content = m["content"]
+        chars += sum(len(tc["function"]["arguments"]) for tc in m.get("tool_calls", []))
+        if content is None:                      # ответ ассистента одними вызовами инструментов
+            continue
         if isinstance(content, str):
             chars += len(content)
             continue
@@ -390,11 +409,22 @@ def _too_big(tokens: int, limit: int) -> HTTPException:
 
 # ---- поток через сервер --------------------------------------------------------
 
+@dataclass
+class ToolCall:
+    """Вызов инструмента из потока модели: `id` и имя — из первого куска, аргументы — склейкой кусков."""
+    id: str
+    name: str
+    arguments: str
+
+
 @dataclass(eq=False)
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
-    ("delta", текст), ("done", статус) или ("error", слова). Поток SSE закрылся (клиент ушёл) —
-    `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется."""
+    ("delta", текст), ("tool", {kind, label}), ("done", статус) или ("error", слова). Поток SSE закрылся
+    (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
+
+    `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
+    зовёт их кругами (не больше TOOL_ROUNDS), шаги — в `steps` и сразу в `messages.tools`."""
     user_id: int
     chat_id: str
     message_id: str
@@ -409,6 +439,10 @@ class StreamTask:
     saved: float = 0.0
     deadline: float = math.inf   # срок всего ответа (STREAM_TOTAL_SEC), ставит _read
     shutdown: bool = False
+    tools: list[str] = field(default_factory=list)
+    exa_key: str | None = field(default=None, repr=False)
+    limit: int | None = None     # предел контекста модели (chat._limit); None — без обрезки результатов
+    steps: list[dict] = field(default_factory=list)
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -431,23 +465,45 @@ class StreamTask:
             state.DB.execute("UPDATE messages SET content = ? WHERE id = ? AND status = 'streaming'",
                              (self.content, self.message_id))
 
-    async def _read(self) -> str | None:
-        """Ответ модели до конца; итог — слова ошибки или None. Конец — `[DONE]` или `finish_reason`:
-        поток, кончившийся без них (обрыв, HTML с кодом 200, пустой ответ), — ошибка, а не готовый
-        ответ. Обрезанный пределом длины модели, объёма (ANSWER_MAX) или срока (STREAM_TOTAL_SEC) —
-        ошибка с пометкой в тексте; прочитанное сохраняется."""
-        payload, self.messages = {"model": self.model, "messages": self.messages, "stream": True}, []
-        self.deadline, ending = clock.NOW() + STREAM_TOTAL_SEC, None
+    def _request(self, offer: bool) -> list[dict]:
+        """Сообщения запроса: с tools — к системному сообщению даты дописан WEB_NOTE; копией, история
+        (`self.messages`) не меняется."""
+        first = self.messages[0] if self.messages else None
+        if not offer or first is None or first["role"] != "system":
+            return self.messages
+        names = ", ".join(spec["function"]["name"] for spec in web.specs(self.tools))
+        return [{**first, "content": f"{first['content']}\n\n{WEB_NOTE.format(tools=names)}"}, *self.messages[1:]]
+
+    def _fit(self, step: dict) -> dict:
+        """Шаг так, как его получит модель: текст, что не помещается в остаток контекста (`limit` без
+        RESERVE_TOKENS), обрезан с пометкой CUT_CONTEXT; остатка меньше 500 знаков — ошибка NO_ROOM. Шаг
+        хранит то же, что получила модель: иначе следующий ход не поместился бы из-за полного текста."""
+        if self.limit is None or "error" in step:
+            return step
+        used = estimate_tokens(self._request(True))
+        if used + math.ceil(len(step["text"]) / 3) <= self.limit - RESERVE_TOKENS:
+            return step
+        room = (self.limit - RESERVE_TOKENS - used) * 3 - len(CUT_CONTEXT)
+        if room < 500:
+            return {**web.public(step), "error": NO_ROOM}
+        return {**step, "text": step["text"][:room] + CUT_CONTEXT}
+
+    async def _round(self, payload: dict, offer: bool) -> "tuple[str | None, str | None, list[ToolCall], str]":
+        """Один запрос к модели потоком: (слова ошибки или None, finish_reason, вызовы инструментов по
+        `index`, текст круга). Текст идёт пользователю дельтами (`_delta`). Отказ 400, когда запрос впервые
+        несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS."""
+        ending, calls, text = None, {}, ""
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
                 if r.status_code != 200:
                     await r.aread()
-                    return upstream.gateway_error(r, self.conn.name)
+                    return (NO_TOOLS if offer and r.status_code == 400 else upstream.gateway_error(r, self.conn.name),
+                            None, [], text)
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:
                         self.content += CUT_TIME
-                        return "ответ шёл слишком долго — обрезан"
+                        return "ответ шёл слишком долго — обрезан", None, [], text
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
@@ -463,25 +519,88 @@ class StreamTask:
                     if chunk.get("error"):
                         error = chunk["error"]
                         words = error.get("message") if isinstance(error, dict) else error
-                        return f"модель прервала ответ: {str(words)[:300]}"
+                        return f"модель прервала ответ: {str(words)[:300]}", None, [], text
                     for choice in chunk.get("choices") or []:
                         if not isinstance(choice, dict):
                             continue
                         delta = choice.get("delta")
-                        text = delta.get("content") if isinstance(delta, dict) else None
-                        if isinstance(text, str) and text:
-                            self._delta(text)
+                        delta = delta if isinstance(delta, dict) else {}
+                        piece = delta.get("content")
+                        if isinstance(piece, str) and piece:
+                            text += piece
+                            self._delta(piece)
+                        for tc in delta.get("tool_calls") or []:
+                            if isinstance(tc, dict):
+                                self._collect(calls, tc)
                         if isinstance(choice.get("finish_reason"), str) and choice["finish_reason"]:
                             ending = choice["finish_reason"]
                     if len(self.content) > ANSWER_MAX:
                         self.content = self.content[:ANSWER_MAX] + CUT_SIZE
-                        return "ответ слишком длинный — обрезан"
+                        return "ответ слишком длинный — обрезан", None, [], text
         except upstream.UpstreamRefused as e:
-            return upstream.refused_words(e, self.conn)
+            return upstream.refused_words(e, self.conn), None, [], text
         except httpx.TimeoutException:
-            return f"шлюз не ответил за {STREAM_READ_SEC} с"
+            return f"шлюз не ответил за {STREAM_READ_SEC} с", None, [], text
         except httpx.HTTPError as e:
-            return f"шлюз недоступен: {type(e).__name__}"
+            return f"шлюз недоступен: {type(e).__name__}", None, [], text
+        return None, ending, [calls[i] for i in sorted(calls)], text
+
+    @staticmethod
+    def _collect(calls: dict, tc: dict) -> None:
+        """Кусок `delta.tool_calls`: первый кусок вызова несёт `index`, `id` и имя, следующие — части аргументов."""
+        index = tc.get("index") if isinstance(tc.get("index"), int) else 0
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        call = calls.setdefault(index, ToolCall(id="", name="", arguments=""))
+        if not call.id and isinstance(tc.get("id"), str):
+            call.id = tc["id"]
+        if not call.name and isinstance(fn.get("name"), str):
+            call.name = fn["name"]
+        if isinstance(fn.get("arguments"), str):
+            call.arguments += fn["arguments"]
+
+    async def _tools(self, calls: list[ToolCall], text: str) -> None:
+        """Вызовы круга — по порядку: событие `tool`, шаг в `steps` и в базу, ответ модели `role: tool`."""
+        for n, c in enumerate(calls):
+            c.id = c.id or f"call_{len(self.steps)}_{n}"
+        # битые аргументы — не назад в запрос: vLLM их разбирает и ответил бы 400
+        self.messages.append({"role": "assistant", "content": text or None, "tool_calls": [
+            {"id": c.id, "type": "function",
+             "function": {"name": c.name, "arguments": c.arguments if web.args_of(c.arguments) is not None else "{}"}}
+            for c in calls]})
+        for c in calls:
+            kind = web.NAMES.get(c.name, "unknown")
+            self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
+            step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools))
+            self.steps.append(step)
+            state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
+                             (json.dumps(self.steps, ensure_ascii=False), self.message_id))
+            log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
+                     "ошибка" if "error" in step else "ok")
+            self.messages.append({"role": "tool", "tool_call_id": c.id, "content": web.for_model(step)})
+
+    async def _read(self) -> str | None:
+        """Ответ модели до конца; итог — слова ошибки или None. Конец — `[DONE]` или `finish_reason`:
+        поток, кончившийся без них (обрыв, HTML с кодом 200, пустой ответ), — ошибка, а не готовый
+        ответ. Обрезанный пределом длины модели, объёма (ANSWER_MAX) или срока (STREAM_TOTAL_SEC) —
+        ошибка с пометкой в тексте; прочитанное сохраняется. С `tools` — круги: модель кончила вызовами
+        (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после TOOL_ROUNDS кругов
+        запрос без tools. Срок — один на весь ответ."""
+        self.deadline, rounds = clock.NOW() + STREAM_TOTAL_SEC, 0
+        while True:
+            offer = bool(self.tools) and rounds < TOOL_ROUNDS
+            payload = {"model": self.model, "messages": self._request(offer), "stream": True}
+            if offer:
+                payload |= {"tools": web.specs(self.tools), "tool_choice": "auto"}
+            # 400 на круге после вызовов — уже не «не умеет tools», а отказ шлюза его словами
+            error, ending, calls, text = await self._round(payload, offer and rounds == 0)
+            if error is not None:
+                return error
+            if not (offer and ending == "tool_calls" and calls):
+                break
+            rounds += 1
+            await self._tools(calls, text)
+            if text and not text[-1].isspace():          # текст до вызовов и ответ — не слитно
+                self._delta("\n\n")
         if ending is None:
             return "модель оборвала ответ: поток кончился без признака конца"
         if ending == "length":
@@ -568,6 +687,8 @@ async def _events(st: StreamTask, user_message_id: str):
             yield ": ping\n\n"
         elif kind == "delta":
             yield _sse("delta", {"text": data})
+        elif kind == "tool":
+            yield _sse("tool", data)
         elif kind == "done":
             yield _sse("done", {"status": data})
             return
@@ -809,6 +930,13 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     via = "server" if conn.proxied else "browser"
     free = body.external_ok or sections.is_local(conn, model)
+    # инструменты «Интернета» этого хода (прямому подключению — никаких); ключ Exa не расшифровался —
+    # шаги поиска скажут это словами (web.NO_KEY)
+    kinds = web.tools_for(conn, web.has_exa_key(uid)) if row["web"] else []
+    try:
+        exa_key = web.exa_key(uid) if "search" in kinds else None
+    except web.ToolError:
+        exa_key = None
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -877,7 +1005,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if not conn.proxied:
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
-    st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages)
+    st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
+                    tools=kinds, exa_key=exa_key, limit=limit)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid)
