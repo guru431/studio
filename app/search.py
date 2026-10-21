@@ -108,16 +108,31 @@ async def find(body: SearchIn, request: Request):
         args.insert(0, match)
     else:
         source = "search_docs d"
-    cursor, tail = "", []
+    cond = " AND ".join(where)
+    cursor, tail, shown = "", [], set()
     if body.before is not None:
-        cursor = " AND (created, item, part) < (?, ?, ?)"
+        cursor = " AND (d.created, d.item, d.part) < (?, ?, ?)"
         tail = [body.before.created, body.before.item, body.before.part]
-    rows = state.DB.execute(
-        "SELECT * FROM (SELECT d.id AS doc, d.section, d.item, d.part, d.model, d.created,"
-        " row_number() OVER (PARTITION BY d.section, d.item ORDER BY d.created DESC, d.part DESC) AS n"
-        f" FROM {source} WHERE {' AND '.join(where)})"
-        f" WHERE n = 1{cursor} ORDER BY created DESC, item DESC, part DESC LIMIT ?",
-        (*args, *tail, body.limit + 1)).fetchall()
+        # диалоги прежних страниц: их последнее совпадение — выше курсора
+        shown = {r[0] for r in state.DB.execute(
+            f"SELECT DISTINCT d.item FROM {source} WHERE {cond} AND d.section = 'chat'"
+            " AND (d.created, d.item, d.part) >= (?, ?, ?)", (*args, *tail))}
+    # по порядку, без LIMIT: строки читаются, пока страница не наберётся; диалог — первым (последним по
+    # времени) совпадением. Окно row_number() по всем совпадениям — впятеро дольше
+    rows = []
+    found = state.DB.execute(f"SELECT d.id AS doc, d.section, d.item, d.part, d.model, d.created FROM {source}"
+                             f" WHERE {cond}{cursor} ORDER BY d.created DESC, d.item DESC, d.part DESC", (*args, *tail))
+    try:
+        for row in found:
+            if row["section"] == "chat":
+                if row["item"] in shown:
+                    continue
+                shown.add(row["item"])
+            rows.append(row)
+            if len(rows) > body.limit:
+                break
+    finally:
+        found.close()
     items = []
     for row in rows[:body.limit]:
         snippet = ""
