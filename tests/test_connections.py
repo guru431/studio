@@ -15,7 +15,7 @@ import manage
 import sections
 import state
 import upstream
-from conftest import add_connection, add_gateway, make_user, signin
+from conftest import add_connection, add_gateway, make_user, set_passport, signin, stored_passport
 from fakes import FakeGateway
 
 GW = "http://10.77.1.15:4000"
@@ -489,10 +489,10 @@ def test_patch_drops_the_passport_on_address_kind_or_token(studio):
     for change, kept in [({"name": "Новое"}, True), ({"sections": ["chat"]}, True), ({"token": "fresh-key-1"}, False),
                          ({"base_url": GW16 + "/v1", "token": "k16-key-1"}, False),
                          ({"kind": "srvllm", "base_url": GW16, "token": "k16-key-2"}, False)]:
-        connections.save_passport(cid, stamp)
+        set_passport(cid, stamp)
         r = studio.c.patch(f"/api/connections/{cid}", json=change)
         assert r.status_code == 200, change
-        assert (r.json()["passport"] == stamp) is kept and (connections.passport_of(cid) == stamp) is kept, change
+        assert (r.json()["passport"] == stamp) is kept and (stored_passport(cid) == stamp) is kept, change
 
 
 def test_admin_mirrors_carry_no_passport(studio):
@@ -500,7 +500,7 @@ def test_admin_mirrors_carry_no_passport(studio):
     base = f"/api/admin/users/{bob}/connections"
     cid = studio.c.post(base, json={"name": "gw", "kind": "srvllm", "base_url": GW, "token": "bob-gateway-key",
                                     "sections": ["photo"]}).json()["id"]
-    connections.save_passport(cid, {"checked": 1.0, "source": "server", "profile": "srvllm", "routes": [],
+    set_passport(cid, {"checked": 1.0, "source": "server", "profile": "srvllm", "routes": [],
                                     "models": [], "probes": {}})
     answers = [studio.c.get(base).json()["items"][0], studio.c.patch(f"{base}/{cid}", json={"name": "x"}).json(),
                studio.c.get(f"/api/admin/users/{bob}/sections").json()["sections"][1]["links"][0]["connection"],

@@ -145,13 +145,34 @@ def dropped(conn: Connection) -> bool:
     return not conn.proxied and (conn.server_only or conn.kind == "srvllm" or not _direct_ok(conn.base_url))
 
 
-def passport_of(conn_id: int) -> dict | None:
-    row = state.DB.execute("SELECT passport FROM connections WHERE id = ?", (conn_id,)).fetchone()
+def passport_of(conn: Connection) -> dict | None:
+    row = state.DB.execute("SELECT passport FROM connections WHERE id = ? AND user_id = ?",
+                           (conn.id, conn.user_id)).fetchone()
     return json.loads(row["passport"]) if row is not None and row["passport"] else None
 
 
-def save_passport(conn_id: int, passport: dict) -> None:
-    state.DB.execute("UPDATE connections SET passport = ? WHERE id = ?", (json.dumps(passport, ensure_ascii=False), conn_id))
+#: строка подключения, какой её видела проверка: id, владелец, вид, адрес и ключ (шифром)
+_SAME = "id = ? AND user_id = ? AND kind = ? AND base_url = ? AND token_enc IS ?"
+
+
+def snapshot(conn: Connection) -> tuple:
+    """Снимок для паспорта: проверка ждёт ответа до десятков секунд, а за это время токен могли сменить
+    (паспорт обнулён), подключение — удалить, а его id — отдать новому подключению другого пользователя."""
+    row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ? AND user_id = ?",
+                           (conn.id, conn.user_id)).fetchone()
+    return conn.id, conn.user_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None
+
+
+def passport_at(snap: tuple) -> dict | None:
+    """Паспорт строки, если она всё ещё та, что в снимке; иначе None."""
+    row = state.DB.execute(f"SELECT passport FROM connections WHERE {_SAME}", snap).fetchone()
+    return json.loads(row["passport"]) if row is not None and row["passport"] else None
+
+
+def save_passport(snap: tuple, passport: dict) -> bool:
+    """Записать паспорт только той же строке, что в снимке; False — подключение изменили или удалили."""
+    return state.DB.execute(f"UPDATE connections SET passport = ? WHERE {_SAME}",
+                            (json.dumps(passport, ensure_ascii=False), *snap)).rowcount == 1
 
 
 def out(conn: Connection, passport: bool = True) -> dict:
@@ -162,7 +183,7 @@ def out(conn: Connection, passport: bool = True) -> dict:
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
             "dropped": dropped(conn), "token_hint": hint}
     if passport:
-        item["passport"] = passport_of(conn.id)
+        item["passport"] = passport_of(conn)
     return item
 
 

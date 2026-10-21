@@ -82,8 +82,9 @@ def model_entry(raw) -> "dict | None":
 
 def models(kind: str, listed: list[dict], slot_ids: "list[str] | None", limit: int) -> list[dict]:
     """Модели паспорта: из `/models` (`listed` — записи model_entry), у srvllm — ещё перечень (модель
-    картинок или ролика, чьего id нет в ответившем `/slot/models`, — `absent`) и прочие id шлюза."""
-    out = {m["id"]: m for m in listed}
+    картинок или ролика, чьего id нет в ответившем `/slot/models`, — `absent`) и прочие id шлюза. Предел
+    режет только список сервиса: перечень srvllm длинный ответ не вытеснит."""
+    out = {m["id"]: m for m in listed[:limit]}
     if kind == "srvllm":
         for name, found in CATALOG_CAPS.items():
             entry = {"id": name, "caps": _caps(found, "catalog")}
@@ -94,18 +95,23 @@ def models(kind: str, listed: list[dict], slot_ids: "list[str] | None", limit: i
             for model, found in SLOT_CAPS.items():
                 out.setdefault(model, {"id": model, "caps": []})["caps"] += _caps(found, "catalog")
             known = set(GATEWAY_IDS.values())
-            for gid in slot_ids:
+            for gid in slot_ids[:limit]:
                 if gid not in known:
                     out.setdefault(gid, {"id": gid, "caps": []})
-    return list(out.values())[:limit]
+    return list(out.values())
+
+
+def _probed(probe: dict) -> str:
+    """Источник возможности по пробе: сервер — `probe`, браузер (его слова) — `probe_browser`."""
+    return "probe_browser" if probe.get("source") == "browser" else "probe"
 
 
 def with_probes(entries: list[dict], probes: dict) -> list[dict]:
-    """Пробный ответ прошёл — у модели возможность `chat` с источником `probe`."""
+    """Пробный ответ прошёл — у модели возможность `chat` с источником `probe` (или `probe_browser`)."""
     for entry in entries:
-        entry["caps"] = [c for c in entry["caps"] if c["source"] != "probe"]
+        entry["caps"] = [c for c in entry["caps"] if c["source"] not in ("probe", "probe_browser")]
         if (probes.get(entry["id"]) or {}).get("ok"):
-            entry["caps"].append({"name": "chat", "source": "probe"})
+            entry["caps"].append({"name": "chat", "source": _probed(probes[entry["id"]])})
     have = {e["id"] for e in entries}
-    return entries + [{"id": m, "caps": [{"name": "chat", "source": "probe"}]}
+    return entries + [{"id": m, "caps": [{"name": "chat", "source": _probed(p)}]}
                       for m, p in probes.items() if p.get("ok") and m not in have]

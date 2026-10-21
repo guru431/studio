@@ -58,8 +58,12 @@ def _down(e: httpx.HTTPError, seconds: int = CHECK_TIMEOUT_SEC) -> str:
 
 def refused_words(e: upstream.UpstreamRefused, conn) -> str:
     if isinstance(e, upstream.ConnectionChanged):
-        return "подключение изменено — откройте заново"
+        return "подключение удалено — откройте заново" if e.deleted else "подключение изменено — откройте заново"
     return upstream.refused_words(e, conn)
+
+
+#: 401 и 403 — своими словами, без текста сервиса: бывает, что он повторяет часть ключа
+KEY_WORDS = {401: "не принят (401): введите токен заново", 403: "принят, маршрут закрыт (403)"}
 
 
 def key_of(response: httpx.Response) -> dict:
@@ -67,12 +71,12 @@ def key_of(response: httpx.Response) -> dict:
     if code == 200:
         return {"state": "accepted", "code": code, "words": "принят"}
     if code == 401:
-        return {"state": "refused", "code": code, "words": "не принят (401): введите токен заново"}
+        return {"state": "refused", "code": code, "words": KEY_WORDS[401]}
     if code == 403:
-        return {"state": "limited", "code": code, "words": "принят, маршрут закрыт (403)"}
+        return {"state": "limited", "code": code, "words": KEY_WORDS[403]}
     reason = upstream.message(response)
     return {"state": "unknown", "code": code,
-            "words": f"неясно: сервис ответил {code}" + (f" — {reason}" if reason else "")[:WORDS_MAX]}
+            "words": (f"неясно: сервис ответил {code}" + (f" — {reason}" if reason else ""))[:WORDS_MAX]}
 
 
 UNVERIFIED = {"state": "unverified", "code": 200,
@@ -136,7 +140,7 @@ def found_of(conn, chat: "list[str] | None", slot_ids: "list[str] | None", liste
     for section in sections.sections_of(conn.user_id, conn.id):
         if conn.kind == "srvllm" and section in sections.CATALOG:
             if slot_ids is not None and section in ("photo", "video"):
-                out[section] = [m for m in sections.CATALOG[section] if capabilities.GATEWAY_IDS[m] in slot_ids]
+                out[section] = [m for m in sections.CATALOG[section] if capabilities.GATEWAY_IDS.get(m) in slot_ids]
         elif conn.kind == "srvllm":
             if chat is not None:
                 out[section] = chat
@@ -145,13 +149,20 @@ def found_of(conn, chat: "list[str] | None", slot_ids: "list[str] | None", liste
     return out
 
 
+def _probes(snap: tuple) -> dict:
+    """Пробы паспорта — читаются перед самой записью (после ожиданий): проба, кончившаяся во время
+    проверки, не теряется."""
+    return (connections.passport_at(snap) or {}).get("probes") or {}
+
+
 async def check(conn) -> dict:
-    """Проверка через сервер: `{"passport", "found"}`; паспорт сохраняется в подключении."""
-    probes = (connections.passport_of(conn.id) or {}).get("probes") or {}
+    """Проверка через сервер: `{"passport", "found"}`; паспорт сохраняется в подключении, если оно за время
+    проверки не изменилось (снимок connections.snapshot), иначе 409 `changed`."""
+    snap = connections.snapshot(conn)
     if connections.dropped(conn):
         words = refused_words(upstream.UpstreamRefused("убран"), conn)
         routes = [_row(u) | {"reach": {"ok": False, "words": words}, "key": None} for u in _urls(conn)]
-        return _save(conn, passport(conn, "server", routes, [], probes), {})
+        return _save(conn, snap, passport(conn, "server", routes, [], _probes(snap)), {})
     if not conn.proxied:
         raise HTTPException(409, {"code": "direct", "message": "прямое подключение проверяет браузер"})
     urls = _urls(conn)
@@ -176,11 +187,17 @@ async def check(conn) -> dict:
             routes.append((await _route(conn, url))[0])
     ids = None if listed is None else [m["id"] for m in listed]
     models = capabilities.models(conn.kind, listed or [], slot_ids, MODELS_MAX)
-    return _save(conn, passport(conn, "server", routes, models, probes), found_of(conn, ids, slot_ids, ids))
+    return _save(conn, snap, passport(conn, "server", routes, models, _probes(snap)),
+                 found_of(conn, ids, slot_ids, ids))
 
 
-def _save(conn, built: dict, found: dict) -> dict:
-    connections.save_passport(conn.id, built)
+def _changed() -> HTTPException:
+    return HTTPException(409, {"code": "changed", "message": "подключение изменено, пока шла проверка — проверьте заново"})
+
+
+def _save(conn, snap: tuple, built: dict, found: dict) -> dict:
+    if not connections.save_passport(snap, built):
+        raise _changed()
     log.info("пользователь %d: подключение %d — проверка %s", conn.user_id, conn.id, outcome(built["routes"]))
     return {"passport": built, "found": found}
 
@@ -196,16 +213,19 @@ def _checked_model(conn, model: str) -> None:
         raise HTTPException(422, {"code": "model", "message": "пробный ответ — только у отмеченной модели чата"})
 
 
-def _with_probes(conn, source: str, fresh: dict) -> dict:
-    """Пробы — в паспорт подключения; паспорта нет — паспорт без проверки (`checked` None)."""
-    base = connections.passport_of(conn.id) or {"checked": None, "source": source,
-                                                "profile": capabilities.profile(conn), "routes": [], "models": [],
-                                                "probes": {}}
+def _with_probes(conn, snap: tuple, source: str, fresh: dict) -> dict:
+    """Пробы — в паспорт подключения (той же строки, что в снимке); паспорта нет — паспорт без проверки
+    (`checked` None)."""
+    base = connections.passport_at(snap) or {"checked": None, "source": source,
+                                             "profile": capabilities.profile(conn), "routes": [], "models": [],
+                                             "probes": {}}
     probes = {**(base.get("probes") or {}), **fresh}
     return base | {"probes": probes, "models": capabilities.with_probes(base["models"], probes)}
 
 
 def _refusal(r: httpx.Response) -> str:
+    if r.status_code in KEY_WORDS:
+        return f"не ответила: ключ {KEY_WORDS[r.status_code]}"
     reason = upstream.message(r)
     return f"не ответила: код {r.status_code}" + (f" — {reason}" if reason else "")
 
@@ -219,7 +239,11 @@ async def probe(conn, model: str) -> dict:
         raise connections.refused(conn, upstream.UpstreamRefused("убран"))
     if not conn.proxied:
         raise HTTPException(409, {"code": "direct", "message": "пробный ответ прямого подключения отправляет браузер"})
+    if model.startswith(sections.LOCAL_PREFIX):
+        # роль local-* шлюза, к которому ходят как к OpenAI-совместимому: та же аренда карты, что у srvllm
+        raise HTTPException(409, {"code": "srvllm", "message": "у роли local-* пробного ответа нет: он занял бы карту srvllm"})
     _checked_model(conn, model)
+    snap = connections.snapshot(conn)
     body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], "max_tokens": PROBE_TOKENS,
             "stream": False}
     start = clock.NOW()
@@ -238,8 +262,9 @@ async def probe(conn, model: str) -> dict:
         result = {"ok": r.status_code == 200, "ms": ms,
                   "words": f"ответила за {ms} мс" if r.status_code == 200 else _refusal(r)[:WORDS_MAX]}
     result |= {"at": clock.NOW(), "source": "server"}
-    built = _with_probes(conn, "server", {model: result})
-    connections.save_passport(conn.id, built)
+    built = _with_probes(conn, snap, "server", {model: result})
+    if not connections.save_passport(snap, built):
+        raise _changed()
     log.info("пользователь %d: подключение %d — пробный ответ %s", conn.user_id, conn.id,
              "ok" if result["ok"] else "отказ")
     return {"passport": built, "probe": result}
@@ -264,7 +289,7 @@ class KeyIn(BaseModel):
 
 
 class RouteIn(BaseModel):
-    path: str = Field(max_length=capabilities.ID_MAX)
+    path: str = Field(max_length=connections.URL_MAX)        # путь прямого адреса бывает длинным
     ms: int | None = Field(None, ge=0, le=3_600_000)
     status: int | None = Field(None, ge=100, le=599)
     count: int | None = Field(None, ge=0, le=1_000_000)
@@ -309,17 +334,19 @@ def put_passport(conn, body: PassportIn) -> dict:
         _checked_model(conn, model)
     fresh = {m: p.model_dump() | {"at": clock.NOW(), "source": "browser"} for m, p in (body.probes or {}).items()}
     found = {}
+    snap = connections.snapshot(conn)
     if body.routes is None and body.models is None:
-        built = _with_probes(conn, "browser", fresh)
+        built = _with_probes(conn, snap, "browser", fresh)
     else:
-        probes = {**((connections.passport_of(conn.id) or {}).get("probes") or {}), **fresh}
+        probes = {**_probes(snap), **fresh}
         listed = [capabilities.model_entry(m.model_dump(exclude_none=True)) for m in body.models or []]
         built = passport(conn, "browser", [r.model_dump() for r in body.routes or []],
                          capabilities.models(conn.kind, listed, None, MODELS_MAX), probes)
         if body.models is not None:
             ids = [m["id"] for m in listed]
             found = found_of(conn, ids, None, ids)
-    connections.save_passport(conn.id, built)
+    if not connections.save_passport(snap, built):
+        raise _changed()
     log.info("пользователь %d: подключение %d — проверка браузером %s", conn.user_id, conn.id,
              outcome(built["routes"]) if body.routes is not None else "пробный-ответ")
     return {"passport": built, "found": found}

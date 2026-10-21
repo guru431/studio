@@ -145,6 +145,21 @@ def signin(s, login_name) -> str:
     return csrf
 
 
+def stored_passport(cid: int) -> "dict | None":
+    """Паспорт подключения прямо из базы (как он записан)."""
+    import json
+    import state
+    row = state.DB.execute("SELECT passport FROM connections WHERE id = ?", (cid,)).fetchone()
+    return json.loads(row[0]) if row is not None and row[0] else None
+
+
+def set_passport(cid: int, passport: dict) -> None:
+    """Записать паспорт прямо в базу — исходное состояние теста."""
+    import json
+    import state
+    state.DB.execute("UPDATE connections SET passport = ? WHERE id = ?", (json.dumps(passport), cid))
+
+
 def add_connection(s, kind="openai", base_url="https://cloud.test/v1", token="cloud-key", sections=None,
                    name=None, chat_models=("local-gemma-abl",)) -> int:
     """Подключение текущему пользователю через POST /api/connections (без входа — заводит

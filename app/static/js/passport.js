@@ -27,7 +27,7 @@ const CAPS = { generate: 'генерация', edit: 'правка', mask: 'ки
   tts: 'озвучка голосом по имени', describe: '«Описать»', translate: '«EN»', vision: 'смотрит фото',
   chat: 'отвечает' };
 const SOURCES = { catalog: 'встроенный перечень srvllm', metadata: 'по описанию модели у сервиса',
-  name: 'по названию, не проверено', probe: 'пробный ответ' };
+  name: 'по названию, не проверено', probe: 'пробный ответ', probe_browser: 'пробный ответ, по словам браузера' };
 const PROFILES = { srvllm: 'шлюз srvllm', openai: 'OpenAI', openrouter: 'OpenRouter', compatible: 'OpenAI-совместимый' };
 const NOT_GATEWAY = 'нет кисти, силы, seed, «Описать», «EN», роликов и образцов голоса; расшифровка — без собеседников';
 const KEY_ORDER = ['refused', 'accepted', 'limited', 'unverified', 'unknown'];

@@ -10,7 +10,7 @@ import capabilities
 import connections
 import state
 import upstream
-from conftest import add_connection, add_gateway, make_user, signin
+from conftest import add_connection, add_gateway, make_user, set_passport, signin, stored_passport
 from fakes import FakeGateway
 
 GW = "http://10.77.1.15:4000"
@@ -228,11 +228,65 @@ def test_profiles():
     assert capabilities.profile(c("openai", GW + "/v1")) == "compatible"
 
 
+#: openai-подключение к адресу шлюза с отмеченной облачной ролью: пробный ответ ей можно (local-* — нельзя)
+CLOUD_ROLE = "gemma4-abl"
+
+
+def gateway_as_openai(studio, token=FakeGateway.TOKEN):
+    return add_connection(studio, base_url=GW + "/v1", token=token, chat_models=(CLOUD_ROLE,))
+
+
 def test_new_check_keeps_earlier_probes(studio):
-    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
-    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).status_code == 200
+    cid = gateway_as_openai(studio)
+    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).status_code == 200
     p = check(studio, cid).json()["passport"]
-    assert p["probes"]["local-gemma-abl"]["ok"] and ("chat", "probe") in caps(by_id(p)["local-gemma-abl"])
+    assert p["probes"][CLOUD_ROLE]["ok"] and ("chat", "probe") in caps(by_id(p)[CLOUD_ROLE])
+
+
+def test_check_reads_the_probes_right_before_it_saves(studio):
+    """Проба, кончившаяся, пока проверка ждала ответа, не теряется: пробы читаются перед записью."""
+    cid = gateway_as_openai(studio)
+
+    async def meanwhile(request):
+        set_passport(cid, {"checked": None, "source": "server", "profile": "compatible", "routes": [], "models": [],
+                           "probes": {CLOUD_ROLE: {"ok": True, "ms": 5, "words": "ответила за 5 мс", "at": 1.0,
+                                                   "source": "server"}}})
+        return httpx.Response(200, json={"data": [{"id": CLOUD_ROLE}]})
+    studio.gw.on["/v1/models"] = meanwhile
+    p = check(studio, cid).json()["passport"]
+    assert p["probes"][CLOUD_ROLE]["ok"] and stored_passport(cid)["probes"] == p["probes"]
+
+
+def test_check_does_not_save_onto_a_connection_changed_meanwhile(studio):
+    """Новый токен, пока шла проверка, обнулил паспорт — итог старым ключом не возвращается: 409."""
+    cid = add_gateway(studio)
+
+    async def retoken(request):                       # как connections.patch с новым токеном: ключ и обнуление
+        import security
+        state.DB.execute("UPDATE connections SET token_enc = ?, passport = NULL WHERE id = ?",
+                         (security.encrypt("fresh-key-12345"), cid))
+        return httpx.Response(200, json={"data": [{"id": "local-gemma-abl"}]})
+    studio.gw.on["/v1/models"] = retoken
+    r = check(studio, cid)
+    assert r.status_code == 409 and code(r) == "changed"
+    assert stored_passport(cid) is None
+
+
+def test_check_of_a_deleted_connection_never_lands_on_anothers(studio):
+    """Подключение удалили, пока шла проверка, а его id занял новый чужой — паспорт ему не достаётся."""
+    owner = make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
+    cid = add_gateway(studio)
+
+    async def swap(request):
+        state.DB.execute("DELETE FROM connections WHERE id = ?", (cid,))
+        state.DB.execute("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
+                         " SELECT ?, ?, 'b', 'srvllm', ?, token_enc, '[]', 0 FROM (SELECT x'00' AS token_enc)",
+                         (cid, bob, GW))
+        return httpx.Response(200, json={"data": []})
+    studio.gw.on["/v1/models"] = swap
+    r = check(studio, cid)
+    assert r.status_code == 409 and code(r) == "changed"
+    assert stored_passport(cid) is None and owner != bob
 
 
 # ---- паспорт браузера --------------------------------------------------------------
@@ -277,7 +331,7 @@ def test_browser_passport_limits(studio, body):
     cid = add_connection(studio)
     r = put(studio, cid, body)
     assert r.status_code == 422, body
-    assert connections.passport_of(cid) is None
+    assert stored_passport(cid) is None
 
 
 def test_browser_passport_only_for_a_direct_connection(studio):
@@ -298,7 +352,7 @@ def test_browser_probe_merges_into_the_passport(studio):
     assert p["routes"] == [route()] and p["source"] == "browser"
     assert p["probes"]["local-gemma-abl"] == {"ok": True, "ms": 120, "words": "ответила за 120 мс",
                                               "at": pytest.approx(studio.clock[0]), "source": "browser"}
-    assert caps(by_id(p)["local-gemma-abl"]) == {("chat", "probe")}
+    assert caps(by_id(p)["local-gemma-abl"]) == {("chat", "probe_browser")}     # слова браузера — так и подписаны
     r = put(studio, cid, {"probes": {"not-checked": {"ok": True, "ms": 1, "words": "ok"}}})
     assert r.status_code == 422 and code(r) == "model"
 
@@ -307,22 +361,22 @@ def test_browser_probe_merges_into_the_passport(studio):
 
 def test_probe_sends_one_short_message(studio, caplog):
     caplog.set_level(logging.DEBUG)
-    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
-    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"})
+    cid = gateway_as_openai(studio)
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE})
     assert r.status_code == 200
     body, = studio.gw.chat_requests
-    assert body == {"model": "local-gemma-abl", "messages": [{"role": "user", "content": "Ответь одним словом: ok"}],
+    assert body == {"model": CLOUD_ROLE, "messages": [{"role": "user", "content": "Ответь одним словом: ok"}],
                     "max_tokens": 16, "stream": False}
     probe = r.json()["probe"]
     assert probe["ok"] and probe["words"].startswith("ответила за ") and probe["source"] == "server"
-    assert r.json()["passport"]["probes"]["local-gemma-abl"] == probe
+    assert r.json()["passport"]["probes"][CLOUD_ROLE] == probe
     assert r.json()["passport"]["checked"] is None                     # проверки не было — только проба
-    assert ("chat", "probe") in caps(by_id(connections.passport_of(cid))["local-gemma-abl"])
+    assert ("chat", "probe") in caps(by_id(stored_passport(cid))[CLOUD_ROLE])
     assert "Ответь" not in caplog.text and "gemma" not in caplog.text and "192.168" not in caplog.text
 
 
 def test_probe_retries_with_max_completion_tokens(studio):
-    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+    cid = gateway_as_openai(studio)
     seen = []
 
     async def picky(request):
@@ -332,34 +386,71 @@ def test_probe_retries_with_max_completion_tokens(studio):
             return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'max_tokens'"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
     studio.gw.on["/v1/chat/completions"] = picky
-    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).json()["probe"]
+    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).json()["probe"]
     assert len(seen) == 2 and seen[1]["max_completion_tokens"] == 16 and "max_tokens" not in seen[1]
     assert probe["ok"]                                                  # пустой текст — тоже ответ
 
 
 def test_probe_failure_is_told(studio):
-    cid = add_connection(studio, base_url=GW + "/v1", token="wrong-key-123")
-    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).json()["probe"]
+    cid = gateway_as_openai(studio, token="wrong-key-123")
+    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).json()["probe"]
     assert not probe["ok"] and "401" in probe["words"]
-    assert by_id(connections.passport_of(cid)) == {}
+    assert by_id(stored_passport(cid)) == {}
+
+
+def test_probe_refusal_of_the_key_is_told_without_the_services_text(studio):
+    """401/403 пробы — своими словами: бывает, что текст сервиса повторяет часть ключа."""
+    cid = gateway_as_openai(studio)
+    async def refused(request):
+        return httpx.Response(401, json={"error": {"message": "Incorrect API key provided: sk-abc***wxyz"}})
+    studio.gw.on["/v1/chat/completions"] = refused
+    probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).json()["probe"]
+    assert not probe["ok"] and "401" in probe["words"] and "sk-" not in probe["words"]
 
 
 def test_probe_is_refused_where_it_must_not_go(studio):
     gw = add_gateway(studio)
     r = studio.c.post(f"/api/connections/{gw}/probe", json={"model": "local-gemma-abl"})
     assert r.status_code == 409 and code(r) == "srvllm"
-    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
-    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "gemma4-abl"})     # не отмечена
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN, chat_models=("local-gemma-abl", CLOUD_ROLE))
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"})   # роль на карте srvllm
+    assert r.status_code == 409 and code(r) == "srvllm"
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "other-role"})        # не отмечена
     assert r.status_code == 422 and code(r) == "model"
     direct = add_connection(studio)
     r = studio.c.post(f"/api/connections/{direct}/probe", json={"model": "local-gemma-abl"})
     assert r.status_code == 409 and code(r) == "direct"
     allow()
-    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"})
+    r = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE})
     assert r.status_code == 409 and code(r) == "refused"
     assert studio.gw.requests == []
     make_user(studio, "bob"); signin(studio, "bob")
-    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": "local-gemma-abl"}).status_code == 404
+    assert studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).status_code == 404
+
+
+def test_unknown_answer_words_stay_within_the_limit():
+    import checks
+    r = httpx.Response(418, json={"error": {"message": "x" * 400}}, request=httpx.Request("GET", GW + "/v1/models"))
+    assert len(checks.key_of(r)["words"]) <= checks.WORDS_MAX
+
+
+def test_browser_route_of_a_long_direct_address_is_accepted(studio):
+    cid = add_connection(studio, base_url="https://cloud.test/" + "p" * 400 + "/v1")
+    assert put(studio, cid, {"routes": [route(path="/" + "p" * 400 + "/v1/models")]}).status_code == 200
+
+
+def test_a_long_service_list_does_not_push_the_srvllm_catalog_out():
+    listed = [{"id": f"m{i}", "caps": []} for i in range(10)]
+    ids = {m["id"] for m in capabilities.models("srvllm", listed, None, 5)}
+    assert set(capabilities.CATALOG_CAPS) <= ids and len(ids - set(capabilities.CATALOG_CAPS)) == 5
+
+
+def test_shared_client_keeps_no_cookies_of_the_services():
+    """Клиент один на всех пользователей: cookie ответа одного не уходит с запросами других."""
+    client = state.make_http()
+    request = httpx.Request("GET", GW + "/v1/models")
+    client.cookies.extract_cookies(httpx.Response(200, headers={"set-cookie": "__cf_bm=abc; Path=/"}, request=request))
+    assert not client.cookies
 
 
 def test_check_logs_only_the_id_and_the_outcome(studio, caplog):
