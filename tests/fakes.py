@@ -99,6 +99,7 @@ class FakeGateway:
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
+        self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
         self.asr_requests = []           # запросы распознавания (asr, transcriptions, lite)
         self.asr_replies = []            # (код, тело) по очереди, затем — (200, asr_reply)
         self.asr_reply = {"text": "распознано", "language": "ru", "segments": [
@@ -173,8 +174,10 @@ class FakeGateway:
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n".encode()
                 while i == 0 and self.chat_hold:
                     await asyncio.sleep(0.001)
-            yield b'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\n'
-            yield b"data: [DONE]\n\n"
+            if self.chat_ending is not None:
+                end = {"choices": [{"index": 0, "delta": {}, "finish_reason": self.chat_ending}]}
+                yield f"data: {json.dumps(end)}\n\n".encode()
+                yield b"data: [DONE]\n\n"
 
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=chunks())
 
@@ -253,6 +256,7 @@ class FakeCloud:
         self.chat_auth = []              # их заголовки авторизации
         self.models_auth = []            # заголовки авторизации /v1/models
         self.chunk_pause = 0.05          # пауза между кусками: браузер видит поток, а не готовый ответ
+        self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
         cloud = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -312,8 +316,10 @@ class FakeCloud:
                     self.wfile.write(f"data: {json.dumps(delta, ensure_ascii=False)}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(cloud.chunk_pause)
-                self.wfile.write(b'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\n')
-                self.wfile.write(b"data: [DONE]\n\n")
+                if cloud.chat_ending is not None:
+                    end = {"choices": [{"index": 0, "delta": {}, "finish_reason": cloud.chat_ending}]}
+                    self.wfile.write(f"data: {json.dumps(end)}\n\n".encode())
+                    self.wfile.write(b"data: [DONE]\n\n")
 
             def log_message(self, *_args):
                 pass

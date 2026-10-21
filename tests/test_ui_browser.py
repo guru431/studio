@@ -880,6 +880,32 @@ def test_direct_stop_aborts_and_saves_the_partial_answer(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_direct_stream_without_an_ending_is_saved_as_cut(browser, live):
+    """Прямое подключение: поток кончился без [DONE] и finish_reason — ответ оборван, а не готов;
+    finish_reason `length` — обрезан пределом длины модели (аудит). Прочитанное сохраняется ошибкой."""
+    import chat
+    seen = {}
+    for name, ending in (("eof", None), ("length", "length")):
+        live.add_user(f"cloudcut-{name}")
+        live.cloud.chat_ending = ending
+        try:
+            r = browser.drive(live.url + "/", [*signin(f"cloudcut-{name}"), ("wait", READY), add_cloud(live.cloud),
+                *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+                ("type", "#chat-input", "Скажи"), ("press", "Enter"), ("wait", ANSWERED),
+                ("eval", "meta", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+                ("eval", "saved", SAVED),
+                ("eval", "out", "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")])   # следующий проход — вход
+        finally:
+            live.cloud.chat_ending = "stop"
+        assert not r.get("failed"), r
+        assert not problems(r), problems(r)
+        seen[name] = r["values"]["meta"], r["values"]["saved"]
+    assert seen["eof"] == ("Модель оборвала ответ: поток кончился без признака конца",
+                           ["assistant", "error", "Облако на связи."])
+    assert seen["length"] == ("Ответ обрезан пределом длины модели",
+                              ["assistant", "error", "Облако на связи." + chat.CUT_LENGTH])
+
+
 def test_chat_list_renames_and_deletes(browser, live):
     item = "document.querySelector('.chat-item[data-id=\"' + window.made + '\"]')"
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
