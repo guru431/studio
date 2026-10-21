@@ -15,6 +15,7 @@
  * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело). */
 import { api, loadMe, me } from './api.js';
 import { installLock } from './lock.js';
+import { cancelRecording } from './mic.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -194,6 +195,7 @@ async function render() {
       notice('wait', 'Раздел не загрузился. Проверьте связь и обновите страницу.', 'empty')); }, unmount() {} };
   }
   if (mine !== renders) return;
+  cancelRecording();                            // запись голоса прежнего раздела не переживает его
   if (current) current.module.unmount();
   view.replaceChildren();
   current = { section: route.section, module };

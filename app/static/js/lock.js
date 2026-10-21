@@ -10,16 +10,28 @@
  * студии шторка не снимается никогда. Любой ответ 423 ждёт одного общего отпирания (api.js
  * hooks.locked) и повторяется.
  * Шторка и экран — <dialog> через showModal: поверх открытых окон просмотра, остальное — inert;
- * Escape их не закрывает (cancel отменён, а закрытое силой окно открывается снова).
+ * Escape их не закрывает (cancel отменён, closedby="none", а закрытое силой окно открывается снова);
+ * пока заперто или под шторкой, <html class="shrouded"> прячет оболочку и в миг до нового showModal.
+ * Отметка без ответа дольше MARK_SEC — как без связи. Под шторкой запись голоса отменяется
+ * (mic.js), при запирании плееры встают на паузу; после отпирания картинки и плееры /api/media/…,
+ * получившие 423 мимо api.js, грузятся заново. CSRF до профиля — из GET /api/lock; не пришёл
+ * (холодный старт без связи) — подготовка входа и пароль берут его заново.
  *
  * iOS 16+: без PublicKeyCredential.parse*FromJSON и toJSON (они с iOS 18.4) — свои base64url.
  * navigator.credentials.* зовётся прямо в обработчике нажатия, без ожидания сети перед ним: Safari
- * иначе теряет «нажатие» и Face ID не показывает. Поэтому варианты (options) готовят заранее. */
+ * иначе теряет «нажатие» и Face ID не показывает. Поэтому варианты (options) готовят заранее и
+ * заново, пока они не старше FRESH_SEC (вызов на сервере живёт 120 с): по таймеру отметок и при
+ * возвращении на экран, а не по нажатию. Пока готовятся или идёт вызов устройства, «Открыть»
+ * выключена («Готовлю…»), а подготовки не начинаются: новый вызов заменил бы подписываемый. */
 import { api, hooks, loadMe, me, useCsrf } from './api.js';
+import { cancelRecording } from './mic.js';
 import { words } from './ui.js';
 
 const AWAY_SEC = 60;
 const ALIVE_SEC = 15;
+const MARK_SEC = 8;
+/** Вызов passkey живёт на сервере 120 с (screenlock.CHALLENGE_SEC): варианты старше — готовить заново. */
+export const FRESH_SEC = 100;
 
 /** Основной указатель — палец: телефон или планшет (не User-Agent: его меняет «версия для ПК»). */
 export function isTouch() {
@@ -101,29 +113,50 @@ let waiting = null;      // { promise, resolve }: одно ожидание от
 let covering = false;
 let hiddenAt = null;     // Date.now() ухода с экрана под шторку
 let keys = false;
+let token = false;       // CSRF сессии взят из GET /api/lock (профиля может ещё не быть)
 let options = null;      // варианты входа passkey — готовы до нажатия «Открыть»
-let prepared = 0;        // номер последней подготовки: поздний ответ прежней не перебьёт новую
+let optionsAt = 0;       // Date.now() их выдачи
+let preparing = null;    // идущая подготовка: нажатия и возвращения её не перезапускают
+let calling = false;     // идёт navigator.credentials.get и его проверка: нажатия и подготовки — мимо
 
 function say(text, kind) {
   note.textContent = text || '';
   note.classList.toggle('error', kind === 'error');
 }
 
+/** Пока заперто или под шторкой — <html class="shrouded">: содержимое скрыто (app.css) и в миг между
+ * закрытием окна силой и его открытием снова. */
+function shroud() {
+  document.documentElement.classList.toggle('shrouded', covering || !!waiting);
+}
+
 function cover(on) {
   covering = on;
+  if (on) cancelRecording();           // ушла с экрана — микрофон не слушает под шторкой
   if (on && !curtain.open) curtain.showModal();
   else if (!on && curtain.open) curtain.close();
+  shroud();
 }
 
 function guarded() {
   return isTouch() && !!me && !!me.screen_lock;
 }
 
-/** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи. */
+/** Состояние блокировки и с ним CSRF сессии. */
+async function lockState() {
+  const state = await api('GET', '/api/lock');
+  useCsrf(state.csrf);
+  token = true;
+  return state;
+}
+
+/** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи
+ * или ответа нет дольше MARK_SEC (у fetch своего срока нет, iOS ждёт минуту и больше). */
 async function mark() {
   if (waiting) return null;
   try {
-    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch() });
+    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch() },
+      { signal: AbortSignal.timeout(MARK_SEC * 1000) });
     if (locked) waitOpen();
     return locked;
   } catch {
@@ -131,17 +164,38 @@ async function mark() {
   }
 }
 
-async function prepare() {
-  const mine = ++prepared;
-  options = null;
-  delete openButton.dataset.ready;
+/** Варианты свежие: вызов на сервере проживёт ещё хотя бы 20 с. */
+function fresh() {
+  return !!options && Date.now() - optionsAt < FRESH_SEC * 1000;
+}
+
+/** «Открыть»: «Готовлю…» и выключена, пока готовятся варианты или идёт вызов; data-ready — варианты готовы. */
+function paintOpen() {
+  openButton.disabled = !!preparing || calling;
+  openButton.textContent = preparing ? 'Готовлю…' : 'Открыть';
+  if (options && !preparing && !calling) openButton.dataset.ready = '1';
+  else delete openButton.dataset.ready;
+}
+
+/** Новые варианты входа. Идущую подготовку не перезапускает, во время вызова устройства — ничего:
+ * новый вызов на сервере заменил бы тот, что подписывает устройство, и ответ получил бы отказ. */
+function prepare() {
+  if (!calling && !preparing) {
+    options = null;
+    preparing = load().finally(() => {
+      preparing = null;
+      paintOpen();
+    });
+  }
+  paintOpen();
+}
+
+async function load() {
   try {
-    const ready = requestOptions(await api('POST', '/api/lock/challenge'));
-    if (mine !== prepared) return;
-    options = ready;
-    openButton.dataset.ready = '1';
+    if (!me && !token) await lockState();          // холодный старт без связи: CSRF ещё нет
+    options = requestOptions(await api('POST', '/api/lock/challenge'));
+    optionsAt = Date.now();
   } catch (err) {
-    if (mine !== prepared) return;
     if (err.code === 'no_keys') {      // ключи удалили на другом устройстве
       keys = false;
       offerPassword();
@@ -160,8 +214,10 @@ function offerPassword() {
  * прошёл, ответу «не заперто» не верить — иначе обрыв связи открыл бы студию без ключа. */
 async function showLock(lockNow) {
   say('');
+  cancelRecording();
+  for (const player of document.querySelectorAll('video, audio')) player.pause();
   options = null;
-  delete openButton.dataset.ready;
+  paintOpen();
   openButton.hidden = false;
   usePassword.hidden = false;
   passwordForm.hidden = true;
@@ -169,19 +225,18 @@ async function showLock(lockNow) {
   const trusted = lockNow ? await lockNow : true;
   let state;
   try {
-    state = await api('GET', '/api/lock');
+    state = await lockState();
   } catch (err) {
     keys = true;                       // неизвестно: «Открыть» попробует подготовить вход ещё раз
     say(words(err), 'error');
     return;
   }
-  useCsrf(state.csrf);
   if (!state.locked && trusted) {
     await opened();
     return;
   }
   keys = state.keys;
-  if (keys) await prepare();
+  if (keys) prepare();
   else offerPassword();
 }
 
@@ -189,9 +244,20 @@ function waitOpen(lockNow = null) {
   if (!waiting) {
     let resolve;
     waiting = { promise: new Promise((done) => { resolve = done; }), resolve };
+    shroud();
     showLock(lockNow);
   }
   return waiting.promise;
+}
+
+/** Картинки и плееры /api/media/…, получившие 423 во время блокировки (они идут мимо api.js), — заново. */
+function reloadMedia() {
+  for (const node of document.querySelectorAll('img, video, audio')) {
+    if (!(node.getAttribute('src') || '').startsWith('/api/media/')) continue;
+    if (node instanceof HTMLImageElement) {
+      if (node.complete && node.naturalWidth === 0) node.src = node.getAttribute('src');
+    } else if (node.error) node.load();
+  }
 }
 
 async function opened() {
@@ -202,37 +268,40 @@ async function opened() {
   } catch {
     // нет связи — профиль прежний
   }
-  if (!waiting) screen.close();
+  if (!waiting) {
+    screen.close();
+    reloadMedia();
+  }
   if (document.visibilityState === 'visible') cover(false);     // скрытая — под шторкой до возвращения
+  shroud();
   passwordInput.value = '';
   if (done) done.resolve();
 }
 
 async function openWithPasskey() {
+  if (calling || preparing) return;    // кнопка выключена; на случай нажатия, пришедшего раньше перерисовки
   if (!options) {                      // вариантов нет (не было связи) — готовим, нажать ещё раз
     say('');
     prepare();
     return;
   }
   const pending = navigator.credentials.get({ publicKey: options });   // сразу: до любого запроса (Safari)
+  calling = true;
   options = null;
-  delete openButton.dataset.ready;
+  paintOpen();
   say('');
-  let credential;
+  let credential = null;
   try {
     credential = await pending;
-  } catch {
-    say('Устройство не подтвердило — нажмите «Открыть» ещё раз', 'error');
-    prepare();
-    return;
-  }
-  try {
     await api('POST', '/api/lock/open', { credential: credentialJSON(credential) });
   } catch (err) {
-    say(words(err), 'error');
+    calling = false;
+    say(credential ? words(err) : 'Устройство не подтвердило — нажмите «Открыть» ещё раз', 'error');
     prepare();
     return;
   }
+  calling = false;
+  paintOpen();
   await opened();
 }
 
@@ -241,6 +310,7 @@ async function openWithPassword(event) {
   const go = document.getElementById('lock-password-go');
   go.disabled = true;
   try {
+    if (!me && !token) await lockState();          // холодный старт без связи: CSRF ещё нет
     await api('POST', '/api/lock/password', { password: passwordInput.value });
   } catch (err) {
     say(words(err), 'error');
@@ -263,7 +333,7 @@ async function onVisibility() {
   hiddenAt = null;
   if (waiting) {                       // уже заперта: варианты passkey могли истечь, пока экран был погашен
     cover(false);
-    if (keys && screen.open) prepare();
+    if (keys && screen.open && !fresh()) prepare();
     return;
   }
   if (since === null) {
@@ -281,8 +351,7 @@ async function onVisibility() {
 
 async function begin() {
   try {
-    const state = await api('GET', '/api/lock');      // CSRF до профиля: отметка — запрос POST
-    useCsrf(state.csrf);
+    const state = await lockState();                  // CSRF до профиля: отметка — запрос POST
     if (state.locked) waitOpen();
     else mark();
   } catch {
@@ -308,7 +377,10 @@ export function installLock() {
   passwordForm.addEventListener('submit', openWithPassword);
   document.addEventListener('visibilitychange', onVisibility);
   setInterval(() => {
-    if (document.visibilityState === 'visible') mark();
+    if (document.visibilityState !== 'visible') return;
+    mark();
+    // экран блокировки открыт давно: вызов на сервере истечёт раньше нажатия — готовить заранее, а не по нажатию (Safari)
+    if (waiting && keys && screen.open && options && !fresh()) prepare();
   }, ALIVE_SEC * 1000);
   begin();
 }

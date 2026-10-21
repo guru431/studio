@@ -2020,6 +2020,46 @@ def test_mic_inserts_text_at_the_cursor(browser, live, width):
     assert not problems(r), problems(r)
 
 
+#: FAKE_MIC со счётчиками: window.mics — вызовы getUserMedia, window.stopped — отпущенные дорожки;
+#: разрешение приходит через 300 мс, как после окна «Разрешить» браузера
+COUNTED_MIC = FAKE_MIC.replace(
+    "navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });",
+    """window.mics = 0; window.stopped = 0;
+  navigator.mediaDevices.getUserMedia = async () => { window.mics += 1; await new Promise(r => setTimeout(r, 300));
+    return { getTracks: () => [{ stop() { window.stopped += 1; } }] }; };""")
+assert COUNTED_MIC != FAKE_MIC
+
+
+def test_mic_stops_when_its_section_or_form_goes_away(browser, live):
+    """Запись голоса не переживает свой раздел и своё окно: микрофон отпущен, звук не уходит, а
+    повторное нажатие, пока браузер спрашивает разрешение, второй записи не начинает."""
+    login = "micgone"
+    live.add_user(login)
+    double = "(() => { const b = document.querySelector('#photo-composer .mic'); b.click(); b.click(); return true; })()"
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)), ("eval", "mic", COUNTED_MIC),
+        ("eval", "double", double), ("wait", "document.querySelector('#photo-composer .mic.on')"),
+        ("eval", "asked", "window.mics"),
+        *go("chat"), ("wait", "window.stopped === 1 && document.querySelector('#composer .mic')"),
+        # ушли из раздела, пока браузер спрашивал разрешение: микрофон отпущен сразу после ответа
+        ("eval", "early", "(() => { document.querySelector('#composer .mic').click(); location.hash = '#/photo'; return true; })()"),
+        ("wait", f"window.stopped === 2 && {FEED_READY}"),
+        # окно «Изменить» закрыто во время записи
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"),
+        ("wait", "document.querySelector('#editor .mic')"), ("click", "#editor .mic"),
+        ("wait", "document.querySelector('#editor .mic.on')"), ("click", "#editor .dialog-close"),
+        ("wait", "window.stopped === 3"),
+        # образец голоса в настройках: окно закрыто во время записи
+        *go("settings/speech"), ("wait", "document.querySelector('#voice-add')"),
+        ("click", "#voice-add"), ("wait", is_open("#voice-dialog")), ("click", "#voice-record"),
+        ("wait", "document.querySelector('#voice-record').textContent === 'Остановить'"),
+        ("click", "#voice-dialog .dialog-close"), ("wait", "window.stopped === 4"),
+        ("eval", "on", settled("document.querySelectorAll('.mic.on').length", 500)), ("idle",)])
+    assert not r.get("failed"), r
+    assert r["values"]["asked"] == 1 and r["values"]["on"] == 0
+    assert not any(s in ("POST /api/dictation", "POST /api/voices") for s in r["sent"]), r["sent"]
+    assert not problems(r), problems(r)
+
+
 def test_mic_without_permission_says_so(browser, live):
     live.add_user("nomic")
     deny = """(() => { navigator.mediaDevices.getUserMedia = async () => {
@@ -2399,3 +2439,192 @@ def test_upload_chosen_while_locked_goes_after_opening(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["early"] is True
     assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_double_tap_open_makes_one_passkey_call(browser, live):
+    """Второе «Открыть», пока устройство ещё не показало Face ID, не выдаёт новый вызов вместо того, что
+    подписывает устройство: иначе сервер отказал бы (403) и понадобился бы второй Face ID."""
+    login = "lk-double"
+    live.add_user(login)
+    taps = """(() => { const get = navigator.credentials.get.bind(navigator.credentials);
+      navigator.credentials.get = (o) => new Promise(r => setTimeout(r, 500)).then(() => get(o));
+      const b = document.querySelector('#lock-open'); b.click(); b.click(); setTimeout(() => b.click(), 100);
+      return true; })()"""
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("wait", PASSKEY_READY), ("eval", "taps", taps),
+        ("wait", f"!{LOCK_OPEN}"), ("eval", "me", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["me"] == 200
+    assert r["sent"].count("POST /api/lock/challenge") == 1 and r["sent"].count("POST /api/lock/open") == 1, r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+#: счётчик вызовов passkey (window.challenges); slow — ответ сервера на 600 мс позже
+COUNT_CHALLENGES = """((slow) => { window.challenges = 0; const real = window.fetch;
+  window.fetch = (u, o) => { if (u !== '/api/lock/challenge') return real(u, o); window.challenges += 1;
+    return slow ? new Promise(r => setTimeout(r, 600)).then(() => real(u, o)) : real(u, o); };
+  return true; })"""
+OPEN_BUTTON = "(b => [b.disabled, b.textContent, b.dataset.ready === undefined])(document.querySelector('#lock-open'))"
+
+
+def test_open_prepares_once_and_only_when_the_options_are_old(browser, live):
+    """Возвращение на экран готовит вход заново, только если варианты старше FRESH_SEC; пока готовит —
+    «Готовлю…», кнопка выключена, и нажатия подготовку не перезапускают."""
+    login = "lk-prep"
+    live.add_user(login)
+    double = "(() => { const b = document.querySelector('#lock-open'); b.click(); b.click(); return true; })()"
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("wait", PASSKEY_READY),
+        ("eval", "spy", f"{COUNT_CHALLENGES}(true)"),
+        hide(), show(), ("eval", "kept", settled("window.challenges")),
+        later(101_000), hide(), show(), ("eval", "button", OPEN_BUTTON), ("eval", "double", double),
+        ("wait", PASSKEY_READY), ("eval", "count", "window.challenges"),
+        ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}")], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kept"] == 0 and v["button"] == [True, "Готовлю…", True] and v["count"] == 1
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_open_options_are_renewed_before_the_server_forgets_them(browser, live):
+    """Экран блокировки открыт дольше FRESH_SEC: вход готовится заново по таймеру отметок (не по нажатию —
+    Safari), и «Открыть» проходит с одного Face ID. Ждёт таймер отметок — до 15 с."""
+    login = "lk-renew"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("wait", PASSKEY_READY),
+        ("eval", "spy", f"{COUNT_CHALLENGES}(false)"), later(101_000),
+        ("wait", f"window.challenges === 1 && {PASSKEY_READY}"),
+        ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}")], timeout=25000, **PHONE)
+    assert not r.get("failed"), r
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_settings_old_key_options_go_back_to_the_password(browser, live):
+    """Варианты создания ключа старше FRESH_SEC: «Добавить» не зовёт устройство (сервер не принял бы ключ,
+    а в «Паролях» iPhone остался бы сирота), а возвращает к паролю и «Далее»."""
+    login = "lk-stale"
+    live.add_user(login)
+    spy = """(() => { window.created = 0; const create = navigator.credentials.create.bind(navigator.credentials);
+      navigator.credentials.create = (o) => { window.created += 1; return create(o); }; return true; })()"""
+    shown = "document.querySelector('#passkey-add') && !document.querySelector('#passkey-add').hidden"
+    r = browser.drive(live.url + "/", [*lock_settings(login), ("eval", "spy", spy),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"), ("wait", shown),
+        later(101_000), ("click", "#passkey-add"),
+        ("wait", "document.querySelector('#passkey-add').hidden && document.querySelector('#passkey-password').getClientRects().length > 0"),
+        ("eval", "note", "document.querySelector('#screen-lock-status').textContent"),
+        ("eval", "created", "window.created"),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"), ("wait", shown),
+        ("click", "#passkey-add"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 1")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["created"] == 0 and "пароль ещё раз" in r["values"]["note"]
+    assert r["sent"].count("POST /api/passkeys") == 1, r["sent"]
+    assert not problems(r), problems(r)
+
+
+VISIBILITY = "['#view', '#rail'].map(s => getComputedStyle(document.querySelector(s)).visibility)"
+
+
+def test_lock_hides_the_studio_even_while_its_window_is_forced_shut(browser, live):
+    """Окно блокировки, закрытое силой (Escape без жеста, «назад» на Android), открывается снова лишь из
+    события close: до него содержимое студии не показывается (класс на <html>, closedby="none")."""
+    login = "lk-forced"
+    live.add_user(login)
+    forced = f"(() => {{ document.querySelector('#lock').close(); return {VISIBILITY}; }})()"
+    r = browser.drive(live.url + "/", [*phone_with_key(login), hide(), ("wait", CURTAIN_OPEN),
+        ("eval", "covered", VISIBILITY), later(61000), show(), ("wait", LOCK_OPEN),
+        ("eval", "closedby", "['#lock', '#curtain'].map(s => document.querySelector(s).getAttribute('closedby'))"),
+        ("eval", "forced", forced), ("eval", "reopened", settled(LOCK_OPEN)),
+        ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN} && !{CURTAIN_OPEN}"),
+        ("eval", "after", VISIBILITY)], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["covered"] == ["hidden", "hidden"] and v["forced"] == ["hidden", "hidden"]
+    assert v["closedby"] == ["none", "none"] and v["reopened"] is True and v["after"] == ["visible", "visible"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_media_broken_by_the_lock_load_again_after_opening(browser, live):
+    """Картинки и плееры /api/media/… идут мимо api.js: запрос во время блокировки получает 423. После
+    отпирания битые грузятся заново; при запирании плееры встают на паузу."""
+    login = "lk-media"
+    live.add_user(login)
+    player = f"""(async () => {{ const m = {API}; window.mid = (await m.api('GET', '/api/images')).items[0].media_id;
+      window.paused = 0; window.reloaded = 0;
+      const a = document.createElement('audio'); a.pause = () => {{ window.paused += 1; }};
+      document.body.append(a); return true; }})()"""
+    broken = """(() => { const i = new Image(); i.id = 'probe'; i.src = '/api/media/' + window.mid; document.body.append(i);
+      const v = document.createElement('video'); v.setAttribute('src', '/api/media/' + window.mid);
+      Object.defineProperty(v, 'error', { get: () => ({ code: 4 }) }); v.load = () => { window.reloaded += 1; };
+      document.body.append(v); return true; })()"""
+    probe = "document.querySelector('#probe')"
+    r = browser.drive(live.url + "/", [*phone_with_key(login), add_gateway(), make_images(1), ("eval", "player", player),
+        hide(), ("wait", CURTAIN_OPEN), later(61000), show(), ("wait", LOCK_OPEN),
+        ("wait", f"{ME_STATUS}.then(s => s === 423)"), ("eval", "paused", "window.paused"),
+        ("eval", "broken", broken), ("wait", f"{probe}.complete && {probe}.naturalWidth === 0"),
+        ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
+        ("wait", f"{probe}.naturalWidth > 0"), ("eval", "reloaded", "window.reloaded")], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["paused"] >= 1 and r["values"]["reloaded"] == 1
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_mic_stops_under_the_curtain(browser, live):
+    """Ушла с экрана — запись голоса отменяется: микрофон не слушает под шторкой, звук не уходит."""
+    login = "lk-mic"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_key(login), add_gateway(), *go("photo"),
+        ("wait", "document.querySelector('#photo-composer .mic')"), ("eval", "mic", COUNTED_MIC),
+        ("click", "#photo-composer .mic"), ("wait", "document.querySelector('#photo-composer .mic.on')"),
+        hide(), ("wait", f"{CURTAIN_OPEN} && window.stopped === 1"), show(), ("wait", f"!{CURTAIN_OPEN}"),
+        ("eval", "on", settled("document.querySelectorAll('.mic.on').length", 500)), ("idle",)], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["on"] == 0 and "POST /api/dictation" not in r["sent"], r["sent"]
+    assert not problems(r), problems(r)
+
+
+#: GET /api/lock падает «нет связи» столько раз, сколько записано в sessionStorage.failLock (с самого старта страницы)
+FAIL_LOCK_STATE = """(() => { const real = window.fetch;
+  window.fetch = function (input, init) {
+    const left = Number(sessionStorage.getItem('failLock') || 0);
+    if (left > 0 && input === '/api/lock' && init && init.method === 'GET') {
+      sessionStorage.setItem('failLock', String(left - 1));
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
+    return real.call(this, input, init);
+  }; })();"""
+
+
+@pytest.mark.parametrize("way", ["passkey", "password"])
+def test_cold_start_without_the_lock_state_still_opens(browser, live, way):
+    """Запертый холодный старт, оба GET /api/lock упали: CSRF нет ни из профиля, ни из состояния —
+    «Открыть» и пароль берут его заново, а не получают 403 «обновите страницу» (в PWA обновить нечем)."""
+    login = f"lk-cold-{way}"
+    live.add_user(login)
+    opening = ([("click", "#lock-open"), ("wait", PASSKEY_READY), ("click", "#lock-open")] if way == "passkey" else
+               [("click", "#lock-use-password"), ("type", "#lock-password", "password-123"), ("click", "#lock-password-go")])
+    r = browser.drive(live.url + "/", [*locked_phone(login), ("eval", "cut", "sessionStorage.setItem('failLock', '2')"),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN}"
+                 " && document.querySelector('#lock-status').textContent.length > 0"),
+        ("eval", "left", "sessionStorage.getItem('failLock')"),
+        *opening, ("wait", f"!{LOCK_OPEN} && {READY}"), ("eval", "me", ME_STATUS)], init=FAIL_LOCK_STATE, **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["left"] == "0" and r["values"]["me"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_curtain_leaves_when_the_mark_hangs(browser, live):
+    """Вернулась раньше минуты, а отметка висит без ответа (у fetch нет срока, iOS ждёт минуту): через
+    MARK_SEC — как без связи, шторка убирается, а не висит без кнопок."""
+    login = "lk-hang"
+    live.add_user(login)
+    hang = """(() => { window.asked = []; const timeout = AbortSignal.timeout.bind(AbortSignal);
+      AbortSignal.timeout = (ms) => { window.asked.push(ms); return timeout(100); };
+      const real = window.fetch;
+      window.fetch = (u, o) => u !== '/api/lock/alive' ? real(u, o) : new Promise((_, no) => {
+        if (o && o.signal) o.signal.addEventListener('abort', () => no(o.signal.reason)); });
+      return true; })()"""
+    r = browser.drive(live.url + "/", [*phone_with_key(login), ("eval", "hang", hang), hide(), ("wait", CURTAIN_OPEN),
+        later(30000), show(), ("wait", f"!{CURTAIN_OPEN}"), ("eval", "asked", "window.asked"),
+        ("eval", "lock", settled(LOCK_OPEN))], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["asked"][:1] == [8000] and r["values"]["lock"] is False
+    assert not problems(r), problems(r)

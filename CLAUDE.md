@@ -231,10 +231,16 @@
 - Варианты passkey (`/api/lock/challenge`, `/api/passkeys/options`) готовятся до нажатия, а
   `navigator.credentials.get/create` зовётся первым в обработчике нажатия: Safari, если перед ним
   ждали сеть, теряет «нажатие», и Face ID на iPhone не появится (в Chrome всё работает) — сторожит
-  `test_open_calls_the_passkey_without_waiting_for_the_network`.
+  `test_open_calls_the_passkey_without_waiting_for_the_network`. Вызов на сервере один на сессию и
+  живёт 120 с: варианты старше `lock.FRESH_SEC` готовятся заново заранее (таймер, возвращение), а
+  пока идёт вызов устройства, новых не готовить — новый заменил бы подписываемый (403).
 - Шторка и экран блокировки — `<dialog>` через `showModal()`: иначе открытое окно просмотра
-  (`#viewer`, тоже top layer) осталось бы над ними. Escape их не закрывает (cancel отменён, закрытое
-  силой окно открывается снова).
+  (`#viewer`, тоже top layer) осталось бы над ними. Escape их не закрывает (cancel отменён,
+  `closedby="none"`, закрытое силой окно открывается снова), а до нового `showModal()` оболочку
+  прячет `<html class="shrouded">`.
+- Запись голоса одна на студию (`mic.js`): смена раздела, шторка и блокировка зовут
+  `cancelRecording()`, кнопка, ушедшая со страницы, отменяет свою запись сама; отменённый звук не
+  уходит.
 - id ключа в API — хеш credential id, а не он сам: `DELETE /api/passkeys/<id>` пишет журнал Apache.
 - `seen` сессии — только по отметке `POST /api/lock/alive`, а не по любому запросу: опросы разделов
   идут на Android и при погасшем экране.

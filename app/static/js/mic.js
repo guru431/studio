@@ -5,9 +5,13 @@
  * POST /api/dictation (модель раздела «Голосовой ввод»), текст встаёт на место курсора (с пробелом,
  * если нужен) и не отправляется. Звук живёт только в памяти этой записи — после ответа его нет ни
  * здесь, ни на сервере. Нет микрофона, нет разрешения, нет модели — слова в `p.mic-error` (в host).
+ * Пока браузер спрашивает разрешение, повторные нажатия не считаются.
  *
- * startRecording(maxSec, onTick) → { stop(), done: Promise<Blob> } — общий рекордер (им же пишется
- * образец голоса в настройках «Озвучки»). */
+ * startRecording(maxSec, onTick, owner) → { stop(), done: Promise<Blob | null> } или null — общий
+ * рекордер (им же пишется образец голоса в настройках «Озвучки»). Запись одна на всю студию: новая
+ * гасит прежнюю. cancelRecording() — отменить её (смена раздела — app.js, шторка и блокировка —
+ * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
+ * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null. */
 import { api } from './api.js';
 import { el, words } from './ui.js';
 
@@ -16,22 +20,41 @@ const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;c
 const ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/>'
   + '<path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
 
+let active = null;       // { cancel() } — идущая запись (или ожидание разрешения) студии
+
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Запись с микрофона до stop() или maxSec. Отказ — Error со словами. */
-export async function startRecording(maxSec, onTick) {
+/** Отменить идущую запись: микрофон отпущен, её done — null. */
+export function cancelRecording() {
+  if (active) active.cancel();
+}
+
+/** Запись с микрофона до stop() или maxSec; null — отменили, пока браузер спрашивал разрешение.
+ * Отказ — Error со словами. */
+export async function startRecording(maxSec, onTick, owner = null) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
     throw new Error('Браузер не умеет записывать звук');
   }
+  cancelRecording();
+  let cancelled = false;
+  const mine = { cancel() { cancelled = true; } };
+  active = mine;
+  const release = () => { if (active === mine) active = null; };
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
+    release();
     throw new Error(err && err.name === 'NotAllowedError'
       ? 'Нет разрешения на микрофон — разрешите его в настройках браузера' : 'Микрофон недоступен');
+  }
+  if (cancelled || (owner && !owner.isConnected)) {
+    for (const track of stream.getTracks()) track.stop();
+    release();
+    return null;
   }
   const type = TYPES.find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
   const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
@@ -39,15 +62,21 @@ export async function startRecording(maxSec, onTick) {
   const started = Date.now();
   let timer = null;
   const stop = () => { if (recorder.state !== 'inactive') recorder.stop(); };
+  mine.cancel = () => { cancelled = true; stop(); };
   recorder.addEventListener('dataavailable', (event) => { if (event.data && event.data.size) chunks.push(event.data); });
   const done = new Promise((resolve) => {
     recorder.addEventListener('stop', () => {
       clearInterval(timer);
       for (const track of stream.getTracks()) track.stop();
-      resolve(new Blob(chunks, { type: (recorder.mimeType || type || 'audio/webm').split(';')[0] }));
+      release();
+      resolve(cancelled ? null : new Blob(chunks, { type: (recorder.mimeType || type || 'audio/webm').split(';')[0] }));
     });
   });
   timer = setInterval(() => {
+    if (owner && !owner.isConnected) {
+      mine.cancel();
+      return;
+    }
     const sec = (Date.now() - started) / 1000;
     if (onTick) onTick(sec);
     if (sec >= maxSec) stop();
@@ -79,39 +108,49 @@ export function attachMic(field, host) {
   const error = el('p', { class: 'mic-error error small', 'aria-live': 'polite' });
   host.append(error);
   let recording = null;
+  let starting = false;    // браузер спрашивает разрешение
   let sending = false;
 
   function paint(sec) {
     button.classList.toggle('on', !!recording);
-    button.classList.toggle('busy', sending);
+    button.classList.toggle('busy', sending || starting);
     button.setAttribute('aria-label', recording ? 'Остановить запись' : 'Голосовой ввод');
     button.innerHTML = ICON;                           // константа выше
     if (recording) button.append(el('span', { class: 'mic-time' }, clock(sec || 0)));
   }
 
   button.addEventListener('click', async () => {
-    if (sending) return;
+    if (sending || starting) return;
     if (recording) {
       recording.stop();
       return;
     }
     error.textContent = '';
     const caret = [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
+    starting = true;
+    paint();
     try {
-      recording = await startRecording(MAX_SEC, paint);
+      recording = await startRecording(MAX_SEC, paint, button);
     } catch (err) {
       error.textContent = words(err);
       return;
+    } finally {
+      starting = false;
+      paint();
     }
+    if (!recording) return;                            // отменили, пока спрашивали разрешение
     paint(0);
     const blob = await recording.done;
     recording = null;
+    paint();
+    if (!blob || !button.isConnected) return;          // отменена: звук не уходит
     sending = true;
     paint();
     try {
       const body = new FormData();
       body.append('audio', blob, recordingName(blob));
       const { text } = await api('POST', '/api/dictation', body);
+      if (!button.isConnected) return;                 // поле уже убрали
       if (text) insertAt(field, text, caret);
       else error.textContent = 'Ничего не распознано — скажите ещё раз';
     } catch (err) {

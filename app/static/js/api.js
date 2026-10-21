@@ -1,6 +1,7 @@
 /* Запросы к API студии.
  *
- * api(метод, путь, тело): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData.
+ * api(метод, путь, тело, { signal }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
+ * signal — обрыв запроса (AbortSignal, например срок).
  * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message)
  * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа.
@@ -37,7 +38,7 @@ export async function loadMe() {
   return me;
 }
 
-export async function api(method, path, body) {
+export async function api(method, path, body, { signal } = {}) {
   const headers = {};
   let payload;
   const token = me ? me.csrf : csrf;
@@ -49,7 +50,7 @@ export async function api(method, path, body) {
   }
   let response;
   try {
-    response = await fetch(path, { method, headers, body: payload, credentials: 'same-origin' });
+    response = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal });
   } catch (err) {
     if (err && err.name === 'AbortError') throw err;
     throw new ApiError(0, 'network', 'Нет связи с сервером');
@@ -69,7 +70,7 @@ export async function api(method, path, body) {
     if (code === 'login') location.href = '/login';
     if (code === 'screen_locked' && hooks.locked) {
       await hooks.locked();
-      return api(method, path, body);
+      return api(method, path, body, { signal });
     }
     throw new ApiError(response.status, code, message);
   }
