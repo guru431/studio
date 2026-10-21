@@ -43,7 +43,7 @@ def wait_state(s, job_id, states, limit=3000):
 
 
 def wait_description(s, job_id, limit=3000):
-    """Первый ответ опроса описания с концом задания (готовое описание выдаётся один раз — им же)."""
+    """Первый ответ опроса описания с концом задания (готовое описание — им же)."""
     body = None
     for _ in range(limit):
         body = s.c.get(f"/api/images/descriptions/{job_id}").json()
@@ -467,7 +467,9 @@ def test_a_refused_masked_upload_leaves_no_files(studio, env, monkeypatch):
 # ---- описание ----------------------------------------------------------------
 
 @pytest.mark.parametrize("finish", ["stop", "length"])
-def test_description_uses_gemma_abl_and_returns_editable_text_once(studio, caplog, finish):
+def test_description_uses_gemma_abl_and_returns_editable_text_until_received(studio, caplog, finish):
+    """Ответ с текстом мог потеряться в пути: повтор GET отдаёт тот же текст, пока страница не
+    подтвердит получение (DELETE); после — 404, повтор подтверждения безопасен."""
     text = "A private detailed description. " * 300
     studio.gw.description_reply = {"choices": [{"message": {"content": text}, "finish_reason": finish}]}
     add_gateway(studio)
@@ -476,7 +478,11 @@ def test_description_uses_gemma_abl_and_returns_editable_text_once(studio, caplo
     job_id = response.json()["id"]
     result = wait_description(studio, job_id)
     assert result == {"state": "done", "text": text.strip(), "truncated": finish == "length"}
-    assert studio.c.get(f"/api/images/descriptions/{job_id}").status_code == 404
+    assert studio.c.get(f"/api/images/descriptions/{job_id}").json() == result
+    for _ in range(2):
+        assert studio.c.delete(f"/api/images/descriptions/{job_id}").status_code == 204
+    r = studio.c.get(f"/api/images/descriptions/{job_id}")
+    assert r.status_code == 404 and r.json()["detail"]["message"] == "описание уже выдано"
     (body,) = studio.gw.descriptions
     assert body["model"] == "gemma4-abl" and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["messages"][0]["content"][0]["text"] == images.DESCRIPTION_PROMPT
@@ -565,16 +571,20 @@ def wait_translation(s, job_id, limit=3000):
     raise AssertionError(f"перевод не дошёл до конца: {body}")
 
 
-def test_translation_goes_to_gemma_abl_as_text_and_is_given_once(studio, caplog):
+def test_translation_goes_to_gemma_abl_as_text_and_is_given_until_received(studio, caplog):
     caplog.set_level(logging.DEBUG)
     studio.gw.description_reply = {"choices": [{"message": {"content": " a woman by the window \n"}, "finish_reason": "stop"}]}
     add_gateway(studio)
     r = studio.c.post("/api/images/translations", json={"prompt": PROMPT})
     assert r.status_code == 202, r.text
     job_id = r.json()["id"]
-    assert wait_translation(studio, job_id) == {"state": "done", "text": "a woman by the window", "truncated": False}
-    assert studio.c.get(f"/api/images/translations/{job_id}").status_code == 404
+    done = {"state": "done", "text": "a woman by the window", "truncated": False}
+    assert wait_translation(studio, job_id) == done
     assert studio.c.get(f"/api/images/descriptions/{job_id}").status_code == 404      # чужой вид задания
+    assert studio.c.delete(f"/api/images/descriptions/{job_id}").status_code == 204   # и его подтверждение
+    assert studio.c.get(f"/api/images/translations/{job_id}").json() == done
+    assert studio.c.delete(f"/api/images/translations/{job_id}").status_code == 204
+    assert studio.c.get(f"/api/images/translations/{job_id}").status_code == 404
     (body,) = studio.gw.descriptions
     assert body["model"] == "gemma4-abl" and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["messages"] == [{"role": "user", "content": images.TRANSLATION_PROMPT + PROMPT}]
@@ -603,6 +613,27 @@ def test_translation_is_one_job_of_the_user_and_needs_the_gateway(studio):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
     studio.gw.hold = False
     wait_state(studio, job["id"], {"done"})
+
+
+def test_unreceived_text_lives_a_short_while_after_it_was_given(studio):
+    """Без подтверждения выданный текст живёт TEXT_KEEP_SEC от первой выдачи; невыданный срока выдачи
+    не ждёт — его, как прежде, забывает KEEP_DONE_SEC. Подтверждение чужого задания текст не трогает."""
+    add_gateway(studio)                                       # owner
+    job_id = describe(studio).json()["id"]
+    wait_for(lambda: images.JOBS[job_id].finished_at is not None)
+    studio.clock[0] += images.TEXT_KEEP_SEC + 1               # ещё не выдан — срока выдачи нет
+    assert wait_description(studio, job_id)["state"] == "done"
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    assert studio.c.delete(f"/api/images/descriptions/{job_id}").status_code == 204
+    signin(studio, "owner")
+    studio.clock[0] += images.TEXT_KEEP_SEC - 1
+    assert studio.c.get(f"/api/images/descriptions/{job_id}").json()["state"] == "done"
+    studio.clock[0] += 2
+    r = studio.c.get(f"/api/images/descriptions/{job_id}")
+    assert r.status_code == 404 and r.json()["detail"]["message"] == "описание уже выдано"
+    assert images.JOBS[job_id].description is None
+    assert images.TEXT_KEEP_SEC < images.KEEP_DONE_SEC
 
 
 # ---- учётки и история --------------------------------------------------------

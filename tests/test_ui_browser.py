@@ -1194,10 +1194,14 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
             ("click", "#viewer .act-describe"), ("wait", described),
             ("eval", "fits", f"{NO_OVERFLOW} && document.querySelector('#describe-dialog').scrollWidth"
                              " <= document.querySelector('#describe-dialog').clientWidth"),
-            ("eval", "forms", "window.sentForms")], width=width, height=900, mobile=width == 390)
+            ("eval", "forms", "window.sentForms"),
+            ("eval", "tick", "new Promise(r => setTimeout(r, 300)).then(() => true)")],
+            width=width, height=900, mobile=width == 390)
     finally:
         live.gw.description_reply = saved
     assert not r.get("failed"), r
+    # текст в поле — получение подтверждено, сервер его стирает (повтор GET до того отдал бы его снова)
+    assert len([s for s in r["sent"] if s.startswith("DELETE /api/images/descriptions/")]) == 2
     v = r["values"]
     assert v["menu"] == ["Описать фото с устройства…"]                 # «Освободить карту» — только админу
     assert v["descriptionLength"] == len(text.strip()) and v["fits"]
@@ -1710,6 +1714,7 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
     assert first["messages"][0]["content"].endswith("кошка на подоконнике")
     assert second["messages"][0]["content"].endswith("собака")
     assert len(gw.generations) == g0 and any(s.endswith("/cancel") for s in r["sent"])
+    assert any(s.startswith("DELETE /api/images/translations/") for s in r["sent"])   # перевод в поле — получен
     assert not problems(r), problems(r)
 
 

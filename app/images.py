@@ -9,8 +9,10 @@
    картинку и сразу зовёт release модели задания — на 409 повторяет с паузой до
    CANCEL_RELEASE_SEC; новое задание до тех пор получает busy.
 2. Готовая PNG — в media с превью, строка `images` — запись ленты. Описания и переводы промпта в
-   историю не пишутся: текст живёт в памяти до выдачи (один раз) или KEEP_DONE_SEC. Перевод — тот
-   же путь, что описание (маршрут шлюза `/slot/images/descriptions`, gemma-abl), без картинки.
+   историю не пишутся: текст живёт в памяти, GET отдаёт его и повторно (ответ мог потеряться в пути),
+   пока страница не подтвердит получение (DELETE …/<id>) или не пройдёт TEXT_KEEP_SEC от первой
+   выдачи; невыданный — до KEEP_DONE_SEC. Перевод — тот же путь, что описание (маршрут шлюза
+   `/slot/images/descriptions`, gemma-abl), без картинки.
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
    (`source_media_id`); оба нормализуются normalize_image. Маска (PNG) остаётся в студии: снаружи
    выделения результат берётся из исходника, модель получает только фото и инструкцию. Маска с
@@ -58,6 +60,10 @@ log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/images")
 
 KEEP_DONE_SEC = 600
+# выданный, но не подтверждённый текст описания или перевода: страница опрашивает раз в 1,5 с и
+# подтверждает сразу, как вставит текст, — две минуты покрывают обрыв мобильной связи на десятки
+# повторов, а текст без хозяина не лежит в памяти все KEEP_DONE_SEC
+TEXT_KEEP_SEC = 120
 # шлюз держит запрос до конца генерации: ожидание карты (budget_s маршрута) плюс n картинок;
 # таймаут маршрута LiteLLM — не больше 1260 с (контракт API картинок)
 GENERATE_TIMEOUT_SEC = 1300
@@ -101,9 +107,9 @@ introduction.
 Prompt:
 """
 TRANSLATION_MAX_TOKENS = 16384
-#: задания с текстом вместо картинки: в истории их нет, текст выдаётся один раз
+#: задания с текстом вместо картинки: в истории их нет, текст живёт до подтверждения получения (п. 2 шапки)
 TEXT_KINDS = {"description", "translation"}
-#: слова заданий с текстом: готово, уже выдано, модель ответила пустым
+#: слова заданий с текстом: готово, уже выдано (подтверждено или срок вышел), модель ответила пустым
 TEXT_WORDS = {"description": ("описание готово", "описание уже выдано", "gemma-abl не вернула описание"),
               "translation": ("перевод готов", "перевод уже выдан", "gemma-abl не вернула перевод")}
 
@@ -127,6 +133,7 @@ class Job:
     mask: bytes | None = None
     kind: str = "generation"                 # generation | edit | description | translation
     description: str | None = None
+    delivered_at: float | None = None        # первая выдача текста: от неё — TEXT_KEEP_SEC
     truncated: bool = False
     description_started: bool = False
     source_media_id: str | None = None
@@ -169,6 +176,9 @@ def _prune() -> None:
     now = clock.NOW()
     for job_id in [j.id for j in JOBS.values() if j.finished_at is not None and now - j.finished_at > KEEP_DONE_SEC]:
         JOBS.pop(job_id, None)
+    for job in JOBS.values():
+        if job.delivered_at is not None and now - job.delivered_at > TEXT_KEEP_SEC:
+            job.description = None
 
 
 def _active(user_id: int) -> "Job | None":
@@ -387,7 +397,8 @@ async def create_description(request: Request):
 
 
 def _text_status(job_id: str, request: Request, kind: str):
-    """Статус описания или перевода; готовый текст — в этом же ответе, один раз."""
+    """Статус описания или перевода; готовый текст — в этом же ответе и в повторах, пока страница не
+    подтвердит получение (_text_received) или не пройдёт TEXT_KEEP_SEC от первой выдачи."""
     _prune()
     job = JOBS.get(job_id)
     if job is None or job.user_id != request.state.user.id or job.kind != kind:
@@ -396,14 +407,28 @@ def _text_status(job_id: str, request: Request, kind: str):
         return _status(job)
     if job.description is None:
         raise HTTPException(404, {"code": "gone", "message": TEXT_WORDS[kind][1]})
-    text, job.description = job.description, None
-    return JSONResponse({"state": "done", "text": text, "truncated": job.truncated},
+    if job.delivered_at is None:
+        job.delivered_at = clock.NOW()
+    return JSONResponse({"state": "done", "text": job.description, "truncated": job.truncated},
                         headers={"Cache-Control": "no-store"})
+
+
+def _text_received(job_id: str, request: Request, kind: str) -> Response:
+    """Страница вставила текст в поле — он стирается. Повтор и чужое или забытое задание — тоже 204."""
+    job = JOBS.get(job_id)
+    if job is not None and job.user_id == request.state.user.id and job.kind == kind and job.state == "done":
+        job.description = None
+    return Response(status_code=204)
 
 
 @router.get("/descriptions/{job_id}")
 async def description_status(job_id: str, request: Request):
     return _text_status(job_id, request, "description")
+
+
+@router.delete("/descriptions/{job_id}", status_code=204)
+async def description_received(job_id: str, request: Request):
+    return _text_received(job_id, request, "description")
 
 
 @router.post("/translations", status_code=202)
@@ -428,6 +453,11 @@ async def create_translation(request: Request):
 @router.get("/translations/{job_id}")
 async def translation_status(job_id: str, request: Request):
     return _text_status(job_id, request, "translation")
+
+
+@router.delete("/translations/{job_id}", status_code=204)
+async def translation_received(job_id: str, request: Request):
+    return _text_received(job_id, request, "translation")
 
 
 @router.post("/release")

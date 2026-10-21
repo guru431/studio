@@ -9,9 +9,10 @@
  * страницы тоже. Одно задание за раз у пользователя: пока идёт своё, «Создать», «EN» и действия
  * просмотра, начинающие задание («Изменить», «Повторить», «Описать»), закрыты.
  * «Повторить» правки кистью идёт с её маской (mask_media_id).
- * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id> (текст выдаётся один раз);
- * окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ заменяет
- * промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
+ * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id>: потерянный ответ опрос
+ * повторяет, а текст, вставленный в поле, подтверждается DELETE …/descriptions/<id> — сервер его
+ * стирает; окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ
+ * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
  * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm. */
@@ -624,6 +625,7 @@ function build(view, ctx) {
         if (r.state === 'done') {
           stop();
           text.value = r.text;
+          api('DELETE', `/api/images/descriptions/${jobId}`).catch(() => {});    // получено — сервер стирает
           text.disabled = false;
           make.disabled = false;
           if (r.truncated) fail.textContent = 'Достигнут лимит ответа модели; описание можно дополнить вручную.';
@@ -706,6 +708,7 @@ function build(view, ctx) {
             prompt.value = r.text;
             autosize();
           }
+          api('DELETE', `/api/images/translations/${job.id}`).catch(() => {});   // получен — сервер стирает
           break;
         }
         if (r.state === 'error') throw new Error(`Перевод не получился: ${r.detail}`);
