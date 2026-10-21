@@ -4,6 +4,7 @@ import dataclasses
 import io
 import sqlite3
 import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -441,6 +442,11 @@ def test_a_stalled_share_is_a_503_in_words(studio, monkeypatch):
     r = studio.c.post("/api/attachments", files={"file": ("p.png", png(20, 10), "image/png")})
     go.set()
     assert r.status_code == 503 and r.json()["detail"] == {"code": "storage", "message": media.STALLED}
+    for _ in range(5000):                          # поток дописывает, пока цикл службы жив
+        if not media.SAVING:
+            break
+        time.sleep(0.001)
+    assert not media.SAVING
 
 
 def test_a_refused_row_takes_the_files_away_off_the_loop(studio, env, unlinks):
