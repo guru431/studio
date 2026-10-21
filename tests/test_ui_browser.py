@@ -3543,3 +3543,71 @@ def test_jobs_open_selects_records_in_every_section(browser, live):
     assert v["rows"] == [["video", "Ролик · 5 с", True, "error"], ["speech", "Озвучка · Привет", True, "error"],
                          ["transcribe", "Расшифровка «Звонок.m4a»", True, "error"]]
     assert not known_refusals(problems(r), 404), problems(r)
+
+
+#: уведомления без настоящего разрешения: Notification.permission и requestPermission — из
+#: sessionStorage.perm (по умолчанию granted), showNotification регистрации пишет в window.shown
+NOTIFY_INIT = """(() => {
+  window.shown = [];
+  if (!window.Notification) window.Notification = function () { throw new TypeError('Illegal constructor'); };
+  Object.defineProperty(Notification, 'permission', { configurable: true,
+    get: () => sessionStorage.getItem('perm') || 'granted' });
+  Notification.requestPermission = async () => sessionStorage.getItem('perm') || 'granted';
+  if (window.ServiceWorkerRegistration) ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+    window.shown.push({ title, options: JSON.parse(JSON.stringify(options)) }); return Promise.resolve(); };
+})();"""
+
+
+def picture_job(name):
+    """Картинка через API страницы и опрос «В работе» сразу; id — под именем `name`."""
+    return ("eval", name, f"""(async () => {{ const m = {API};
+      const job = await m.api('POST', '/api/images', {{ prompt: 'секретный кот', size: 'square' }});
+      (await import('/static/js/jobs.js')).kick(); return job.id; }})()""")
+
+
+def notify_settings(login):
+    return [*signin(login), ("wait", READY), add_gateway(), *go("settings/other"),
+            ("wait", "document.querySelector('#notify-enabled')")]
+
+
+def test_notification_only_when_hidden_and_without_content(browser, live):
+    """«Прочее» → «Уведомления» включает флаг устройства; готовое при видимой странице — без
+    уведомления, при скрытой — одно: «Студия: картинка готова», tag — id, data.href — запись, без промпта."""
+    login = "notify-on"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*notify_settings(login),
+        ("eval", "disabled", "document.querySelector('#notify-enabled').disabled"),
+        ("click", "#notify-enabled"),
+        ("wait", "document.querySelector('#notify-status').textContent.includes('включены')"),
+        ("eval", "stored", "localStorage.getItem('studio-notify')"),
+        picture_job("first"),
+        ("wait", "document.querySelector('#jobs').dataset.new === '1' && document.querySelector('#jobs').dataset.running === '0'"),
+        ("eval", "whileVisible", settled("window.shown.length")),
+        hide(), picture_job("second"),
+        ("wait", "window.shown.length === 1"),
+        ("eval", "shown", settled("window.shown", 500)),
+        show()], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["disabled"] is False and v["stored"] == "1" and v["whileVisible"] == 0
+    assert v["shown"] == [{"title": "Студия: картинка готова", "options": {
+        "tag": v["second"], "icon": "/static/icons/icon-192.png", "data": {"href": f"photo?id={v['second']}"}}}]
+    assert "секретный" not in json.dumps(v["shown"], ensure_ascii=False)
+    assert not problems(r), problems(r)
+
+
+def test_notify_toggle_explains_a_refusal(browser, live):
+    """Браузер не разрешил уведомления: переключатель снят, флага нет, слова — что сделать."""
+    login = "notify-denied"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [("idle",), ("eval", "deny", "sessionStorage.setItem('perm', 'denied')"),
+        *notify_settings(login), ("click", "#notify-enabled"),
+        ("wait", "document.querySelector('#notify-status').textContent !== ''"),
+        ("eval", "note", "document.querySelector('#notify-status').textContent"),
+        ("eval", "checked", "document.querySelector('#notify-enabled').checked"),
+        ("eval", "stored", "localStorage.getItem('studio-notify')")], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["note"] == "Браузер запретил уведомления — разрешите их в настройках сайта"
+    assert v["checked"] is False and v["stored"] is None
+    assert not problems(r), problems(r)

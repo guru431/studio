@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, хранилище, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, хранилище, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -19,6 +19,7 @@
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
+import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
@@ -308,6 +309,32 @@ function storageBlock() {
   return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, 'Хранилище'), list, queue,
     el('p', { class: 'muted small' }, 'Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: '
       + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).')) };
+}
+
+/* «Уведомления» (jobs.js): флаг этого устройства; включение спрашивает разрешение браузера. */
+function notifyBlock() {
+  const note = status('notify-status');
+  const supported = notifySupported();
+  const box = el('input', { type: 'checkbox', id: 'notify-enabled', checked: notifyEnabled(), disabled: !supported });
+  box.addEventListener('change', async () => {
+    say(note, '');
+    if (!box.checked) {
+      await setNotify(false);
+      say(note, 'Уведомления выключены на этом устройстве');
+      return;
+    }
+    const on = await setNotify(true);
+    box.checked = on;
+    if (on) say(note, 'Уведомления включены на этом устройстве', 'ok');
+    else say(note, 'Браузер запретил уведомления — разрешите их в настройках сайта', 'error');
+  });
+  if (!supported) {
+    say(note, 'Этот браузер не показывает уведомления сайта: на iPhone — только у студии, добавленной на экран «Домой»');
+  }
+  return el('section', { class: 'block notify-block' }, el('h2', {}, 'Уведомления'),
+    el('label', { class: 'check' }, box, 'Сообщать о готовности, когда студия открыта в фоне'), note,
+    el('p', { class: 'muted small' }, 'Только на этом устройстве и пока студия открыта — свёрнутая вкладка или окно. '
+      + 'Закрытая студия и запертый телефон уведомлений не получают. Промптов, текстов и имён файлов в уведомлении нет.'));
 }
 
 function wipeBlock(host, onWiped) {
@@ -639,7 +666,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     if (shown === 'other') {
       const storage = storageBlock();
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), storage.el, wipeBlock(host, storage.reload)));
+        lockBlock(), notifyBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;
     }
     const s = sectionOf(shown);

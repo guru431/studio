@@ -104,6 +104,19 @@ def test_service_worker_never_caches_api_or_media():
     assert "/offline.html" in sw and "studio-shell-" in sw
 
 
+def test_service_worker_opens_the_job_from_a_notification():
+    """Нажатие на уведомление «В работе»: открытое окно — focus и адрес сообщением, иначе новое окно на
+    записи; ничего сверх оболочки в кэш не кладётся (спека 2026-10-21-studio-jobs-panel, раздел 7)."""
+    sw = (STATIC / "sw.js").read_text(encoding="utf-8")
+    assert "addEventListener('notificationclick'" in sw and "event.notification.close()" in sw
+    assert "clients.matchAll" in sw and ".focus()" in sw and "postMessage({ jobs: href })" in sw
+    assert "openWindow(`/#/${href}`)" in sw and ".put(" not in sw and "pushManager" not in sw
+    jobs = (STATIC / "js" / "jobs.js").read_text(encoding="utf-8")
+    # только showNotification регистрации: конструктор на Android — «Illegal constructor»
+    code = "\n".join(line for line in jobs.splitlines() if not line.lstrip().startswith(("*", "/*", "//")))
+    assert "registration.showNotification(" in code and not re.search(r"new\s+Notification\s*\(", code)
+
+
 def test_pages_send_csp_and_nosniff(studio):
     def check(r):
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")

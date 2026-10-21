@@ -8,9 +8,15 @@
  *
  * Опрос: раз в JOBS_POLL_MS, пока что-то идёт или открыта панель, иначе раз в IDLE_POLL_MS и при
  * возвращении на экран; первый — без since (готовое за час), дальше since — `now` прошлого ответа.
- * Скрытая страница опрашивает, только пока что-то идёт. Запертая сессия: api() ждёт отпирания —
+ * Скрытая страница опрашивает, только если включены уведомления и что-то идёт. Запертая сессия: api() ждёт отпирания —
  * опрос стоит (отметку «на экране» он не ставит: она — только POST /api/lock/alive). Раздел, запустивший
- * задание, зовёт kick() — опрос сразу. Текст сервера — только textContent. */
+ * задание, зовёт kick() — опрос сразу. Текст сервера — только textContent.
+ *
+ * Уведомления (по желанию, «Настройки» → «Прочее»; флаг устройства localStorage `studio-notify`, как
+ * тема): только ServiceWorkerRegistration.showNotification, только пока страница скрыта, только о
+ * ставшем готовым за жизнь этой страницы (не о пришедшем первым опросом). Без push: закрытая студия
+ * и запертая сессия уведомлений не получают. Нажатие ведёт sw.js: открытое окно получает
+ * postMessage({ jobs: href }) — адрес проверяет HREF, иначе открывается новое окно на записи. */
 import { api } from './api.js';
 import { el } from './ui.js';
 
@@ -18,6 +24,14 @@ export const JOBS_POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
 const RECENT_SEC = 3600;
 const SEEN_KEY = 'studio-jobs-seen';
+const NOTIFY_KEY = 'studio-notify';
+/** Слова уведомления раздела: готово, не получилось. Без промпта, текста и имён — их видно на запертом экране. */
+const NOTICES = {
+  photo: ['картинка готова', 'картинка не получилась'],
+  video: ['ролик готов', 'ролик не получился'],
+  transcribe: ['расшифровка готова', 'расшифровка не получилась'],
+  speech: ['озвучка готова', 'озвучка не получилась'],
+};
 /** Адрес записи из ответа или от service worker: иное не открывается. */
 const HREF = /^(?:(?:photo|video|transcribe|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
 const ICONS = {
@@ -193,11 +207,55 @@ function openPanel() {
 
 /* ---- уведомления ------------------------------------------------------------------ */
 
-export function notifyEnabled() {
-  return false;
+/** Уведомления умеет браузер: только через service worker — `new Notification()` на Android запрещён
+ * («Illegal constructor»), хотя 'Notification' in window там истинно. */
+export function notifySupported() {
+  return 'Notification' in window && 'serviceWorker' in navigator && typeof ServiceWorkerRegistration !== 'undefined'
+    && 'showNotification' in ServiceWorkerRegistration.prototype;
 }
 
-function notify() {}
+/** Включены на этом устройстве: флаг studio-notify и разрешение браузера. */
+export function notifyEnabled() {
+  try {
+    return notifySupported() && Notification.permission === 'granted' && localStorage.getItem(NOTIFY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Включить (спрашивает разрешение — звать из нажатия) или выключить; true — получилось. */
+export async function setNotify(on) {
+  try {
+    if (!on) {
+      localStorage.removeItem(NOTIFY_KEY);
+      return true;
+    }
+    // старый Safari отвечает в обратный вызов, а не обещанием
+    const answer = await new Promise((resolve) => {
+      const pending = Notification.requestPermission(resolve);
+      if (pending) pending.then(resolve, () => resolve('denied'));
+    });
+    if (answer !== 'granted') return false;
+    localStorage.setItem(NOTIFY_KEY, '1');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Готовое за жизнь страницы, пока она скрыта: текст без содержимого, tag — id (повтор не дублирует),
+ * data.href — куда вести по нажатию (sw.js). Видимой странице хватает значка; отменённое — не повод. */
+async function notify(item) {
+  const words = NOTICES[item.section];
+  if (!words || item.state === 'cancelled' || document.visibilityState === 'visible' || !notifyEnabled()) return;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    await registration.showNotification(`Студия: ${words[item.state === 'done' ? 0 : 1]}`,
+      { tag: item.id, icon: '/static/icons/icon-192.png', data: { href: item.href } });
+  } catch {
+    // браузер отказал — значок всё скажет при возвращении
+  }
+}
 
 /** Оболочка зовёт после профиля (app.js, рядом с setupMenu). */
 export function setupJobs({ navigate }) {
@@ -220,6 +278,12 @@ export function setupJobs({ navigate }) {
     if (document.visibilityState === 'visible') poll();
     else schedule();
   });
+  // нажатие на уведомление при открытом окне студии: sw.js шлёт адрес записи
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data && typeof event.data.jobs === 'string') openHref(event.data.jobs);
+    });
+  }
   paint();
   poll();
 }
