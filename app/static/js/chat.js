@@ -20,6 +20,14 @@
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>).
  * Раздел без модели (ctx.hint): диалоги читаются, переименовываются и удаляются; новый диалог —
  * подсказка вместо поля ввода, в прежнем поле ввода есть (ход его пару не перепроверяет).
+ *
+ * Из расшифровки (#/chat?transcript=<id>&ask=…, спека 2026-10-21-studio-transcript-edit-chat-design,
+ * раздел 9): новый диалог, POST /api/transcripts/<id>/attachments — вложение встаёт в поле уже
+ * загруженным (`meta` без файла), в поле — вопрос по `ask`; адрес — сразу #/chat без записи в историю.
+ * Модель — локальная (`local_models` ссылки раздела): умолчание, иначе первая отмеченная, иначе не
+ * выбрана, и «Отправить» закрыто до явного выбора. Отправка расшифровки нелокальной модели — после окна
+ * «уйдёт во внешний сервис» (ход с `external_ok`; 409 `external` сервера — то же окно). Ничего не
+ * отправляется само. У отправленного вложения из расшифровки — ссылка «к записи».
  * Текст сервера и модели — только textContent и renderMarkdown (DOMPurify). */
 import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
@@ -37,6 +45,12 @@ const COPIED_MS = 1500;
 const CUT_LENGTH = '\n\n[ответ обрезан пределом длины модели]';   // как chat.CUT_LENGTH сервера
 const CUT_SIZE = '\n\n[ответ обрезан: слишком длинный для студии]';   // как chat.CUT_SIZE сервера
 const ANSWER_MAX = 2000000;      // как chat.ANSWER_MAX: длиннее PUT ответа не примет
+const ASKS = {                   // вопрос в поле диалога из расшифровки
+  discuss: '',
+  summary: 'Составь краткие итоги этой записи: о чём говорили и к чему пришли.',
+  tasks: 'Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы.',
+};
+const EXTERNAL_NOTE = 'Запись уйдёт во внешний сервис — выберите модель';
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
@@ -232,7 +246,8 @@ function build(view, ctx) {
   let links = [];              // подключения раздела «Чат» с отмеченными моделями (GET /api/sections)
   let chatDefault = null;      // { connection_id, model } — умолчание раздела
   let draft = null;            // { connection_id, model } нового диалога
-  let atts = [];               // вложения поля ввода: { file, meta, error, busy }
+  let atts = [];               // вложения поля ввода: { file, meta, error, busy, transcript }; из расшифровки — без file
+  let needModel = false;       // диалог из расшифровки без локальной модели: «Отправить» — после явного выбора
   let sending = false;
   let stick = true;
   let opened = 0;              // медленный ответ прежнего диалога не перебьёт новый
@@ -256,6 +271,7 @@ function build(view, ctx) {
   const connName = el('span', { class: 'chat-conn' });
   const head = el('header', { class: 'head chat-head' }, toggle,
     el('div', { class: 'model-wrap' }, chip, modelMenu), connName);
+  const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
   const notice = el('p', { class: 'chat-error error', id: 'chat-error', 'aria-live': 'polite' });
@@ -272,7 +288,7 @@ function build(view, ctx) {
   const micNote = el('div', { class: 'mic-note' });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input, micNote,
     el('div', { class: 'row' }, clip, attachMic(input, micNote), el('span', { class: 'grow' }), send, stop));
-  const main = el('section', { class: 'chat-main' }, head, scroller, notice, form);
+  const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
 
@@ -410,6 +426,72 @@ function build(view, ctx) {
     chip.classList.toggle('off', none);
     const link = links.find((l) => l.connection.id === connId);
     connName.textContent = link ? link.connection.name : '';
+    paintGuard();
+  }
+
+  /* правило локальной модели для расшифровки */
+  function isLocal({ connection_id: connId, model }) {
+    const link = links.find((l) => l.connection.id === connId);
+    return !!link && (link.local_models || []).includes(model);
+  }
+
+  function localPair() {
+    if (chatDefault && isLocal(chatDefault)) return { ...chatDefault };
+    for (const link of links) {
+      const model = link.models.find((m) => (link.local_models || []).includes(m));
+      if (model) return { connection_id: link.connection.id, model };
+    }
+    return null;
+  }
+
+  function blocked() {
+    return needModel && !chatId && atts.some((a) => a.transcript);
+  }
+
+  function paintGuard() {
+    modelNote.textContent = blocked() ? EXTERNAL_NOTE : '';
+    send.disabled = sending || blocked();
+  }
+
+  function askExternal() {
+    const link = links.find((l) => l.connection.id === chosen().connection_id);
+    const confirm = button('Отправить', { class: 'btn btn-accent', id: 'external-confirm' });
+    const dialog = openDialog(root, { id: 'external-dialog', title: 'Отправить расшифровку?', actions: [confirm],
+      body: [el('p', {}, `Расшифровка уйдёт во внешний сервис «${link ? link.connection.name : 'подключение диалога'}» — отправить?`)] });
+    confirm.addEventListener('click', () => {
+      dialog.close();
+      submit(false, true);
+    });
+  }
+
+  async function fromTranscript(tid, ask) {
+    history.replaceState(null, '', '#/chat');      // перезагрузка не сделает второе вложение
+    open(null);
+    if (ctx.hint) return;                           // без модели чата новый диалог не начать
+    notice.textContent = '';
+    input.value = ASKS[ask] || '';
+    autosize();
+    await sectionsReady;
+    draft = localPair();
+    needModel = !draft;
+    draft ||= { connection_id: null, model: '' };
+    paintChip();
+    let meta;
+    try {
+      meta = await api('POST', `/api/transcripts/${encodeURIComponent(tid)}/attachments`);
+    } catch (err) {
+      notice.textContent = words(err);
+      return;
+    }
+    atts.push({ file: null, meta, error: '', busy: false, transcript: tid });
+    paintAtts();
+  }
+
+  function showText(a) {
+    const tokens = (a.meta.tokens / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+    openDialog(root, { id: 'att-text-dialog', title: a.meta.name, cancelText: 'Закрыть',
+      body: [el('p', { class: 'muted small' }, `${a.meta.chars.toLocaleString('ru-RU')} зн. · ~${tokens} тыс. токенов`),
+        el('pre', { class: 'att-text' }, a.meta.text)] });
   }
 
   function openModels(open) {
@@ -437,6 +519,7 @@ function build(view, ctx) {
 
   async function choose(connId, model) {
     openModels(false);
+    needModel = false;                             // явный выбор
     if (!chat) {
       draft = { connection_id: connId, model };
       paintChip();
@@ -464,7 +547,9 @@ function build(view, ctx) {
 
   function attLabel(a) {
     return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'image' : 'doc'), el('b', {}, a.name),
-      a.kind === 'document' ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null);
+      a.kind === 'document' ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
+      a.source && a.source.exists ? el('a', { class: 'att-source',
+        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null);
   }
 
   function messageNode(m, last) {
@@ -557,7 +642,7 @@ function build(view, ctx) {
     const busy = jobs.has(chatId) || remoteStream();
     send.hidden = busy;
     stop.hidden = !busy;
-    send.disabled = sending;
+    paintGuard();
   }
 
   function schedulePoll() {
@@ -633,19 +718,27 @@ function build(view, ctx) {
   /* поле ввода и вложения */
   function paintAtts() {
     chipsBox.replaceChildren(...atts.map((a) => {
-      const remove = iconButton('x', `Убрать ${a.file.name}`, { class: 'icon-btn att-remove' });
+      const name = a.file ? a.file.name : a.meta.name;
+      const image = a.file ? a.file.type.startsWith('image/') : a.meta.kind === 'image';
+      const remove = iconButton('x', `Убрать ${name}`, { class: 'icon-btn att-remove' });
       remove.addEventListener('click', () => {
         atts = atts.filter((x) => x !== a);
         paintAtts();
         // уже загружено, но не отправлено — и с сервера; отказ не важен: остаток уберёт уборка
         if (a.meta) api('DELETE', `/api/attachments/${a.meta.id}`).catch(() => {});
       });
-      return el('span', { class: `att-chip${a.error ? ' bad' : ''}` },
-        icon(a.file.type.startsWith('image/') ? 'image' : 'doc'), el('span', { class: 'att-name' }, a.file.name),
+      let label = el('span', { class: 'att-name' }, name);
+      if (a.transcript) {                            // весь передаваемый текст — по нажатию
+        label = el('button', { type: 'button', class: 'att-name att-open', title: 'Показать текст' }, name);
+        label.addEventListener('click', () => showText(a));
+      }
+      return el('span', { class: `att-chip${a.error ? ' bad' : ''}` }, icon(image ? 'image' : 'doc'), label,
+        a.transcript ? el('span', { class: 'muted att-state' }, `${a.meta.chars.toLocaleString('ru-RU')} зн.`) : null,
         a.busy ? el('span', { class: 'muted att-state' }, 'загружаю…') : null,
         a.error ? el('span', { class: 'error att-state' }, a.error) : null,
         sending ? null : remove);
     }));
+    paintGuard();
   }
 
   function autosize() {
@@ -672,17 +765,23 @@ function build(view, ctx) {
     }
   }
 
-  async function submit(regenerate) {
+  async function submit(regenerate, externalOk = false) {
     const text = input.value;
     if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
+    if (!regenerate && blocked()) return;
+    if (!regenerate && !externalOk && atts.some((a) => a.transcript) && !isLocal(chosen())) {
+      askExternal();
+      return;
+    }
     sending = true;
     notice.textContent = '';
     syncBusy();
     paintAtts();
     try {
-      await turn(regenerate, text);
+      await turn(regenerate, text, externalOk);
     } catch (err) {
-      notice.textContent = words(err);
+      if (err.code === 'external') askExternal();   // вкладка не знала, что модель не локальная
+      else notice.textContent = words(err);
     } finally {
       sending = false;
       syncBusy();
@@ -690,7 +789,7 @@ function build(view, ctx) {
     }
   }
 
-  async function turn(regenerate, text) {
+  async function turn(regenerate, text, externalOk) {
     if (!chatId) {
       const created = await api('POST', '/api/chats', draft || {});
       ++opened;
@@ -708,7 +807,7 @@ function build(view, ctx) {
     if (chatId !== id) return;
     const before = chat.messages;
     const user = regenerate ? null : { id: null, role: 'user', content: text, status: 'done',
-      attachments: sent.map((a) => a.meta) };
+      attachments: sent.map((a) => (a.transcript ? { ...a.meta, source: { transcript_id: a.transcript, exists: true } } : a.meta)) };
     const message = { id: null, role: 'assistant', content: '', status: 'streaming', via: null, attachments: [] };
     const job = { chatId: id, connId: chat.chat.connection_id, user, message, started: Date.now(), first: false,
       lost: false, controller: new AbortController() };
@@ -721,7 +820,8 @@ function build(view, ctx) {
     let reply;
     try {
       reply = await api('POST', `/api/chats/${id}/turns`,
-        regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) });
+        regenerate ? { regenerate: true }
+          : { text, attachment_ids: sent.map((a) => a.meta.id), ...(externalOk ? { external_ok: true } : {}) });
     } catch (err) {
       jobs.delete(id);
       if (chatId === id) {
@@ -827,7 +927,7 @@ function build(view, ctx) {
     }
   });
 
-  api('GET', '/api/sections').then(({ sections }) => {
+  const sectionsReady = api('GET', '/api/sections').then(({ sections }) => {
     const section = sections.find((s) => s.id === 'chat');
     links = section.links;
     chatDefault = section.default;
@@ -838,6 +938,10 @@ function build(view, ctx) {
   return {
     open,
     refresh,
+    query(query) {                                 // #/chat?transcript=<id>&ask=…
+      const tid = query && query.get('transcript');
+      if (tid) fromTranscript(tid, query.get('ask') || 'discuss');
+    },
     destroy() {
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
@@ -851,10 +955,13 @@ function build(view, ctx) {
 export function mount(view, ctx) {
   screen = build(view, ctx);
   screen.open(ctx.id);
+  screen.query(ctx.query);
 }
 
 export function update(ctx) {
-  if (screen) screen.open(ctx.id);
+  if (!screen) return;
+  screen.open(ctx.id);
+  screen.query(ctx.query);
 }
 
 export function unmount() {

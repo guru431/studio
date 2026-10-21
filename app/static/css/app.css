@@ -418,6 +418,13 @@ label { font-size: 13px; color: var(--muted); }
 .att-chip.bad { border-color: var(--danger); }
 .att-chip svg.ico { width: 15px; height: 15px; color: var(--muted); }
 .att-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-open { padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px; }
+.att-text { max-height: 60dvh; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;
+  font-size: 14px; line-height: 1.5; }
+.att-source { color: var(--accent); font-size: 12px; white-space: nowrap; }
+.chat-model-note { margin: 0 16px; font-size: 13px; }
+.chat-model-note:empty { display: none; }
 .att-state { font-size: 12px; overflow-wrap: anywhere; }
 .att-chip .icon-btn { width: 24px; height: 24px; border-radius: 7px; }
 .att-chip .icon-btn svg.ico { width: 14px; height: 14px; }
