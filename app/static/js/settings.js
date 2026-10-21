@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, ключ Exa «Интернета» чата, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -354,6 +354,45 @@ function storageBlock(host) {
       + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).'),
     el('div', { class: 'row' }, button('Выгрузить мою историю', { class: 'btn', id: 'export-open' },
       () => exportDialog(host)))) };
+}
+
+/* «Интернет» чата: ключ Exa учётки (PUT/DELETE /api/me/exa-key). Страница знает только признак `me.exa_key` —
+ * ключ после сохранения из поля стирается и обратно не приходит. Ссылка — в новую вкладку без Referer. */
+const EXA_KEYS = 'https://dashboard.exa.ai/api-keys';
+
+function exaBlock() {
+  const key = el('input', { class: 'input', id: 'exa-key', type: 'password', autocomplete: 'off', maxlength: '200',
+    spellcheck: 'false' });
+  const note = status('exa-status');
+  const save = button('Сохранить', { class: 'btn', id: 'exa-save' });
+  const remove = button('Убрать', { class: 'btn', id: 'exa-remove' });
+  const show = () => {
+    say(note, me.exa_key ? 'Ключ задан' : 'Ключа нет', me.exa_key ? 'ok' : '');
+    remove.disabled = !me.exa_key;
+  };
+  async function change(method, body) {
+    save.disabled = remove.disabled = true;
+    try {
+      await api(method, '/api/me/exa-key', body);
+      me.exa_key = method === 'PUT';
+      key.value = '';
+      show();
+    } catch (err) {
+      say(note, words(err), 'error');
+      remove.disabled = !me.exa_key;
+    } finally {
+      save.disabled = false;
+    }
+  }
+  save.addEventListener('click', () => change('PUT', { key: key.value }));
+  remove.addEventListener('click', () => change('DELETE'));
+  show();
+  return el('section', { class: 'block exa-block' }, el('h2', {}, 'Интернет'),
+    el('p', { class: 'muted small' }, 'Кнопка «Интернет» в чате: поиск и чтение страниц — через Exa по вашему ключу, '
+      + 'субтитры YouTube — и без него. Ключ — на ',
+    el('a', { href: EXA_KEYS, target: '_blank', rel: 'noopener noreferrer' }, 'dashboard.exa.ai'),
+    ': бесплатно $10 в месяц, без привязанной карты перерасхода нет. Поисковые запросы и адреса страниц видит Exa.'),
+    field('Ключ Exa', key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
 }
 
 /* «Уведомления» (jobs.js): флаг этого устройства; включение спрашивает разрешение браузера. */
@@ -760,7 +799,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     if (shown === 'other') {
       const storage = storageBlock(host);
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), notifyBlock(), storage.el, wipeBlock(host, storage.reload)));
+        lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;
     }
     const s = sectionOf(shown);

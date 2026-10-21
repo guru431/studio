@@ -416,6 +416,35 @@ def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
     assert not refused, problems(r)
 
 
+def test_settings_exa_key_is_saved_and_never_shown(browser, live):
+    """«Прочее» → «Интернет»: ключ Exa сохраняется, поле после этого пустое, показан только признак «Ключ
+    задан» (и после перезагрузки); ключа нет ни в DOM, ни в хранилищах; «Убрать» — «Ключа нет»."""
+    live.add_user("exauser")
+    secret = "exa-secret-key-0123456789"
+    status = "document.querySelector('#exa-status').textContent"
+    r = browser.drive(live.url + "/", [*signin("exauser"), ("wait", READY),
+        *go("settings/other"), ("wait", f"document.querySelector('#exa-key') && {status}"),
+        ("eval", "empty", f"[{status}, document.querySelector('#exa-remove').disabled,"
+                          " document.querySelector('#exa-key').type, document.querySelector('#exa-key').autocomplete,"
+                          " [...document.querySelectorAll('.exa-block a')].map(a => [a.href, a.target, a.rel])]"),
+        ("type", "#exa-key", secret), ("click", "#exa-save"),
+        ("wait", f"{status} === 'Ключ задан'"),
+        ("eval", "field", "document.querySelector('#exa-key').value"),
+        ("eval", "traces", f"({TOKEN_TRACES})([{secret!r}])"),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", f"document.querySelector('#exa-status')?.textContent === 'Ключ задан'"),
+        ("eval", "me", f"(async () => (await {API}.api('GET', '/api/me')).exa_key)()"),
+        ("click", "#exa-remove"), ("wait", f"{status} === 'Ключа нет'"),
+        ("eval", "gone", f"(async () => (await {API}.api('GET', '/api/me')).exa_key)()")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["empty"] == ["Ключа нет", True, "password", "off",
+                          [["https://dashboard.exa.ai/api-keys", "_blank", "noopener noreferrer"]]]
+    assert v["field"] == "" and v["traces"] == [] and v["me"] is True and v["gone"] is False
+    assert not problems(r), problems(r)
+
+
 def spent(gw):
     """Сколько шлюз нарисовал, освободил, озвучил, ответил и сколько раз его спросили о роликах."""
     return (len(gw.generations), len(gw.releases), len(gw.video_calls), len(gw.descriptions), len(gw.chat_requests),
@@ -953,6 +982,68 @@ def test_chat_with_a_pdf_attachment(browser, live):
     content = live.gw.chat_requests[-1]["messages"][-1]["content"]
     assert content.startswith('<document name="договор.pdf">') and "Payment is due" in content
     assert content.endswith("Какой срок оплаты?")
+    assert not problems(r), problems(r)
+
+
+WEB_TOGGLE = "document.querySelector('#web-toggle')"
+#: ключ Exa учётки через API страницы (сам ключ страница больше нигде не видит) и профиль заново
+EXA_KEY_SET = f"""(async () => {{ const m = {API};
+  await m.api('PUT', '/api/me/exa-key', {{ key: 'exa-test-key' }}); await m.loadMe(); return true; }})()"""
+
+
+def test_chat_internet_toggle_search_and_sources(browser, live):
+    """«Интернет»: кнопка выключена → включить → ход: строка «Ищу: …», ответ, под ним «Источники» со
+    ссылками в новую вкладку без адреса студии; перезагрузка — кнопка включена (хранится у диалога);
+    диалог на прямом подключении — кнопки нет."""
+    live.add_user("webber")
+    live.gw.chat_script = [{"tool_calls": [("web_search", json.dumps({"query": "python 3.14"}))]},
+                           ["Python 3.14 вышел ", "7 октября."]]
+    live.gw.chat_delay = 1.5                 # строку хода видно, пока модель молчит после поиска
+    searches = len(live.gw.exa_requests)
+    try:
+        r = browser.drive(live.url + "/", [*signin("webber"), ("wait", READY), add_gateway(),
+            ("eval", "exa", EXA_KEY_SET), add_cloud(live.cloud),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden"),
+            ("eval", "before", f"[{WEB_TOGGLE}.getAttribute('aria-pressed'), {WEB_TOGGLE}.textContent.trim()]"),
+            ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("eval", "hint", "document.querySelector('#web-note').textContent"),
+            ("type", "#chat-input", "Что нового в Python?"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.msg-meta').textContent.startsWith('Ищу:')"),
+            ("eval", "progress", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps')"),
+            ("eval", "answer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+            ("eval", "summary", f"{LAST_ANSWER}.querySelector('details.web-steps summary').textContent"),
+            ("eval", "steps", f"{LAST_ANSWER}.querySelector('details.web-steps li').textContent"),
+            ("eval", "links", f"[...{LAST_ANSWER}.querySelectorAll('details.web-steps a')]"
+                              ".map(a => [a.href, a.textContent, a.target, a.rel])"),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"document.querySelectorAll('#messages .msg').length === 2 && {WEB_TOGGLE}"),
+            ("eval", "kept", f"[{WEB_TOGGLE}.hidden, {WEB_TOGGLE}.getAttribute('aria-pressed'),"
+                             f" !!{LAST_ANSWER}.querySelector('details.web-steps')]"),
+            # тот же диалог на прямом подключении: инструменты ему не даются — кнопки нет
+            ("click", "#model-chip"),
+            ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+            ("click", ".model-option[data-model=\"cloud-chat\"]"),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('cloud-chat')"),
+            ("wait", f"{WEB_TOGGLE}.hidden"),
+            ("eval", "direct", "document.querySelector('#web-note').textContent")])
+    finally:
+        live.gw.chat_delay = 0
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == ["false", "Интернет"] and v["hint"] == ""
+    assert v["progress"] == "Ищу: python 3.14"
+    assert v["answer"] == "Python 3.14 вышел 7 октября."
+    assert v["summary"] == "Источники (1)" and "python 3.14" in v["steps"]
+    assert v["links"] == [
+        ["https://www.python.org/downloads/", "Download Python", "_blank", "noopener noreferrer"],
+        ["https://docs.python.org/3/whatsnew/", "What's New in Python", "_blank", "noopener noreferrer"]]
+    assert v["kept"] == [False, "true", True] and v["direct"] == ""
+    assert [(p, b["query"], k) for p, b, k in live.gw.exa_requests[searches:]] == [("/search", "python 3.14", "exa-test-key")]
     assert not problems(r), problems(r)
 
 
@@ -3404,6 +3495,50 @@ def test_transcript_in_the_chat_history_asks_once_per_cloud_model(browser, live)
     assert v["asked"] == "Расшифровка уйдёт во внешний сервис «Шлюз» — отправить?"
     assert [q["model"] for q in live.gw.chat_requests[sent:]] == [
         "local-gemma-abl", "local-gemma-abl", "gemma4-abl", "gemma4-abl", "gemma4-abl"]
+    assert not problems(r), problems(r)
+
+
+def test_chat_internet_transcript_asks_before_exa(browser, live):
+    """Расшифровка в диалог локальной модели с включённым «Интернетом» и ключом Exa: окно «могут уйти в
+    Exa», ход — только после «Отправить» в нём; следующий ход того же диалога — без окна."""
+    live.add_user("trweb")
+    r = browser.drive(live.url + "/", [*transcribed("trweb", 1.0), ("eval", "exa", EXA_KEY_SET),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=summary]"), ("wait", CHAT_CHIP),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden"), ("click", "#web-toggle"),
+        ("click", "#send"), ("wait", is_open("#web-dialog")),
+        ("eval", "asked", "document.querySelector('#web-dialog p').textContent"),
+        ("eval", "before", TURNS_SO_FAR), ("eval", "external", NOT_ASKED),
+        ("click", "#web-confirm"), ("wait", f"{ASSISTANTS} === 1 && {ANSWERED}"),
+        ("eval", "web", f"""(async () => {{ const m = {API};
+          return (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).chat.web; }})()"""),
+        ("type", "#chat-input", "Ещё"), ("click", "#send"),
+        ("wait", f"{ASSISTANTS} === 2 && {ANSWERED}"), ("eval", "again", "!document.querySelector('#web-dialog')")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["asked"] == "Запросы, составленные из расшифровки, могут уйти в Exa — отправить?"
+    assert v["before"] == 0 and v["external"] and v["web"] is True and v["again"]
+    assert not problems(r), problems(r)
+
+
+def test_chat_internet_and_a_cloud_model_ask_in_turn(browser, live):
+    """Расшифровка, нелокальная модель и «Интернет» с ключом Exa: сначала окно внешнего сервиса, затем окно
+    Exa, ход — одним запросом после обоих."""
+    live.add_user("trboth")
+    r = browser.drive(live.url + "/", [*transcribed("trboth", 1.0), ("eval", "exa", EXA_KEY_SET),
+        ("eval", "unmark", UNMARK_LOCAL),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=tasks]"), ("wait", CHAT_CHIP),
+        ("click", "#model-chip"), ("click", "#model-menu .model-option[data-model='gemma4-abl']"),
+        ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden"), ("click", "#web-toggle"),
+        ("click", "#send"), ("wait", is_open("#external-dialog")), ("eval", "first", "!document.querySelector('#web-dialog')"),
+        ("click", "#external-confirm"), ("wait", is_open("#web-dialog")),
+        ("eval", "before", TURNS_SO_FAR),
+        ("click", "#web-confirm"), ("wait", f"{ASSISTANTS} === 1 && {ANSWERED}"),
+        ("eval", "turns", TURNS_SO_FAR)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["first"] and v["before"] == 0 and v["turns"] == 1
+    assert live.gw.chat_requests[-1]["model"] == "gemma4-abl" and live.gw.chat_requests[-1].get("tools")
     assert not problems(r), problems(r)
 
 
