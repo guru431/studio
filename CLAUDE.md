@@ -69,6 +69,14 @@
   держатся согласованными (`sections._sync_legacy`) — новая логика их не читает. Ход начатого
   диалога пару не перепроверяет (`chat.create_turn` — `connections.get`, план section-connections,
   Task 4): галочки — правило выбора для нового, не запрет старого (README «Подключения и разделы»).
+- Правка расшифровки — JSON `transcripts.edits` (`texts` по номеру реплики, `names` по метке
+  «Собеседник N») поверх файла итога, который не переписывается; показываемые реплики для GET,
+  выгрузок и вложения собирает одна `transcripts.view`. Файл итога новых расшифровок несёт ещё `raw` —
+  сегменты до склейки с номером реплики `turn` (`speech.turns`), по ним SRT (`exports.srt`, пределы 7 с
+  и 84 знака); прежний код читает только `segments`. Вложение из расшифровки
+  (`POST /api/transcripts/<id>/attachments`) — обычный документ чата со своим .txt и
+  `attachments.source_transcript_id` (без FK); ход, который привязывает его к модели, не локальной по
+  `sections.is_local` (`local-*` подключения srvllm через сервер), — 409 `external` без `external_ok`.
 - История: база SQLite — `/var/lib/studio/studio.db` (локальный диск); файлы — storage
   `\\storage\dd$\SharedData\studio`, на debian `/mnt/storage/SharedData/studio`. Токены подключений в
   базе зашифрованы `STUDIO_DATA_KEY` (Fernet), пароли — scrypt.
