@@ -390,6 +390,30 @@ def test_open_refuses_a_foreign_key_a_replay_no_uv_and_a_stale_challenge(studio)
     assert studio.c.get("/api/me").status_code == 423
 
 
+def test_foreign_origin_or_rp_id_neither_adds_nor_opens(studio, caplog):
+    """Origin и RP ID — из STUDIO_ORIGIN, а не из запроса; отказ в журнале — с типом ошибки, без origin."""
+    caplog.set_level(logging.INFO)
+    uid = owner(studio)
+    for key in (SoftKey(origin="https://evil.test"), SoftKey(rp_id="evil.test")):
+        options = studio.c.post("/api/passkeys/options", json={"password": "password-123"}).json()
+        r = studio.c.post("/api/passkeys", json={"credential": key.register(options), "name": "iPhone"},
+                          headers={"Host": "evil.test", "Origin": "https://evil.test"})
+        assert r.status_code == 400 and code(r) == "passkey"
+    assert studio.c.get("/api/passkeys").json() == {"items": []}
+    assert f"пользователь {uid}: ключ не добавлен (InvalidRegistrationResponse)" in caplog.text
+    lock_on(uid); phone(studio)
+    studio.c.post("/api/lock/now")
+    for key in (SoftKey(origin="https://evil.test"), SoftKey(rp_id="evil.test")):
+        insert_key(uid, key)
+        options = studio.c.post("/api/lock/challenge").json()
+        r = studio.c.post("/api/lock/open", json={"credential": key.assertion(options)},
+                          headers={"Host": "evil.test", "Origin": "https://evil.test"})
+        assert r.status_code == 403 and code(r) == "passkey"
+    assert studio.c.get("/api/me").status_code == 423
+    assert f"пользователь {uid}: ключ не подошёл (InvalidAuthenticationResponse)" in caplog.text
+    assert "evil.test" not in caplog.text
+
+
 def test_challenge_without_keys_is_409(studio):
     owner(studio)
     r = studio.c.post("/api/lock/challenge")
