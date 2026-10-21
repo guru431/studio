@@ -376,6 +376,87 @@ def test_unreadable_exa_key_answers_in_words(studio):
     assert studio.gw.exa_requests == []
 
 
+# ---- найденное в следующих ходах (6.5) --------------------------------------------------------
+
+def test_found_goes_to_the_next_turn_inside_the_previous_user_message(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="версия Python")]}, ["Python 3.14."]]
+    sse(turn(studio, cid, "Какая версия Python?"))
+    (step,) = steps_of(messages(studio, cid)[1]["id"])
+    studio.gw.chat_script = [["Да."]]
+    sse(turn(studio, cid, "Точно?"))
+    sent = studio.gw.chat_requests[-1]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user"]
+    assert sent[1]["content"] == f'<web kind="search">\n{step["text"]}\n</web>\n\nКакая версия Python?'
+    assert sent[2]["content"] == "Python 3.14." and sent[3]["content"] == "Точно?"
+    assert all("tool_calls" not in m for m in sent)
+    assert len(studio.gw.exa_requests) == 1                               # Exa не зовётся снова
+
+
+def test_history_block_holds_each_step_with_its_model_text():
+    steps = [{"kind": "search", "query": "q", "results": [], "text": "найдено"},
+             {"kind": "page", "url": "u", "error": "страница не найдена"}]
+    assert web.history_block(steps) == (
+        '<web kind="search">\nнайдено\n</web>\n\n'
+        '<web kind="page">\nОшибка инструмента: страница не найдена\n</web>\n\n')
+    assert web.history_block([]) == ""
+
+
+def test_found_goes_into_the_first_text_part_of_a_message_with_a_photo():
+    """compose без сервера: сообщение пользователя частями (фото) — блок в начале первой текстовой части;
+    частей без текста — новая текстовая часть первой."""
+    block = '<web kind="search">\nнайдено\n</web>\n\n'
+    assert chat._prefix(block, "вопрос") == block + "вопрос"
+    parts = [{"type": "text", "text": "вопрос"}, {"type": "image_url", "media_id": "m"}]
+    assert chat._prefix(block, parts) == [{"type": "text", "text": block + "вопрос"}, parts[1]]
+    assert chat._prefix(block, [parts[1]]) == [{"type": "text", "text": block}, parts[1]]
+
+
+def test_found_that_does_not_fit_refuses_the_next_turn(studio, monkeypatch):
+    cid = web_chat(studio)
+    studio.gw.exa_page_text = "слово " * 6000                           # ~12 тыс. токенов
+    studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
+    sse(turn(studio, cid, "Прочитай"))
+    monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": chat.RESERVE_TOKENS + 5000})
+    before = len(messages(studio, cid))
+    r = turn(studio, cid, "Ещё?")
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "context"
+    assert len(messages(studio, cid)) == before
+
+
+def test_error_answer_gives_no_found_to_the_next_turn(studio):
+    cid = web_chat(studio)
+    studio.gw.chat_ending = None                                          # второй круг рвётся без конца
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["Обры"]]
+    assert sse(turn(studio, cid, "Найди"))[-1][0] == "error"
+    answer = messages(studio, cid)[1]
+    assert answer["status"] == "error" and steps_of(answer["id"])
+    studio.gw.chat_ending = "stop"
+    studio.gw.chat_script = [["Ок."]]
+    sse(turn(studio, cid, "Ещё раз"))
+    sent = studio.gw.chat_requests[-1]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user"] and sent[1]["content"] == "Найди\n\nЕщё раз"
+    assert "<web" not in json.dumps(sent, ensure_ascii=False)
+
+
+def test_history_search_does_not_look_into_the_found(studio):
+    """Поиск по истории — по `messages.content`: слово только из выдержки Exa диалог не находит."""
+    cid = web_chat(studio)
+    studio.gw.exa_replies["/search"] = (200, {"results": [
+        {"title": "Сайт", "url": "https://example.test/", "highlights": ["Зюзюкамбра цветёт весной"]}]})
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["Растение найдено."]]
+    sse(turn(studio, cid, "Найди"))
+    assert "Зюзюкамбра" in steps_of(messages(studio, cid)[1]["id"])[0]["text"]
+
+    def items(q):
+        r = studio.c.post("/api/search", json={"q": q})
+        assert r.status_code == 200, r.text
+        return r.json()["items"]
+
+    assert items("Растение")                                              # ответ модели — находится
+    assert items("Зюзюкамбра") == []
+
+
 def test_labels_and_model_text_of_steps():
     assert web.label("search", {"query": "  новости\n  Python "}) == "новости Python"
     assert web.label("page", {"url": "https://example.test/" + "a" * 300}) == ("https://example.test/" + "a" * 300)[:200]

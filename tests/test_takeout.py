@@ -309,6 +309,24 @@ def test_export_holds_transcript_edits_and_presets(studio):
         {"id": "p1", "section": "photo", "name": "night", "params": {"model": "lustify"}, "created": T0}]
 
 
+def test_export_holds_the_steps_of_the_internet_but_not_the_exa_key(studio):
+    """Шаги «Интернета» ответа — `tools` целиком (с текстом для модели), у прочих сообщений — []; ключа Exa
+    учётки в архиве нет ни открытым, ни шифром."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.put("/api/me/exa-key", json={"key": "exa-secret-key-123"}).status_code == 204
+    history(uid, "mine")
+    steps = [{"kind": "search", "query": "mine query", "results": [{"title": "t", "url": "https://example.test/",
+                                                                     "published": ""}], "text": "1. t\nfound text"},
+             {"kind": "page", "url": "https://example.test/x", "error": "страница не найдена"}]
+    put("UPDATE messages SET tools = ? WHERE id = 'minechat1-a'", json.dumps(steps, ensure_ascii=False))
+    _, z = download(studio, ["chat"])
+    chat = json.loads(unzip(z).read("chats/minechat1.json"))
+    assert [m["tools"] for m in chat["messages"]] == [[], steps]
+    exa_enc = state.DB.execute("SELECT exa_key FROM users WHERE id = ?", (uid,)).fetchone()[0]
+    for secret in (b"exa-secret-key-123", bytes(exa_enc), b"exa_key"):
+        assert secret not in z.content, secret
+
+
 def as_user(uid):
     return SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)))
 

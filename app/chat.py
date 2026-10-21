@@ -275,6 +275,17 @@ def _merge(first, second):
     return [{"type": "text", "text": text}] + [p for p in parts if p["type"] != "text"]
 
 
+def _prefix(block: str, content):
+    """Найденное прежнего ответа — в начало сообщения пользователя: строке — префиксом, частям — в начало
+    первой текстовой части (её нет — новой первой частью)."""
+    if isinstance(content, str):
+        return block + content
+    for n, p in enumerate(content):
+        if p["type"] == "text":
+            return [*content[:n], {**p, "text": block + p["text"]}, *content[n + 1:]]
+    return [{"type": "text", "text": block}, *content]
+
+
 def _cap_images(messages: list[dict]) -> None:
     """Не больше MAX_IMAGES картинок на весь запрос (gemma-abl больше не примет): остаются самые
     свежие, прежние — пометкой DROPPED, чтобы модель знала о пропуске; в истории диалога фото целы."""
@@ -295,8 +306,10 @@ def _cap_images(messages: list[dict]) -> None:
 
 def compose(chat_id: str, upto: str) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
-    пользователя подряд сливаются, картинок — не больше MAX_IMAGES на весь запрос. Синхронно и без
-    файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT."""
+    пользователя подряд сливаются, картинок — не больше MAX_IMAGES на весь запрос. Найденное «Интернетом»
+    (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
+    без ролей `tool` и `tool_calls`. Синхронно и без файлов (идёт в транзакции хода): картинки — частями с
+    id media, данные — fill_photos после COMMIT."""
     atts = _attachments(chat_id)
     out = []
     for row in _messages(chat_id):
@@ -307,8 +320,12 @@ def compose(chat_id: str, upto: str) -> list[dict]:
                     out[-1]["content"] = _merge(out[-1]["content"], content)
                 else:
                     out.append({"role": "user", "content": content})
-            elif row["content"]:
-                out.append({"role": "assistant", "content": row["content"]})
+            else:
+                steps = json.loads(row["tools"] or "[]")
+                if steps and out and out[-1]["role"] == "user":
+                    out[-1]["content"] = _prefix(web.history_block(steps), out[-1]["content"])
+                if row["content"]:
+                    out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
             break
     _cap_images(out)
