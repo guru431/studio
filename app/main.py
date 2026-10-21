@@ -24,6 +24,7 @@ import admin
 import audio
 import auth
 import chat
+import checks
 import config
 import connections
 import db
@@ -103,6 +104,7 @@ app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(screenlock.router)
 app.include_router(connections.router)
+app.include_router(checks.router)
 app.include_router(sections.router)
 app.include_router(admin.router)
 app.include_router(media.router)
