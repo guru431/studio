@@ -93,6 +93,13 @@ def test_install_checks_the_share_by_a_real_write():
     assert "test -w" not in uncommented(INSTALL)
 
 
+def test_install_warns_without_yt_dlp():
+    """yt-dlp общий на debian (root обновляет его ночью): нет — предупреждение, выкладка идёт дальше."""
+    line = next(s for s in uncommented(INSTALL).splitlines() if "command -v yt-dlp" in s)
+    assert "ВНИМАНИЕ: нет yt-dlp" in line and ">&2" in line
+    assert "exit" not in line and "apt-get" not in line and "pip" not in line
+
+
 def test_vhost_is_public_and_streams_chat():
     v = (DEPLOY / "apache-vhost.conf").read_text(encoding="utf-8")
     assert "ServerName studio.example.com" in v and "Require ip" not in v

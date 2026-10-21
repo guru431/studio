@@ -66,6 +66,9 @@ fi
 
 # Звук студии (расшифровка, озвучка) — ffmpeg debian; до подмены кода: не встал — работает прежний
 command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg >/dev/null
+# Субтитры YouTube в чате — общий yt-dlp debian (root обновляет его ночью из /etc/crontab): своей копии нет,
+# поэтому без него только предупреждение, выкладка идёт дальше
+command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — чтение YouTube в чате недоступно" >&2
 
 # Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
 # Собирается в $NEW/.venv, только если сменились requirements.txt или python3 (штамп в самой
