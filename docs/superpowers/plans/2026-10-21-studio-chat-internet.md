@@ -252,6 +252,11 @@ return None
 - `web.for_model(step: dict) -> str` — `step["text"]` или `«Ошибка инструмента: <error>»`;
   `web.public(step: dict) -> dict` — шаг без `text`; `web.label(kind: str, args: dict) -> str` — запрос,
   адрес или `субтитры <адрес>`, до 200 знаков.
+- `chat.WEB_NOTE` — строка, которая дописывается к системному сообщению даты, пока в запросе есть
+  `tools` (задача 1: без неё gemma-abl на «найди в интернете» отвечает по памяти): «У тебя есть доступ к
+  интернету через инструменты: <перечень по `kinds`>. Если пользователь просит найти что-то в интернете,
+  прочитать ссылку или ролик YouTube или нужны свежие данные — вызови инструмент, а не отвечай по памяти.»
+  Последний круг без `tools` — без неё.
 - `chat.TOOL_ROUNDS = 5`; `chat.CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"`;
   `chat.NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"`.
 - `chat.ToolCall` — `@dataclass`: `id: str`, `name: str`, `arguments: str` (склейка кусков).
@@ -296,6 +301,8 @@ while True:
 `STREAM_TOOLS`/`TOOL_ROLE` модуля.
 
 - [ ] Тесты (`chat_script` + Exa-подделка задачи 4 + `web.RUN`):
+  `test_web_note_goes_only_with_tools` (системное сообщение с `WEB_NOTE` — в запросах с `tools`, без
+  них — только дата);
   `test_web_off_sends_no_tools_and_calls_nothing` (анти-цель 1: `tools` нет ни в одном запросе, `exa_requests`
   пусто, `RUN` не вызван — даже если в тексте ссылка YouTube); `test_model_searches_and_answers` (второй
   запрос несёт `tool_calls` и `role: tool` с текстом поиска; в Exa — только `query`; ответ `done`;
