@@ -246,7 +246,8 @@ def test_connection_out_carries_only_a_hint(studio):
     cid = add_connection(studio, token="cloud-key-1234567", sections=["chat"], name="Облако")
     items = studio.c.get("/api/connections").json()["items"]
     assert items == [{"id": cid, "name": "Облако", "kind": "openai", "base_url": "https://cloud.test/v1",
-                      "sections": ["chat"], "proxied": False, "token_hint": "…4567"}]
+                      "sections": ["chat"], "proxied": False, "dropped": False, "token_hint": "…4567",
+                      "passport": None}]
     cid = add_gateway(studio)
     gw = studio.c.get("/api/connections").json()["items"][1]
     assert gw["id"] == cid and gw["proxied"] and gw["sections"] == list(sections.SECTIONS)
@@ -435,6 +436,78 @@ def test_models_of_a_proxied_connection_come_through_the_server(studio):
     direct = add_connection(studio)
     r = studio.c.get(f"/api/connections/{direct}/models")
     assert r.status_code == 409 and code(r) == "direct" and len(studio.gw.requests) == 2
+
+
+def test_dropped_connection_models_say_so(studio):
+    """Адрес убран из списка: «Обновить модели» — этими словами, а не «нет связи» и не 409 direct; запроса нет."""
+    cid = add_gateway(studio)
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    assert connections.dropped(conn_of(cid)) and studio.c.get("/api/connections").json()["items"][0]["dropped"]
+    for path in (f"/api/connections/{cid}/models", f"/api/sections/chat/links/{cid}/found",
+                 f"/api/sections/photo/links/{cid}/found"):
+        r = studio.c.get(path)
+        assert r.status_code == 409 and code(r) == "refused", path
+        assert r.json()["detail"]["message"] == "адрес подключения «srvllm» убран из списка администратора"
+    assert studio.gw.requests == []
+    direct = add_connection(studio)                       # настоящее прямое — по-прежнему direct
+    assert not connections.dropped(conn_of(direct))
+    assert code(studio.c.get(f"/api/connections/{direct}/models")) == "direct"
+
+
+def test_internal_name_is_told_apart_from_the_list(studio, monkeypatch):
+    named_list("api.cloud.test:443")
+    async def resolve(host, port): return ["10.0.0.7"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(studio, base_url="https://api.cloud.test/v1", token="cloud-key-1")
+    with pytest.raises(upstream.UpstreamRefused) as e:
+        asyncio.run(upstream.request(conn_of(cid), "GET", "https://api.cloud.test/v1/models"))
+    assert e.value.reason == "internal"
+    inside = upstream.refused_words(e.value, conn_of(cid))
+    with pytest.raises(upstream.UpstreamRefused) as e:
+        asyncio.run(upstream.request(conn_of(cid), "GET", "https://other.test/v1/models"))
+    assert e.value.reason == "unlisted" and upstream.refused_words(e.value, conn_of(cid)) != inside
+    assert "внутренний адрес" in inside
+    r = studio.c.get(f"/api/connections/{cid}/models")
+    assert r.status_code == 409 and code(r) == "refused" and r.json()["detail"]["message"] == inside
+    assert studio.gw.requests == []
+
+
+def test_keyless_request_carries_no_key(studio):
+    conn = conn_of(add_gateway(studio))
+    asyncio.run(upstream.request(conn, "GET", GW + "/v1/models", keyless=True))
+    q, = studio.gw.requests
+    assert "authorization" not in q.headers
+    with pytest.raises(upstream.UpstreamRefused):                     # список — и без ключа
+        asyncio.run(upstream.request(conn, "GET", "http://10.77.1.1/", keyless=True))
+
+
+def test_patch_drops_the_passport_on_address_kind_or_token(studio):
+    state.DB.execute("""UPDATE settings SET value = '["10.77.1.15:4000", "10.77.1.16:4000"]'"""
+                     " WHERE key = 'allowlist'")
+    cid = add_connection(studio, kind="openai", base_url=GW + "/v1", token="gw-secret-token", sections=["chat"])
+    stamp = {"checked": 1.0, "source": "server", "profile": "compatible", "routes": [], "models": [], "probes": {}}
+    for change, kept in [({"name": "Новое"}, True), ({"sections": ["chat"]}, True), ({"token": "fresh-key-1"}, False),
+                         ({"base_url": GW16 + "/v1", "token": "k16-key-1"}, False),
+                         ({"kind": "srvllm", "base_url": GW16, "token": "k16-key-2"}, False)]:
+        connections.save_passport(cid, stamp)
+        r = studio.c.patch(f"/api/connections/{cid}", json=change)
+        assert r.status_code == 200, change
+        assert (r.json()["passport"] == stamp) is kept and (connections.passport_of(cid) == stamp) is kept, change
+
+
+def test_admin_mirrors_carry_no_passport(studio):
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
+    base = f"/api/admin/users/{bob}/connections"
+    cid = studio.c.post(base, json={"name": "gw", "kind": "srvllm", "base_url": GW, "token": "bob-gateway-key",
+                                    "sections": ["photo"]}).json()["id"]
+    connections.save_passport(cid, {"checked": 1.0, "source": "server", "profile": "srvllm", "routes": [],
+                                    "models": [], "probes": {}})
+    answers = [studio.c.get(base).json()["items"][0], studio.c.patch(f"{base}/{cid}", json={"name": "x"}).json(),
+               studio.c.get(f"/api/admin/users/{bob}/sections").json()["sections"][1]["links"][0]["connection"],
+               studio.c.put(f"/api/admin/users/{bob}/sections/photo/links/{cid}",
+                            json={"models": ["flux"]}).json()["links"][0]["connection"]]
+    for answer in answers:
+        assert "passport" not in answer and answer["id"] == cid
 
 
 def test_admin_manages_a_users_connections(studio):

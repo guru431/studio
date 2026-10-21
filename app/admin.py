@@ -265,17 +265,22 @@ async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require
 
 
 # ---- подключения пользователя: те же действия, что в профиле, но для `uid` ------
+# паспорт (проверка подключения, checks.py) панель не показывает и проверять не даёт
+
+def _bare(conn: dict) -> dict:
+    return {k: v for k, v in conn.items() if k != "passport"}
+
 
 @router.get("/users/{uid}/connections")
 async def list_user_connections(uid: int):
     _user_out(uid)
-    return {"items": [connections.out(c) for c in connections.list_for(uid)]}
+    return {"items": [connections.out(c, passport=False) for c in connections.list_for(uid)]}
 
 
 @router.post("/users/{uid}/connections", status_code=201)
 async def create_user_connection(uid: int, body: connections.ConnIn, admin: auth.User = Depends(auth.require_admin)):
     _user_out(uid)
-    conn = connections.create(uid, body)
+    conn = _bare(connections.create(uid, body))
     log.info("администратор %d: пользователю %d добавлено подключение %d", admin.id, uid, conn["id"])
     return conn
 
@@ -284,7 +289,7 @@ async def create_user_connection(uid: int, body: connections.ConnIn, admin: auth
 async def patch_user_connection(uid: int, conn_id: int, body: connections.ConnPatch,
                                 admin: auth.User = Depends(auth.require_admin)):
     _user_out(uid)
-    conn = connections.patch(uid, conn_id, body)
+    conn = _bare(connections.patch(uid, conn_id, body))
     log.info("администратор %d: у пользователя %d изменено подключение %d", admin.id, uid, conn_id)
     return conn
 
@@ -302,7 +307,7 @@ async def delete_user_connection(uid: int, conn_id: int, admin: auth.User = Depe
 @router.get("/users/{uid}/sections")
 async def get_user_sections(uid: int):
     _user_out(uid)
-    return sections.all_out(uid)
+    return sections.all_out(uid, passport=False)
 
 
 @router.post("/users/{uid}/sections/{section}/links")
@@ -310,7 +315,7 @@ async def add_user_link(uid: int, section: str, body: sections.LinkIn, admin: au
     _user_out(uid)
     sections.link(uid, section, body.connection_id)
     log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
-    return sections.section_out(uid, section)
+    return sections.section_out(uid, section, passport=False)
 
 
 @router.delete("/users/{uid}/sections/{section}/links/{conn_id}", status_code=204)
@@ -327,7 +332,7 @@ async def put_user_models(uid: int, section: str, conn_id: int, body: sections.M
     _user_out(uid)
     sections.set_models(uid, section, conn_id, body.models)
     log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
-    return sections.section_out(uid, section)
+    return sections.section_out(uid, section, passport=False)
 
 
 @router.put("/users/{uid}/sections/{section}/default")
@@ -335,7 +340,7 @@ async def put_user_default(uid: int, section: str, body: sections.DefaultIn, adm
     _user_out(uid)
     sections.set_default(uid, section, body.connection_id, body.model)
     log.info("администратор %d: у пользователя %d изменены разделы", admin.id, uid)
-    return sections.section_out(uid, section)
+    return sections.section_out(uid, section, passport=False)
 
 
 @router.get("/users/{uid}/sections/{section}/links/{conn_id}/found")
