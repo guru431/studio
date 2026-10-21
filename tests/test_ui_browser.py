@@ -1057,6 +1057,44 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_chat_internet_needs_an_exa_key(browser, live):
+    """Решение владельца 2026-10-21: без ключа Exa кнопка «Интернет» видна, но выключена, не нажата, с подсказкой
+    (title и строка под полем); ключ задан в другой вкладке — возвращение на экран (профиль перечитан) её
+    включает, и после перезагрузки тоже. Ключ убрали в другой вкладке — нажатие: 409 словами, кнопка выключена."""
+    live.add_user("nokey")
+    state = (f"[{WEB_TOGGLE}.hidden, {WEB_TOGGLE}.disabled, {WEB_TOGGLE}.getAttribute('aria-pressed'),"
+             f" {WEB_TOGGLE}.title, document.querySelector('#web-note').textContent]")
+    enabled = f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden && !{WEB_TOGGLE}.disabled"
+    put_key = f"(async () => {{ await {API}.api('PUT', '/api/me/exa-key', {{ key: 'exa-test-key' }}); return true; }})()"
+    r = browser.drive(live.url + "/", [*signin("nokey"), ("wait", READY), add_gateway(),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden"),
+        ("eval", "nokey", state),
+        ("eval", "put", put_key),                                   # профиль вкладки ещё без ключа
+        ("eval", "back", "document.dispatchEvent(new Event('visibilitychange')), true"),
+        ("wait", enabled), ("eval", "returned", state),
+        ("eval", "reload", "location.reload()"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", "document.querySelector('#model-chip')?.textContent.includes('local-gemma-abl')"),
+        ("wait", enabled), ("eval", "reloaded", state),
+        ("eval", "open", f"""(async () => {{ const m = {API};
+          location.hash = '#/chat/' + (await m.api('POST', '/api/chats', {{}})).id; return true; }})()"""),
+        ("wait", f"/^#\\/chat\\/./.test(location.hash) && {enabled}"),
+        ("eval", "drop", f"(async () => {{ await {API}.api('DELETE', '/api/me/exa-key'); return true; }})()"),
+        ("click", "#web-toggle"),
+        ("wait", "document.querySelector('#chat-error').textContent.length > 0"),
+        ("eval", "refused", f"[document.querySelector('#chat-error').textContent, ...{state}]")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    hint = "Задайте ключ Exa в Настройках → Прочее → Интернет"
+    assert v["nokey"] == [False, True, "false", hint, hint]
+    title = "Интернет: поиск, страницы и субтитры YouTube"
+    assert v["returned"] == v["reloaded"] == [False, False, "false", title, ""]
+    assert v["refused"] == ["Сначала задайте ключ Exa в Настройках → Прочее → Интернет", False, True, "false", hint, hint]
+    assert known_refusals(problems(r), 409) == [], problems(r)
+
+
 def test_chat_context_refusal_keeps_the_text_and_the_attachments(browser, live):
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
         attach("[new File(['а'.repeat(400000)], 'том.txt', { type: 'text/plain' })]"),

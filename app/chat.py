@@ -97,6 +97,7 @@ NO_ANSWER = "модель не ответила по найденному — п
 CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"
 NO_ROOM = "не помещается в контекст модели"
 NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
+NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Прочее → Интернет"   # PATCH {web: true} без ключа — 409
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
 # памяти (проба 2026-10-21, спека раздел 8)
 WEB_NOTE = ("У тебя есть доступ к интернету через инструменты: {tools}. Если пользователь просит найти что-то в "
@@ -192,8 +193,10 @@ def _chat_view(user_id: int, row) -> dict:
     (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
     подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`); `web` — кнопка
     «Интернет» и `web_tools` — виды инструментов, которые она даст на этом подключении (web.tools_for; пусто
-    — кнопку не показывать: у прямого подключения `web` хранится, но не действует); `external_web` — следующий
-    ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил бы 409 `external_web`)."""
+    у прямого подключения — там `web` хранится, но не действует, — и без ключа Exa); `proxied` — подключение
+    диалога через сервер (страница: нет — кнопки нет, есть без ключа — кнопка выключена с подсказкой);
+    `external_web` — следующий ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил
+    бы 409 `external_web`)."""
     out, conn = _chat_out(row), None
     if row["connection_id"] is not None:
         try:
@@ -205,6 +208,7 @@ def _chat_view(user_id: int, row) -> dict:
     out["external"] = conn is not None and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
+    out["proxied"] = conn is not None and conn.proxied
     out["web_tools"] = web.tools_for(conn, web.has_exa_key(user_id))
     out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
         row["id"], row["web_consent"])
@@ -836,6 +840,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         conn, model = _chat_pair(uid, conn_id, body.model if (body.model or "").strip() else row["model"])
         changes["connection_id"], changes["model"] = conn.id, model
     if body.web is not None:
+        if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
+            raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
         changes["web"] = int(body.web)
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса

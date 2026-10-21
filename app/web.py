@@ -80,10 +80,11 @@ class ToolError(Exception):
 
 def tools_for(conn: "Connection | None", has_key: bool) -> list[str]:
     """Виды инструментов, которые ход диалога даст модели: только путь через сервер (`conn.proxied`, как
-    `via` в chat.create_turn); поиск и страницы — только с ключом Exa."""
-    if conn is None or not conn.proxied:
+    `via` в chat.create_turn) и только с ключом Exa — без ключа ни одного, и YouTube тоже (решение владельца
+    2026-10-21)."""
+    if conn is None or not conn.proxied or not has_key:
         return []
-    return list(KINDS) if has_key else ["youtube"]
+    return list(KINDS)
 
 
 def specs(kinds: list[str]) -> list[dict]:

@@ -33,8 +33,10 @@
  *
  * «Интернет» (спека 2026-10-21-studio-chat-internet, 6.8 и 6.10): кнопка #web-toggle рядом со скрепкой —
  * `web` диалога (PATCH {web}); у нового диалога — в памяти до создания, затем тем же PATCH. Видна, если
- * подключение даёт инструменты (`web_tools` диалога; у нового — путь через сервер, без ключа Exa только
- * YouTube); без `search` — подсказка про ключ Exa. Событие SSE `tool` — строка хода («Ищу: …»), ответ с
+ * подключение идёт через сервер (`proxied` диалога; у нового — подключения из чипа); без ключа Exa
+ * (`me.exa_key`, оболочка перечитывает профиль при возвращении на экран — событие `studio-me`) выключена, не
+ * нажата и с подсказкой WEB_HINT; 409 `no_exa_key` (ключ убрали в другой вкладке) — его слова, кнопка
+ * выключена. Событие SSE `tool` — строка хода («Ищу: …»), ответ с
  * ходом перечитывается: под ним `tools` — «Источники» ссылками в новую вкладку без адреса студии. Ход, чьи
  * запросы к Exa модель составит из расшифровки (`external_web` диалога или новое вложение из неё), — после
  * окна #web-dialog (ход с `web_ok`; 409 `external_web` — то же окно); окно внешней модели — первым. */
@@ -61,7 +63,8 @@ const ASKS = {                   // вопрос в поле диалога из
   tasks: 'Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы.',
 };
 const EXTERNAL_NOTE = 'Запись уйдёт во внешний сервис — выберите модель';
-const WEB_HINT = 'поиск и страницы — после ключа Exa в Настройках';
+const WEB_HINT = 'Задайте ключ Exa в Настройках → Прочее → Интернет';
+const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
 const WEB_TITLE = 'Интернет: поиск, страницы и субтитры YouTube';
 const WEB_ASK = 'Запросы, составленные из расшифровки, могут уйти в Exa — отправить?';
 const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субтитры' };   // строка хода по виду инструмента
@@ -526,27 +529,45 @@ function build(view, ctx) {
     paintWeb();
   }
 
-  /* «Интернет»: виды инструментов, которые ход даст модели (у открытого диалога — сервер, web.tools_for;
-   * у нового — так же по подключению из чипа и ключу Exa профиля) и состояние кнопки */
+  /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
+   * ключа Exa, кнопка выключена с подсказкой; 'ready' — ход даст модели все инструменты. Путь — `proxied`
+   * открытого диалога или подключения из чипа нового, ключ — профиль (перечитывается при возвращении) */
+  function webState() {
+    let proxied;
+    if (chat) proxied = !!chat.chat.proxied;
+    else {
+      const link = links.find((l) => l.connection.id === chosen().connection_id);
+      proxied = !!link && !!link.connection.proxied;
+    }
+    if (!proxied) return 'hidden';
+    return me && me.exa_key ? 'ready' : 'nokey';
+  }
+
   function webTools() {
-    if (chat) return chat.chat.web_tools || [];
-    const link = links.find((l) => l.connection.id === chosen().connection_id);
-    if (!link || !link.connection.proxied) return [];
-    return me && me.exa_key ? ['search', 'page', 'youtube'] : ['youtube'];
+    return webState() === 'ready' ? WEB_KINDS : [];
   }
 
   function webOn() {
-    return chat ? !!chat.chat.web : draftWeb;
+    return webState() === 'ready' && (chat ? !!chat.chat.web : draftWeb);
   }
 
   function paintWeb() {
-    const kinds = webTools();
-    const on = webOn();
-    const hint = kinds.length && !kinds.includes('search') ? WEB_HINT : '';
-    webToggle.hidden = !kinds.length;
-    webToggle.setAttribute('aria-pressed', String(on));
+    const mode = webState();
+    const hint = mode === 'nokey' ? WEB_HINT : '';
+    webToggle.hidden = mode === 'hidden';
+    webToggle.disabled = mode === 'nokey';
+    webToggle.setAttribute('aria-pressed', String(webOn()));
     webToggle.title = hint || WEB_TITLE;
-    webNote.textContent = hint && on ? hint : '';
+    webNote.textContent = hint;
+  }
+
+  /* 409 `no_exa_key`: ключ убрали в другой вкладке — профиль этой вкладки ещё не знал */
+  function noKey(err) {
+    if (err.code !== 'no_exa_key') return false;
+    if (me) me.exa_key = false;
+    notice.textContent = words(err);
+    paintWeb();
+    return true;
   }
 
   async function switchWeb() {
@@ -557,10 +578,10 @@ function build(view, ctx) {
     }
     webToggle.disabled = true;
     try {
-      chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { web: !chat.chat.web });
+      chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { web: !webOn() });
       notice.textContent = '';
     } catch (err) {
-      notice.textContent = words(err);
+      if (!noKey(err)) notice.textContent = words(err);
     } finally {
       webToggle.disabled = false;
     }
@@ -959,7 +980,7 @@ function build(view, ctx) {
       // вкладка не знала (другая вкладка сменила модель, включила «Интернет», ключ Exa появился)
       if (err.code === 'external') askExternal(regenerate, webOk);
       else if (err.code === 'external_web') askWeb(regenerate, externalOk);
-      else notice.textContent = words(err);
+      else if (!noKey(err)) notice.textContent = words(err);
     } finally {
       sending = false;
       syncBusy();
@@ -976,7 +997,7 @@ function build(view, ctx) {
       draft = null;
       history.replaceState(null, '', `#/chat/${created.id}`);
       loadList();
-      if (draftWeb) {                              // «Интернет», включённый до создания диалога
+      if (draftWeb && webState() === 'ready') {    // «Интернет», включённый до создания диалога
         draftWeb = false;
         chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
         paintWeb();
@@ -1071,6 +1092,7 @@ function build(view, ctx) {
   };
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKey);
+  document.addEventListener('studio-me', paintWeb);     // профиль перечитан: ключ Exa могли задать или убрать
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
     if (job && !job.first) paint(job.message);
@@ -1134,6 +1156,7 @@ function build(view, ctx) {
     destroy() {
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
+      document.removeEventListener('studio-me', paintWeb);
       clearInterval(tick);
       clearTimeout(poll);
       clearTimeout(paintTimer);

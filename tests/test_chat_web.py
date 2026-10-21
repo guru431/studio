@@ -26,15 +26,21 @@ def patch(s, cid, **body) -> dict:
     return r.json()
 
 
+NO_KEY = {"code": "no_exa_key", "message": "сначала задайте ключ Exa в Настройках → Прочее → Интернет"}
+
+
+def web_of(cid) -> int:
+    return state.DB.execute("SELECT web FROM chats WHERE id = ?", (cid,)).fetchone()[0]
+
+
 def test_switch_is_stored_and_tools_follow_the_exa_key(studio):
     add_gateway(studio); cid = new_chat(studio)
     chat = chat_of(studio, cid)
-    assert chat["web"] is False and chat["web_tools"] == ["youtube"]      # кнопке есть что включать
-    assert patch(studio, cid, web=True)["web"] is True
-    chat = chat_of(studio, cid)
-    assert chat["web"] is True and chat["web_tools"] == ["youtube"]
+    assert chat["web"] is False and chat["web_tools"] == [] and chat["proxied"] is True   # без ключа — ничего
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
-    assert chat_of(studio, cid)["web_tools"] == ["search", "page", "youtube"]
+    chat = chat_of(studio, cid)
+    assert chat["web"] is False and chat["web_tools"] == ["search", "page", "youtube"]   # ключ ничего не включает
+    assert patch(studio, cid, web=True)["web"] is True
     before = chat_of(studio, cid)
     assert patch(studio, cid, web=None)["web"] is True                  # null — не трогает
     assert patch(studio, cid, title="Новости")["web"] is True           # другое поле — не трогает
@@ -53,14 +59,43 @@ def test_switch_of_someone_elses_chat_is_gone(studio):
     assert chat_of(studio, cid)["web"] is False
 
 
+def test_switch_does_not_turn_on_without_an_exa_key(studio):
+    """Решение владельца 2026-10-21: без ключа Exa «Интернет» не включается (и YouTube тоже) — 409, ничего не
+    меняется, и заголовок того же запроса тоже; выключить можно всегда."""
+    add_gateway(studio); cid = new_chat(studio)
+    r = studio.c.patch(f"/api/chats/{cid}", json={"web": True, "title": "Новости"})
+    assert r.status_code == 409 and r.json()["detail"] == NO_KEY
+    assert web_of(cid) == 0 and chat_of(studio, cid)["title"] is None
+    assert patch(studio, cid, web=False)["web"] is False
+    state.DB.execute("UPDATE chats SET web = 1 WHERE id = ?", (cid,))  # включён до решения
+    assert patch(studio, cid, web=False)["web"] is False and web_of(cid) == 0
+
+
+def test_removing_the_exa_key_turns_the_switch_off_in_all_own_chats(studio):
+    add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    mine = [new_chat(studio), new_chat(studio)]
+    patch(studio, mine[0], web=True); patch(studio, mine[1], web=True)
+    make_user(studio, "bob"); signin(studio, "bob")
+    add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    bobs = new_chat(studio)
+    patch(studio, bobs, web=True)
+    signin(studio, "owner")
+    assert studio.c.delete("/api/me/exa-key").status_code == 204
+    assert [web_of(c) for c in mine] == [0, 0] and web_of(bobs) == 1     # чужие диалоги не тронуты
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    assert [web_of(c) for c in mine] == [0, 0]                            # сохранение ключа ничего не включает
+
+
 def test_direct_connection_keeps_the_switch_but_offers_no_tools(studio):
     gateway = add_gateway(studio); direct = add_connection(studio)
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
     cid = new_chat(studio, connection_id=direct)
     chat = patch(studio, cid, web=True)
-    assert chat["web"] is True and chat["web_tools"] == []
+    assert chat["web"] is True and chat["web_tools"] == [] and chat["proxied"] is False
     chat = patch(studio, cid, connection_id=gateway)                     # туда и обратно — web остаётся
-    assert chat["web"] is True and chat["web_tools"] == ["search", "page", "youtube"]
+    assert chat["web"] is True and chat["web_tools"] == ["search", "page", "youtube"] and chat["proxied"] is True
     chat = patch(studio, cid, connection_id=direct)
     assert chat["web"] is True and chat["web_tools"] == []
 
@@ -72,7 +107,7 @@ def test_tools_for_decides_by_the_path_and_the_key(studio):
     proxied, browser = connections.get(uid, gateway), connections.get(uid, direct)
     assert web.tools_for(None, True) == []
     assert web.tools_for(browser, True) == [] and web.tools_for(browser, False) == []
-    assert web.tools_for(proxied, False) == ["youtube"]
+    assert web.tools_for(proxied, False) == []                            # без ключа — и YouTube нет
     assert web.tools_for(proxied, True) == list(web.KINDS) == ["search", "page", "youtube"]
 
 
@@ -97,11 +132,10 @@ def test_specs_are_openai_functions_with_one_required_string():
 ALL = "web_search, read_page, youtube_subtitles"
 
 
-def web_chat(s, key=True) -> str:
-    """Диалог шлюза с включённым «Интернетом»; key — с ключом Exa у учётки."""
+def web_chat(s) -> str:
+    """Диалог шлюза с ключом Exa у учётки и включённым «Интернетом» (без ключа он не включается)."""
     add_gateway(s)
-    if key:
-        assert s.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    assert s.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
     cid = new_chat(s)
     patch(s, cid, web=True)
     return cid
@@ -505,14 +539,25 @@ def test_web_never_reaches_the_log(studio, monkeypatch, caplog):
         assert f"шаг {kind}: {result}" in caplog.text
 
 
-def test_without_a_key_only_youtube_is_offered(studio):
-    cid = web_chat(studio, key=False)
-    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}, ["ok"]]
-    sse(turn(studio, cid))
-    first = studio.gw.chat_requests[0]
-    assert names(first) == ["youtube_subtitles"] and first["messages"][0] == noted("youtube_subtitles")
-    (step,) = steps_of(messages(studio, cid)[1]["id"])                    # не предложенный — не исполняется
-    assert step["kind"] == "unknown" and step["error"] and studio.gw.exa_requests == []
+def test_without_a_key_nothing_is_offered_even_if_the_switch_is_on(studio, monkeypatch):
+    """Ключ убран мимо DELETE (`web` остался 1): ход — без tools и без строки о доступе в интернет, вызовы
+    модели (и YouTube) не исполняются."""
+    fake = FakeYtDlp()
+    monkeypatch.setattr(web, "RUN", fake)
+    cid = web_chat(studio)
+    state.DB.execute("UPDATE users SET exa_key = NULL")
+    assert web_of(cid) == 1
+    studio.gw.chat_script = [{"text": ["ok"], "tool_calls": [call("youtube_subtitles", url=CANON),
+                                                             call("web_search", query="q")]}]
+    sse(turn(studio, cid, f"Перескажи {CANON}"))
+    (request,) = studio.gw.chat_requests
+    assert "tools" not in request and "tool_choice" not in request
+    assert request["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
+    assert studio.gw.exa_requests == [] and fake.calls == []
+    answer = messages(studio, cid)[1]
+    assert answer["tools"] == [] and steps_of(answer["id"]) is None
+    view = chat_of(studio, cid)
+    assert view["web"] is True and view["web_tools"] == [] and view["external_web"] is False
 
 
 def test_unreadable_exa_key_answers_in_words(studio):
@@ -647,8 +692,9 @@ def test_transcript_goes_to_exa_only_when_confirmed(studio, fake_audio):
     assert consent_of(cid) == first + 1 and chat_of(studio, cid)["external_web"] is False
 
 
-def test_transcript_with_youtube_only_or_web_off_asks_nothing(studio, fake_audio):
-    cid = web_chat(studio, key=False); tid = done_transcript(studio)      # без ключа — только YouTube
+def test_transcript_without_a_key_or_with_web_off_asks_nothing(studio, fake_audio):
+    cid = web_chat(studio); tid = done_transcript(studio)
+    state.DB.execute("UPDATE users SET exa_key = NULL")                  # ключ убран мимо DELETE: web остался 1
     sse(turn(studio, cid, "Итоги?", attachment_ids=[from_transcript(studio, tid).json()["id"]]))
     assert chat_of(studio, cid)["external_web"] is False and consent_of(cid) is None
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204

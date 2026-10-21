@@ -42,7 +42,10 @@
   через `state.HTTP`, не `upstream`; субтитры YouTube — общий `yt-dlp` списком аргументов только по
   `https://www.youtube.com/watch?v=<id>` из `web.youtube_id`, одна дорожка `pick_track`, файлы `<uuid>.*`
   в `tmp_dir`; запуск — `web.RUN`, тесты подменяют; кнопка — `chats.web` (`PATCH` диалога), инструменты
-  хода — `web.tools_for` (только `proxied`, без ключа — только YouTube), круги — `chat.StreamTask` до
+  хода — `web.tools_for` (только `proxied` и только с ключом Exa — без ключа ни одного, YouTube тоже;
+  `PATCH {web: true}` без ключа — 409 `no_exa_key`, `DELETE /api/me/exa-key` тем же запросом ставит
+  `chats.web = 0` всем диалогам учётки; страница — по `proxied` диалога и `me.exa_key`: без ключа кнопка
+  выключена с подсказкой, профиль перечитан — событие `studio-me`), круги — `chat.StreamTask` до
   `TOOL_ROUNDS`, вызовов за круг — до `CALLS_PER_ROUND` (лишним — шаг-ошибка со своим `role: tool`), срок
   ответа — перед каждым вызовом и кругом; `chats.web` читается в транзакции хода и снова перед каждым
   вызовом (выключили — «Интернет выключен», дальше без `tools`); событие SSE `tool`; 400 первого запроса с
