@@ -853,7 +853,9 @@ def test_admin_backup_check_start_failure_stays_said(browser, live):
         return real(u, o); };
       return true; })()"""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
-        *go("admin"), ("wait", f"{result} && {result}.textContent.startsWith('Ещё не проверялась')"),
+        # «Ещё не проверялась…» или итог прошлой проверки (служба общая с test_admin_checks_the_backup)
+        *go("admin"), ("wait", f"{result} && {result}.textContent"
+                               " && !document.querySelector('#admin-backup-check').disabled"),
         ("eval", "stub", stub), ("click", "#admin-backup-check"),
         ("wait", f"{result}.classList.contains('error')"),
         ("eval", "later", f"""new Promise((done) => setTimeout(() => done([{result}.textContent,
