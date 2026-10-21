@@ -7,6 +7,7 @@ tests/test_studio.py): создание, статус, `content`, удалени
 `/v1/chat/completions` (поток OpenAI SSE); речь — `/speech/asr`, `/speech/transcriptions`,
 `/speech/lite/transcriptions` (`asr_replies` — очередь ответов, затем `asr_reply`) и `/speech/tts-qwen`
 (`tts_replies`, последний повторяется). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
+Запросы на хост `api.exa.ai` — Exa (`_exa`), мимо шлюза: ни `requests`, ни `down`, ни `reply`, ни `TOKEN`.
 
 `FakeCloud` — облачный сервис для браузерных тестов: настоящий HTTP на localhost с CORS.
 """
@@ -60,6 +61,15 @@ def _wav(seconds: float = 0.3, rate: int = 24000) -> bytes:
 WAV_FAKE = _wav()
 SPEECH_ASR = ("/speech/asr", "/speech/transcriptions", "/speech/lite/transcriptions")
 RELEASES = ("/slot/images/release", "/slot/images/descriptions/release")
+EXA_HOST = "api.exa.ai"
+#: образец ответа `POST /search` Exa (форма — живая проба 2026-10-21)
+EXA_SEARCH = {"requestId": "req-search", "results": [
+    {"id": "https://www.python.org/downloads/", "title": "Download Python", "url": "https://www.python.org/downloads/",
+     "publishedDate": "2025-10-07T00:00:00.000Z", "author": None,
+     "highlights": ["Python 3.14.0 — Oct. 7, 2025", "Download the latest version for Windows"]},
+    {"id": "https://docs.python.org/3/whatsnew/", "title": "What's New in Python", "url": "https://docs.python.org/3/whatsnew/",
+     "highlights": ["What's New In Python 3.14"]}],
+    "costDollars": {"total": 0.005}}
 
 
 class FakeGateway:
@@ -109,8 +119,16 @@ class FakeGateway:
             {"start": 3.0, "end": 5.0, "speaker": "SPEAKER_01", "text": "Добрый день."}]}
         self.tts_requests = []           # запросы озвучки /speech/tts-qwen
         self.tts_replies = [(200, WAV_FAKE)]   # (код, тело: bytes — звук, dict — JSON); последний повторяется
+        self.exa_requests = []           # (путь, тело, заголовок x-api-key) запросов к Exa
+        #: путь → (код, тело) ответа Exa; `/contents` без записи — образец по адресам запроса
+        self.exa_replies = {"/search": (200, EXA_SEARCH)}
+        self.exa_page_text = "Текст страницы."   # текст образца `/contents` (режется по maxCharacters, как у Exa)
+        self.exa_html = False            # True — 403 text/html Cloudflare, как Exa отвечает debian
+        self.exa_raise = None            # класс исключения httpx вместо ответа Exa
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == EXA_HOST:
+            return self._exa(request)
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("нет соединения", request=request)
@@ -184,6 +202,31 @@ class FakeGateway:
                 yield b"data: [DONE]\n\n"
 
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=chunks())
+
+    def _exa(self, request: httpx.Request) -> httpx.Response:
+        """Exa: `POST /search` и `/contents`. Без ключа — 402 x402, как живой Exa."""
+        path, body = request.url.path, json.loads(request.content or b"{}")
+        self.exa_requests.append((path, body, request.headers.get("x-api-key")))
+        if self.exa_raise is not None:
+            raise self.exa_raise("нет ответа", request=request)
+        if self.exa_html:
+            return httpx.Response(403, text="<!DOCTYPE html><title>Attention Required!</title>"
+                                            "<h1>Sorry, you have been blocked</h1>",
+                                  headers={"content-type": "text/html; charset=UTF-8"})
+        if not request.headers.get("x-api-key"):
+            return httpx.Response(402, json={"error": "Payment required", "tag": "X402_PAYMENT_REQUIRED"})
+        if path in self.exa_replies:
+            code, reply = self.exa_replies[path]
+            return httpx.Response(code, json=reply)
+        if path == "/contents" and request.method == "POST":
+            limit = (body.get("text") or {}).get("maxCharacters")
+            urls = body.get("urls") or []
+            results = [{"id": u, "url": u, "title": f"Страница {httpx.URL(u).host}",
+                        "text": self.exa_page_text[:limit]} for u in urls]
+            statuses = [{"id": u, "status": "success", "source": "cached"} for u in urls]
+            return httpx.Response(200, json={"requestId": "req-contents", "results": results, "statuses": statuses,
+                                             "costDollars": {"total": 0.001}})
+        return httpx.Response(404, json={"error": "Not found", "tag": "NOT_FOUND"})
 
     def _video(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
