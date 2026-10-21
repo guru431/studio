@@ -73,7 +73,8 @@ async def lifespan(_app):
     transcripts.recover()
     speeches.recover()
     state.HTTP = state.make_http()
-    loops = [videos.start_watcher(), chat.start_sweeper(), media.start_purger()] if state.WATCHER else []
+    loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill()]
+             if state.WATCHER else [])
     try:
         yield
     finally:

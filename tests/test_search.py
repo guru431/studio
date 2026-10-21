@@ -1,9 +1,13 @@
 """Поиск по истории (app/search.py, шаг схемы 13): индекс держат триггеры таблиц истории, ответ чата —
 после «готово», расшифровки — по тексту (`transcripts.text`), запрос — телом POST, только своё."""
+import pathlib
+
 import chat
 import state
+import transcripts
 from conftest import add_gateway, make_user
 from test_chat import events_of, new_chat, wait
+from test_transcripts import result_file, upload, wait_tr
 
 IMAGE = ("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
          " VALUES (?, ?, 'generation', ?, ?, '1024x1024', 1, 'done', 'готово', ?)")
@@ -82,3 +86,48 @@ def test_answer_is_indexed_once_it_is_done_not_while_it_streams(studio):
         studio.gw.chat_hold = False
     wait(studio, stream)
     assert found("здравствуйте") == [("chat", cid, ids["assistant_message_id"])]
+
+
+# ---- текст расшифровок ------------------------------------------------------
+
+def test_transcript_is_found_by_its_text_and_follows_the_edits(studio, fake_audio):
+    """Готовая — по словам реплик; правка меняет найденное, «Сбросить правки» — возвращает."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    assert state.DB.execute("SELECT text FROM transcripts").fetchone()[0] == "Здравствуйте. Добрый день."
+    assert found("здравств") == found("иван") == [("transcribe", tid, "")]   # имя записи — тоже
+    assert studio.c.patch(f"/api/transcripts/{tid}", json={"texts": {"1": "Добрый вечер."}}).status_code == 200
+    assert found("вечер") == [("transcribe", tid, "")] and found("день") == []
+    assert studio.c.delete(f"/api/transcripts/{tid}/edits").status_code == 200
+    assert found("вечер") == [] and found("день") == [("transcribe", tid, "")]
+
+
+def test_backfill_fills_the_text_of_old_transcripts_from_their_files(studio, fake_audio, monkeypatch):
+    """Расшифровка старого кода (без text): фон читает файл итога и пишет текст с правками; файла нет —
+    пропуск; шара недоступна — фон кончается, текст ждёт следующего старта."""
+    add_gateway(studio)
+    tids = []
+    for name in ("Первая.m4a", "Вторая.m4a", "Третья.m4a"):
+        tids.append(upload(studio, name=name).json()["id"])
+        wait_tr(studio, tids[-1], {"done"})
+    state.DB.execute("UPDATE transcripts SET text = NULL, edits = ? WHERE id = ?",
+                     ('{"texts": {"0": "Алло, слышно?"}, "names": {}}', tids[0]))
+    state.DB.execute("UPDATE transcripts SET text = NULL WHERE id != ?", (tids[0],))
+    result_file(tids[1]).unlink()
+    broken_file = result_file(tids[2])
+    assert found("алло") == []
+    real = pathlib.Path.read_bytes
+
+    def broken(self):
+        if self == broken_file:
+            raise OSError("share is gone")
+        return real(self)
+    monkeypatch.setattr(pathlib.Path, "read_bytes", broken)
+    assert studio.c.portal.call(transcripts.backfill_text) == 1
+    texts = dict(state.DB.execute("SELECT id, text FROM transcripts").fetchall())
+    assert texts == {tids[0]: "Алло, слышно? Добрый день.", tids[1]: None, tids[2]: None}
+    assert found("алло") == [("transcribe", tids[0], "")]
+    monkeypatch.setattr(pathlib.Path, "read_bytes", real)
+    assert studio.c.portal.call(transcripts.backfill_text) == 1                 # следующий старт
+    assert state.DB.execute("SELECT text FROM transcripts WHERE id = ?", (tids[2],)).fetchone()[0] is not None
