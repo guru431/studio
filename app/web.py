@@ -31,6 +31,7 @@ from cryptography.fernet import InvalidToken
 
 import security
 import state
+from connections import Connection
 
 EXA_URL = "https://api.exa.ai"
 EXA_TIMEOUT_SEC = 30
@@ -48,8 +49,41 @@ _TAG = re.compile(r"<[^>]*>")
 _YT_CLOSED = ("Private video", "Sign in", "unavailable", "has been removed")
 
 
+KINDS = ("search", "page", "youtube")
+NAMES = {"web_search": "search", "read_page": "page", "youtube_subtitles": "youtube"}   # имя функции → вид
+_SPECS = {
+    "search": ("web_search", "Найти в интернете свежие или внешние сведения. Вызывай, только когда для ответа "
+               "нужны свежие данные или сведения, которых нет в разговоре, или пользователь просит поискать.",
+               "query", "поисковый запрос"),
+    "page": ("read_page", "Прочитать веб-страницу по адресу: тот, что дал пользователь, или из результатов "
+             "поиска.", "url", "адрес страницы, http или https"),
+    "youtube": ("youtube_subtitles", "Прочитать содержание ролика YouTube по его субтитрам.",
+                "url", "адрес ролика YouTube"),
+}
+
+
 class ToolError(Exception):
     """Неудача инструмента; args[0] — слова для человека (без ключей и ответов сервиса)."""
+
+
+def tools_for(conn: "Connection | None", has_key: bool) -> list[str]:
+    """Виды инструментов, которые ход диалога даст модели: только путь через сервер (`conn.proxied`, как
+    `via` в chat.create_turn); поиск и страницы — только с ключом Exa."""
+    if conn is None or not conn.proxied:
+        return []
+    return list(KINDS) if has_key else ["youtube"]
+
+
+def specs(kinds: list[str]) -> list[dict]:
+    """Определения инструментов OpenAI (`tools` запроса) для видов `kinds` в их порядке."""
+    out = []
+    for kind in kinds:
+        name, about, param, param_about = _SPECS[kind]
+        out.append({"type": "function", "function": {
+            "name": name, "description": about,
+            "parameters": {"type": "object", "properties": {param: {"type": "string", "description": param_about}},
+                           "required": [param]}}})
+    return out
 
 
 def has_exa_key(user_id: int) -> bool:
