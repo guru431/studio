@@ -8,9 +8,11 @@
 """
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email import policy
@@ -88,6 +90,13 @@ def test_powershell_parses_script_and_defaults_match_contract():
     assert d["Seconds"] == 5 and d["Quality"] == "standard" and d["Count"] == 1
     assert d["Token"] == "" and d["Prompt"] == ""
     assert d["VaultPath"] == r"C:\work\projects\local-config\secrets\vault.env"
+
+
+def test_python_help_survives_a_pipe_in_a_non_utf8_encoding():
+    """В трубу и файл Python пишет кодировкой локали (Windows — cp1251): «→» справки ронял скрипт."""
+    r = subprocess.run([sys.executable, str(SCRIPT.with_suffix(".py")), "--help"], capture_output=True,
+                       timeout=25, env={**os.environ, "PYTHONIOENCODING": "cp1251"})
+    assert r.returncode == 0, r.stderr.decode("cp1251", "replace")
 
 
 class FakeVideos:

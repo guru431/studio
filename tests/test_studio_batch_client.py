@@ -6,9 +6,11 @@
 пустой, а локальная копия с ключом (studio-batch.local.ps1) — в .gitignore.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -138,6 +140,17 @@ def run_script(runner, images, *args, code=0):
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
     return out
+
+
+def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):
+    """В трубу и файл Python пишет кодировкой локали (Windows — cp1251): «×» и «→» сообщений
+    роняли пакет посреди работы."""
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("first\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT.with_suffix(".py")), "--prompts-file", str(prompts),
+                        "--token", "test-key", "--url", images.url, "--out-dir", str(tmp_path / "out")],
+                       capture_output=True, timeout=25, env={**os.environ, "PYTHONIOENCODING": "cp1251"})
+    assert r.returncode == 0, r.stderr.decode("cp1251", "replace")
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

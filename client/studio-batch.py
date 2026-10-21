@@ -319,6 +319,11 @@ def run(args):
 
 
 def main(argv=None):
+    # в трубу и файл Python пишет кодировкой локали (Windows — cp1251): «×» и «→» сообщений
+    # не должны ронять пакет посреди работы
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = parse_args(argv)
     try:
         if args.make_local:
