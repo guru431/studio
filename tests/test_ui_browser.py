@@ -4489,3 +4489,57 @@ def test_jobs_open_keeps_the_transcript_draft(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["draft"] == "Черновик правки"
     assert not problems(r), problems(r)
+
+
+# ---- поиск по истории ---------------------------------------------------------------
+
+SEARCH_ROWS = """[...document.querySelectorAll('#search-results .search-row')].map((r) => [r.dataset.section,
+  r.querySelector('.search-title').textContent, [...r.querySelectorAll('mark')].map((m) => m.textContent)])"""
+SEARCH_PLACED = JOBS_PLACED.replace("'#jobs'", "'#search-open'").replace(
+    "apart('#theme-toggle')", "apart('#theme-toggle') && apart('#jobs')")
+
+
+def search_ready(rows):
+    return (f"document.querySelector('#search-results')?.dataset.state === 'ready'"
+            f" && document.querySelectorAll('#search-results .search-row').length === {rows}")
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, live, width):
+    """Лупа → «Поиск»; «кот» находит картинку (промпт «кот 0») и расшифровку («Кот в сапогах») с выделенным
+    словом; чип «Расшифровка» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
+    картинку открывает её просмотр в «Фото»."""
+    login = f"searcher{width}"
+    uid = live.add_user(login)
+    live_sql(live, "INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created,"
+                   " finished) VALUES (?, ?, 'whisperx', 'Кот в сапогах.m4a', 'nope', 'error', 'не вышло', ?, ?)",
+             (f"tr-find{width}", uid, time.time() - 600, time.time() - 590))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), make_images(1),
+        ("eval", "placed", SEARCH_PLACED),
+        ("click", "#search-open"), ("wait", "location.hash === '#/search' && document.querySelector('#search-q')"),
+        ("eval", "current", "document.querySelector('#search-open').getAttribute('aria-current')"),
+        ("eval", "idle", "document.querySelector('#search-status').textContent"),
+        ("type", "#search-q", "кот"), ("wait", search_ready(2)),
+        ("eval", "rows", SEARCH_ROWS), ("eval", "hash", "location.hash"),
+        ("click", "#view .search-chips .chip[data-section=transcribe]"), ("wait", search_ready(1)),
+        ("eval", "narrowed", SEARCH_ROWS),
+        ("type", "#search-q", "ы"), ("wait", "document.querySelector('#search-status').textContent === 'Ничего не нашлось'"),
+        *go("chat"), ("wait", "document.querySelector('#composer')"),
+        *go("search"), ("wait", search_ready(0)),
+        ("eval", "kept", "[document.querySelector('#search-q').value,"
+                         " document.querySelector('.search-chips [aria-pressed=true]').dataset.section]"),
+        ("click", "#view .search-chips .chip[data-section='']"),
+        set_value("#search-q", "кот"), ("wait", search_ready(2)),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        ("click", "#search-results .search-row[data-section=photo]"),
+        ("wait", is_open("#viewer")), ("eval", "opened", "location.hash")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["placed"] and v["current"] == "page"
+    assert v["idle"] == "Введите слова или выберите раздел, модель или период"
+    assert v["rows"] == [["photo", "кот 0", ["кот"]], ["transcribe", "Кот в сапогах.m4a", ["Кот"]]]
+    assert v["hash"] == "#/search" and v["narrowed"] == [["transcribe", "Кот в сапогах.m4a", ["Кот"]]]
+    assert v["kept"] == ["коты", "transcribe"] and not v["overflow"]
+    assert v["opened"] == "#/photo"
+    assert not problems(r), problems(r)
