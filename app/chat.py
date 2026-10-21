@@ -22,6 +22,8 @@
 5. Вложение из расшифровки (`source_transcript_id`) в истории диалога — ход и повтор к нелокальной
    модели (sections.is_local) только с `external_ok`, иначе 409 `external`; подтверждённым считается
    диалог, где после последнего такого вложения уже есть ответ этой модели тем же путём (`_needs_consent`).
+   Ход, которому «Интернет» даёт Exa, с такой расшифровкой новее `chats.web_consent` — только с `web_ok`,
+   иначе 409 `external_web` (после `external`); `web_ok` ставит `web_consent` (`_needs_web_consent`).
 6. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
 7. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
 """
@@ -126,6 +128,7 @@ class TurnIn(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     regenerate: bool = False
     external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
+    web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
 
 
 class AnswerIn(BaseModel):
@@ -167,12 +170,24 @@ def _needs_consent(chat_id: str, model: str, via: str) -> bool:
         " AND (created, rowid) > (?, ?) LIMIT 1", (chat_id, model, via, last[0], last[1])).fetchone() is None
 
 
+def _needs_web_consent(chat_id: str, consent: "float | None") -> bool:
+    """В истории диалога есть вложение из расшифровки новее подтверждения «расшифровка и Exa»
+    (`chats.web_consent`; NULL — не было): запросы модели к Exa составлены из всей истории. Прежний след
+    (`_needs_consent`: ответ той же модели) не годится — Exa не модель; расшифровка, вложенная позже
+    подтверждения, спрашивает снова."""
+    return state.DB.execute(
+        "SELECT 1 FROM messages m JOIN attachments a ON a.message_id = m.id WHERE m.chat_id = ?"
+        " AND a.source_transcript_id IS NOT NULL AND (? IS NULL OR m.created > ?) LIMIT 1",
+        (chat_id, consent, consent)).fetchone() is not None
+
+
 def _chat_view(user_id: int, row) -> dict:
     """Диалог для страницы (GET, POST, PATCH одного): ещё `local` — модель диалога локальная
     (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
     подтверждения (страница спрашивает заранее; сервер ответил бы 409 `external`); `web` — кнопка
     «Интернет» и `web_tools` — виды инструментов, которые она даст на этом подключении (web.tools_for; пусто
-    — кнопку не показывать: у прямого подключения `web` хранится, но не действует)."""
+    — кнопку не показывать: у прямого подключения `web` хранится, но не действует); `external_web` — следующий
+    ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил бы 409 `external_web`)."""
     out, conn = _chat_out(row), None
     if row["connection_id"] is not None:
         try:
@@ -185,6 +200,8 @@ def _chat_view(user_id: int, row) -> dict:
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
     out["web_tools"] = web.tools_for(conn, web.has_exa_key(user_id))
+    out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
+        row["id"], row["web_consent"])
     return out
 
 
@@ -979,6 +996,15 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if ask:
             raise HTTPException(409, {"code": "external",
                                       "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
+        # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —
+        # только с `web_ok`; подтверждение — `now`, им покрыта и расшифровка этого хода (created = now)
+        if "search" in kinds:
+            if body.web_ok:
+                state.DB.execute("UPDATE chats SET web_consent = ? WHERE id = ?", (now, chat_id))
+            elif _needs_web_consent(chat_id, state.DB.execute(
+                    "SELECT web_consent FROM chats WHERE id = ?", (chat_id,)).fetchone()[0]):
+                raise HTTPException(409, {"code": "external_web", "message": (
+                    "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         messages = compose(chat_id, user_mid)
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:

@@ -8,7 +8,7 @@ import chat
 import state
 import web
 from conftest import T0, add_connection, add_gateway, make_user, signin
-from test_chat import events_of, messages, new_chat, sse, turn
+from test_chat import done_transcript, events_of, from_transcript, messages, new_chat, sse, turn
 from test_web import CANON, FakeYtDlp
 
 EXA_KEY = "exa-test-key"
@@ -455,6 +455,75 @@ def test_history_search_does_not_look_into_the_found(studio):
 
     assert items("Растение")                                              # ответ модели — находится
     assert items("Зюзюкамбра") == []
+
+
+# ---- расшифровка в диалоге и Exa (6.10) -------------------------------------------------------
+
+WEB_ASK = {"code": "external_web", "message": "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите"}
+
+
+def consent_of(cid):
+    return state.DB.execute("SELECT web_consent FROM chats WHERE id = ?", (cid,)).fetchone()[0]
+
+
+def test_transcript_goes_to_exa_only_when_confirmed(studio, fake_audio):
+    cid = web_chat(studio); tid = done_transcript(studio)
+    a = from_transcript(studio, tid).json()
+    r = turn(studio, cid, "Итоги?", attachment_ids=[a["id"]])
+    assert r.status_code == 409 and r.json()["detail"] == WEB_ASK
+    assert messages(studio, cid) == [] and not studio.gw.chat_requests and studio.gw.exa_requests == []
+    assert consent_of(cid) is None                                       # отказ ничего не тронул
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="Иван")]}, ["Итоги."]]
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]], web_ok=True))
+    first = studio.clock[0]
+    assert len(studio.gw.exa_requests) == 1 and consent_of(cid) == first  # расшифровка этого хода покрыта
+    assert chat_of(studio, cid)["external_web"] is False
+    sse(turn(studio, cid, "Ещё?"))                                        # подтверждено — без вопроса
+    # позже вложенная расшифровка (при выключенном «Интернете») — вопрос снова, и у хода, и у повтора
+    studio.clock[0] += 1
+    patch(studio, cid, web=False)
+    b = from_transcript(studio, tid).json()
+    sse(turn(studio, cid, "А это?", attachment_ids=[b["id"]]))
+    assert chat_of(studio, cid)["external_web"] is False                  # выключен — Exa не дан
+    assert patch(studio, cid, web=True)["external_web"] is True
+    before = (len(messages(studio, cid)), len(studio.gw.chat_requests))
+    for body in ({"text": "И?"}, {"regenerate": True}):
+        r = studio.c.post(f"/api/chats/{cid}/turns", json=body)
+        assert r.status_code == 409 and r.json()["detail"] == WEB_ASK, body
+    assert (len(messages(studio, cid)), len(studio.gw.chat_requests)) == before and consent_of(cid) == first
+    sse(studio.c.post(f"/api/chats/{cid}/turns", json={"regenerate": True, "web_ok": True}))
+    assert consent_of(cid) == first + 1 and chat_of(studio, cid)["external_web"] is False
+
+
+def test_transcript_with_youtube_only_or_web_off_asks_nothing(studio, fake_audio):
+    cid = web_chat(studio, key=False); tid = done_transcript(studio)      # без ключа — только YouTube
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[from_transcript(studio, tid).json()["id"]]))
+    assert chat_of(studio, cid)["external_web"] is False and consent_of(cid) is None
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    assert chat_of(studio, cid)["external_web"] is True                   # ключ появился — Exa будет дан
+    off = new_chat(studio)                                                # «Интернет» выключен
+    sse(turn(studio, off, "Итоги?", attachment_ids=[from_transcript(studio, tid).json()["id"]]))
+    assert chat_of(studio, off)["external_web"] is False and consent_of(off) is None
+    assert studio.gw.exa_requests == []
+
+
+def test_cloud_model_asks_for_both_one_after_another(studio, fake_audio):
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    patch(studio, cid, web=True)
+    a = from_transcript(studio, tid).json()
+    r = turn(studio, cid, "Итоги?", attachment_ids=[a["id"]])
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "external"
+    r = turn(studio, cid, "Итоги?", attachment_ids=[a["id"]], external_ok=True)
+    assert r.status_code == 409 and r.json()["detail"] == WEB_ASK
+    r = turn(studio, cid, "Итоги?", attachment_ids=[a["id"]], web_ok=True)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "external"
+    assert messages(studio, cid) == [] and not studio.gw.chat_requests and consent_of(cid) is None
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]], external_ok=True, web_ok=True))
+    view = chat_of(studio, cid)
+    assert (view["external"], view["external_web"]) == (False, False) and consent_of(cid) == studio.clock[0]
 
 
 def test_labels_and_model_text_of_steps():
