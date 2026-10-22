@@ -109,8 +109,13 @@ class FakeGateway:
         self.chat_auth = []              # их заголовки авторизации
         self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели
         #: ответы на очередные потоковые запросы: list[str] — куски текста, dict {"text": [...],
-        #: "tool_calls": [(имя, аргументы JSON), …]} — ещё и вызовы инструментов; пусто — chat_reply
+        #: "tool_calls": [(имя, аргументы JSON), …], "reasoning": [...]} — ещё вызовы инструментов и рассуждение
+        #: (идёт до текста); пусто — chat_reply
         self.chat_script = []
+        self.reasoning_field = "reasoning_content"   # поле дельты рассуждения: vLLM через LiteLLM; иначе "reasoning"
+        #: после первого куска рассуждения ответ «думает», пока не снимут; функция без аргументов — пока она истинна
+        #: (живой службе браузерных тестов: сценарий страницы снимает его своим запросом)
+        self.think_hold = False
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
@@ -186,7 +191,8 @@ class FakeGateway:
                                                           "finish_reason": "stop"}]})
 
         step = self.chat_script.pop(0) if self.chat_script else self.chat_reply
-        pieces, calls = (step.get("text", []), step.get("tool_calls", [])) if isinstance(step, dict) else (step, [])
+        pieces, calls, thoughts = ((step.get("text", []), step.get("tool_calls", []), step.get("reasoning", []))
+                                   if isinstance(step, dict) else (step, [], []))
         number = len(self.chat_requests)
 
         def data(delta, ending=None):
@@ -202,6 +208,10 @@ class FakeGateway:
                 if clock.NOW() - start >= self.chat_delay:
                     break
                 await asyncio.sleep(0.001)
+            for i, thought in enumerate(thoughts):
+                yield data({self.reasoning_field: thought})
+                while i == 0 and (self.think_hold() if callable(self.think_hold) else self.think_hold):
+                    await asyncio.sleep(0.001)
             for i, piece in enumerate(pieces):
                 yield data({"content": piece})
                 while i == 0 and self.chat_hold:

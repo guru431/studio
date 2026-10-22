@@ -68,7 +68,8 @@ README = """Выгрузка истории студии
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
   (подключения и отмеченные модели, умолчания) и пресеты.
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
-  найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом).
+  найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом) и рассуждение модели (reasoning,
+  reasoning_sec — секунды).
 - images/0001.json, images/0002.json … — картинки страницами по 500: промпт, модель, размер, seed,
   цепочка промптов, файлы итога, исходника, маски.
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
@@ -150,8 +151,10 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
              "file": files.get(a["media_id"])})
     messages = [{"id": m["id"], "role": m["role"], "content": m["content"], "status": m["status"], "model": m["model"],
                  "created": m["created"], "attachments": attachments.get(m["id"], []),
-                 "tools": json.loads(m["tools"] or "[]")}                  # шаги «Интернета» целиком
-                for m in state.DB.execute("SELECT id, role, content, status, model, created, tools FROM messages"
+                 "tools": json.loads(m["tools"] or "[]"),                  # шаги «Интернета» целиком
+                 "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"]}
+                for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
+                                          " reasoning_sec FROM messages"
                                           " WHERE chat_id = ? ORDER BY created, id", (chat_id,))]
     return {**dict(chat), "messages": messages}
 
