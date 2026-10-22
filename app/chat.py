@@ -86,13 +86,15 @@ CUT_LENGTH = "\n\n[ответ обрезан пределом длины мод�
 CUT_SIZE = "\n\n[ответ обрезан: слишком длинный для студии]"
 CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_SEC // 60} минут]"
 # рассуждение модели (спека 2026-10-22-studio-chat-tools-badge-reasoning, 4.3) — пределы на весь ответ, все круги.
-# Видимое (кнопка включена или у модели её нет) — до REASONING_MAX знаков. При выключенной кнопке gemma-abl в
+# Видимое (кнопка включена или у модели её нет) — до REASONING_MAX знаков: дальше с кнопкой ответ остановлен (петля
+# держала бы карту), у модели без неё — пометка REASONING_CUT, ответ дочитывается. При выключенной кнопке gemma-abl в
 # нормальных ответах роняет 7–14 знаков «thought», а в петле — тысячи (3–4,5 тыс. за 75 с, 2026-10-22): сверх
 # STRAY_MAX — петля, ответ остановлен, а не идёт до STREAM_TOTAL_SEC, держа карту
 REASONING_MAX = 60_000
 STRAY_MAX = 2_000
 THINK_EVERY_SEC = 1              # «думает» (`think {}`) при выключенной кнопке — на страницу не чаще
 THINK_LONG = "рассуждение слишком длинное — ответ остановлен"
+REASONING_CUT = "\n\n[рассуждение обрезано: длиннее предела студии]"
 LOOPED = "модель зациклилась — ответ остановлен"
 # «Интернет» (спека 2026-10-21-studio-chat-internet, 6.3): кругов с инструментами на ответ, затем последний
 # запрос без tools — модель отвечает по найденному
@@ -532,7 +534,8 @@ class StreamTask:
     reasoning: str = field(default="", repr=False)   # видимое рассуждение всех кругов (круги — через пустую строку)
     reasoning_sec: float = 0.0   # его длительность по кончившимся отрезкам
     think_from: float | None = None   # начало идущего отрезка: от первого куска рассуждения до текста ответа
-    stray: int = 0              # знаков рассуждения при выключенной кнопке
+    reasoning_cut: bool = False  # модель без кнопки дошла до REASONING_MAX: дальше рассуждение не хранится
+    stray: int = 0             # знаков рассуждения при выключенной кнопке
     thought: float = -math.inf   # когда ушло последнее `think {}`
 
     def put(self, kind: str, data) -> None:
@@ -579,9 +582,10 @@ class StreamTask:
 
     def _think(self, piece: str) -> "str | None":
         """Кусок рассуждения модели; итог — слова ошибки (предел) или None. Видно — текстом в `reasoning` и
-        событием `think` (первый кусок отрезка — нового круга или после текста — через пустую строку), сверх
-        REASONING_MAX — обрезано, ответ остановлен. Кнопка выключена (`thinking is False`) — текст не идёт и не хранится, только `think {}` не
-        чаще THINK_EVERY_SEC; сверх STRAY_MAX знаков — петля."""
+        событием `think` (первый кусок отрезка — нового круга или после текста — через пустую строку); сверх
+        REASONING_MAX — обрезано: кнопка включена — ответ остановлен, у модели без кнопки — пометка REASONING_CUT,
+        дальше рассуждение не идёт и не хранится, а ответ дочитывается. Кнопка выключена (`thinking is False`) —
+        текст не идёт и не хранится, только `think {}` не чаще THINK_EVERY_SEC; сверх STRAY_MAX знаков — петля."""
         now = clock.NOW()
         if self.thinking is False:
             self.stray += len(piece)
@@ -595,12 +599,19 @@ class StreamTask:
             self.think_from = now
             if self.reasoning:
                 piece = "\n\n" + piece
+        if self.reasoning_cut:
+            return None
         shown = piece[:REASONING_MAX - len(self.reasoning)]
+        over = len(shown) < len(piece)
+        if over and self.thinking is None:           # облачная модель: её ответ оплачен — не терять (решение 2026-10-22)
+            self.reasoning_cut = True
+            shown += REASONING_CUT
+            log.info("чат %s: ответ %s — рассуждение обрезано", self.chat_id[:8], self.message_id[:8])
         if shown:
             self.reasoning += shown
             self.fresh = True
             self.put("think", shown)
-        if len(shown) < len(piece):
+        if over and not self.reasoning_cut:
             return self._over(THINK_LONG)
         self._save()
         return None

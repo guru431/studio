@@ -183,6 +183,27 @@ def test_reasoning_over_the_limit_is_cut(studio):
     assert answer["status"] == "error" and len(answer["reasoning"]) == chat.REASONING_MAX
 
 
+def test_model_without_switch_reasoning_over_the_limit_is_cut_and_the_answer_goes_on(studio, caplog):
+    """Решение владельца 2026-10-22: облачная модель без кнопки думает дольше REASONING_MAX — рассуждение обрезано
+    пометкой, дальше не идёт и не хранится (и в следующем круге), а оплаченный ответ дочитывается."""
+    caplog.set_level(logging.INFO)
+    gw = add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
+    patch(studio, cid, web=True)
+    studio.gw.chat_script = [{"reasoning": ["x" * 1000] * (chat.REASONING_MAX // 1000) + ["y" * 10, "z" * 10],
+                              "text": ["Ищу."], "tool_calls": [call("web_search", query="q")]},
+                             {"reasoning": ["Второй круг."], "text": [" Готово."]}]
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("done", {"status": "done"})
+    assert thinks(events)[-1] == {"text": chat.REASONING_CUT}
+    answer = answer_of(studio, cid)
+    assert (answer["status"], answer["content"]) == ("done", "Ищу.\n\n Готово.")
+    assert answer["reasoning"] == "x" * chat.REASONING_MAX + chat.REASONING_CUT
+    assert "рассуждение обрезано" in caplog.text
+
+
 def test_reasoning_limit_counts_every_round(studio):
     """REASONING_MAX — на весь ответ (спека, разделы 4.3 и 5): два круга чуть больше половины предела — обрезано."""
     add_gateway(studio)
