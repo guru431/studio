@@ -113,7 +113,9 @@ class FakeGateway:
         #: (идёт до текста); пусто — chat_reply
         self.chat_script = []
         self.reasoning_field = "reasoning_content"   # поле дельты рассуждения: vLLM через LiteLLM; иначе "reasoning"
-        self.think_hold = False          # после первого куска рассуждения ответ «думает», пока не снимут
+        #: после первого куска рассуждения ответ «думает», пока не снимут; функция без аргументов — пока она истинна
+        #: (живой службе браузерных тестов: сценарий страницы снимает его своим запросом)
+        self.think_hold = False
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
@@ -208,7 +210,7 @@ class FakeGateway:
                 await asyncio.sleep(0.001)
             for i, thought in enumerate(thoughts):
                 yield data({self.reasoning_field: thought})
-                while i == 0 and self.think_hold:
+                while i == 0 and (self.think_hold() if callable(self.think_hold) else self.think_hold):
                     await asyncio.sleep(0.001)
             for i, piece in enumerate(pieces):
                 yield data({"content": piece})

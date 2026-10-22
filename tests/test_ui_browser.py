@@ -1104,6 +1104,77 @@ def test_chat_internet_badge_counts_and_errors(browser, live):
     assert not problems(r), problems(r)
 
 
+THINK_TOGGLE = "document.querySelector('#think-toggle')"
+#: метка страницы «увидела, что модель думает»: название диалога — шлюз держит рассуждение, пока его нет
+SEEN = f"""(async () => {{ await {API}.api('PATCH', '/api/chats/' + location.hash.split('/')[2],
+  {{ title: 'увидела' }}); return true; }})()"""
+
+
+def test_chat_reasoning_switch_and_thinking_line(browser, live):
+    """Кнопка «Рассуждение» у local-gemma-abl: нажата до первого сообщения — уходит PATCH после создания диалога;
+    с «Интернетом» — подсказка, что модель реже ищет; пока модель думает — «Думает… N с» и текст рассуждения,
+    после — свёрнутое «💭 Рассуждала N с»; рассуждение — только текстом (HTML модели не исполняется); перезагрузка —
+    то же из базы, кнопка нажата; облачная роль шлюза — кнопки нет."""
+    import state
+    live.add_user("thinker")
+    live.gw.chat_script = [{"reasoning": ["Считаю ", "<img src=x onerror=alert(1)>"], "text": ["410"]}]
+    live.gw.think_hold = lambda: state.DB.execute("SELECT 1 FROM chats WHERE title = 'увидела'").fetchone() is None
+    two_models = f"""(async () => {{ const m = {API};
+      const chat = (await m.api('GET', '/api/sections')).sections.find(x => x.id === 'chat');
+      const link = chat.links.find(l => l.connection.kind === 'srvllm');
+      await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['local-gemma-abl', 'gemma4-abl'] }});
+      return true; }})()"""
+    toggle = f"[{THINK_TOGGLE}.hidden, {THINK_TOGGLE}.getAttribute('aria-pressed'), {THINK_TOGGLE}.textContent.trim()]"
+    done = (f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(), {LAST_ANSWER}.querySelector('details.think').open,"
+            f" {LAST_ANSWER}.querySelector('details.think summary').textContent,"
+            f" {LAST_ANSWER}.querySelector('details.think .think-text').textContent,"
+            f" document.querySelectorAll('#messages img').length]")
+    try:
+        r = browser.drive(live.url + "/", [*signin("thinker"), ("wait", READY), add_gateway(),
+            ("eval", "exa", EXA_KEY_SET), ("eval", "models", two_models),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{THINK_TOGGLE} && !{THINK_TOGGLE}.hidden"),
+            ("eval", "before", toggle),
+            ("click", "#think-toggle"), ("wait", f"{THINK_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("eval", "note", "document.querySelector('#web-note').textContent"),
+            ("type", "#chat-input", "Сколько будет 17×23?"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.think.busy .think-text')?.textContent === 'Считаю '"),
+            ("eval", "busy", f"{LAST_ANSWER}.querySelector('.think.busy').textContent"),
+            ("eval", "seen", SEEN),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.think')"),
+            ("eval", "done", done),
+            ("eval", "saved", f"""(async () => {{ const m = {API};
+              const c = await m.api('GET', '/api/chats/' + location.hash.split('/')[2]);
+              return [c.chat.thinking, c.messages.at(-1).reasoning]; }})()"""),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"document.querySelectorAll('#messages .msg').length === 2 && {THINK_TOGGLE} && !{THINK_TOGGLE}.hidden"),
+            ("eval", "kept", f"[{toggle}, {done}]"),
+            ("click", "#model-chip"),
+            ("wait", "document.querySelector('.model-option[data-model=\"gemma4-abl\"]')"),
+            ("click", ".model-option[data-model=\"gemma4-abl\"]"),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('gemma4-abl')"),
+            ("wait", f"{THINK_TOGGLE}.hidden"),
+            ("eval", "cloud", "document.querySelector('#web-note').textContent")])
+    finally:
+        live.gw.think_hold = False
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == [False, "false", "Рассуждение"]
+    assert v["note"] == "С рассуждением модель реже ищет в интернете"
+    assert v["busy"].startswith("Думает… ") and v["busy"].endswith(" сСчитаю "), v["busy"]
+    img = "Считаю <img src=x onerror=alert(1)>"
+    assert v["done"][:2] == ["410", False] and v["done"][2].startswith("💭 Рассуждала ") and v["done"][3:] == [img, 0]
+    assert v["saved"] == [True, img]
+    assert v["kept"] == [[False, "true", "Рассуждение"], v["done"]]
+    assert v["cloud"] == ""
+    assert live.gw.chat_requests[-1]["chat_template_kwargs"] == {"enable_thinking": True}
+    assert not problems(r), problems(r)
+
+
 def test_chat_internet_needs_an_exa_key(browser, live):
     """Решение владельца 2026-10-21: без ключа Exa кнопка «Интернет» видна, но выключена, не нажата, с подсказкой
     (title и строка под полем); ключ задан в другой вкладке — возвращение на экран (профиль перечитан) её

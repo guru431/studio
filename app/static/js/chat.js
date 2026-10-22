@@ -41,7 +41,15 @@
  * виды и числа вызовов, зелёная без ошибок и красная с ними, нажатие раскрывает «Источники» под ответом —
  * ссылки в новую вкладку без адреса студии. Ход, чьи
  * запросы к Exa модель составит из расшифровки (`external_web` диалога или новое вложение из неё), — после
- * окна #web-dialog (ход с `web_ok`; 409 `external_web` — то же окно); окно внешней модели — первым. */
+ * окна #web-dialog (ход с `web_ok`; 409 `external_web` — то же окно); окно внешней модели — первым.
+ *
+ * «Рассуждение» (спека 2026-10-22-studio-chat-tools-badge-reasoning, раздел 4): кнопка #think-toggle рядом с
+ * «Интернетом» — `thinking` диалога (PATCH {thinking}; у нового — в памяти до создания, затем тем же PATCH).
+ * Видна, где сервер её исполняет: `thinking_ok` диалога, у нового — модель из `local_models` подключения чипа
+ * (sections.is_local); 409 `no_thinking` — его слова, кнопка прячется. Обе включены — под полем подсказка
+ * THINK_NOTE (подсказка «нет ключа» важнее). Событие SSE `think` — модель думает: над ответом «Думает… N с»
+ * (счётчик страницы от первого `think`) и текст рассуждения, если сервер его шлёт; готовый ответ с `reasoning`
+ * — свёрнутое «💭 Рассуждала N с» (`reasoning_sec`). Рассуждение — только текстом, без разметки. */
 import { api, me } from './api.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
@@ -70,8 +78,11 @@ const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с кл�
 const WEB_TITLE = 'Интернет: поиск, страницы и субтитры YouTube';
 const WEB_ASK = 'Запросы, составленные из расшифровки, могут уйти в Exa — отправить?';
 const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субтитры' };   // строка хода по виду инструмента
+const THINK_TITLE = 'Рассуждение: модель думает перед ответом, ход мысли виден';
+const THINK_NOTE = 'С рассуждением модель реже ищет в интернете';   // замер 2026-10-22: 5 поисков из 10 против 10
 const ICONS = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 00-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0012 3z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
   send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
@@ -131,7 +142,15 @@ function finish(job) {
 
 /* ---- чтение ответа ------------------------------------------------------------ */
 
+/* модель кончила думать (пошёл текст ответа, ответ кончился): секунды — счётчиком страницы до перечитывания */
+function thinkEnd(job) {
+  if (!job.thinking) return;
+  job.thinking = false;
+  job.message.reasoning_sec = (Date.now() - job.thinkFrom) / 1000;
+}
+
 function append(job, text) {
+  thinkEnd(job);
   job.first = true;
   job.tool = null;                 // модель снова пишет — инструмент кончился
   job.message.content += text;
@@ -163,6 +182,11 @@ async function readServer(job, response) {
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
         (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
         notify(job, false);
+      } else if (event === 'think' && data) {      // {text} — ход мысли виден, {} — модель только думает
+        job.thinking = true;
+        job.thinkFrom ??= Date.now();
+        if (typeof data.text === 'string') job.message.reasoning = (job.message.reasoning || '') + data.text;
+        notify(job, false);
       } else if (event === 'done' || event === 'error') {
         job.message.status = event === 'done' ? data.status : 'error';
         if (event === 'error') job.message.error = data.message;
@@ -174,6 +198,7 @@ async function readServer(job, response) {
     // связь оборвалась — ответ на сервере идёт дальше, диалог перечитается
   }
   if (cut) job.lost = true;
+  thinkEnd(job);
   finish(job);
 }
 
@@ -363,6 +388,7 @@ function build(view, ctx) {
   let atts = [];               // вложения поля ввода: { file, meta, error, busy, transcript }; из расшифровки — без file
   let needModel = false;       // диалог из расшифровки без локальной модели: «Отправить» — после явного выбора
   let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
+  let draftThink = false;      // «Рассуждение» нового диалога — так же
   let sending = false;
   let stick = true;
   let opened = 0;              // медленный ответ прежнего диалога не перебьёт новый
@@ -403,9 +429,12 @@ function build(view, ctx) {
   const micNote = el('div', { class: 'mic-note' });
   const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
     title: WEB_TITLE, hidden: true }, icon('globe'), 'Интернет');
+  const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip think-toggle', 'aria-pressed': 'false',
+    title: THINK_TITLE, hidden: true }, icon('bulb'), 'Рассуждение');
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input, micNote,
-    el('div', { class: 'row' }, clip, webToggle, attachMic(input, micNote), el('span', { class: 'grow' }), send, stop),
+    el('div', { class: 'row' }, clip, webToggle, thinkToggle, attachMic(input, micNote), el('span', { class: 'grow' }),
+      send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
@@ -546,6 +575,7 @@ function build(view, ctx) {
     const link = links.find((l) => l.connection.id === connId);
     connName.textContent = link ? link.connection.name : '';
     paintGuard();
+    paintThink();
     paintWeb();
   }
 
@@ -578,7 +608,7 @@ function build(view, ctx) {
     webToggle.disabled = mode === 'nokey';
     webToggle.setAttribute('aria-pressed', String(webOn()));
     webToggle.title = hint || WEB_TITLE;
-    webNote.textContent = hint;
+    webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
   }
 
   /* 409 `no_exa_key`: ключ убрали в другой вкладке — профиль этой вкладки ещё не знал */
@@ -605,6 +635,40 @@ function build(view, ctx) {
     } finally {
       webToggle.disabled = false;
     }
+    paintWeb();
+  }
+
+  /* «Рассуждение» (как chat._thinking_ok сервера): у открытого диалога — `thinking_ok`, у нового — модель чипа
+   * локальная (роль `local-*` srvllm через сервер, `local_models` подключения) */
+  function thinkOk() {
+    return chat ? !!chat.chat.thinking_ok : isLocal(chosen());
+  }
+
+  function thinkOn() {
+    return thinkOk() && (chat ? !!chat.chat.thinking : draftThink);
+  }
+
+  function paintThink() {
+    thinkToggle.hidden = !thinkOk();
+    thinkToggle.setAttribute('aria-pressed', String(thinkOn()));
+  }
+
+  async function switchThink() {
+    if (!chat) {
+      draftThink = !draftThink;
+    } else {
+      thinkToggle.disabled = true;
+      try {
+        chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { thinking: !thinkOn() });
+        notice.textContent = '';
+      } catch (err) {
+        if (err.code === 'no_thinking') chat.chat.thinking_ok = false;   // модель сменили в другой вкладке
+        notice.textContent = words(err);
+      } finally {
+        thinkToggle.disabled = false;
+      }
+    }
+    paintThink();
     paintWeb();
   }
 
@@ -775,14 +839,15 @@ function build(view, ctx) {
     const actions = el('div', { class: 'msg-actions' });
     const steps = Array.isArray(m.tools) && m.tools.length ? sourcesNode(m.tools) : null;
     const badge = el('button', { type: 'button', class: 'web-badge', hidden: true });
+    const think = el('div', { class: 'think-box' });
     badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
       if (!steps) return;
       steps.open = true;
       steps.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
     const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, md, steps, meta, actions));
-    parts.set(m, { badge, steps, md, meta, actions, last, shown: null });
+      el('div', { class: 'msg-body' }, badge, think, md, steps, meta, actions));
+    parts.set(m, { badge, steps, think, thought: '', md, meta, actions, last, shown: null });
     paint(m);
     return node;
   }
@@ -807,11 +872,42 @@ function build(view, ctx) {
     p.badge.setAttribute('aria-label', p.steps ? `${p.badge.textContent} — показать источники` : p.badge.textContent);
   }
 
+  /* строка рассуждения под плашкой: модель думает — «Думает… N с» с крутилкой и бегущим текстом (если он виден),
+     свёрнутым до нескольких строк — нажатие раскрывает; ответ с рассуждением — свёрнутое «💭 Рассуждала N с».
+     Узел строится заново только при смене вида: раскрытое человеком не сворачивается. Текст — textContent */
+  function paintThought(p, m, job) {
+    const text = m.reasoning || '';
+    const busy = m.status === 'streaming' && (job ? !!job.thinking : !m.content && !!text);
+    const mode = busy ? 'busy' : text ? 'done' : '';
+    if (mode !== p.thought) {
+      p.thought = mode;
+      if (mode === 'busy') {
+        const run = el('div', { class: 'think-text', title: 'Показать целиком' });
+        run.addEventListener('click', () => run.classList.toggle('open'));
+        p.think.replaceChildren(el('div', { class: 'think busy' }, el('p', { class: 'think-line' },
+          el('span', { class: 'spin', 'aria-hidden': 'true' }), el('span', { class: 'think-sec' })), run));
+      } else if (mode === 'done') {
+        p.think.replaceChildren(el('details', { class: 'think' }, el('summary', {}), el('div', { class: 'think-text' })));
+      } else p.think.replaceChildren();
+    }
+    if (!mode) return;
+    const box = p.think.querySelector('.think-text');
+    if (box.textContent !== text) {
+      box.textContent = text;
+      if (busy) box.scrollTop = box.scrollHeight;         // свёрнутый — виден конец
+    }
+    if (busy) {
+      const sec = job ? (Date.now() - job.thinkFrom) / 1000 : m.reasoning_sec;
+      p.think.querySelector('.think-sec').textContent = `Думает… ${Math.max(0, Math.round(sec || 0))} с`;
+    } else p.think.querySelector('summary').textContent = `💭 Рассуждала ${Math.max(1, Math.round(m.reasoning_sec || 0))} с`;
+  }
+
   function paint(m) {
     const p = parts.get(m);
     if (!p) return;
     const job = reading(m);
     paintBadge(p, m, job);
+    paintThought(p, m, job);
     if (p.shown !== m.content) {
       p.md.replaceChildren(renderMarkdown(m.content));
       p.shown = m.content;
@@ -819,7 +915,8 @@ function build(view, ctx) {
     let text = '';
     let kind = '';
     if (m.status === 'streaming') {
-      if (job) text = job.tool || job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;   // инструмент — на плашке
+      // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена
+      if (job) text = job.tool || job.first || job.thinkFrom ? '' : `загружаю модель · ${elapsed(job.started)}`;
       else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
       else text = 'ответ ещё идёт…';
     } else if (m.status === 'stopped') text = 'остановлено';
@@ -916,6 +1013,7 @@ function build(view, ctx) {
     chatId = id;
     chat = null;
     draftWeb = false;
+    draftThink = false;
     clearTimeout(poll);
     notice.textContent = '';
     let listed = false;
@@ -1044,6 +1142,12 @@ function build(view, ctx) {
       draft = null;
       history.replaceState(null, '', `#/chat/${created.id}`);
       loadList();
+      const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
+      draftThink = false;
+      if (think) {
+        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
+        paintThink();
+      }
       if (draftWeb && webState() === 'ready') {    // «Интернет», включённый до создания диалога
         draftWeb = false;
         chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
@@ -1142,7 +1246,7 @@ function build(view, ctx) {
   document.addEventListener('studio-me', paintWeb);     // профиль перечитан: ключ Exa могли задать или убрать
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
-    if (job && !job.first) paint(job.message);
+    if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» и «Думает…»
   }, 1000);
 
   fresh.addEventListener('click', newChat);
@@ -1150,6 +1254,7 @@ function build(view, ctx) {
   backdrop.addEventListener('click', () => panel(false));
   chip.addEventListener('click', () => openModels(modelMenu.hidden));
   webToggle.addEventListener('click', switchWeb);
+  thinkToggle.addEventListener('click', switchThink);
   scroller.addEventListener('scroll', () => {
     stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }, { passive: true });
