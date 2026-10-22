@@ -98,6 +98,7 @@ CUT_CONTEXT = "\n[обрезано: не помещается в контекс�
 NO_ROOM = "не помещается в контекст модели"
 NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
 NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Прочее → Интернет"   # PATCH {web: true} без ключа — 409
+NO_THINKING = "эта модель не умеет рассуждать по кнопке"   # PATCH {thinking: true} не у роли local-* srvllm — 409
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
 # памяти (проба 2026-10-21, спека раздел 8). Последняя фраза — против «я заглянула в интернет» без вызова: на
 # диалоге, где модель уже так ответила, вызов поиска на «какой курс доллара» — 10 из 12 вместо 5 из 12 (2026-10-22)
@@ -130,6 +131,7 @@ class ChatPatch(BaseModel):
     connection_id: int | None = None
     model: str | None = Field(None, max_length=MODEL_MAX)
     web: bool | None = None              # кнопка «Интернет»; null — не трогать
+    thinking: bool | None = None         # кнопка «Рассуждение»; null — не трогать
 
 
 class TurnIn(BaseModel):
@@ -198,7 +200,8 @@ def _chat_view(user_id: int, row) -> dict:
     у прямого подключения — там `web` хранится, но не действует, — и без ключа Exa); `proxied` — подключение
     диалога через сервер (страница: нет — кнопки нет, есть без ключа — кнопка выключена с подсказкой);
     `external_web` — следующий ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил
-    бы 409 `external_web`)."""
+    бы 409 `external_web`); `thinking` — кнопка «Рассуждение» и `thinking_ok` — действует ли она у модели диалога
+    (та же `local`: параметр уходит только ролям `local-*` srvllm через сервер)."""
     out, conn = _chat_out(row), None
     if row["connection_id"] is not None:
         try:
@@ -214,7 +217,21 @@ def _chat_view(user_id: int, row) -> dict:
     out["web_tools"] = web.tools_for(conn, web.has_exa_key(user_id))
     out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
         row["id"], row["web_consent"])
+    out["thinking"] = bool(row["thinking"])
+    out["thinking_ok"] = out["local"]
     return out
+
+
+def _thinking_ok(user_id: int, conn_id: "int | None", model: "str | None") -> bool:
+    """Кнопка «Рассуждение» действует: роль `local-*` srvllm через сервер (sections.is_local) — студия проверила,
+    что `chat_template_kwargs.enable_thinking` до неё доходит; облачной роли LiteLLM передал бы его провайдеру."""
+    if conn_id is None:
+        return False
+    try:
+        conn = connections.get(user_id, conn_id)
+    except HTTPException:                            # подключение удалено
+        return False
+    return sections.is_local(conn, model or manage.DEFAULT_MODEL)
 
 
 def _chat_pair(user_id: int, conn_id: "int | None", model: "str | None") -> tuple[Connection, str]:
@@ -493,6 +510,8 @@ class StreamTask:
     limit: int | None = None     # предел контекста модели (chat._limit); None — без обрезки результатов
     steps: list[dict] = field(default_factory=list)
     known: set[str] = field(default_factory=set, repr=False)
+    #: кнопка «Рассуждение» хода: None — модель без кнопки (параметра в запросе нет), иначе `enable_thinking`
+    thinking: bool | None = None
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -666,6 +685,8 @@ class StreamTask:
             payload = {"model": self.model, "messages": self._request(offer), "stream": True}
             if offer:
                 payload |= {"tools": web.specs(self.tools), "tool_choice": "auto"}
+            if self.thinking is not None:
+                payload["chat_template_kwargs"] = {"enable_thinking": self.thinking}
             # 400 на круге после вызовов — уже не «не умеет tools», а отказ шлюза его словами
             error, ending, calls, text = await self._round(payload, offer and rounds == 0)
             if error is not None:
@@ -845,6 +866,13 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
         changes["web"] = int(body.web)
+    if body.thinking is not None:
+        # по паре, какой она станет; смена пары кнопку не сбрасывает — у модели без поддержки она хранится
+        row = _chat_row(uid, chat_id)
+        conn_id, model = changes.get("connection_id", row["connection_id"]), changes.get("model", row["model"])
+        if body.thinking and not _thinking_ok(uid, conn_id, model):
+            raise HTTPException(409, {"code": "no_thinking", "message": NO_THINKING})
+        changes["thinking"] = int(body.thinking)
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))
@@ -1033,7 +1061,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     try:
         # инструменты «Интернета» этого хода — по кнопке, какой она стала к ходу (`row` прочитан до await
         # _limit); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
-        fresh = state.DB.execute("SELECT web FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        fresh = state.DB.execute("SELECT web, thinking FROM chats WHERE id = ?", (chat_id,)).fetchone()
         if fresh is None:
             raise _gone()
         kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] else []
@@ -1116,7 +1144,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
-                    tools=kinds, exa_key=exa_key, limit=limit, known=known)
+                    tools=kinds, exa_key=exa_key, limit=limit, known=known,
+                    thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid)
