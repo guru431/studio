@@ -46,6 +46,7 @@ URL_MAX = 2048
 NOT_KNOWN = "читаю только ссылки из переписки или найденные поиском"
 _LINK = re.compile(r"https?://[^\s<>\"'«»`]+", re.I)
 _LINK_TAIL = ".,;:!?)]}"
+_TRACKING = re.compile(r"(?:utm_[^=&]*|fbclid|gclid|yclid)(?:=[^&]*)?", re.I)   # метки рекламы в запросе адреса
 
 YTDLP = "yt-dlp"
 YTDLP_TIMEOUT_SEC = 60       # на каждый из двух вызовов; дорожка 1,5-часового ролика скачивалась за ~1 с
@@ -426,13 +427,18 @@ def _bare(url: str) -> str:
 
 
 def norm(url: str) -> str:
-    """Адрес для сравнения: без пробелов по краям, фрагмента и одного «/» в конце; схема и хост — в нижнем
-    регистре, %-коды раскрыты (модель пишет «/wiki/Москва» вместо «/wiki/%D0%9C…» и наоборот)."""
+    """Адрес для сравнения: без пробелов по краям, фрагмента, меток рекламы (`utm_*`, `fbclid`…) и одного «/» в
+    конце; схема и хост — в нижнем регистре, %-коды раскрыты (модель пишет «/wiki/Москва» вместо
+    «/wiki/%D0%9C…» и наоборот, снимает метки)."""
     url = _bare(url)
     head, sep, rest = url.partition("://")
     if sep:
         cut = min((i for i in (rest.find("/"), rest.find("?")) if i >= 0), default=len(rest))
         url = f"{head.lower()}://{rest[:cut].lower()}{rest[cut:]}"
+    base, mark, query = url.partition("?")
+    if mark:
+        kept = [p for p in query.split("&") if p and not _TRACKING.fullmatch(p)]
+        url = base + ("?" + "&".join(kept) if kept else "")
     url = unquote(url)
     return url[:-1] if url.endswith("/") else url
 

@@ -515,6 +515,10 @@ def test_links_are_found_in_text_with_light_normalisation():
     assert web.norm("HTTPS://RU.Wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0") == \
         web.norm("https://ru.wikipedia.org/wiki/Москва") == "https://ru.wikipedia.org/wiki/Москва"
     assert web.norm("https://A.test?Q=1") == "https://a.test?Q=1" and web.norm("https://a.test/P") != web.norm("https://a.test/p")
+    # метки рекламы не важны, прочие параметры — важны
+    assert web.norm("https://a.test/x?utm_source=tg&id=5&FBCLID=1") == web.norm("https://a.test/x?id=5") == \
+        "https://a.test/x?id=5"
+    assert web.norm("https://a.test/x/?utm_medium=a") == "https://a.test/x" != web.norm("https://a.test/x?id=6")
     assert web.found_links({"kind": "search", "results": [{"url": "https://r.test/#x"}, {"title": "без адреса"}]}) == {
         "https://r.test": "https://r.test/"}
     assert web.found_links({"kind": "page", "url": "https://p.test/"}) == {}
@@ -534,15 +538,19 @@ def test_page_outside_the_known_addresses_is_refused_without_exa(studio):
 
 
 def test_page_variant_of_a_known_address_reads_the_address_of_the_chat(studio):
-    """Модель переписала адрес — раскрыла %-коды, сменила регистр хоста: страница та же, а в Exa уходит адрес
-    переписки — вариант модели не канал наружу."""
+    """Модель переписала адрес — раскрыла %-коды (живьём gemma-abl так и делает), сменила регистр хоста, сняла
+    метки: страница та же, а в Exa уходит адрес переписки — вариант модели не канал наружу."""
     import web
     wiki = "https://ru.wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0"
-    known = web.links(f"что тут? {wiki}#История")
-    for url in ("https://ru.wikipedia.org/wiki/Москва", "https://RU.wikipedia.org/wiki/Москва#a%20b"):
+    news = "https://news.test/a?id=7&utm_source=tg"
+    known = web.links(f"что тут? {wiki}#История и {news}")
+    for url, sent in (("https://ru.wikipedia.org/wiki/Москва", wiki), ("https://RU.wikipedia.org/wiki/Москва#a%20b", wiki),
+                      ("https://news.test/a?id=7", news)):
         step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, known)
-        assert step["url"] == wiki and "error" not in step, url
-    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [[wiki]] * 2
+        assert step["url"] == sent and "error" not in step, url
+    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [[wiki], [wiki], [news]]
+    step = run(studio, web.call, "read_page", json.dumps({"url": "https://news.test/a?id=8"}), KEY, None, known)
+    assert step["error"] == web.NOT_KNOWN and len(studio.gw.exa_requests) == 3
 
 
 def test_page_without_known_addresses_goes_to_exa_without_the_fragment(studio):
