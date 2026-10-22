@@ -36,8 +36,10 @@
  * подключение идёт через сервер (`proxied` диалога; у нового — подключения из чипа); без ключа Exa
  * (`me.exa_key`, оболочка перечитывает профиль при возвращении на экран — событие `studio-me`) выключена, не
  * нажата и с подсказкой WEB_HINT; 409 `no_exa_key` (ключ убрали в другой вкладке) — его слова, кнопка
- * выключена. Событие SSE `tool` — строка хода («Ищу: …»), ответ с
- * ходом перечитывается: под ним `tools` — «Источники» ссылками в новую вкладку без адреса студии. Ход, чьи
+ * выключена. Событие SSE `tool` — плашка над ответом с крутилкой («🌐 Ищу: …»), ответ с ходом
+ * перечитывается: над ним плашка из `tools` (спека 2026-10-22-studio-chat-tools-badge-reasoning, раздел 3) —
+ * виды и числа вызовов, зелёная без ошибок и красная с ними, нажатие раскрывает «Источники» под ответом —
+ * ссылки в новую вкладку без адреса студии. Ход, чьи
  * запросы к Exa модель составит из расшифровки (`external_web` диалога или новое вложение из неё), — после
  * окна #web-dialog (ход с `web_ok`; 409 `external_web` — то же окно); окно внешней модели — первым. */
 import { api, me } from './api.js';
@@ -46,7 +48,7 @@ import { renderMarkdown } from './markdown.js';
 import { attachMic } from './mic.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
@@ -159,6 +161,7 @@ async function readServer(job, response) {
       else if (event === 'tool' && data && typeof data.kind === 'string') {
         job.tool = data;
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
+        (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
         notify(job, false);
       } else if (event === 'done' || event === 'error') {
         job.message.status = event === 'done' ? data.status : 'error';
@@ -325,6 +328,23 @@ function stepNode(s) {
   } else li.append('Инструмент');
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
   return li;
+}
+
+const count = (n, forms) => `${n} ${plural(n, forms)}`;
+
+/* плашка над ответом: «🌐 Интернет (Exa): 2 поиска, 1 страница · ▶ YouTube: 1 ролик — 1 ошибка»; YouTube идёт
+   не через Exa — своей частью, вызов несуществующего инструмента — «неверный вызов» */
+function badgeText(steps) {
+  const of = (kind) => steps.filter((s) => s.kind === kind).length;
+  const exa = [];
+  if (of('search')) exa.push(count(of('search'), ['поиск', 'поиска', 'поисков']));
+  if (of('page')) exa.push(count(of('page'), ['страница', 'страницы', 'страниц']));
+  const parts = exa.length ? [`🌐 Интернет (Exa): ${exa.join(', ')}`] : [];
+  if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), ['ролик', 'ролика', 'роликов'])}`);
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind)).length;
+  if (wrong) parts.push(count(wrong, ['неверный вызов', 'неверных вызова', 'неверных вызовов']));
+  const errors = steps.filter((s) => s.error).length;
+  return parts.join(' · ') + (errors ? ` — ${count(errors, ['ошибка', 'ошибки', 'ошибок'])}` : '');
 }
 
 function sourcesNode(steps) {
@@ -754,17 +774,44 @@ function build(view, ctx) {
     const meta = el('p', { class: 'msg-meta' });
     const actions = el('div', { class: 'msg-actions' });
     const steps = Array.isArray(m.tools) && m.tools.length ? sourcesNode(m.tools) : null;
+    const badge = el('button', { type: 'button', class: 'web-badge', hidden: true });
+    badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
+      if (!steps) return;
+      steps.open = true;
+      steps.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
     const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, md, steps, meta, actions));
-    parts.set(m, { md, meta, actions, last, shown: null });
+      el('div', { class: 'msg-body' }, badge, md, steps, meta, actions));
+    parts.set(m, { badge, steps, md, meta, actions, last, shown: null });
     paint(m);
     return node;
+  }
+
+  /* плашка: идёт инструмент — он с крутилкой; есть шаги с сервера — итог зелёным или красным; вызовы этого хода
+     до перечитывания — итог без цвета (ошибок ещё не знаем); нет ничего — плашки нет (ответ по памяти) */
+  function paintBadge(p, m, job) {
+    const tools = Array.isArray(m.tools) && m.tools.length ? m.tools : null;
+    const steps = tools || m.calls || [];
+    const busy = m.status === 'streaming' && job && job.tool;
+    p.badge.hidden = !busy && !steps.length;
+    if (p.badge.hidden) return;
+    if (busy) {
+      p.badge.className = 'web-badge busy';
+      p.badge.replaceChildren(el('span', { class: 'spin', 'aria-hidden': 'true' }),
+        `${job.tool.kind === 'youtube' ? '▶' : '🌐'} ${toolLine(job.tool)}`);
+    } else {
+      p.badge.className = `web-badge${tools ? (tools.some((s) => s.error) ? ' bad' : ' ok') : ''}`;
+      p.badge.replaceChildren(badgeText(steps));
+    }
+    p.badge.disabled = !p.steps;
+    p.badge.setAttribute('aria-label', p.steps ? `${p.badge.textContent} — показать источники` : p.badge.textContent);
   }
 
   function paint(m) {
     const p = parts.get(m);
     if (!p) return;
     const job = reading(m);
+    paintBadge(p, m, job);
     if (p.shown !== m.content) {
       p.md.replaceChildren(renderMarkdown(m.content));
       p.shown = m.content;
@@ -772,7 +819,7 @@ function build(view, ctx) {
     let text = '';
     let kind = '';
     if (m.status === 'streaming') {
-      if (job) text = job.tool ? toolLine(job.tool) : job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;
+      if (job) text = job.tool || job.first ? '' : `загружаю модель · ${elapsed(job.started)}`;   // инструмент — на плашке
       else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
       else text = 'ответ ещё идёт…';
     } else if (m.status === 'stopped') text = 'остановлено';

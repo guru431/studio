@@ -992,8 +992,8 @@ EXA_KEY_SET = f"""(async () => {{ const m = {API};
 
 
 def test_chat_internet_toggle_search_and_sources(browser, live):
-    """«Интернет»: кнопка выключена → включить → ход: строка «Ищу: …», ответ, под ним «Источники» со
-    ссылками в новую вкладку без адреса студии; перезагрузка — кнопка включена (хранится у диалога);
+    """«Интернет»: кнопка выключена → включить → ход: плашка «🌐 Ищу: …», ответ, над ним зелёная плашка, под ним
+    «Источники» со ссылками в новую вкладку без адреса студии; перезагрузка — кнопка включена (хранится у диалога);
     диалог на прямом подключении — кнопки нет. Результат с адресом `javascript:` или `data:` — текстом, не
     ссылкой, и в число «Источников» (ссылки, а не шаги) не идёт."""
     from fakes import EXA_SEARCH
@@ -1015,10 +1015,13 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
             ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
             ("eval", "hint", "document.querySelector('#web-note').textContent"),
             ("type", "#chat-input", "Что нового в Python?"), ("press", "Enter"),
-            ("wait", f"{LAST_ANSWER}?.querySelector('.msg-meta').textContent.startsWith('Ищу:')"),
-            ("eval", "progress", f"{LAST_ANSWER}.querySelector('.msg-meta').textContent"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.web-badge.busy')?.textContent.startsWith('🌐 Ищу:')"),
+            ("eval", "progress", f"[{LAST_ANSWER}.querySelector('.web-badge').textContent,"
+                                 f" {LAST_ANSWER}.querySelector('.msg-meta').textContent]"),
             ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps')"),
             ("eval", "answer", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+            ("eval", "badge", f"[{LAST_ANSWER}.querySelector('.web-badge').textContent,"
+                              f" {LAST_ANSWER}.querySelector('.web-badge').className]"),
             ("eval", "summary", f"{LAST_ANSWER}.querySelector('details.web-steps summary').textContent"),
             ("eval", "steps", f"{LAST_ANSWER}.querySelector('details.web-steps li').textContent"),
             ("eval", "links", f"[...{LAST_ANSWER}.querySelectorAll('details.web-steps a')]"
@@ -1044,8 +1047,9 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["before"] == ["false", "Интернет"] and v["hint"] == ""
-    assert v["progress"] == "Ищу: python 3.14"
+    assert v["progress"] == ["🌐 Ищу: python 3.14", ""]
     assert v["answer"] == "Python 3.14 вышел 7 октября."
+    assert v["badge"] == ["🌐 Интернет (Exa): 1 поиск", "web-badge ok"]
     assert v["summary"] == "Источники (2)" and "python 3.14" in v["steps"]
     assert v["links"] == [
         ["https://www.python.org/downloads/", "Download Python", "_blank", "noopener noreferrer"],
@@ -1054,6 +1058,49 @@ def test_chat_internet_toggle_search_and_sources(browser, live):
                           ["SPAN", "Данные"]]
     assert v["kept"] == [False, "true", True] and v["direct"] == ""
     assert [(p, b["query"], k) for p, b, k in live.gw.exa_requests[searches:]] == [("/search", "python 3.14", "exa-test-key")]
+    assert not problems(r), problems(r)
+
+
+BADGE = "document.querySelector('#messages .msg.assistant .web-badge:not([hidden])')"
+
+
+def test_chat_internet_badge_counts_and_errors(browser, live):
+    """Плашка над ответом с шагами: поиск, который Exa отклонил, — красная с числом ошибок; нажатие раскрывает
+    «Источники» этого ответа; ответ без шагов — без плашки; после перезагрузки плашка та же (из базы)."""
+    live.add_user("badger")
+    live.gw.chat_script = [{"tool_calls": [("web_search", json.dumps({"query": "курс доллара"}))]},
+                           ["Не получилось найти."], ["Привет!"]]
+    live.gw.exa_html = True                                  # 403 HTML Cloudflare, как Exa отвечает debian
+    badge = f"[{BADGE}.textContent, {BADGE}.className, document.querySelectorAll('#messages .web-badge:not([hidden])').length]"
+    try:
+        r = browser.drive(live.url + "/", [*signin("badger"), ("wait", READY), add_gateway(),
+            ("eval", "exa", EXA_KEY_SET), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+            *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden && !{WEB_TOGGLE}.disabled"),
+            ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("type", "#chat-input", "Какой курс доллара?"), ("press", "Enter"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps') && {BADGE}?.classList.contains('bad')"),
+            ("eval", "failed", badge),
+            ("eval", "closed", f"{LAST_ANSWER}.querySelector('details.web-steps').open"),
+            ("click", "#messages .msg.assistant .web-badge"),
+            ("wait", f"{LAST_ANSWER}.querySelector('details.web-steps').open"),
+            ("type", "#chat-input", "Привет"), ("press", "Enter"),
+            ("wait", f"document.querySelectorAll('#messages .msg.assistant').length === 2 && {ANSWERED}"),
+            ("eval", "plain", f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(),"
+                              f" !!{LAST_ANSWER}.querySelector('.web-badge:not([hidden])'), ...{badge}]"),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"document.querySelectorAll('#messages .msg').length === 4 && {BADGE}"),
+            ("eval", "kept", badge)])
+    finally:
+        live.gw.exa_html = False
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["failed"] == ["🌐 Интернет (Exa): 1 поиск — 1 ошибка", "web-badge bad", 1] and v["closed"] is False
+    assert v["plain"] == ["Привет!", False, "🌐 Интернет (Exa): 1 поиск — 1 ошибка", "web-badge bad", 1]
+    assert v["kept"] == v["failed"]
     assert not problems(r), problems(r)
 
 
