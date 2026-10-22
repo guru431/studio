@@ -61,6 +61,7 @@ import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
+const THINK_TAIL = 600;          // знаков свёрнутого бегущего рассуждения: в три строки помещается меньше
 const POLL_MS = 2000;
 const BEAT_MS = 15000;           // признак жизни ответа из браузера; сервер ждёт его 90 с (ALIVE_SEC)
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
@@ -350,7 +351,7 @@ function duration(sec) {
 function stepNode(s) {
   const li = el('li', { class: `web-step web-${s.kind}` });
   if (s.kind === 'search') {
-    li.append(`Поиск: «${s.query || ''}»`);
+    li.append(s.query ? `Поиск: «${s.query}»` : 'Поиск');
     const results = Array.isArray(s.results) ? s.results : [];
     if (results.length) {
       li.append(el('ul', {}, ...results.map((x) => el('li', {}, sourceLink(x.url, x.title),
@@ -407,6 +408,7 @@ function build(view, ctx) {
   let lastPaint = 0;
   let menuFor = null;          // пункт списка с открытым меню
   const parts = new WeakMap(); // сообщение → его узлы в ленте
+  const unfolded = new Set();  // id ответов, чьё рассуждение человек раскрыл: лента перестраивается целиком
 
   /* разметка */
   const list = el('nav', { class: 'chat-list', 'aria-label': 'Диалоги' });
@@ -857,7 +859,7 @@ function build(view, ctx) {
     });
     const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
       el('div', { class: 'msg-body' }, badge, think, md, steps, meta, actions));
-    parts.set(m, { badge, steps, think, thought: '', md, meta, actions, last, shown: null });
+    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, actions, last, shown: null });
     paint(m);
     return node;
   }
@@ -883,28 +885,58 @@ function build(view, ctx) {
   }
 
   /* строка рассуждения под плашкой: модель думает — «Думает… N с» с крутилкой и бегущим текстом (если он виден),
-     свёрнутым до нескольких строк — нажатие раскрывает; ответ с рассуждением — свёрнутое «💭 Рассуждала N с».
-     Узел строится заново только при смене вида: раскрытое человеком не сворачивается. Текст — textContent */
+     свёрнутым до нескольких строк — нажатие (с клавиатуры — Enter или пробел) раскрывает; ответ с рассуждением —
+     свёрнутое «💭 Рассуждала N с». Узел строится заново при смене вида (модель думает и после текста) и вместе с
+     лентой (конец ответа, опрос), а раскрытое человеком остаётся раскрытым (`unfolded`). Текст — textContent:
+     свёрнутому бегущему — хвост THINK_TAIL знаков, раскрытому — дописывается кусками (`p.said` — что уже в узле): не
+     раскладывать заново 60 тыс. знаков каждые RENDER_MS */
   function paintThought(p, m, job) {
     const text = m.reasoning || '';
     const busy = m.status === 'streaming' && (job ? !!job.thinking : !m.content && !!text);
     const mode = busy ? 'busy' : text ? 'done' : '';
+    const unfold = (on) => (on ? unfolded.add(m.id) : unfolded.delete(m.id));
     if (mode !== p.thought) {
       p.thought = mode;
+      p.said = '';
       if (mode === 'busy') {
-        const run = el('div', { class: 'think-text', title: 'Показать целиком' });
-        run.addEventListener('click', () => run.classList.toggle('open'));
+        const run = el('div', { class: 'think-text', role: 'button', tabindex: '0' });
+        const fold = () => {
+          const on = unfolded.has(m.id);
+          run.classList.toggle('open', on);
+          run.setAttribute('aria-expanded', String(on));
+          run.title = on ? 'Свернуть' : 'Показать целиком';
+        };
+        const flip = () => {
+          unfold(!unfolded.has(m.id));
+          p.said = '';
+          fold();
+          paintThought(p, m, reading(m));
+        };
+        run.addEventListener('click', flip);
+        run.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          flip();
+        });
+        fold();
         p.think.replaceChildren(el('div', { class: 'think busy' }, el('p', { class: 'think-line' },
           el('span', { class: 'spin', 'aria-hidden': 'true' }), el('span', { class: 'think-sec' })), run));
       } else if (mode === 'done') {
-        p.think.replaceChildren(el('details', { class: 'think' }, el('summary', {}), el('div', { class: 'think-text' })));
+        const details = el('details', { class: 'think' }, el('summary', {}), el('div', { class: 'think-text' }));
+        details.open = unfolded.has(m.id);
+        details.addEventListener('toggle', () => unfold(details.open));
+        p.think.replaceChildren(details);
       } else p.think.replaceChildren();
     }
     if (!mode) return;
     const box = p.think.querySelector('.think-text');
-    if (box.textContent !== text) {
-      box.textContent = text;
-      if (busy) box.scrollTop = box.scrollHeight;         // свёрнутый — виден конец
+    const folded = busy && !unfolded.has(m.id);
+    const shown = folded ? text.slice(-THINK_TAIL) : text;
+    if (p.said !== shown) {
+      if (p.said && shown.startsWith(p.said) && box.lastChild) box.lastChild.appendData(shown.slice(p.said.length));
+      else box.textContent = shown;
+      p.said = shown;
+      if (folded) box.scrollTop = box.scrollHeight;     // свёрнутый — виден конец
     }
     if (busy) {
       const sec = job ? thinkSec(job) : m.reasoning_sec;

@@ -26,7 +26,7 @@ import uuid
 from asyncio.subprocess import DEVNULL, PIPE
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -198,8 +198,9 @@ async def page(key: str, url: str) -> dict:
 
 def _env() -> dict:
     """Окружение yt-dlp: без окружения службы (там STUDIO_DATA_KEY); Windows (тесты) без SYSTEMROOT
-    процессы не запускает."""
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(state.CFG.tmp_dir)}
+    процессы не запускает. HOME — не tmp_dir: каталог, что там заведёт помощник yt-dlp (`.cache/` deno),
+    уронил бы старт службы — audio.clean_tmp удаляет файлы `unlink`-ом."""
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent"}
     if os.name == "nt":
         env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
     return env
@@ -376,6 +377,18 @@ def args_of(arguments: str) -> "dict | None":
     return args if isinstance(args, dict) else None
 
 
+def asked(kind: str, arguments: str) -> dict:
+    """Что модель просила — `{query}` или `{url}` в пределах QUERY_MAX / URL_MAX — для шага без вызова
+    (chat.TOO_MANY, chat.WEB_OFF); не разобралось — {}."""
+    if kind not in _SPECS:
+        return {}
+    param = _SPECS[kind][2]
+    value = (args_of(arguments) or {}).get(param)
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    return {param: value.strip()[:QUERY_MAX if kind == "search" else URL_MAX]}
+
+
 def label(kind: str, args: dict) -> str:
     """Что показать, пока идёт инструмент: запрос, адрес или «субтитры <адрес>», до LABEL_MAX знаков."""
     value = args.get(_SPECS[kind][2]) if kind in _SPECS else None
@@ -404,38 +417,52 @@ def public(step: dict) -> dict:
 # ---- какие адреса можно читать (read_page) ------------------------------------------------
 # Страница уходит в Exa, а для незнакомого адреса Exa обходит сайт сам: адрес, который составила модель
 # (по просьбе текста страницы или выдержки поиска), унёс бы переписку на чужой сайт. Читаются только адреса из
-# переписки — сообщений пользователя и вложенных документов — и найденные поиском (`results[].url`).
+# переписки — сообщений пользователя и вложенных документов — и найденные поиском (`results[].url`). В Exa
+# уходит адрес так, как он записан в переписке или выдаче (без фрагмента), а не вариант модели: иначе фрагмент,
+# регистр букв или %-коды адреса стали бы каналом, которым модель вынесет кусок переписки на сайт.
+
+def _bare(url: str) -> str:
+    return url.strip().split("#", 1)[0]
+
 
 def norm(url: str) -> str:
-    """Адрес для сравнения: без пробелов по краям, фрагмента и одного «/» в конце."""
-    url = url.strip().split("#", 1)[0]
+    """Адрес для сравнения: без пробелов по краям, фрагмента и одного «/» в конце; схема и хост — в нижнем
+    регистре, %-коды раскрыты (модель пишет «/wiki/Москва» вместо «/wiki/%D0%9C…» и наоборот)."""
+    url = _bare(url)
+    head, sep, rest = url.partition("://")
+    if sep:
+        cut = min((i for i in (rest.find("/"), rest.find("?")) if i >= 0), default=len(rest))
+        url = f"{head.lower()}://{rest[:cut].lower()}{rest[cut:]}"
+    url = unquote(url)
     return url[:-1] if url.endswith("/") else url
 
 
-def links(text: str) -> set[str]:
-    """Адреса http(s) в тексте (norm); хвостовая пунктуация («…/a).») — и с ней, и без неё: скобка
-    бывает частью адреса."""
-    out = set()
+def links(text: str) -> dict[str, str]:
+    """Адреса http(s) в тексте: norm → адрес, как записан (без фрагмента); хвостовая пунктуация («…/a).») — и с
+    ней, и без неё: скобка бывает частью адреса."""
+    out = {}
     for m in _LINK.finditer(text or ""):
-        url = m.group(0)
-        out.add(norm(url))
+        url = _bare(m.group(0))
+        out.setdefault(norm(url), url)
         while url and url[-1] in _LINK_TAIL:
             url = url[:-1]
-            out.add(norm(url))
+            out.setdefault(norm(url), url)
     return out
 
 
-def found_links(step: dict) -> set[str]:
-    """Адреса результатов шага поиска (norm)."""
-    return {norm(r["url"]) for r in step.get("results") or [] if isinstance(r, dict) and isinstance(r.get("url"), str)}
+def found_links(step: dict) -> dict[str, str]:
+    """Адреса результатов шага поиска: norm → адрес выдачи (без фрагмента)."""
+    return {norm(r["url"]): _bare(r["url"]) for r in step.get("results") or []
+            if isinstance(r, dict) and isinstance(r.get("url"), str)}
 
 
 async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] | None" = None,
-               known: "set[str] | None" = None) -> dict:
+               known: "dict[str, str] | None" = None) -> dict:
     """Шаг инструмента по вызову модели: имя функции и аргументы JSON. Неизвестное имя (или вид не из `kinds`,
     которые модели давали) и битые аргументы — шаг `unknown` с ошибкой; неудача инструмента — шаг с `error`.
-    Запрос длиннее QUERY_MAX, адрес длиннее URL_MAX и страница не из `known` (norm-адреса переписки и поиска;
-    None — без проверки) — шаг-ошибка без вызова.
+    Запрос длиннее QUERY_MAX, адрес длиннее URL_MAX и страница не из `known` (norm → адрес переписки и поиска,
+    links; None — без проверки) — шаг-ошибка без вызова. Страница читается по адресу из `known`, без него — по
+    адресу модели без фрагмента.
     Не бросает ToolError (и сбой инструмента — тоже шаг); отмена («Стоп») идёт насквозь."""
     kind = NAMES.get(name)
     if kind is None or (kinds is not None and kind not in kinds):
@@ -449,8 +476,10 @@ async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] |
         return {"kind": kind, param: value[:QUERY_MAX], "error": "запрос слишком длинный"}
     if kind != "search" and len(value) > URL_MAX:
         return {"kind": kind, param: value[:URL_MAX], "error": "адрес слишком длинный"}
-    if kind == "page" and known is not None and norm(value) not in known:
-        return {"kind": kind, param: value, "error": NOT_KNOWN}
+    if kind == "page":
+        if known is not None and norm(value) not in known:
+            return {"kind": kind, param: value, "error": NOT_KNOWN}
+        value = known[norm(value)] if known is not None else _bare(value)
     try:
         if kind == "youtube":
             return await youtube(value)

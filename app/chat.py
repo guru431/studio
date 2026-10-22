@@ -501,8 +501,8 @@ class StreamTask:
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
     зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
-    `messages.tools`. Перед каждым вызовом — срок ответа и `chats.web` заново: выключили — вызова нет, и
-    дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
+    `messages.tools`. Перед каждым вызовом и кругом — срок ответа и `chats.web` заново: выключили — вызова нет,
+    и дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
     поиском этого ответа).
 
     Рассуждение модели (`delta.reasoning_content`, иначе `delta.reasoning`) — `_think`: видно (`thinking` не
@@ -526,14 +526,13 @@ class StreamTask:
     exa_key: str | None = field(default=None, repr=False)
     limit: int | None = None     # предел контекста модели (chat._limit); None — без обрезки результатов
     steps: list[dict] = field(default_factory=list)
-    known: set[str] = field(default_factory=set, repr=False)
+    known: dict[str, str] = field(default_factory=dict, repr=False)
     #: кнопка «Рассуждение» хода: None — модель без кнопки (параметра в запросе нет), иначе `enable_thinking`
     thinking: bool | None = None
     reasoning: str = field(default="", repr=False)   # видимое рассуждение всех кругов (круги — через пустую строку)
     reasoning_sec: float = 0.0   # его длительность по кончившимся отрезкам
     think_from: float | None = None   # начало идущего отрезка: от первого куска рассуждения до текста ответа
-    joined: bool = False         # в этом круге рассуждение уже было
-    stray: int = 0               # знаков рассуждения при выключенной кнопке
+    stray: int = 0              # знаков рассуждения при выключенной кнопке
     thought: float = -math.inf   # когда ушло последнее `think {}`
 
     def put(self, kind: str, data) -> None:
@@ -580,8 +579,8 @@ class StreamTask:
 
     def _think(self, piece: str) -> "str | None":
         """Кусок рассуждения модели; итог — слова ошибки (предел) или None. Видно — текстом в `reasoning` и
-        событием `think` (первый кусок круга — через пустую строку), сверх REASONING_MAX — обрезано, ответ
-        остановлен. Кнопка выключена (`thinking is False`) — текст не идёт и не хранится, только `think {}` не
+        событием `think` (первый кусок отрезка — нового круга или после текста — через пустую строку), сверх
+        REASONING_MAX — обрезано, ответ остановлен. Кнопка выключена (`thinking is False`) — текст не идёт и не хранится, только `think {}` не
         чаще THINK_EVERY_SEC; сверх STRAY_MAX знаков — петля."""
         now = clock.NOW()
         if self.thinking is False:
@@ -592,11 +591,10 @@ class StreamTask:
                 self.thought, self.fresh = now, True
                 self.put("think", None)
             return None
-        if self.think_from is None:
+        if self.think_from is None:                  # новый отрезок: новый круг или снова после текста
             self.think_from = now
-        if self.reasoning and not self.joined:
-            piece = "\n\n" + piece
-        self.joined = True
+            if self.reasoning:
+                piece = "\n\n" + piece
         shown = piece[:REASONING_MAX - len(self.reasoning)]
         if shown:
             self.reasoning += shown
@@ -636,7 +634,6 @@ class StreamTask:
         впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS (vLLM: «"auto" tool choice
         requires…», LiteLLM называет `tools`); прочий 400 (контекст, картинка) — словами шлюза."""
         ending, calls, text = None, {}, ""
-        self.joined = False
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
@@ -735,10 +732,10 @@ class StreamTask:
                 return self._cut_time()
             kind = web.NAMES.get(c.name, "unknown")
             if n >= CALLS_PER_ROUND:
-                step = {"kind": kind, "error": TOO_MANY}
+                step = {"kind": kind, **web.asked(kind, c.arguments), "error": TOO_MANY}
             elif not self.tools or not self._web_on():
                 self.tools = []
-                step = {"kind": kind, "error": WEB_OFF}
+                step = {"kind": kind, **web.asked(kind, c.arguments), "error": WEB_OFF}
             else:
                 self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
                 step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools, self.known))
@@ -763,6 +760,8 @@ class StreamTask:
         while True:
             if clock.NOW() > self.deadline:
                 return self._cut_time()
+            if self.tools and not self._web_on():         # выключили на последнем вызове круга — круг без tools
+                self.tools = []
             offer = bool(self.tools) and rounds < TOOL_ROUNDS
             payload = {"model": self.model, "messages": self._request(offer), "stream": True}
             if offer:
@@ -1102,11 +1101,11 @@ def _drop_last_answer(chat_id: str) -> str:
     return last["id"]
 
 
-def _known_links(chat_id: str) -> set[str]:
-    """Адреса, которые read_page может читать в ходе (web.norm, спека 6.4): из сообщений пользователя и
-    вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`). Синхронно — в
-    транзакции хода."""
-    known = set()
+def _known_links(chat_id: str) -> dict[str, str]:
+    """Адреса, которые read_page может читать в ходе (web.links: norm → адрес, спека 6.4): из сообщений
+    пользователя и вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`).
+    Синхронно — в транзакции хода."""
+    known = {}
     for row in state.DB.execute("SELECT role, content, tools FROM messages WHERE chat_id = ?", (chat_id,)):
         if row["role"] == "user":
             known |= web.links(row["content"])
@@ -1186,7 +1185,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 raise HTTPException(409, {"code": "external_web", "message": (
                     "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         messages = compose(chat_id, user_mid)
-        known = _known_links(chat_id) if "page" in kinds else set()
+        known = _known_links(chat_id) if "page" in kinds else {}
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)

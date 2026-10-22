@@ -110,7 +110,7 @@ class FakeGateway:
         self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели
         #: ответы на очередные потоковые запросы: list[str] — куски текста, dict {"text": [...],
         #: "tool_calls": [(имя, аргументы JSON), …], "reasoning": [...]} — ещё вызовы инструментов и рассуждение
-        #: (идёт до текста); пусто — chat_reply
+        #: (идёт до текста), "then": {"reasoning": [...], "text": [...]} — снова после текста; пусто — chat_reply
         self.chat_script = []
         self.reasoning_field = "reasoning_content"   # поле дельты рассуждения: vLLM через LiteLLM; иначе "reasoning"
         #: после первого куска рассуждения ответ «думает», пока не снимут; функция без аргументов — пока она истинна
@@ -193,6 +193,7 @@ class FakeGateway:
         step = self.chat_script.pop(0) if self.chat_script else self.chat_reply
         pieces, calls, thoughts = ((step.get("text", []), step.get("tool_calls", []), step.get("reasoning", []))
                                    if isinstance(step, dict) else (step, [], []))
+        then = step.get("then", {}) if isinstance(step, dict) else {}
         number = len(self.chat_requests)
 
         def data(delta, ending=None):
@@ -216,6 +217,10 @@ class FakeGateway:
                 yield data({"content": piece})
                 while i == 0 and self.chat_hold:
                     await asyncio.sleep(0.001)
+            for thought in then.get("reasoning", []):    # модель снова думает после текста того же круга
+                yield data({self.reasoning_field: thought})
+            for piece in then.get("text", []):
+                yield data({"content": piece})
             # вызовы — как vLLM gemma-abl через шлюз (проба 2026-10-21): имя с id и index, затем
             # аргументы кусками; конец — finish_reason "tool_calls"
             for i, (name, arguments) in enumerate(calls):

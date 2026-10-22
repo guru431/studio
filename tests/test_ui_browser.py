@@ -1108,6 +1108,9 @@ THINK_TOGGLE = "document.querySelector('#think-toggle')"
 #: метка страницы «увидела, что модель думает»: название диалога — шлюз держит рассуждение, пока его нет
 SEEN = f"""(async () => {{ await {API}.api('PATCH', '/api/chats/' + location.hash.split('/')[2],
   {{ title: 'увидела' }}); return true; }})()"""
+#: то же со своим названием: база живой службы общая на модуль, «увидела» уже стоит у диалога прежнего теста
+MARK = f"""(async () => {{ await {API}.api('PATCH', '/api/chats/' + location.hash.split('/')[2],
+  {{ title: '%s' }}); return true; }})()"""
 
 
 def test_chat_reasoning_switch_and_thinking_line(browser, live):
@@ -1231,6 +1234,82 @@ def test_chat_reasoning_and_internet_show_one_spinner_at_a_time(browser, live, m
     assert v["tool"][3].startswith("💭 Рассуждала "), v["tool"]
     assert v["think"] == ["web-badge", "▶ YouTube: 1 ролик", True, ""], v["think"]
     assert v["done"] == "Ролик о Python."
+    assert not problems(r), problems(r)
+
+
+def test_chat_thinking_without_text_while_the_switch_is_off(browser, live):
+    """Ревью партии, пункт 6: кнопка «Рассуждение» выключена — пока модель думает, «Думает… N с» с крутилкой и
+    без текста; первое слово ответа строку убирает, «Рассуждала» нет (рассуждение не хранится)."""
+    import state
+    live.add_user("dreamer")
+    live.gw.chat_script = [{"reasoning": ["thought"], "text": ["Ок."]}]
+    live.gw.think_hold = lambda: state.DB.execute("SELECT 1 FROM chats WHERE title = 'думает молча'").fetchone() is None
+    busy = (f"[{LAST_ANSWER}.querySelector('.think.busy .think-sec').textContent,"
+            f" {LAST_ANSWER}.querySelector('.think.busy .think-text').textContent,"
+            f" !!{LAST_ANSWER}.querySelector('.think.busy .spin')]")
+    try:
+        r = browser.drive(live.url + "/", [*signin("dreamer"), ("wait", READY), add_gateway(),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{THINK_TOGGLE} && !{THINK_TOGGLE}.hidden && {THINK_TOGGLE}.getAttribute('aria-pressed') === 'false'"),
+            ("type", "#chat-input", "Привет"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.think.busy .think-sec')?.textContent.startsWith('Думает… ')"),
+            ("eval", "busy", busy),
+            ("eval", "seen", MARK % "думает молча"),
+            ("wait", ANSWERED),
+            ("eval", "done", f"[{LAST_ANSWER}.querySelector('.md').textContent.trim(),"
+                             f" {LAST_ANSWER}.querySelector('.think-box').childElementCount]")])
+    finally:
+        live.gw.think_hold = False
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert re.fullmatch(r"Думает… \d+ с", v["busy"][0]) and v["busy"][1:] == ["", True], v["busy"]
+    assert v["done"] == ["Ок.", 0]
+    assert live.gw.chat_requests[-1]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert not problems(r), problems(r)
+
+
+def test_chat_thinking_text_opens_from_the_keyboard_and_stays_open(browser, live):
+    """Ревью партии, пункты 4 и 5: бегущий текст рассуждения раскрывается с клавиатуры (Enter), подпись и
+    aria-expanded меняются; раскрытое остаётся раскрытым, пока модель пишет текст и снова думает, и в свёрнутом
+    «Рассуждала»; второй отрезок рассуждения — через пустую строку."""
+    import state
+    live.add_user("opener")
+    live.gw.chat_script = [{"reasoning": ["Считаю."], "text": ["410"],
+                            "then": {"reasoning": ["Проверяю."], "text": [" — верно."]}}]
+    live.gw.think_hold = lambda: state.DB.execute("SELECT 1 FROM chats WHERE title = 'раскрыла'").fetchone() is None
+    run = f"{LAST_ANSWER}.querySelector('.think.busy .think-text')"
+    attrs = (f"[{run}.getAttribute('role'), {run}.tabIndex, {run}.getAttribute('aria-expanded'), {run}.title,"
+             f" {run}.classList.contains('open')]")
+    done = (f"[{LAST_ANSWER}.querySelector('details.think').open,"
+            f" {LAST_ANSWER}.querySelector('details.think .think-text').textContent,"
+            f" {LAST_ANSWER}.querySelector('.md').textContent.trim()]")
+    try:
+        r = browser.drive(live.url + "/", [*signin("opener"), ("wait", READY), add_gateway(),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{THINK_TOGGLE} && !{THINK_TOGGLE}.hidden"),
+            ("click", "#think-toggle"), ("wait", f"{THINK_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("type", "#chat-input", "Сколько будет 17×23?"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.think.busy .think-text')?.textContent === 'Считаю.'"),
+            ("eval", "closed", attrs),
+            ("eval", "focus", f"{run}.focus(), document.activeElement === {run}"),
+            ("press", "Enter"),
+            ("wait", f"{run}.classList.contains('open')"),
+            ("eval", "opened", attrs),
+            ("eval", "seen", MARK % "раскрыла"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.think')"),
+            ("eval", "done", done)])
+    finally:
+        live.gw.think_hold = False
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["focus"] is True
+    assert v["closed"] == ["button", 0, "false", "Показать целиком", False]
+    assert v["opened"] == ["button", 0, "true", "Свернуть", True]
+    assert v["done"] == [True, "Считаю.\n\nПроверяю.", "410 — верно."]
     assert not problems(r), problems(r)
 
 

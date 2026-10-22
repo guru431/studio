@@ -114,6 +114,34 @@ def test_switch_off_shows_only_thinking_and_keeps_nothing(studio, no_pings):
                             (answer["id"],)).fetchone()[:] == (None, None)
 
 
+def test_switch_off_thinking_goes_again_after_a_second(studio, no_pings):
+    """Ревью партии, пункт 6: `think {}` — не чаще THINK_EVERY_SEC, но и не один раз на ответ."""
+    cid = thinking_chat(studio, on=False)
+    studio.gw.chat_script = [{"reasoning": ["thought"] * 3, "text": ["Ок."]}]
+    studio.gw.think_hold = True
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(d for e, d in events if e == "think") == {}
+            studio.clock[0] += chat.THINK_EVERY_SEC
+            studio.gw.think_hold = False
+            rest = [(e, d) for e, d in events if e != "ping"]
+    finally:
+        studio.gw.think_hold = False
+    assert rest == [("think", {}), ("delta", {"text": "Ок."}), ("done", {"status": "done"})]
+
+
+def test_reasoning_after_text_in_the_same_round_is_set_apart(studio):
+    """Ревью партии, пункт 5: модель снова думает после текста того же круга — через пустую строку, как в
+    новом круге."""
+    cid = thinking_chat(studio)
+    studio.gw.chat_script = [{"reasoning": ["Считаю."], "text": ["410"],
+                              "then": {"reasoning": ["Проверяю."], "text": [" — верно."]}}]
+    assert thinks(sse(turn(studio, cid))) == [{"text": "Считаю."}, {"text": "\n\nПроверяю."}]
+    answer = answer_of(studio, cid)
+    assert (answer["content"], answer["reasoning"]) == ("410 — верно.", "Считаю.\n\nПроверяю.")
+
+
 def test_model_without_switch_shows_its_reasoning(studio):
     gw = add_gateway(studio)
     studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})

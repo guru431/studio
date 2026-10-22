@@ -454,7 +454,7 @@ def test_run_gives_yt_dlp_no_environment_of_the_service(studio, monkeypatch):
     env = json.loads(out)
     assert code == 0 and "STUDIO_DATA_KEY" not in env
     assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin" and env["LANG"] == "C.UTF-8"
-    assert env["HOME"] == str(state.CFG.tmp_dir)
+    assert env["HOME"] == "/nonexistent" and str(state.CFG.tmp_dir) not in env.values()   # каталог там уронил бы старт
     assert set(env) - {"PATH", "LANG", "HOME", "SYSTEMROOT"} <= {"COMSPEC", "PATHEXT", "WINDIR"}   # Windows дописывает свои
 
 
@@ -488,7 +488,7 @@ def test_long_query_or_address_is_refused_without_a_call(studio, monkeypatch):
     q, url = "я" * (web.QUERY_MAX + 1), "https://example.test/" + "a" * web.URL_MAX
     step = run(studio, web.call, "web_search", json.dumps({"query": q}), KEY)
     assert step == {"kind": "search", "query": q[:web.QUERY_MAX], "error": "запрос слишком длинный"}
-    step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, {web.norm(url)})
+    step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, {web.norm(url): url})
     assert step == {"kind": "page", "url": url[:web.URL_MAX], "error": "адрес слишком длинный"}
     step = run(studio, web.call, "youtube_subtitles", json.dumps({"url": CANON + "&x=" + "a" * web.URL_MAX}), KEY)
     assert step["error"] == "адрес слишком длинный"
@@ -503,15 +503,21 @@ def test_links_are_found_in_text_with_light_normalisation():
             "[док](https://docs.test/x#part) <a href=\"https://html.test/p\">x</a> «https://q.test/?a=1&b=2» "
             "ftp://no.test/ javascript:alert(1)")
     found = web.links(text)
-    for url in ("https://Example.test/a", "https://en.wikipedia.org/wiki/Python_(language)", "https://docs.test/x",
-                "https://html.test/p", "https://q.test/?a=1&b=2"):
-        assert url in found, url
+    for key, url in (("https://example.test/a", "https://Example.test/a/"),
+                     ("https://en.wikipedia.org/wiki/Python_(language)", "https://en.wikipedia.org/wiki/Python_(language)"),
+                     ("https://docs.test/x", "https://docs.test/x"), ("https://html.test/p", "https://html.test/p"),
+                     ("https://q.test/?a=1&b=2", "https://q.test/?a=1&b=2")):
+        assert found.get(key) == url, key
     assert not any("no.test" in u or "alert" in u for u in found)
     assert web.norm("  https://a.test/x/#top ") == web.norm("https://a.test/x") == "https://a.test/x"
     assert web.norm("https://a.test//") == "https://a.test/"                   # один «/», не все
-    assert web.found_links({"kind": "search", "results": [{"url": "https://r.test/"}, {"title": "без адреса"}]}) == {
-        "https://r.test"}
-    assert web.found_links({"kind": "page", "url": "https://p.test/"}) == set()
+    # регистр схемы и хоста и %-коды не важны, регистр пути — важен
+    assert web.norm("HTTPS://RU.Wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0") == \
+        web.norm("https://ru.wikipedia.org/wiki/Москва") == "https://ru.wikipedia.org/wiki/Москва"
+    assert web.norm("https://A.test?Q=1") == "https://a.test?Q=1" and web.norm("https://a.test/P") != web.norm("https://a.test/p")
+    assert web.found_links({"kind": "search", "results": [{"url": "https://r.test/#x"}, {"title": "без адреса"}]}) == {
+        "https://r.test": "https://r.test/"}
+    assert web.found_links({"kind": "page", "url": "https://p.test/"}) == {}
 
 
 def test_page_outside_the_known_addresses_is_refused_without_exa(studio):
@@ -523,5 +529,23 @@ def test_page_outside_the_known_addresses_is_refused_without_exa(studio):
     for url in ("https://attacker.test/?d=секрет", "https://example.test/article/other", "https://example.test/"):
         step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, known)
         assert step == {"kind": "page", "url": url, "error": "читаю только ссылки из переписки или найденные поиском"}
-    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [["https://example.test/article"],
-                                                                   ["https://example.test/article/#intro"]]
+    # в Exa — адрес, как он в переписке: фрагмент модели (до ~2 КБ) на сайт не уходит
+    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [["https://example.test/article/"]] * 2
+
+
+def test_page_variant_of_a_known_address_reads_the_address_of_the_chat(studio):
+    """Модель переписала адрес — раскрыла %-коды, сменила регистр хоста: страница та же, а в Exa уходит адрес
+    переписки — вариант модели не канал наружу."""
+    import web
+    wiki = "https://ru.wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0"
+    known = web.links(f"что тут? {wiki}#История")
+    for url in ("https://ru.wikipedia.org/wiki/Москва", "https://RU.wikipedia.org/wiki/Москва#a%20b"):
+        step = run(studio, web.call, "read_page", json.dumps({"url": url}), KEY, None, known)
+        assert step["url"] == wiki and "error" not in step, url
+    assert [b["urls"] for _p, b, _k in studio.gw.exa_requests] == [[wiki]] * 2
+
+
+def test_page_without_known_addresses_goes_to_exa_without_the_fragment(studio):
+    import web
+    step = run(studio, web.call, "read_page", json.dumps({"url": "https://a.test/p#d=секрет"}), KEY)
+    assert step["url"] == "https://a.test/p" and studio.gw.exa_requests[-1][1]["urls"] == ["https://a.test/p"]

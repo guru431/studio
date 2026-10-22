@@ -366,9 +366,10 @@ def test_page_is_read_only_from_the_chat_or_the_search(studio):
                              ["Ок."]]
     sse(turn(studio, cid, "Дальше", attachment_ids=[doc]))
     assert [s.get("error") for s in steps_of(messages(studio, cid)[3]["id"])] == [None, None, web.NOT_KNOWN]
+    # в Exa — адрес выдачи или документа, а не как его переписала модель
     assert [b["urls"] for p, b, _ in studio.gw.exa_requests if p == "/contents"] == [
-        ["https://www.python.org/downloads"], ["https://docs.python.org/3/whatsnew"],
-        ["https://docs.example.test/guide/"]]
+        ["https://www.python.org/downloads/"], ["https://docs.python.org/3/whatsnew/"],
+        ["https://docs.example.test/guide"]]
 
 
 def test_calls_over_the_round_cap_are_error_steps_with_their_replies(studio):
@@ -382,6 +383,7 @@ def test_calls_over_the_round_cap_are_error_steps_with_their_replies(studio):
     assert [b["query"] for _p, b, _k in studio.gw.exa_requests] == [f"q{i}" for i in range(chat.CALLS_PER_ROUND)]
     steps = steps_of(messages(studio, cid)[1]["id"])
     assert [s.get("error") for s in steps] == [None] * chat.CALLS_PER_ROUND + ["не больше 4 вызовов за раз"] * 2
+    assert [s["query"] for s in steps] == [f"q{i}" for i in range(n)]     # в источниках — что модель просила
     second = studio.gw.chat_requests[1]["messages"]
     ids = [tc["id"] for tc in second[2]["tool_calls"]]
     assert [m["tool_call_id"] for m in second[3:]] == ids and len(ids) == n
@@ -443,11 +445,40 @@ def test_switch_off_during_an_answer_stops_the_next_calls(studio, monkeypatch):
     assert studio.gw.exa_requests == [] and len(fake.calls) == 2
     steps = steps_of(messages(studio, cid)[1]["id"])
     assert [(s["kind"], s.get("error")) for s in steps] == [("youtube", None), ("search", "Интернет выключен")]
+    assert steps[1]["query"] == "q"
     first, second = studio.gw.chat_requests
     assert names(first) == ALL.split(", ")
     assert "tools" not in second and "tool_choice" not in second
     assert second["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
     assert [m["role"] for m in second["messages"][-2:]] == ["tool", "tool"]
+
+
+def test_switch_off_during_the_last_call_of_a_round_drops_the_tools(studio, monkeypatch):
+    """«Интернет» выключили, пока шёл последний вызов круга: следующий круг — без tools и без строки о доступе
+    в интернет (кнопку перечитывает и начало круга, не только следующий вызов)."""
+    fake, release = FakeYtDlp(), []
+
+    async def held(argv, timeout):
+        while not release:
+            await asyncio.sleep(0.001)
+        return await fake(argv, timeout)
+
+    monkeypatch.setattr(web, "RUN", held)
+    cid = web_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=CANON)]}, ["Ответ."]]
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+            events = events_of(r.iter_lines())
+            assert next(d for e, d in events if e == "tool")["kind"] == "youtube"
+            patch(studio, cid, web=False)
+            release.append(True)
+            assert [e for e, _ in events][-1] == "done"
+    finally:
+        release.append(True)
+    assert [s.get("error") for s in steps_of(messages(studio, cid)[1]["id"])] == [None]
+    second = studio.gw.chat_requests[1]
+    assert "tools" not in second and "tool_choice" not in second
+    assert second["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
 
 
 def test_switch_is_read_inside_the_turn_not_before_the_model_list(studio):
