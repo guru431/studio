@@ -155,6 +155,20 @@ def test_reasoning_over_the_limit_is_cut(studio):
     assert answer["status"] == "error" and len(answer["reasoning"]) == chat.REASONING_MAX
 
 
+def test_reasoning_limit_counts_every_round(studio):
+    """REASONING_MAX — на весь ответ (спека, разделы 4.3 и 5): два круга чуть больше половины предела — обрезано."""
+    add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    cid = new_chat(studio)
+    patch(studio, cid, web=True); patch(studio, cid, thinking=True)
+    half = ["x" * 1000] * (chat.REASONING_MAX // 2000 + 1)
+    studio.gw.chat_script = [{"reasoning": half, "tool_calls": [call("web_search", query="q")]},
+                             {"reasoning": half, "text": ["не дойдёт"]}]
+    assert sse(turn(studio, cid))[-1] == ("error", {"message": chat.THINK_LONG})
+    answer = answer_of(studio, cid)
+    assert answer["status"] == "error" and len(answer["reasoning"]) == chat.REASONING_MAX
+
+
 def test_reasoning_never_goes_back_to_the_model(studio):
     """Review Focus 4: рассуждение не уходит модели — ни во втором круге, ни в следующем ходе."""
     add_gateway(studio)

@@ -1175,6 +1175,65 @@ def test_chat_reasoning_switch_and_thinking_line(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_chat_reasoning_and_internet_show_one_spinner_at_a_time(browser, live, monkeypatch):
+    """Ревью партии, пункт 1: «Интернет» и «Рассуждение» вместе. Пока идут субтитры — крутится только плашка, а
+    рассуждение первого круга уже «Рассуждала»; модель снова думает во втором круге — крутится только «Думает…»,
+    плашка — итог вызовов без крутилки."""
+    import state
+    import web
+    from test_web import CANON, FakeYtDlp
+    fake = FakeYtDlp()
+
+    def titled(title):
+        return state.DB.execute("SELECT 1 FROM chats WHERE title = ?", (title,)).fetchone() is not None
+
+    async def held(argv, timeout):                       # субтитры «идут», пока страница их не увидела
+        while not titled("субтитры"):
+            await asyncio.sleep(0.01)
+        return await fake(argv, timeout)
+
+    monkeypatch.setattr(web, "RUN", held)
+    live.add_user("both")
+    start = len(live.gw.chat_requests)
+    live.gw.chat_script = [{"reasoning": ["Надо посмотреть ролик."],
+                            "tool_calls": [("youtube_subtitles", json.dumps({"url": CANON}))]},
+                           {"reasoning": ["Смотрю субтитры."], "text": ["Ролик о Python."]}]
+    # второй круг думает, пока страница его не увидела
+    live.gw.think_hold = lambda: len(live.gw.chat_requests) > start + 1 and not titled("думает")
+    mark = f"""(async () => {{ await {API}.api('PATCH', '/api/chats/' + location.hash.split('/')[2],
+      {{ title: '%s' }}); return true; }})()"""
+    shown = (f"[{LAST_ANSWER}.querySelector('.web-badge').className, {LAST_ANSWER}.querySelector('.web-badge').textContent,"
+             f" !!{LAST_ANSWER}.querySelector('.think.busy'),"
+             f" {LAST_ANSWER}.querySelector('details.think summary')?.textContent || ''] ")
+    try:
+        r = browser.drive(live.url + "/", [*signin("both"), ("wait", READY), add_gateway(),
+            ("eval", "exa", EXA_KEY_SET), *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+            *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ("wait", f"{THINK_TOGGLE} && !{THINK_TOGGLE}.hidden && {WEB_TOGGLE} && !{WEB_TOGGLE}.disabled"),
+            ("click", "#think-toggle"), ("wait", f"{THINK_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("type", "#chat-input", "Перескажи ролик"), ("press", "Enter"),
+            ("wait", f"{LAST_ANSWER}?.querySelector('.web-badge.busy')?.textContent.startsWith('▶ Субтитры:')"),
+            ("eval", "tool", shown),
+            ("eval", "seen1", mark % "субтитры"),
+            ("wait", f"{LAST_ANSWER}.querySelector('.think.busy .think-text')?.textContent.includes('Смотрю субтитры.')"),
+            ("eval", "think", shown),
+            ("eval", "seen2", mark % "думает"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.think')"),
+            ("eval", "done", f"{LAST_ANSWER}.querySelector('.md').textContent.trim()")])
+    finally:
+        live.gw.think_hold = False
+        live.gw.chat_script = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tool"][0] == "web-badge busy" and v["tool"][1].startswith("▶ Субтитры: ") and v["tool"][2] is False
+    assert v["tool"][3].startswith("💭 Рассуждала "), v["tool"]
+    assert v["think"] == ["web-badge", "▶ YouTube: 1 ролик", True, ""], v["think"]
+    assert v["done"] == "Ролик о Python."
+    assert not problems(r), problems(r)
+
+
 def test_chat_internet_needs_an_exa_key(browser, live):
     """Решение владельца 2026-10-21: без ключа Exa кнопка «Интернет» видна, но выключена, не нажата, с подсказкой
     (title и строка под полем); ключ задан в другой вкладке — возвращение на экран (профиль перечитан) её

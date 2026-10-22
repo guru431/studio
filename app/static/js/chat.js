@@ -48,7 +48,8 @@
  * Видна, где сервер её исполняет: `thinking_ok` диалога, у нового — модель из `local_models` подключения чипа
  * (sections.is_local); 409 `no_thinking` — его слова, кнопка прячется. Обе включены — под полем подсказка
  * THINK_NOTE (подсказка «нет ключа» важнее). Событие SSE `think` — модель думает: над ответом «Думает… N с»
- * (счётчик страницы от первого `think`) и текст рассуждения, если сервер его шлёт; готовый ответ с `reasoning`
+ * (счётчик страницы — сумма отрезков от `think` до текста или инструмента; крутится что-то одно: инструмент на
+ * плашке или рассуждение) и текст рассуждения, если сервер его шлёт; готовый ответ с `reasoning`
  * — свёрнутое «💭 Рассуждала N с» (`reasoning_sec`). Рассуждение — только текстом, без разметки. */
 import { api, me } from './api.js';
 import { kick } from './jobs.js';
@@ -142,11 +143,18 @@ function finish(job) {
 
 /* ---- чтение ответа ------------------------------------------------------------ */
 
-/* модель кончила думать (пошёл текст ответа, ответ кончился): секунды — счётчиком страницы до перечитывания */
+/* секунды рассуждения хода — сумма отрезков, как reasoning_sec сервера: идущий — от своего первого `think` */
+function thinkSec(job) {
+  return (job.thinkSum || 0) + (job.thinking ? (Date.now() - job.thinkFrom) / 1000 : 0);
+}
+
+/* модель кончила думать (пошёл текст ответа или инструмент, ответ кончился): секунды — счётчиком страницы до
+   перечитывания */
 function thinkEnd(job) {
   if (!job.thinking) return;
+  job.thinkSum = thinkSec(job);
   job.thinking = false;
-  job.message.reasoning_sec = (Date.now() - job.thinkFrom) / 1000;
+  job.message.reasoning_sec = job.thinkSum;
 }
 
 function append(job, text) {
@@ -178,13 +186,15 @@ async function readServer(job, response) {
       if (event === 'turn') adoptIds(job, data);
       else if (event === 'delta' && data && typeof data.text === 'string') append(job, data.text);
       else if (event === 'tool' && data && typeof data.kind === 'string') {
+        thinkEnd(job);                             // крутится одно: инструмент, а не «Думает…»
         job.tool = data;
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
         (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
         notify(job, false);
       } else if (event === 'think' && data) {      // {text} — ход мысли виден, {} — модель только думает
+        job.tool = null;                           // модель снова думает — инструмент кончился
+        if (!job.thinking) job.thinkFrom = Date.now();
         job.thinking = true;
-        job.thinkFrom ??= Date.now();
         if (typeof data.text === 'string') job.message.reasoning = (job.message.reasoning || '') + data.text;
         notify(job, false);
       } else if (event === 'done' || event === 'error') {
@@ -897,7 +907,7 @@ function build(view, ctx) {
       if (busy) box.scrollTop = box.scrollHeight;         // свёрнутый — виден конец
     }
     if (busy) {
-      const sec = job ? (Date.now() - job.thinkFrom) / 1000 : m.reasoning_sec;
+      const sec = job ? thinkSec(job) : m.reasoning_sec;
       p.think.querySelector('.think-sec').textContent = `Думает… ${Math.max(0, Math.round(sec || 0))} с`;
     } else p.think.querySelector('summary').textContent = `💭 Рассуждала ${Math.max(1, Math.round(m.reasoning_sec || 0))} с`;
   }
