@@ -85,6 +85,15 @@ INTERRUPTED = "\n\n[прервано перезапуском студии]"
 CUT_LENGTH = "\n\n[ответ обрезан пределом длины модели]"
 CUT_SIZE = "\n\n[ответ обрезан: слишком длинный для студии]"
 CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_SEC // 60} минут]"
+# рассуждение модели (спека 2026-10-22-studio-chat-tools-badge-reasoning, 4.3) — пределы на весь ответ, все круги.
+# Видимое (кнопка включена или у модели её нет) — до REASONING_MAX знаков. При выключенной кнопке gemma-abl в
+# нормальных ответах роняет 7–14 знаков «thought», а в петле — тысячи (3–4,5 тыс. за 75 с, 2026-10-22): сверх
+# STRAY_MAX — петля, ответ остановлен, а не идёт до STREAM_TOTAL_SEC, держа карту
+REASONING_MAX = 60_000
+STRAY_MAX = 2_000
+THINK_EVERY_SEC = 1              # «думает» (`think {}`) при выключенной кнопке — на страницу не чаще
+THINK_LONG = "рассуждение слишком длинное — ответ остановлен"
+LOOPED = "модель зациклилась — ответ остановлен"
 # «Интернет» (спека 2026-10-21-studio-chat-internet, 6.3): кругов с инструментами на ответ, затем последний
 # запрос без tools — модель отвечает по найденному
 TOOL_ROUNDS = 5
@@ -261,14 +270,16 @@ def _alive(row) -> bool:
 
 
 def _message_out(row, atts: list) -> dict:
-    """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public)."""
+    """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
+    `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null)."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
+    reasoning, seconds = live.thought_out() if live else (row["reasoning"], row["reasoning_sec"])
     return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
             "attachments": [_attachment_out(a) for a in atts],
-            "tools": [web.public(s) for s in steps]}
+            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds}
 
 
 def _attachment_out(a) -> dict:
@@ -281,10 +292,12 @@ def _attachment_out(a) -> dict:
     return out
 
 
-def _finish(message_id: str, chat_id: str, content: str, status: str) -> bool:
+def _finish(message_id: str, chat_id: str, content: str, status: str, reasoning: "str | None" = None,
+            reasoning_sec: "float | None" = None) -> bool:
     """Итог идущего ответа; False — он уже сохранён (или удалён)."""
-    done = state.DB.execute("UPDATE messages SET content = ?, status = ? WHERE id = ? AND status = 'streaming'",
-                            (content, status, message_id)).rowcount == 1
+    done = state.DB.execute("UPDATE messages SET content = ?, status = ?, reasoning = ?, reasoning_sec = ?"
+                            " WHERE id = ? AND status = 'streaming'",
+                            (content, status, reasoning, reasoning_sec, message_id)).rowcount == 1
     if done:
         state.DB.execute("UPDATE chats SET updated = ? WHERE id = ?", (clock.NOW(), chat_id))
     return done
@@ -483,14 +496,18 @@ class ToolCall:
 @dataclass(eq=False)
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
-    ("delta", текст), ("tool", {kind, label}), ("done", статус) или ("error", слова). Поток SSE закрылся
+    ("delta", текст), ("think", текст или None), ("tool", {kind, label}), ("done", статус) или ("error", слова). Поток SSE закрылся
     (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
     зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
     `messages.tools`. Перед каждым вызовом — срок ответа и `chats.web` заново: выключили — вызова нет, и
     дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
-    поиском этого ответа)."""
+    поиском этого ответа).
+
+    Рассуждение модели (`delta.reasoning_content`, иначе `delta.reasoning`) — `_think`: видно (`thinking` не
+    False) — текстом в `reasoning` и событием `think`, секунды — `reasoning_sec`; кнопка выключена — только
+    «думает». Модели оно назад не уходит: ни в круге инструментов, ни в следующем ходе (compose)."""
     user_id: int
     chat_id: str
     message_id: str
@@ -512,6 +529,12 @@ class StreamTask:
     known: set[str] = field(default_factory=set, repr=False)
     #: кнопка «Рассуждение» хода: None — модель без кнопки (параметра в запросе нет), иначе `enable_thinking`
     thinking: bool | None = None
+    reasoning: str = field(default="", repr=False)   # видимое рассуждение всех кругов (круги — через пустую строку)
+    reasoning_sec: float = 0.0   # его длительность по кончившимся отрезкам
+    think_from: float | None = None   # начало идущего отрезка: от первого куска рассуждения до текста ответа
+    joined: bool = False         # в этом круге рассуждение уже было
+    stray: int = 0               # знаков рассуждения при выключенной кнопке
+    thought: float = -math.inf   # когда ушло последнее `think {}`
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -524,15 +547,65 @@ class StreamTask:
             if not self.fresh:
                 self.put("ping", None)
 
+    def _save(self) -> None:
+        """Идущий ответ — в базу не чаще SAVE_SEC: текст, рассуждение и его секунды."""
+        now = clock.NOW()
+        if now - self.saved >= SAVE_SEC:
+            self.saved = now
+            state.DB.execute("UPDATE messages SET content = ?, reasoning = ?, reasoning_sec = ?"
+                             " WHERE id = ? AND status = 'streaming'", (self.content, *self.thought_out(), self.message_id))
+
     def _delta(self, text: str) -> None:
         self.content += text
         self.fresh = True
         self.put("delta", text)
+        self._save()
+
+    def thought_out(self) -> "tuple[str | None, float | None]":
+        """Рассуждение для базы и страницы: (текст, секунды с идущим отрезком); не было или скрыто — (None, None)."""
+        if not self.reasoning:
+            return None, None
+        running = clock.NOW() - self.think_from if self.think_from is not None else 0.0
+        return self.reasoning, self.reasoning_sec + running
+
+    def _think_end(self) -> None:
+        """Отрезок рассуждения кончился (пошёл текст ответа, кончился круг): его секунды — в сумму."""
+        if self.think_from is not None:
+            self.reasoning_sec += clock.NOW() - self.think_from
+            self.think_from = None
+
+    def _over(self, words: str) -> str:
+        log.info("чат %s: ответ %s — рассуждение сверх предела", self.chat_id[:8], self.message_id[:8])
+        return words
+
+    def _think(self, piece: str) -> "str | None":
+        """Кусок рассуждения модели; итог — слова ошибки (предел) или None. Видно — текстом в `reasoning` и
+        событием `think` (первый кусок круга — через пустую строку), сверх REASONING_MAX — обрезано, ответ
+        остановлен. Кнопка выключена (`thinking is False`) — текст не идёт и не хранится, только `think {}` не
+        чаще THINK_EVERY_SEC; сверх STRAY_MAX знаков — петля."""
         now = clock.NOW()
-        if now - self.saved >= SAVE_SEC:
-            self.saved = now
-            state.DB.execute("UPDATE messages SET content = ? WHERE id = ? AND status = 'streaming'",
-                             (self.content, self.message_id))
+        if self.thinking is False:
+            self.stray += len(piece)
+            if self.stray > STRAY_MAX:
+                return self._over(LOOPED)
+            if now - self.thought >= THINK_EVERY_SEC:
+                self.thought, self.fresh = now, True
+                self.put("think", None)
+            return None
+        if self.think_from is None:
+            self.think_from = now
+        if self.reasoning and not self.joined:
+            piece = "\n\n" + piece
+        self.joined = True
+        shown = piece[:REASONING_MAX - len(self.reasoning)]
+        if shown:
+            self.reasoning += shown
+            self.fresh = True
+            self.put("think", shown)
+        if len(shown) < len(piece):
+            return self._over(THINK_LONG)
+        self._save()
+        return None
 
     def _request(self, offer: bool) -> list[dict]:
         """Сообщения запроса: с tools — к системному сообщению даты дописан WEB_NOTE; копией, история
@@ -563,6 +636,7 @@ class StreamTask:
         впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS (vLLM: «"auto" tool choice
         requires…», LiteLLM называет `tools`); прочий 400 (контекст, картинка) — словами шлюза."""
         ending, calls, text = None, {}, ""
+        self.joined = False
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
@@ -594,8 +668,14 @@ class StreamTask:
                             continue
                         delta = choice.get("delta")
                         delta = delta if isinstance(delta, dict) else {}
+                        thought = delta.get("reasoning_content")
+                        if not (isinstance(thought, str) and thought):
+                            thought = delta.get("reasoning")
+                        if isinstance(thought, str) and thought and (error := self._think(thought)) is not None:
+                            return error, None, [], text
                         piece = delta.get("content")
                         if isinstance(piece, str) and piece:
+                            self._think_end()
                             text += piece
                             self._delta(piece)
                         for tc in delta.get("tool_calls") or []:
@@ -612,6 +692,8 @@ class StreamTask:
             return f"шлюз не ответил за {STREAM_READ_SEC} с", None, [], text
         except httpx.HTTPError as e:
             return f"шлюз недоступен: {type(e).__name__}", None, [], text
+        finally:
+            self._think_end()
         return None, ending, [calls[i] for i in sorted(calls)], text
 
     @staticmethod
@@ -720,7 +802,8 @@ class StreamTask:
             status, error = "error", f"сбой службы: {type(e).__name__}"
         finally:
             pings.cancel()
-        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status)
+        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
+                *self.thought_out())
         if STREAMS.get(self.message_id) is self:
             del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
@@ -741,7 +824,8 @@ async def _cancel(streams: list[StreamTask]) -> None:
     await asyncio.gather(*(st.task for st in streams), return_exceptions=True)
     for st in streams:
         status = "error" if st.shutdown else "stopped"
-        if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status):
+        if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status,
+                   *st.thought_out()):
             st.put("done", status)
         if STREAMS.get(st.message_id) is st:
             del STREAMS[st.message_id]
@@ -787,6 +871,8 @@ async def _events(st: StreamTask, user_message_id: str):
             yield ": ping\n\n"
         elif kind == "delta":
             yield _sse("delta", {"text": data})
+        elif kind == "think":
+            yield _sse("think", {"text": data} if data is not None else {})
         elif kind == "tool":
             yield _sse("tool", data)
         elif kind == "done":

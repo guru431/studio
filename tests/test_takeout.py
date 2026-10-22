@@ -319,9 +319,11 @@ def test_export_holds_the_steps_of_the_internet_but_not_the_exa_key(studio):
                                                                      "published": ""}], "text": "1. t\nfound text"},
              {"kind": "page", "url": "https://example.test/x", "error": "страница не найдена"}]
     put("UPDATE messages SET tools = ? WHERE id = 'minechat1-a'", json.dumps(steps, ensure_ascii=False))
+    put("UPDATE messages SET reasoning = ?, reasoning_sec = ? WHERE id = 'minechat1-a'", "Ход мысли", 11.5)
     _, z = download(studio, ["chat"])
     chat = json.loads(unzip(z).read("chats/minechat1.json"))
     assert [m["tools"] for m in chat["messages"]] == [[], steps]
+    assert [(m["reasoning"], m["reasoning_sec"]) for m in chat["messages"]] == [(None, None), ("Ход мысли", 11.5)]
     exa_enc = state.DB.execute("SELECT exa_key FROM users WHERE id = ?", (uid,)).fetchone()[0]
     for secret in (b"exa-secret-key-123", bytes(exa_enc), b"exa_key"):
         assert secret not in z.content, secret

@@ -37,7 +37,15 @@
   srt), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
   готовые за час задания всех разделов — только база и память модулей, к шлюзу не ходит), `search`
   (поиск по своей истории: `POST /api/search`, `GET /api/search/models`; страница — `search.js`), `admin`, `chat` (поток SSE;
-  дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения), `web`
+  дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения;
+  кнопка «Рассуждение» — `chats.thinking` (спека 2026-10-22-studio-chat-tools-badge-reasoning, шаг схемы 15):
+  действует только при `sections.is_local` (`thinking_ok` диалога; иначе `PATCH {thinking: true}` — 409
+  `no_thinking`, хранится, но не действует), запрос несёт `chat_template_kwargs.enable_thinking` в каждом
+  круге, прочим моделям параметра нет; рассуждение — `delta.reasoning_content`, иначе `delta.reasoning`
+  (`StreamTask._think`): кнопка включена или у модели её нет — текстом событием SSE `think {text}`, в
+  `messages.reasoning` и секунды `reasoning_sec`, до `REASONING_MAX` знаков; выключена — только `think {}` не
+  чаще `THINK_EVERY_SEC`, без хранения, сверх `STRAY_MAX` знаков — «модель зациклилась»; пределы — на весь
+  ответ, модели рассуждение назад не уходит), `web`
   («Интернет» чата, спека 2026-10-21-studio-chat-internet, шаг схемы 14: поиск и страницы Exa — `EXA_URL`
   через `state.HTTP`, не `upstream`; субтитры YouTube — общий `yt-dlp` списком аргументов только по
   `https://www.youtube.com/watch?v=<id>` из `web.youtube_id`, одна дорожка `pick_track`, файлы `<uuid>.*`
