@@ -4,7 +4,8 @@
 разделами чат · фото · видео, плюс пакетные скрипты для Windows и Linux — клиенты API картинок и
 видео LLM-шлюза srvllm. Что умеет и как пользоваться — [README.md](README.md); спека —
 [docs/superpowers/specs/2026-10-19-studio-pwa-design.md](docs/superpowers/specs/2026-10-19-studio-pwa-design.md).
-Репозиторий `git.example.net/xadmin/studio` — **приватный**: NSFW-назначение, хосты LAN.
+Репозитории — **приватные** (хосты LAN): `origin` — `git.example.net/xadmin/studio`, `cld` —
+`cld.hubtrust.net:8443/RD/studio` (сам не обновляется: push туда вслед за `origin`, перемоткой).
 
 ## История и граница с llm_routers
 
