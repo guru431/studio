@@ -419,6 +419,35 @@ def test_search_of_twenty_thousand_rows_is_quick(studio):
     assert hits(search(studio, q="номер 19999")) == [("photo", "i19999")]
 
 
+def test_next_pages_of_chats_are_as_quick_as_the_first(studio):
+    """Со словами запросы идут от FTS5 и с курсором, и с фильтром: от индекса search_docs MATCH шёл заново на
+    каждую строку истории — вторая страница диалогов на 20 000 сообщений длилась секунды, а первая — десятую."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(                                # 500 диалогов по 10 сообщений со словами запроса
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 499)"
+        " INSERT INTO chats(id, user_id, title, model, created, updated)"
+        " SELECT printf('c%05d', i), ?, 'диалог', 'm', ? + i * 10, ? + i * 10 FROM n", (uid, T0, T0))
+    state.DB.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4999)"
+        " INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+        " SELECT printf('m%05d', i), printf('c%05d', i / 10), 'user', 'кошка на крыше', 'done', 'server', 'm', ? + i"
+        " FROM n", (T0,))
+    before, best, chats = None, [], []
+    for _ in range(3):
+        spent = []
+        for _ in range(2):                           # лучшее из двух: соседние процессы набора делят ядра
+            started = time.perf_counter()
+            r = search(studio, q="крыш кошк", section="chat", before=before)
+            spent.append(time.perf_counter() - started)
+        best.append(min(spent))
+        items = r.json()["items"]
+        chats += [i["id"] for i in items]
+        before = {k: items[-1][k] for k in ("created", "id", "part")}
+        before["item"] = before.pop("id")
+    assert chats == [f"c{i:05d}" for i in range(499, 409, -1)]   # диалог — один раз, по порядку
+    assert max(best[1:]) < 2 * best[0] + 0.05, best
+
+
 def test_one_letter_over_a_large_vocabulary_is_quick(studio):
     """Короткое начало слова: snippet() по «к»* без индекса префиксов сливал списки позиций всех слов
     на «к» на каждую строку выдачи (150 000 разных слов — 1,4 с в цикле событий); с prefix='1 2 3' —
