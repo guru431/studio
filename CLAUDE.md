@@ -39,7 +39,8 @@
   готовые за час задания всех разделов — только база и память модулей, к шлюзу не ходит), `search`
   (поиск по своей истории: `POST /api/search`, `GET /api/search/models`; страница — `search.js`), `admin`, `chat` (поток SSE;
   дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения;
-  кнопка «Рассуждение» — `chats.thinking` (спека 2026-10-22-studio-chat-tools-badge-reasoning, шаг схемы 15):
+  предел контекста модели вне `CONTEXT` — `context_length` списка моделей подключения, запомненный в
+  `chat.LIMITS` на `CONTEXT_TTL_SEC` (неудача не запоминается); кнопка «Рассуждение» — `chats.thinking` (спека 2026-10-22-studio-chat-tools-badge-reasoning, шаг схемы 15):
   действует только при `sections.is_local` (`thinking_ok` диалога; иначе `PATCH {thinking: true}` — 409
   `no_thinking`, хранится, но не действует), запрос несёт `chat_template_kwargs.enable_thinking` в каждом
   круге, прочим моделям параметра нет; рассуждение — `delta.reasoning_content`, иначе `delta.reasoning`
@@ -65,7 +66,8 @@
   `PUT/DELETE /api/me/exa-key` в `profile`, `verify-backup` считает `exa_keys`; ход, что даст модели Exa
   при расшифровке в истории новее `chats.web_consent`, — 409 `external_web` без `web_ok`; страница —
   `chat.js`, ключ — «Прочее» → «Интернет» в `settings.js`), `documents`, `images`, `videos`, `media` (файлы на
-  шаре, `Range`; архив выделенного — `POST /api/media/archives` списком в теле → токен в памяти на
+  шаре, `Range` — один диапазон; несколько диапазонов или другая единица — файл целиком (200), 416 —
+  только диапазон вне файла; архив выделенного — `POST /api/media/archives` списком в теле → токен в памяти на
   `ARCHIVE_TTL_SEC`, `GET /api/media/archives/<токен>` — ZIP без сжатия на лету; CRC и размер — в
 локальном заголовке первым проходом по файлу, без дескриптора данных: запись без сжатия с ним не
 открывают Archive Utility macOS и потоковые читатели; учёт записей — `media.ZipWriter`, общий с
@@ -92,7 +94,8 @@
   `PATCH /api/me`); вернувшись на экран, оболочка перечитывает `/api/me`. Выделение нескольких
   записей ленты фото и видео (отметки, долгое нажатие, «Скачать» и «Удалить» пачкой) —
   `select.js` (действия раздела — `extraActions`: «Сравнить» у фото), групповое сохранение —
-  `save.js` `saveMany`. Фото (спека 2026-10-21-studio-photo-presets-compare-series): пресеты —
+  `save.js` `saveMany` (предел iPhone `SHARE_MAX` — по Content-Length до чтения и по настоящему размеру
+  после: на заголовок не полагается). Фото (спека 2026-10-21-studio-photo-presets-compare-series): пресеты —
   `presets.py` (таблица `presets`, роутер `/api/images/presets` подключён раньше `images`; не
   история — стирание их не трогает, учётка уносит каскадом) и `presets.js` (чип «★»); серия —
   поле `series` у `POST /api/images` (`images.run_series`: строки `queued` по одной в слоте
@@ -113,7 +116,9 @@
   `upstream.RESOLVE`). Правило путей `PROXIED_PATHS` — только для IP-записей. Задания держат
   снимок `Connection`: `connections.token` отдаёт ключ, только если владелец, вид и адрес строки
   совпали со снимком, иначе `upstream.ConnectionChanged` (слова — `upstream.refused_words`) — новый
-  ключ прежнему адресу не уходит.
+  ключ прежнему адресу не уходит. PATCH подключения проверяет адрес (`check_base_url`), только если
+  меняются вид или адрес: убранное из списка (`dropped`) можно переименовать и убрать из разделов,
+  новый раздел, кроме чата, — 422 `server`.
 - Разделы (`chat`, `photo`, `video`, `transcribe`, `speech`, `dictation`) — таблицы `section_links`
   (подключение в разделе и его отмеченные модели) и `section_defaults`; встроенный перечень srvllm —
   `sections.CATALOG`. Старые `connections.sections` и `users.default_*` остаются для отката и
@@ -167,7 +172,11 @@
   Документ чата и текст расшифровки — в индексе первые `db.INDEX_CHARS` (200 000) знаков: триггеры
   токенизируют в транзакции хода и удаления, документ на 2 млн знаков — 0,65 с цикла событий.
   Удаление и фильтры идут по индексам
-  `search_docs` (`search_docs_key`, `_user`, `_part`), а не просмотром FTS. `transcripts.text` —
+  `search_docs` (`search_docs_key`, `_user`, `_part`), а не просмотром FTS. Запросы со словами (выдача
+  и диалоги прежних страниц) — `search CROSS JOIN search_docs`: FTS5 — внешний цикл при любом курсоре и
+  фильтре, цена страницы — число совпадений; обычный JOIN со второй страницы планировщик вёл от индекса
+  `search_docs` и гонял MATCH на каждую строку истории (секунды на 20 000 сообщений; сторожит
+  `test_next_pages_of_chats_are_as_quick_as_the_first`). `transcripts.text` —
   реплики с правками одной строкой: пишут «готово», правка и сброс (сброс — файл итога до записи, затем
   `edits` и `text` одним UPDATE); фон `transcripts.backfill_text` при старте (под `state.WATCHER`; шара
   недоступна — следующий старт) — пустым и правленым (прежний код при откате правит `edits`, а `text`
@@ -224,8 +233,11 @@
   сообщений и документов диалога или из `results[].url` поиска (иначе — шаг-ошибка, в Exa ничего: страница
   или выдача не уведут переписку на чужой сайт краулером Exa; сравнение — `web.norm`, а в Exa уходит адрес, как
   он записан там, без фрагмента — вариант модели не канал наружу); yt-dlp получает только канонический
-  адрес из id (у него общий извлекатель — чужой адрес, в том числе внутренний, сервер прочитал бы), с
-  урезанным окружением (без `STUDIO_DATA_KEY`) и не больше двух сразу.
+  адрес из id (у него общий извлекатель — чужой адрес, в том числе внутренний, сервер прочитал бы), и
+  только ролика, чей id совпал с id адреса из сообщений и документов диалога или из `results[].url`
+  поиска (`web.youtube_id` от адресов `known`, любая форма — watch, youtu.be, shorts, live, embed, music,
+  m.; иначе — шаг-ошибка `NOT_KNOWN`, yt-dlp не зовётся: id из 11 знаков, составленный моделью, — тот же
+  канал наружу, что и адрес страницы), с урезанным окружением (без `STUDIO_DATA_KEY`) и не больше двух сразу.
   Наружу — только при `chats.web = 1`: иначе в запросе к модели нет `tools`, Exa и yt-dlp не зовутся; в
   Exa — только `query` (до 500 знаков) / `url` (до 2048) из вызова модели, не переписка (сторожат
   `test_chat_web.py`, `test_web.py`).
@@ -322,7 +334,9 @@
 `install.sh` до подмены кода собирает новую среду Python рядом (`.incoming/.venv`; только если
 сменились `requirements.txt` или `python3` — штамп `.venv/.studio-requirements`), переносит её на
 место вместе с кодом, держит прежние код и среду в `.previous` до ответа `/health` от www-data
-через сокет, ставит юниты копии базы и включает таймер. Перенесённая среда — с чужим shebang в
+через сокет, ставит юниты копии базы и включает таймер. Отказ `systemctl restart` и молчание `/health`
+идут одним путём `service_failed` — status, журнал и строки отката, без автоматического отката; таймер
+копии базы, который не включился, — ошибка с кодом не 0 (служба уже обновлена). Перенесённая среда — с чужим shebang в
 `bin/`: всё запускается `.venv/bin/python` (`-m uvicorn`, `-m pip`, `manage.py`), не `bin/<скрипт>`. Перезапуск ждёт
 открытые потоки чата не дольше 10 с (`--timeout-graceful-shutdown`, `TimeoutStopSec=30`);
 недописанное помечают `chat.recover()` / `images.recover()` при старте. Смоук —
@@ -330,7 +344,7 @@
 
 ## Тесты
 
-    .venv/Scripts/python -m pytest -q                                   # быстрый набор (~22 с, 4 процесса)
+    .venv/Scripts/python -m pytest -q                                   # быстрый набор (~25–30 с, 4 процесса)
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell
     v() { grep "^$1=" C:/work/projects/local-config/secrets/vault.env | cut -d= -f2-; }    # живая приёмка: значения не печатать
     STUDIO_ADMIN_LOGIN=$(v STUDIO_ADMIN_LOGIN) STUDIO_ADMIN_PASSWORD=$(v STUDIO_ADMIN_PASSWORD) \
@@ -358,7 +372,14 @@
 юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`. Набор идёт четырьмя процессами
 (`-n 4 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
 его не делят; `integration` и `manual` — группой `serial` (хук в `tests/conftest.py`), одним
-процессом по очереди. Один тест без параллели — `-n0`.
+процессом по очереди. Один тест без параллели — `-n0`. База фикстуры `studio` — копия схемы
+`schema_db` (одна на процесс; SCHEMA на новый файл — ~0,2 с на тест), базы тестов — без fsync
+(autouse `no_fsync`): на нагруженном ночью диске набор выходил за бюджет 60 с.
+Клиентские скрипты (`tests/clients.py`): вывод `[ps]`-вариантов декодируется кодовой страницей консоли
+процесса тестов (`clients.ps_encoding`: дочерний powershell пишет в трубу ею, ночной прогон идёт под
+65001); проверка — `cmd /c "chcp 65001 >nul && .venv\Scripts\python.exe -m pytest -q -m integration
+tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие настоящую паузу `PollSec`, и разбор скриптов
+парсером PowerShell — `integration` (секунды).
 
 ## Ловушки
 
