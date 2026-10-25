@@ -103,11 +103,12 @@ def test_python_help_survives_a_pipe_in_a_non_utf8_encoding():
 class FakeVideos:
     """Подставная служба видео: задание готово с первого опроса, журнал всех запросов."""
 
-    def __init__(self, busy_posts=(), fail_names=(), reject_posts=False):
+    def __init__(self, busy_posts=(), fail_names=(), reject_posts=False, unavailable=0):
         self.log = []            # (метод, путь) по порядку
         self.posts = []          # поля multipart принятых заданий
         self.post_attempts = 0
         self.busy_posts = set(busy_posts)    # номера попыток POST, на которые 429
+        self.unavailable = unavailable       # столько первых попыток POST — 503
         self.reject_posts = reject_posts     # все создания — 400
         self.fail_names = set(fail_names)    # картинки (по содержимому), задания которых падают
         self.jobs = {}
@@ -149,6 +150,8 @@ class FakeVideos:
                     fake.post_attempts += 1
                     if fake.post_attempts in fake.busy_posts:
                         return self.reply(429, {"error": {"message": "очередь полна", "type": "rate_limit"}})
+                    if fake.post_attempts <= fake.unavailable:
+                        return self.reply(503, {"error": {"message": "карта занята", "type": "unavailable"}})
                     if fake.reject_posts:
                         return self.reply(400, {"error": {"message": "модель не та", "type": "invalid_request"}})
                     mime = BytesParser(policy=policy.default).parsebytes(
@@ -331,6 +334,45 @@ def test_full_queue_waits_for_sent_jobs_and_resends(runner, service, tmp_path):
     assert [p["input_reference"] for p in fake.posts] == [b"a.png", b"b.png", b"c.png"]
     assert len(list(tmp_path.glob("*.mp4"))) == 3
     assert fake.release == [], "-KeepCard: карта не освобождается"
+
+
+@pytest.mark.integration      # ждёт паузу перед повтором по-настоящему (5 с)
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_unavailable_service_gets_the_job_again_after_a_pause(runner, service, tmp_path):
+    # 503 — служба задание не приняла: повтор безопасен, ролик выходит со второй попытки
+    fake = service(unavailable=1)
+    (tmp_path / "a.png").write_bytes(b"img-a")
+
+    out = run_script(runner, fake, tmp_path, "-KeepCard")
+
+    assert fake.log.count(("POST", "/slot/videos")) == 2 and "карта занята" in out
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["a.png"] and len(list(tmp_path.glob("*.mp4"))) == 1
+
+
+@pytest.mark.integration      # две паузы перед повтором по-настоящему
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_always_unavailable_service_gives_up_after_three_tries(runner, service, tmp_path):
+    fake = service(unavailable=99)
+    (tmp_path / "a.png").write_bytes(b"img-a")
+
+    out = run_script(runner, fake, tmp_path, code=3)
+
+    assert fake.log == [("POST", "/slot/videos")] * 3, "три попытки, карту не трогает: ничего не отправлено"
+    assert "не отправлен — карта или служба недоступна (503): карта занята" in out
+    assert manifest_rows(tmp_path) == [] and not list(tmp_path.glob("*.mp4"))
+
+
+@pytest.mark.parametrize("content", [b"", b"\xef\xbb\xbf"], ids=["empty", "bom"])
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_empty_manifest_gets_the_header(runner, content, service, tmp_path):
+    # Пустой журнал (0 байт или один BOM): раньше шапка писалась, только если файла не было
+    fake = service()
+    (tmp_path / "a.png").write_bytes(b"img-a")
+    (tmp_path / "video-manifest.tsv").write_bytes(content)
+
+    run_script(runner, fake, tmp_path, "-KeepCard")
+
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["a.png"]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

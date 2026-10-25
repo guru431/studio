@@ -18,7 +18,10 @@
 сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
 
 Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
-ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролик, если в журнале
+ждёт, пока выйдут отправленные, и досылает; «карта или служба недоступна» (503) — задание
+уходит в конец очереди и повторяется через 5 с, всего до 3 попыток. Сетевой сбой при отправке
+не повторяется: запрос мог дойти и начать рендер, повтор сделал бы ролик дважды, — несделанное
+доделает повторный запуск по журналу. Повторный запуск пропускает ролик, если в журнале
 есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
 модели, seed (если задан --seed), длительности, качества, дорисовки, номера варианта и своего
 промпта (<имя>.txt или --prompt; промпт службы и <имя>.auto.txt в него не входят): смена
@@ -70,7 +73,8 @@ VAULT_PATH = r"C:\work\projects\local-config\secrets\vault.env"
 URL = "http://10.77.1.15:4000/slot"
 MODEL = "wan2.2-remix-i2v-v3"
 TIMEOUT = 300                          # один запрос к шлюзу: загрузка картинки или выдача mp4 (маршрут шлюза — 180 с)
-POLL = 5                               # опрос заданий, с
+POLL = 5                               # опрос заданий и пауза перед повтором отправки после 503, с
+SEND_TRIES = 3                         # попыток отправки задания, на которые служба отвечает 503
 MAX_PROMPT = 4000                      # предел API видео
 MAX_IMAGE = 20 * 1024 * 1024
 MAX_SEED = 4294967295
@@ -372,6 +376,7 @@ class Videos:
         """Задания по картинкам папки без уже сделанных по журналу."""
         a = self.args
         recorded, legacy = set(), set()
+        rows = []
         if self.manifest.exists():
             raw = self.manifest.read_bytes()
             bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
@@ -389,7 +394,9 @@ class Videos:
                     recorded.add(c[10])
                 else:
                     legacy.add((c[0], c[3], c[4], c[5], c[6]))
-        else:
+        if not any(row.strip() for row in rows):
+            # Журнала нет или в нём ни одной строки (пустой файл, один BOM) — начать с шапки
+            self.manifest.write_bytes(b"")
             self.add_row(HEADER)
         legacy_skipped = 0
 
@@ -449,7 +456,7 @@ class Videos:
                     continue
                 todo.append(SimpleNamespace(n=len(todo) + 1, image=img, base=base, variant=k, seed=seed,
                                             prompt=text, source=source, key=key, id="", detail="", sent=0.0,
-                                            running=0.0, tries=0))
+                                            running=0.0, tries=0, unavailable=0))
                 added += 1
             if added:
                 say(f"  {img.name}: роликов {added}, промпт — {label}")
@@ -469,13 +476,14 @@ class Videos:
         started = time.monotonic()
         try:
             while next_job < self.total or active:
-                moved = False
+                moved = wait = False
                 if not active:
                     full = False     # своих в очереди нет — пробуем снова после паузы
                 before = sent
                 while next_job < self.total and not full:
                     job = todo[next_job]
                     status, data, why = None, b"", ""
+                    # Сетевой сбой не повторяется: запрос мог дойти, повтор сделал бы ролик дважды
                     try:
                         status, data = self.send(job)
                     except Fail as e:
@@ -483,6 +491,14 @@ class Videos:
                     if status == 429:
                         full = True
                         say(f"Очередь службы полна: жду, пока выйдут отправленные (отправлено {sent} из {self.total})")
+                        break
+                    # 503 — служба задание не приняла, повтор безопасен: задание — в конец очереди, и
+                    # остальные ждут паузу вместе с ним (карта недоступна — не примут и их)
+                    if status == 503 and job.unavailable + 1 < SEND_TRIES:
+                        job.unavailable += 1
+                        say(f"{self.label(job)}: {fail_text(status, data)} — повторю через {POLL} с")
+                        todo.append(todo.pop(next_job))
+                        wait = True
                         break
                     next_job += 1
                     moved = True
@@ -505,7 +521,7 @@ class Videos:
                         active.remove(job)
                         full = False
                         moved = True
-                if not moved and (active or full):
+                if wait or (not moved and (active or full)):
                     time.sleep(POLL)
         finally:
             # Ctrl+C или ошибка: свои незавершённые задания — снять, чтобы служба не рендерила впустую
