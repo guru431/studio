@@ -27,6 +27,21 @@ def env(tmp_path, monkeypatch):
     return SimpleNamespace(db_path=db_path, media_dir=media_dir)
 
 
+@pytest.fixture(autouse=True)
+def no_fsync(monkeypatch):
+    """Базы тестов — без fsync (`synchronous=OFF`): на нагруженном диске каждый коммит WAL ждал его
+    десятки миллисекунд. Видимость записей другим соединениям та же — теряется только стойкость к сбою ОС."""
+    import db
+    real = db.connect
+
+    def connect(path):
+        conn = real(path)
+        conn.execute("PRAGMA synchronous=OFF")
+        return conn
+
+    monkeypatch.setattr(db, "connect", connect)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Браузерные, PowerShell и живая приёмка — одной группой xdist: один процесс, по очереди
@@ -40,10 +55,25 @@ def pytest_collection_modifyitems(config, items):
 T0 = 1_800_000_000.0
 
 
+@pytest.fixture(scope="session")
+def schema_db(tmp_path_factory):
+    """Пустая база текущей схемы — одна на процесс xdist: SCHEMA на новый файл — ~0,2 с, а тестов
+    с `studio` — почти весь набор. Закрыта — WAL слит в файл, копия файла — целая база."""
+    import db
+    path = tmp_path_factory.mktemp("schema") / "studio.db"
+    conn = db.connect(path)
+    db.migrate(conn)
+    conn.close()
+    return path
+
+
 @pytest.fixture
-def studio(env, monkeypatch):
+def studio(env, schema_db, monkeypatch):
     """main.app на свежей базе: часы — список `clock`, пауза двигает их и пишется в `sleeps`,
-    шлюз — FakeGateway через httpx.MockTransport."""
+    шлюз — FakeGateway через httpx.MockTransport. База — копия `schema_db`, если тест не положил
+    свою заранее (её lifespan доведёт до VERSION сам)."""
+    import shutil
+
     import httpx
     from fastapi.testclient import TestClient
 
@@ -93,6 +123,8 @@ def studio(env, monkeypatch):
     media.ARCHIVES.clear()
     takeout.EXPORTS.clear()
     takeout.RUNNING.clear()
+    if not env.db_path.exists():
+        shutil.copyfile(schema_db, env.db_path)
     with TestClient(main.app, base_url="https://testserver") as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
