@@ -454,6 +454,36 @@ def test_dropped_connection_models_say_so(studio):
     assert code(studio.c.get(f"/api/connections/{direct}/models")) == "direct"
 
 
+def test_dropped_connection_can_be_renamed_and_taken_out_of_sections(studio):
+    """Адрес убран из списка: правка без смены вида и адреса проходит (страница шлёт имя, вид и адрес сразу) —
+    переименовать, убрать раздел; новый раздел, кроме чата, — 422 `server`; другой адрес вне списка — 422."""
+    state.DB.execute("""UPDATE settings SET value = '["10.77.1.15:4000", "203.0.113.10:443"]'"""
+                     " WHERE key = 'allowlist'")
+    gw = add_connection(studio, kind="srvllm", base_url=GW, sections=["chat", "photo"])
+    http = add_connection(studio, kind="openai", base_url=GW + "/v1", sections=["chat", "photo"])
+    https = add_connection(studio, kind="openai", base_url="https://203.0.113.10/v1", sections=["chat", "photo"])
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    for cid in (gw, http, https):
+        conn = conn_of(cid)
+        assert connections.dropped(conn)
+        form = {"name": f"Новое {cid}", "kind": conn.kind, "base_url": conn.base_url + "/ "}
+        r = studio.c.patch(f"/api/connections/{cid}", json=form)
+        assert r.status_code == 200 and r.json()["name"] == f"Новое {cid}" and r.json()["dropped"], conn.kind
+        assert conn_of(cid).base_url == conn.base_url and conn_of(cid).sections == {"chat", "photo"}
+    r = studio.c.patch(f"/api/connections/{http}", json={"sections": ["chat"]})
+    assert r.status_code == 200 and r.json()["sections"] == ["chat"]
+    r = studio.c.patch(f"/api/connections/{http}", json={"sections": ["chat", "photo"]})
+    assert r.status_code == 422 and code(r) == "server" and conn_of(http).sections == {"chat"}
+    r = studio.c.patch(f"/api/connections/{gw}", json={"sections": ["chat", "photo", "video"]})
+    assert r.status_code == 422 and code(r) == "server"
+    for cid, url, refusal in ((gw, "http://10.77.1.16:4000", "srvllm"), (http, "http://10.77.1.16:4000/v1", "https")):
+        r = studio.c.patch(f"/api/connections/{cid}", json={"base_url": url, "token": "new-key-0001"})
+        assert r.status_code == 422 and code(r) == refusal, cid
+        assert conn_of(cid).base_url != url
+    r = studio.c.patch(f"/api/connections/{gw}", json={"kind": "openai"})          # смена вида — адрес проверяется
+    assert r.status_code == 422 and code(r) == "https"
+
+
 def test_internal_name_is_told_apart_from_the_list(studio, monkeypatch):
     named_list("api.cloud.test:443")
     async def resolve(host, port): return ["10.0.0.7"]
