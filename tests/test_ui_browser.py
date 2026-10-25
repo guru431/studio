@@ -1923,6 +1923,49 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("created", [True, False])
+def test_photo_description_is_cancelled_when_the_section_goes_away(browser, live, created):
+    """Ушли из раздела («Назад» браузера) при открытом «Описать»: удалённое окно события close не шлёт,
+    а задание gemma-abl всё равно отменено — и созданное (created), и то, чьё создание ещё шло; часы окна
+    остановлены."""
+    import images
+    login = f"descgone{int(created)}"
+    live.add_user(login)
+
+    async def held(request):
+        """Описание «идёт», пока задание не отменят (предел — 20 с)."""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not any(j.state == "cancelling" for j in images.JOBS.values()):
+            await asyncio.sleep(0.01)
+        return await live.gw.builtin(request)
+
+    #: отмены и опросы окна; ответ на создание — через 500 мс, если уйти надо раньше него
+    spy = f"""(() => {{ const real = window.fetch; window.cancels = []; window.polls = 0;
+      window.fetch = (url, opts = {{}}) => {{ const u = String(url);
+        if (opts.method === 'POST' && u.endsWith('/cancel')) window.cancels.push(u);
+        if (opts.method === 'GET' && u.startsWith('/api/images/descriptions/')) window.polls += 1;
+        const p = real(url, opts);
+        return {'false' if created else 'true'} && opts.method === 'POST' && u === '/api/images/descriptions'
+          ? p.then(r => new Promise(res => setTimeout(() => res(r), 500))) : p; }};
+      return true; }})()"""
+    leave = [("wait", "window.polls >= 1")] if created else []
+    live.gw.on["/slot/images/descriptions"] = held
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", spy),
+            put_file("#describe-file", png_of(64, 48, "blue"), "source.png"), ("wait", is_open("#describe-dialog")),
+            ("eval", "st", "!!(window.st = document.querySelector('#describe-status'))"), *leave,
+            *go("chat"), ("wait", "document.querySelector('#composer')"),
+            ("wait", "window.cancels.length === 1"), ("wait", "window.st.hidden"),
+            ("eval", "polls", "window.polls"),
+            ("eval", "after", "new Promise(r => setTimeout(() => r(window.polls), 2000))")], timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/descriptions", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["after"] == v["polls"] and (v["polls"] >= 1) == created     # после ухода окно не опрашивает
+    assert not problems(r), problems(r)
+
+
 def test_photo_feed_survives_reload_with_a_running_job(browser, live):
     import images
     login = "runner"
@@ -2152,18 +2195,30 @@ def test_preview_save_on_iphone_goes_through_the_share_sheet(browser, live, fail
     assert not problems(r), problems(r)
 
 
-def test_too_big_for_the_phone_is_downloaded_not_shared(browser, live):
-    live.add_user("iosbig")
-    big = ("eval", "big", """(() => { const real = window.fetch;
-      window.fetch = (url, opts) => String(url).startsWith('/api/media/') && !String(url).includes('?')
-        ? Promise.resolve(new Response(new Blob([new Uint8Array(8)], { type: 'image/png' }),
-            { headers: { 'Content-Type': 'image/png', 'Content-Length': String(200 * 1024 * 1024) } }))
-        : real(url, opts); return true; })()""")
-    r = browser.drive(live.url + "/", [*photo_screen("iosbig", cards=1), ("wait", done_cards(1)), iphone(), big,
+def media_of_size(mib, header):
+    """Ответ /api/media/<id> подменён: header — 8 байт с Content-Length в `mib` МиБ (отказ до чтения),
+    иначе — настоящие `mib` МиБ без заголовка, как chunked (размер виден только после чтения)."""
+    body = (f"new Blob([new Uint8Array(8)], {{ type: 'image/png' }}), {{ headers: {{ 'Content-Type': 'image/png',"
+            f" 'Content-Length': String({mib} * 1024 * 1024) }} }}" if header
+            else "big, { headers: { 'Content-Type': 'image/png' } }")
+    return ("eval", "big", f"""(() => {{ const real = window.fetch; const mb = new Uint8Array(1024 * 1024);
+      const big = {'null' if header else f"new Blob(Array({mib}).fill(mb), {{ type: 'image/png' }})"};
+      window.fetch = (url, opts) => /^\\/api\\/media\\/[0-9a-f]{{32}}$/.test(String(url))
+        ? Promise.resolve(new Response({body})) : real(url, opts);
+      return new Response(new Blob([mb])).headers.get('Content-Length'); }})()""")
+
+
+@pytest.mark.parametrize("header", [True, False])
+def test_too_big_for_the_phone_is_downloaded_not_shared(browser, live, header):
+    login = f"iosbig{int(header)}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)), iphone(),
+        media_of_size(200 if header else 101, header),
         ("eval", "spy", CLICKS), ("click", "#photo-feed .card-save"), ("wait", "window.clicked.length === 1"),
-        ("eval", "shared", "window.shared.length")], width=390, mobile=True)
+        ("eval", "shared", "window.shared.length"), ("eval", "href", "window.clicked[0][0]")], width=390, mobile=True)
     assert not r.get("failed"), r
-    assert r["values"]["shared"] == 0
+    assert r["values"]["big"] is None                      # Response из Blob заголовка не несёт
+    assert r["values"]["shared"] == 0 and r["values"]["href"].endswith("?download=1")
 
 
 def test_viewer_shows_the_chain_and_opens_a_step(browser, live):
@@ -2638,19 +2693,17 @@ def test_photo_selection_on_iphone_shares_all_files(browser, live, fail_first):
     assert not problems(r), problems(r)
 
 
-def test_photo_selection_too_big_for_the_iphone_is_a_zip(browser, live):
-    live.add_user("iosmanybig")
-    big = ("eval", "big", """(() => { const real = window.fetch;
-      window.fetch = (url, opts) => /^\\/api\\/media\\/[0-9a-f]{32}$/.test(String(url))
-        ? Promise.resolve(new Response(new Blob([new Uint8Array(8)], { type: 'image/png' }),
-            { headers: { 'Content-Type': 'image/png', 'Content-Length': String(60 * 1024 * 1024) } }))
-        : real(url, opts); return true; })()""")
-    r = browser.drive(live.url + "/", [*photo_screen("iosmanybig", cards=2), ("wait", done_cards(2)), iphone(), big,
+@pytest.mark.parametrize("header", [True, False])
+def test_photo_selection_too_big_for_the_iphone_is_a_zip(browser, live, header):
+    login = f"iosmanybig{int(header)}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=2), ("wait", done_cards(2)), iphone(),
+        media_of_size(200 if header else 60, header),          # заголовок — отказ до чтения; без него — 2 × 60 > 100
         ("eval", "spy", CLICKS), ("click", "#photo-select"), ("click", "#photo-select-all"),
         ("click", "#photo-select-download"), ("wait", "window.clicked.length === 1"),
         ("eval", "shared", "window.shared.length"), ("eval", "href", "window.clicked[0][0]")], width=390, mobile=True)
     assert not r.get("failed"), r
-    assert r["values"]["shared"] == 0 and r["values"]["href"].startswith("/api/media/archives/")   # 2 × 60 МиБ > 100
+    assert r["values"]["shared"] == 0 and r["values"]["href"].startswith("/api/media/archives/")
 
 
 def test_photo_selection_archive_refusal_is_told(browser, live):
@@ -3465,6 +3518,30 @@ def test_mic_inserts_text_at_the_cursor(browser, live, width):
         live.gw.asr_reply = saved
     assert not r.get("failed"), r
     assert r["values"]["sent"] == 0 and not r["values"]["overflow"]
+    assert not problems(r), problems(r)
+
+
+def test_mic_inserts_at_the_new_cursor_when_the_field_was_edited_while_recording(browser, live):
+    """Поле правили, пока шла запись: курсор на момент нажатия устарел — текст встаёт по нынешнему."""
+    login = "micedit"
+    live.add_user(login)
+    saved = live.gw.asr_reply
+    live.gw.asr_reply = {"text": "кот"}
+    put = """(() => { const f = document.querySelector('#photo-prompt'); f.value = 'рыжий на окне';
+      f.setSelectionRange(6, 6); return f.selectionStart; })()"""
+    edit = """(() => { const f = document.querySelector('#photo-prompt'); f.value = 'большой рыжий на окне';
+      f.setSelectionRange(14, 14); return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+            ("eval", "mic", FAKE_MIC), ("eval", "put", put),
+            ("click", "#photo-composer .mic"), ("wait", "document.querySelector('#photo-composer .mic.on')"),
+            ("eval", "edit", edit), ("click", "#photo-composer .mic"),
+            ("wait", "document.querySelector('#photo-prompt').value !== 'большой рыжий на окне'"),
+            ("eval", "value", "document.querySelector('#photo-prompt').value")], width=1280)
+    finally:
+        live.gw.asr_reply = saved
+    assert not r.get("failed"), r
+    assert r["values"]["value"] == "большой рыжий кот на окне"
     assert not problems(r), problems(r)
 
 

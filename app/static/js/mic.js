@@ -3,7 +3,8 @@
  * attachMic(field, host) → кнопка микрофона: нажал — запись MediaRecorder (iPhone — audio/mp4,
  * Chrome — audio/webm) с таймером в кнопке; нажал ещё раз или прошло MAX_SEC — запись уходит
  * POST /api/dictation (модель раздела «Голосовой ввод»), текст встаёт на место курсора (с пробелом,
- * если нужен) и не отправляется. Звук живёт только в памяти этой записи — после ответа его нет ни
+ * если нужен) и не отправляется. Курсор — на момент нажатия, а если поле за время записи правили, —
+ * нынешнее выделение поля. Звук живёт только в памяти этой записи — после ответа его нет ни
  * здесь, ни на сервере. Нет микрофона, нет разрешения, нет модели — слова в `p.mic-error` (в host).
  * Пока браузер спрашивает разрешение, повторные нажатия не считаются.
  *
@@ -127,6 +128,7 @@ export function attachMic(field, host) {
     }
     error.textContent = '';
     const caret = [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
+    const value = field.value;                       // поле правили во время записи — курсор уже другой
     starting = true;
     paint();
     try {
@@ -151,7 +153,9 @@ export function attachMic(field, host) {
       body.append('audio', blob, recordingName(blob));
       const { text } = await api('POST', '/api/dictation', body);
       if (!button.isConnected) return;                 // поле уже убрали
-      if (text) insertAt(field, text, caret);
+      const at = field.value === value ? caret
+        : [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
+      if (text) insertAt(field, text, at);
       else error.textContent = 'Ничего не распознано — скажите ещё раз';
     } catch (err) {
       error.textContent = words(err);

@@ -96,6 +96,7 @@ function build(view, ctx) {
   let submitting = false;
   let describing = false;
   let translating = null;        // { id, started, timer } — идущий перевод промпта
+  let shutDescribe = null;       // уборка открытого окна «Описать»: отмена задания, часы, опрос, превью
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
   const gated = new Set();       // кнопки открытого просмотра, начинающие задание
   const popups = [];             // { chip, menu } — открывающиеся меню
@@ -791,13 +792,19 @@ function build(view, ctx) {
     };
     text.addEventListener('input', count);
     extra.addEventListener('input', count);
-    dialog.addEventListener('close', () => {
+    /* окно закрыли или ушли из раздела (destroy: удалённый <dialog> события close не шлёт); задание без
+     * id отменит .then создания — он видит !open */
+    const shut = () => {
+      if (!open) return;
       open = false;
+      if (shutDescribe === shut) shutDescribe = null;
       clearTimeout(timer);
       if (url) URL.revokeObjectURL(url);
       if (jobId && !finished) api('POST', `/api/images/${jobId}/cancel`).catch(() => {});
       if (!finished) stop();
-    });
+    };
+    shutDescribe = shut;
+    dialog.addEventListener('close', shut);
     make.addEventListener('click', () => {
       const prompted = combined();
       if (!text.value.trim() || prompted.length > PROMPT_MAX) {
@@ -993,6 +1000,7 @@ function build(view, ctx) {
     follow,
     destroy() {
       alive = false;
+      if (shutDescribe) shutDescribe();
       selection.destroy();
       document.removeEventListener('click', onDocClick, true);
       document.removeEventListener('keydown', onKey);

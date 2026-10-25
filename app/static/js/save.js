@@ -5,7 +5,8 @@
  * «Поделиться» с готовым файлом: молча сохранить в «Фото» веб-приложение не может, а в меню есть
  * «Сохранить изображение» / «Сохранить видео». Файл качается после нажатия, и Safari может счесть
  * жест истёкшим (NotAllowedError) — тогда окно «Файл готов» с кнопкой «Сохранить»: её нажатие —
- * новый жест. Файл больше SHARE_MAX в память телефона не берётся — обычная загрузка.
+ * новый жест. Файл больше SHARE_MAX в память телефона не берётся — обычная загрузка: по заголовку
+ * Content-Length — до чтения, а без заголовка (chunked) — по настоящему размеру прочитанного.
  *
  * Несколько (saveMany): iPhone — все файлы одним меню «Поделиться», если вместе они не больше
  * SHARE_MAX; иначе и не на iPhone — один ZIP: POST /api/media/archives со списком, загрузка по токену. */
@@ -68,7 +69,7 @@ async function share(mediaId, host) {
     return;
   }
   const file = await fileOf(mediaId, response);
-  if (!navigator.canShare({ files: [file] })) {
+  if (file.size > SHARE_MAX || !navigator.canShare({ files: [file] })) {
     download(mediaId);
     return;
   }
@@ -101,12 +102,14 @@ async function fetchAll(mediaIds, onProgress) {
       abort.abort();
       continue;
     }
-    total += Number(response.headers.get('Content-Length')) || 0;
-    if (!response.ok || total > SHARE_MAX) {
+    if (!response.ok || total + (Number(response.headers.get('Content-Length')) || 0) > SHARE_MAX) {
       abort.abort();
       return null;
     }
-    files.push(await fileOf(mediaId, response));
+    const file = await fileOf(mediaId, response);
+    total += file.size;                     // настоящий размер: заголовка может и не быть
+    if (total > SHARE_MAX) return null;
+    files.push(file);
   }
   return files.length ? files : null;
 }
