@@ -88,7 +88,8 @@ def test_verify_backup_of_an_old_schema_steps_it_up(base, env):
     folder = env.media_dir / "backup"
     folder.mkdir()
     old = sqlite3.connect(folder / "studio-20270101.db")
-    old.executescript(db.SCHEMA.split(db.INDEXES_9)[0] + "\nPRAGMA user_version = 8;")   # шаги 9+ — после INDEXES_9
+    old.executescript("PRAGMA synchronous=OFF;\n"           # автокоммит на оператор: с fsync — ~0,8 с
+                      + db.SCHEMA.split(db.INDEXES_9)[0] + "\nPRAGMA user_version = 8;")   # шаги 9+ — после INDEXES_9
     old.execute("INSERT INTO users(login, name, pw_hash, created) VALUES ('a', 'a', 'x', 1)")
     old.commit()
     old.close()
