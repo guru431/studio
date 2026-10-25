@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from clients import RUNNERS, run_client
+from clients import RUNNERS, ps_encoding, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-batch.ps1"
@@ -68,6 +68,7 @@ foreach ($p in $ast.ParamBlock.Parameters) {
 """
 
 
+@pytest.mark.integration      # старт PowerShell — больше секунды
 def test_powershell_parses_script_and_defaults_match_contract():
     ps = shutil.which("powershell") or shutil.which("pwsh")
     if not ps:
@@ -135,7 +136,7 @@ def images():
 def run_script(runner, images, *args, code=0):
     """code — ожидаемый код выхода: 0 — все картинки готовы, 3 — хотя бы одна не вышла."""
     r = run_client(runner, SCRIPT, [*args, "-Token", "test-key", "-Url", images.url])
-    enc = "oem" if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
+    enc = ps_encoding() if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
     out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"

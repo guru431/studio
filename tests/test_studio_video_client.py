@@ -20,7 +20,7 @@ from email.parser import BytesParser
 
 import pytest
 
-from clients import RUNNERS, run_client
+from clients import RUNNERS, ps_encoding, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-video.ps1"
@@ -76,6 +76,7 @@ foreach ($p in $ast.ParamBlock.Parameters) {
 """
 
 
+@pytest.mark.integration      # старт PowerShell — больше секунды
 def test_powershell_parses_script_and_defaults_match_contract():
     ps = _powershell()
     r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command",
@@ -214,7 +215,7 @@ def service():
 def run_script(runner, fake, folder, *extra, code=0):
     """code — ожидаемый код выхода: 0 — всё готово или уже было, 3 — хотя бы один ролик не вышел."""
     r = run_client(runner, SCRIPT, ["-Folder", str(folder), "-Token", "test-key", "-Url", fake.url, *extra])
-    enc = "oem" if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
+    enc = ps_encoding() if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
     out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
