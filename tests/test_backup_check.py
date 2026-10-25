@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -230,6 +231,28 @@ def test_verify_backup_command_codes(base, env, monkeypatch, capsys, tmp_path):
     assert manage.main(["verify-backup", str(junk)]) == 1
     assert manage.main(["verify-backup", str(tmp_path / "nope.db")]) == 2
     assert manage.main(["verify-backup", "a", "b"]) == 2
+
+
+def test_verify_backup_copy_gone_between_is_file_and_stat(base, env, monkeypatch, capsys):
+    """Копию между is_file и stat убрала уборка backup() или мигнула шара: итог «копии нет» и код 2,
+    а не трейсбек мимо JSON."""
+    add_rows(base)
+    copy = backup_of(base, env, monkeypatch)
+    capsys.readouterr()
+    real_stat, real_is_file = Path.stat, Path.is_file
+
+    def gone(self, *args, **kwargs):
+        if self == copy:
+            raise FileNotFoundError(2, "No such file", str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_file", lambda self, **kw: self == copy or real_is_file(self, **kw))
+    monkeypatch.setattr(Path, "stat", gone)
+    out = manage.verify_backup()
+    assert out["backup"] is None and out["ok"] is False and out["problems"] == ["копий базы нет (или шара недоступна)"]
+    assert manage.main(["verify-backup"]) == 2
+    assert json.loads(capsys.readouterr().out)["backup"] is None
+    assert tmp_files(env) == []
 
 
 # ---- панель -------------------------------------------------------------------------

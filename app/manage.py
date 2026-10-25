@@ -277,13 +277,13 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
            "ok": False, "took": 0, "problems": []}
     try:
         source = Path(path) if path else _newest_backup(cfg.media_dir / "backup")
-        found = source is not None and source.is_file()
+        # stat — в том же try: между is_file и stat копию убирает уборка backup() или мигает шара
+        info = source.stat() if source is not None and source.is_file() else None
     except OSError:
-        found = False
-    if not found:
+        info = None
+    if info is None:
         out["problems"].append("копии базы нет" if path else "копий базы нет (или шара недоступна)")
         return out
-    info = source.stat()
     out.update(backup=source.name, at=info.st_mtime, size=info.st_size)
     cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
     # tmp_dir — на диске рабочей базы: копия, забившая его до ENOSPC, уронила бы запись студии до уборки
