@@ -59,8 +59,22 @@ def test_suffix_and_bad_ranges(studio):
     past = studio.c.get(f"/api/media/{mid}", headers={"Range": "bytes=2000-"})
     assert past.status_code == 416 and past.headers["content-range"] == "bytes */1000"
     assert media.byte_range("bytes=990-5000", 1000) == (990, 999)
-    for bad in ("bytes=-0", "bytes=-", "bytes=5-1", "items=0-1", "bytes=0-1,3-4"):
-        assert media.byte_range(bad, 1000) is None
+    assert media.byte_range("bytes=-0", 1000) == media.UNSATISFIABLE
+    zero = studio.c.get(f"/api/media/{mid}", headers={"Range": "bytes=-0"})
+    assert zero.status_code == 416 and zero.headers["content-range"] == "bytes */1000"
+    for other in ("bytes=-", "bytes=5-1", "items=0-1", "bytes=0-1,3-4"):     # не наш диапазон — не замечаем
+        assert media.byte_range(other, 1000) is None
+
+
+def test_unsupported_range_gets_the_whole_file(studio):
+    """RFC 9110 §14.2: Range, который сервер не поддерживает (несколько диапазонов, другая единица), он
+    вправе не заметить — 200 и файл целиком; 416 — только неудовлетворимому."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "clip.mp4")
+    for spec in ("bytes=0-1,5-9", "items=0-1"):
+        r = studio.c.get(f"/api/media/{mid}", headers={"Range": spec})
+        assert r.status_code == 200 and r.content == DATA, spec
+        assert r.headers["content-length"] == "1000" and "content-range" not in r.headers
 
 
 def test_thumb_is_small_webp(studio, env):

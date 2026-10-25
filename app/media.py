@@ -57,6 +57,7 @@ PURGE_SEC = 300
 SAVE_TIMEOUT_SEC = 45
 STALLED = "не удалось сохранить файл: хранилище не отвечает"
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+UNSATISFIABLE = "unsatisfiable"     # byte_range: одиночный диапазон вне файла — 416
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 #: виды файлов «Хранилища» в «Прочем» (usage): по началу mime; документы — ещё PDF, DOCX и JSON итогов расшифровки
 KINDS = ("image", "video", "audio", "document", "other")
@@ -470,19 +471,23 @@ async def delete_async(user_id: int, media_id: str) -> None:
     await _purge(rows)
 
 
-def byte_range(header: str, size: int) -> "tuple[int, int] | None":
-    """Один диапазон `bytes=a-b`, `a-` или `-n` → (начало, конец включительно); None — 416."""
+def byte_range(header: str, size: int) -> "tuple[int, int] | str | None":
+    """Один диапазон `bytes=a-b`, `a-` или `-n` → (начало, конец включительно); UNSATISFIABLE — 416
+    (начало за концом файла, `-0`). None — заголовок не наш одиночный диапазон (несколько диапазонов,
+    другая единица, `5-1`, мусор): его не замечают, ответ — файл целиком (RFC 9110 §14.2)."""
     match = RANGE_RE.fullmatch(header.strip())
     if match is None or match.groups() == ("", ""):
         return None
     first, last = match.groups()
     if first == "":
         if int(last) == 0:
-            return None
+            return UNSATISFIABLE
         return max(0, size - int(last)), size - 1
     start, end = int(first), int(last) if last else size - 1
-    if start >= size or end < start:
+    if last and end < start:
         return None
+    if start >= size:
+        return UNSATISFIABLE
     return start, min(end, size - 1)
 
 
@@ -717,11 +722,11 @@ async def get_media(media_id: str, request: Request, thumb: str = "", download: 
     if download == "1":
         headers["Content-Disposition"] = disposition(row["download_name"])
     spec = request.headers.get("range")
-    if spec is None:
+    span = None if spec is None else byte_range(spec, size)
+    if span is None:
         return StreamingResponse(_read(file, 0, size), media_type=mime,
                                  headers=headers | {"Content-Length": str(size)})
-    span = byte_range(spec, size)
-    if span is None:
+    if span == UNSATISFIABLE:
         return Response(status_code=416, headers=headers | {"Content-Range": f"bytes */{size}"})
     start, end = span
     return StreamingResponse(_read(file, start, end - start + 1), status_code=206, media_type=mime,
