@@ -126,7 +126,9 @@ async def find(body: SearchIn, request: Request):
         args.append((_day(body.until) + timedelta(days=1)).timestamp())
     match = " AND ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
     if terms:
-        source = "search JOIN search_docs d ON d.id = search.rowid"
+        # CROSS JOIN держит FTS5 внешним циклом и при курсоре, и при фильтрах: иначе планировщик идёт от
+        # индекса search_docs и гоняет MATCH заново на каждую строку истории (вторая страница — секунды)
+        source = "search CROSS JOIN search_docs d ON d.id = search.rowid"
         where.insert(0, "search MATCH ?")
         args.insert(0, match)
     else:
