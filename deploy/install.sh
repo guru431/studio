@@ -123,12 +123,11 @@ fi
 install -m 0644 "$R/deploy/$UNIT" "/etc/systemd/system/$UNIT"
 install -m 0644 "$R/deploy/studio-backup.service" "$R/deploy/studio-backup.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable "$UNIT" >/dev/null 2>&1
-systemctl restart "$UNIT"
-health_failed() {
+systemctl enable --quiet "$UNIT"      # --quiet убирает «Created symlink», ошибки остаются видны
+service_failed() {      # $1 — что не прошло; прежняя служба уже остановлена, новый код на месте
     # status упавшей службы (failed, auto-restart) возвращает 3: под pipefail диагностика не должна
     # ронять скрипт раньше журнала и подсказки
-    echo "ОШИБКА: $UNIT не ответил 200 на /health за 20 с (от www-data, последний код $code)" >&2
+    echo "ОШИБКА: $1" >&2
     systemctl status "$UNIT" --no-pager 2>&1 | tail -n 15 >&2 || true
     journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
     echo "Откат: прежние код, юнит и (если менялась) среда Python — в $OLD:" >&2
@@ -140,6 +139,7 @@ health_failed() {
     fi
     exit 1
 }
+systemctl restart "$UNIT" || service_failed "systemctl restart $UNIT не прошёл (ошибка выше)"
 # Type=simple: restart возвращается раньше, чем uvicorn поднял приложение — ждём ответа.
 # От www-data — так к сокету ходит Apache; /health открыт без входа.
 code=000
@@ -149,14 +149,18 @@ for _ in $(seq 1 40); do
     [ "$code" = 200 ] && break
     sleep 0.5
 done
-[ "$code" = 200 ] || health_failed
+[ "$code" = 200 ] || service_failed "$UNIT не ответил 200 на /health за 20 с (от www-data, последний код $code)"
 # reload — всегда после проверки службы (configtest пройден выше): сравнение с прежним деревом
 # пропустило бы vhost, выложенный неудачной выкладкой того же коммита
 systemctl reload apache2
 echo "OK: Apache перечитал конфигурацию"
 rm -rf "$OLD"
 echo "OK: $UNIT отвечает на $SOCK"
-systemctl enable --now studio-backup.timer >/dev/null 2>&1
+if ! systemctl enable --now --quiet studio-backup.timer; then
+    echo "ОШИБКА: studio-backup.timer не включён (ошибка выше) — $UNIT обновлена и отвечает," \
+         "но копии базы по расписанию не будет; включить: systemctl enable --now studio-backup.timer" >&2
+    exit 1
+fi
 echo "OK: studio-backup.timer — $(systemctl show -p NextElapseUSecRealtime --value studio-backup.timer)"
 
 if [ "$ADMIN" = 1 ]; then

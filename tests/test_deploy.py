@@ -184,7 +184,7 @@ def test_backup_timer_runs_as_the_service_user():
     assert directives(BACKUP, "ExecStart") == ["/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py backup"]
     assert directives(TIMER, "OnCalendar") == ["*-*-* 04:30"] and directives(TIMER, "Persistent") == ["true"]
     assert "WantedBy=timers.target" in TIMER
-    assert "systemctl enable --now studio-backup.timer" in INSTALL
+    assert "systemctl enable --now --quiet studio-backup.timer" in INSTALL
     assert all(f"$R/deploy/{u}" in INSTALL for u in ("studio-backup.service", "studio-backup.timer"))
 
 
@@ -326,13 +326,60 @@ def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():
              "journalctl() { echo 'Traceback: boom'; }\n"
              "R=/r; OLD=/r/.previous; UNIT=studio-web.service; ENV_FILE=/etc/studio/studio.env\n"
              "PARTS=(app deploy requirements.txt); SWAP=(\"${PARTS[@]}\" .venv); code=000\n")
-    r = subprocess.run([bash, "-c", stubs + _function("health_failed") + "health_failed\necho unreachable\n"],
+    r = subprocess.run([bash, "-c", stubs + _function("service_failed") + "service_failed 'не ответил'\necho unreachable\n"],
                        capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    assert r.stderr.startswith("ОШИБКА: не ответил\n")
     assert "auto-restart" in r.stderr and "Traceback: boom" in r.stderr
     assert "for p in app deploy requirements.txt .venv; do" in r.stderr     # и прежняя среда Python
     assert "install -m 0644 /r/deploy/studio-web.service /etc/systemd/system/studio-web.service" in r.stderr
     assert "systemctl daemon-reload" in r.stderr and "чинить вперёд" not in r.stderr
+
+
+def test_install_restart_refusal_takes_the_failure_branch():
+    """Отказ `systemctl restart` (сломанный юнит) под set -e обрывал скрипт без журнала и подсказки
+    отката, хотя прежняя служба уже остановлена, а новый код на месте. Теперь — путь отказа /health,
+    но первая строка говорит, что не прошёл сам restart."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    line = next(s for s in INSTALL.splitlines() if s.startswith('systemctl restart "$UNIT"'))
+    stubs = ("set -euo pipefail\n"
+             "systemctl() { if [ \"$1\" = restart ]; then echo 'Job failed' >&2; return 1; fi;"
+             " echo 'studio-web.service: failed'; return 3; }\n"
+             "journalctl() { echo 'bad unit file'; }\n"
+             "R=/r; OLD=/r/.previous; UNIT=studio-web.service; ENV_FILE=/etc/studio/studio.env\n"
+             "SWAP=(app deploy requirements.txt)\n")
+    r = subprocess.run([bash, "-c", stubs + _function("service_failed") + line + "\necho unreachable\n"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    lines = r.stderr.splitlines()
+    assert lines[:2] == ["Job failed", "ОШИБКА: systemctl restart studio-web.service не прошёл (ошибка выше)"], r.stderr
+    assert "/health" not in r.stderr and "bad unit file" in r.stderr and "studio-web.service: failed" in r.stderr
+    assert "for p in app deploy requirements.txt; do" in r.stderr
+
+
+def test_install_systemctl_enable_does_not_hide_errors():
+    """`enable … >/dev/null 2>&1` под set -e обрывал скрипт молча — deploy.sh говорил лишь «установка
+    не прошла». «Created symlink» убирает --quiet, ошибки остаются видны."""
+    lines = re.findall(r"^(?:if ! )?systemctl enable[^#\n]*", uncommented(INSTALL), re.M)    # команды, без комментариев
+    assert len(lines) == 2 and all("--quiet" in s for s in lines), lines
+    assert not any("2>" in s or "/dev/null" in s for s in lines), lines
+
+
+def test_install_timer_refusal_is_a_loud_failure():
+    """Таймер копии базы не включился: служба уже обновлена и отвечает, но это ошибка с кодом не 0."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    start = INSTALL.index("if ! systemctl enable --now --quiet studio-backup.timer; then")
+    block = INSTALL[start:INSTALL.index("fi\n", start) + 3]
+    stubs = ("set -euo pipefail\nUNIT=studio-web.service\n"
+             "systemctl() { echo 'Failed to enable unit' >&2; return 1; }\n")
+    r = subprocess.run([bash, "-c", stubs + block + "echo unreachable\n"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    assert "Failed to enable unit" in r.stderr and "studio-backup.timer не включён" in r.stderr
 
 
 def test_install_restore_puts_the_previous_tree_back(tmp_path):
@@ -369,7 +416,7 @@ def test_install_checks_apache_before_the_restart_and_always_reloads_after_healt
     assert "vhost_changed" not in INSTALL and "cmp -s" not in INSTALL
     reload = INSTALL.index("systemctl reload apache2")
     assert INSTALL.count("systemctl reload apache2") == 1
-    assert INSTALL.index("|| health_failed") < reload < INSTALL.index('rm -rf "$OLD"\necho "OK')
+    assert INSTALL.index('|| service_failed "$UNIT не ответил 200') < reload < INSTALL.index('rm -rf "$OLD"\necho "OK')
     line = INSTALL[INSTALL.rindex("\n", 0, reload) + 1:INSTALL.index("\n", reload)]
     assert line == "systemctl reload apache2"           # без условия вокруг
 
@@ -403,7 +450,7 @@ def test_install_builds_the_environment_apart_and_swaps_it_with_the_code():
     assert code.index('python3 -m venv "$NEW/.venv"') < build < code.index('for p in "${SWAP[@]}"; do')
     assert "SWAP+=(.venv)" in code and "bin/pip" not in code
     assert '"$PY" -m compileall -q "$NEW/app"' in code
-    assert 'for p in "${SWAP[@]}"; do' in _function("restore") and "${SWAP[*]}" in _function("health_failed")
+    assert 'for p in "${SWAP[@]}"; do' in _function("restore") and "${SWAP[*]}" in _function("service_failed")
     for unit in (UNIT, BACKUP):
         assert all(e.startswith("/opt/services/studio/.venv/bin/python ") for e in directives(unit, "ExecStart"))
     assert '"$R/.venv/bin/python" "$R/app/manage.py"' in code
