@@ -91,8 +91,9 @@ def test_powershell_parses_script_and_defaults_match_contract():
 def images():
     """Подставной API картинок на 127.0.0.1: журнал (путь, Authorization, поля или JSON).
     generations отдаёт «png-<номер>» без seed (так отвечает FLUX), на промпт «bad» — 400;
-    edits — «result-png» и seed 7."""
+    edits — «result-png» и seed 7. files — (поле, имя файла, тип) файловых частей multipart."""
     log = []
+    files = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -102,6 +103,8 @@ def images():
                     b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + raw)
                 payload = {p.get_param("name", header="content-disposition"): p.get_payload(decode=True)
                            for p in mime.iter_parts()}
+                files.extend((p.get_param("name", header="content-disposition"), p.get_filename(),
+                              p.get_content_type()) for p in mime.iter_parts() if p.get_filename())
             else:
                 payload = json.loads(raw)
             log.append((self.path, self.headers["Authorization"], payload))
@@ -127,7 +130,7 @@ def images():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
-    yield SimpleNamespace(log=log, url=f"http://127.0.0.1:{server.server_port}/slot")
+    yield SimpleNamespace(log=log, files=files, url=f"http://127.0.0.1:{server.server_port}/slot")
     server.shutdown()
     server.server_close()
     thread.join(1)
@@ -158,7 +161,7 @@ def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):
 def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path):
     prompts = tmp_path / "prompts.txt"
     prompts.write_text("change background\n", encoding="utf-8")
-    photo = tmp_path / "photo.png"
+    photo = tmp_path / "photo.JPG"
     photo.write_bytes(b"source-photo")
     out = tmp_path / "out"
 
@@ -170,6 +173,8 @@ def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path)
     assert path == "/slot/images/edits" and auth == "Bearer test-key"
     assert fields["image"] == b"source-photo" and fields["strength"] == b"0.4"
     assert fields["model"] == b"lustify-v10-krea2-turbo" and fields["seed"] == b"7"
+    # Имя файла — своё (имя фото владельца в журналы службы не идёт), тип — по расширению
+    assert images.files == [("image", "input.jpg", "image/jpeg")]
     assert [p.read_bytes() for p in out.glob("*.png")] == [b"result-png"]
 
 

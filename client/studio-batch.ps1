@@ -87,11 +87,11 @@ param(
 # Строка-заглушка ключа: в репозитории пусто, -MakeLocal вписывает ключ в локальную копию.
 $EmbeddedKey = ''
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'   # прогресс-бар Invoke-WebRequest в 5.1 тормозит загрузку
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
 $Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux.2-klein-4b' }
 $Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
+$Mime = @{ '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.png' = 'image/png'; '.webp' = 'image/webp' }
 $TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
 $MaxPrompt = 24000                     # предел API картинок
 $MaxSeed = 4294967295
@@ -119,6 +119,7 @@ if (-not $Token) {
         "затем запускайте studio-batch.local.ps1 (или передайте ключ параметром -Token)")
 }
 $Url = $Url.TrimEnd('/')
+Add-Type -AssemblyName System.Net.Http
 $modelId = $Models[$Model]
 if ($ImagePath) {
     $imageInfo = Get-Item -LiteralPath $ImagePath
@@ -133,50 +134,52 @@ $prompts = @(Get-Content -LiteralPath $PromptsFile -Encoding UTF8 |
 if ($prompts.Count -eq 0) { throw "В файле $PromptsFile нет промптов" }
 if ($null -ne $Seed -and ($Seed -lt 0 -or $Seed + $Count - 1 -gt $MaxSeed)) { throw "Seed — от 0 до $MaxSeed" }
 
-# Запрос к шлюзу: код ответа и тело текстом (UTF-8 — Windows PowerShell сам читает
-# ответ без charset как Latin-1, и кириллица в сообщениях ломалась бы).
+# Запрос к шлюзу: код ответа и тело текстом. HttpClient ведёт себя одинаково в Windows
+# PowerShell 5.1 и pwsh 7 (Invoke-WebRequest на кодах HTTP бросает там разные исключения);
+# тело — UTF-8 сами: ответ без charset Windows PowerShell прочёл бы как Latin-1.
+# Ждём ответ кусочками по 250 мс: так Ctrl+C прерывает и долгий запрос.
 function Invoke-Gateway([string]$Path, $Body, [int]$Timeout, [string]$ImageFile = '') {
-    if ($ImageFile) {
-        Add-Type -AssemblyName System.Net.Http
-        $client = New-Object Net.Http.HttpClient
-        $form = New-Object Net.Http.MultipartFormDataContent
-        $response = $null
-        try {
-            $client.Timeout = [TimeSpan]::FromSeconds($Timeout)
-            $client.DefaultRequestHeaders.Authorization = New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer', $Token)
+    # Фото читается до запроса: сбой чтения — не «шлюз недоступен». Не через if-выражение:
+    # оно развернуло бы массив байтов в object[]
+    $imageBytes = $null
+    if ($ImageFile) { $imageBytes = [IO.File]::ReadAllBytes($ImageFile) }
+    $client = New-Object Net.Http.HttpClient
+    $content = $null
+    $response = $null
+    try {
+        $client.Timeout = [TimeSpan]::FromSeconds($Timeout)
+        $client.DefaultRequestHeaders.Authorization = New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer', $Token)
+        if ($ImageFile) {
+            $content = New-Object Net.Http.MultipartFormDataContent
             foreach ($entry in $Body.GetEnumerator()) {
                 $value = [Convert]::ToString($entry.Value, [Globalization.CultureInfo]::InvariantCulture)
-                $form.Add((New-Object Net.Http.StringContent($value, [Text.Encoding]::UTF8)), $entry.Key)
+                $content.Add((New-Object Net.Http.StringContent($value, [Text.Encoding]::UTF8)), $entry.Key)
             }
-            $fileContent = New-Object Net.Http.ByteArrayContent -ArgumentList (,[IO.File]::ReadAllBytes($ImageFile))
-            $form.Add($fileContent, 'image', 'input.png')
-            $response = $client.PostAsync("$Url$Path", $form).GetAwaiter().GetResult()
-            return [pscustomobject]@{ Status = [int]$response.StatusCode
-                                      Text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
-        } finally {
-            if ($response) { $response.Dispose() }
-            $form.Dispose()
-            $client.Dispose()
+            $ext = [IO.Path]::GetExtension($ImageFile).ToLowerInvariant()
+            $type = if ($Mime.ContainsKey($ext)) { $Mime[$ext] } else { 'application/octet-stream' }
+            $part = New-Object Net.Http.ByteArrayContent -ArgumentList (,$imageBytes)
+            $part.Headers.ContentType = New-Object Net.Http.Headers.MediaTypeHeaderValue($type)
+            # Имя файла — своё, не владельца: в журналы службы оно попадать не должно
+            $content.Add($part, 'image', "input$ext")
+        } else {
+            $content = New-Object Net.Http.StringContent(($Body | ConvertTo-Json -Compress),
+                [Text.Encoding]::UTF8, 'application/json')
         }
-    }
-    $params = @{ Uri = "$Url$Path"; Method = 'POST'; UseBasicParsing = $true; TimeoutSec = $Timeout
-                 Headers = @{ Authorization = "Bearer $Token" }
-                 Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress))
-                 ContentType = 'application/json; charset=utf-8' }
-    try {
-        $r = Invoke-WebRequest @params
-        return [pscustomobject]@{ Status = [int]$r.StatusCode
-                                  Text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) }
-    } catch [System.Net.WebException] {
+        $task = $client.PostAsync("$Url$Path", $content)
+        while (-not $task.Wait(250)) { }
+        $response = $task.Result
+        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        return [pscustomobject]@{ Status = [int]$response.StatusCode; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+    } catch {
         $e = $_.Exception
-        if ($e.Status -eq [Net.WebExceptionStatus]::Timeout) { throw "шлюз не ответил за $Timeout с" }
-        if ($null -eq $e.Response) { throw "шлюз недоступен ($Url): $($e.Message)" }
-        # Тело отказа Invoke-WebRequest уже вычитал в ErrorDetails: поток ответа к этому моменту пуст
-        $text = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { '' }
-        if (-not $text) {
-            $text = (New-Object IO.StreamReader($e.Response.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd()
-        }
-        return [pscustomobject]@{ Status = [int]$e.Response.StatusCode; Text = $text }
+        while ($e.InnerException -and ($e -is [Management.Automation.MethodInvocationException] -or
+                $e -is [AggregateException] -or $e -is [Net.Http.HttpRequestException])) { $e = $e.InnerException }
+        if ($e -is [Threading.Tasks.TaskCanceledException]) { throw "шлюз не ответил за $Timeout с" }
+        throw "шлюз недоступен ($Url): $($e.Message)"
+    } finally {
+        if ($response) { $response.Dispose() }
+        if ($content) { $content.Dispose() }
+        $client.Dispose()
     }
 }
 
