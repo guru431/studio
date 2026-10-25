@@ -129,6 +129,9 @@ def test_pages_send_csp_and_nosniff(studio):
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
         csp = r.headers["content-security-policy"]
         assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp and "base-uri 'none'" in csp
+        # картинка из ответа модели (markdown `![](http://…)`) — <img> с внешним src: DOMPurify (markdown.js)
+        # его пропускает, наружу запрос не уходит только из-за img-src
+        assert "img-src 'self' blob: data:" in csp
         assert r.headers["x-content-type-options"] == "nosniff"
         assert r.headers["referrer-policy"] == "same-origin"
 
