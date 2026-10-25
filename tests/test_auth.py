@@ -264,8 +264,10 @@ def test_pages_answer_head_and_robots_are_turned_away(studio):
     assert r.headers["content-type"].startswith("text/plain")
 
 
-def test_every_route_but_the_anonymous_ones_needs_a_session(studio):
-    """Заслон — по пути: роутер без префикса /api стал бы открытым, и ни один тест не заметил бы."""
+def guarded_routes() -> list[tuple[str, str]]:
+    """(метод, путь) всех маршрутов, кроме анонимных: заслон — по пути, и роутер без префикса /api стал
+    бы открытым, а ни один тест не заметил бы. Обход — двумя тестами (сессия, CSRF): ~320 запросов
+    одним тестом шли дольше секунды."""
     import re
     from starlette.routing import Mount, Route
     import main
@@ -290,11 +292,18 @@ def test_every_route_but_the_anonymous_ones_needs_a_session(studio):
         path = re.sub(r"\{[^}]+\}", "1", full)
         routes += [(method, path) for method in sorted(route.methods - {"HEAD"})]
     assert len(routes) > 30
-    for method, path in routes:
+    return routes
+
+
+def test_every_route_but_the_anonymous_ones_needs_a_session(studio):
+    for method, path in guarded_routes():
         r = studio.c.request(method, path)
         assert r.status_code == 401 and r.json()["detail"]["code"] == "login", (method, path)
+
+
+def test_every_changing_route_needs_the_csrf_header(studio):
     make_user(studio, "owner", is_admin=True); login(studio, "owner", "password-123")
-    for method, path in routes:
+    for method, path in guarded_routes():
         if method != "GET":
             r = studio.c.request(method, path)
             assert r.status_code == 403 and r.json()["detail"]["code"] == "csrf", (method, path)
