@@ -254,7 +254,8 @@ def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser,
                   "pwned": 0, "highlighted": True, "copy": "Копировать"}
     assert r["values"]["sse"]["out"] == ["Облако ", "на связи.", "", "[DONE]"]
     assert r["values"]["sse"]["parsed"] == [{"event": "delta", "data": {"a": 1}}, {"event": "message", "data": "tail"}]
-    assert live.cloud.chat_requests[-1]["messages"][1:] == [{"role": "user", "content": "привет"}]
+    # запрос шлёт сам тест (fetch мимо chat.js) — даты первым системным сообщением в нём нет
+    assert live.cloud.chat_requests[-1]["messages"] == [{"role": "user", "content": "привет"}]
 
 
 def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
@@ -1216,7 +1217,7 @@ def test_chat_reasoning_and_internet_show_one_spinner_at_a_time(browser, live, m
             ("wait", f"{THINK_TOGGLE} && !{THINK_TOGGLE}.hidden && {WEB_TOGGLE} && !{WEB_TOGGLE}.disabled"),
             ("click", "#think-toggle"), ("wait", f"{THINK_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
             ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
-            ("type", "#chat-input", "Перескажи ролик"), ("press", "Enter"),
+            ("type", "#chat-input", f"Перескажи ролик {CANON}"), ("press", "Enter"),    # ролик — только из переписки
             ("wait", f"{LAST_ANSWER}?.querySelector('.web-badge.busy')?.textContent.startsWith('▶ Субтитры:')"),
             ("eval", "tool", shown),
             ("eval", "seen1", mark % "субтитры"),
