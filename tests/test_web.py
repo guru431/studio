@@ -553,6 +553,26 @@ def test_page_variant_of_a_known_address_reads_the_address_of_the_chat(studio):
     assert step["error"] == web.NOT_KNOWN and len(studio.gw.exa_requests) == 3
 
 
+def test_youtube_outside_the_known_addresses_is_refused_without_yt_dlp(studio, monkeypatch):
+    """id из 11 знаков, составленный моделью, — канал вывода переписки на YouTube: ролик читается, только если
+    его id есть у адреса из переписки или выдачи (любая форма адреса), иначе шаг-ошибка и ни одного yt-dlp."""
+    import web
+    yt = FakeYtDlp()
+    monkeypatch.setattr(web, "RUN", yt)
+    known = web.links(f"глянь https://youtu.be/{VID}?si=abc и https://example.test/a")
+    for url in ("https://www.youtube.com/watch?v=Secret12345", "https://youtu.be/AbCdEfGhIjK",
+                f"https://www.youtube.com/watch?v={VID.lower()}"):
+        step = run(studio, web.call, "youtube_subtitles", json.dumps({"url": url}), KEY, None, known)
+        assert step == {"kind": "youtube", "url": url, "error": web.NOT_KNOWN}, url
+    assert run(studio, web.call, "youtube_subtitles", json.dumps({"url": "https://example.test/a"}), KEY, None,
+               known)["error"] == "это не адрес ролика YouTube"
+    assert yt.calls == []
+    for url in (CANON, f"https://m.youtube.com/shorts/{VID}", f"https://music.youtube.com/watch?v={VID}&si=x"):
+        step = run(studio, web.call, "youtube_subtitles", json.dumps({"url": url}), KEY, None, known)
+        assert "error" not in step and step["url"] == CANON, url
+    assert {argv[-1] for argv, _t in yt.calls} == {CANON} and len(yt.calls) == 6
+
+
 def test_page_without_known_addresses_goes_to_exa_without_the_fragment(studio):
     import web
     step = run(studio, web.call, "read_page", json.dumps({"url": "https://a.test/p#d=секрет"}), KEY)

@@ -523,8 +523,8 @@ class StreamTask:
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
     зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
     `messages.tools`. Перед каждым вызовом и кругом — срок ответа и `chats.web` заново: выключили — вызова нет,
-    и дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
-    поиском этого ответа).
+    и дальше запросы без tools. `known` — адреса, которые read_page может читать, и ролики (по id) для
+    youtube_subtitles (`_known_links` и найденное поиском этого ответа).
 
     Рассуждение модели (`delta.reasoning_content`, иначе `delta.reasoning`) — `_think`: видно (`thinking` не
     False) — текстом в `reasoning` и событием `think`, секунды — `reasoning_sec`; кнопка выключена — только
@@ -1132,7 +1132,8 @@ def _drop_last_answer(chat_id: str) -> str:
 
 
 def _known_links(chat_id: str) -> dict[str, str]:
-    """Адреса, которые read_page может читать в ходе (web.links: norm → адрес, спека 6.4): из сообщений
+    """Адреса, которые read_page и youtube_subtitles (по id ролика) могут читать в ходе (web.links: norm →
+    адрес, спека 6.4): из сообщений
     пользователя и вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`).
     Синхронно — в транзакции хода."""
     known = {}
@@ -1215,7 +1216,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 raise HTTPException(409, {"code": "external_web", "message": (
                     "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         messages = compose(chat_id, user_mid)
-        known = _known_links(chat_id) if "page" in kinds else {}
+        known = _known_links(chat_id) if kinds else {}
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)

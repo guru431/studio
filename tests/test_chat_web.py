@@ -372,6 +372,34 @@ def test_page_is_read_only_from_the_chat_or_the_search(studio):
         ["https://docs.example.test/guide"]]
 
 
+def test_youtube_is_read_only_from_the_chat_or_the_search(studio, monkeypatch):
+    """Ролик — как страница: id, которого нет в переписке и выдаче поиска, модель не отнесёт на YouTube (шаг-ошибка
+    без yt-dlp); ссылка youtu.be из сообщения пользователя и адрес из `results[].url` поиска — читаются."""
+    from test_web import VID
+    fake = FakeYtDlp()
+    monkeypatch.setattr(web, "RUN", fake)
+    cid = web_chat(studio)
+    evil = "https://www.youtube.com/watch?v=Pass1234567"
+    studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=evil)]}, ["Не вышло."]]
+    sse(turn(studio, cid, "Мой пароль 1234567"))
+    (step,) = steps_of(messages(studio, cid)[1]["id"])
+    assert step == {"kind": "youtube", "url": evil, "error": web.NOT_KNOWN} and fake.calls == []
+    # ссылка youtu.be из сообщения пользователя — модель зовёт адрес другой формы
+    studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=CANON)]}, ["Пересказ."]]
+    sse(turn(studio, cid, f"Перескажи https://youtu.be/{VID}?si=x"))
+    (step,) = steps_of(messages(studio, cid)[3]["id"])
+    assert "error" not in step and step["id"] == VID and len(fake.calls) == 2
+    # ролик, найденный поиском этого ответа
+    found = "https://www.youtube.com/watch?v=Found123456"
+    studio.gw.exa_replies["/search"] = (200, {"results": [{"title": "Ролик", "url": found}]})
+    studio.gw.chat_script = [{"tool_calls": [call("web_search", query="ролик")]},
+                             {"tool_calls": [call("youtube_subtitles", url="https://youtu.be/Found123456")]}, ["Ок."]]
+    sse(turn(studio, cid, "Найди ролик"))
+    steps = steps_of(messages(studio, cid)[5]["id"])
+    assert [s.get("error") for s in steps] == [None, None] and steps[1]["id"] == "Found123456"
+    assert fake.calls[-1][0][-1] == found
+
+
 def test_calls_over_the_round_cap_are_error_steps_with_their_replies(studio):
     """I2: в круге — не больше CALLS_PER_ROUND вызовов; лишние — шаг-ошибка без вызова, но со своим
     `role: tool` (id пар сходятся)."""
@@ -407,7 +435,7 @@ def test_time_is_checked_before_each_call_and_round(studio, monkeypatch):
                   [call("youtube_subtitles", url=CANON)]):                                 # перед кругом
         before = (len(studio.gw.chat_requests), len(fake.calls))
         studio.gw.chat_script = [{"tool_calls": calls}, ["не дойдёт"]]
-        events = sse(turn(studio, cid))
+        events = sse(turn(studio, cid, f"Перескажи {CANON}"))
         assert events[-1] == ("error", {"message": "ответ шёл слишком долго — обрезан"})
         assert [d["kind"] for e, d in events if e == "tool"] == ["youtube"]
         assert (len(studio.gw.chat_requests), len(fake.calls)) == (before[0] + 1, before[1] + 2)
@@ -433,7 +461,7 @@ def test_switch_off_during_an_answer_stops_the_next_calls(studio, monkeypatch):
     studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=CANON), call("web_search", query="q")]},
                              ["Ответ."]]
     try:
-        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": f"Перескажи {CANON}"}) as r:
             events = events_of(r.iter_lines())
             assert next(d for e, d in events if e == "tool")["kind"] == "youtube"
             patch(studio, cid, web=False)
@@ -467,7 +495,7 @@ def test_switch_off_during_the_last_call_of_a_round_drops_the_tools(studio, monk
     cid = web_chat(studio)
     studio.gw.chat_script = [{"tool_calls": [call("youtube_subtitles", url=CANON)]}, ["Ответ."]]
     try:
-        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": f"Перескажи {CANON}"}) as r:
             events = events_of(r.iter_lines())
             assert next(d for e, d in events if e == "tool")["kind"] == "youtube"
             patch(studio, cid, web=False)
@@ -529,7 +557,7 @@ def test_stop_during_a_tool_keeps_the_done_steps(studio, monkeypatch):
     monkeypatch.setattr(web, "RUN", hanging)
     cid = web_chat(studio)
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q"), call("youtube_subtitles", url=CANON)]}]
-    with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+    with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": f"Перескажи {CANON}"}) as r:
         events = events_of(r.iter_lines())
         assert next(events)[0] == "turn"
         tools = []
@@ -559,7 +587,7 @@ def test_web_never_reaches_the_log(studio, monkeypatch, caplog):
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="тайный запрос"),
                                              call("read_page", url="https://secret-host.test/private"),
                                              call("youtube_subtitles", url=CANON)]}, ["ok"]]
-    sse(turn(studio, cid, "Прочитай https://secret-host.test/private"))
+    sse(turn(studio, cid, f"Прочитай https://secret-host.test/private и {CANON}"))
     studio.gw.exa_replies["/search"] = (401, {"error": "Invalid API key", "tag": "INVALID_API_KEY"})
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="второй тайный запрос")]}, ["ok"]]
     sse(turn(studio, cid))
