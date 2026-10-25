@@ -17,7 +17,10 @@
   сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
 
   Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
-  ждёт, пока выйдут отправленные, и досылает. Повторный запуск пропускает ролик, если в журнале
+  ждёт, пока выйдут отправленные, и досылает; «карта или служба недоступна» (503) — задание
+  уходит в конец очереди и повторяется через 5 с, всего до 3 попыток. Сетевой сбой при отправке
+  не повторяется: запрос мог дойти и начать рендер, повтор сделал бы ролик дважды, — несделанное
+  доделает повторный запуск по журналу. Повторный запуск пропускает ролик, если в журнале
   есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
   модели, seed (если задан -Seed), длительности, качества, дорисовки, номера варианта и своего
   промпта (<имя>.txt или -Prompt; промпт службы и <имя>.auto.txt в него не входят): смена
@@ -101,7 +104,8 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
 $TimeoutSec = 300                      # один запрос к шлюзу: загрузка картинки или выдача mp4 (маршрут шлюза — 180 с)
-$PollSec = 5                           # опрос заданий
+$PollSec = 5                           # опрос заданий и пауза перед повтором отправки после 503
+$SendTries = 3                         # попыток отправки задания, на которые служба отвечает 503
 $MaxPrompt = 4000                      # предел API видео
 $MaxImage = 20MB
 $MaxSeed = 4294967295
@@ -339,6 +343,7 @@ $header = @('image', 'video', 'seed', 'seconds', 'quality', 'smooth', 'variant',
             'fingerprint')
 $recorded = @{}
 $legacy = @{}
+$rows = @()
 if (Test-Path -LiteralPath $manifest) {
     $rows = [IO.File]::ReadAllLines($manifest, [Text.Encoding]::UTF8)
     if ($rows.Count -gt 0 -and $rows[0] -ceq ($header[0..8] -join "`t")) {
@@ -354,7 +359,10 @@ if (Test-Path -LiteralPath $manifest) {
         if ($c.Count -ge 11 -and $c[10]) { $recorded[$c[10]] = $true }
         else { $legacy[(@($c[0], $c[3], $c[4], $c[5], $c[6]) -join "`t")] = $true }
     }
-} else {
+}
+if (-not @($rows | Where-Object { $_.Trim() }).Count) {
+    # Журнала нет или в нём ни одной строки (пустой файл, один BOM) — начать с шапки
+    [IO.File]::WriteAllText($manifest, '')
     Add-ManifestLine $header
 }
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -416,7 +424,8 @@ foreach ($img in $images) {
         }
         [void]$todo.Add([pscustomobject]@{ N = $todo.Count + 1; Image = $img; Base = $base; Variant = $k
                                            Seed = $seedValue; Prompt = $text; Source = $source; Key = $key
-                                           Id = ''; Detail = ''; Sent = $null; Running = $null; Tries = 0 })
+                                           Id = ''; Detail = ''; Sent = $null; Running = $null; Tries = 0
+                                           Unavailable = 0 })
         $added++
     }
     if ($added) { Write-Host "  $($img.Name): роликов $added, промпт — $label" }
@@ -437,16 +446,28 @@ $started = Get-Date
 try {
     while ($next -lt $total -or $active.Count -gt 0) {
         $moved = $false
+        $wait = $false
         if ($active.Count -eq 0) { $full = $false }    # своих в очереди нет — пробуем снова после паузы
         $before = $sent
         while ($next -lt $total -and -not $full) {
             $job = $todo[$next]
             $r = $null
             $why = ''
+            # Сетевой сбой не повторяется: запрос мог дойти, повтор сделал бы ролик дважды
             try { $r = Send-Video $job } catch { $why = $_.Exception.Message }
             if ($r -and $r.Status -eq 429) {
                 $full = $true
                 Write-Host "Очередь службы полна: жду, пока выйдут отправленные (отправлено $sent из $total)"
+                break
+            }
+            # 503 — служба задание не приняла, повтор безопасен: задание — в конец очереди, и
+            # остальные ждут паузу вместе с ним (карта недоступна — не примут и их)
+            if ($r -and $r.Status -eq 503 -and $job.Unavailable + 1 -lt $SendTries) {
+                $job.Unavailable++
+                Write-Host "$(Get-Label $job): $(Get-FailText $r) — повторю через $PollSec с"
+                $todo.RemoveAt($next)
+                [void]$todo.Add($job)
+                $wait = $true
                 break
             }
             $next++
@@ -472,7 +493,7 @@ try {
                 $moved = $true
             }
         }
-        if (-not $moved -and ($active.Count -gt 0 -or $full)) { Start-Sleep -Seconds $PollSec }
+        if ($wait -or (-not $moved -and ($active.Count -gt 0 -or $full))) { Start-Sleep -Seconds $PollSec }
     }
 } finally {
     # Ctrl+C или ошибка: свои незавершённые задания — снять, чтобы служба не рендерила впустую

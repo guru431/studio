@@ -18,6 +18,18 @@ RUNNERS = [pytest.param("ps", marks=pytest.mark.integration), "py"]
 UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 
+def ps_encoding():
+    """Кодировка вывода PowerShell в трубу — кодовая страница консоли: дочерний powershell
+    наследует консоль процесса тестов (ночной прогон идёт под 65001, ручной — под 866).
+    Консоли нет (0) — дочерний получит новую с умолчанием, то есть OEM."""
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+    except (ImportError, AttributeError, OSError):
+        return "utf-8"      # не Windows: pwsh пишет UTF-8
+    return f"cp{cp}" if cp else "oem"
+
+
 def py_args(args):
     """-PromptsFile x -NoSmooth → --prompts-file x --no-smooth."""
     return ["--" + re.sub(r"(?<!^)(?=[A-Z])", "-", a[1:]).lower() if re.fullmatch(r"-[A-Z]\w*", a) else a
