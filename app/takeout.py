@@ -151,7 +151,7 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
              "file": files.get(a["media_id"])})
     messages = [{"id": m["id"], "role": m["role"], "content": m["content"], "status": m["status"], "model": m["model"],
                  "created": m["created"], "attachments": attachments.get(m["id"], []),
-                 "tools": json.loads(m["tools"] or "[]"),                  # шаги «Интернета» целиком
+                 "tools": _maybe_json(m["tools"] or "[]"),                 # шаги «Интернета» целиком
                  "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"]}
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
                                           " reasoning_sec FROM messages"

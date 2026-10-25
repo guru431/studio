@@ -329,6 +329,18 @@ def test_export_holds_the_steps_of_the_internet_but_not_the_exa_key(studio):
         assert secret not in z.content, secret
 
 
+def test_export_survives_broken_tools_json(studio):
+    """Битая строка `messages.tools` не обрывает выгрузку посреди потока: идёт как есть, manifest на месте."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    history(uid, "mine")
+    put("UPDATE messages SET tools = ? WHERE id = 'minechat1-a'", '[{"kind": "search"')
+    _, z = download(studio, ["chat"])
+    zf = unzip(z)
+    chat = json.loads(zf.read("chats/minechat1.json"))
+    assert [m["tools"] for m in chat["messages"]] == [[], '[{"kind": "search"']
+    assert json.loads(zf.read("manifest.json"))["counts"]["chats"] == 2
+
+
 def as_user(uid):
     return SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)))
 
