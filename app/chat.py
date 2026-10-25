@@ -71,6 +71,12 @@ STREAM_TOTAL_SEC = 1800
 # (и очередь событий), а MemoryMax службы — 2 ГБ на всех
 USER_STREAMS = 3
 MODELS_TIMEOUT_SEC = 10
+# пределы контекста из списка моделей подключения (_limit): список почти не меняется, а у OpenRouter он —
+# сотни КБ JSON, до MODELS_TIMEOUT_SEC перед каждым ходом. Удачный список живёт CONTEXT_TTL_SEC, записей —
+# не больше CONTEXT_KEEP; неудача не запоминается
+CONTEXT_TTL_SEC = 600
+CONTEXT_KEEP = 256
+LIMITS: dict[tuple, tuple[float, dict[str, int]]] = {}
 SAVE_SEC = 5                     # идущий ответ — в базу не чаще (перезапуск оставит прочитанное)
 # признак жизни ответа из браузера: вкладка шлёт его раз в ~15 с, а фоновой вкладке браузер
 # разрешает таймер раз в минуту
@@ -462,21 +468,34 @@ def estimate_tokens(messages: list[dict]) -> int:
 
 async def _limit(conn: Connection, model: str) -> int | None:
     """Предел контекста модели: CONTEXT, иначе `context_length` списка моделей подключения через
-    сервер; не узнать — None (тогда без проверки)."""
+    сервер (запомненный в LIMITS на CONTEXT_TTL_SEC); не узнать — None (тогда без проверки)."""
     if model in CONTEXT:
         return CONTEXT[model]
     if not conn.proxied:
         return None
+    now = clock.NOW()
+    for key in [k for k, (at, _) in LIMITS.items() if not 0 <= now - at < CONTEXT_TTL_SEC]:
+        del LIMITS[key]
+    key = (conn.user_id, conn.id, conn.kind, conn.base_url)
+    if key in LIMITS:
+        return LIMITS[key][1].get(model)
     try:
         r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
     except (httpx.HTTPError, upstream.UpstreamRefused):
         return None
     data = upstream.json_body(r).get("data") if r.is_success else None
-    for m in data if isinstance(data, list) else []:
-        if isinstance(m, dict) and m.get("id") == model:
+    if not isinstance(data, list):
+        return None
+    lengths = {}
+    for m in data:
+        if isinstance(m, dict) and isinstance(m.get("id"), str):
             length = m.get("context_length")
-            return length if isinstance(length, int) and not isinstance(length, bool) and length > 0 else None
-    return None
+            if isinstance(length, int) and not isinstance(length, bool) and length > 0:
+                lengths.setdefault(m["id"], length)
+    while len(LIMITS) >= CONTEXT_KEEP:
+        del LIMITS[next(iter(LIMITS))]
+    LIMITS[key] = (now, lengths)
+    return lengths.get(model)
 
 
 def _too_big(tokens: int, limit: int) -> HTTPException:
@@ -504,8 +523,8 @@ class StreamTask:
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
     зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
     `messages.tools`. Перед каждым вызовом и кругом — срок ответа и `chats.web` заново: выключили — вызова нет,
-    и дальше запросы без tools. `known` — адреса, которые read_page может читать (`_known_links` и найденное
-    поиском этого ответа).
+    и дальше запросы без tools. `known` — адреса, которые read_page может читать, и ролики (по id) для
+    youtube_subtitles (`_known_links` и найденное поиском этого ответа).
 
     Рассуждение модели (`delta.reasoning_content`, иначе `delta.reasoning`) — `_think`: видно (`thinking` не
     False) — текстом в `reasoning` и событием `think`, секунды — `reasoning_sec`; кнопка выключена — только
@@ -1113,7 +1132,8 @@ def _drop_last_answer(chat_id: str) -> str:
 
 
 def _known_links(chat_id: str) -> dict[str, str]:
-    """Адреса, которые read_page может читать в ходе (web.links: norm → адрес, спека 6.4): из сообщений
+    """Адреса, которые read_page и youtube_subtitles (по id ролика) могут читать в ходе (web.links: norm →
+    адрес, спека 6.4): из сообщений
     пользователя и вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`).
     Синхронно — в транзакции хода."""
     known = {}
@@ -1196,7 +1216,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 raise HTTPException(409, {"code": "external_web", "message": (
                     "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         messages = compose(chat_id, user_mid)
-        known = _known_links(chat_id) if "page" in kinds else {}
+        known = _known_links(chat_id) if kinds else {}
         tokens = estimate_tokens(messages)
         if limit is not None and tokens > limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)

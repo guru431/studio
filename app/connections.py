@@ -17,6 +17,8 @@
   ставит связи ровно на эти разделы. Виды по разделам — KINDS.
 - `dropped` — адрес убрали из списка, а подключение прямым не стало (srvllm, `server_only`, адрес без
   https): «Обновить модели» и «Проверить» говорят «убран из списка администратора», а не «нет связи».
+  PATCH проверяет адрес (check_base_url), только если меняются вид или адрес: такое подключение можно
+  переименовать и убрать из разделов, а новый раздел, кроме чата, ему — отказ `server`.
 - Паспорт (`passport`, checks.py) — итог «Проверить» JSON; смена адреса, вида или токена его обнуляет;
   `out(…, passport=False)` — зеркала панели администратора.
 - Журнал — только id: имена, адреса и токены туда не пишутся.
@@ -231,12 +233,17 @@ def check_base_url(kind: str, text: str) -> str:
     return raw
 
 
-def check(kind: str, base_url: str, wanted: list[str]) -> tuple[str, list[str]]:
+def check_sections(kind: str, wanted: list[str]) -> list[str]:
     if kind not in KINDS:
         raise _bad("kind", "вид подключения — openai или srvllm")
     if not set(wanted) <= KINDS[kind]:
         raise _bad("sections", "разделы — " + ", ".join(s for s in sections.SECTIONS if s in KINDS[kind]))
-    return check_base_url(kind, base_url), [s for s in sections.SECTIONS if s in wanted]
+    return [s for s in sections.SECTIONS if s in wanted]
+
+
+def check(kind: str, base_url: str, wanted: list[str]) -> tuple[str, list[str]]:
+    chosen = check_sections(kind, wanted)
+    return check_base_url(kind, base_url), chosen
 
 
 # ---- общие действия (профиль и панель администратора) ------------------------
@@ -270,10 +277,14 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     kind = body.kind if "kind" in sent and body.kind is not None else conn.kind
     base_url = body.base_url if "base_url" in sent and body.base_url is not None else conn.base_url
     wanted = body.sections if "sections" in sent and body.sections is not None else list(conn.sections)
-    changes["base_url"], chosen = check(kind, base_url, wanted)      # вид, адрес и разделы — вместе
+    chosen = check_sections(kind, wanted)                           # разделы — против вида всегда
+    # вид и адрес прежние — адрес не перепроверяется: его могли убрать из списка (dropped), и тогда отказ
+    # получало бы любое изменение, даже имя. Серверные разделы такому — только прежние, новых нет
+    kept = kind == conn.kind and base_url.strip().rstrip("/") == conn.base_url
+    changes["base_url"] = conn.base_url if kept else check_base_url(kind, base_url)
     changes["kind"] = kind
     proxied = upstream.is_allowed(changes["base_url"])
-    if not proxied and set(chosen) & sections.SERVER_ONLY:
+    if not proxied and (set(chosen) - (conn.sections if kept else set())) & sections.SERVER_ONLY:
         raise _bad("server", "адрес вне списка разрешённых — уберите подключение из разделов, кроме чата,"
                              " или попросите администратора внести адрес")
     moved = (kind != conn.kind or proxied != conn.proxied

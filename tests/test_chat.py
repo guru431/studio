@@ -326,6 +326,41 @@ def test_too_big_document_is_refused_before_saving(studio):
     assert r.status_code == 413 and "при пределе 8 тыс." in r.json()["detail"]["message"]
 
 
+def test_model_list_for_the_context_limit_is_remembered(studio):
+    """Предел модели вне CONTEXT — из списка моделей подключения, запомненного на CONTEXT_TTL_SEC (у OpenRouter
+    список — сотни КБ на каждый ход): ходы подряд — один GET; после срока — снова; неудача не запоминается."""
+    import httpx
+    gw = add_gateway(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
+    cid = new_chat(studio, connection_id=gw, model="tiny")
+    studio.gw.models.append({"id": "tiny", "context_length": 8192})
+    listed, fail = [], []
+
+    async def models(request):
+        listed.append(True)
+        if fail:
+            return httpx.Response(fail.pop())
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/models"] = models
+    sse(turn(studio, cid, "раз"))
+    r = turn(studio, cid, "а" * 15_000)
+    assert r.status_code == 413 and "при пределе 8 тыс." in r.json()["detail"]["message"]
+    sse(turn(studio, cid, "два"))
+    assert len(listed) == 1
+    studio.clock[0] += chat.CONTEXT_TTL_SEC
+    sse(turn(studio, cid, "три"))
+    assert len(listed) == 2
+    studio.clock[0] += chat.CONTEXT_TTL_SEC
+    fail.append(503)                                         # не узнали — ход без проверки, и спросим снова
+    r = turn(studio, cid, "а" * 15_000)
+    assert r.status_code == 200 and len(listed) == 3
+    sse(r)
+    r = turn(studio, cid, "а" * 15_000)
+    assert r.status_code == 413 and len(listed) == 4
+    assert len(chat.LIMITS) == 1
+
+
 def test_images_go_as_image_url_parts_up_to_four(studio):
     add_gateway(studio); cid = new_chat(studio)
     pics = [attach(studio, f"photo{i}.jpg", png(), "image/jpeg") for i in range(5)]

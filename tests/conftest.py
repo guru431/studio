@@ -84,6 +84,7 @@ def studio(env, monkeypatch):
     screenlock.CHALLENGES.clear()
     images.JOBS.clear()
     chat.STREAMS.clear()
+    chat.LIMITS.clear()
     transcripts.JOBS.clear()
     speeches.JOBS.clear()
     videos.WATCHING.clear()

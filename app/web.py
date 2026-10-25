@@ -12,7 +12,9 @@ Exa — постоянный адрес `EXA_URL` через общий клие
 
 YouTube — общий yt-dlp debian (`/usr/local/bin/yt-dlp`, root обновляет ночью), списком аргументов без
 оболочки. Адрес разбирает студия (`youtube_id`), yt-dlp получает только канонический
-`https://www.youtube.com/watch?v=<id>`: у него есть общий извлекатель, и чужой адрес сервер прочитал бы.
+`https://www.youtube.com/watch?v=<id>`: у него есть общий извлекатель, и чужой адрес сервер прочитал бы. Ролик —
+только тот, чей id есть у адреса из переписки или найденного поиском (`known` у call, как у страниц): id,
+составленный моделью, был бы каналом вывода переписки.
 Одна дорожка — язык оригинала (`pick_track`; автопереводы не берутся: третий подряд запрос дорожки YouTube
 отвечал 429). Файлы — `<uuid>.*` в state.CFG.tmp_dir (файлы, не каталог: audio.clean_tmp удаляет файлы),
 убираются в finally. stderr yt-dlp — только для выбора слов ошибки, в журнал не идёт. Шаг —
@@ -70,7 +72,8 @@ _SPECS = {
                "query", "поисковый запрос"),
     "page": ("read_page", "Прочитать веб-страницу по адресу: тот, что дал пользователь, или из результатов "
              "поиска.", "url", "адрес страницы, http или https"),
-    "youtube": ("youtube_subtitles", "Прочитать содержание ролика YouTube по его субтитрам.",
+    "youtube": ("youtube_subtitles", "Прочитать содержание ролика YouTube по его субтитрам: того, что дал "
+                "пользователь, или из результатов поиска.",
                 "url", "адрес ролика YouTube"),
 }
 
@@ -415,12 +418,15 @@ def public(step: dict) -> dict:
     return {k: v for k, v in step.items() if k != "text"}
 
 
-# ---- какие адреса можно читать (read_page) ------------------------------------------------
+# ---- какие адреса можно читать (read_page, youtube_subtitles) -----------------------------
 # Страница уходит в Exa, а для незнакомого адреса Exa обходит сайт сам: адрес, который составила модель
 # (по просьбе текста страницы или выдержки поиска), унёс бы переписку на чужой сайт. Читаются только адреса из
 # переписки — сообщений пользователя и вложенных документов — и найденные поиском (`results[].url`). В Exa
 # уходит адрес так, как он записан в переписке или выдаче (без фрагмента), а не вариант модели: иначе фрагмент,
 # регистр букв или %-коды адреса стали бы каналом, которым модель вынесет кусок переписки на сайт.
+# Ролик YouTube — так же: id из 11 знаков, составленный моделью, сервер отнёс бы YouTube запросом — кусок
+# переписки в журнал чужого сервиса. Читается только ролик, чей id совпал с id адреса из переписки или выдачи
+# (любая форма: watch, youtu.be, shorts, live, embed, music, m.); yt-dlp получает канонический адрес из id.
 
 def _bare(url: str) -> str:
     return url.strip().split("#", 1)[0]
@@ -466,9 +472,9 @@ async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] |
                known: "dict[str, str] | None" = None) -> dict:
     """Шаг инструмента по вызову модели: имя функции и аргументы JSON. Неизвестное имя (или вид не из `kinds`,
     которые модели давали) и битые аргументы — шаг `unknown` с ошибкой; неудача инструмента — шаг с `error`.
-    Запрос длиннее QUERY_MAX, адрес длиннее URL_MAX и страница не из `known` (norm → адрес переписки и поиска,
-    links; None — без проверки) — шаг-ошибка без вызова. Страница читается по адресу из `known`, без него — по
-    адресу модели без фрагмента.
+    Запрос длиннее QUERY_MAX, адрес длиннее URL_MAX, страница не из `known` (norm → адрес переписки и поиска,
+    links; None — без проверки) и ролик, чей id (youtube_id) не совпал с id ни одного адреса `known`, — шаг-ошибка
+    без вызова. Страница читается по адресу из `known`, без него — по адресу модели без фрагмента.
     Не бросает ToolError (и сбой инструмента — тоже шаг); отмена («Стоп») идёт насквозь."""
     kind = NAMES.get(name)
     if kind is None or (kinds is not None and kind not in kinds):
@@ -486,6 +492,10 @@ async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] |
         if known is not None and norm(value) not in known:
             return {"kind": kind, param: value, "error": NOT_KNOWN}
         value = known[norm(value)] if known is not None else _bare(value)
+    if kind == "youtube" and known is not None:
+        vid = youtube_id(value)
+        if vid is not None and vid not in {youtube_id(url) for url in known.values()}:
+            return {"kind": kind, param: value, "error": NOT_KNOWN}
     try:
         if kind == "youtube":
             return await youtube(value)
