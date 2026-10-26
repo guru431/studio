@@ -25,7 +25,7 @@ from fakes import PNG_REAL, TOKEN
 from image_upload import decode_form, normalize_image
 
 PROMPT = "секретный промпт: женщина у окна"
-LUSTIFY, FLUX = "lustify-v10-krea2-turbo", "flux.2-klein-4b"
+LUSTIFY, FLUX = "lustify-v10-krea2-turbo", "flux-3-image-klein"
 GW = "http://10.77.1.15:4000"
 SLOT_BUSY = (409, {"error": {"message": "busy", "type": "slot_busy"}})
 

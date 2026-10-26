@@ -104,7 +104,7 @@ class FakeGateway:
         self.video_deleted = []          # id роликов, снятых DELETE
         self.models = [{"id": "local-gemma-abl", "context_length": 131072}, {"id": "gemma4-abl"}]
         #: `GET /slot/models` — модели карты, отвечает сам slot-gate
-        self.slot_models = [{"id": "flux.2-klein-4b"}, {"id": "lustify-v10-krea2-turbo"}, {"id": VIDEO_MODEL}]
+        self.slot_models = [{"id": "flux-3-image-klein"}, {"id": "lustify-v10-krea2-turbo"}, {"id": VIDEO_MODEL}]
         self.chat_requests = []          # тела запросов /v1/chat/completions
         self.chat_auth = []              # их заголовки авторизации
         self.chat_reply = ["Здрав", "ствуйте!"]   # куски ответа модели

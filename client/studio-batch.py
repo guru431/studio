@@ -61,7 +61,7 @@ LOCAL_NAME = "studio-batch.local.py"
 VAULT_KEY = "GATEWAY_KEY_OWNER_IMAGES"
 VAULT_PATH = r"C:\work\projects\local-config\secrets\vault.env"
 URL = "http://10.77.1.15:4000/slot"
-MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
+MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
 TIMEOUT = 1300                         # маршрут генерации у шлюза — до 1260 с
 MAX_PROMPT = 24000                     # предел API картинок
@@ -100,7 +100,7 @@ def parse_args(argv):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--prompts-file", help="файл с промптами, одна строка — один промпт")
     p.add_argument("--model", choices=sorted(MODELS), default="lustify",
-                   help="lustify (Lustify v10 Krea2 Turbo, по умолчанию) или flux (FLUX.2 klein 4B)")
+                   help="lustify (Lustify v10 Krea2 Turbo, по умолчанию) или flux (FLUX 3 Image Klein)")
     p.add_argument("--image-path", default="",
                    help="исходное фото PNG/JPEG/WebP до 10 МиБ, одно на все промпты (запрос /images/edits)")
     p.add_argument("--strength", type=bounded(float, 0.05, 1.0), default=0.65,

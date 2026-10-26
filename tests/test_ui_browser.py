@@ -1706,7 +1706,7 @@ def test_chat_layout_fits_390(browser, live):
 
 # ---- фото ----------------------------------------------------------------------
 
-MODEL_IDS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
+MODEL_IDS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
 FEED_READY = ("document.querySelector('#photo-feed')?.dataset.feed"
               " && document.querySelector('#photo-feed').dataset.feed !== 'loading'")
 NEWEST_DONE = "#photo-feed .photo-card[data-state=done] .card-open"

@@ -40,7 +40,7 @@ def test_key_placeholder_is_empty_in_repo():
 
 def test_models_and_sizes_match_the_gateway_contract():
     text = SCRIPT.read_text(encoding="utf-8-sig")
-    assert "$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux.2-klein-4b' }" in text
+    assert "$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux-3-image-klein' }" in text
     assert "$Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }" in text
     assert "'/images/generations'" in text and "'/images/release'" in text
     assert "'GATEWAY_KEY_OWNER_IMAGES'" in text and "'studio-batch.local.ps1'" in text
@@ -190,7 +190,7 @@ def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, image
     gens = [body for path, _, body in images.log if path == "/slot/images/generations"]
     assert [(b["prompt"], b["seed"]) for b in gens] == [
         ("first prompt", 5), ("first prompt", 6), ("second: a/b", 5), ("second: a/b", 6)]
-    assert all((b["model"], b["size"], b["n"], b["response_format"]) == ("flux.2-klein-4b", "1024x1024", 1, "b64_json")
+    assert all((b["model"], b["size"], b["n"], b["response_format"]) == ("flux-3-image-klein", "1024x1024", 1, "b64_json")
                and "strength" not in b for b in gens)
     # Без seed в ответе (FLUX) — в имени и журнале запрошенный; из имени выпали «:» и «/»
     names = ["001-01_first_prompt_s5.png", "001-02_first_prompt_s6.png",
@@ -201,7 +201,7 @@ def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, image
         "n\tfile\tseed\tsize\tmodel\tprompt",
         f"1-1\t{names[0]}\t5\tsquare\tflux\tfirst prompt", f"1-2\t{names[1]}\t6\tsquare\tflux\tfirst prompt",
         f"2-1\t{names[2]}\t5\tsquare\tflux\tsecond: a/b", f"2-2\t{names[3]}\t6\tsquare\tflux\tsecond: a/b"]
-    assert images.log[-1] == ("/slot/images/release", "Bearer test-key", {"model": "flux.2-klein-4b"})
+    assert images.log[-1] == ("/slot/images/release", "Bearer test-key", {"model": "flux-3-image-klein"})
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

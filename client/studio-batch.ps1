@@ -35,7 +35,7 @@
 .PARAMETER PromptsFile
   Файл с промптами, одна строка — один промпт.
 .PARAMETER Model
-  lustify (по умолчанию, Lustify v10 Krea2 Turbo) или flux (FLUX.2 klein 4B).
+  lustify (по умолчанию, Lustify v10 Krea2 Turbo) или flux (FLUX 3 Image Klein).
 .PARAMETER ImagePath
   Исходное фото PNG/JPEG/WebP до 10 МиБ. Одно фото для всех промптов; запрос /images/edits.
 .PARAMETER Strength
@@ -89,7 +89,7 @@ $EmbeddedKey = ''
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
-$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux.2-klein-4b' }
+$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux-3-image-klein' }
 $Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
 $Mime = @{ '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.png' = 'image/png'; '.webp' = 'image/webp' }
 $TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
