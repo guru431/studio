@@ -45,7 +45,7 @@ def test_key_placeholder_is_empty_in_repo(script):
 
 def test_batch_defaults_match_the_gateway_contract():
     m = load(BATCH)
-    assert m.MODELS == {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
+    assert m.MODELS == {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
     assert m.SIZES == {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
     a = m.parse_args(["--prompts-file", "p.txt"])
     assert (a.model, a.size, a.count, a.strength, a.url, a.token, a.vault_path) == (

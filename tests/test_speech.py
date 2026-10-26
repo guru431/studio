@@ -106,7 +106,7 @@ def test_qwen_busy_is_busy_and_wav_comes_back(studio):
 def test_free_card_releases_images_and_gemma(studio):
     conn = conn_of(add_gateway(studio))
     asyncio.run(speech.free_card(conn))
-    assert sorted(m for m, _ in studio.gw.releases) == ["flux.2-klein-4b", "gemma4-abl", "lustify-v10-krea2-turbo"]
+    assert sorted(m for m, _ in studio.gw.releases) == ["flux-3-image-klein", "gemma4-abl", "lustify-v10-krea2-turbo"]
 
 
 def test_external_service_speaks_openai(studio, monkeypatch, tmp_path):

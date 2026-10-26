@@ -105,7 +105,7 @@ RESULT_MAX = 50 * 1024 * 1024
 NOT_PICTURE = "сервис вернул не картинку (нужен PNG, JPEG или WebP)"
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
-MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux.2-klein-4b"}
+MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
 #: Размеры: портрет, квадрат, альбом — около мегапикселя, кратны 16 (обе модели их держат).
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
 #: те же форматы у внешнего сервиса (размеры gpt-image-1); «original» — без size
