@@ -6,6 +6,11 @@
 [docs/superpowers/specs/2026-10-19-studio-pwa-design.md](docs/superpowers/specs/2026-10-19-studio-pwa-design.md).
 Репозитории — **приватные** (хосты LAN): `origin` — `git.example.net/xadmin/studio`, `cld` —
 `cld.hubtrust.net:8443/RD/studio` (сам не обновляется: push туда вслед за `origin`, перемоткой).
+`cld` виден только с build-host (`D:\vsc\studio`; имя — внутренний DNS RD, `nas05.rd.vvv`): на workstation
+имени нет, а 10.96.10.95:8443 через VPN не отвечает, remote там не заводить. Вход в `cld` хранит GCM
+учётки `Services` и отдаёт его только в её сессии (RDP, Claude Code там): по SSH под `deploy` — `could
+not read Username`. Поэтому с workstation — только `origin`, а `cld` догоняет сессия на build-host:
+`git -C D:\vsc\studio pull --ff-only origin main; git -C D:\vsc\studio push cld main`.
 
 ## История и граница с llm_routers
 
