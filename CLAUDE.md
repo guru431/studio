@@ -24,7 +24,8 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   шлюза, история только в памяти) заменена приложением на `studio.example.com`; старая — в `git log`.
   Перенаправление `/studio/` → новый адрес — в vhost `llm.example.com` проекта `llm_routers`.
 - Здесь только клиенты. ComfyUI, переводчик `srvllm-lustify-api`, слот `comfy`, маршруты шлюза
-  `/slot/images/*` и `/slot/videos`, потребитель шлюза `owner-images` — в `llm_routers`. Смена
+  `/slot/images/*`, `/slot/videos`, `/pages/ocr` и `/pages/ocr-release` (слот `ocr`), потребитель шлюза
+  `owner-images` — в `llm_routers`. Смена
   контракта API (поля, модели, размеры, пределы) — сначала там, потом здесь: имена моделей и
   размеры сверяют тесты скриптов.
 - `app/image_upload.py` — копия модуля переводчика на 2026-10-19; правка пределов здесь не должна
@@ -39,8 +40,8 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   (разделы: подключения раздела, отмеченные модели, умолчание; `resolve` — пара запроса),
   `upstream` (список разрешённых адресов и имён, запросы к ним), речь — `speech` (WhisperX, GigaAM,
   Qwen3-TTS шлюза и внешний сервис), `audio` (ffmpeg debian: длительность, сжатие, WAV образца,
-  склейка), `dictation` (голосовой ввод), `transcripts` (расшифровка в фоне), `exports` (txt, docx,
-  srt), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
+  склейка), `dictation` (голосовой ввод), `transcripts` (расшифровка в фоне), `ocr` и `ocr_render`
+  (распознавание сканов — абзац ниже), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
   готовые за час задания всех разделов — только база и память модулей, к шлюзу не ходит), `search`
   (поиск по своей истории: `POST /api/search`, `GET /api/search/models`; страница — `search.js`), `admin`, `chat` (поток SSE;
   дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения;
@@ -124,9 +125,10 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   ключ прежнему адресу не уходит. PATCH подключения проверяет адрес (`check_base_url`), только если
   меняются вид или адрес: убранное из списка (`dropped`) можно переименовать и убрать из разделов,
   новый раздел, кроме чата, — 422 `server`.
-- Разделы (`chat`, `photo`, `video`, `transcribe`, `speech`, `dictation`) — таблицы `section_links`
+- Разделы (`chat`, `photo`, `video`, `transcribe`, `ocr`, `speech`, `dictation`) — таблицы `section_links`
   (подключение в разделе и его отмеченные модели) и `section_defaults`; встроенный перечень srvllm —
-  `sections.CATALOG`. Старые `connections.sections` и `users.default_*` остаются для отката и
+  `sections.CATALOG`. Строки раздела, которого код не знает (новее его — после отката), `connections`
+  не видит (`_from_row` фильтрует `linked` по `SECTIONS`), а `set_sections` не трогает. Старые `connections.sections` и `users.default_*` остаются для отката и
   держатся согласованными (`sections._sync_legacy`) — новая логика их не читает. Ход начатого
   диалога пару не перепроверяет (`chat.create_turn` — `connections.get`, план section-connections,
   Task 4): галочки — правило выбора для нового, не запрет старого (README «Подключения и разделы»).
@@ -158,6 +160,32 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   берёт признаки `local` и `external` у диалога (GET, POST, PATCH одного диалога).
 - Правленый текст реплики — одной строкой (управляющие — пробелом, пробелы схлопнуты), до
   `len(исходной) + EDIT_TEXT_MAX`; SRT и DOCX ещё и сами убирают управляющие (`exports.CONTROL`).
+- Распознавание (спека 2026-10-27-studio-ocr-design, шаг схемы 16 `db.OCR_16`): раздел `ocr`
+  «Распознавание», вкладка рельса «Сканы» (`ocr.js`, `#/ocr`). Документ — `scans` (`queued`, `working`,
+  `cancelling`, `done`, `error`, `cancelled`; `origin` — `section`/`chat`, `attachment_id` без FK; `text` —
+  весь текст по готовности, для поиска триггерами `search_scans_*`), страницы — `scan_pages` (n с 1, свой
+  `user_id` — для `media.referenced`; `waiting`, `done`, `failed`, `layer`, `blank`). Шаг 16 связал каждое
+  подключение srvllm с `ocr` (`hunyuan-ocr`, умолчание — наименьшее). API `/api/ocr` (`ocr.router`):
+  загрузка — один PDF (все страницы, слой не читается) или 1…`PAGES_MAX` (50) фото PNG, JPEG, WebP одним
+  документом, до `documents.DOC_MAX` на всё; лента, документ (`pages` — список страниц, в ленте — число),
+  `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат. Очередь — один раннер
+  на пользователя (`ocr.RUNNERS`, `kick`), ждущих до `QUEUE_MAX` (5, дальше 409 `busy`). Страница —
+  `POST <адрес>/pages/ocr`, модель `tencent/HunyuanOCR` (в студии — `hunyuan-ocr`), `PROMPT` — дословно
+  cleaner `_OCR_PROMPT`; обрезанный, пустой ответ и карта блоков `layout_type` — отказ страницы
+  (`PageFailed`), прочие отказы шлюза — документа; 503 — повтор раз в `RETRY_SEC` до `WAIT_MAX_SEC`.
+  Рендер — `ocr_render`: pypdfium2 только под замком `PDFIUM` (PDFium не потокобезопасен и на разных
+  документах), 300 DPI, длинная сторона ≤ `MAX_SIDE` 2200, фото — поворот по EXIF; пустая страница
+  (`is_blank`, разброс яркости < `BLANK_STDDEV`) шлюза не зовёт. Скан в чате (только подключение через
+  сервер): PDF, где у страницы нет текста слоя или он короче `LAYER_MIN_CHARS` (40 непробельных) и в
+  ресурсах есть картинка (`needs_ocr`; битые ресурсы — картинка), с подключением раздела `ocr` —
+  вложение без текста и документ `origin=chat` (ответ загрузки — `ocr {id, pages}`), без подключения —
+  `chat.NO_OCR`. Ход создаётся сразу, `StreamTask._await_scans` ждёт сканы хода и истории диалога
+  (`ocr.pending`) раз в `SCAN_POLL_SEC`, событие SSE `ocr {page, pages}`, у сообщения в GET — `ocr`;
+  затем ждёт `ocr.idle` и только тогда `compose` и предел контекста, срок ответа — от готовности.
+  Ошибка документа — «скан не распознан: …» без модели; «Остановить» отменяет документ. Прямое
+  подключение — 409 `not_ready`: страница опрашивает `GET /api/ocr/<id>` и повторяет ход. Текст
+  вложения — `ocr.attachment_text` («Страница N»). Файлы — исходный PDF и PNG страниц в `media`;
+  «Хранилище» считает их по MIME.
 - Поиск (спека 2026-10-21-studio-history-search-design, шаг схемы 13): документы — таблица `search_docs`
   (`section`, `item` — id записи или диалога, `part` — `''`, у чата `title`, id сообщения или вложения,
   `user_id`, `model`, `created`, `body`), над ней FTS5 `search` с внешним содержимым
@@ -344,8 +372,16 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 копии базы, который не включился, — ошибка с кодом не 0 (служба уже обновлена). Перенесённая среда — с чужим shebang в
 `bin/`: всё запускается `.venv/bin/python` (`-m uvicorn`, `-m pip`, `manage.py`), не `bin/<скрипт>`. Перезапуск ждёт
 открытые потоки чата не дольше 10 с (`--timeout-graceful-shutdown`, `TimeoutStopSec=30`);
-недописанное помечают `chat.recover()` / `images.recover()` при старте. Смоук —
+недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` при старте. Смоук —
 `https://studio.example.com/health`; живая приёмка — `tests/test_studio_upload_live.py` (ниже).
+
+**Откат на код до шага схемы 16** (`.previous`): прежний код не знает раздела `ocr`, и его
+`PATCH /api/connections/<id>` без `sections` (имя, токен — так шлют форма подключения и панель) у
+подключения srvllm отвечает 422, пока есть строки `ocr`; остальное работает. Обход — служба
+остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "DELETE FROM section_links
+WHERE section = 'ocr'; DELETE FROM section_defaults WHERE section = 'ocr';"` (второе — для чистоты:
+прежний код читает умолчание только по своим разделам). Новый код строки незнакомых разделов не видит —
+следующий новый раздел откатывается на него без обхода.
 
 ## Тесты
 
@@ -358,8 +394,9 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 Живая приёмка (`tests/test_studio_upload_live.py`, генерирует на карте, до ~1,5 ч) — после
 выкладки и `--create-admin`: входит администратором в `STUDIO_LIVE_URL` (по умолчанию
 `https://studio.example.com`), делает Lustify, правку кистью (Lustify, вне маски — пиксели исходника),
-описание gemma-abl, ролик 1 с и ответ `local-gemma-abl` по PDF; удаляет только своё и освобождает
-карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
+описание gemma-abl, ролик 1 с, ответ `local-gemma-abl` по PDF и одностраничный скан — в разделе
+«Распознавание» и вложением в чате (затем `/pages/ocr-release` — 200 и ответ gemma-abl без ожидания
+аренды); удаляет только своё и освобождает карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
 напрямую (`STUDIO_LIVE_GATEWAY`) и `client/studio-batch.local.ps1`.
 
 **`STUDIO_ADMIN_PASSWORD` в vault — пароль восстановления, не рабочий:** владелец входит своим
@@ -423,6 +460,14 @@ tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие наст
   освобождает модели картинок и gemma-abl (`speech.free_card`), а на 503 ждёт и повторяет
   (`RETRY_SEC`, до `WAIT_MAX_SEC`). Отмена обрывает только свой запрос — WhisperX дослушает запись.
   Голосовой ввод WhisperX — так же, но в пределах своего бюджета (`dictation.BUDGET_SEC`, затем 504).
+- Слот `ocr` (6656 МиБ) не помещается рядом ни с gemma-abl, ни с comfy и держит карту арендой 900 с:
+  перед первой страницей документа — `speech.free_card`, после документа, звавшего шлюз (готово, ошибка,
+  отмена), — `POST <адрес>/pages/ocr-release {}` (`ocr.release`; 409 `slot_busy` — повтор через
+  `RETRY_SEC` до `RELEASE_RETRIES`), если в студии не идёт и не ждёт другое распознавание. Без release
+  Lustify и gemma-abl ждали бы 15 минут. Отмена идущего документа запрос страницы не обрывает: раннер
+  дожидается ответа, выбрасывает его и только потом освобождает карту (`stop_user` обрывает сразу и без
+  release). Ход чата со сканом зовёт модель только после `ocr.idle` — раннер уже освободил слот: итог
+  документа пишется раньше release, и gemma-abl иначе ждала бы карту под арендой `ocr`.
 - Имя файла записи едет заголовком `X-Studio-Name`, а не строкой запроса: строку пишет журнал Apache.
 - Перевод промпта («EN», `POST /api/images/translations`) идёт маршрутом описания
   `/slot/images/descriptions` — текстом, без картинки, а не чат-ролью `local-gemma-abl`: у этого

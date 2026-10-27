@@ -299,6 +299,19 @@ def test_patch_changes_only_what_was_sent(studio):
     assert connections.token(conn_of(cid)) == "other-key-7654321"
 
 
+def test_patch_survives_a_section_this_code_does_not_know(studio):
+    # строка раздела новее этого кода (откат install.sh после шага схемы с новым разделом): правка без
+    # `sections` не падает 422 и чужую строку не трогает
+    cid = add_gateway(studio)
+    uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (cid,)).fetchone()[0]
+    state.DB.execute("INSERT INTO section_links(user_id, section, connection_id, models, created)"
+                     " VALUES (?, 'future', ?, '[]', 0)", (uid, cid))
+    r = studio.c.patch(f"/api/connections/{cid}", json={"name": "Новое"})
+    assert r.status_code == 200 and r.json()["name"] == "Новое" and "future" not in r.json()["sections"]
+    assert state.DB.execute("SELECT 1 FROM section_links WHERE section = 'future' AND connection_id = ?",
+                            (cid,)).fetchone() is not None
+
+
 def test_direct_token_is_given_to_its_owner_only(studio):
     cid = add_connection(studio)
     # адреса — те, куда браузеру можно нести этот токен: не из списка подключений, который мог устареть
