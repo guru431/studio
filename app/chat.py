@@ -26,6 +26,11 @@
    иначе 409 `external_web` (после `external`); `web_ok` ставит `web_consent` (`_needs_web_consent`).
 6. База — только с цикла событий: в asyncio.to_thread уходят Pillow, разбор документов и файлы.
 7. Журнал — только id и статусы: текст сообщений и документов, имена файлов и токены туда не идут.
+8. Скан (спека 2026-10-27-studio-ocr-design, 6.5): PDF со страницами без текстового слоя при подключении
+   раздела «Распознавание» через сервер — документ ocr.py, вложение без текста, пока он идёт. Ход через
+   сервер с таким вложением (или с идущим сканом в истории диалога) создаётся как обычно, а StreamTask до
+   запроса к модели ждёт документы (событие SSE `ocr`), затем собирает контекст и проверяет предел; срок
+   ответа отсчитывается от готовности. Прямому подключению — 409 `not_ready`: ждёт страница.
 """
 import asyncio
 import base64
@@ -48,6 +53,8 @@ import connections
 import documents
 import manage
 import media
+import ocr
+import ocr_render
 import sections
 import state
 import upstream
@@ -124,6 +131,9 @@ WEB_NOTE = ("У тебя есть доступ к интернету через 
             "отвечай по памяти. Говори, что нашёл что-то в интернете, только если инструмент в этом ответе вернул "
             "результат; если вернул ошибку — так и скажи и не выдумывай данные.")
 STORAGE = "хранилище недоступно"
+SCAN_POLL_SEC = 1                # ход ждёт скан: состояние документов — из базы раз в столько
+NO_OCR = "это скан — подключите «Распознавание» в настройках"
+NOT_READY = "скан ещё распознаётся"
 NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
 DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
@@ -279,7 +289,8 @@ def _alive(row) -> bool:
 
 def _message_out(row, atts: list) -> dict:
     """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
-    `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null)."""
+    `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null), `ocr` — ход
+    распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null)."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
     reasoning, seconds = live.thought_out() if live else (row["reasoning"], row["reasoning_sec"])
@@ -287,7 +298,8 @@ def _message_out(row, atts: list) -> dict:
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
             "attachments": [_attachment_out(a) for a in atts],
-            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds}
+            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
+            "ocr": live.scan_state if live else None}
 
 
 def _attachment_out(a) -> dict:
@@ -517,7 +529,8 @@ class ToolCall:
 @dataclass(eq=False)
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
-    ("delta", текст), ("think", текст или None), ("tool", {kind, label}), ("done", статус) или ("error", слова). Поток SSE закрылся
+    ("delta", текст), ("think", текст или None), ("tool", {kind, label}), ("ocr", {page, pages}) — ход скана, которого
+    ждёт ответ (`scans`), ("done", статус) или ("error", слова). Поток SSE закрылся
     (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
@@ -556,6 +569,10 @@ class StreamTask:
     reasoning_cut: bool = False  # модель без кнопки дошла до REASONING_MAX: дальше рассуждение не хранится
     stray: int = 0             # знаков рассуждения при выключенной кнопке
     thought: float = -math.inf   # когда ушло последнее `think {}`
+    #: сканы, которых ждёт ход (ocr.py): `messages` пуст, контекст до `user_message_id` собирает _await_scans
+    scans: list[str] = field(default_factory=list)
+    user_message_id: str | None = None
+    scan_state: dict | None = None   # ход распознавания для страницы ({page, pages}), пока ждём
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -819,11 +836,63 @@ class StreamTask:
             return "ответ обрезан пределом длины модели"
         return None
 
+    async def _await_scans(self) -> str | None:
+        """Ход со сканом: ждать документы раз в SCAN_POLL_SEC (событие `ocr` — при смене страниц без слоя),
+        затем — пока раннер распознавания освобождает карту (ocr.idle), и только тогда контекст (compose,
+        фото, дата) и предел модели. Итог — слова ошибки (документ не распознан, не помещается) или None.
+        Отмена хода (не остановка службы) отменяет и документы."""
+        log.info("чат %s: ответ %s — жду скан (%d док.)", self.chat_id[:8], self.message_id[:8], len(self.scans))
+        marks = ", ".join("?" * len(self.scans))
+        try:
+            while True:
+                rows = state.DB.execute(f"SELECT state, detail FROM scans WHERE id IN ({marks})",
+                                        tuple(self.scans)).fetchall()
+                if len(rows) < len(self.scans):
+                    return "скан не распознан: документ удалён"
+                failed = next((r for r in rows if r["state"] in ("error", "cancelled")), None)
+                if failed is not None:
+                    log.info("чат %s: ответ %s — скан не распознан", self.chat_id[:8], self.message_id[:8])
+                    return f"скан не распознан: {failed['detail']}"
+                page, pages = ocr.progress(self.scans)
+                if self.scan_state != {"page": page, "pages": pages}:
+                    self.scan_state = {"page": page, "pages": pages}
+                    self.fresh = True
+                    self.put("ocr", self.scan_state)
+                if all(r["state"] == "done" for r in rows) and ocr.idle(self.user_id):
+                    break
+                await clock.SLEEP(SCAN_POLL_SEC)
+        except asyncio.CancelledError:
+            if not self.shutdown:                        # остановка службы: документы прервёт ocr.stop
+                for scan_id in self.scans:
+                    try:
+                        await ocr.request_cancel(self.user_id, scan_id)
+                    except HTTPException:                # документа уже нет (стирание истории)
+                        pass
+            raise
+        finally:
+            self.scan_state = None
+        composed = compose(self.chat_id, self.user_message_id)
+        tokens = estimate_tokens(composed)
+        if self.limit is not None and tokens > self.limit - RESERVE_TOKENS:
+            log.info("чат %s: ход не помещается в контекст (~%d токенов)", self.chat_id[:8], tokens)
+            return _too_big(tokens, self.limit).detail["message"]
+        if self.tools:
+            self.known = _known_links(self.chat_id)
+        try:
+            self.messages = with_date(await fill_photos(self.chat_id, self.user_id, composed))
+        except OSError as e:
+            log.warning("чат %s: вложение не прочиталось (%s)", self.chat_id[:8], type(e).__name__)
+            return STORAGE
+        return None
+
     async def run(self) -> None:
         pings = asyncio.create_task(self._pings())
         error = None
         try:
-            error = await self._read()
+            if self.scans:
+                error = await self._await_scans()
+            if error is None:
+                error = await self._read()
             status = "done" if error is None else "error"
         except asyncio.CancelledError:               # кнопка «стоп» или остановка службы
             status = "error" if self.shutdown else "stopped"
@@ -904,6 +973,8 @@ async def _events(st: StreamTask, user_message_id: str):
             yield _sse("think", {"text": data} if data is not None else {})
         elif kind == "tool":
             yield _sse("tool", data)
+        elif kind == "ocr":
+            yield _sse("ocr", data)
         elif kind == "done":
             yield _sse("done", {"status": data})
             return
@@ -1015,9 +1086,10 @@ async def delete_chat(chat_id: str, request: Request):
 @router.post("/attachments", status_code=201)
 async def upload_attachment(request: Request):
     """Картинка (PNG, JPEG, WebP — нормализуется до PNG) или документ (текст — сразу); файл — в media.
-    К сообщению вложение привязывает ход."""
+    К сообщению вложение привязывает ход. PDF со страницами без текстового слоя при подключении раздела
+    «Распознавание» через сервер — документ распознавания (`ocr` в ответе), текст вложения допишет он."""
     uid = request.state.user.id
-    text = None
+    text, scan = None, None
     try:
         name, data = await documents.read_upload(request)
         suffix = PurePosixPath(name.lower()).suffix
@@ -1027,10 +1099,15 @@ async def upload_attachment(request: Request):
             kind, mime, body = "image", "image/png", await asyncio.to_thread(normalize_image, data)
             download = PurePosixPath(name).stem + ".png"
         else:
-            text = await asyncio.to_thread(documents.extract, name, data)
+            reader = sections.default(uid, "ocr") if suffix == ".pdf" else None
+            if reader is not None and reader[0].proxied:
+                text, scan = _scan_plan(await asyncio.to_thread(documents.pdf_page_texts, data))
+            else:
+                text = await asyncio.to_thread(documents.extract, name, data)
             kind, mime, body, download = "document", DOC_MIME[suffix], data, name
     except documents.DocumentError as e:
-        raise HTTPException(e.status, {"code": "document", "message": str(e)}) from None
+        message = NO_OCR if str(e) == documents.SCAN else str(e)
+        raise HTTPException(e.status, {"code": "document", "message": message}) from None
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     try:
@@ -1040,8 +1117,41 @@ async def upload_attachment(request: Request):
     att_id, chars = uuid.uuid4().hex, len(text or "")
     state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
                      " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)", (att_id, uid, kind, name, media_id, text, chars, clock.NOW()))
-    log.info("вложение %s: %s, %d знаков", att_id[:8], kind, chars)
-    return {"id": att_id, "kind": kind, "name": name, "chars": chars, "media_id": media_id}
+    out = {"id": att_id, "kind": kind, "name": name, "chars": chars, "media_id": media_id}
+    if scan is not None:
+        conn, model = reader
+        try:
+            sid = ocr.create(uid, conn, model, name, origin="chat", source_media_id=media_id, pages=scan,
+                             attachment_id=att_id)
+        except HTTPException:                        # очередь распознавания полна — вложения нет
+            await _drop_attachments([{"id": att_id, "user_id": uid, "media_id": media_id}])
+            raise
+        ocr.kick(uid)
+        out["ocr"] = {"id": sid, "pages": sum(p["state"] == "waiting" for p in scan)}
+        log.info("вложение %s: скан, %d стр. на распознавание (%s)", att_id[:8], out["ocr"]["pages"], sid[:8])
+    else:
+        log.info("вложение %s: %s, %d знаков", att_id[:8], kind, chars)
+    return out
+
+
+def _scan_plan(texts: list[str]) -> "tuple[str | None, list[dict] | None]":
+    """PDF при подключении «Распознавания»: страниц без слоя нет — (текст как у documents.extract, None);
+    есть — (None, страницы документа: со слоем — `layer` с текстом, остальные — `waiting`). Пустые страницы
+    определяет задание (рендер), а не загрузка. Страниц без слоя больше PAGES_MAX — отказ словами."""
+    pages = [{"n": n, "state": "layer", "media_id": None, "text": t} if ocr_render.has_layer(t)
+             else {"n": n, "state": "waiting", "media_id": None, "text": None} for n, t in enumerate(texts, 1)]
+    waiting = sum(p["state"] == "waiting" for p in pages)
+    if waiting > ocr_render.PAGES_MAX:
+        raise documents.DocumentError(f"больше {ocr_render.PAGES_MAX} страниц-сканов — распознайте его частями"
+                                      " в разделе «Распознавание»")
+    if waiting:
+        return None, pages
+    text = "\n\n".join(t for t in texts if t)
+    if not text:                                     # PDF без страниц
+        raise documents.DocumentError(documents.BROKEN)
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise documents.DocumentError(documents.TOO_LONG)
+    return text, None
 
 
 async def _drop_attachments(rows) -> int:
@@ -1059,13 +1169,16 @@ async def _drop_attachments(rows) -> int:
 
 @router.delete("/attachments/{att_id}", status_code=204)
 async def delete_attachment(att_id: str, request: Request):
-    """Крестик на вложении, которое ещё не отправили; отправленное — часть сообщения (409)."""
-    row = state.DB.execute("SELECT * FROM attachments WHERE id = ? AND user_id = ?",
-                           (att_id, request.state.user.id)).fetchone()
+    """Крестик на вложении, которое ещё не отправили; отправленное — часть сообщения (409). Скан, который ещё
+    распознаётся (ход отклонили после загрузки), — отменяется: документ остаётся в «Распознавании»."""
+    uid = request.state.user.id
+    row = state.DB.execute("SELECT * FROM attachments WHERE id = ? AND user_id = ?", (att_id, uid)).fetchone()
     if row is None:
         raise _gone("такого вложения нет")
     if row["message_id"] is not None:
         raise HTTPException(409, {"code": "sent", "message": "вложение уже отправлено"})
+    for scan_id in ocr.pending(uid, [att_id]):
+        await ocr.request_cancel(uid, scan_id)
     await _drop_attachments([row])
     return Response(status_code=204)
 
@@ -1148,6 +1261,15 @@ def _known_links(chat_id: str) -> dict[str, str]:
     return known
 
 
+def _pending_scans(user_id: int, chat_id: str, atts: list) -> list[str]:
+    """Идущие сканы вложений хода и истории диалога (повтор сразу после «Остановить», пока документ
+    отменяется): модели вложение уходит только готовым."""
+    ids = [a["id"] for a in atts if a["kind"] == "document"] + [r["id"] for r in state.DB.execute(
+        "SELECT a.id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?"
+        " AND a.kind = 'document'", (chat_id,))]
+    return ocr.pending(user_id, ids)
+
+
 def _title(text: str) -> str | None:
     lines = text.strip().splitlines()
     if not lines:
@@ -1170,6 +1292,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     limit = await _limit(conn, model)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     via = "server" if conn.proxied else "browser"
+    # скан ещё распознаётся: ход через сервер подождёт его в StreamTask, прямой — ждёт страница
+    scans = _pending_scans(uid, chat_id, atts)
+    if scans and via == "browser":
+        raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     free = body.external_ok or sections.is_local(conn, model)
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
@@ -1215,12 +1341,15 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                     "SELECT web_consent FROM chats WHERE id = ?", (chat_id,)).fetchone()[0]):
                 raise HTTPException(409, {"code": "external_web", "message": (
                     "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
-        messages = compose(chat_id, user_mid)
-        known = _known_links(chat_id) if kinds else {}
-        tokens = estimate_tokens(messages)
-        if limit is not None and tokens > limit - RESERVE_TOKENS:
-            log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
-            raise _too_big(tokens, limit)
+        if scans:                                    # контекст и предел — после распознавания (_await_scans)
+            messages, known = [], {}
+        else:
+            messages = compose(chat_id, user_mid)
+            known = _known_links(chat_id) if kinds else {}
+            tokens = estimate_tokens(messages)
+            if limit is not None and tokens > limit - RESERVE_TOKENS:
+                log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
+                raise _too_big(tokens, limit)
         # идущие ответы через сервер — по строкам `streaming` (и те, чей поток ещё не запущен)
         if via == "server" and state.DB.execute(
                 "SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?"
@@ -1239,7 +1368,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     try:
-        messages = with_date(await fill_photos(chat_id, uid, messages))    # файлы — после COMMIT и в потоке
+        if not scans:
+            messages = with_date(await fill_photos(chat_id, uid, messages))    # файлы — после COMMIT и в потоке
     except BaseException as e:
         # строка ответа уже в базе: без итога диалог считался бы занятым (см. _busy)
         _finish(answer_id, chat_id, STORAGE if isinstance(e, OSError) else "", "error")
@@ -1261,7 +1391,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
                     tools=kinds, exa_key=exa_key, limit=limit, known=known,
-                    thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None)
+                    thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
+                    scans=scans, user_message_id=user_mid)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid)

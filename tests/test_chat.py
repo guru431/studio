@@ -288,18 +288,22 @@ def test_user_streams_are_limited(studio):
 # ---- контекст ----------------------------------------------------------------
 
 def test_document_goes_in_full_before_the_question(studio):
+    # страницы — не короче 40 знаков без пробелов: короче — страница без слоя, её распознаёт ocr (test_chat_ocr)
+    first, second = "Payment is due in 30 days from the date of the invoice", "Penalty of 1% per day of delay, payable on written demand"
     add_gateway(studio); cid = new_chat(studio)
-    doc = attach(studio, "договор.pdf", pdf("Payment is due in 30 days", "Penalty 1% per day"), "application/pdf")
-    assert {k: doc[k] for k in ("kind", "name", "chars")} == {"kind": "document", "name": "договор.pdf", "chars": 45}
+    doc = attach(studio, "договор.pdf", pdf(first, second), "application/pdf")
+    chars = len(first) + 2 + len(second)
+    assert {k: doc[k] for k in ("kind", "name", "chars")} == {"kind": "document", "name": "договор.pdf", "chars": chars}
+    assert "ocr" not in doc
     sse(turn(studio, cid, QUESTION, attachment_ids=[doc["id"]]))
     sent = studio.gw.chat_requests[0]["messages"][1:]
     assert sent == [{"role": "user", "content": '<document name="договор.pdf">\n'
-                                                "Payment is due in 30 days\n\nPenalty 1% per day\n"
+                                                f"{first}\n\n{second}\n"
                                                 "</document>\n\n" + QUESTION}]
     user = messages(studio, cid)[0]
     assert user["content"] == QUESTION
     assert user["attachments"] == [{"id": doc["id"], "kind": "document", "name": "договор.pdf",
-                                    "media_id": doc["media_id"], "chars": 45}]
+                                    "media_id": doc["media_id"], "chars": chars}]
     assert studio.c.get(f"/api/media/{doc['media_id']}").content.startswith(b"%PDF")
     # вложение уже привязано: второй ход с ним — отказ
     r = turn(studio, cid, "ещё", attachment_ids=[doc["id"]])

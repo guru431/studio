@@ -207,6 +207,35 @@ def _attachment(attachment_id: "str | None", text: str) -> None:
         state.DB.execute("UPDATE attachments SET text = ?, chars = ? WHERE id = ?", (text, len(text), attachment_id))
 
 
+# ---- скан в чате (chat.py) -----------------------------------------------------
+
+def pending(user_id: int, attachment_ids: list[str]) -> list[str]:
+    """Идущие и ждущие документы (RUNNING) этих вложений чата."""
+    if not attachment_ids:
+        return []
+    marks = ", ".join("?" * len(attachment_ids))
+    return [r["id"] for r in state.DB.execute(
+        f"SELECT id FROM scans WHERE user_id = ? AND state IN {RUNNING} AND attachment_id IN ({marks})"
+        " ORDER BY created, rowid", (user_id, *attachment_ids))]
+
+
+def progress(scan_ids: list[str]) -> tuple[int, int]:
+    """Ход документов для плашки чата: (страниц с итогом, всего) — без страниц текстового слоя."""
+    marks = ", ".join("?" * len(scan_ids))
+    row = state.DB.execute(f"SELECT count(*), coalesce(sum(state != 'waiting'), 0) FROM scan_pages"
+                           f" WHERE scan_id IN ({marks}) AND state != 'layer'", tuple(scan_ids)).fetchone()
+    return row[1], row[0]
+
+
+def idle(user_id: int) -> bool:
+    """Раннер пользователя не дописывает свой последний документ: после итога он ещё освобождает карту
+    (release), и ход чата, позвавший модель раньше, ждал бы её под арендой слота ocr. Идут другие его
+    документы — карту никто не освободит (`run`), ждать нечего."""
+    task = RUNNERS.get(user_id)
+    return task is None or task.done() or state.DB.execute(
+        f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1", (user_id,)).fetchone() is not None
+
+
 def create(user_id: int, conn, model: str, name: str, *, origin: str, source_media_id: "str | None",
            pages: list[dict], attachment_id: "str | None" = None) -> str:
     """Документ в очередь пользователя (раннер — `kick`). `pages`: `{"n", "state": "waiting"|"layer",

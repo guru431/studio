@@ -254,7 +254,8 @@ def test_chat_answers_from_an_attached_pdf(studio):
     assert r.json()["model"] == CHAT_MODEL
 
     r = c.post(STUDIO + "/api/attachments", files={"file": ("live-acceptance.pdf",
-                                                            pdf(f"The secret code phrase is {code}."),
+                                                            # от 40 знаков без пробелов: иначе — скан для ocr
+                                                            pdf(f"The secret code phrase of this document is {code}."),
                                                             "application/pdf")})
     assert r.status_code == 201, (r.status_code, r.text[:300])
     attachment = r.json()
