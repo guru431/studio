@@ -4038,7 +4038,9 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
         ("eval", "hashes", "(() => { window.hashes = []; addEventListener('hashchange', (e) => window.hashes.push("
                            "new URL(e.newURL).hash)); return true; })()"),
         ("click", ".ocr-chat-menu [data-ask=translate]"), ("wait", "window.hashes.length"),
-        ("eval", "went", "window.hashes[0]")])
+        ("eval", "went", "window.hashes[0]"),
+        ("wait", f"{CHAT_CHIP}?.textContent === 'Счёт.md'"),
+        ("eval", "chat", "[location.hash, document.querySelector('#chat-input').value]")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["pager"] is False                                       # одна страница — без листалки
@@ -4047,7 +4049,99 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
+    assert v["chat"] == ["#/chat", "Переведи этот документ на русский"]
     assert not problems(r), problems(r)
+
+
+SCAN_BADGE = f"{LAST_ANSWER}?.querySelector('.web-badge.busy')?.textContent"
+
+
+def scan_file(name="скан.pdf"):
+    """PDF из двух страниц-сканов (без текстового слоя) — выражение JS со списком File для `attach`."""
+    from scans import scan_pdf
+    data = base64.b64encode(scan_pdf("ink", "ink")).decode()
+    return f"[new File([Uint8Array.from(atob({data!r}), c => c.charCodeAt(0))], {name!r}, {{ type: 'application/pdf' }})]"
+
+
+def test_chat_scan_shows_progress_then_answers(browser, live):
+    """Скан в чате через сервер: ответ ждёт распознавания — над ним плашка «📄 Распознаю скан · стр. N из M»
+    (событие SSE `ocr`); ушли в «Фото» и вернулись — плашка на месте; перезагрузка — плашка из `ocr` сообщения
+    (опрос идущего ответа); распознали — ответ модели, плашки нет, модели ушёл распознанный текст."""
+    import state
+    live.add_user("scanner")
+    live.gw.ocr_hold = lambda request: state.DB.execute(
+        "SELECT 1 FROM chats WHERE title = 'скан виден'").fetchone() is None
+    try:
+        r = browser.drive(live.url + "/", [*signin("scanner"), ("wait", READY), add_gateway(),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            attach(scan_file()), ("wait", "document.querySelector('#composer .att-chip')"),
+            ("type", "#chat-input", "О чём документ?"), ("press", "Enter"),
+            ("wait", f"{SCAN_BADGE}?.includes('Распознаю скан')"),
+            ("eval", "own", f"[{SCAN_BADGE}, !!{LAST_ANSWER}.querySelector('.web-badge .spin'),"
+                            f" {LAST_ANSWER}.querySelector('.msg-meta').textContent]"),
+            ("eval", "cid", "window.cid = location.hash"),
+            *go("photo"), ("wait", "document.querySelector('#photo-feed')"),
+            ("eval", "back", "location.hash = window.cid"),
+            ("wait", f"{SCAN_BADGE}?.includes('Распознаю скан')"),
+            ("eval", "again", SCAN_BADGE),
+            ("eval", "reload", "location.reload()"),          # поток SSE открыт — страница не затихнет, ("idle",) нельзя
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"{SCAN_BADGE}?.includes('Распознаю скан')"),
+            ("eval", "other", SCAN_BADGE),
+            ("eval", "seen", MARK % "скан виден"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('.md').textContent.trim() === 'Здравствуйте!'"),
+            ("eval", "after", f"[{LAST_ANSWER}.querySelector('.web-badge').hidden,"
+                              " document.querySelector('#messages .msg.user .att').textContent]")])
+    finally:
+        live.gw.ocr_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["own"] == ["📄 Распознаю скан · стр. 1 из 2", True, ""]
+    assert v["again"] == "📄 Распознаю скан · стр. 1 из 2"
+    assert v["other"] == "📄 Распознаю скан · стр. 1 из 2"
+    assert v["after"][0] is True and "скан.pdf" in v["after"][1]
+    content = live.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert content.startswith('<document name="скан.pdf">') and "Текст страницы." in content
+    assert content.endswith("О чём документ?")
+    assert not problems(r), problems(r)
+
+
+def test_chat_scan_on_a_direct_connection_waits_in_the_page(browser, live):
+    """Прямое подключение: сервер на ход с неготовым сканом отвечает 409 `not_ready` — под полем «скан ещё
+    распознаётся — отправлю, когда будет готов», страница повторяет ход сама; распознали — ответ облака по
+    распознанному тексту, ход ушёл один раз."""
+    import state
+    live.add_user("scandirect")
+    live.gw.ocr_hold = lambda request: state.DB.execute(
+        "SELECT 1 FROM chats WHERE title = 'скан прямой'").fetchone() is None
+    sent = len(live.cloud.chat_requests)
+    try:
+        r = browser.drive(live.url + "/", [*signin("scandirect"), ("wait", READY), add_gateway(), add_cloud(live.cloud),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+            ("click", ".model-option[data-model=\"cloud-chat\"]"),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('cloud-chat')"),
+            attach(scan_file()), ("wait", "document.querySelector('#composer .att-chip')"),
+            ("type", "#chat-input", "О чём документ?"), ("press", "Enter"),
+            ("wait", "document.querySelector('#chat-error').textContent"),
+            ("eval", "waiting", "[document.querySelector('#chat-error').textContent,"
+                                " document.querySelector('#chat-input').value,"
+                                " document.querySelectorAll('#composer .att-chip').length]"),
+            ("eval", "seen", MARK % "скан прямой"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('.md').textContent.trim() === 'Облако на связи.'"),
+            ("eval", "after", "[document.querySelector('#chat-error').textContent,"
+                              " document.querySelectorAll('#composer .att-chip').length]")])
+    finally:
+        live.gw.ocr_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["waiting"] == ["скан ещё распознаётся — отправлю, когда будет готов", "О чём документ?", 1]
+    assert v["after"] == ["", 0]
+    assert len(live.cloud.chat_requests) == sent + 1
+    content = live.cloud.chat_requests[-1]["messages"][-1]["content"]
+    assert content.startswith('<document name="скан.pdf">') and "Текст страницы." in content
+    assert not known_refusals(problems(r), 409), problems(r)
 
 
 def test_voice_is_added_in_settings(browser, live):
