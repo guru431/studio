@@ -55,8 +55,8 @@
  * Сканы (спека 2026-10-27-studio-ocr, 6.5): ход через сервер ждёт распознавания там — событие SSE `ocr {page, pages}`
  * (своя вкладка) или `ocr` идущего ответа (вкладка, что его не читает) дают плашку «📄 Распознаю скан · стр. N из M»
  * до первого текста модели. Прямое подключение — 409 `not_ready`: под полем NOT_READY, страница опрашивает документы
- * сканов поля ввода и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки, POST /api/ocr/<id>/attachments,
- * модель — умолчание раздела, без окна внешней модели. */
+ * сканов поля ввода и вложений диалога и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки,
+ * POST /api/ocr/<id>/attachments, модель — умолчание раздела, без окна внешней модели. */
 import { api, me } from './api.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
@@ -881,7 +881,7 @@ function build(view, ctx) {
 
   function attLabel(a) {
     return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'image' : 'doc'), el('b', {}, a.name),
-      // скан этой вкладки (`ocr` ответа загрузки) знаков ещё не знает — их скажет перечитанный диалог
+      // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
         href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null);
@@ -1198,18 +1198,21 @@ function build(view, ctx) {
     }
   }
 
-  /* 409 `not_ready`: раз в NOT_READY_MS — документы сканов поля ввода (`ocr` ответа загрузки); пока какой-то
-     идёт — ждём, затем ход заново (ход с неготовым сканом из истории диалога — тем же повтором). Смена диалога,
-     уход из раздела и «Отправить» человека ожидание снимают, правка поля и вложений — тоже (dropWaiting): по
-     таймеру ушло бы не то, что человек отправлял */
+  /* 409 `not_ready`: раз в NOT_READY_MS — документы сканов поля ввода (`ocr` ответа загрузки) и вложений
+     сообщений диалога (`ocr` идущего скана, ход с неготовым сканом из истории) — только состояние (`brief`);
+     пока какой-то идёт — ждём, затем ход заново (ни одного id — просто ход заново). Смена диалога, уход из
+     раздела и «Отправить» человека ожидание снимают; правка поля и вложений — только у обычного хода
+     (dropWaiting): по таймеру ушло бы не то, что человек отправлял, а повтор поле и вложения не берёт */
   function waitScans(args) {
-    const mine = { timer: 0 };
+    const mine = { timer: 0, regenerate: args[0] };
     notReady = mine;
     const step = async () => {
-      const ids = atts.map((a) => a.meta && a.meta.ocr && a.meta.ocr.id).filter(Boolean);
+      const ids = [...atts.map((a) => a.meta && a.meta.ocr && a.meta.ocr.id),
+        ...(chat ? chat.messages : []).flatMap((m) => (m.attachments || []).map((a) => a.ocr && a.ocr.id))]
+        .filter(Boolean);
       try {
         for (const id of ids) {
-          const { state } = await api('GET', `/api/ocr/${encodeURIComponent(id)}`);
+          const { state } = await api('GET', `/api/ocr/${encodeURIComponent(id)}?brief=1`);
           if (notReady !== mine) return;
           if (SCAN_RUNNING.includes(state)) {
             mine.timer = setTimeout(step, NOT_READY_MS);
@@ -1230,7 +1233,7 @@ function build(view, ctx) {
   }
 
   function dropWaiting() {
-    if (!notReady) return;
+    if (!notReady || notReady.regenerate) return;
     stopWaiting();
     if (notice.textContent === NOT_READY) notice.textContent = '';
   }

@@ -5,10 +5,12 @@ import asyncio
 import io
 import json
 import logging
+import time
 import zipfile
 from urllib.parse import quote
 from xml.etree import ElementTree
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -302,21 +304,97 @@ def test_release_after_a_next_document_cancelled_before_its_first_page(studio, m
     assert len(studio.gw.ocr_requests) == 1
 
 
+def hold_releases(s, go: list):
+    """release слота ocr ждёт, пока в `go` не появится True (не дольше 5 с), и отвечает 200; в `releases` —
+    когда ответил."""
+    async def release(request):
+        deadline = time.monotonic() + 5
+        while not go and time.monotonic() < deadline:
+            await asyncio.sleep(0.001)
+        s.gw.releases.append((None, request.headers.get("authorization")))
+        return httpx.Response(200, json={"ok": True})
+    s.gw.on["/pages/ocr-release"] = release
+
+
+def leased_with_a_queued_document(s):
+    """Документ Алисы распознан, ждёт документ Боба (его раннер не запущен): слот держим. → (uid, uid_b, ждущий)."""
+    uid, conn = gateway_user(s)
+    make_user(s, "bob")
+    signin(s, "bob")
+    uid_b, conn_b = gateway_user(s)
+    s.gw.ocr_hold = True
+    first = pdf_scan(s, uid, conn, "ink")
+    wait_until(s, lambda: len(s.gw.ocr_requests) == 1)
+    second = pdf_scan(s, uid_b, conn_b, "ink", kick=False)        # раннер Боба ещё не запущен
+    s.gw.ocr_hold = False
+    assert wait_scan(s, first)["state"] == "done"       # итог и решение о release — без await между ними
+    assert ocr_releases(s) == 0 and ocr.LEASED != {}  # в студии ждёт документ — слот держим
+    return uid, uid_b, second
+
+
 def test_release_after_cancelling_the_last_queued_document(studio):
-    """Чужой ждущий документ отменён, пока его раннер не взял его: release — от отмены (ревью I1)."""
+    """Чужой ждущий документ отменён, пока его раннер не взял его: release — от отмены (ревью I1), фоном —
+    ответ отмены шлюза не ждёт; ход чата ждёт и его (idle), запись LEASED снимает прошедший release."""
+    uid, uid_b, second = leased_with_a_queued_document(studio)
+    go = []
+    hold_releases(studio, go)
+    assert on_loop(studio, ocr.request_cancel, uid_b, second) == "cancelled"
+    assert ocr_releases(studio) == 0 and ocr.LEASED != {} and ocr.SETTLING
+    assert not on_loop(studio, ocr.idle, uid) and not on_loop(studio, ocr.idle, uid_b)
+    go.append(True)
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 1 and on_loop(studio, ocr.idle, uid_b)
+
+
+def test_service_stop_ends_the_background_release(studio):
+    uid, uid_b, second = leased_with_a_queued_document(studio)
+    hold_releases(studio, [])
+    assert on_loop(studio, ocr.request_cancel, uid_b, second) == "cancelled"
+    tasks = set(ocr.SETTLING)
+    assert tasks
+    on_loop(studio, ocr.stop)
+    assert all(t.cancelled() for t in tasks) and ocr_releases(studio) == 0
+
+
+def test_failed_release_keeps_the_lease_for_the_next_document(studio):
+    """release не прошёл — запись LEASED остаётся: её освобождает конец следующего документа, хоть он шлюз и
+    не звал."""
+    uid, conn = gateway_user(studio)
+    codes = [500, 200]
+
+    async def release(request):
+        studio.gw.releases.append((None, request.headers.get("authorization")))
+        return httpx.Response(codes.pop(0), json={})
+    studio.gw.on["/pages/ocr-release"] = release
+    assert wait_scan(studio, pdf_scan(studio, uid, conn, "ink"))["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert ocr_releases(studio) == 1 and ocr.LEASED != {}
+    assert wait_scan(studio, pdf_scan(studio, uid, conn, "blank"))["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert ocr_releases(studio) == 2 and ocr.LEASED == {}
+
+
+def test_release_keeps_the_lease_of_a_document_started_meanwhile(studio):
+    """Пока шёл release конца документа Алисы, начался документ Боба и взял слот: прошедший release его
+    запись не снимает — слот освободит конец документа Боба."""
     uid, conn = gateway_user(studio)
     make_user(studio, "bob")
     signin(studio, "bob")
     uid_b, conn_b = gateway_user(studio)
-    studio.gw.ocr_hold = True
+    go = []
+    hold_releases(studio, go)
     first = pdf_scan(studio, uid, conn, "ink")
-    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
-    second = pdf_scan(studio, uid_b, conn_b, "ink", kick=False)        # раннер Боба ещё не запущен
+    assert wait_scan(studio, first)["state"] == "done"
+    studio.gw.ocr_hold = True
+    second = pdf_scan(studio, uid_b, conn_b, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 2)
+    go.append(True)
+    wait_until(studio, lambda: ocr_releases(studio) == 1 and not ocr.RUNNERS.get(uid))
+    assert list(ocr.LEASED) == [conn_b.base_url] and ocr.LEASED[conn_b.base_url] is conn_b
     studio.gw.ocr_hold = False
-    assert wait_scan(studio, first)["state"] == "done"       # итог и решение о release — без await между ними
-    assert ocr_releases(studio) == 0 and ocr.LEASED != {}  # в студии ждёт документ — слот держим
-    assert on_loop(studio, ocr.request_cancel, uid_b, second) == "cancelled"
-    assert ocr_releases(studio) == 1 and ocr.LEASED == {}
+    assert wait_scan(studio, second)["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert ocr_releases(studio) == 2 and ocr.LEASED == {}
 
 
 def test_queue_runs_one_at_a_time_and_caps_at_five(studio):
@@ -434,6 +512,27 @@ def test_stop_user_cancels_the_running_and_the_queued(studio):
     assert ocr.JOBS == {} and ocr.RUNNERS == {}
 
 
+def test_stop_user_releases_the_cut_page_in_the_background(studio):
+    """Стирание истории посреди страницы: раннер оборван, а слот ocr освобождает release фоном — шлюз ещё
+    считает оборванную страницу (409), release повторяет и проходит."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    pdf_scan(studio, uid, conn, "ink", "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    codes = [409, 200]
+
+    async def release(request):
+        studio.gw.releases.append((None, request.headers.get("authorization")))
+        return httpx.Response(codes.pop(0), json={})
+    studio.gw.on["/pages/ocr-release"] = release
+    try:
+        on_loop(studio, history.delete_all, uid)
+    finally:
+        studio.gw.ocr_hold = False
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 2 and ocr.RETRY_SEC in studio.sleeps
+
+
 # ---- API раздела ---------------------------------------------------------------
 
 TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
@@ -479,6 +578,8 @@ def test_upload_photos_make_one_document_in_order(studio, caplog):
     assert len(studio.gw.ocr_requests) == 2 and count(studio, "media") == 2
     listed = studio.c.get("/api/ocr").json()["items"]
     assert [i["id"] for i in listed] == [item["id"]] and "text" not in listed[0] and listed[0]["pages"] == 2
+    # опрос чата — только состояние: страницы числом, как в ленте, без текстов
+    assert studio.c.get(f"/api/ocr/{item['id']}?brief=1").json() == listed[0]
     assert f"ocr {item['id'][:8]}: принят, 2 стр." in caplog.text
     assert "a.jpg" not in caplog.text and "Текст страницы" not in caplog.text
 
