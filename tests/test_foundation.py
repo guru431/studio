@@ -52,8 +52,9 @@ DROP_V14 = ("ALTER TABLE chats DROP COLUMN web; ALTER TABLE chats DROP COLUMN we
 DROP_V15 = ("ALTER TABLE chats DROP COLUMN thinking; ALTER TABLE messages DROP COLUMN reasoning;"
             " ALTER TABLE messages DROP COLUMN reasoning_sec;")
 #: шаг 16 (распознавание): таблицы уносят свои индексы и триггеры поиска (связей ocr у новой базы нет —
-#: подключений нет); снимать первой — триггеры ссылаются на search_docs, а DROP_V13 её сносит
-DROP_V16 = "DROP TABLE scan_pages; DROP TABLE scans;"
+#: подключений нет); снимать первой — триггеры ссылаются на search_docs, а DROP_V13 её сносит; триггер текста
+#: вложений висит на attachments — его отдельно
+DROP_V16 = "DROP TABLE scan_pages; DROP TABLE scans; DROP TRIGGER search_attachments_text;"
 
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):

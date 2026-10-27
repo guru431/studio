@@ -193,7 +193,9 @@ ALTER TABLE messages ADD COLUMN reasoning_sec REAL;
 #: распознавание (ocr.py, спека 2026-10-27-studio-ocr-design, 6.3 и 6.7): документ — `scans` (state — queued,
 #: working, cancelling, done, error, cancelled; origin — раздел или вложение чата, attachment_id без ссылки на
 #: attachments: вложение удаляют, документ остаётся; text — весь текст по готовности, для поиска), страницы —
-#: `scan_pages` с n от 1 (свой user_id — media.referenced). Поиск — триггерами, как у расшифровки. Каждое
+#: `scan_pages` с n от 1 (свой user_id — media.referenced). Поиск — триггерами, как у расшифровки; текст скана,
+#: который раннер дописал во вложение уже после хода, — в поиск чата `search_attachments_text` (строка — заново:
+#: у прямого подключения ход уходит с готовым текстом, и строка уже есть). Каждое
 #: подключение srvllm — в разделе ocr с hunyuan-ocr, умолчание — наименьшее (как шаг 4): скан в чате работает
 #: сразу после выкладки. У новой базы (SCHEMA) подключений нет — вставки пусты
 _SCAN = _TRANSCRIPT                             # имя и начало текста — как у расшифровки
@@ -217,6 +219,10 @@ CREATE TRIGGER search_scans_au AFTER UPDATE OF name, text ON scans
   {_DOC} ('ocr', new.id, '', new.user_id, new.model, new.created, {_SCAN}); END;
 CREATE TRIGGER search_scans_ad AFTER DELETE ON scans BEGIN
   DELETE FROM search_docs WHERE section = 'ocr' AND item = old.id; END;
+CREATE TRIGGER search_attachments_text AFTER UPDATE OF text ON attachments
+  WHEN new.message_id IS NOT NULL AND new.kind = 'document' AND old.text IS NOT new.text BEGIN
+  DELETE FROM search_docs WHERE part = old.id AND section = 'chat';
+  {_CHAT_DOCUMENT} AND new.text IS NOT NULL; END;
 INSERT INTO section_links(user_id, section, connection_id, models, created)
 SELECT user_id, 'ocr', id, '["hunyuan-ocr"]', created FROM connections WHERE kind = 'srvllm';
 INSERT INTO section_defaults(user_id, section, connection_id, model)

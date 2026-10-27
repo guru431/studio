@@ -147,9 +147,13 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
             raise _bad("model", "этой модели нет среди отмеченных в настройках раздела")
         conn = link.connection
     if section in SERVER_ONLY and not conn.proxied:
-        raise _bad("server", f"адрес подключения «{conn.name}» убран из списка разрешённых — попросите"
-                             " администратора внести его", 409)
+        raise _bad("server", unlisted(conn), 409)
     return conn, model
+
+
+def unlisted(conn: "connections.Connection") -> str:
+    """Слова: подключение раздела только через сервер есть, но его адрес убран из списка разрешённых."""
+    return f"адрес подключения «{conn.name}» убран из списка разрешённых — попросите администратора внести его"
 
 
 # ---- правка ------------------------------------------------------------------------

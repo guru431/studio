@@ -4144,6 +4144,75 @@ def test_chat_scan_on_a_direct_connection_waits_in_the_page(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+def test_chat_scan_failure_words_stay_after_a_reload(browser, live):
+    """Скан не распознан: под ответом — слова причины, и после перезагрузки тоже, а не «ответ не получен»
+    (ревью M1)."""
+    import chat
+    live.add_user("scanfail")
+    live.gw.ocr_replies = [(500, {"error": {"message": "внутренняя ошибка"}})]
+    live.gw.ocr_hold = lambda request: not chat.STREAMS          # отказ — когда ход уже ждёт скан
+    meta = f"{LAST_ANSWER}?.querySelector('.msg-meta')?.textContent"
+    try:
+        r = browser.drive(live.url + "/", [*signin("scanfail"), ("wait", READY), add_gateway(),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            attach(scan_file()), ("wait", "document.querySelector('#composer .att-chip')"),
+            ("type", "#chat-input", "О чём документ?"), ("press", "Enter"),
+            ("wait", f"{meta}?.startsWith('скан не распознан')"),
+            ("eval", "live", meta),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("wait", f"{meta}?.startsWith('скан не распознан')"),
+            ("eval", "after", f"[{meta}, {LAST_ANSWER}.querySelector('.md').textContent]")])
+    finally:
+        live.gw.ocr_replies = []
+        live.gw.ocr_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["live"].startswith("скан не распознан: ") and v["after"] == [v["live"], ""]
+
+
+def test_chat_scan_wait_is_dropped_when_the_field_changes(browser, live):
+    """Прямое подключение ждёт скан, а человек дописал вопрос: ожидание снято, «скан ещё распознаётся…»
+    убрано, и по готовности скана ход сам не уходит — уходит по «Отправить», с новым текстом (ревью M6)."""
+    import state
+    live.add_user("scanedit")
+    live.gw.ocr_hold = lambda request: state.DB.execute(
+        "SELECT 1 FROM chats WHERE title = 'скан правят'").fetchone() is None
+    sent = len(live.cloud.chat_requests)
+    quiet = (f"(async () => {{ for (;;) {{ const {{ items }} = await {API}.api('GET', '/api/ocr');"
+             " if (items[0] && items[0].state === 'done') break; await new Promise(r => setTimeout(r, 50)); }"
+             " await new Promise(r => setTimeout(r, 3500));"
+             " return [document.querySelectorAll('#messages .msg').length,"
+             " document.querySelector('#chat-error').textContent]; })()")
+    try:
+        r = browser.drive(live.url + "/", [*signin("scanedit"), ("wait", READY), add_gateway(), add_cloud(live.cloud),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+            ("click", ".model-option[data-model=\"cloud-chat\"]"),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('cloud-chat')"),
+            attach(scan_file()), ("wait", "document.querySelector('#composer .att-chip')"),
+            ("type", "#chat-input", "О чём документ?"), ("press", "Enter"),
+            ("wait", "document.querySelector('#chat-error').textContent"),
+            ("type", "#chat-input", " Кратко."),
+            ("eval", "edited", "[document.querySelector('#chat-error').textContent,"
+                               " document.querySelector('#chat-input').value]"),
+            ("eval", "seen", MARK % "скан правят"),
+            ("eval", "quiet", quiet),
+            ("press", "Enter"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('.md').textContent.trim() === 'Облако на связи.'")])
+    finally:
+        live.gw.ocr_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["edited"] == ["", "О чём документ? Кратко."]
+    assert v["quiet"] == [0, ""]                                       # скан готов, а ход сам не ушёл
+    assert len(live.cloud.chat_requests) == sent + 1
+    content = live.cloud.chat_requests[-1]["messages"][-1]["content"]
+    assert "Текст страницы." in content and content.endswith("О чём документ? Кратко.")
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_voice_is_added_in_settings(browser, live):
     live.add_user("voicer")
     dialog = "#voice-dialog"
