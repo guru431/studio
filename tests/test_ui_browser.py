@@ -2370,9 +2370,9 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
               " return [c.querySelector('.card-prompt').textContent, c.querySelector('.card-meta').textContent,"
               " c.querySelector('img').getAttribute('srcset'), o.width / o.height]; })()")
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=3), ("wait", done_cards(3)),
-        ("eval", "pressed", "[...document.querySelectorAll('#view .view-switch [aria-pressed=true]')].map(b => b.id)"),
+        ("eval", "pressed", "[...document.querySelectorAll('#view .view-menu [aria-checked=true]')].map(b => b.id)"),
         ("eval", "tiles", grid_cols("#photo-feed")),
-        ("click", "#photo-view-table"),
+        ("click", "#photo-view"), ("click", "#photo-view-table"),
         ("wait", "document.querySelector('#photo-feed').dataset.view === 'table' && document.querySelector('#photo-feed .cell-prompt')"),
         ("eval", "head", "getComputedStyle(document.querySelector('#photo-feed .feed-head')).display"),
         ("eval", "rows", rows),
@@ -2380,13 +2380,13 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
         ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#photo-feed').scrollWidth <= document.querySelector('#photo-feed').clientWidth"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("wait", "document.querySelector('#viewer .chain-step')"),
         ("press", "Escape"), ("wait", "!document.querySelector('#viewer')"),
-        ("click", "#photo-view-preview"), ("wait", "document.querySelector('#photo-feed .card-info')"),
+        ("click", "#photo-view"), ("click", "#photo-view-preview"), ("wait", "document.querySelector('#photo-feed .card-info')"),
         ("eval", "previewCols", grid_cols("#photo-feed")),
         ("eval", "newest", newest),
         ("idle",), ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY} && {FEED_READY}"),
         ("eval", "kept", "fetch('/api/me').then(r => r.json()).then(m => [document.querySelector('#photo-feed').dataset.view,"
-                         " m.views.photo, document.querySelector('#photo-view-preview').getAttribute('aria-pressed')])")],
+                         " m.views.photo, document.querySelector('#photo-view-preview').getAttribute('aria-checked')])")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -2401,6 +2401,45 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
     assert re.fullmatch(r"/api/media/\w+\?thumb=1 384w, /api/media/\w+ 1216w", srcset)
     assert abs(ratio - 1216 / 832) < 0.02                       # картинка целиком, без обрезки
     assert v["kept"] == ["preview", "preview", "true"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
+    """Вид ленты — одна кнопка со значком текущего вида: меню из трёх пунктов (внутри окна и на телефоне)
+    закрывается выбором, Escape (фокус — на кнопку) и нажатием вне."""
+    login = f"vmenu{width}"
+    live.add_user(login)
+    menu = "document.querySelector('#photo-view + .view-menu')"
+    state = (f"[{menu}.hidden, document.querySelector('#photo-view').getAttribute('aria-expanded'),"
+             " document.activeElement.id]")
+    # значок кнопки — тот же, что у пункта вида
+    shows = "document.querySelector('#photo-view svg').innerHTML === document.querySelector('#photo-view-{0} svg').innerHTML"
+    r = browser.drive(live.url + "/", [*photo_screen(login),
+        ("eval", "button", f"[{menu}.hidden, document.querySelector('#photo-view').getAttribute('aria-haspopup'),"
+                           f" {shows.format('tiles')}]"),
+        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"),
+        ("eval", "items", f"[...{menu}.children].map(b => [b.id, b.getAttribute('role'), b.getAttribute('aria-checked'),"
+                          " b.textContent.trim(), !!b.querySelector('svg')])"),
+        ("eval", "inside", f"(() => {{ const b = {menu}.getBoundingClientRect();"
+                           f" return b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight && {NO_OVERFLOW}; }})()"),
+        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
+        ("eval", "chosen", state), ("eval", "shows", shows.format("table")),
+        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"), ("press", "Escape"),
+        ("eval", "escaped", state),
+        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"), ("click", ".photo .head h1"),
+        ("eval", "outside", state)],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["button"] == [True, "menu", True]
+    assert v["items"] == [["photo-view-preview", "menuitemradio", "false", "Превью", True],
+                          ["photo-view-tiles", "menuitemradio", "true", "Плитка", True],
+                          ["photo-view-table", "menuitemradio", "false", "Таблица", True]]
+    assert v["inside"] and v["shows"]
+    assert v["chosen"] == [True, "false", "photo-view"]
+    assert v["escaped"] == [True, "false", "photo-view"]
+    assert v["outside"][:2] == [True, "false"]
     assert not problems(r), problems(r)
 
 
@@ -2475,13 +2514,15 @@ def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, wi
         ("eval", "viewer", "!!document.querySelector('#viewer')"),
         ("eval", "count", text_of("#photo-select-count")),
         ("eval", "picked", picked()),
-        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
+        ("click", "#photo-view"), ("click", "#photo-view-table"),
+        ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "pickedTable", picked()),
         ("eval", "fits", NO_OVERFLOW),
         ("eval", "bar", "getComputedStyle(document.querySelector('.photo .select-bar')).display !== 'none'"
                         " && getComputedStyle(document.querySelector('#photo-composer')).display === 'none'"),
         ("eval", "inHead", "!!document.querySelector('.photo .head #photo-select-delete')"),
-        ("click", "#photo-view-tiles"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'tiles'"),
+        ("click", "#photo-view"), ("click", "#photo-view-tiles"),
+        ("wait", "document.querySelector('#photo-feed').dataset.view === 'tiles'"),
         ("eval", "pickedTiles", picked()),
         ("click", "#photo-select-delete"), ("wait", is_open("#photo-select-delete-dialog")),
         ("eval", "title", text_of("#photo-select-delete-dialog h2")),
@@ -2794,7 +2835,7 @@ def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, l
         *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
         *go("photo"), ("wait", FEED_READY),
         ("eval", "after", "document.querySelector('#photo-feed').dataset.view"),
-        ("eval", "pressed", "document.querySelector('#photo-view-table').getAttribute('aria-pressed')")])
+        ("eval", "pressed", "document.querySelector('#photo-view-table').getAttribute('aria-checked')")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["before"] == ["light", "tiles"] and v["patched"] == 200
@@ -3036,7 +3077,7 @@ def test_photo_external_model_hides_the_seed(browser, live):
         ("eval", "external", seed_hidden),
         ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':lustify']"),
         ("eval", "back", seed_hidden),
-        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
+        ("click", "#photo-view"), ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "row", text_of(PHOTO_CARD))], width=1280)
     assert not r.get("failed"), r
     v = r["values"]
@@ -3363,7 +3404,7 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
     live.add_user(login)
     steps = [*video_screen(login), *make_clips(3), ("click", "#video-select"), ("wait", selecting(".video"))]
     for i, view in enumerate(("preview", "tiles", "table"), 1):   # по ролику в каждом виде, отметки копятся
-        steps += [("click", f"#video-view-{view}"),
+        steps += [("click", "#video-view"), ("click", f"#video-view-{view}"),
                   ("wait", f"document.querySelector('#video-feed').dataset.view === '{view}'"),
                   ("click", nth(i, card=CLIP)),
                   ("eval", f"{view}Picked", picked("#video-feed")),
@@ -3428,8 +3469,8 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         put_file("#video-file", png_of(48, 64, "olive")),
         ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48"),
         ("click", "#video-go"), ("wait", clips("done", 1)),
-        ("eval", "pressed", "document.querySelector('#video-view-preview').getAttribute('aria-pressed')"),
-        ("click", "#video-view-tiles"), ("wait", f"document.querySelector('{CLIP} .video-open')"),
+        ("eval", "pressed", "document.querySelector('#video-view-preview').getAttribute('aria-checked')"),
+        ("click", "#video-view"), ("click", "#video-view-tiles"), ("wait", f"document.querySelector('{CLIP} .video-open')"),
         ("eval", "tile", f"[document.querySelector('{CLIP} .card-cap').textContent, !!document.querySelector('{CLIP} video'),"
                          f" {grid_cols('#video-feed')}]"),
         ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
@@ -3440,7 +3481,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         ("eval", "spy", CLICKS), ("click", "#video-viewer .act-download"), ("wait", "window.clicked.length === 1"),
         ("eval", "download", "window.clicked[0][0]"),
         ("press", "Escape"), ("wait", "!document.querySelector('#video-viewer')"),
-        ("click", "#video-view-table"), ("wait", f"document.querySelector('{CLIP} .cell-prompt')"),
+        ("click", "#video-view"), ("click", "#video-view-table"), ("wait", f"document.querySelector('{CLIP} .cell-prompt')"),
         ("eval", "row", f"[...document.querySelectorAll('{CLIP} .cell-meta > span')].map(s => s.textContent)"),
         ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#video-feed').scrollWidth"
                               " <= document.querySelector('#video-feed').clientWidth"),

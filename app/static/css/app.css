@@ -779,10 +779,14 @@ label.chip { cursor: pointer; }
 
 /* ---- вид ленты фото и видео (views.js; data-view ленты): превью, плитка, таблица ---- */
 
-.view-switch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 10px; background: var(--panel-2); }
-.view-switch .icon-btn { width: 30px; height: 30px; border-radius: 8px; }
-.view-switch .icon-btn[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
-.view-switch svg.ico { width: 17px; height: 17px; }
+.view-pick { position: relative; flex: none; }
+.view-toggle { width: auto; grid-auto-flow: column; gap: 2px; padding: 0 6px; }
+.view-toggle svg.caret { width: 12px; height: 12px; }
+.view-toggle[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
+.view-menu { position: absolute; z-index: 15; top: calc(100% + 4px); right: 0; min-width: 160px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.view-option { display: flex; align-items: center; gap: 10px; }
+.view-option svg.ico { width: 17px; height: 17px; flex: none; }
 
 /* превью: крупно, картинка целиком (её пропорции — --ratio), под ней промпт и параметры */
 [data-view="preview"] .feed-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
