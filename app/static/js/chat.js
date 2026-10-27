@@ -1175,7 +1175,8 @@ function build(view, ctx) {
 
   function autosize() {
     input.style.height = 'auto';
-    input.style.height = `${input.scrollHeight}px`;
+    // пустое — в одну строку: подсказка, не влезшая в строку, иначе растянула бы рамку до двух
+    if (input.value) input.style.height = `${input.scrollHeight}px`;
   }
 
   async function upload(a) {

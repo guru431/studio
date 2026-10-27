@@ -925,7 +925,8 @@ function build(view, ctx) {
 
   function autosize() {
     prompt.style.height = 'auto';
-    prompt.style.height = `${prompt.scrollHeight}px`;
+    // пустое — в одну строку, как при открытии: длинная подсказка на телефоне иначе растянула бы рамку до двух
+    if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
   /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */
