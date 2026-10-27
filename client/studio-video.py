@@ -361,8 +361,20 @@ class Videos:
             n += 1
             file = f"{stem}-{n}.mp4"
         part = self.folder / (file + ".part")
-        part.write_bytes(video)
-        os.replace(part, self.folder / file)
+        try:
+            part.write_bytes(video)
+            os.replace(part, self.folder / file)
+        except OSError as e:
+            # Диск полон, нет прав, имя занято: один ролик — не повод ронять прогон и снимать чужие
+            warn(f"{self.label(job)}: не записался — {e}")
+            try:
+                if part.is_file():
+                    part.unlink()
+            except OSError:
+                pass
+            self.remove(job)
+            self.failed += 1
+            return True
         self.remove(job)
         prompt = job.prompt or str(obj.get("prompt") or "")
         source = job.source or str(obj.get("prompt_source") or "") or "auto"
