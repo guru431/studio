@@ -288,6 +288,18 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
     assert r["values"]["items"][0] in THEME_WORDS and r["values"]["items"][1:] == ["Настройки", "Выход"]
 
 
+def test_api_passes_the_deadline_through(browser, live):
+    """Срок (AbortSignal.timeout отклоняет fetch TimeoutError) и обрыв — как есть, а не «Нет связи с сервером»."""
+    call = ("(async () => {{ try {{ await {api}.api('GET', '/api/me', undefined, {{ signal: AbortSignal.abort({why}) }});"
+            " return 'ok'; }} catch (e) {{ return [e.name, e.code || null]; }} }})()")
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        ("eval", "timeout", call.format(api=API, why="new DOMException('срок', 'TimeoutError')")),
+        ("eval", "abort", call.format(api=API, why=""))])
+    assert not r.get("failed"), r
+    assert r["values"]["timeout"] == ["TimeoutError", 23]          # DOMException.TIMEOUT_ERR, не ApiError 'network'
+    assert r["values"]["abort"] == ["AbortError", 20]
+
+
 # ---- профиль и панель ----------------------------------------------------------
 
 #: api() страницы — тот же экземпляр, что у оболочки (me с токеном CSRF уже загружен).
@@ -2926,6 +2938,38 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
     assert not problems(r), problems(r)
 
 
+#: опрос перевода всегда 500; window.fails — число отказов, window.fast() — пауза опроса (POLL_MS) 5 мс
+TRANSLATION_DOWN = """(() => { const real = window.fetch; const wait = window.setTimeout.bind(window);
+  window.fails = 0;
+  window.fast = () => { window.setTimeout = (f, ms, ...a) => wait(f, ms === 1500 ? 5 : ms, ...a); return true; };
+  window.fetch = (url, opts = {}) => (opts.method || 'GET') === 'GET' && String(url).startsWith('/api/images/translations/')
+    ? (window.fails += 1, Promise.resolve(new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })))
+    : real(url, opts);
+  return true; })()"""
+
+
+def test_photo_translation_that_keeps_failing_lets_the_field_go(browser, live):
+    """Опрос перевода отказывает: «EN» отменяет сразу, а без отмены после TRANSLATE_FAILS отказов подряд
+    поле снова правится, под ним — ошибка, задание снято."""
+    login = "trdown"
+    live.add_user(login)
+    idle = "document.querySelector('#photo-translate').textContent === 'EN' && !document.querySelector('#photo-prompt').readOnly"
+    state = ("[document.querySelector('#photo-prompt').value, document.querySelector('#photo-prompt').readOnly,"
+             " document.querySelector('#photo-error').textContent, window.fails]")
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "stub", TRANSLATION_DOWN),
+        ("type", "#photo-prompt", "кошка на подоконнике"), ("click", "#photo-translate"),
+        ("wait", "window.fails >= 2"), ("click", "#photo-translate"), ("wait", idle),
+        ("eval", "cancelled", state),
+        ("eval", "fast", "window.fast()"), ("eval", "zero", "window.fails = 0"),
+        ("click", "#photo-translate"), ("wait", idle), ("eval", "gaveUp", state)], timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["cancelled"][:3] == ["кошка на подоконнике", False, ""]
+    assert v["gaveUp"] == ["кошка на подоконнике", False, "Перевод не получился: Ошибка сервера (500)", 40]
+    assert sum(s.endswith("/cancel") for s in r["sent"]) >= 2
+    assert not problems(r), problems(r)
+
+
 # ---- видео ---------------------------------------------------------------------
 
 # ---- фото: серии, пресеты, сравнение, варианты (спека 2026-10-21-studio-photo-presets-compare-series) ----
@@ -3821,9 +3865,18 @@ def box_geo(field):
         document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === f, Math.round(r.height)]; }})()"""
 
 
+def hint_fits(field):
+    """[высота подсказки пустого поля, высота поля]: подсказка — значением в обход перехвата field.js
+    (значки не появляются, ширина та же), высота — scrollHeight; поле затем снова пустое."""
+    return f"""(() => {{ const f = document.querySelector({field!r});
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      set.call(f, f.placeholder); const out = [f.scrollHeight, f.clientHeight]; set.call(f, ''); return out; }})()"""
+
+
 def geo_steps(name, field, scope):
-    """Рамка поля пустого, с одной буквой и после «очистить»: `<name>-empty`, `<name>-typed`, `<name>-cleared`."""
-    return [("eval", f"{name}-empty", box_geo(field)), ("type", field, "к"),
+    """Рамка поля пустого, с одной буквой и после «очистить»: `<name>-empty`, `<name>-typed`, `<name>-cleared`;
+    подсказка пустого — `<name>-hint` (hint_fits)."""
+    return [("eval", f"{name}-empty", box_geo(field)), ("eval", f"{name}-hint", hint_fits(field)), ("type", field, "к"),
             ("eval", f"{name}-typed", box_geo(field)), ("click", f"{scope} .field-clear"),
             ("eval", f"{name}-cleared", box_geo(field))]
 
@@ -3858,8 +3911,10 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
     v = r["values"]
     for name, tools in (("photo", 3), ("chat", 2), ("video", 2)):
         empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
-        # у видео на телефоне поле — в две строки (подсказка целиком), у чата и фото — в одну
-        assert empty[0] <= (50 if name == "video" else 34), (name, empty)
+        # у фото и видео на телефоне поле — под подсказку целиком (две строки), у чата — в одну
+        assert empty[0] <= (34 if name == "chat" else 50), (name, empty)
+        hint, height = v[f"{name}-hint"]
+        assert name != "photo" or hint <= height, (name, v[f"{name}-hint"])
         assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)
         assert empty[1:4] == [1, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
     assert v["chatTall"] > v["chat-empty"][4] + 20 and abs(v["chatBack"] - v["chat-empty"][4]) <= 1, (v["chatTall"], v["chatBack"])
@@ -3925,6 +3980,7 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
         ("eval", "meta", "document.querySelector('.tr-view .tr-meta').textContent"),
         ("eval", "audio", "document.querySelector('.tr-view audio.tr-audio').getAttribute('src').startsWith('/api/media/')"),
         ("eval", "item", "document.querySelector('.tr-item[data-state=done]').textContent"),
+        ("eval", "group", "document.querySelector('.tr-group').textContent"),
         ("eval", "copy", COPY_SPY), ("click", "#tr-copy"), ("wait", "window.copied"),
         ("eval", "copied", "window.copied"),
         ("eval", "spy", CLICKS), ("click", "#tr-download"), ("click", ".tr-formats [data-format=docx]"),
@@ -3934,6 +3990,7 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
     v = r["values"]
     assert v["who"] == ["Собеседник 1 · 00:00", "Собеседник 2 · 00:03"]
     assert "собеседников: 2" in v["meta"] and v["audio"] and "Звонок.wav" in v["item"]
+    assert v["group"] == "Сегодня"                     # подпись дня — dayTitle ленты (с годом, если не текущий)
     assert v["copied"].startswith("Собеседник 1 · 00:00\nЗдравствуйте.")
     assert v["clicked"][0].endswith("/export?format=docx") and v["clicked"][1]
     assert not v["overflow"]

@@ -45,7 +45,7 @@ import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
 
 const POLL_MS = 1500;
-const THUMB_SIDE = 384;          // длинная сторона миниатюры (media.THUMB_SIDE)
+const TRANSLATE_FAILS = 40;      // отказов опроса перевода подряд (~минута) — дальше перевод бросаетсяconst THUMB_SIDE = 384;          // длинная сторона миниатюры (media.THUMB_SIDE)
 const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
@@ -872,6 +872,7 @@ function build(view, ctx) {
     try {
       job.id = (await api('POST', '/api/images/translations', { prompt: text })).id;
       if (job.cancelled) api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+      let fails = 0;
       for (;;) {
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
         if (!alive) {                                     // ушли из раздела: перевод никто не заберёт
@@ -883,8 +884,14 @@ function build(view, ctx) {
           r = await api('GET', `/api/images/translations/${job.id}`);
         } catch (err) {
           if (err.code === 'gone') throw err;
+          if (job.cancelled) break;                       // отменили, а ответа нет — отмена уже ушла
+          if (++fails >= TRANSLATE_FAILS) {               // не связь мигнула, а отказ надолго — поле вернуть
+            api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+            throw new Error(`Перевод не получился: ${err.message}`);
+          }
           continue;                                       // связь мигнула — спросить ещё раз
         }
+        fails = 0;
         if (r.state === 'done') {
           if (!job.cancelled) {                           // отмена опоздала — перевод не нужен
             prompt.value = r.text;

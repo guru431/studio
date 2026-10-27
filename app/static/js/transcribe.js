@@ -25,7 +25,7 @@
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
 import { api, hooks, me } from './api.js';
-import { createPicker } from './feed.js';
+import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -55,10 +55,6 @@ function clock(sec) {
   const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
   const ss = String(s % 60).padStart(2, '0');
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
-function day(ts) {
-  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
 function when(ts) {
@@ -119,7 +115,7 @@ function build(view, ctx) {
     const nodes = [];
     let last = '';
     for (const item of items) {
-      const label = day(item.created);
+      const label = dayTitle(item.created);
       if (label !== last) {
         nodes.push(el('p', { class: 'tr-group' }, label));
         last = label;

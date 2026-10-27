@@ -52,7 +52,8 @@ export async function api(method, path, body, { signal } = {}) {
   try {
     response = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal });
   } catch (err) {
-    if (err && err.name === 'AbortError') throw err;
+    // обрыв и срок (AbortSignal.timeout отклоняет TimeoutError) — как есть: это не «нет связи»
+    if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) throw err;
     throw new ApiError(0, 'network', 'Нет связи с сервером');
   }
   if (!response.ok) {

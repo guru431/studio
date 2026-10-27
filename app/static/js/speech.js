@@ -10,7 +10,7 @@
  * поля текста — подсказка. #/speech?id=<id> («Открыть» в «В работе», jobs.js) выбирает озвучку;
  * принятая озвучка зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
-import { createPicker } from './feed.js';
+import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { modelLabel } from './settings.js';
@@ -34,10 +34,6 @@ function icon(name) {
 function clock(sec) {
   const s = Math.max(0, Math.round(sec || 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function day(ts) {
-  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
 function build(view, ctx) {
@@ -134,7 +130,7 @@ function build(view, ctx) {
     const nodes = [];
     let last = '';
     for (const item of items) {
-      const label = day(item.created);
+      const label = dayTitle(item.created);
       if (label !== last) {
         nodes.push(el('p', { class: 'tr-group' }, label));
         last = label;

@@ -18,7 +18,7 @@
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me } from './api.js';
-import { createPicker } from './feed.js';
+import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
 import { el, openDialog, plural, words } from './ui.js';
@@ -43,10 +43,6 @@ function icon(name) {
   const box = document.createElement('span');
   box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
   return box.firstChild;
-}
-
-function day(ts) {
-  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
 function when(ts) {
@@ -115,7 +111,7 @@ function build(view, ctx) {
     const nodes = [];
     let last = '';
     for (const item of items) {
-      const label = day(item.created);
+      const label = dayTitle(item.created);
       if (label !== last) {
         nodes.push(el('p', { class: 'tr-group' }, label));
         last = label;
