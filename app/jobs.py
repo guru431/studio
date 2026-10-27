@@ -2,6 +2,7 @@
 
 `GET /api/jobs?since=<время>` → `{now, running, finished}`. Идущие — картинки `working`,
 `cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`,
+распознавания `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
 не старше JOBS_RECENT_SEC, не больше FINISHED_MAX (чат сюда не попадает: ответ виден в диалоге).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Request
 import chat
 import clock
 import images
+import ocr
 import speeches
 import state
 import transcripts
@@ -83,6 +85,17 @@ def _transcribe(uid: int, after: float) -> list:
     return out
 
 
+def _ocr(uid: int, after: float) -> list:
+    going, done = _rows("scans", uid, ocr.RUNNING, after)
+    out = []
+    for row in going + done:
+        job = ocr.JOBS.get(row["id"])
+        # этап идущего — без своего времени (как у расшифровки); ждущий и отменяемый — слова строки
+        detail = job.stage if job is not None and row["state"] == "working" else row["detail"]
+        out.append(_item("ocr", row, f"Распознавание «{row['name']}»", detail, f"ocr?id={row['id']}"))
+    return out
+
+
 def _speech(uid: int, after: float) -> list:
     going, done = _rows("speeches", uid, ("working",), after)
     out = []
@@ -114,7 +127,7 @@ def _chat(uid: int) -> list:
 async def list_jobs(request: Request, since: "float | None" = None):
     uid, now = request.state.user.id, clock.NOW()
     after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
-    items = _photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _speech(uid, after)
+    items = _photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after) + _speech(uid, after)
     running = sorted([i for i in items if i["finished"] is None] + _chat(uid), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
     return {"now": now, "running": running, "finished": finished[:FINISHED_MAX]}

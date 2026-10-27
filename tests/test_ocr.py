@@ -2,14 +2,19 @@
 отказ документа, ожидание карты, отмена после ответа страницы и освобождение слота ocr последним
 документом студии, очередь пользователя, перезапуск; имя файла и текст — не в журнал."""
 import asyncio
+import io
 import json
 import logging
+import zipfile
+from urllib.parse import quote
+from xml.etree import ElementTree
 
 import pytest
 from fastapi import HTTPException
 
 import clock
 import connections
+import documents
 import history
 import media
 import ocr
@@ -17,6 +22,8 @@ import ocr_render
 import state
 from conftest import add_gateway, make_user, signin
 from scans import photo, scan_pdf
+
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 NAME = "Договор аренды.pdf"
 TEXT = "# Договор\n\nТекст страницы."
@@ -311,3 +318,180 @@ def test_stop_user_cancels_the_running_and_the_queued(studio):
     on_loop(studio, ocr.stop_user, uid)
     assert [scan_row(studio, s)["state"] for s in (running, queued)] == ["cancelled", "cancelled"]
     assert ocr.JOBS == {} and ocr.RUNNERS == {}
+
+
+# ---- API раздела ---------------------------------------------------------------
+
+TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def post_files(s, files):
+    """POST /api/ocr: части `file` в порядке списка (имя, байты)."""
+    parts = [("file", (name, data, TYPES.get(name[name.rfind("."):], "application/octet-stream")))
+             for name, data in files]
+    return s.c.post("/api/ocr", files=parts)
+
+
+def wait_ocr(s, sid, states=ocr.TERMINAL, limit=3000):
+    for _ in range(limit):
+        r = s.c.get(f"/api/ocr/{sid}")
+        assert r.status_code == 200, r.text
+        if r.json()["state"] in states:
+            return r.json()
+        s.c.portal.call(asyncio.sleep, 0.001)
+    raise AssertionError("не дождались")
+
+
+def count(s, table):
+    return on_loop(s, lambda: state.DB.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+
+
+def test_upload_photos_make_one_document_in_order(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    r = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))])
+    assert r.status_code == 202 and r.json()["pages"] == 2 and r.json()["name"] == "a.jpg"
+    assert set(r.json()) == {"id", "name", "state", "detail", "model", "pages", "done_pages", "origin", "created",
+                             "finished"}
+    assert (r.json()["origin"], r.json()["model"]) == ("section", "hunyuan-ocr")
+    item = wait_ocr(studio, r.json()["id"], {"done"})
+    assert [p["n"] for p in item["pages"]] == [1, 2] and all(p["media_id"] for p in item["pages"])
+    assert [(p["state"], p["text"], p["detail"]) for p in item["pages"]] == [("done", TEXT, None)] * 2
+    assert item["done_pages"] == 2 and item["detail"] == "готово"
+    mimes = [on_loop(studio, lambda m=p["media_id"]: state.DB.execute(
+        "SELECT mime, download_name FROM media WHERE id = ?", (m,)).fetchone()[:]) for p in item["pages"]]
+    assert mimes == [("image/jpeg", "a.jpg"), ("image/png", "b.png")]                 # фото — как есть
+    assert studio.c.get(f"/api/media/{item['pages'][0]['media_id']}").content == photo()
+    assert len(studio.gw.ocr_requests) == 2 and count(studio, "media") == 2
+    listed = studio.c.get("/api/ocr").json()["items"]
+    assert [i["id"] for i in listed] == [item["id"]] and "text" not in listed[0] and listed[0]["pages"] == 2
+    assert f"ocr {item['id'][:8]}: принят, 2 стр." in caplog.text
+    assert "a.jpg" not in caplog.text and "Текст страницы" not in caplog.text
+
+
+def test_pdf_in_the_section_recognizes_every_page(studio):
+    """Текстовый слой в разделе не читается: страница со слоем тоже уходит в /pages/ocr."""
+    add_gateway(studio)
+    r = post_files(studio, [(NAME, scan_pdf("Layer text of the first page, long enough to count", "ink"))])
+    assert r.status_code == 202 and r.json()["name"] == NAME and r.json()["pages"] == 2
+    item = wait_ocr(studio, r.json()["id"], {"done"})
+    assert [(p["n"], p["state"], p["text"]) for p in item["pages"]] == [(1, "done", TEXT), (2, "done", TEXT)]
+    assert all(p["media_id"] for p in item["pages"]) and len(studio.gw.ocr_requests) == 2
+    source = scan_row(studio, item["id"])["source_media_id"]
+    assert on_loop(studio, lambda: state.DB.execute("SELECT mime FROM media WHERE id = ?", (source,)).fetchone()[0]) \
+        == "application/pdf"
+
+
+def test_refusals_are_words(studio, monkeypatch):
+    add_gateway(studio)
+    pdf = scan_pdf("ink")
+
+    def refused(files, status, message):
+        r = post_files(studio, files)
+        assert r.status_code == status, r.text
+        assert message in r.json()["detail"]["message"], r.json()
+    heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 64
+    refused([("IMG_1.heic", heic)], 415, ocr.FORMAT)
+    refused([(NAME, pdf), ("a.jpg", photo())], 415, ocr.FORMAT)
+    refused([("a.jpg", photo()), (NAME, pdf)], 415, ocr.FORMAT)
+    refused([(NAME, pdf), ("b.pdf", pdf)], 415, ocr.FORMAT)
+    refused([(NAME, scan_pdf(*["page"] * 51))], 422, "больше 50 страниц — разделите документ")
+    refused([(f"{n}.png", photo("PNG", (8, 8))) for n in range(51)], 422, "50")
+    refused([(NAME, b"%PDF-1.4 broken")], 422, "повреждён")
+    refused([(NAME, b"\x00" * (21 * 1024 * 1024))], 413, "20 МиБ")
+    monkeypatch.setattr(ocr_render.image_upload, "VIDEO_PIXELS", 100)
+    refused([("a.jpg", photo())], 413, "Мп")
+    assert count(studio, "media") == 0 and count(studio, "scans") == 0
+    make_user(studio, "bob")
+    signin(studio, "bob")                                         # без подключения раздела
+    r = post_files(studio, [("a.jpg", photo())])
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"
+    assert "Распознавание" in r.json()["detail"]["message"]
+
+
+def test_someone_else_cannot_see_the_scan_or_its_pages(studio):
+    add_gateway(studio)
+    sid = post_files(studio, [(NAME, scan_pdf("ink"))]).json()["id"]
+    page = wait_ocr(studio, sid, {"done"})["pages"][0]["media_id"]
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    for r in (studio.c.get(f"/api/ocr/{sid}"), studio.c.get(f"/api/ocr/{sid}/export?format=txt"),
+              studio.c.post(f"/api/ocr/{sid}/attachments"), studio.c.post(f"/api/ocr/{sid}/cancel"),
+              studio.c.delete(f"/api/ocr/{sid}"), studio.c.get(f"/api/media/{page}")):
+        assert r.status_code == 404, r.request.url
+    assert studio.c.get("/api/ocr").json() == {"items": []}
+    assert count(studio, "scans") == 1
+
+
+TABLE = ("# Итоги\n\n**Важно:** `код`\n\n"
+         "<table><tr><td>Товар</td><td>Цена</td></tr><tr><td>Хлеб &amp; соль</td><td>50</td></tr></table>")
+
+
+def test_export_txt_md_docx(studio):
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(200, answer(TABLE)), (200, answer("Обрывок", "length"))]
+    studio.gw.ocr_hold = True
+    sid = post_files(studio, [("Отчёт.pdf", scan_pdf("ink", "ink", "blank"))]).json()["id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=txt")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "running"
+    studio.gw.ocr_hold = False
+    wait_ocr(studio, sid, {"done"})
+
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=txt")
+    assert r.status_code == 200 and r.headers["content-type"] == "text/plain; charset=utf-8"
+    assert quote("Отчёт.txt", safe="") in r.headers["content-disposition"]
+    assert r.text == ("Страница 1\n\nИтоги\n\nВажно: код\n\nТовар\tЦена\nХлеб & соль\t50\n\n"
+                      "Страница 2\n\n[не распознана: ответ модели обрезан — страница слишком плотная]\n\n"
+                      "Страница 3\n\n[пустая страница]\n")
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=md")
+    assert r.status_code == 200 and r.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert quote("Отчёт.md", safe="") in r.headers["content-disposition"]
+    assert r.text.startswith(f"## Страница 1\n\n{TABLE}\n\n## Страница 2\n\n[не распознана: ")
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=docx")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert quote("Отчёт.docx", safe="") in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    texts = [t.text for t in root.iter(f"{W}t")]
+    assert texts[:2] == ["Отчёт", "Страница 1"] and "Хлеб & соль" in texts and "[пустая страница]" in texts
+    assert len(list(root.iter(f"{W}tab"))) == 2                        # ячейки таблицы — табуляцией
+    assert studio.c.get(f"/api/ocr/{sid}/export?format=pdf").status_code == 422
+
+
+def test_to_chat_attaches_markdown(studio, monkeypatch):
+    add_gateway(studio)
+    sid = post_files(studio, [("Отчёт.pdf", scan_pdf("ink"))]).json()["id"]
+    assert studio.c.post(f"/api/ocr/{sid}/attachments").status_code == 409
+    wait_ocr(studio, sid, {"done"})
+    r = studio.c.post(f"/api/ocr/{sid}/attachments")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert set(body) == {"id", "kind", "name", "chars", "media_id", "text", "tokens"}
+    assert body["kind"] == "document" and body["name"] == "Отчёт.md" and body["text"].startswith("## Страница 1")
+    assert body["text"] == f"## Страница 1\n\n{TEXT}\n" and body["chars"] == len(body["text"])
+    row = on_loop(studio, lambda: state.DB.execute("SELECT * FROM attachments WHERE id = ?", (body["id"],)).fetchone())
+    assert row["message_id"] is None and row["source_transcript_id"] is None and row["text"] == body["text"]
+    assert studio.c.get(f"/api/media/{body['media_id']}").text == body["text"]
+    monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 10)
+    r = studio.c.post(f"/api/ocr/{sid}/attachments")
+    assert r.status_code == 413 and "в чат его не передать" in r.json()["detail"]["message"]
+
+
+def test_delete_running_is_409_and_done_removes_files(studio):
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    sid = post_files(studio, [(NAME, scan_pdf("ink", "ink"))]).json()["id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    r = studio.c.delete(f"/api/ocr/{sid}")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "running"
+    assert studio.c.post(f"/api/ocr/{sid}/cancel").json() == {"state": "cancelling"}
+    studio.gw.ocr_hold = False
+    assert wait_ocr(studio, sid)["state"] == "cancelled"
+    sid2 = post_files(studio, [(NAME, scan_pdf("ink", "ink"))]).json()["id"]
+    wait_ocr(studio, sid2, {"done"})
+    assert count(studio, "media") == 2 + 3                               # PDF и страница отменённого, PDF и две готового
+    assert studio.c.delete(f"/api/ocr/{sid2}").status_code == 204
+    assert studio.c.delete(f"/api/ocr/{sid}").status_code == 204
+    assert count(studio, "media") == 0 and count(studio, "scans") == 0 and count(studio, "scan_pages") == 0
+    assert studio.c.get(f"/api/ocr/{sid}").status_code == 404

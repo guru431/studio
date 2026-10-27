@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import images
 import jobs
+import ocr
 import speeches
 import state
 import transcripts
@@ -181,6 +182,37 @@ def test_jobs_log_nothing(studio, caplog):
     get(studio)
     for secret in (NAME, TEXT[:20], "План отпуска"):
         assert secret not in caplog.text
+
+
+def scan(uid, sid, state_="working", created=T0 - 30, finished=None, detail="готовлю страницы"):
+    state.DB.execute("INSERT INTO scans(id, user_id, model, name, origin, pages, state, detail, created, finished)"
+                     " VALUES (?, ?, 'hunyuan-ocr', ?, 'section', 3, ?, ?, ?, ?)",
+                     (sid, uid, SCAN, state_, detail, created, finished))
+
+
+SCAN = "Договор аренды.pdf"
+
+
+def test_jobs_panel_lists_running_and_done_scans(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    uid = me(studio)
+    scan(uid, "o1")
+    ocr.JOBS["o1"] = SimpleNamespace(stage="распознаю · стр. 2 из 3", stage_at=T0 - 10)
+    scan(uid, "o2", state_="queued", detail="в очереди")
+    ocr.JOBS["o2"] = SimpleNamespace(stage="в очереди", stage_at=T0 - 5)
+    scan(uid, "o3", state_="cancelling", detail="отменяю")
+    ocr.JOBS["o3"] = SimpleNamespace(stage="распознаю · стр. 1 из 3", stage_at=T0 - 5)
+    scan(uid, "o4", state_="done", detail="готово", finished=T0 - 2)
+    scan(uid, "o5", state_="error", detail="файл документа удалён", finished=T0 - 1)
+    scan(make_user(studio, "friend"), "o9")
+    out = get(studio)
+    run, fin = by_id(out["running"]), by_id(out["finished"])
+    assert set(run) == {"o1", "o2", "o3"} and set(fin) == {"o4", "o5"}
+    assert run["o1"] == {"section": "ocr", "id": "o1", "state": "running", "title": f"Распознавание «{SCAN}»",
+                         "detail": "распознаю · стр. 2 из 3", "started": T0 - 30, "finished": None, "href": "ocr?id=o1"}
+    assert run["o2"]["detail"] == "в очереди" and run["o3"]["detail"] == "отменяю"
+    assert (fin["o4"]["state"], fin["o5"]["state"], fin["o5"]["detail"]) == ("done", "error", "файл документа удалён")
+    assert SCAN not in caplog.text
 
 
 def test_window_constants():
