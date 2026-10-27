@@ -116,7 +116,9 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0;
     padding: 4px 0 env(safe-area-inset-bottom, 0px); background: var(--side); border-right: 0; border-top: 1px solid var(--border); }
   #rail .logo, #rail .spacer { display: none; }
-  #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 2px 5px; justify-content: center; font-size: 10px; }
+  /* шесть вкладок: «Расшифровка» на 390 px — 64 px в 65 px вкладки, поэтому без боковых отступов и чуть плотнее */
+  #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size: 10px;
+    letter-spacing: -0.02em; }
   #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .theme-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
@@ -281,6 +283,20 @@ label { font-size: 13px; color: var(--muted); }
 .sp-voice { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .sp-voice-hint { margin: 0; }
 .tr-text { overflow-wrap: anywhere; line-height: 1.5; }
+/* «Распознавание» (ocr.js): листалка и две колонки — картинка страницы и её текст; на телефоне — одна */
+.ocr-view { width: 100%; max-width: 1400px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ocr-meta { margin: 0; }
+.ocr-pager { display: flex; align-items: center; gap: 10px; }
+.ocr-pager .btn { min-width: 38px; padding: 6px 10px; font-size: 18px; line-height: 1; }
+.ocr-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ocr-scan-open { display: block; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  background: #fff; cursor: zoom-in; }
+.ocr-scan { display: block; width: 100%; height: auto; }
+.ocr-noscan { margin: 0; padding: 24px 12px; border: 1px dashed var(--border); border-radius: 8px; text-align: center; }
+.ocr-text { margin: 0; line-height: 1.5; }
+@media (max-width: 760px) {
+  .ocr-two { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 760px) {
   .split-aside { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw);
     padding-top: calc(12px + env(safe-area-inset-top, 0px)); transform: translateX(-100%); visibility: hidden;

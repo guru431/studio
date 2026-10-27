@@ -580,7 +580,7 @@ def test_settings_menu_and_old_profile_route(browser, live):
         ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => a.dataset.section)")])
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
-    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "dictation", "other"]
+    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "ocr", "speech", "dictation", "other"]
     assert not problems(r), problems(r)
 
 
@@ -811,7 +811,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices")]
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "ocr", "speech", "voices")]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
@@ -1772,7 +1772,7 @@ def put_file(selector, data, name="photo.png"):
 def add_gateway():
     return ("eval", "gateway", f"""(async () => {{ const m = {API};
       await m.api('POST', '/api/connections', {{ name: 'Шлюз', kind: 'srvllm', base_url: {GATEWAY_URL!r},
-        token: {GW_TOKEN!r}, sections: ['chat', 'photo', 'video', 'transcribe', 'speech', 'dictation'] }});
+        token: {GW_TOKEN!r}, sections: ['chat', 'photo', 'video', 'transcribe', 'ocr', 'speech', 'dictation'] }});
       await m.loadMe(); return true; }})()""")
 
 
@@ -2337,7 +2337,8 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """«Расшифровка» вылезала за рельс шириной 64 px; на телефоне от 390 px подписи целиком."""
+    """«Расшифровка» вылезала за рельс шириной 64 px; на телефоне от 390 px подписи целиком — и с шестой
+    вкладкой «Сканы»."""
     fits = """[...document.querySelectorAll('#rail .tab span')].map(s => { const t = s.closest('.tab').getBoundingClientRect();
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= t.left - 0.5 && b.right <= t.right + 0.5,
       s.scrollWidth <= s.clientWidth]; })"""
@@ -2345,7 +2346,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
                       width=width, mobile=width < 760)
     assert not r.get("failed"), r
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    assert set(labels) == {"Чат", "Фото", "Видео", "Расшифровка", "Озвучка"}
+    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Расшифровка", "Сканы", "Озвучка"]
     assert all(inside for inside, _ in labels.values()), labels
     if width >= 390:
         assert all(whole for _, whole in labels.values()), labels
@@ -3941,6 +3942,114 @@ def test_transcript_to_chat_that_fails_leaves_the_sections_default(browser, live
     assert not known_refusals(problems(r), 404), problems(r)
 
 
+# ---- распознавание ---------------------------------------------------------------
+
+#: ответ HunyuanOCR: заголовок, HTML-таблица (должна стать таблицей) и то, что не должно сработать
+OCR_MARKDOWN = ("# Отчёт\n\n<table><tr><td>Офис</td><td>38,5</td></tr></table>\n\n"
+                "<script>window.pwned = 1</script>\n\n<a href=\"javascript:window.pwned = 2\">ссылка</a>")
+OCR_PAGE = "document.querySelector('#ocr-page')?.textContent"
+
+
+def put_files(selector, files, mime="image/png"):
+    """Несколько файлов в поле одним выбором, как из окна выбора, и событие change."""
+    parts = ", ".join(f"['{base64.b64encode(data).decode()}', '{name}']" for name, data in files)
+    return ("eval", "files", f"""(() => {{ const dt = new DataTransfer();
+      for (const [b64, name] of [{parts}]) dt.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))],
+        name, {{ type: '{mime}' }}));
+      const input = document.querySelector('{selector}'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.files.length; }})()""")
+
+
+def recognized(login, files):
+    """Вход, шлюз, «Распознавание», фото страниц одним выбором — документ готов."""
+    return [*signin(login), ("wait", READY), add_gateway(),
+            *go("ocr"), ("wait", "document.querySelector('#ocr-add input')"),
+            put_files("#ocr-add input", files),
+            ("wait", "document.querySelector('.ocr-item[data-state=done]') && document.querySelector('.ocr-text')")]
+
+
+@pytest.fixture
+def ocr_reply(live):
+    before = live.gw.ocr_reply
+    live.gw.ocr_reply = {"choices": [{"message": {"content": OCR_MARKDOWN}, "finish_reason": "stop"}]}
+    try:
+        yield
+    finally:
+        live.gw.ocr_reply = before
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_ocr_uploads_photos_and_pages_through_scan_and_text(browser, live, ocr_reply, width):
+    """Два фото одним выбором — один документ из двух страниц: слева (на телефоне — сверху) картинка
+    страницы, справа текст с HTML-таблицей; «›» — вторая страница; нажатие на картинку — окно просмотра."""
+    from scans import photo
+    login = f"ocr{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*recognized(login, [("Договор.png", photo("PNG", (800, 600))),
+                                                           ("Лист 2.png", photo("PNG", (600, 800)))]),
+        ("eval", "item", "document.querySelector('.ocr-item[data-state=done]').textContent"),
+        ("eval", "title", "document.querySelector('.split-main h1').textContent"),
+        ("eval", "meta", "document.querySelector('.ocr-meta').textContent"),
+        ("eval", "page1", OCR_PAGE),
+        ("wait", "document.querySelector('img.ocr-scan')?.complete && document.querySelector('img.ocr-scan').naturalWidth > 0"),
+        ("eval", "scan1", "document.querySelector('img.ocr-scan').naturalWidth"),
+        ("eval", "cells", "[...document.querySelectorAll('.ocr-text td')].map(e => e.textContent)"),
+        ("eval", "unsafe", "[document.querySelectorAll('.ocr-view script').length, window.pwned || 0,"
+                           " [...document.querySelectorAll('.ocr-text a')].some(a => a.href.startsWith('javascript'))]"),
+        ("eval", "placed", """(() => { const s = document.querySelector('.ocr-scan').getBoundingClientRect();
+          const t = document.querySelector('.ocr-text').getBoundingClientRect();
+          return [s.bottom <= t.top + 0.5, s.right <= t.left + 0.5]; })()"""),
+        ("eval", "fits", NO_OVERFLOW),
+        ("eval", "prev", "document.querySelector('#ocr-prev').disabled"),
+        ("click", "#ocr-next"), ("wait", f"{OCR_PAGE} === 'страница 2 из 2'"),
+        ("wait", "document.querySelector('img.ocr-scan')?.complete && document.querySelector('img.ocr-scan').naturalWidth === 600"),
+        ("eval", "next", "document.querySelector('#ocr-next').disabled"),
+        ("click", "img.ocr-scan"), ("wait", is_open("#ocr-viewer")),
+        ("eval", "viewer", "document.querySelector('#ocr-viewer img').getAttribute('src').startsWith('/api/media/')"),
+        ("click", "#ocr-viewer .viewer-close"), ("wait", "!document.querySelector('#ocr-viewer')")],
+        width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "Договор.png" in v["item"] and "2 стр." in v["item"] and v["title"] == "Договор.png"
+    assert v["meta"].startswith("2 страницы · ")
+    assert v["page1"] == "страница 1 из 2" and v["scan1"] == 800 and v["prev"] is True and v["next"] is True
+    assert v["cells"] == ["Офис", "38,5"] and v["unsafe"] == [0, 0, False]
+    assert v["placed"] == ([True, False] if width == 390 else [False, True])   # телефон — над текстом, иначе — слева
+    assert v["fits"] is True and v["viewer"] is True
+    assert not problems(r), problems(r)
+
+
+def test_ocr_download_and_to_chat(browser, live, ocr_reply):
+    """«Скачать ▾» — .txt, .md, .docx (ссылка на выгрузку); «Копировать» — весь текст по страницам;
+    «В чат ▾» — три просьбы, нажатие ведёт в #/chat?ocr=<id>&ask=<просьба> (вложение — Task 8 чата)."""
+    from scans import photo
+    live.add_user("ocrdl")
+    r = browser.drive(live.url + "/", [*recognized("ocrdl", [("Счёт.png", photo("PNG"))]),
+        ("eval", "sid", "document.querySelector('.ocr-item').dataset.id"),
+        ("eval", "pager", "!!document.querySelector('#ocr-page')"),
+        ("eval", "copy", COPY_SPY), ("click", "#ocr-copy"), ("wait", "window.copied"),
+        ("eval", "copied", "window.copied"),
+        ("eval", "spy", CLICKS), ("click", "#ocr-download"),
+        ("eval", "formats", "[...document.querySelectorAll('.ocr-formats [data-format]')].map(b => b.dataset.format)"),
+        ("click", ".ocr-formats [data-format=md]"),
+        ("wait", "window.clicked.length === 1"), ("eval", "clicked", "window.clicked[0]"),
+        ("click", "#ocr-chat"),
+        ("eval", "asks", "[...document.querySelectorAll('.ocr-chat-menu [data-ask]')].map(b => [b.dataset.ask, b.textContent])"),
+        ("eval", "hashes", "(() => { window.hashes = []; addEventListener('hashchange', (e) => window.hashes.push("
+                           "new URL(e.newURL).hash)); return true; })()"),
+        ("click", ".ocr-chat-menu [data-ask=translate]"), ("wait", "window.hashes.length"),
+        ("eval", "went", "window.hashes[0]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["pager"] is False                                       # одна страница — без листалки
+    assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
+    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md", True]
+    assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
+    assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
+    assert not problems(r), problems(r)
+
+
 def test_voice_is_added_in_settings(browser, live):
     live.add_user("voicer")
     dialog = "#voice-dialog"
@@ -4783,8 +4892,8 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
 
 
 def test_jobs_open_selects_records_in_every_section(browser, live):
-    """#/<раздел>?id=<запись>: расшифровка и озвучка выбраны в списке, карточка ролика подсвечена; ?id
-    из адреса убран. Записи готовы за час — они же в «Готово за час»."""
+    """#/<раздел>?id=<запись>: расшифровка, распознавание и озвучка выбраны в списке, карточка ролика
+    подсвечена; ?id из адреса убран. Записи готовы за час — они же в «Готово за час»."""
     login = "jobs-open"
     uid = live.add_user(login)
     now = time.time()
@@ -4794,6 +4903,9 @@ def test_jobs_open_selects_records_in_every_section(browser, live):
     live_sql(live, "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created, finished)"
                    " VALUES ('sp-jobs', ?, 'qwen3-tts', 'v', 'Привет', 'error', 'не вышло', ?, ?)",
              (uid, now - 60, now - 20))
+    live_sql(live, "INSERT INTO scans(id, user_id, model, name, origin, pages, state, detail, created, finished)"
+                   " VALUES ('oc-jobs', ?, 'hunyuan-ocr', 'Скан.pdf', 'section', 2, 'error', 'не вышло', ?, ?)",
+             (uid, now - 60, now - 25))
     live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
                    " state, progress, detail, created, finished) VALUES ('vd-jobs', ?, 1, 'nope', '', 5, 'standard',"
                    " 1, 'failed', 0, 'ролик не получился', ?, ?)", (uid, now - 60, now - 10))
@@ -4805,6 +4917,9 @@ def test_jobs_open_selects_records_in_every_section(browser, live):
         *go("speech?id=sp-jobs"),
         ("wait", "document.querySelector('.sp-item[data-id=\"sp-jobs\"][aria-current=true]')"),
         ("eval", "spHash", "location.hash"),
+        *go("ocr?id=oc-jobs"),
+        ("wait", "document.querySelector('.ocr-item[data-id=\"oc-jobs\"][aria-current=true]')"),
+        ("eval", "ocHash", "location.hash"),
         *go("video?id=vd-jobs"),
         ("wait", "document.querySelector('.video-card[data-id=\"vd-jobs\"].jobs-focus')"),
         ("eval", "vdHash", "location.hash"),
@@ -4813,8 +4928,9 @@ def test_jobs_open_selects_records_in_every_section(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["badge"] == "1"
-    assert (v["trHash"], v["spHash"], v["vdHash"]) == ("#/transcribe", "#/speech", "#/video")
+    assert (v["trHash"], v["spHash"], v["ocHash"], v["vdHash"]) == ("#/transcribe", "#/speech", "#/ocr", "#/video")
     assert v["rows"] == [["video", "Ролик · 5 с", True, "error"], ["speech", "Озвучка · Привет", True, "error"],
+                         ["ocr", "Распознавание «Скан.pdf»", True, "error"],
                          ["transcribe", "Расшифровка «Звонок.m4a»", True, "error"]]
     assert not known_refusals(problems(r), 404), problems(r)
 

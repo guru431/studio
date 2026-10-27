@@ -1,0 +1,399 @@
+/* Раздел «Распознавание» (#/ocr) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
+ *
+ * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
+ * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx), «В чат ▾», «Удалить»; идущий — состояние
+ * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
+ * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
+ * как у «Расшифровки». Готовые страницы идущего документа уже листаются.
+ *
+ * Загрузка — один PDF или несколько фото одним выбором (один документ, страницы в порядке выбора):
+ * XMLHttpRequest с FormData (части `file`, ход в процентах), 423 запертой студии (XHR идёт мимо api.js)
+ * ждёт отпирания и шлёт те же файлы заново. Список — createPicker (feed.js): опрос идущих раз в POLL_MS,
+ * «Показать ещё», выбор по номеру. Раздел без модели (ctx.hint): документы читаются, скачиваются и
+ * удаляются, вместо загрузки — подсказка.
+ *
+ * Текст страницы — Markdown модели через renderMarkdown(…, { html: true }) (marked + DOMPurify: таблицы
+ * HunyuanOCR — HTML-тегами, скрипты — нет); прочий текст сервера — только textContent. «Копировать» — весь
+ * документ, как выгрузка .md. «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
+ * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
+ * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
+import { api, hooks, me } from './api.js';
+import { createPicker } from './feed.js';
+import { kick } from './jobs.js';
+import { renderMarkdown } from './markdown.js';
+import { el, openDialog, plural, words } from './ui.js';
+
+const POLL_MS = 3000;
+const PAGE = 60;
+const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю загрузку
+const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
+const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
+const RUNNING = new Set(['queued', 'working', 'cancelling']);
+const FORMATS = [['txt', 'Текст .txt'], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
+const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Кратко пересказать'], ['translate', 'Перевести']];
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+};
+
+let screen = null;
+
+function icon(name) {
+  const box = document.createElement('span');
+  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
+  return box.firstChild;
+}
+
+function day(ts) {
+  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+function when(ts) {
+  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function media(id) {
+  return `/api/media/${encodeURIComponent(id)}`;
+}
+
+/** Текст страницы без распознанного — как в выгрузке (exports._page_body). */
+function pageBody(p) {
+  if (p.state === 'done' || p.state === 'layer') return p.text || '';
+  if (p.state === 'blank') return '[пустая страница]';
+  return p.detail ? `[не распознана: ${p.detail}]` : '[не распознана]';
+}
+
+/** Весь документ — как выгрузка .md (exports.pages_md). */
+export function asMarkdown(pages) {
+  return `${pages.map((p) => `## Страница ${p.n}\n\n${pageBody(p)}`).join('\n\n')}\n`;
+}
+
+function build(view, ctx) {
+  let picked = false;          // документ выбрали сами (список, загрузка): ?id из адреса его не перебивает
+  let shownId = null;          // документ, чья страница сейчас в листалке
+  let at = 0;                  // номер показанной страницы (с 0)
+  const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
+    running: (i) => RUNNING.has(i.state), paint: paintList,
+    show() {
+      error.textContent = '';
+      paintList();
+      paintView();
+    },
+    fail(err) { error.textContent = words(err); } });
+  const { select, refresh } = docs;
+
+  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
+  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add' }, icon('plus'), 'Загрузить скан', input);
+  const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
+  const list = el('nav', { class: 'tr-list', 'aria-label': 'Документы' });
+  const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
+  const backdrop = el('div', { class: 'split-backdrop', hidden: true });
+  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Документы',
+    'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'));
+  const title = el('h1', {}, 'Распознавание');
+  const head = el('header', { class: 'head' }, toggle, title);
+  const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
+  const body = el('div', { class: 'ocr-view' });
+  const main = el('section', { class: 'split-main' }, head, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
+  const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
+  view.append(root);
+
+  function panel(open) {
+    root.classList.toggle('panel-open', open);
+    backdrop.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  }
+
+  /* список */
+  function paintList() {
+    const { items, current } = docs;
+    if (!items.length) {
+      list.replaceChildren(el('p', { class: 'muted small' }, 'Здесь появятся ваши документы'));
+      return;
+    }
+    const nodes = [];
+    let last = '';
+    for (const item of items) {
+      const label = day(item.created);
+      if (label !== last) {
+        nodes.push(el('p', { class: 'tr-group' }, label));
+        last = label;
+      }
+      const link = el('button', { type: 'button', class: 'tr-item ocr-item', 'data-id': item.id, 'data-state': item.state,
+        'aria-current': current && current.id === item.id ? 'true' : null },
+      el('span', { class: 'tr-name' }, item.name),
+      el('span', { class: 'tr-state' }, [`${item.pages} стр.`, item.detail].filter(Boolean).join(' · ')));
+      link.addEventListener('click', () => {
+        panel(false);
+        picked = true;
+        select(item.id);
+      });
+      nodes.push(link);
+    }
+    if (!docs.done) {
+      const next = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'ocr-more', disabled: docs.paging },
+        docs.paging ? 'Загружаю…' : 'Показать ещё');
+      next.addEventListener('click', docs.more);
+      nodes.push(next);
+    }
+    list.replaceChildren(...nodes);
+  }
+
+  /* выбранный */
+  function download(format) {
+    el('a', { href: `/api/ocr/${docs.current.id}/export?format=${format}`, download: '' }).click();
+  }
+
+  function confirmDelete(item) {
+    const fail = el('p', { class: 'error' });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'ocr-delete-confirm' }, 'Удалить');
+    const dialog = openDialog(root, { id: 'ocr-delete-dialog', title: 'Удалить документ?', actions: [yes],
+      body: [el('p', {}, 'Удалятся текст, картинки страниц и исходный файл.'), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/ocr/${item.id}`);
+        dialog.close();
+        docs.forget(item.id);
+        paintView();
+        await docs.load();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  function menu(id, cls, label, entries) {
+    const box = el('div', { class: `tr-formats ${cls}`, hidden: true }, ...entries.map(([key, text, attr, fn]) => {
+      const b = el('button', { type: 'button', class: 'btn btn-sm', [attr]: key }, text);
+      b.addEventListener('click', () => {
+        box.hidden = true;
+        fn(key);
+      });
+      return b;
+    }));
+    const open = el('button', { type: 'button', class: 'btn btn-sm', id, 'aria-haspopup': 'true' }, label);
+    open.addEventListener('click', () => { box.hidden = !box.hidden; });
+    return el('div', { class: 'tr-download-wrap' }, open, box);
+  }
+
+  function openViewer(page) {
+    const img = el('img', { src: media(page.media_id), alt: `Страница ${page.n}` });
+    const stage = el('div', { class: 'viewer-stage' }, img);
+    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': 'Закрыть' }, icon('x'));
+    const dialog = el('dialog', { id: 'ocr-viewer', class: 'viewer', 'aria-label': `Страница ${page.n}` },
+      el('div', { class: 'viewer-top' }, close), stage);
+    close.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove());
+    // 1:1 — точка под пальцем или курсором остаётся на месте; клик мимо картинки — закрыть
+    img.addEventListener('click', (event) => {
+      const fx = event.offsetX / img.clientWidth;
+      const fy = event.offsetY / img.clientHeight;
+      if (!dialog.classList.toggle('full')) return;
+      stage.scrollLeft = fx * img.offsetWidth - event.clientX;
+      stage.scrollTop = fy * img.offsetHeight - event.clientY;
+    });
+    stage.addEventListener('click', (event) => { if (event.target === stage) dialog.close(); });
+    root.append(dialog);
+    dialog.showModal();
+  }
+
+  function scanNode(page) {
+    if (page.media_id) {
+      const open = el('button', { type: 'button', class: 'ocr-scan-open', 'aria-label': `Страница ${page.n} во весь экран` },
+        el('img', { class: 'ocr-scan', src: media(page.media_id), alt: `Страница ${page.n}`, decoding: 'async' }));
+      open.addEventListener('click', () => openViewer(page));
+      return open;
+    }
+    return el('p', { class: 'ocr-noscan muted small' },
+      page.state === 'layer' ? 'страница взята из текстового слоя' : 'картинка страницы ещё не готова');
+  }
+
+  function textNode(page, item) {
+    if (page.state === 'done' || page.state === 'layer') {
+      const box = el('div', { class: 'ocr-text md' });
+      box.append(renderMarkdown(page.text || '', { html: true }));
+      return box;
+    }
+    if (page.state === 'blank') return el('p', { class: 'ocr-text muted' }, 'пустая страница');
+    if (page.state === 'failed') return el('p', { class: 'ocr-text error' }, `не распознана: ${page.detail || 'причина неизвестна'}`);
+    return el('p', { class: 'ocr-text muted' }, RUNNING.has(item.state) ? 'ждёт распознавания' : 'не распознана');
+  }
+
+  function pageView(item) {
+    const pages = item.pages;
+    if (!pages.length) return [];
+    if (shownId !== item.id) {
+      shownId = item.id;
+      at = 0;
+    }
+    at = Math.min(at, pages.length - 1);
+    const page = pages[at];
+    const nodes = [];
+    if (pages.length > 1) {
+      const prev = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-prev', 'aria-label': 'Предыдущая страница',
+        disabled: at === 0 }, '‹');
+      const next = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next', 'aria-label': 'Следующая страница',
+        disabled: at === pages.length - 1 }, '›');
+      prev.addEventListener('click', () => turn(-1));
+      next.addEventListener('click', () => turn(1));
+      nodes.push(el('div', { class: 'ocr-pager' }, prev,
+        el('span', { id: 'ocr-page', 'aria-live': 'polite' }, `страница ${at + 1} из ${pages.length}`), next));
+    }
+    nodes.push(el('div', { class: 'ocr-two', 'data-n': String(page.n) }, scanNode(page), textNode(page, item)));
+    return nodes;
+  }
+
+  function turn(step) {
+    at += step;
+    paintView();
+    const focus = body.querySelector(step < 0 ? '#ocr-prev' : '#ocr-next');
+    if (focus && !focus.disabled) focus.focus();
+  }
+
+  function paintView() {
+    const item = docs.current;
+    title.textContent = item ? item.name : 'Распознавание';
+    if (!item) {
+      shownId = null;
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите документ в списке.'
+        : 'Загрузите PDF-скан или фото страниц — студия распознает текст.'));
+      return;
+    }
+    const nodes = [];
+    if (RUNNING.has(item.state)) {
+      const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-cancel' }, 'Отменить');
+      cancel.addEventListener('click', async () => {
+        cancel.disabled = true;
+        try {
+          await api('POST', `/api/ocr/${item.id}/cancel`);
+        } catch (err) {
+          error.textContent = words(err);
+        }
+        refresh();
+      });
+      nodes.push(el('div', { class: 'tr-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
+        el('p', {}, item.detail), cancel));
+    } else if (item.state !== 'done') {
+      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
+    }
+    const n = item.pages.length;
+    nodes.push(el('p', { class: 'ocr-meta muted small' },
+      `${n} ${plural(n, ['страница', 'страницы', 'страниц'])} · ${when(item.created)}`));
+    const acts = el('div', { class: 'tr-acts' });
+    if (item.state === 'done') {
+      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, 'Копировать');
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(asMarkdown(item.pages));
+          copy.textContent = 'Скопировано';
+        } catch {
+          error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
+        }
+      });
+      acts.append(copy,
+        menu('ocr-download', 'ocr-formats', 'Скачать ▾', FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
+        menu('ocr-chat', 'ocr-chat-menu', 'В чат ▾', ASKS.map(([ask, label]) => [ask, label, 'data-ask',
+          () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
+    }
+    if (!RUNNING.has(item.state)) {
+      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, 'Удалить');
+      del.addEventListener('click', () => confirmDelete(item));
+      acts.append(del);
+    }
+    if (acts.children.length) nodes.push(acts);
+    nodes.push(...pageView(item));
+    body.replaceChildren(...nodes);
+  }
+
+  /* загрузка */
+  function send(files) {
+    if (files.length > FILES_MAX) {
+      error.textContent = `Больше ${FILES_MAX} файлов за раз`;
+      return;
+    }
+    if (files.reduce((sum, f) => sum + f.size, 0) > UPLOAD_MAX) {
+      error.textContent = 'Файлы вместе больше 20 МиБ';
+      return;
+    }
+    error.textContent = '';
+    input.disabled = true;
+    const form = new FormData();
+    for (const file of files) form.append('file', file, file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/ocr');
+    xhr.setRequestHeader('x-studio-csrf', me.csrf);
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) progress.textContent = `Загружаю · ${Math.round(event.loaded * 100 / event.total)}%`;
+    });
+    xhr.addEventListener('loadend', async () => {
+      input.disabled = false;
+      progress.textContent = '';
+      let answer = null;
+      try {
+        answer = JSON.parse(xhr.responseText);
+      } catch {
+        // не JSON — ниже словами по коду
+      }
+      if (xhr.status === 202 && answer) {
+        kick();
+        picked = true;
+        await docs.load();
+        await select(answer.id);
+        return;
+      }
+      if (xhr.status === 401) location.href = '/login';
+      const detail = answer && answer.detail;
+      if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
+        await hooks.locked();          // студия заперта (lock.js): те же файлы — после отпирания
+        send(files);
+        return;
+      }
+      error.textContent = words((detail && detail.message) || (xhr.status ? `Ошибка сервера (${xhr.status})` : 'Нет связи с сервером'));
+    });
+    xhr.send(form);
+  }
+
+  input.addEventListener('change', () => {
+    const files = [...input.files];
+    input.value = '';
+    if (files.length) send(files);
+  });
+  toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
+  backdrop.addEventListener('click', () => panel(false));
+  /** ?id адреса («Открыть» в «В работе», «Поиск») — при сборке и при переходе внутри раздела (update). */
+  function follow(wanted) {
+    if (wanted) {
+      history.replaceState(null, '', '#/ocr');
+      picked = false;
+    }
+    // пока шёл список, документ могли выбрать сами (загрузка) — его не перебивать
+    docs.load().then(() => { if (wanted && !picked) select(wanted, true); });
+  }
+  paintView();
+  follow(ctx.query && ctx.query.get('id'));
+
+  return {
+    follow,
+    destroy() {
+      docs.stop();
+    },
+  };
+}
+
+export function mount(view, ctx) {
+  screen = build(view, ctx);
+}
+
+/** Переход внутри открытого раздела (#/ocr?id=…): только ?id. */
+export function update(ctx) {
+  const wanted = ctx.query && ctx.query.get('id');
+  if (screen && wanted) screen.follow(wanted);
+}
+
+export function unmount() {
+  if (screen) screen.destroy();
+  screen = null;
+}

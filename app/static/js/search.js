@@ -21,7 +21,7 @@ import { el, words } from './ui.js';
 export const SEARCH_PAUSE_MS = 300;
 const LIMIT = 30;
 const SECTIONS = [['', 'Все'], ['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
-  ['speech', 'Озвучка']];
+  ['ocr', 'Распознавание'], ['speech', 'Озвучка']];
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const HAS_WORD = /[\p{L}\p{N}]/u;
