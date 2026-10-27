@@ -17,6 +17,7 @@ import image_upload
 import images
 import manage
 import media
+import presets
 import videos
 from conftest import DEPLOY, ROOT
 
@@ -134,6 +135,7 @@ def test_apache_lets_through_the_largest_body_the_studio_accepts():
     assert limit >= documents.BODY_MAX and documents.BODY_MAX > documents.DOC_MAX     # документ чата
     assert limit >= videos.BODY_MAX and videos.BODY_MAX > image_upload.VIDEO_UPLOAD   # картинка ролика
     assert limit >= image_upload.MAX_BODY + image_upload.MAX_UPLOAD                   # правка: фото и маска
+    assert limit >= presets.BODY_MAX                                                  # пресет с длинным промптом
 
 
 def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():

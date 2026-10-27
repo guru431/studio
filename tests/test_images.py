@@ -629,6 +629,25 @@ def test_description_reports_running_videos(studio):
     assert status["state"] == "error" and "идут ролики: 1" in status["detail"]
 
 
+@pytest.mark.parametrize("kind", ["descriptions", "translations"])
+def test_ready_text_does_not_wait_a_minute_for_a_busy_gemma(studio, kind):
+    """409 release после готового ответа — чужой запрос к gemma-abl: текст отдаётся после короткого
+    окна повторов DONE_RELEASE_SEC, а не через CANCEL_RELEASE_SEC; слот пользователя свободен."""
+    ok = (200, {"ok": True})
+    studio.gw.release_replies = [ok, ok, SLOT_BUSY]       # модели картинок — до запроса, gemma-abl — 409 всегда
+    add_gateway(studio)
+    if kind == "descriptions":
+        job_id = describe(studio).json()["id"]
+        result = wait_description(studio, job_id)
+    else:
+        job_id = studio.c.post("/api/images/translations", json={"prompt": PROMPT}).json()["id"]
+        result = wait_translation(studio, job_id)
+    assert result["state"] == "done" and result["text"]
+    assert 0 < sum(studio.sleeps) <= images.DONE_RELEASE_SEC < images.CANCEL_RELEASE_SEC
+    assert "освободится сама" in images.JOBS[job_id].detail
+    assert start(studio).status_code == 202
+
+
 # ---- перевод промпта ---------------------------------------------------------
 
 def wait_translation(s, job_id, limit=3000):
@@ -1603,6 +1622,19 @@ def test_presets_limit_is_50(studio):
     assert r.status_code == 409 and r.json()["detail"] == {
         "code": "presets", "message": "не больше 50 пресетов — удалите ненужные"}
     assert save_preset(studio, "p3", seed=1).status_code == 201             # замена — не новый
+
+
+@pytest.mark.parametrize("ensure_ascii", [False, True], ids=["utf8", "escaped"])
+def test_preset_with_the_longest_prompt_of_four_byte_chars_is_saved(studio, ensure_ascii):
+    """24000 знаков по 4 байта UTF-8 (или по 12 — `\\uXXXX\\uXXXX`) — допустимый промпт: предел тела
+    его не отбивает раньше проверки полей."""
+    add_gateway(studio)
+    prompt = "\U0001F600" * 24000
+    body = json.dumps({"name": "эмодзи", "params": PRESET | {"prompt": prompt}}, ensure_ascii=ensure_ascii).encode()
+    assert len(body) > 64 * 1024
+    r = studio.c.post("/api/images/presets", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 201, r.text[:200]
+    assert studio.c.get("/api/images/presets").json()["items"][0]["params"]["prompt"] == prompt
 
 
 def test_presets_are_own(studio):

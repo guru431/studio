@@ -46,6 +46,8 @@ def test_openai_cannot_join_video_and_outside_the_list_only_chat(studio):
         with pytest.raises(HTTPException) as e:
             sections.link(uid, section, cloud)
         assert e.value.detail["code"] == code, section
+        if code == "kind":                                    # слова — о своём разделе, не всегда о видео
+            assert f"«{sections.NAMES[section]}» — только через шлюз srvllm" in e.value.detail["message"], section
 
 
 def test_unchecking_the_default_moves_it_and_empty_section_has_no_default(studio):
