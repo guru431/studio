@@ -966,8 +966,7 @@ def test_chat_streams_through_the_server_and_survives_reload(browser, live):
 
 def test_chat_with_a_pdf_attachment(browser, live):
     from test_documents import pdf
-    # не короче 40 знаков без пробелов: иначе страница — скан, и её распознаёт ocr (test_chat_ocr)
-    data = base64.b64encode(pdf("Payment is due within five days of the invoice date")).decode()
+    data = base64.b64encode(pdf("Payment is due within five days")).decode()
     file = f"[new File([Uint8Array.from(atob({data!r}), c => c.charCodeAt(0))], 'договор.pdf', {{ type: 'application/pdf' }})]"
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
         attach(file),
