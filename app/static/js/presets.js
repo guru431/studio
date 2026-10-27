@@ -1,10 +1,11 @@
 /* Пресеты раздела «Фото» (спека 2026-10-21-studio-photo-presets-compare-series, раздел 5): чип «★»
  * с меню — пресеты учётки (нажатие — применить, «×» — удалить с подтверждением) и «Сохранить как
- * пресет…» (окно: имя, галочки «промпт» и «seed»; имя уже есть — пресет заменится, окно это
- * говорит). Пресеты — GET/POST/DELETE /api/images/presets, одни на всех устройствах учётки.
+ * пресет…» (окно: имя, галочка «промпт»; имя уже есть — пресет заменится, окно это говорит). Seed
+ * пресет не хранит: поля seed нет (спека 2026-10-27-studio-ui-tidy, 4.5). Пресеты — GET/POST/DELETE
+ * /api/images/presets, одни на всех устройствах учётки.
  *
  * presetChip({ host, snapshot, apply, say, close }): host() — корень раздела (окна); snapshot() —
- * параметры поля сейчас { model, connection_id, size, seed, strength, prompt }; apply(params) —
+ * параметры поля сейчас { model, connection_id, size, strength, prompt }; apply(params) —
  * поставить пресет; say(text, bad) — строка состояния раздела; close() — закрыть меню. Ответ —
  * { wrap, chip, menu, load() }; открывает меню раздел (его общий список меню). Текст — textContent. */
 import { api } from './api.js';
@@ -71,14 +72,12 @@ export function presetChip({ host, snapshot, apply, say, close }) {
     const now = snapshot();
     const name = el('input', { id: 'preset-name', class: 'input', maxlength: '60', autocomplete: 'off' });
     const withPrompt = el('input', { type: 'checkbox', id: 'preset-with-prompt', checked: !!now.prompt, disabled: !now.prompt });
-    const withSeed = el('input', { type: 'checkbox', id: 'preset-with-seed', checked: now.seed !== null, disabled: now.seed === null });
     const note = el('p', { id: 'preset-replace-note', class: 'muted small', 'aria-live': 'polite' });
     const fail = el('p', { class: 'error', role: 'alert' });
     const ok = button('Сохранить', { class: 'btn btn-accent', id: 'preset-save-confirm' });
     const dialog = openDialog(host(), { id: 'preset-dialog', title: 'Сохранить как пресет', actions: [ok], body: [
       field('Имя', name, 'name'),
       el('label', { class: 'check' }, withPrompt, 'Промпт'),
-      el('label', { class: 'check' }, withSeed, now.seed === null ? 'Seed (не задан)' : `Seed ${now.seed}`),
       el('p', { class: 'muted small' }, 'Ещё сохранятся модель, формат и сила изменения.'), note, fail] });
     const taken = () => items.find((p) => p.name === name.value.trim());
     const paintName = () => {
@@ -93,7 +92,7 @@ export function presetChip({ host, snapshot, apply, say, close }) {
         fail.textContent = 'Назовите пресет';
         return;
       }
-      const params = { ...now, prompt: withPrompt.checked ? now.prompt : null, seed: withSeed.checked ? now.seed : null };
+      const params = { ...now, prompt: withPrompt.checked ? now.prompt : null };
       ok.disabled = true;
       try {
         await api('POST', '/api/images/presets', { name: text, params });

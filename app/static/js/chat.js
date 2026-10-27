@@ -58,9 +58,9 @@
  * сканов поля ввода и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки, POST /api/ocr/<id>/attachments,
  * модель — умолчание раздела, без окна внешней модели. */
 import { api, me } from './api.js';
+import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
-import { attachMic } from './mic.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
@@ -460,19 +460,20 @@ function build(view, ctx) {
   const file = el('input', { type: 'file', id: 'attach', class: 'sr', accept: ACCEPT, multiple: true });
   const clip = el('label', { class: 'icon-btn attach', title: 'Прикрепить файл' }, icon('clip'),
     el('span', { class: 'sr' }, 'Прикрепить файл'), file);
-  const send = el('button', { type: 'submit', id: 'send', class: 'send', 'aria-label': 'Отправить', title: 'Отправить' },
-    icon('send'));
-  const stop = el('button', { type: 'button', id: 'stop', class: 'send', 'aria-label': 'Остановить', title: 'Остановить',
-    hidden: true }, icon('stop'));
-  const micNote = el('div', { class: 'mic-note' });
+  const send = el('button', { type: 'submit', id: 'send', class: 'send composer-go', 'aria-label': 'Отправить',
+    title: 'Отправить' }, icon('send'));
+  const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go', 'aria-label': 'Остановить',
+    title: 'Остановить', hidden: true }, icon('stop'));
+  // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
   const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
-    title: WEB_TITLE, hidden: true }, icon('globe'), 'Интернет');
+    'aria-label': 'Интернет', title: WEB_TITLE, hidden: true }, icon('globe'), el('span', { class: 'toggle-word' }, 'Интернет'));
   const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip think-toggle', 'aria-pressed': 'false',
-    title: THINK_TITLE, hidden: true }, icon('bulb'), 'Рассуждение');
+    'aria-label': 'Рассуждение', title: THINK_TITLE, hidden: true }, icon('bulb'),
+  el('span', { class: 'toggle-word' }, 'Рассуждение'));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
-  const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, input, micNote,
-    el('div', { class: 'row' }, clip, webToggle, thinkToggle, attachMic(input, micNote), el('span', { class: 'grow' }),
-      send, stop),
+  const inputBox = fieldBox(input);
+  const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, clip, webToggle, thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);

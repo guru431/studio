@@ -1,8 +1,8 @@
 /* Раздел «Озвучка» (#/speech) — раскладка как у «Расшифровки» (спека 2026-10-20, раздел 6.4).
  *
  * Слева — озвучки по дням, справа — выбранная: текст, плеер, «Скачать» (mp3), «Удалить»; идущая —
- * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков, счётчик) с микрофоном,
- * «модель» (отмеченные модели раздела) и «голос»: у шлюза srvllm — свои голоса по образцу (их
+ * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков; field.js: «очистить», микрофон)
+ * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
  * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
@@ -11,8 +11,8 @@
  * принятая озвучка зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
 import { createPicker } from './feed.js';
+import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
-import { attachMic } from './mic.js';
 import { modelLabel } from './settings.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -66,11 +66,11 @@ function build(view, ctx) {
   const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': 'Модель' });
   const voiceBox = el('span', { class: 'sp-voice' });
-  const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent' }, 'Озвучить');
+  const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, 'Озвучить');
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
-  const micNote = el('div', { class: 'mic-note' });
-  const form = el('form', { class: 'composer', id: 'speech-composer' }, text, micNote, hint,
-    el('div', { class: 'row' }, modelPick, voiceBox, count, el('span', { class: 'grow' }), attachMic(text, micNote), go));
+  const textBox = fieldBox(text);
+  const form = el('form', { class: 'composer', id: 'speech-composer' }, textBox.box, textBox.error, hint,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, voiceBox, count), go));
   const main = el('section', { class: 'split-main' }, head, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
