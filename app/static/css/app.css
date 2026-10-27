@@ -47,17 +47,14 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
 #rail .logo { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 10px; }
 #rail .tab { width: 76px; padding: 7px 0 5px; border-radius: 10px; display: flex; flex-direction: column; align-items: center;
   gap: 2px; color: var(--muted); font-size: 11px; text-decoration: none; }
-/* подпись — в ширину вкладки: самая длинная, «Расшифровка» (74 px в Segoe UI 11px), и на узком
- * телефоне не вылезает за край — там она обрезается многоточием */
+/* подпись — в ширину вкладки: подписи короткие («Озвучка» — самая длинная) и влезают целиком и на 320 px;
+ * многоточие — страховка от чужого шрифта */
 #rail .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
 #rail .spacer { flex: 1; }
-#avatar, .theme-toggle, .jobs-toggle, .search-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
+#avatar, .jobs-toggle, .search-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
   color: var(--text); font-weight: 600; font-size: 13px; display: grid; place-items: center; padding: 0; }
-.theme-toggle { color: var(--muted); }
-.theme-toggle:hover { color: var(--text); }
-.theme-toggle svg.ico { width: 18px; height: 18px; }
 #avatar[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* «В работе» (jobs.js): число идущих и точка готового, панель — выпадающая у полосы */
 .jobs-toggle { position: relative; color: var(--muted); }
@@ -102,6 +99,9 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
 .menu-item { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none;
   color: var(--text); text-align: left; text-decoration: none; font-size: 14px; }
 .menu-item:hover, .menu-item:focus-visible { background: var(--panel-2); }
+/* тема (app.js): значок того, что включит нажатие, и слово */
+.menu-theme { display: flex; align-items: center; gap: 8px; }
+.menu-theme svg.ico { width: 18px; height: 18px; color: var(--muted); }
 
 /* шапка раздела */
 .head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 10px 16px;
@@ -116,21 +116,21 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0;
     padding: 4px 0 env(safe-area-inset-bottom, 0px); background: var(--side); border-right: 0; border-top: 1px solid var(--border); }
   #rail .logo, #rail .spacer { display: none; }
-  /* шесть вкладок: «Расшифровка» на 390 px — 64 px в 65 px вкладки, поэтому без боковых отступов и чуть плотнее */
+  /* шесть вкладок: на 320 px — по 53 px, поэтому без боковых отступов и чуть плотнее */
   #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size: 10px;
     letter-spacing: -0.02em; }
   #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
-  .theme-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
-  .jobs-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
-  .search-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 138px; }
+  .jobs-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
+  .search-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
   .jobs-dot { border-color: var(--bubble); }
   .jobs-panel { inset: auto 0 0 0; width: 100%; max-width: none; max-height: 80dvh; border-radius: 16px 16px 0 0;
     border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .jobs-panel::backdrop { background: var(--backdrop); }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
-  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 184px; }
-  /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от четырёх значков — вторая строка */
+  /* справа сверху три значка (поиск, «В работе», профиль): 96 + 34 + зазор 12 */
+  .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 142px; }
+  /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от трёх значков — вторая строка */
   [data-selecting] .head { flex-wrap: wrap; row-gap: 6px; }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }

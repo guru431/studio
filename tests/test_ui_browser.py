@@ -78,29 +78,49 @@ def test_theme_from_profile_is_applied(browser, live, theme, bg):
     assert not problems(r), problems(r)
 
 
+MENU_OPEN = "!document.querySelector('#menu').hidden"
+MENU_INSIDE = ("(() => { const b = document.querySelector('#menu').getBoundingClientRect();"
+               " return b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight; })()")
+MENU_ITEMS = "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.hidden).map(e => e.textContent.trim())"
+THEME_WORDS = ("Тёмная тема", "Светлая тема")
+
+
 @pytest.mark.parametrize("width", [390, 1280])
-def test_theme_toggle_switches_and_is_kept(browser, live, width):
+def test_theme_toggle_in_the_profile_menu(browser, live, width):
+    """Тема — пункт меню профиля сразу под именем (в шапке кнопки нет): подпись — что включит нажатие;
+    нажатие меняет тему, пишет её в учётку и оставляет меню открытым; после перезагрузки тема та же."""
     login = f"toggle{width}"
     live.add_user(login)
     expected = "(matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark')"
+    label = "document.querySelector('#theme-toggle').textContent.trim()"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
         ("eval", "want", expected),
+        ("eval", "shownClosed", "document.querySelector('#theme-toggle').getBoundingClientRect().width > 0"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "place", "(() => { const t = document.querySelector('#theme-toggle');"
+                          " return [t.parentElement.id, t.previousElementSibling.className, t.className,"
+                          " t.getAttribute('role')]; })()"),
+        ("eval", "before", label),
         ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme === {expected}"),
-        ("idle",), ("eval", "reload", "location.reload()"),
+        ("eval", "stillOpen", MENU_OPEN), ("eval", "after", label),
+        ("idle",), ("eval", "saved", "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
+        ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
         ("eval", "kept", "document.documentElement.dataset.theme"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
         ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme !== {expected}"),
-        ("eval", "apart", "(() => { const a = document.querySelector('#theme-toggle').getBoundingClientRect();"
-                          " const b = document.querySelector('#avatar').getBoundingClientRect();"
-                          " return a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top; })()"),
-        ("eval", "inside", "(() => { const a = document.querySelector('#theme-toggle').getBoundingClientRect();"
-                           " return a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight; })()"),
+        ("eval", "inside", MENU_INSIDE),
         ("eval", "go", "location.hash = '#/profile'"), ("wait", "document.querySelector('#view .page')"),
         ("eval", "profileTheme", "!!document.querySelector('#theme-auto, #theme-dark, #theme-light')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["kept"] == v["want"] and v["apart"] and v["inside"] and v["profileTheme"] is False
+    words = dict(zip(("dark", "light"), THEME_WORDS))
+    other = "light" if v["want"] == "dark" else "dark"
+    assert v["shownClosed"] is False
+    assert v["place"] == ["menu", "menu-who", "menu-item menu-theme", "menuitem"]
+    assert v["before"] == words[v["want"]] and v["after"] == words[other] and v["stillOpen"] is True
+    assert v["saved"] == v["want"] and v["kept"] == v["want"] and v["inside"] and v["profileTheme"] is False
     assert not problems(r), problems(r)
 
 
@@ -143,16 +163,16 @@ def test_photo_without_gateway_shows_the_hint(browser, live, width):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_avatar_menu_and_logout(browser, live, width):
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
-        ("click", "#avatar"), ("wait", "!document.querySelector('#menu').hidden"),
-        ("eval", "items", "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.hidden).map(e => e.textContent.trim())"),
-        ("eval", "inside", "(() => { const b = document.querySelector('#menu').getBoundingClientRect();"
-                           " return b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight; })()"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "items", MENU_ITEMS),
+        ("eval", "inside", MENU_INSIDE),
         ("press", "Escape"), ("wait", "document.querySelector('#menu').hidden"),
         ("click", "#avatar"), ("click", "#menu-logout"),
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Панель", "Выход"] and r["values"]["inside"]
+    items = r["values"]["items"]
+    assert items[0] in THEME_WORDS and items[1:] == ["Настройки", "Панель", "Выход"] and r["values"]["inside"]
     assert not problems(r), problems(r)
 
 
@@ -261,11 +281,11 @@ def test_markdown_is_sanitized_highlighted_and_sse_reads_a_cloud_stream(browser,
 def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
     live.add_user("plain")
     r = browser.drive(live.url + "/", [*signin("plain"), ("wait", READY),
-        ("click", "#avatar"), ("wait", "!document.querySelector('#menu').hidden"),
-        ("eval", "items", "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.hidden).map(e => e.textContent.trim())"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "items", MENU_ITEMS),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Выход"]
+    assert r["values"]["items"][0] in THEME_WORDS and r["values"]["items"][1:] == ["Настройки", "Выход"]
 
 
 # ---- профиль и панель ----------------------------------------------------------
@@ -580,7 +600,7 @@ def test_settings_menu_and_old_profile_route(browser, live):
         ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => a.dataset.section)")])
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
-    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "ocr", "speech", "dictation", "other"]
+    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "dictation", "other"]
     assert not problems(r), problems(r)
 
 
@@ -811,7 +831,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "ocr", "speech", "voices")]
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
@@ -2337,19 +2357,23 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """«Расшифровка» вылезала за рельс шириной 64 px; на телефоне от 390 px подписи целиком — и с шестой
-    вкладкой «Сканы»."""
+    """Вкладки по порядку (спека 2026-10-27-studio-ui-tidy, 4.1): «Сканы» последней, вместо «Расшифровки» —
+    «Записи»; все подписи целиком и на 320 px. На телефоне шапка раздела кончается у лупы — справа сверху три
+    значка (поиск, «В работе», профиль), место прежней кнопки темы отдано заголовку."""
     fits = """[...document.querySelectorAll('#rail .tab span')].map(s => { const t = s.closest('.tab').getBoundingClientRect();
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= t.left - 0.5 && b.right <= t.right + 0.5,
       s.scrollWidth <= s.clientWidth]; })"""
-    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("eval", "fits", fits)],
+    room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
+      - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#search-open').getBoundingClientRect().left - end; })()"""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
+                                       ("eval", "fits", fits), ("eval", "room", room)],
                       width=width, mobile=width < 760)
     assert not r.get("failed"), r
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Расшифровка", "Сканы", "Озвучка"]
-    assert all(inside for inside, _ in labels.values()), labels
-    if width >= 390:
-        assert all(whole for _, whole in labels.values()), labels
+    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Записи", "Озвучка", "Сканы"]
+    assert all(inside and whole for inside, whole in labels.values()), labels
+    if width < 760:
+        assert 0 <= r["values"]["room"] <= 16, r["values"]["room"]
 
 
 def grid_cols(feed):
@@ -5024,7 +5048,7 @@ JOBS_PLACED = """(() => { const j = document.querySelector('#jobs').getBoundingC
   const apart = (s) => { const b = document.querySelector(s).getBoundingClientRect();
     return j.right <= b.left || b.right <= j.left || j.bottom <= b.top || b.bottom <= j.top; };
   return j.left >= 0 && j.top >= 0 && j.right <= innerWidth && j.bottom <= innerHeight
-    && apart('#theme-toggle') && apart('#avatar'); })()"""
+    && apart('#avatar'); })()"""
 JOBS_SHEET_INSIDE = """(() => { const b = document.querySelector('#jobs-panel').getBoundingClientRect();
   return b.left >= 0 && b.top >= 0 && b.right <= innerWidth + 0.5 && b.bottom <= innerHeight + 0.5; })()"""
 JOBS_ROWS = """[...document.querySelectorAll('{list} .jobs-row')].map((r) => [r.dataset.section,
@@ -5039,7 +5063,7 @@ def reload_page(name="reload"):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_jobs_badge_counts_a_running_picture(browser, live, width):
     """Запустил картинку — у значка «1» сразу (jobs.kick), панель: «Идёт» — «Картинка · Lustify» с ходом,
-    «Готово за час» — пусто; значок в окне и не на теме и аватаре."""
+    «Готово за час» — пусто; значок в окне и не на аватаре."""
     login = f"jobs-run{width}"
     live.add_user(login)
     live.gw.hold = True
@@ -5333,7 +5357,7 @@ def test_jobs_open_keeps_the_transcript_draft(browser, live):
 SEARCH_ROWS = """[...document.querySelectorAll('#search-results .search-row')].map((r) => [r.dataset.section,
   r.querySelector('.search-title').textContent, [...r.querySelectorAll('mark')].map((m) => m.textContent)])"""
 SEARCH_PLACED = JOBS_PLACED.replace("'#jobs'", "'#search-open'").replace(
-    "apart('#theme-toggle')", "apart('#theme-toggle') && apart('#jobs')")
+    "apart('#avatar')", "apart('#avatar') && apart('#jobs')")
 
 
 def search_ready(rows):

@@ -38,7 +38,7 @@ import db
 import media
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "ocr", "speech", "voices")
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")   # порядок вкладок студии
 #: большая выгрузка качается дольше 10 минут архива выделенного
 EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2

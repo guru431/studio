@@ -19,6 +19,8 @@ def uid_of_owner() -> int:
 def test_gateway_joins_every_section_with_its_catalog(studio):
     cid = add_gateway(studio)
     uid = uid_of_owner()
+    # порядок вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1): API отдаёт разделы в нём
+    assert sections.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "ocr", "dictation")
     assert sections.sections_of(uid, cid) == list(sections.SECTIONS)
     assert [link.models for link in sections.links(uid, "photo")] == [("lustify", "flux")]
     assert sections.default(uid, "photo")[1] == "lustify" and sections.default(uid, "chat")[1] == "local-gemma-abl"

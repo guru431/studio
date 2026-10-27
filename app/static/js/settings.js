@@ -297,7 +297,7 @@ export function queueText(pending) {
  * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
 const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
-  ['ocr', 'Распознавание'], ['speech', 'Озвучка'], ['voices', 'Голоса озвучки']];
+  ['speech', 'Озвучка'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },

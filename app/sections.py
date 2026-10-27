@@ -28,7 +28,7 @@ import clock
 import connections
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "ocr", "speech", "dictation")
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "dictation")   # порядок вкладок студии
 NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Расшифровка", "ocr": "Распознавание",
          "speech": "Озвучка", "dictation": "Голосовой ввод"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "speech", "dictation"}

@@ -161,6 +161,8 @@ def test_export_takes_only_chosen_sections(studio):
     assert {n for n in names if not n.startswith("files/")} == {"README.txt", "settings.json", "images/0001.json",
                                                                "manifest.json"}
     assert json.loads(unzip(z).read("manifest.json"))["sections"] == ["photo"]
+    # разделы — по порядку вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1), голоса — за озвучкой
+    assert takeout.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")
 
 
 def test_export_never_holds_another_users_rows_or_files(studio):

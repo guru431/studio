@@ -1,7 +1,7 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/ocr, #/speech, #/search, #/settings, #/settings/<раздел>, #/admin (только
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/search, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -15,7 +15,8 @@
  * Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты). Профиль при запуске
  * не пришёл (нет связи) — «Повторить», и сам повтор при появлении сети и возвращении на экран.
  *
- * Тема — кнопкой #theme-toggle над аватаром: из «auto» первое нажатие ставит противоположную видимой,
+ * Тема — пунктом #theme-toggle меню аватара (сразу под именем; подпись — что включит нажатие, меню после
+ * нажатия остаётся открытым): из «auto» первое нажатие ставит противоположную видимой,
  * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. Тема и вид ленты — в учётке: вернувшись
  * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
  * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
@@ -32,8 +33,8 @@ const HINTS = {
   photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
   video: 'Чтобы делать видео, выберите модель в настройках раздела «Видео»',
   transcribe: 'Чтобы расшифровывать записи, выберите модель в настройках раздела «Расшифровка»',
-  ocr: 'Чтобы распознавать сканы, выберите модель в настройках раздела «Распознавание»',
   speech: 'Чтобы озвучивать текст, выберите модель в настройках раздела «Озвучка»',
+  ocr: 'Чтобы распознавать сканы, выберите модель в настройках раздела «Распознавание»',
 };
 const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -41,8 +42,8 @@ const ICONS = {
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
-  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
+  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
 };
 const THEME_ICONS = {
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -55,8 +56,8 @@ const SECTIONS = {
   photo: { title: 'Фото', load: () => import('./photo.js') },
   video: { title: 'Видео', load: () => import('./video.js') },
   transcribe: { title: 'Расшифровка', load: () => import('./transcribe.js') },
-  ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
   speech: { title: 'Озвучка', load: () => import('./speech.js') },
+  ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
   search: { title: 'Поиск', load: () => import('./search.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
@@ -131,10 +132,8 @@ function visibleTheme() {
 
 function paintToggle() {
   const dark = visibleTheme() === 'dark';
-  const label = dark ? 'Светлая тема' : 'Тёмная тема';
-  toggle.setAttribute('aria-label', label);
-  toggle.title = label;
   toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${THEME_ICONS[dark ? 'sun' : 'moon']}</svg>`;   // константа
+  toggle.append(dark ? 'Светлая тема' : 'Тёмная тема');
 }
 
 function setupTheme() {
@@ -236,7 +235,7 @@ function setupMenu() {
       avatar.focus();
     }
   });
-  menu.addEventListener('click', (event) => {
+  menu.addEventListener('click', (event) => {   // пункт темы (button) меню не закрывает: видно, что тема сменилась
     if (event.target.closest('a.menu-item')) openMenu(false);
   });
 }
