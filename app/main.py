@@ -32,6 +32,7 @@ import dictation
 import images
 import jobs
 import media
+import ocr
 import presets
 import profile
 import screenlock
@@ -72,6 +73,7 @@ async def lifespan(_app):
     images.recover()
     chat.recover()
     transcripts.recover()
+    ocr.recover()
     speeches.recover()
     state.HTTP = state.make_http()
     loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill()]
@@ -84,6 +86,7 @@ async def lifespan(_app):
         await asyncio.gather(*loops, return_exceptions=True)
         await images.stop()
         await transcripts.stop()
+        await ocr.stop()
         await speeches.stop()
         await chat.stop_all()
         await state.HTTP.aclose()

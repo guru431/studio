@@ -83,6 +83,7 @@ def studio(env, schema_db, monkeypatch):
     import images
     import main
     import media
+    import ocr
     import screenlock
     import security
     import state
@@ -116,6 +117,8 @@ def studio(env, schema_db, monkeypatch):
     chat.STREAMS.clear()
     chat.LIMITS.clear()
     transcripts.JOBS.clear()
+    ocr.JOBS.clear()
+    ocr.RUNNERS.clear()
     speeches.JOBS.clear()
     videos.WATCHING.clear()
     videos.PAUSED.clear()
