@@ -54,6 +54,9 @@ export function viewSwitch(section, fallback, onChange) {
   };
   function open(on) {
     menu.hidden = !on;
+    // меню прижато правым краем к кнопке; не влезает слева (кнопка у левого края шапки) — от левого края кнопки
+    menu.classList.remove('start');
+    if (on && menu.getBoundingClientRect().left < 8) menu.classList.add('start');
     toggle.setAttribute('aria-expanded', String(on));
     const how = on ? 'addEventListener' : 'removeEventListener';
     document[how]('click', onDoc, true);

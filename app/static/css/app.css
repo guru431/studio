@@ -108,6 +108,7 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
   border-bottom: 1px solid var(--border); }
 .head h1 { margin: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
+.head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
 
 /* телефон: рельс — нижние вкладки, аватар — в шапке раздела */
 @media (max-width: 760px) {
@@ -132,6 +133,13 @@ body.shell { display: flex; height: 100dvh; overflow: hidden; }
   .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 142px; }
   /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от трёх значков — вторая строка */
   [data-selecting] .head { flex-wrap: wrap; row-gap: 6px; }
+  /* 320–360 px: «Фото», «Выбрать», вид и «⋯» — плотнее (зазор 6, кнопка вида без стрелки, резерв справа 138),
+   * чтобы заголовок не срезался */
+  @media (max-width: 360px) {
+    .head { gap: 6px; padding-right: 138px; }
+    .head .view-toggle { width: 34px; }
+    .head .view-toggle svg.caret { display: none; }
+  }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: 5; background: var(--bg); }
 }
@@ -322,6 +330,10 @@ label { font-size: 13px; color: var(--muted); }
 .field-box > textarea, .field-box > input { flex: 1; min-width: 0; width: auto; }
 .field-tools { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .field-box > input + .field-tools { flex-direction: row; align-items: center; align-self: center; }   /* строка поиска */
+/* однострочное поле (чат, фото, видео): значки в ряд у нижнего края — высота рамки max(поле, 30) и не прыгает,
+ * когда с первой буквой появляются «очистить» и «EN»; у многострочного (озвучка, «Изменить») поле выше колонки */
+.field-box.one-line { align-items: flex-end; }
+.field-box.one-line > .field-tools { flex-direction: row; align-items: center; }
 .field-tools .icon-btn:not(.mic.on) { width: 30px; height: 30px; }
 .field-tools .icon-btn svg.ico { width: 17px; height: 17px; }
 .field-tools .mic.on { height: 30px; }
@@ -800,6 +812,8 @@ label.chip { cursor: pointer; }
 .view-toggle[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
 .view-menu { position: absolute; z-index: 15; top: calc(100% + 4px); right: 0; min-width: 160px; padding: 4px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+/* кнопка у левого края (режим выделения на узком экране — вторая строка шапки): меню от её левого края (views.js) */
+.view-menu.start { left: 0; right: auto; }
 .view-option { display: flex; align-items: center; gap: 10px; }
 .view-option svg.ico { width: 17px; height: 17px; flex: none; }
 

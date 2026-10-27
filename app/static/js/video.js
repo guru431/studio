@@ -163,9 +163,12 @@ function build(view, ctx) {
   }
   follow(ctx.query.get('id'));
 
-  /* чип качества: в чипе — «576p», полные слова — в меню */
+  /* чип качества: в чипе — «576p», полные слова — в меню, в title и aria-label */
   function paintQuality() {
     qualityName.textContent = RESOLUTION[quality];
+    const named = `Качество: ${QUALITIES.find(([value]) => value === quality)[1]}`;   // «576p» без слова — непонятно, что это
+    chipQuality.setAttribute('aria-label', named);
+    chipQuality.title = named;
     for (const b of qualityMenu.children) b.setAttribute('aria-checked', String(b.dataset.value === quality));
   }
 
@@ -500,7 +503,8 @@ function build(view, ctx) {
 
   function autosize() {
     prompt.style.height = 'auto';
-    prompt.style.height = `${prompt.scrollHeight}px`;
+    // пустое — в одну строку, как при открытии: длинная подсказка на телефоне иначе растянула бы рамку до двух
+    if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
   /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */

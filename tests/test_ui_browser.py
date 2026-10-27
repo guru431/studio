@@ -85,7 +85,7 @@ MENU_ITEMS = "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.
 THEME_WORDS = ("Тёмная тема", "Светлая тема")
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_theme_toggle_in_the_profile_menu(browser, live, width):
     """Тема — пункт меню профиля сразу под именем (в шапке кнопки нет): подпись — что включит нажатие;
     нажатие меняет тему, пишет её в учётку и оставляет меню открытым; после перезагрузки тема та же."""
@@ -112,7 +112,7 @@ def test_theme_toggle_in_the_profile_menu(browser, live, width):
         ("eval", "inside", MENU_INSIDE),
         ("eval", "go", "location.hash = '#/profile'"), ("wait", "document.querySelector('#view .page')"),
         ("eval", "profileTheme", "!!document.querySelector('#theme-auto, #theme-dark, #theme-light')")],
-        width=width, mobile=width == 390)
+        width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
     words = dict(zip(("dark", "light"), THEME_WORDS))
@@ -2428,7 +2428,7 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
     assert not problems(r), problems(r)
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
     """Вид ленты — одна кнопка со значком текущего вида: меню из трёх пунктов (внутри окна и на телефоне)
     закрывается выбором, Escape (фокус — на кнопку) и нажатием вне."""
@@ -2453,7 +2453,7 @@ def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
         ("eval", "escaped", state),
         ("click", "#photo-view"), ("wait", f"!{menu}.hidden"), ("click", ".photo .head h1"),
         ("eval", "outside", state)],
-        width=width, mobile=width == 390)
+        width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["button"] == [True, "menu", True]
@@ -2527,10 +2527,14 @@ def deletes(mode):
 SERVER_IMAGES = f"(async () => (await {API}.api('GET', '/api/images')).items.map(i => String(i.id)))()"
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, width):
+    """Режим выделения: меню вида внутри окна и на 320 px, где кнопка вида уходит в начало второй строки шапки."""
     login = f"sel{width}"
     live.add_user(login)
+    # все три пункта меню вида — в окне и нажимаются (elementFromPoint — сам пункт)
+    menu_in = """[...document.querySelectorAll('#photo-view-menu .view-option')].map(e => { const b = e.getBoundingClientRect();
+      return b.left >= 0 && b.right <= innerWidth && e.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)); })"""
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=4), ("wait", done_cards(4)),
         ("eval", "all", ids()),
         ("click", "#photo-select"), ("wait", selecting()),
@@ -2538,7 +2542,8 @@ def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, wi
         ("eval", "viewer", "!!document.querySelector('#viewer')"),
         ("eval", "count", text_of("#photo-select-count")),
         ("eval", "picked", picked()),
-        ("click", "#photo-view"), ("click", "#photo-view-table"),
+        ("click", "#photo-view"), ("wait", "!document.querySelector('#photo-view-menu').hidden"),
+        ("eval", "menuIn", menu_in), ("click", "#photo-view-table"),
         ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "pickedTable", picked()),
         ("eval", "fits", NO_OVERFLOW),
@@ -2553,15 +2558,16 @@ def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, wi
         ("click", "#photo-select-delete-confirm"),
         ("wait", f"document.querySelectorAll('{PHOTO_CARD}').length === 2 && !{selecting()}"),
         ("eval", "left", ids()), ("eval", "server", SERVER_IMAGES)],
-        width=width, mobile=width == 390)
+        width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
     first, second, third, fourth = v["all"]
     assert v["viewer"] is False and v["count"] == "Выбрано 2"
+    assert v["menuIn"] == [True, True, True], v["menuIn"]
     assert sorted(v["picked"]) == sorted(v["pickedTable"]) == sorted(v["pickedTiles"]) == sorted([first, third])
     assert v["title"] == "Удалить 2 картинки?"
     assert v["left"] == [second, fourth] and sorted(v["server"]) == sorted([second, fourth])
-    if width == 390:
+    if width < 760:
         assert v["fits"] and v["bar"] and not v["inHead"]
     else:
         assert v["inHead"]
@@ -2869,7 +2875,7 @@ def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, l
 
 def test_photo_translates_the_prompt_into_the_field(browser, live):
     """«EN»: перевод встаёт в поле вместо промпта, генерации нет; во время перевода «Создать» закрыт,
-    а «EN» перевод отменяет — промпт остаётся."""
+    «очистить» не действует (не прячет «EN» с отменой), а «EN» перевод отменяет — промпт остаётся."""
     login = "translator"
     live.add_user(login)
     gw = live.gw
@@ -2891,6 +2897,10 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
             ("wait", "document.querySelector('#photo-translate').textContent.startsWith('EN · ')"),
             ("eval", "busy", "[document.querySelector('#photo-go').disabled, document.querySelector('#photo-prompt').readOnly,"
                              " document.querySelector('#photo-translate').title]"),
+            # «очистить» во время перевода ничего не делает: «EN» с отменой и часами остаётся
+            ("click", "#photo-composer .field-clear"),
+            ("eval", "clearBusy", "[document.querySelector('#photo-prompt').value, document.querySelector('#photo-translate').hidden,"
+                                  " document.querySelector('#photo-translate').textContent.startsWith('EN · ')]"),
             ("wait", "document.querySelector('#photo-prompt').value === 'a cat on the windowsill'"), ("wait", idle),
             # второй перевод — отменён «EN»: промпт тот же
             ("eval", "edit", "(() => { const p = document.querySelector('#photo-prompt'); p.value = 'собака'; return true; })()"),
@@ -2906,6 +2916,7 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
     v = r["values"]
     assert v["title"] == "Перевести промпт на английский (gemma-abl)" and v["empty"] is True
     assert v["busy"] == [True, True, "Отменить перевод"]
+    assert v["clearBusy"] == ["кошка на подоконнике", False, True]
     assert v["after"] == ["собака", False, ""]
     first, second = gw.descriptions[d0:]
     assert first["messages"][0]["content"].endswith("кошка на подоконнике")
@@ -3434,7 +3445,7 @@ def make_clips(n):
     return steps
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_video_selection_in_every_view(browser, live, ready_clips, width):
     login = f"vsel{width}"
     live.add_user(login)
@@ -3449,14 +3460,14 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
                   ("eval", f"{view}Fits", NO_OVERFLOW)]
     steps += [("eval", "bar", "getComputedStyle(document.querySelector('.video .select-bar')).display !== 'none'"),
               ("eval", "label", text_of("#video-select-download"))]
-    r = browser.drive(live.url + "/", steps, width=width, mobile=width == 390, timeout=20000)
+    r = browser.drive(live.url + "/", steps, width=width, mobile=width < 760, timeout=20000)
     assert not r.get("failed"), r
     v = r["values"]
     for n, view in enumerate(("preview", "tiles", "table"), 1):
         assert len(v[f"{view}Picked"]) == n, view
         assert v[f"{view}Viewer"] is False and v[f"{view}Paused"] and v[f"{view}Fits"], view
     assert set(v["previewPicked"]) < set(v["tilesPicked"]) < set(v["tablePicked"])
-    assert v["bar"] is (width == 390) and v["label"] == "Скачать"
+    assert v["bar"] is (width < 760) and v["label"] == "Скачать"
     assert not problems(r), problems(r)
 
 
@@ -3571,8 +3582,10 @@ FAKE_MIC = """(() => {
   return true; })()"""
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_mic_inserts_text_at_the_cursor(browser, live, width):
+    """Текст встаёт на место курсора; идущая запись (кнопка шире, с таймером) — в рамке поля и середину поля
+    не закрывает и на 320 px."""
     login = f"mic{width}"
     live.add_user(login)
     saved = live.gw.asr_reply
@@ -3583,6 +3596,7 @@ def test_mic_inserts_text_at_the_cursor(browser, live, width):
         r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
             ("eval", "spy", SPY), ("eval", "mic", FAKE_MIC), ("eval", "put", put),
             ("click", "#photo-composer .mic"), ("wait", "document.querySelector('#photo-composer .mic.on')"),
+            ("eval", "recording", field_state("#photo-prompt")),
             ("click", "#photo-composer .mic"),
             ("wait", "document.querySelector('#photo-prompt').value === 'рыжий кот на окне'"),
             ("eval", "sent", "window.sentForms.length"),
@@ -3592,11 +3606,13 @@ def test_mic_inserts_text_at_the_cursor(browser, live, width):
             ("wait", "document.querySelector('#editor .mic')"), ("press", "Escape"),
             *go("chat"), ("wait", "document.querySelector('#composer .mic')"),
             *go("video"), ("wait", "document.querySelector('#video-composer .mic')")],
-            width=width, mobile=width == 390)
+            width=width, mobile=width < 760)
     finally:
         live.gw.asr_reply = saved
     assert not r.get("failed"), r
     assert r["values"]["sent"] == 0 and not r["values"]["overflow"]
+    # [.mic.on в рамке, «очистить» в рамке, «очистить» скрыт, середина поля — поле, EN скрыт]
+    assert r["values"]["recording"] == [True, True, False, True, False], r["values"]["recording"]
     assert not problems(r), problems(r)
 
 
@@ -3698,13 +3714,13 @@ def field_steps(name, field, scope):
                                         " f.closest('.field-box').querySelector('.field-clear').hidden]; })()")]
 
 
-@pytest.mark.parametrize("width", [390, 1280])
+@pytest.mark.parametrize("width", [320, 390, 1280])
 def test_every_field_has_the_mic_and_clear_inside(browser, live, width):
     """Чат, фото, «Изменить», видео, озвучка, поиск: микрофон и «очистить» — в рамке поля, «очистить» виден
     только при тексте и очищает поле с фокусом в нём; середина поля значками не закрыта; EN фото — при тексте."""
     login = f"fields{width}"
     live.add_user(login)
-    mobile = width == 390
+    mobile = width < 760
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
         *field_steps("photo", "#photo-prompt", "#photo-composer"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
@@ -3742,10 +3758,12 @@ BAR = """((go) => { const g = document.querySelector(go); const bar = g.closest(
     g.offsetHeight]; })"""
 
 
-def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live):
-    """390 px: у чата 📎, «Интернет», «Рассуждение» и ↑ — одной строкой (слова кнопок — только в подписях); у фото,
-    видео и озвучки главная кнопка справа на строке последнего чипа; поля seed нет."""
-    login = "bars"
+@pytest.mark.parametrize("width", [320, 390])
+def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width):
+    """320 и 390 px: у чата 📎, «Интернет», «Рассуждение» и ↑ — одной строкой (слова кнопок — только в подписях);
+    у фото, видео и озвучки главная кнопка справа на строке последнего чипа; поля seed нет; у чипа качества —
+    название параметра."""
+    login = f"bars{width}"
     live.add_user(login)
     local = f"""(async () => {{ const m = {API};
       const chat = (await m.api('GET', '/api/sections')).sections.find(x => x.id === 'chat');
@@ -3764,6 +3782,11 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live):
         ("eval", "videoSeed", "!!document.querySelector('#chip-vseed, #video-seed')"),
         ("eval", "videoChips", "[document.querySelector('#chip-quality').textContent,"
                                " document.querySelector('#chip-smooth').textContent, document.querySelector('#chip-smooth').title]"),
+        ("eval", "qualityName", "[document.querySelector('#chip-quality').getAttribute('aria-label'),"
+                                " document.querySelector('#chip-quality').title]"),
+        ("click", "#chip-quality"), ("click", "#chip-quality-menu [data-value=high]"),
+        ("eval", "qualityHigh", "[document.querySelector('#chip-quality').textContent,"
+                                " document.querySelector('#chip-quality').getAttribute('aria-label')]"),
         *go("speech"), ("wait", "document.querySelector('#speech-go')"),
         ("eval", "speech", f"({BAR})('#speech-go')"),
         ("eval", "exa", EXA_KEY_SET), ("eval", "local", local),
@@ -3771,7 +3794,7 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live):
         ("wait", "!document.querySelector('#think-toggle').hidden && !document.querySelector('#web-toggle').hidden"),
         ("eval", "chat", line), ("eval", "words", words),
         ("eval", "goHeight", "document.querySelector('#send').offsetHeight"),
-        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=390, mobile=True)
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     for name in ("photo", "video", "speech"):
@@ -3780,9 +3803,87 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live):
     assert not v["photoSeed"] and not v["videoSeed"] and v["sizeChip"] == "Портрет"
     quality, smooth, smooth_title = v["videoChips"]
     assert quality == "576p" and smooth == "плавно" and "32 к/с" in smooth_title
+    assert v["qualityName"] == ["Качество: Обычно 576p"] * 2
+    assert v["qualityHigh"] == ["720p", "Качество: Высоко 720p"]
     assert len(v["chat"]) == 4 and max(v["chat"]) - min(v["chat"]) <= 2, v["chat"]
     assert v["words"] == [["Интернет", True], ["Рассуждение", True]]
     assert v["goHeight"] == 34 and not v["overflow"]
+    assert not problems(r), problems(r)
+
+
+def box_geo(field):
+    """[высота рамки поля, видимых значков, все они в рамке, середина поля — само поле, высота поля]."""
+    return f"""(() => {{ const f = document.querySelector({field!r}); const box = f.closest('.field-box');
+      const b = box.getBoundingClientRect(); const r = f.getBoundingClientRect();
+      const tools = [...box.querySelectorAll('.field-tools > *')].filter(e => !e.hidden);
+      return [Math.round(b.height), tools.length, tools.every(e => {{ const x = e.getBoundingClientRect();
+        return x.left >= b.left - 0.5 && x.right <= b.right + 0.5 && x.top >= b.top - 0.5 && x.bottom <= b.bottom + 0.5; }}),
+        document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === f, Math.round(r.height)]; }})()"""
+
+
+def geo_steps(name, field, scope):
+    """Рамка поля пустого, с одной буквой и после «очистить»: `<name>-empty`, `<name>-typed`, `<name>-cleared`."""
+    return [("eval", f"{name}-empty", box_geo(field)), ("type", field, "к"),
+            ("eval", f"{name}-typed", box_geo(field)), ("click", f"{scope} .field-clear"),
+            ("eval", f"{name}-cleared", box_geo(field))]
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, width):
+    """Чат, фото, видео: с первой буквой появляются «очистить» (и «EN» у фото) — в ряд с микрофоном, рамка поля
+    не меняет высоту, значки в рамке, середина поля свободна. «Очистить» шлёт `input`: поле чата сжимается
+    обратно, счётчик озвучки — «0 / 2000», поиск — снова в ожидании."""
+    login = f"oneline{width}"
+    live.add_user(login)
+    tall = """(() => { const f = document.querySelector('#chat-input'); f.value = 'кот '.repeat(80);
+      f.dispatchEvent(new Event('input', { bubbles: true })); return Math.round(f.getBoundingClientRect().height); })()"""
+    chat_height = "Math.round(document.querySelector('#chat-input').getBoundingClientRect().height)"
+    state = "document.querySelector('#search-results').dataset.state"
+    r = browser.drive(live.url + "/", [*photo_screen(login),
+        *geo_steps("photo", "#photo-prompt", "#photo-composer"),
+        *open_new_chat(mobile=True), ("wait", "document.querySelector('#chats').getBoundingClientRect().right <= 0"),
+        *geo_steps("chat", "#chat-input", "#composer"),
+        ("eval", "chatTall", tall), ("click", "#composer .field-clear"), ("eval", "chatBack", chat_height),
+        *go("video"), ("wait", "document.querySelector('#video-prompt')"),
+        *geo_steps("video", "#video-prompt", "#video-composer"),
+        *go("speech"), ("wait", "document.querySelector('#speech-text')"),
+        ("type", "#speech-text", "кот"), ("eval", "speechTyped", text_of("#speech-count")),
+        ("click", "#speech-composer .field-clear"), ("eval", "speechCleared", text_of("#speech-count")),
+        *go("search"), ("wait", "document.querySelector('#search-q')"),
+        ("type", "#search-q", "кот"), ("wait", f"{state} === 'ready'"),
+        ("click", ".search-page .field-clear"), ("wait", f"{state} === 'idle'"),
+        ("eval", "searchCleared", "document.querySelector('#search-q').value"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=True, height=760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    for name, tools in (("photo", 3), ("chat", 2), ("video", 2)):
+        empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
+        # у видео на телефоне поле — в две строки (подсказка целиком), у чата и фото — в одну
+        assert empty[0] <= (50 if name == "video" else 34), (name, empty)
+        assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)
+        assert empty[1:4] == [1, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
+    assert v["chatTall"] > v["chat-empty"][4] + 20 and abs(v["chatBack"] - v["chat-empty"][4]) <= 1, (v["chatTall"], v["chatBack"])
+    assert v["speechTyped"] == "3 / 2000" and v["speechCleared"] == "0 / 2000"
+    assert v["searchCleared"] == "" and not v["overflow"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_photo_and_video_heads_fit_the_phone(browser, live, width):
+    """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее лупы."""
+    login = f"heads{width}"
+    live.add_user(login)
+    head = """((root) => { const h = document.querySelector(root + ' .head'); const t = h.querySelector('h1');
+      const end = document.querySelector('#search-open').getBoundingClientRect().left;
+      const kids = [...h.children].filter(e => e.getBoundingClientRect().width > 0 && !e.classList.contains('grow'));
+      return [t.textContent, t.scrollWidth <= t.clientWidth, h.querySelector('.select-btn').offsetWidth,
+        kids.every(e => e.getBoundingClientRect().right <= end)]; })"""
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "photo", f"({head})('.photo')"),
+        *go("video"), ("wait", VIDEO_FEED_READY), ("eval", "video", f"({head})('.video')")],
+        width=width, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["photo"] == ["Фото", True, 34, True], r["values"]["photo"]
+    assert r["values"]["video"] == ["Видео", True, 34, True], r["values"]["video"]
     assert not problems(r), problems(r)
 
 
