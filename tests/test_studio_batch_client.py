@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from clients import RUNNERS, ps_encoding, run_client
+from clients import RUNNERS, flat, ps_encoding, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-batch.ps1"
@@ -143,7 +143,7 @@ def run_script(runner, images, *args, code=0):
     out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
-    return out
+    return flat(out)
 
 
 def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):

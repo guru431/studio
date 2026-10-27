@@ -20,7 +20,7 @@ from email.parser import BytesParser
 
 import pytest
 
-from clients import RUNNERS, ps_encoding, run_client
+from clients import RUNNERS, flat, ps_encoding, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-video.ps1"
@@ -222,7 +222,7 @@ def run_script(runner, fake, folder, *extra, code=0):
     out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
-    return out
+    return flat(out)
 
 
 HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt", "model",
@@ -407,6 +407,26 @@ def test_failed_job_is_deleted_and_not_recorded(runner, service, tmp_path):
     assert [p.name for p in tmp_path.glob("*.mp4")] == [
         f"good_5s_s{int(fake.posts[1]['seed'])}_{fingerprint(b'good')[:8]}.mp4"]
     assert fake.jobs == {}
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_failed_write_of_one_video_does_not_stop_the_run(runner, service, tmp_path):
+    # Ролик не записался (здесь имя .part занято каталогом — отказ записи и на Windows, и на Linux):
+    # раньше исключение роняло прогон и снимало у шлюза уже принятые задания
+    fake = service()
+    (tmp_path / "a.png").write_bytes(b"img-a")
+    (tmp_path / "b.png").write_bytes(b"img-b")
+    blocked = tmp_path / f"a_5s_s42_{fingerprint(b'img-a', seed=42)[:8]}.mp4.part"
+    blocked.mkdir()
+
+    out = run_script(runner, fake, tmp_path, "-Seed", "42", code=3)
+
+    assert "ролик 1/2 a.png: не записался —" in out and "готово 1, не вышло 1" in out
+    assert ("DELETE", "/slot/videos/video_%024x" % 1) in fake.log and fake.jobs == {}
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["b.png"]
+    assert [p.name for p in tmp_path.glob("*.mp4")] == [f"b_5s_s42_{fingerprint(b'img-b', seed=42)[:8]}.mp4"]
+    assert blocked.is_dir(), "чужой каталог не трогается: убирается только свой недописанный файл"
+    assert fake.release == [{"model": MODEL}]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

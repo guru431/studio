@@ -224,9 +224,10 @@ function Get-FailText($Response) {
     }
 }
 
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()    # один на скрипт: Fill в .NET Framework нет
 function New-Seed {
     $bytes = New-Object byte[] 4
-    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $rng.GetBytes($bytes)
     return [long][BitConverter]::ToUInt32($bytes, 0)
 }
 
@@ -325,8 +326,19 @@ function Update-Video($Job, $Listing) {
     $file = "$stem.mp4"
     for ($n = 2; Test-Path -LiteralPath (Join-Path $Folder $file); $n++) { $file = "$stem-$n.mp4" }
     $path = Join-Path $Folder $file
-    [IO.File]::WriteAllBytes("$path.part", $c.Bytes)
-    [IO.File]::Move("$path.part", $path)
+    try {
+        [IO.File]::WriteAllBytes("$path.part", $c.Bytes)
+        [IO.File]::Move("$path.part", $path)
+    } catch {
+        # Диск полон, нет прав, имя занято: один ролик — не повод ронять прогон и снимать чужие
+        $e = $_.Exception
+        if ($e.InnerException) { $e = $e.InnerException }
+        Write-Warning "$(Get-Label $Job): не записался — $($e.Message)"
+        try { if (Test-Path -LiteralPath "$path.part" -PathType Leaf) { [IO.File]::Delete("$path.part") } } catch { }
+        Remove-Video $Job
+        $script:failed++
+        return $true
+    }
     Remove-Video $Job
     $promptOut = if ($Job.Prompt) { $Job.Prompt } else { "$($obj.prompt)" }
     $sourceOut = if ($Job.Source) { $Job.Source } elseif ($obj.prompt_source) { "$($obj.prompt_source)" } else { 'auto' }

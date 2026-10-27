@@ -30,6 +30,13 @@ def ps_encoding():
     return f"cp{cp}" if cp else "oem"
 
 
+def flat(text):
+    """Вывод одной строкой: Write-Warning переносит текст по ширине консоли процесса тестов
+    (из окна в 80 знаков «(503): карта занята» приходит как «(503): \\r\\nкарта занята»), а
+    проверки ищут фразы — сравнивать их можно только со схлопнутыми пробелами."""
+    return re.sub(r"\s+", " ", text)
+
+
 def py_args(args):
     """-PromptsFile x -NoSmooth → --prompts-file x --no-smooth."""
     return ["--" + re.sub(r"(?<!^)(?=[A-Z])", "-", a[1:]).lower() if re.fullmatch(r"-[A-Z]\w*", a) else a

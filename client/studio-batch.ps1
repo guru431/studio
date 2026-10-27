@@ -208,9 +208,10 @@ function Get-FailText($Response) {
     }
 }
 
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()    # один на скрипт: Fill в .NET Framework нет
 function New-Seed {
     $bytes = New-Object byte[] 4
-    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $rng.GetBytes($bytes)
     return [long][BitConverter]::ToUInt32($bytes, 0)
 }
 
