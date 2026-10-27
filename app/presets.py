@@ -24,7 +24,8 @@ router = APIRouter(prefix="/api/images/presets")
 
 SECTION = "photo"
 PRESETS_MAX = 50
-BODY_MAX = 64 * 1024
+# промпт — до 24000 знаков, а знак — до 4 байт UTF-8 и до 12 в JSON с `\uXXXX` (суррогатная пара)
+BODY_MAX = 512 * 1024
 INPUT = {"code": "input", "message": "имя пресета — от 1 до 60 знаков; проверьте модель, формат, seed, силу и промпт"}
 
 

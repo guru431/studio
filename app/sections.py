@@ -166,7 +166,7 @@ def _link_row(user_id: int, section: str, conn_id: int):
 def check_link(conn: "connections.Connection", section: str) -> None:
     """Может ли подключение участвовать в разделе: вид и, для раздела только через сервер, список."""
     if section not in connections.KINDS[conn.kind]:
-        raise _bad("kind", "видео — только через шлюз srvllm")
+        raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")
     if section in SERVER_ONLY and not conn.proxied:
         raise _bad("server", f"раздел «{NAMES[section]}» — только через сервер: попросите администратора"
                              " внести адрес в список разрешённых")

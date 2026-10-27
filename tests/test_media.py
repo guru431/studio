@@ -66,6 +66,17 @@ def test_suffix_and_bad_ranges(studio):
         assert media.byte_range(other, 1000) is None
 
 
+def test_range_of_an_empty_file_is_unsatisfiable(studio):
+    """Пустой файл (`.md` пустого распознавания): у него нет ни байта — любой диапазон 416, а не
+    206 с `bytes 0--1/0` (RFC 9110 §14.1.2)."""
+    for spec in ("bytes=-5", "bytes=0-", "bytes=0-0"):
+        assert media.byte_range(spec, 0) == media.UNSATISFIABLE, spec
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, b"", "text/markdown", "empty.md")
+    r = studio.c.get(f"/api/media/{mid}", headers={"Range": "bytes=-5"})
+    assert r.status_code == 416 and r.headers["content-range"] == "bytes */0"
+
+
 def test_unsupported_range_gets_the_whole_file(studio):
     """RFC 9110 §14.2: Range, который сервер не поддерживает (несколько диапазонов, другая единица), он
     вправе не заметить — 200 и файл целиком; 416 — только неудовлетворимому."""

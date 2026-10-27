@@ -86,6 +86,9 @@ SHORT_TIMEOUT_SEC = 30
 # release после отменённого задания: 409 — slot-gate ещё считает запрос (свой — доли секунды,
 # чужой — до конца его картинки); дольше минуты не ждём — аренду снимет её срок
 CANCEL_RELEASE_SEC = 60
+# release после готового описания или перевода: свой запрос кончился, 409 — миг, пока slot-gate ещё
+# его считает, или чужой запрос к gemma-abl; ждать чужой ради release — держать готовый текст и слот
+DONE_RELEASE_SEC = 4
 RELEASE_PAUSE_SEC = 2
 TERMINAL = {"done", "error", "cancelled"}
 WORKING = "жду карту или генерирую"
@@ -827,10 +830,10 @@ async def describe(job: Job):
     job.description = text.strip()
 
 
-async def release_after_cancel(job: Job, *, cancelled=True) -> str:
+async def release_after_cancel(job: Job, *, cancelled=True, wait=CANCEL_RELEASE_SEC) -> str:
     """Release модели отменённого задания сразу после конца его запроса. 409 — slot-gate ещё
-    считает запрос (свой или чужой): повтор с паузой до CANCEL_RELEASE_SEC."""
-    deadline = clock.NOW() + CANCEL_RELEASE_SEC
+    считает запрос (свой или чужой): повтор с паузой до `wait` секунд."""
+    deadline = clock.NOW() + wait
     prefix = "отменено" if cancelled else TEXT_WORDS[job.kind][0]
     if job.conn.kind != "srvllm":                 # у внешнего сервиса карты студии нет
         return prefix
@@ -850,7 +853,7 @@ async def release_after_cancel(job: Job, *, cancelled=True) -> str:
             log.warning("задание %s: release ответил %s", job.id[:8], r.status_code)
             return f"{prefix}; карту освободить не удалось — {upstream.gateway_error(r, job.conn.name)}"
         if clock.NOW() >= deadline:
-            log.warning("задание %s: release — 409 дольше %d с", job.id[:8], CANCEL_RELEASE_SEC)
+            log.warning("задание %s: release — 409 дольше %d с", job.id[:8], wait)
             return prefix + "; карта занята другим запросом — освободится сама по окончании аренды"
         await clock.SLEEP(RELEASE_PAUSE_SEC)
 
@@ -890,7 +893,10 @@ async def run_job(job: Job) -> None:
             log.warning("задание %s: сбой %s", job.id[:8], type(e).__name__)
         description_cleanup = None
         if job.kind in TEXT_KINDS and job.description_started:
-            description_cleanup = await release_after_cancel(job, cancelled=job.state == "cancelling")
+            cancelled = job.state == "cancelling"
+            # готовый текст не ждёт чужой запрос к gemma-abl; отменённое — ждёт свой, шлюз его дорабатывает
+            wait = DONE_RELEASE_SEC if outcome[0] == "done" and not cancelled else CANCEL_RELEASE_SEC
+            description_cleanup = await release_after_cancel(job, cancelled=cancelled, wait=wait)
             if outcome[0] == "done":
                 outcome = ("done", description_cleanup, None, None)
         state_, detail, picture, seed = outcome

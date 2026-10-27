@@ -476,14 +476,14 @@ async def delete_async(user_id: int, media_id: str) -> None:
 
 def byte_range(header: str, size: int) -> "tuple[int, int] | str | None":
     """Один диапазон `bytes=a-b`, `a-` или `-n` → (начало, конец включительно); UNSATISFIABLE — 416
-    (начало за концом файла, `-0`). None — заголовок не наш одиночный диапазон (несколько диапазонов,
+    (начало за концом файла, `-0`, `-n` у пустого файла). None — заголовок не наш одиночный диапазон (несколько диапазонов,
     другая единица, `5-1`, мусор): его не замечают, ответ — файл целиком (RFC 9110 §14.2)."""
     match = RANGE_RE.fullmatch(header.strip())
     if match is None or match.groups() == ("", ""):
         return None
     first, last = match.groups()
     if first == "":
-        if int(last) == 0:
+        if int(last) == 0 or size == 0:          # у пустого файла нет ни байта: (0, -1) — не диапазон
             return UNSATISFIABLE
         return max(0, size - int(last)), size - 1
     start, end = int(first), int(last) if last else size - 1
