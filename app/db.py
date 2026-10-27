@@ -1,11 +1,11 @@
-"""Соединение SQLite и схема базы (версия 15).
+"""Соединение SQLite и схема базы (версия 16).
 
 Новая база получает SCHEMA сразу последней версии; прежняя — шаги STEPS от своей версии.
 Шаг только добавляет: код предыдущей выкладки (откат install.sh) с новой базой работает."""
 import sqlite3
 from pathlib import Path
 
-VERSION = 15
+VERSION = 16
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -190,6 +190,39 @@ ALTER TABLE messages ADD COLUMN reasoning TEXT;
 ALTER TABLE messages ADD COLUMN reasoning_sec REAL;
 """
 
+#: распознавание (ocr.py, спека 2026-10-27-studio-ocr-design, 6.3 и 6.7): документ — `scans` (state — queued,
+#: working, cancelling, done, error, cancelled; origin — раздел или вложение чата, attachment_id без ссылки на
+#: attachments: вложение удаляют, документ остаётся; text — весь текст по готовности, для поиска), страницы —
+#: `scan_pages` с n от 1 (свой user_id — media.referenced). Поиск — триггерами, как у расшифровки. Каждое
+#: подключение srvllm — в разделе ocr с hunyuan-ocr, умолчание — наименьшее (как шаг 4): скан в чате работает
+#: сразу после выкладки. У новой базы (SCHEMA) подключений нет — вставки пусты
+_SCAN = _TRANSCRIPT                             # имя и начало текста — как у расшифровки
+OCR_16 = f"""CREATE TABLE scans(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+      connection_id INTEGER, model TEXT NOT NULL, name TEXT NOT NULL, source_media_id TEXT,
+      origin TEXT NOT NULL CHECK (origin IN ('section','chat')), attachment_id TEXT,
+      pages INTEGER NOT NULL, done_pages INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL, detail TEXT NOT NULL,
+      text TEXT, created REAL NOT NULL, finished REAL);
+CREATE TABLE scan_pages(scan_id TEXT NOT NULL REFERENCES scans ON DELETE CASCADE,
+      user_id INTEGER NOT NULL, n INTEGER NOT NULL, media_id TEXT,
+      state TEXT NOT NULL CHECK (state IN ('waiting','done','failed','layer','blank')),
+      text TEXT, detail TEXT, PRIMARY KEY (scan_id, n));
+CREATE INDEX scans_user_created ON scans(user_id, created);
+CREATE INDEX scans_attachment ON scans(attachment_id);
+CREATE INDEX scans_state ON scans(state);
+CREATE TRIGGER search_scans_ai AFTER INSERT ON scans BEGIN
+  {_DOC} ('ocr', new.id, '', new.user_id, new.model, new.created, {_SCAN}); END;
+CREATE TRIGGER search_scans_au AFTER UPDATE OF name, text ON scans
+  WHEN old.name IS NOT new.name OR old.text IS NOT new.text BEGIN
+  DELETE FROM search_docs WHERE section = 'ocr' AND item = old.id;
+  {_DOC} ('ocr', new.id, '', new.user_id, new.model, new.created, {_SCAN}); END;
+CREATE TRIGGER search_scans_ad AFTER DELETE ON scans BEGIN
+  DELETE FROM search_docs WHERE section = 'ocr' AND item = old.id; END;
+INSERT INTO section_links(user_id, section, connection_id, models, created)
+SELECT user_id, 'ocr', id, '["hunyuan-ocr"]', created FROM connections WHERE kind = 'srvllm';
+INSERT INTO section_defaults(user_id, section, connection_id, model)
+SELECT user_id, 'ocr', MIN(connection_id), 'hunyuan-ocr' FROM section_links WHERE section = 'ocr' GROUP BY user_id;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -232,7 +265,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -293,6 +326,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     14: INTERNET_14,
     # кнопка «Рассуждение» диалога, рассуждение ответа и его длительность
     15: THINKING_15,
+    # распознавание: документы и страницы, поиск по ним; srvllm — в разделе ocr
+    16: OCR_16,
 }
 
 

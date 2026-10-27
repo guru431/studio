@@ -40,7 +40,7 @@ import state
 import upstream
 
 KINDS = {"openai": {"chat", "photo", "transcribe", "speech", "dictation"},
-         "srvllm": {"chat", "photo", "video", "transcribe", "speech", "dictation"}}
+         "srvllm": {"chat", "photo", "video", "transcribe", "ocr", "speech", "dictation"}}
 NAME_MAX = 64
 URL_MAX = 2048
 TOKEN_RE = r"[\x20-\x7e]{1,512}"
