@@ -28,13 +28,13 @@ import clock
 import connections
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "dictation")
-NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Расшифровка", "speech": "Озвучка",
-         "dictation": "Голосовой ввод"}
-SERVER_ONLY = {"photo", "video", "transcribe", "speech", "dictation"}
+SECTIONS = ("chat", "photo", "video", "transcribe", "ocr", "speech", "dictation")
+NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Расшифровка", "ocr": "Распознавание",
+         "speech": "Озвучка", "dictation": "Голосовой ввод"}
+SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections
-CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "speech": ["qwen3-tts"],
-           "dictation": ["gigaam", "whisperx"]}
+CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
+           "speech": ["qwen3-tts"], "dictation": ["gigaam", "whisperx"]}
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
 LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200

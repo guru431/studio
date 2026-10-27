@@ -190,6 +190,22 @@ def test_history_wipe_removes_files(studio, env, unlinks):
     assert unlinks and not any(unlinks)                         # ни одного удаления с цикла событий
 
 
+def test_scan_files_are_referenced(studio):
+    """Исходник документа распознавания и картинки страниц — файлы его записи (у страницы свой user_id):
+    удаление другой записи их не трогает; чужой id — не ссылка. Стирание истории уносит документ и страницы."""
+    uid = make_user(studio, "owner"); bob = make_user(studio, "bob"); signin(studio, "owner")
+    state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, state, detail,"
+                     " created) VALUES ('o1', ?, 'hunyuan-ocr', 'Скан.pdf', 'src', 'section', 2, 'done', 'готово', 1)",
+                     (uid,))
+    for n, media_id in ((1, "p1"), (2, None)):
+        state.DB.execute("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state) VALUES ('o1', ?, ?, ?, 'done')",
+                         (uid, n, media_id))
+    assert media.referenced(uid, "src") and media.referenced(uid, "p1")
+    assert not media.referenced(uid, "other") and not media.referenced(bob, "src") and not media.referenced(bob, "p1")
+    assert studio.c.delete("/api/history").status_code == 200
+    assert state.DB.execute("SELECT (SELECT COUNT(*) FROM scans) + (SELECT COUNT(*) FROM scan_pages)").fetchone()[0] == 0
+
+
 def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypatch):
     """Тысячи файлов истории — одним вызовом в потоке, не по строке с возвратом на цикл (ревью A2-I2);
     файл, который не удалился, строки не держит — его путь ждёт в очереди удаления."""

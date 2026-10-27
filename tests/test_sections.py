@@ -25,11 +25,22 @@ def test_gateway_joins_every_section_with_its_catalog(studio):
     assert sections.capabilities(uid) == dict.fromkeys(sections.SECTIONS, True)
 
 
+def test_new_srvllm_connection_gets_ocr(studio):
+    """«Распознавание» — встроенный раздел srvllm: новое подключение шлюза входит в него с hunyuan-ocr и
+    умолчанием, раздел — только через сервер."""
+    cid = add_gateway(studio)
+    ocr = next(s for s in studio.c.get("/api/sections").json()["sections"] if s["id"] == "ocr")
+    assert ocr["name"] == "Распознавание" and ocr["links"][0]["catalog"] == ["hunyuan-ocr"]
+    assert ocr["links"][0]["models"] == ["hunyuan-ocr"] and ocr["default"] == {"connection_id": cid, "model": "hunyuan-ocr"}
+    assert "ocr" in sections.SERVER_ONLY and sections.capabilities(uid_of_owner())["ocr"] is True
+    assert studio.c.get(f"/api/sections/ocr/links/{cid}/found").json()["items"] == ["hunyuan-ocr"]
+
+
 def test_openai_cannot_join_video_and_outside_the_list_only_chat(studio):
     add_gateway(studio)
     uid = uid_of_owner()
     cloud = add_connection(studio, base_url="https://cloud.test/v1", sections=["chat"])
-    for section, code in (("video", "kind"), ("photo", "server"), ("dictation", "server")):
+    for section, code in (("video", "kind"), ("ocr", "kind"), ("photo", "server"), ("dictation", "server")):
         with pytest.raises(HTTPException) as e:
             sections.link(uid, section, cloud)
         assert e.value.detail["code"] == code, section

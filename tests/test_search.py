@@ -23,6 +23,8 @@ TRANSCRIPT = ("INSERT INTO transcripts(id, user_id, model, name, source_media_id
               " VALUES (?, ?, 'whisperx', ?, 'm', 'done', 'готово', ?, ?)")
 SPEECH = ("INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created)"
           " VALUES (?, ?, 'qwen3-tts', 'v', ?, 'done', 'готово', ?)")
+SCAN = ("INSERT INTO scans(id, user_id, model, name, origin, pages, state, detail, created, text)"
+        " VALUES (?, ?, 'hunyuan-ocr', ?, 'section', 1, 'done', 'готово', ?, ?)")
 CHAT = "INSERT INTO chats(id, user_id, title, model, created, updated) VALUES (?, ?, ?, ?, ?, ?)"
 MESSAGE = ("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
            " VALUES (?, ?, ?, ?, 'done', 'server', ?, ?)")
@@ -102,6 +104,30 @@ def test_large_documents_and_transcripts_are_indexed_by_their_start(studio):
     state.DB.execute("DELETE FROM transcripts WHERE id = 't1'")
     state.DB.execute("INSERT INTO search(search) VALUES ('integrity-check')")    # удаление — тем же текстом
     assert found("начал") == [] and found("слово") == []
+
+
+def test_scan_text_is_found_and_removed_with_the_scan(studio):
+    """Распознавание (шаг 16): документ — имя и текст (первые INDEX_CHARS); текст пишется по готовности одним
+    обновлением — индекс по новому; удаление документа и стирание истории уносят его из выдачи."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(SCAN, ("o1", uid, "Договор.pdf", T0, "арендатор обязуется"))
+    r = search(studio, q="арендатор")
+    assert hits(r) == [("ocr", "o1")]
+    item = r.json()["items"][0]
+    assert (item["title"], item["href"], item["model"], item["part"]) == ("Договор.pdf", "ocr?id=o1", "hunyuan-ocr", "")
+    assert hits(search(studio, q="договор")) == hits(search(studio, section="ocr")) == [("ocr", "o1")]
+    assert studio.c.get("/api/search/models").json() == {"models": {"ocr": ["hunyuan-ocr"]}}
+    state.DB.execute("UPDATE scans SET text = 'арендодатель вправе', name = 'Акт.pdf' WHERE id = 'o1'")
+    assert hits(search(studio, q="обязуется")) == [] and hits(search(studio, q="договор")) == []
+    assert hits(search(studio, q="арендодатель акт")) == [("ocr", "o1")]
+    state.DB.execute("DELETE FROM scans WHERE id = 'o1'")
+    assert hits(search(studio, q="арендодатель")) == []
+    state.DB.execute(SCAN, ("o2", uid, "Скан.pdf", T0, None))                 # ещё не распознан — по имени
+    assert found("скан") == [("ocr", "o2", "")]
+    state.DB.execute("UPDATE scans SET text = ? WHERE id = 'o2'", ("начало " + "слово " * (db.INDEX_CHARS // 6) + "хвост",))
+    assert found("начал") == [("ocr", "o2", "")] and found("хвост") == []
+    assert studio.c.delete("/api/history").status_code == 200
+    assert found("скан") == [] and state.DB.execute("SELECT COUNT(*) FROM search_docs").fetchone()[0] == 0
 
 
 def test_reindex_repairs_the_index_and_keeps_yo_where_rebuild_loses_it(studio):

@@ -51,7 +51,7 @@ async def delete_all(user_id: int) -> int:
         media.queue(user_id, failed)
         state.DB.execute("DELETE FROM attachments WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))      # сообщения — каскадом
-        for table in ("images", "videos", "transcripts", "voices", "speeches", "media"):
+        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "media"):   # scan_pages — каскадом
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         state.DB.execute("COMMIT")
     except BaseException:
