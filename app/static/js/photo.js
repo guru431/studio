@@ -45,7 +45,8 @@ import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
 
 const POLL_MS = 1500;
-const TRANSLATE_FAILS = 40;      // отказов опроса перевода подряд (~минута) — дальше перевод бросаетсяconst THUMB_SIDE = 384;          // длинная сторона миниатюры (media.THUMB_SIDE)
+const TRANSLATE_FAILS = 40;      // отказов опроса перевода подряд (~минута) — дальше перевод бросается
+const THUMB_SIDE = 384;          // длинная сторона миниатюры (media.THUMB_SIDE)
 const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
