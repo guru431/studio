@@ -1,6 +1,6 @@
 /* «Поиск» (спека 2026-10-21-studio-history-search-design): своя история по словам и фильтрам.
  *
- * Поле (пауза SEARCH_PAUSE_MS после ввода, Enter — сразу; голосовой ввод — attachMic), чипы раздела,
+ * Поле (пауза SEARCH_PAUSE_MS после ввода, Enter — сразу; «очистить» и голосовой ввод — field.js), чипы раздела,
  * модель (GET /api/search/models — модели своей истории), период «с … по …» и «сбросить». Запрос —
  * POST /api/search телом: адрес пишет журнал Apache и видно в истории браузера, поэтому слова и
  * фильтры живут только в памяти этого модуля (`memory`) — переживают уход в раздел и возврат, но не
@@ -14,8 +14,8 @@
  * ready | error (по нему ждут тесты). */
 import { api } from './api.js';
 import { dayKey, dayTitle } from './feed.js';
+import { fieldBox } from './field.js';
 import { HREF, ICONS } from './jobs.js';
-import { attachMic } from './mic.js';
 import { el, words } from './ui.js';
 
 export const SEARCH_PAUSE_MS = 300;
@@ -73,7 +73,7 @@ function mountScreen(view, ctx) {
   const q = el('input', { id: 'search-q', class: 'input', type: 'search', maxlength: '200', autocomplete: 'off',
     enterkeyhint: 'search', placeholder: 'Слова промпта, сообщения или записи', 'aria-label': 'Что искать' });
   q.value = memory.q;
-  const micNote = el('div', { class: 'mic-note' });
+  const field = fieldBox(q);
   const chips = el('div', { class: 'search-chips', role: 'group', 'aria-label': 'Раздел' },
     ...SECTIONS.map(([value, label]) => el('button', { type: 'button', class: 'chip', 'data-section': value,
       'aria-pressed': String(memory.section === value) }, label)));
@@ -89,7 +89,7 @@ function mountScreen(view, ctx) {
 
   view.append(el('header', { class: 'head' }, el('h1', {}, 'Поиск')),
     el('div', { class: 'page search-page' },
-      el('div', { class: 'with-mic search-field' }, q, attachMic(q, micNote)), micNote, chips,
+      field.box, field.error, chips,
       el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, 'с'), since,
         el('label', { for: until.id }, 'по'), until, reset),
       status, results, moreBtn));

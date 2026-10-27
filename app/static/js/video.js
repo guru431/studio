@@ -1,6 +1,7 @@
 /* Раздел «Видео» (#/video): лента роликов по дням в одном из видов (views.js), поле промпта снизу
- * с фото-источником и чипами (модель — если в разделе их больше одной, длительность, качество,
- * плавность, seed). Превью — карточка с ходом ролика и плеером, у ролика из фото истории —
+ * (field.js: «очистить», микрофон) с фото-источником над ним и строкой чипов под ним (модель — если в
+ * разделе их больше одной, длительность, качество, «плавно») и «Оживить» справа; seed выбирает студия
+ * (поля нет, спека 2026-10-27-studio-ui-tidy, 4.5). Превью — карточка с ходом ролика и плеером, у ролика из фото истории —
  * «Промпты» (цепочка, chain.js); плитка и таблица — постер и ход, готовый ролик открывается в
  * просмотре (плеер, цепочка, «Скачать», «Удалить»). Цепочку записи ленты (в ней — только число
  * шагов) догружает GET /api/videos/<id>.
@@ -16,8 +17,8 @@
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
+import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
-import { attachMic } from './mic.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
@@ -28,7 +29,6 @@ const POLL_MS = 3000;
 const PAGE = 30;
 const PROMPT_MAX = 4000;
 const PHOTO_MAX = 20 * 1024 * 1024;
-const SEED_MAX = 4294967295;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const QUALITIES = [['fast', 'Быстро 480p'], ['standard', 'Обычно 576p'], ['high', 'Высоко 720p']];
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
@@ -106,18 +106,15 @@ function build(view, ctx) {
     ...QUALITIES.map(([value, label]) => el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio',
       'data-value': value }, label)));
   const chipSmooth = el('button', { type: 'button', class: 'chip', id: 'chip-smooth', 'aria-pressed': 'true',
-    title: 'Дорисовка кадров до 32 к/с; выключена — 16 к/с' }, 'плавность 32 к/с');
-  const seed = el('input', { id: 'video-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
-    'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
-  const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-vseed' }, el('span', {}, 'seed'), seed);
+    title: 'Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с' }, 'плавно');
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
   const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': 'Модель', hidden: true });
-  const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go' }, 'Оживить');
+  const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, 'Оживить');
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
-  const micNote = el('div', { class: 'mic-note' });
-  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, prompt, micNote,
-    el('div', { class: 'row' }, modelPick, chipSeconds, el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth, chipSeed,
-      el('span', { class: 'grow' }), attachMic(prompt, micNote), go));
+  const promptBox = fieldBox(prompt);
+  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, promptBox.box, promptBox.error,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, chipSeconds,
+      el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth), go));
   const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);
   view.append(root);
@@ -166,9 +163,9 @@ function build(view, ctx) {
   }
   follow(ctx.query.get('id'));
 
-  /* чип качества */
+  /* чип качества: в чипе — «576p», полные слова — в меню */
   function paintQuality() {
-    qualityName.textContent = QUALITIES.find((q) => q[0] === quality)[1];
+    qualityName.textContent = RESOLUTION[quality];
     for (const b of qualityMenu.children) b.setAttribute('aria-checked', String(b.dataset.value === quality));
   }
 
@@ -461,10 +458,6 @@ function build(view, ctx) {
     if (!source) throw new Error('Выберите фото для ролика');
     const sec = seconds.value.trim();
     if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error('Длительность — целое число секунд от 1 до 30');
-    const seedText = seed.value.trim();
-    if (seedText !== '' && (!/^\d+$/.test(seedText) || Number(seedText) > SEED_MAX)) {
-      throw new Error(`Seed — целое число от 0 до ${SEED_MAX}; пусто — случайный`);
-    }
     if (source.file && source.file.size > PHOTO_MAX) throw new Error('Фото больше 20 МиБ');
     const body = new FormData();
     if (source.file) body.append('image', source.file, source.file.name);
@@ -473,7 +466,6 @@ function build(view, ctx) {
     body.append('seconds', String(Number(sec)));
     body.append('quality', quality);
     body.append('smooth', String(smooth));
-    if (seedText !== '') body.append('seed', seedText);
     if (!modelPick.hidden && modelPick.value) {
       const [connId, ...rest] = modelPick.value.split(':');
       body.append('connection_id', connId);

@@ -2886,8 +2886,7 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login),
             ("eval", "title", "document.querySelector('#photo-translate').title"),
-            ("click", "#photo-translate"), ("wait", "document.querySelector('#photo-error').textContent.length > 0"),
-            ("eval", "empty", "document.querySelector('#photo-error').textContent"),
+            ("eval", "empty", "document.querySelector('#photo-translate').hidden"),   # пустое поле — «EN» нет
             ("type", "#photo-prompt", "кошка на подоконнике"), ("click", "#photo-translate"),
             ("wait", "document.querySelector('#photo-translate').textContent.startsWith('EN · ')"),
             ("eval", "busy", "[document.querySelector('#photo-go').disabled, document.querySelector('#photo-prompt').readOnly,"
@@ -2905,7 +2904,7 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
         gw.on.pop("/slot/images/descriptions", None)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["title"] == "Перевести промпт на английский (gemma-abl)" and v["empty"] == "Напишите промпт"
+    assert v["title"] == "Перевести промпт на английский (gemma-abl)" and v["empty"] is True
     assert v["busy"] == [True, True, "Отменить перевод"]
     assert v["after"] == ["собака", False, ""]
     first, second = gw.descriptions[d0:]
@@ -2941,7 +2940,8 @@ def slow_first(live, prompt, seconds=2.0):
 
 @pytest.mark.parametrize("width", [390, 1280])
 def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
-    """Критерий 4: «×3 · seed» → три карточки, две «в очереди серии», готовые встают по одной; чип — снова «×1»."""
+    """Критерий 4: «×3 · seed» → три карточки, две «в очереди серии», готовые встают по одной; чип — снова «×1».
+    Поля seed нет: запрос без seed, у шлюза — три разных случайных."""
     login = f"series{width}"
     live.add_user(login)
     g0 = len(live.gw.generations)
@@ -2949,7 +2949,7 @@ def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
     live.gw.on["/slot/images/generations"] = slow_first(live, "серия котов")
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
-            ("type", "#photo-prompt", "серия котов"), ("type", "#photo-seed", "7"),
+            ("type", "#photo-prompt", "серия котов"),
             ("click", "#chip-series"), ("wait", "!document.querySelector('#chip-series-menu').hidden"),
             ("eval", "noStrength", "document.querySelector('#photo-series-panel [data-vary=strength]').hidden"),
             ("click", "#photo-series-panel [data-count='3']"),
@@ -2973,8 +2973,9 @@ def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
     assert sorted("2 из 3" in q[0] or "3 из 3" in q[0] for q in v["queued"]) == [True, True]
     assert all(q[0].startswith("В очереди серии") for q in v["queued"])
     assert v["goBusy"] and v["free"]
-    assert v["forms"][0]["form"]["series"] == {"count": 3, "vary": "seed"} and v["forms"][0]["form"]["seed"] == 7
-    assert [g[0]["seed"] for g in live.gw.generations[g0:]] == [7, 8, 9]
+    assert v["forms"][0]["form"]["series"] == {"count": 3, "vary": "seed"} and "seed" not in v["forms"][0]["form"]
+    seeds = [g[0]["seed"] for g in live.gw.generations[g0:]]
+    assert len(seeds) == 3 and len(set(seeds)) == 3 and all(isinstance(s, int) for s in seeds)
     assert not problems(r), problems(r)
 
 
@@ -2998,6 +2999,8 @@ def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, 
         set_value("#photo-strength", "0.25"),
         set_value("#photo-series-to", "0.3"), ("eval", "narrow", values),
         set_value("#photo-series-to", "0.75"),
+        # меню серии открыто над полем (чип — в строке под ним): закрыть, как человек, прежде чем писать
+        ("press", "Escape"), ("wait", "document.querySelector('#chip-series-menu').hidden"),
         ("type", "#photo-prompt", "акварель"), ("click", "#photo-go"), ("wait", done_cards(3)),
         # «Изменить»: серия по силе, с кистью — без серии
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
@@ -3023,37 +3026,40 @@ def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, 
 
 
 def test_photo_preset_saves_and_applies(browser, live):
-    """Критерий 1: «★» → «Сохранить как пресет…» → в меню; применение ставит модель, формат, seed, силу и
-    промпт; в непустое поле — после вопроса; то же имя — замена, «×» — удаление."""
+    """Критерий 1: «★» → «Сохранить как пресет…» → в меню; применение ставит модель, формат, силу и промпт;
+    в непустое поле — после вопроса; то же имя — замена, «×» — удаление. Seed пресет не хранит, а seed
+    старого пресета не применяется: картинка по нему идёт без seed."""
     login = "presets"
     live.add_user(login)
     prompt = "document.querySelector('#photo-prompt').value"
     chips = "[document.querySelector('#chip-model').textContent, document.querySelector('#chip-size').textContent," \
-            " document.querySelector('#photo-seed').value, document.querySelector('#photo-strength').value]"
+            " document.querySelector('#photo-strength').value]"
+    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'lustify',
+      connection_id: null, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
     r = browser.drive(live.url + "/", [*photo_screen(login),
-        ("type", "#photo-prompt", "портрет у окна"), ("type", "#photo-seed", "42"),
+        ("type", "#photo-prompt", "портрет у окна"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=landscape]"),
         set_value("#photo-strength", "0.6"),
         ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu').hidden"),
         ("eval", "empty", text_of("#chip-preset-menu .preset-list")),
         ("click", "#preset-save"), ("wait", is_open("#preset-dialog")),
-        ("eval", "checks", "[document.querySelector('#preset-with-prompt').checked, document.querySelector('#preset-with-seed').checked]"),
+        ("eval", "checks", "[document.querySelector('#preset-with-prompt').checked, !!document.querySelector('#preset-with-seed')]"),
         ("type", "#preset-name", "Портрет студия"), ("click", "#preset-save-confirm"),
         ("wait", f"!{is_open('#preset-dialog')}"),
         ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/images/presets')).items.map(p => [p.name, p.params]))()"),
         # всё другое — и пресет возвращает
-        set_value("#photo-prompt", ""), set_value("#photo-seed", ""), set_value("#photo-strength", "0.25"),
+        set_value("#photo-prompt", ""), set_value("#photo-strength", "0.25"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=portrait]"),
         ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':flux']"),
         ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
         ("click", "#chip-preset-menu .preset-apply"),
         ("eval", "prompt", prompt), ("eval", "chips", chips),
         # своё в поле — вопрос; «Оставить свой» ставит остальное
-        set_value("#photo-prompt", "свой текст"), set_value("#photo-seed", "1"),
+        set_value("#photo-prompt", "свой текст"),
         ("click", "#chip-preset"), ("click", "#chip-preset-menu .preset-apply"),
         ("wait", is_open("#preset-prompt-dialog")), ("click", "#preset-prompt-keep"),
         ("wait", f"!{is_open('#preset-prompt-dialog')}"),
-        ("eval", "kept", prompt), ("eval", "seedAfterKeep", "document.querySelector('#photo-seed').value"),
+        ("eval", "kept", prompt),
         # то же имя — окно говорит, что заменит
         ("click", "#chip-preset"), ("click", "#preset-save"), ("wait", is_open("#preset-dialog")),
         ("type", "#preset-name", "Портрет студия"),
@@ -3064,24 +3070,32 @@ def test_photo_preset_saves_and_applies(browser, live):
         ("wait", is_open("#preset-delete-dialog")), ("click", "#preset-delete-confirm"),
         ("wait", f"!{is_open('#preset-delete-dialog')}"), ("idle",),
         ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu .preset-apply')"),
-        ("eval", "gone", text_of("#chip-preset-menu .preset-list"))], width=1280, height=900)
+        ("eval", "gone", text_of("#chip-preset-menu .preset-list")), ("press", "Escape"),
+        # пресет прежнего кода с seed: применяется всё, кроме seed
+        ("eval", "old", old), *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
+        *go("photo"), ("wait", FEED_READY), ("eval", "spy", SPY),
+        ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
+        ("click", "#chip-preset-menu .preset-apply"), ("click", "#photo-go"), ("wait", done_cards(1)),
+        ("eval", "forms", "window.sentForms")], width=1280, height=900)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["empty"] == "Пресетов пока нет" and v["checks"] == [True, True]
+    assert v["empty"] == "Пресетов пока нет" and v["checks"] == [True, False]
     (name, params), = v["saved"]
     assert name == "Портрет студия" and params["model"] == "lustify" and params["size"] == "landscape"
-    assert params["seed"] == 42 and params["strength"] == 0.6 and params["prompt"] == "портрет у окна"
+    assert params.get("seed") is None and params["strength"] == 0.6 and params["prompt"] == "портрет у окна"
     assert v["prompt"] == "портрет у окна"
-    model, size, seed, strength = v["chips"]
-    assert "Lustify" in model and "Альбом" in size and seed == "42" and strength == "0.6"
-    assert v["kept"] == "свой текст" and v["seedAfterKeep"] == "42"
+    model, size, strength = v["chips"]
+    assert "Lustify" in model and "Альбом" in size and strength == "0.6"
+    assert v["kept"] == "свой текст"
     assert "уже есть" in v["replace"][0] and v["replace"][1] == "Заменить"
     assert v["gone"] == "Пресетов пока нет"
+    (sent,) = (f["form"] for f in v["forms"])
+    assert sent["prompt"] == "старый кот" and sent["size"] == "square" and "seed" not in sent
     assert not problems(r), problems(r)
 
 
 def test_photo_external_model_hides_the_seed(browser, live):
-    """Критерий 7: у внешнего сервиса seed нет — чип seed скрыт, в таблице seed его картинок не показан."""
+    """Критерий 7: у внешнего сервиса seed нет — в таблице seed его картинок не показан; поля seed нет ни у какой модели."""
     login = "extseed"
     uid = live.add_user(login)
     live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
@@ -3093,19 +3107,17 @@ def test_photo_external_model_hides_the_seed(browser, live):
         base_url: {GATEWAY_URL + '/v1'!r}, token: 'cloud-key', sections: ['photo'] }});
       await m.api('PUT', '/api/sections/photo/links/' + c.id, {{ models: ['gpt-image-1'] }});
       await m.loadMe(); return c.id; }})()""")
-    seed_hidden = "document.querySelector('#chip-seed').hidden"
+    no_seed = "!document.querySelector('#chip-seed, #photo-seed')"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), cloud, *go("photo"),
         ("wait", FEED_READY), ("wait", "document.querySelector('#chip-model-menu [data-value$=\":gpt-image-1\"]')"),
-        ("eval", "onGateway", seed_hidden),
+        ("eval", "onGateway", no_seed),
         ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':gpt-image-1']"),
-        ("eval", "external", seed_hidden),
-        ("click", "#chip-model"), ("click", "#chip-model-menu [data-value$=':lustify']"),
-        ("eval", "back", seed_hidden),
+        ("eval", "external", no_seed),
         ("click", "#photo-view"), ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "row", text_of(PHOTO_CARD))], width=1280)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["onGateway"] is False and v["external"] is True and v["back"] is False
+    assert v["onGateway"] is True and v["external"] is True
     assert "gpt-image-1" in v["row"] and "123456" not in v["row"] and "seed" not in v["row"]
     assert not problems(r), problems(r)
 
@@ -3377,7 +3389,7 @@ def test_video_layout_fits_390(browser, live, ready_clips):
         ("eval", "defaults", "[document.querySelector('#video-seconds').value,"
                              " document.querySelector('#chip-quality').textContent,"
                              " document.querySelector('#chip-smooth').getAttribute('aria-pressed'),"
-                             " document.querySelector('#chip-smooth').textContent,"
+                             " document.querySelector('#chip-smooth').title,"
                              " document.querySelector('#video-prompt').placeholder,"
                              " document.querySelector('#video-prompt').maxLength,"
                              " document.querySelector('#video-go').textContent]"),
@@ -3404,7 +3416,7 @@ def test_video_layout_fits_390(browser, live, ready_clips):
     v = r["values"]
     seconds, quality, smooth, smooth_text, placeholder, maxlength, go_text = v["defaults"]
     assert (seconds, smooth, maxlength, go_text) == ("5", "true", 4000, "Оживить")
-    assert "Обычно 576p" in quality and "32 к/с" in smooth_text
+    assert quality == "576p" and "32 к/с" in smooth_text            # полные слова качества — в меню
     assert "пусто — движение придумает gemma-abl" in placeholder
     # вид по умолчанию — превью: на телефоне ролик во всю ширину
     assert not v["overflow"] and v["cols"] == 1 and v["aboveTabs"] and v["inside"] and v["menu"]
@@ -3662,6 +3674,116 @@ def test_mic_without_permission_says_so(browser, live):
         ("eval", "words", "document.querySelector('#photo-composer .mic-error').textContent")])
     assert not r.get("failed"), r
     assert "разрешения на микрофон" in r["values"]["words"]
+
+
+# ---- поле со значками и строка под полем (спека 2026-10-27-studio-ui-tidy, 4.4–4.5) ----
+
+def field_state(field):
+    """[микрофон в рамке поля, «очистить» в рамке, «очистить» скрыт, середина поля — само поле, EN скрыт или null]."""
+    return f"""(() => {{ const f = document.querySelector({field!r}); const box = f.closest('.field-box');
+      const b = box.getBoundingClientRect(); const r = f.getBoundingClientRect();
+      const inside = (e) => {{ if (!e || e.hidden) return !!e; const x = e.getBoundingClientRect();
+        return x.left >= b.left && x.right <= b.right && x.top >= b.top && x.bottom <= b.bottom; }};
+      const clear = box.querySelector('.field-tools .field-clear'); const en = box.querySelector('#photo-translate');
+      return [inside(box.querySelector('.field-tools .mic')), inside(clear), clear.hidden,
+        document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === f, en ? en.hidden : null]; }})()"""
+
+
+def field_steps(name, field, scope):
+    """Пустое поле, набранный текст, «очистить»: значения `<name>-empty`, `<name>-typed`, `<name>-cleared`."""
+    return [("eval", f"{name}-empty", field_state(field)), ("type", field, "кот"),
+            ("eval", f"{name}-typed", field_state(field)), ("click", f"{scope} .field-clear"),
+            ("eval", f"{name}-cleared", f"(() => {{ const f = document.querySelector({field!r});"
+                                        " return [f.value, document.activeElement === f,"
+                                        " f.closest('.field-box').querySelector('.field-clear').hidden]; })()")]
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_every_field_has_the_mic_and_clear_inside(browser, live, width):
+    """Чат, фото, «Изменить», видео, озвучка, поиск: микрофон и «очистить» — в рамке поля, «очистить» виден
+    только при тексте и очищает поле с фокусом в нём; середина поля значками не закрыта; EN фото — при тексте."""
+    login = f"fields{width}"
+    live.add_user(login)
+    mobile = width == 390
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+        *field_steps("photo", "#photo-prompt", "#photo-composer"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
+        *field_steps("editor", "#edit-prompt", "#editor"), ("press", "Escape"), ("wait", f"!{is_open('#editor')}"),
+        *open_new_chat(mobile), ("wait", "document.querySelector('#chats').getBoundingClientRect().right <= 0"
+                                         " || innerWidth > 760"),     # выдвижная панель списка уехала
+        *field_steps("chat", "#chat-input", "#composer"),
+        *go("video"), ("wait", "document.querySelector('#video-prompt')"),
+        *field_steps("video", "#video-prompt", "#video-composer"),
+        *go("speech"), ("wait", "document.querySelector('#speech-text')"),
+        *field_steps("speech", "#speech-text", "#speech-composer"),
+        *go("search"), ("wait", "document.querySelector('#search-q')"),
+        *field_steps("search", "#search-q", ".search-page"),
+        ("eval", "noNote", "!document.querySelector('.mic-note')"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=mobile, height=900)
+    assert not r.get("failed"), r
+    v = r["values"]
+    for name in ("photo", "editor", "chat", "video", "speech", "search"):
+        en = name == "photo" or None
+        assert v[f"{name}-empty"] == [True, True, True, True, en], name
+        assert v[f"{name}-typed"] == [True, True, False, True, en and False], name
+        assert v[f"{name}-cleared"] == ["", True, True], name
+    assert v["noNote"] and not v["overflow"]
+    assert not problems(r), problems(r)
+
+
+#: [середина главной кнопки − середина последнего видимого чипа, главная кнопка правее всех чипов, её высота]
+BAR = """((go) => { const g = document.querySelector(go); const bar = g.closest('.composer-bar');
+  const opts = [...bar.querySelector('.composer-opts').querySelectorAll(':scope > *, :scope > .chip-wrap > .chip')]
+    .filter(e => !e.classList.contains('chip-wrap') && e.getBoundingClientRect().width > 0);
+  const mid = (e) => { const b = e.getBoundingClientRect(); return b.top + b.height / 2; };
+  const last = opts.reduce((a, e) => (mid(e) > mid(a) ? e : a));
+  const gb = g.getBoundingClientRect();
+  return [Math.round(Math.abs(mid(g) - mid(last))), opts.every(e => e.getBoundingClientRect().right <= gb.left),
+    g.offsetHeight]; })"""
+
+
+def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live):
+    """390 px: у чата 📎, «Интернет», «Рассуждение» и ↑ — одной строкой (слова кнопок — только в подписях); у фото,
+    видео и озвучки главная кнопка справа на строке последнего чипа; поля seed нет."""
+    login = "bars"
+    live.add_user(login)
+    local = f"""(async () => {{ const m = {API};
+      const chat = (await m.api('GET', '/api/sections')).sections.find(x => x.id === 'chat');
+      const link = chat.links.find(l => l.connection.kind === 'srvllm');
+      await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['local-gemma-abl'] }});
+      return true; }})()"""
+    line = """[...document.querySelectorAll('#composer .attach, #web-toggle, #think-toggle, #send')].map(e => {
+      const b = e.getBoundingClientRect(); return Math.round(b.top + b.height / 2); })"""
+    words = "[...document.querySelectorAll('#web-toggle, #think-toggle')].map(e => [e.getAttribute('aria-label'), e.offsetWidth < 50])"
+    r = browser.drive(live.url + "/", [*photo_screen(login),
+        ("eval", "photo", f"({BAR})('#photo-go')"),
+        ("eval", "photoSeed", "!!document.querySelector('#chip-seed, #photo-seed')"),
+        ("eval", "sizeChip", text_of("#chip-size")),
+        *go("video"), ("wait", "document.querySelector('#video-go')"),
+        ("eval", "video", f"({BAR})('#video-go')"),
+        ("eval", "videoSeed", "!!document.querySelector('#chip-vseed, #video-seed')"),
+        ("eval", "videoChips", "[document.querySelector('#chip-quality').textContent,"
+                               " document.querySelector('#chip-smooth').textContent, document.querySelector('#chip-smooth').title]"),
+        *go("speech"), ("wait", "document.querySelector('#speech-go')"),
+        ("eval", "speech", f"({BAR})('#speech-go')"),
+        ("eval", "exa", EXA_KEY_SET), ("eval", "local", local),
+        *open_new_chat(mobile=True),
+        ("wait", "!document.querySelector('#think-toggle').hidden && !document.querySelector('#web-toggle').hidden"),
+        ("eval", "chat", line), ("eval", "words", words),
+        ("eval", "goHeight", "document.querySelector('#send').offsetHeight"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    for name in ("photo", "video", "speech"):
+        gap, rightmost, height = v[name]
+        assert gap <= 4 and rightmost and height == 34, (name, v[name])
+    assert not v["photoSeed"] and not v["videoSeed"] and v["sizeChip"] == "Портрет"
+    quality, smooth, smooth_title = v["videoChips"]
+    assert quality == "576p" and smooth == "плавно" and "32 к/с" in smooth_title
+    assert len(v["chat"]) == 4 and max(v["chat"]) - min(v["chat"]) <= 2, v["chat"]
+    assert v["words"] == [["Интернет", True], ["Рассуждение", True]]
+    assert v["goHeight"] == 34 and not v["overflow"]
+    assert not problems(r), problems(r)
 
 
 # ---- расшифровка ----------------------------------------------------------------

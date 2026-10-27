@@ -106,6 +106,23 @@ def test_theme_toggle_lives_in_the_profile_menu_not_the_settings():
     assert "themeBlock" not in (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
 
 
+def test_text_fields_carry_the_mic_through_field_js_and_have_no_seed():
+    """Микрофон и «очистить» — только через field.js (спека 2026-10-27-studio-ui-tidy, 4.4): разделы attachMic сами
+    не зовут, пустых `mic-note` нет; полей seed у фото, видео и пресетов нет (4.5)."""
+    js = STATIC / "js"
+    for name in ("chat.js", "photo.js", "editor.js", "video.js", "speech.js", "search.js"):
+        text = (js / name).read_text(encoding="utf-8")
+        assert "fieldBox(" in text and "attachMic" not in text and "mic-note" not in text, name
+    assert "attachMic(" in (js / "field.js").read_text(encoding="utf-8")
+    css = (STATIC / "css" / "app.css").read_text(encoding="utf-8")
+    assert ".mic-note" not in css and ".with-mic" not in css and ".chip-seed" not in css
+    for name in ("photo.js", "video.js", "presets.js"):
+        text = (js / name).read_text(encoding="utf-8")
+        assert not re.search(r"photo-seed|video-seed|chip-seed|chip-vseed|preset-with-seed|SEED_MAX", text), name
+    for name in ("chat.js", "photo.js", "video.js", "speech.js"):
+        assert "composer-bar" in (js / name).read_text(encoding="utf-8") and "composer-go" in (js / name).read_text(encoding="utf-8"), name
+
+
 def test_service_worker_never_caches_api_or_media():
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
     assert "'/api/'" in sw and "'/static/js/'" in sw

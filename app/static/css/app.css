@@ -160,8 +160,11 @@ label { font-size: 13px; color: var(--muted); }
   background: var(--panel); border: 1px solid var(--border); border-radius: 16px; }
 .composer textarea { width: 100%; min-height: 24px; max-height: 40dvh; padding: 2px 0; border: 0; outline: none;
   background: none; resize: none; line-height: 1.45; }
-.composer .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.composer .row .grow { flex: 1; }
+/* строка под полем: слева параметры (переносятся внутри себя), справа главная кнопка — на последней их строке */
+.composer-bar { display: flex; align-items: flex-end; gap: 6px; }
+.composer-opts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.btn.composer-go { height: 34px; min-height: 34px; padding: 0 16px; }
+@media (max-width: 420px) { .composer-opts .toggle-word { display: none; } }   /* «Интернет», «Рассуждение» — значком */
 
 /* лента картинок и роликов */
 .feed-grid { display: grid; gap: 8px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -308,15 +311,29 @@ label { font-size: 13px; color: var(--muted); }
 }
 @media (prefers-reduced-motion: reduce) { .split-aside { transition: none !important; } }
 
-/* голосовой ввод: кнопка у поля промпта, во время записи — красная с таймером */
+/* голосовой ввод: кнопка в рамке поля, во время записи — красная с таймером (растёт влево, поле сужается) */
 .mic { position: relative; flex: none; }
 .mic.on { color: #fff; background: #d64545; border-radius: 999px; width: auto; padding: 0 10px; gap: 6px; display: inline-flex; align-items: center; }
 .mic.busy { opacity: .55; }
 .mic-time { font-size: 13px; font-variant-numeric: tabular-nums; }
-.mic-note .mic-error { margin: 2px 0 0; font-size: 13px; }
-.mic-note .mic-error:empty { display: none; }
-.with-mic { display: flex; align-items: flex-start; gap: 6px; }
-.with-mic textarea { flex: 1; min-width: 0; }
+
+/* поле со значками (field.js): справа в рамке поля — «очистить», «EN» фото, микрофон; середина поля свободна */
+.field-box { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.field-box > textarea, .field-box > input { flex: 1; min-width: 0; width: auto; }
+.field-tools { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.field-box > input + .field-tools { flex-direction: row; align-items: center; align-self: center; }   /* строка поиска */
+.field-tools .icon-btn:not(.mic.on) { width: 30px; height: 30px; }
+.field-tools .icon-btn svg.ico { width: 17px; height: 17px; }
+.field-tools .mic.on { height: 30px; }
+.field-tools .chip { padding: 0 9px; font-size: 12px; font-weight: 600; }
+/* поле с рамкой (.input: «Изменить», поиск) — рамка общая с колонкой значков; в поле раздела рамка — у .composer */
+.field-box:has(> .input) { padding: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.dialog .field-box:has(> .input) { background: var(--bg); }
+.field-box:has(> .input:focus) { border-color: var(--muted); }
+.field-box > .input { border: 0; background: none; }
+.field-box > input[type="search"]::-webkit-search-cancel-button { display: none; }   /* свой «очистить» */
+.field-error .mic-error { margin: 2px 0 0; font-size: 13px; }
+.field-error:has(> .mic-error:empty) { display: none; }   /* пустая строка ошибки — без лишнего зазора */
 
 /* настройки: разделы слева, раздел справа (на телефоне — по очереди) */
 .settings { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -624,17 +641,15 @@ label { font-size: 13px; color: var(--muted); }
 .chip svg.caret { width: 12px; height: 12px; }
 label.chip { cursor: pointer; }
 .chip-wrap { position: relative; }
-.chip-seed input, .chip-num input { width: 10ch; padding: 0; border: 0; outline: none; background: none; color: inherit;
-  font: inherit; }
-.chip-num input { width: 2ch; text-align: center; }
-.chip-seed:focus-within, .chip-num:focus-within { border-color: var(--muted); }
+.chip-num input { width: 2ch; padding: 0; border: 0; outline: none; background: none; color: inherit; font: inherit;
+  text-align: center; }
+.chip-num:focus-within { border-color: var(--muted); }
 .chip-menu { position: absolute; z-index: 15; bottom: calc(100% + 6px); left: 0; min-width: 150px; padding: 4px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
 .chip-option { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: none;
   color: var(--text); text-align: left; font-size: 14px; white-space: nowrap; }
 .chip-option:hover, .chip-option:focus-visible, .chip-option[aria-checked="true"] { background: var(--panel-2); }
 .chip-option[aria-checked="true"] { font-weight: 600; }
-.photo-go, .video-go { min-height: 34px; padding: 6px 16px; }
 
 /* просмотр во весь экран */
 .viewer { width: 100%; height: 100%; max-width: 100%; max-height: 100%; margin: 0; padding: 0; border: 0;
@@ -911,7 +926,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .lock form { margin: 0; }
 /* «Поиск» (search.js): поле, чипы раздела, модель и период, выдача по дням */
 .search-page { gap: 10px; }
-.search-field .input { flex: 1; min-width: 0; }
 .search-chips, .search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .search-filters label { color: var(--muted); }
 .search-date { width: auto; min-width: 0; padding: 5px 8px; font-size: 13px; }

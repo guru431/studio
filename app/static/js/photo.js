@@ -1,7 +1,8 @@
 /* Раздел «Фото» (#/photo): лента картинок по дням в одном из видов (превью, плитка, таблица —
- * views.js), поле промпта снизу с чипами (исходное фото и сила, модель, размер, seed) и «EN»
- * (перевод промпта), «Скачать» на карточке (save.js), просмотр с действиями, правка кистью
- * (editor.js) и «Описать».
+ * views.js), поле промпта снизу (field.js: «очистить», «EN» — перевод промпта, микрофон) и строка чипов под
+ * ним (исходное фото и сила, модель, размер, серия, пресеты) с «Создать» справа; seed студия выбирает сама
+ * (поля нет, спека 2026-10-27-studio-ui-tidy, 4.5). «Скачать» на карточке (save.js), просмотр с действиями,
+ * правка кистью (editor.js) и «Описать».
  *
  * Задание: POST /api/images (JSON; с файлом исходника — форма), запись ленты — GET /api/images/<id>
  * (у неё цепочка промптов; в ленте — только число шагов, цепочку просмотр догружает). Идущее задание
@@ -27,13 +28,13 @@
  * серии» без таймера, с «Отменить»); сравнение двух картинок (compare.js) — «Сравнить с исходником»
  * в просмотре и «Сравнить» в режиме выделения при двух отмеченных; «Варианты» в просмотре —
  * GET /api/images/<id>/variants. Параметры по модели — chain.js: силы нет у FLUX, seed — у внешнего
- * сервиса (его чип seed скрыт, «Повторить с тем же seed» — просто «Повторить»). */
+ * сервиса («Повторить с тем же seed» — просто «Повторить»). */
 import { api } from './api.js';
 import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
 import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
-import { attachMic } from './mic.js';
 import { createFeed, pageQuery } from './feed.js';
+import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
@@ -49,7 +50,6 @@ const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
 const PHOTO_MAX = 10 * 1024 * 1024;
-const SEED_MAX = 4294967295;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const SIZES = [['portrait', 'Портрет 832×1216', '832x1216'], ['square', 'Квадрат 1024×1024', '1024x1024'],
   ['landscape', 'Альбом 1216×832', '1216x832']];
@@ -143,10 +143,8 @@ function build(view, ctx) {
     choice = (choices.find((c) => c[0] === value) || [])[2] || null;
     paintSource();
   });
-  const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; });
-  const seed = el('input', { id: 'photo-seed', inputmode: 'numeric', maxlength: '10', placeholder: 'случайный',
-    'aria-label': 'Seed, пусто — случайный', autocomplete: 'off' });
-  const chipSeed = el('label', { class: 'chip chip-seed', id: 'chip-seed' }, el('span', {}, 'seed'), seed);
+  // в чипе — только имя формата («Портрет»), размеры — в меню
+  const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; }, (label) => label.split(' ')[0]);
   const seriesName = el('span', { class: 'chip-name' }, '×1');
   const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series', 'aria-haspopup': 'true',
     'aria-expanded': 'false', 'aria-controls': 'chip-series-menu', title: 'Серия: несколько вариантов подряд' }, seriesName);
@@ -164,13 +162,12 @@ function build(view, ctx) {
   presets.chip.addEventListener('click', () => popup(presets.chip, presets.menu, presets.menu.hidden));
   popups.push({ chip: presets.chip, menu: presets.menu });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate' }, 'EN');
-  const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go' }, 'Создать');
+  const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
-  const micNote = el('div', { class: 'mic-note' });
-  const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, prompt, micNote,
-    el('div', { class: 'row' }, chipPhoto, presets.wrap, chipModel.wrap, chipSize.wrap, chipSeed,
-      el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu), el('span', { class: 'grow' }),
-      chipTranslate, attachMic(prompt, micNote), go));
+  const promptBox = fieldBox(prompt, { tools: [chipTranslate] });
+  const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, promptBox.box, promptBox.error,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, chipPhoto, chipModel.wrap, chipSize.wrap,
+      el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu), presets.wrap), go));
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);
   view.append(root);
@@ -220,14 +217,14 @@ function build(view, ctx) {
   follow(ctx.query.get('id'));
 
   /* меню чипов и раздела */
-  function chipMenu(id, initial, get, set) {
+  function chipMenu(id, initial, get, set, short = (label) => label) {
     const name = el('span', { class: 'chip-name' });
     const chip = el('button', { type: 'button', class: 'chip', id, 'aria-haspopup': 'true', 'aria-expanded': 'false',
       'aria-controls': `${id}-menu` }, name, icon('down', 'ico caret'));
     const list = el('div', { class: 'chip-menu', id: `${id}-menu`, role: 'menu', hidden: true });
     let options = [];
     const paint = () => {
-      name.textContent = (options.find((o) => o[0] === get()) || options[0] || [null, 'модель'])[1];
+      name.textContent = short((options.find((o) => o[0] === get()) || options[0] || [null, 'модель'])[1]);
       for (const b of list.children) b.setAttribute('aria-checked', String(b.dataset.value === get()));
     };
     const fill = (next) => {
@@ -298,23 +295,18 @@ function build(view, ctx) {
   function paintSource() {
     sourceBox.hidden = !source;
     strengthLabel.hidden = !isLustify();
-    chipSeed.hidden = !!choice && choice.kind !== 'srvllm';      // внешний сервис seed не получает
     series.refresh();
   }
 
   /* пресеты: снимок поля и чипов, применение пресета */
-  function seedValue() {
-    const text = seed.value.trim();
-    return /^\d+$/.test(text) && Number(text) <= SEED_MAX ? Number(text) : null;
-  }
-
   function snapshot() {
     return { model: choice ? choice.model : null, connection_id: choice ? choice.connection_id : null, size,
-      seed: chipSeed.hidden ? null : seedValue(), strength: Number(strength.value), prompt: prompt.value.trim() || null };
+      strength: Number(strength.value), prompt: prompt.value.trim() || null };
   }
 
-  /** Модель — если пара есть среди отмеченных моделей раздела; формат, seed, сила — всегда; промпт —
-   * в пустое поле, в непустое — после вопроса («Оставить свой» ставит всё, кроме промпта). */
+  /** Модель — если пара есть среди отмеченных моделей раздела; формат и сила — всегда; промпт — в пустое
+   * поле, в непустое — после вопроса («Оставить свой» ставит всё, кроме промпта). Seed пресета прежнего
+   * кода не ставится: поля seed нет. */
   function applyPreset(p) {
     const rest = () => {
       if (p.model) {
@@ -332,7 +324,6 @@ function build(view, ctx) {
         size = p.size;
         chipSize.paint();
       }
-      seed.value = p.seed === null || p.seed === undefined ? '' : String(p.seed);
       if (p.strength !== null && p.strength !== undefined) {
         strength.value = String(p.strength);
         strengthValue.textContent = Number(strength.value).toFixed(2);
@@ -350,7 +341,7 @@ function build(view, ctx) {
     const replace = button('Заменить', { class: 'btn btn-accent', id: 'preset-prompt-replace' });
     const keep = button('Оставить свой', { class: 'btn', id: 'preset-prompt-keep' });
     const dialog = openDialog(root, { id: 'preset-prompt-dialog', title: 'Заменить промпт пресетом?',
-      body: [el('p', { class: 'muted small' }, 'В поле уже есть промпт. Модель, формат, seed и силу пресет поставит в любом случае.')],
+      body: [el('p', { class: 'muted small' }, 'В поле уже есть промпт. Модель, формат и силу пресет поставит в любом случае.')],
       actions: [keep, replace] });
     replace.addEventListener('click', () => {
       prompt.value = p.prompt;
@@ -569,23 +560,14 @@ function build(view, ctx) {
     }
   }
 
-  /** Тело задания из поля и чипов; withSource — с исходным фото, если оно выбрано. */
+  /** Тело задания из поля и чипов (без seed — его выбирает студия); withSource — с исходным фото, если оно выбрано. */
   function compose(text, withSource) {
-    const seedText = seed.value.trim();
-    if (seedText !== '' && (!/^\d+$/.test(seedText) || Number(seedText) > SEED_MAX)) {
-      throw new Error(`Seed — целое число от 0 до ${SEED_MAX}; пусто — случайный`);
-    }
     const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
-    const sent = chipSeed.hidden ? '' : seedText;                // внешнему сервису seed не уходит
     const many = withSource ? series.value() : null;
-    if (!withSource || !source) {
-      return { prompt: text, size, ...picked, seed: sent === '' ? null : Number(sent), ...(many ? { series: many } : {}) };
-    }
+    if (!withSource || !source) return { prompt: text, size, ...picked, ...(many ? { series: many } : {}) };
     if (source.file.size > PHOTO_MAX) throw new Error('Фото больше 10 МиБ');
     const body = new FormData();
-    for (const [k, v] of Object.entries({ prompt: text, size, ...picked, seed: sent })) {
-      if (v !== '') body.append(k, String(v));
-    }
+    for (const [k, v] of Object.entries({ prompt: text, size, ...picked })) body.append(k, String(v));
     if (isLustify()) body.append('strength', strength.value);
     if (many) body.append('series', JSON.stringify(many));
     body.append('image', source.file, source.file.name);
