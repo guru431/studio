@@ -3911,10 +3911,10 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
     v = r["values"]
     for name, tools in (("photo", 3), ("chat", 2), ("video", 2)):
         empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
-        # у фото и видео на телефоне поле — под подсказку целиком (две строки), у чата — в одну
-        assert empty[0] <= (34 if name == "chat" else 50), (name, empty)
+        # у фото и видео на телефоне поле — под подсказку целиком (две строки, у видео уже 360 px — три), у чата — в одну
+        assert empty[0] <= {"chat": 34, "photo": 50, "video": 72 if width < 360 else 50}[name], (name, empty)
         hint, height = v[f"{name}-hint"]
-        assert name != "photo" or hint <= height, (name, v[f"{name}-hint"])
+        assert name == "chat" or hint <= height, (name, v[f"{name}-hint"], empty)
         assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)
         assert empty[1:4] == [1, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
     assert v["chatTall"] > v["chat-empty"][4] + 20 and abs(v["chatBack"] - v["chat-empty"][4]) <= 1, (v["chatTall"], v["chatBack"])

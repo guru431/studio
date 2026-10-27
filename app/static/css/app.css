@@ -793,6 +793,9 @@ label.chip { cursor: pointer; }
   .video-body { padding: 6px 8px 8px; }
   .video .composer textarea { min-height: calc(2.9em + 4px); }   /* подсказка поля — целиком, в две строки */
 }
+@media (max-width: 359px) {   /* подсказка видео — в три строки (320 px); двух хватает с ~336 px, с 360 — с запасом */
+  .video .composer textarea { min-height: calc(4.35em + 4px); }
+}
 
 /* готовый ролик плитки и таблицы: постер со значком, нажатие — просмотр */
 .video-open { position: relative; display: block; width: 100%; aspect-ratio: 2 / 3; padding: 0; border: 0; overflow: hidden;
