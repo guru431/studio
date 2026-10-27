@@ -752,6 +752,7 @@ label.chip { cursor: pointer; }
 @media (max-width: 760px) {
   .photo-feed, .video-feed { padding: 10px 12px; }
   .photo .composer, .video .composer { width: calc(100% - 24px); margin: 0 12px 12px; }
+  #photo-prompt { min-height: calc(2.9em + 4px); }   /* подсказка поля — целиком, в две строки (как у видео) */
   .photo-error, .video-error { margin: 0 12px 8px; }
   .photo-status { margin: 8px 12px 0; }
 }

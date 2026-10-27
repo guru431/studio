@@ -14,7 +14,7 @@
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
  *
  * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
- * их список с выбором. */
+ * их список с выбором; dayTitle — и подпись дня этих списков и «Сканов» (год — если не текущий). */
 import { api } from './api.js';
 import { button, el as make, words } from './ui.js';
 
