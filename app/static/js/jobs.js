@@ -33,16 +33,18 @@ const NOTICES = {
   photo: ['картинка готова', 'картинка не получилась'],
   video: ['ролик готов', 'ролик не получился'],
   transcribe: ['расшифровка готова', 'расшифровка не получилась'],
+  ocr: ['распознавание готово', 'распознавание не получилось'],
   speech: ['озвучка готова', 'озвучка не получилась'],
 };
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. */
-export const HREF = /^(?:(?:photo|video|transcribe|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
+export const HREF = /^(?:(?:photo|video|transcribe|ocr|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
 /** Значки разделов (и у строк «Поиска», search.js). */
 export const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
   photo: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
 };
 

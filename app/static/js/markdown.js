@@ -9,7 +9,11 @@
  * экранирует такие куски сам (кроме голого <br> — перенос строки в ячейке таблицы); DOMPurify пропускает только теги разметки, без style, id и форм;
  * class остаётся только language-* у кода. Флажки списков задач — знаками ☑/☐, без <input>.
  * Внешние <img> (markdown-картинка с чужим адресом) блокирует CSP страниц (`img-src`, main.CSP), поэтому
- * DOMPurify их не вычищает. */
+ * DOMPurify их не вычищает.
+ *
+ * renderMarkdown(text, { html: true }) — текст распознавания («Распознавание», ocr.js): HunyuanOCR пишет
+ * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
+ * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
 
 const COPIED_MS = 1500;
 const TAGS = ['a', 'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre',
@@ -22,14 +26,15 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-let parser = null;
+const parsers = {};
 
-function markdownParser() {
-  parser ||= new window.marked.Marked({
+function markdownParser(html) {
+  parsers[html] ||= new window.marked.Marked({
     gfm: true,
     async: false,
     renderer: {
       html({ text, block }) {
+        if (html) return text;                         // дальше — DOMPurify
         if (!block && BR.test(text)) return '<br>';   // модели так переносят строку в ячейке таблицы
         return block ? `<p>${escapeHtml(text)}</p>` : escapeHtml(text);
       },
@@ -38,7 +43,7 @@ function markdownParser() {
       },
     },
   });
-  return parser;
+  return parsers[html];
 }
 
 async function copy(pre, button) {
@@ -52,10 +57,10 @@ async function copy(pre, button) {
   setTimeout(() => { button.textContent = 'Копировать'; }, COPIED_MS);
 }
 
-export function renderMarkdown(text) {
-  const html = markdownParser().parse(String(text ?? ''));
-  const fragment = window.DOMPurify.sanitize(html, { RETURN_DOM_FRAGMENT: true, ALLOWED_TAGS: TAGS,
-    ALLOWED_ATTR: ATTRS, ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
+export function renderMarkdown(text, { html = false } = {}) {
+  const out = markdownParser(html).parse(String(text ?? ''));
+  const fragment = window.DOMPurify.sanitize(out, { RETURN_DOM_FRAGMENT: true, ALLOWED_TAGS: TAGS,
+    ALLOWED_ATTR: html ? [...ATTRS, 'colspan', 'rowspan'] : ATTRS, ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
   for (const node of fragment.querySelectorAll('[class]')) {
     if (node.tagName !== 'CODE' || !LANG.test(node.className)) node.removeAttribute('class');
   }

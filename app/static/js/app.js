@@ -1,7 +1,7 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/search, #/settings, #/settings/<раздел>, #/admin (только
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/ocr, #/speech, #/search, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -32,6 +32,7 @@ const HINTS = {
   photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
   video: 'Чтобы делать видео, выберите модель в настройках раздела «Видео»',
   transcribe: 'Чтобы расшифровывать записи, выберите модель в настройках раздела «Расшифровка»',
+  ocr: 'Чтобы распознавать сканы, выберите модель в настройках раздела «Распознавание»',
   speech: 'Чтобы озвучивать текст, выберите модель в настройках раздела «Озвучка»',
 };
 const ICONS = {
@@ -40,6 +41,7 @@ const ICONS = {
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
   speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
 };
 const THEME_ICONS = {
@@ -53,6 +55,7 @@ const SECTIONS = {
   photo: { title: 'Фото', load: () => import('./photo.js') },
   video: { title: 'Видео', load: () => import('./video.js') },
   transcribe: { title: 'Расшифровка', load: () => import('./transcribe.js') },
+  ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
   speech: { title: 'Озвучка', load: () => import('./speech.js') },
   search: { title: 'Поиск', load: () => import('./search.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
