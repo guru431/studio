@@ -87,22 +87,26 @@ async def read_upload(request) -> tuple[str, bytes]:
 
 # ---- текст -------------------------------------------------------------------
 
-def _pdf(data: bytes) -> str:
-    """Страницы — до предела TEXT_MAX_CHARS: гигабайты текста по многим страницам в память не идут."""
+def pdf_page_texts(data: bytes) -> list[str]:
+    """Текст слоя pypdf каждой страницы (пустой — "") до предела TEXT_MAX_CHARS на все страницы:
+    гигабайты текста по многим страницам в память не идут."""
     pages, chars = [], 0
     try:
         for page in PdfReader(io.BytesIO(data)).pages:
             text = (page.extract_text() or "").strip()
-            if text:
-                pages.append(text)
-                chars += len(text)
-                if chars > TEXT_MAX_CHARS:
-                    break
+            pages.append(text)
+            chars += len(text)
+            if chars > TEXT_MAX_CHARS:
+                break
     except Exception:                                 # noqa: BLE001 — pypdf падает на битом файле по-разному
         raise DocumentError(BROKEN) from None
     if chars > TEXT_MAX_CHARS:
         raise DocumentError(TOO_LONG)
-    text = "\n\n".join(pages)
+    return pages
+
+
+def _pdf(data: bytes) -> str:
+    text = "\n\n".join(page for page in pdf_page_texts(data) if page)
     if not text:
         raise DocumentError(SCAN)
     return text
