@@ -111,6 +111,27 @@ def test_mixed_pdf_recognizes_only_pages_without_a_layer(studio):
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == doc("скан.pdf", expected)
 
 
+def test_short_text_page_is_taken_from_its_layer(studio):
+    """Строка без картинки (подписи, одна фраза) — текст слоя сразу, без распознавания и ожидания карты."""
+    add_gateway(studio); cid = new_chat(studio)
+    att = upload(studio, scan_pdf("Signed: J. Smith", "Payment is due in 30 days"))
+    assert "ocr" not in att and att["chars"] == len("Signed: J. Smith\n\nPayment is due in 30 days")
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1] == ("done", {"status": "done"})
+    assert paths(studio) == ["/v1/chat/completions"]
+    assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM scans").fetchone()[0]) == 0
+
+
+def test_camscanner_watermark_over_a_scan_is_recognized(studio):
+    add_gateway(studio); cid = new_chat(studio)
+    held_until_the_turn_waits(studio)
+    att = upload(studio, scan_pdf("ink+Scanned with CamScanner", "Signed: J. Smith"))
+    assert att["chars"] == 0 and att["ocr"]["pages"] == 1
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1] == ("done", {"status": "done"})
+    assert len(studio.gw.ocr_requests) == 1
+    assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == doc(
+        "скан.pdf", f"Страница 1\n\n{TEXT}\n\nСтраница 2\n\nSigned: J. Smith")
+
+
 def test_only_blank_scanned_pages_do_not_touch_the_card(studio):
     """Текстовый PDF с пустой страницей: страница уходит в задание (пустую определяет рендер), но шлюз
     распознавания не зовётся, карта не освобождается — ни моделей картинок, ни слота ocr."""

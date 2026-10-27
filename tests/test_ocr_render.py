@@ -68,6 +68,25 @@ def test_page_texts_per_page():
         ["Payment is due in 30 days", ""]
 
 
+def test_chat_recognizes_pages_without_text_or_short_text_over_an_image():
+    """Чат (6.5): нет текста — распознать; короткий текст без картинки (строка, подписи) — из слоя; короткий
+    поверх картинки (водяной знак CamScanner) — распознать; длинный — из слоя, даже поверх картинки."""
+    long = "This page has a text layer long enough to be read as it is."
+    assert ocr_render.pdf_scan_pages(scan_pdf("Signed: J. Smith", "ink", "blank", "ink+Scanned with CamScanner",
+                                              f"ink+{long}", long)) == [
+        ("Signed: J. Smith", False), ("", True), ("", True), ("Scanned with CamScanner", True),
+        (long, False), (long, False)]
+
+
+def test_unreadable_resources_count_as_an_image():
+    from pypdf.generic import DictionaryObject, NameObject, NumberObject
+    page = DictionaryObject({NameObject("/Resources"): DictionaryObject({NameObject("/XObject"): NumberObject(5)})})
+    assert ocr_render.needs_ocr(page, "Page 2")
+    assert not ocr_render.needs_ocr(DictionaryObject(), "Page 2")                  # ресурсов нет — картинки нет
+    with pytest.raises(documents.DocumentError):
+        ocr_render.pdf_scan_pages(b"%PDF-1.4 junk")
+
+
 def test_page_texts_refuse_broken_and_too_long(monkeypatch):
     with pytest.raises(documents.DocumentError) as e:
         documents.pdf_page_texts(b"%PDF-1.4 junk")

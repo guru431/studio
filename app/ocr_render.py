@@ -2,8 +2,9 @@
 
 - PDF рисует pypdfium2 (pypdf рисовать не умеет): 300 DPI, длинная сторона — не больше MAX_SIDE.
 - Фото — PNG, JPEG, WebP до image_upload.VIDEO_PIXELS, с поворотом по EXIF и тем же пределом.
-- Страница со слоем — у pypdf не меньше LAYER_MIN_CHARS знаков без пробельных; пустая — почти
-  однотонная картинка (ImageStat).
+- Страница PDF в чате требует распознавания (`needs_ocr`), если текста слоя у pypdf нет или его меньше
+  LAYER_MIN_CHARS знаков без пробельных и на странице есть картинка; пустая — почти однотонная картинка
+  (ImageStat).
 - Всё синхронно (зовётся через asyncio.to_thread). PDFium не потокобезопасен даже на разных
   документах — вызовы идут под одним замком; документ открывается и закрывается внутри вызова.
 - Отказы — ScanError со словами для человека; ни байты, ни текст в журнал не идут.
@@ -43,6 +44,38 @@ class ScanError(ValueError):
 
 def has_layer(text: str) -> bool:
     return sum(not c.isspace() for c in text) >= LAYER_MIN_CHARS
+
+
+def _has_image(resources, depth: int = 0) -> bool:
+    """В ресурсах страницы есть картинка — XObject `/Image`, в том числе внутри `/Form` (до 3 уровней).
+    Ресурсы не разбираются — True: тогда страница распознаётся, как по прежнему правилу."""
+    try:
+        xobjects = resources.get_object().get("/XObject") if resources is not None else None
+        if xobjects is None:
+            return False
+        for ref in xobjects.get_object().values():
+            obj = ref.get_object()
+            subtype = obj.get("/Subtype")
+            if subtype == "/Image":
+                return True
+            if subtype == "/Form" and depth < 3 and _has_image(obj.get("/Resources"), depth + 1):
+                return True
+        return False
+    except Exception:                                 # noqa: BLE001 — битые ресурсы pypdf роняет по-разному
+        return True
+
+
+def needs_ocr(page, text: str) -> bool:
+    """Страница PDF в чате требует распознавания: текста слоя нет, или его меньше LAYER_MIN_CHARS знаков без
+    пробелов и на странице есть картинка (скан с водяным знаком «Scanned with CamScanner»). Короткая страница
+    без картинки (одна строка, подписи) берётся из слоя как есть."""
+    return not text or (not has_layer(text) and _has_image(page.get("/Resources")))
+
+
+def pdf_scan_pages(data: bytes) -> list[tuple[str, bool]]:
+    """(текст слоя, нужно ли распознавание) каждой страницы PDF для чата; отказы — DocumentError
+    documents.pdf_page_texts (битый файл, текст длиннее предела). Раздел «Распознавание» слой не читает."""
+    return documents.pdf_pages(data, lambda page, text: (text, needs_ocr(page, text)))
 
 
 # ---- PDF ---------------------------------------------------------------------

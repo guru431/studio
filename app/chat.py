@@ -1101,7 +1101,7 @@ async def upload_attachment(request: Request):
         else:
             reader = sections.default(uid, "ocr") if suffix == ".pdf" else None
             if reader is not None and reader[0].proxied:
-                text, scan = _scan_plan(await asyncio.to_thread(documents.pdf_page_texts, data))
+                text, scan = _scan_plan(await asyncio.to_thread(ocr_render.pdf_scan_pages, data))
             else:
                 text = await asyncio.to_thread(documents.extract, name, data)
             kind, mime, body, download = "document", DOC_MIME[suffix], data, name
@@ -1134,12 +1134,14 @@ async def upload_attachment(request: Request):
     return out
 
 
-def _scan_plan(texts: list[str]) -> "tuple[str | None, list[dict] | None]":
-    """PDF при подключении «Распознавания»: страниц без слоя нет — (текст как у documents.extract, None);
-    есть — (None, страницы документа: со слоем — `layer` с текстом, остальные — `waiting`). Пустые страницы
-    определяет задание (рендер), а не загрузка. Страниц без слоя больше PAGES_MAX — отказ словами."""
-    pages = [{"n": n, "state": "layer", "media_id": None, "text": t} if ocr_render.has_layer(t)
-             else {"n": n, "state": "waiting", "media_id": None, "text": None} for n, t in enumerate(texts, 1)]
+def _scan_plan(scanned: list[tuple[str, bool]]) -> "tuple[str | None, list[dict] | None]":
+    """PDF при подключении «Распознавания» (`ocr_render.pdf_scan_pages`: текст слоя и нужно ли распознавание):
+    распознавать нечего — (текст как у documents.extract, None); есть что — (None, страницы документа: прочие —
+    `layer` с текстом слоя, требующие распознавания — `waiting`). Пустые страницы определяет задание (рендер), а
+    не загрузка. Страниц на распознавание больше PAGES_MAX — отказ словами."""
+    texts = [t for t, _ in scanned]
+    pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} if wanted
+             else {"n": n, "state": "layer", "media_id": None, "text": t} for n, (t, wanted) in enumerate(scanned, 1)]
     waiting = sum(p["state"] == "waiting" for p in pages)
     if waiting > ocr_render.PAGES_MAX:
         raise documents.DocumentError(f"больше {ocr_render.PAGES_MAX} страниц-сканов — распознайте его частями"

@@ -113,11 +113,16 @@ async def read_uploads(request, max_files: int) -> list[tuple[str, bytes]]:
 def pdf_page_texts(data: bytes) -> list[str]:
     """Текст слоя pypdf каждой страницы (пустой — "") до предела TEXT_MAX_CHARS на все страницы:
     гигабайты текста по многим страницам в память не идут."""
+    return pdf_pages(data, lambda page, text: text)
+
+
+def pdf_pages(data: bytes, probe) -> list:
+    """`probe(страница pypdf, её текст)` каждой страницы по порядку — с пределом и отказами pdf_page_texts."""
     pages, chars = [], 0
     try:
         for page in PdfReader(io.BytesIO(data)).pages:
             text = (page.extract_text() or "").strip()
-            pages.append(text)
+            pages.append(probe(page, text))
             chars += len(text)
             if chars > TEXT_MAX_CHARS:
                 break

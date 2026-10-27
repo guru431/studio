@@ -39,11 +39,23 @@ def _image_page(ink: bool) -> bytes:
     return out.getvalue()
 
 
+def _text_over_ink(text: str) -> bytes:
+    """Скан с текстом слоя поверх картинки — как водяной знак «Scanned with CamScanner»."""
+    w = PdfWriter()
+    w.append(PdfReader(io.BytesIO(_image_page(True))))
+    w.pages[0].merge_page(PdfReader(io.BytesIO(_text_page(text))).pages[0])
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
 def scan_pdf(*pages: str) -> bytes:
-    """PDF: "blank" — белая картинка, "ink" — картинка с тёмными полосами, иначе — страница с текстом."""
+    """PDF: "blank" — белая картинка, "ink" — картинка с тёмными полосами, "ink+текст" — она же с текстом слоя
+    поверх, иначе — страница с текстом."""
     w = PdfWriter()
     for page in pages:
-        one = _image_page(page == "ink") if page in ("blank", "ink") else _text_page(page)
+        one = (_image_page(page == "ink") if page in ("blank", "ink") else
+               _text_over_ink(page[len("ink+"):]) if page.startswith("ink+") else _text_page(page))
         w.append(PdfReader(io.BytesIO(one)))
     out = io.BytesIO()
     w.write(out)
