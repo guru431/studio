@@ -6,7 +6,8 @@ release моделей, описание gemma-abl, список карты `GET
 tests/test_studio.py): создание, статус, `content`, удаление; чат — `/v1/models` и
 `/v1/chat/completions` (поток OpenAI SSE); речь — `/speech/asr`, `/speech/transcriptions`,
 `/speech/lite/transcriptions` (`asr_replies` — очередь ответов, затем `asr_reply`) и `/speech/tts-qwen`
-(`tts_replies`, последний повторяется). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
+(`tts_replies`, последний повторяется); распознавание — `/pages/ocr` (`ocr_replies`, затем `ocr_reply`) и
+`/pages/ocr-release` (в `releases` с моделью None; пока страница идёт — 409). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
 Запросы на хост `api.exa.ai` — Exa (`_exa`), мимо шлюза: ни `requests`, ни `down`, ни `reply`, ни `TOKEN`.
 
 `FakeCloud` — облачный сервис для браузерных тестов: настоящий HTTP на localhost с CORS.
@@ -127,6 +128,12 @@ class FakeGateway:
             {"start": 3.0, "end": 5.0, "speaker": "SPEAKER_01", "text": "Добрый день."}]}
         self.tts_requests = []           # запросы озвучки /speech/tts-qwen
         self.tts_replies = [(200, WAV_FAKE)]   # (код, тело: bytes — звук, dict — JSON); последний повторяется
+        self.ocr_requests = []           # запросы страниц /pages/ocr
+        self.ocr_replies = []            # (код, тело) по очереди, затем — (200, ocr_reply)
+        self.ocr_reply = {"choices": [{"message": {"content": "# Договор\n\nТекст страницы."}, "finish_reason": "stop"}]}
+        #: ответ страницы ждёт, пока не снимут; функция от запроса — пока она истинна (держать один из нескольких)
+        self.ocr_hold = False
+        self.ocr_inflight = 0            # страницы, на которые шлюз ещё не ответил: release слота ocr тогда — 409
         self.exa_requests = []           # (путь, тело, заголовок x-api-key) запросов к Exa
         #: путь → (код, тело) ответа Exa; `/contents` без записи — образец по адресам запроса
         self.exa_replies = {"/search": (200, EXA_SEARCH)}
@@ -154,6 +161,15 @@ class FakeGateway:
             self.releases.append((json.loads(request.content)["model"], request.headers.get("authorization")))
             code, body = self.release_replies[min(len(self.releases), len(self.release_replies)) - 1]
             return httpx.Response(code, json=body)
+        if path == "/pages/ocr" and request.method == "POST":
+            return await self._ocr(request)
+        if path == "/pages/ocr-release" and request.method == "POST":
+            # тело — `{}`, модели нет; slot-gate отвечает 409, пока страница ещё считается
+            self.releases.append((None, request.headers.get("authorization")))
+            if self.ocr_inflight:
+                return httpx.Response(409, json={"error": {"message": "slot_busy: идёт распознавание"}})
+            code, body = self.release_replies[min(len(self.releases), len(self.release_replies)) - 1]
+            return httpx.Response(code, json=body)
         if path == "/slot/images/descriptions":
             self.descriptions.append(json.loads(request.content))
             return httpx.Response(200, json=self.description_reply)
@@ -176,6 +192,18 @@ class FakeGateway:
                 return httpx.Response(code, content=body, headers={"content-type": "audio/wav"})
             return httpx.Response(code, json=body)
         return httpx.Response(404)
+
+    async def _ocr(self, request: httpx.Request) -> httpx.Response:
+        """Страница HunyuanOCR через шлюз: ответ OpenAI chat completions (не поток)."""
+        self.ocr_requests.append(request)
+        self.ocr_inflight += 1
+        try:
+            while self.ocr_hold(request) if callable(self.ocr_hold) else self.ocr_hold:
+                await asyncio.sleep(0.001)
+        finally:
+            self.ocr_inflight -= 1
+        code, body = self.ocr_replies.pop(0) if self.ocr_replies else (200, self.ocr_reply)
+        return httpx.Response(code, json=body)
 
     def _chat(self, request: httpx.Request) -> httpx.Response:
         """OpenAI chat completions; `stream: true` — строки `data:` SSE и `data: [DONE]`."""
