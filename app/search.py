@@ -42,6 +42,10 @@ DAYS_WORDS = f"дни — с {YEARS[0]} по {YEARS[1]} год"
 TITLES = {"chat": ("chats", "title"), "photo": ("images", "prompt"), "video": ("videos", "prompt"),
           "transcribe": ("transcripts", "name"), "ocr": ("scans", "name"), "speech": ("speeches", "text")}
 EMPTY = {"code": "input", "message": "введите слова или выберите фильтр"}
+#: строки разделов новее этого кода (откат install.sh после следующего шага схемы) — мимо выдачи, курсоров и
+#: моделей: заголовка у них нет (_title), а ссылка вела бы в никуда. «+» — без индекса по section: план
+#: запроса прежний (FTS5 внешним циклом, иначе индекс search_docs_user)
+KNOWN = "+d.section IN ({})".format(", ".join(f"'{s}'" for s in TITLES))
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/search")
@@ -113,7 +117,7 @@ async def find(body: SearchIn, request: Request):
     terms = words(body.q)
     if not terms and not (body.section or body.model or body.since or body.until):
         raise HTTPException(400, EMPTY)
-    where, args = ["d.user_id = ?"], [uid]
+    where, args = ["d.user_id = ?", KNOWN], [uid]
     for column, value in (("section", body.section), ("model", body.model)):
         if value:
             where.append(f"d.{column} = ?")
@@ -180,5 +184,7 @@ async def models(request: Request):
     out: dict[str, list[str]] = {}
     for row in state.DB.execute("SELECT DISTINCT section, model FROM search_docs WHERE user_id = ? AND model IS NOT NULL"
                                 " ORDER BY section, model", (request.state.user.id,)):
+        if row["section"] not in TITLES:                 # раздел новее кода (KNOWN)
+            continue
         out.setdefault(row["section"], []).append(row["model"])
     return {"models": out}

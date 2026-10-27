@@ -9,12 +9,14 @@
    фото — PNG из своего файла (не сохраняется); пустая — без шлюза. Перед первой непустой — release
    моделей картинок и gemma-abl (`speech.free_card`): слот ocr рядом с ними не помещается. Запрос — как
    у cleaner (`_ocr_chat`): PROMPT дословно, картинка первой. Обрезанный, пустой ответ и карта блоков без
-   текста — отказ одной страницы (PageFailed); прочие отказы шлюза — отказ документа (OcrError). 503 —
+   текста — отказ одной страницы (PageFailed), как и страница, которую не нарисовать (ScanError рендера,
+   обрезанное фото — UNREADABLE); прочие отказы шлюза — отказ документа (OcrError). 503 —
    ждать и повторять раз в RETRY_SEC до WAIT_MAX_SEC («жду карту · м:сс»).
 4. Отмена (`request_cancel`): ждущий — сразу `cancelled`; идущий — `cancelling`: запрос страницы шлюз не
    обрывает (LiteLLM обрыв дальше не передаёт), поэтому раннер дожидается ответа, выбрасывает его и
-   освобождает карту. После документа, звавшего шлюз, — release слота ocr, если в студии не идёт и не
-   ждёт другое распознавание (иначе следующее заплатит холодный старт).
+   освобождает карту. Слот ocr освобождает студия, а не документ (`LEASED`, `_settle`): после каждого
+   документа (звал он шлюз или нет) и после отмены ждущего — release шлюзов, чей слот взят, если в студии
+   не идёт и не ждёт другое распознавание (иначе следующее заплатит холодный старт).
 5. Стирание истории, удаление и отключение учётки (`stop_user`) — ждущие отменены, идущий оборван
    сразу (без release: шлюз ещё считает оборванную страницу); остановка службы (`stop`) — идущий —
    ошибка «прервано», ждущие — их сделает ошибкой `recover` при старте.
@@ -75,6 +77,7 @@ CANCELLING = "отменяю"
 CANCELLED = "отменено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
+UNREADABLE = "страница не читается — файл повреждён"
 
 log = logging.getLogger("studio")
 
@@ -111,6 +114,9 @@ class Job:
 JOBS: dict[str, Job] = {}
 #: раннер пользователя: одно распознавание за раз
 RUNNERS: dict[int, asyncio.Task] = {}
+#: шлюзы, чей слот ocr взят и ещё не освобождён (адрес → снимок подключения последнего звавшего): освобождает
+#: `_settle`, когда в студии нечего распознавать, — кто бы ни кончил последним, даже не звав шлюз
+LEASED: dict[str, object] = {}
 
 
 # ---- шлюз --------------------------------------------------------------------
@@ -192,14 +198,19 @@ def attachment_marker(detail: str) -> str:
 
 def attachment_text(scan_id: str) -> str:
     """Текст вложения чата: страницы с итогом — «Страница N» и текст, нераспознанные — пометкой,
-    пустые пропущены."""
+    пустые пропущены. Не длиннее documents.TEXT_MAX_CHARS (спека 6.5): дальше — обрезка с пометкой, а не
+    отказ — распознанное уже стоило минут карты."""
     parts = []
     for p in state.DB.execute("SELECT n, state, text, detail FROM scan_pages WHERE scan_id = ? ORDER BY n", (scan_id,)):
         if p["state"] in ("done", "layer"):
             parts.append(f"Страница {p['n']}\n\n{p['text'] or ''}")
         elif p["state"] == "failed":
             parts.append(f"[страница {p['n']} не распознана: {p['detail']}]")
-    return "\n\n".join(parts)
+    text, limit = "\n\n".join(parts), documents.TEXT_MAX_CHARS
+    if len(text) > limit:
+        mark = f"\n\n[текст скана обрезан: длиннее {limit:,} знаков]".replace(",", " ")
+        text = text[:limit - len(mark)] + mark
+    return text
 
 
 def _attachment(attachment_id: "str | None", text: str) -> None:
@@ -341,19 +352,28 @@ async def _recognize_pages(job: Job, row) -> str:
     for page in waiting:
         _check(job)
         n = page["n"]
-        if source is not None:
-            png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
+        try:
+            if source is not None:
+                png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
+            else:
+                png = await asyncio.to_thread(ocr_render.photo_png,
+                                              await asyncio.to_thread(_read, job.user_id, page["media_id"]))
+        except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
+            png = None
+        if png is not None and source is not None:
             media_id = await media.save_async(job.user_id, png, "image/png", f"{stem}-{n}.png")
             state.DB.execute("UPDATE scan_pages SET media_id = ? WHERE scan_id = ? AND n = ?", (media_id, job.id, n))
-        else:
-            png = await asyncio.to_thread(ocr_render.photo_png, await asyncio.to_thread(_read, job.user_id, page["media_id"]))
         _check(job)
-        if await asyncio.to_thread(ocr_render.is_blank, png):
+        if png is None:
+            page_state, text, why = "failed", None, UNREADABLE
+        elif await asyncio.to_thread(ocr_render.is_blank, png):
             page_state, text, why = "blank", None, None
         else:
             if not job.called:
                 job.called = True
                 await speech.free_card(job.conn)
+                _check(job)                               # отменили, пока освобождалась карта
+            LEASED[job.conn.base_url] = job.conn
             job.stage = f"распознаю · стр. {n} из {row['pages']}"
             _store(job)
             try:
@@ -369,9 +389,22 @@ async def _recognize_pages(job: Job, row) -> str:
     return "\n\n".join(t for t in texts if t)
 
 
+async def _settle() -> None:
+    """Release слота ocr каждого шлюза из LEASED, если в студии нечего распознавать (ни идущего, ни ждущего
+    документа): следующий за ним заплатил бы холодный старт. Решает студия, а не документ: последний
+    кончившийся мог шлюз и не звать (пустые страницы, отмена до первой страницы, отказ до шлюза)."""
+    if not LEASED or state.DB.execute(f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is not None:
+        return
+    leased = list(LEASED.values())
+    LEASED.clear()
+    for conn in leased:
+        await release(conn)
+
+
 async def run(job: Job) -> None:
-    """Один документ. Итог — в строку последним; затем, если звали шлюз и в студии больше нечего
-    распознавать, — release слота ocr. Оборванный (stop_user, остановка службы) карту не освобождает."""
+    """Один документ. Итог — в строку последним; затем — `_settle` (release, если в студии больше нечего
+    распознавать), звал этот документ шлюз или нет. Оборванный (stop_user, остановка службы) карту не
+    освобождает."""
     row = state.DB.execute("SELECT * FROM scans WHERE id = ?", (job.id,)).fetchone()
     outcome = ("error", INTERRUPTED, None)
     try:
@@ -398,8 +431,7 @@ async def run(job: Job) -> None:
     finally:
         _finish(job.id, *outcome)
         JOBS.pop(job.id, None)
-    if job.called and state.DB.execute(f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is None:
-        await release(job.conn)
+    await _settle()
 
 
 async def _runner(user_id: int) -> None:
@@ -428,6 +460,7 @@ async def request_cancel(user_id: int, scan_id: str) -> str:
         _finish(scan_id, "cancelled", CANCELLED)
         JOBS.pop(scan_id, None)
         log.info("распознавание %s: отменено в очереди", scan_id[:8])
+        await _settle()
         return "cancelled"
     job = JOBS.get(scan_id)
     if row["state"] == "working" and job is not None:
@@ -452,6 +485,7 @@ async def stop_user(user_id: int) -> None:
     for row in state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND state = 'queued'", (user_id,)).fetchall():
         _finish(row["id"], "cancelled", CANCELLED)
         JOBS.pop(row["id"], None)
+    await _settle()                    # ждали отменённые — слот держали для них
     task = RUNNERS.get(user_id)
     if task is not None and not task.done():
         for job in JOBS.values():

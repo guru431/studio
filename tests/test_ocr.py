@@ -140,6 +140,49 @@ def test_truncated_empty_and_layout_only_pages_fail_alone(studio):
         ("done", None)]
 
 
+def test_unreadable_page_fails_alone(studio, monkeypatch):
+    """Страница, которую PDFium не нарисовал, и обрезанное фото — отказ своей страницы словами, а не
+    документа (ревью M4)."""
+    uid, conn = gateway_user(studio)
+    real = ocr_render.render_page
+
+    def render(data, index):
+        if index == 1:
+            raise ocr_render.ScanError(ocr_render.BROKEN)
+        return real(data, index)
+    monkeypatch.setattr(ocr_render, "render_page", render)
+    row = wait_scan(studio, pdf_scan(studio, uid, conn, "ink", "ink"))
+    assert row["state"] == "done" and row["done_pages"] == 2 and row["text"] == TEXT
+    assert [(p["state"], p["detail"]) for p in page_rows(studio, row["id"])] == [
+        ("done", None), ("failed", ocr.UNREADABLE)]
+
+    async def go():
+        good = await media.save_async(uid, photo(), "image/jpeg", "a.jpg")
+        cut = await media.save_async(uid, photo()[:-200], "image/jpeg", "b.jpg")       # заголовок цел
+        sid = ocr.create(uid, conn, "hunyuan-ocr", "a.jpg", origin="section", source_media_id=None,
+                         pages=[{"n": 1, "state": "waiting", "media_id": cut, "text": None},
+                                {"n": 2, "state": "waiting", "media_id": good, "text": None}])
+        ocr.kick(uid)
+        return sid
+    row = wait_scan(studio, on_loop(studio, go))
+    assert row["state"] == "done" and row["text"] == TEXT
+    assert [(p["state"], p["detail"]) for p in page_rows(studio, row["id"])] == [
+        ("failed", ocr.UNREADABLE), ("done", None)]
+
+
+def test_cancel_while_the_card_is_freed_skips_the_page(studio, monkeypatch):
+    """Отмена, пока освобождается карта (speech.free_card): страница в шлюз не уходит (ревью M5)."""
+    uid, conn = gateway_user(studio)
+
+    async def free(conn):
+        for job in ocr.JOBS.values():
+            job.cancel = True
+    monkeypatch.setattr(ocr.speech, "free_card", free)
+    row = wait_scan(studio, pdf_scan(studio, uid, conn, "ink"))
+    assert row["state"] == "cancelled" and studio.gw.ocr_requests == []
+    assert ocr_releases(studio) == 0 and ocr.LEASED == {}
+
+
 def test_card_busy_waits_and_says_so(studio, monkeypatch):
     """Фото — страница как есть (PNG не сохраняется), карта занята — «жду карту · м:сс»."""
     uid, conn = gateway_user(studio)
@@ -217,6 +260,65 @@ def test_release_waits_for_the_last_scan_of_the_studio(studio):
     assert ocr_releases(studio) == 1 and paths(studio)[-1] == "/pages/ocr-release"
 
 
+def released(s):
+    """release слота ocr дошёл до шлюза (он — после итога документа, отдельным запросом)."""
+    wait_until(s, lambda: ocr_releases(s) >= 1)
+    return ocr_releases(s)
+
+
+def test_release_after_a_next_document_that_never_calls_the_gateway(studio):
+    """Первый распознаётся, второй (только пустые страницы) ждёт: первый слот не освобождает (в очереди
+    второй), второй шлюз не звал — release всё равно делает конец второго (ревью I1)."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    first = pdf_scan(studio, uid, conn, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    second = pdf_scan(studio, uid, conn, "blank")
+    studio.gw.ocr_hold = False
+    assert wait_scan(studio, first)["state"] == "done"
+    assert wait_scan(studio, second)["state"] == "done"
+    assert released(studio) == 1 and ocr.LEASED == {}
+
+
+def test_release_after_a_next_document_cancelled_before_its_first_page(studio, monkeypatch):
+    """«Отменить» второго документа, пока рисуется его первая страница (до запроса к шлюзу)."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    first = pdf_scan(studio, uid, conn, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    second = pdf_scan(studio, uid, conn, "ink")
+    real = ocr_render.render_page
+
+    def render(data, index):
+        job = ocr.JOBS.get(second)
+        if job is not None and job.stage != ocr.QUEUED:
+            job.cancel = True                                     # нажали «Отменить» во время рендера
+        return real(data, index)
+    monkeypatch.setattr(ocr_render, "render_page", render)
+    studio.gw.ocr_hold = False
+    assert wait_scan(studio, first)["state"] == "done"
+    assert wait_scan(studio, second)["state"] == "cancelled"
+    assert released(studio) == 1 and ocr.LEASED == {}
+    assert len(studio.gw.ocr_requests) == 1
+
+
+def test_release_after_cancelling_the_last_queued_document(studio):
+    """Чужой ждущий документ отменён, пока его раннер не взял его: release — от отмены (ревью I1)."""
+    uid, conn = gateway_user(studio)
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    uid_b, conn_b = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    first = pdf_scan(studio, uid, conn, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    second = pdf_scan(studio, uid_b, conn_b, "ink", kick=False)        # раннер Боба ещё не запущен
+    studio.gw.ocr_hold = False
+    assert wait_scan(studio, first)["state"] == "done"       # итог и решение о release — без await между ними
+    assert ocr_releases(studio) == 0 and ocr.LEASED != {}  # в студии ждёт документ — слот держим
+    assert on_loop(studio, ocr.request_cancel, uid_b, second) == "cancelled"
+    assert ocr_releases(studio) == 1 and ocr.LEASED == {}
+
+
 def test_queue_runs_one_at_a_time_and_caps_at_five(studio):
     uid, conn = gateway_user(studio)
     studio.gw.ocr_hold = True
@@ -274,6 +376,18 @@ def test_chat_scan_fills_the_attachment_text(studio):
     assert attachment(studio, aid) == (expected, len(expected)) and on_loop(studio, ocr.attachment_text, sid) == expected
     assert [p["state"] for p in page_rows(studio, sid)] == ["layer", "done", "blank", "failed"]
     assert len(studio.gw.ocr_requests) == 2
+
+
+def test_chat_scan_text_is_cut_at_the_document_limit(studio, monkeypatch):
+    """Текст вложения — не длиннее documents.TEXT_MAX_CHARS, с пометкой обрезки (спека 6.5, ревью M3)."""
+    uid, conn = gateway_user(studio)
+    monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 100)
+    aid = add_attachment(studio, uid)
+    sid = pdf_scan(studio, uid, conn, "ink", "ink", "ink", origin="chat", attachment_id=aid)
+    assert wait_scan(studio, sid)["state"] == "done"
+    text, chars = attachment(studio, aid)
+    mark = "\n\n[текст скана обрезан: длиннее 100 знаков]"
+    assert len(text) == chars == 100 and text.endswith(mark) and text.startswith(f"Страница 1\n\n{TEXT}")
 
 
 def test_recover_marks_running_as_interrupted_and_fills_the_attachment(studio):

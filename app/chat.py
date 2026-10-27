@@ -133,6 +133,8 @@ WEB_NOTE = ("У тебя есть доступ к интернету через 
 STORAGE = "хранилище недоступно"
 SCAN_POLL_SEC = 1                # ход ждёт скан: состояние документов — из базы раз в столько
 NO_OCR = "это скан — подключите «Распознавание» в настройках"
+#: начало слов ответа-ошибки «скан не распознан: …» — они хранятся в content ответа, страница получает их `error`
+SCAN_FAILED = "скан не распознан"
 NOT_READY = "скан ещё распознаётся"
 NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
 DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
@@ -290,11 +292,16 @@ def _alive(row) -> bool:
 def _message_out(row, atts: list) -> dict:
     """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
     `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null), `ocr` — ход
-    распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null)."""
+    распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `error` — слова ответа-ошибки
+    «скан не распознан: …» (хранятся в content; тогда content — пустой: модели ответ не уходил)."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
     reasoning, seconds = live.thought_out() if live else (row["reasoning"], row["reasoning_sec"])
-    return {"id": row["id"], "role": row["role"], "content": live.content if live else row["content"],
+    error = None
+    if not live and row["status"] == "error" and row["role"] == "assistant" and row["content"].startswith(SCAN_FAILED):
+        error = row["content"]
+    return {"id": row["id"], "role": row["role"], "content": "" if error else live.content if live else row["content"],
+            "error": error,
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
             "attachments": [_attachment_out(a) for a in atts],
@@ -847,12 +854,12 @@ class StreamTask:
             while True:
                 rows = state.DB.execute(f"SELECT state, detail FROM scans WHERE id IN ({marks})",
                                         tuple(self.scans)).fetchall()
-                if len(rows) < len(self.scans):
-                    return "скан не распознан: документ удалён"
                 failed = next((r for r in rows if r["state"] in ("error", "cancelled")), None)
-                if failed is not None:
+                if len(rows) < len(self.scans) or failed is not None:
                     log.info("чат %s: ответ %s — скан не распознан", self.chat_id[:8], self.message_id[:8])
-                    return f"скан не распознан: {failed['detail']}"
+                    # слова — и в ответ: человек ушёл, пока скан распознаётся (compose ответ-ошибку не берёт)
+                    self.content = f"{SCAN_FAILED}: {'документ удалён' if failed is None else failed['detail']}"
+                    return self.content
                 page, pages = ocr.progress(self.scans)
                 if self.scan_state != {"page": page, "pages": pages}:
                     self.scan_state = {"page": page, "pages": pages}
@@ -1089,7 +1096,7 @@ async def upload_attachment(request: Request):
     К сообщению вложение привязывает ход. PDF со страницами без текстового слоя при подключении раздела
     «Распознавание» через сервер — документ распознавания (`ocr` в ответе), текст вложения допишет он."""
     uid = request.state.user.id
-    text, scan = None, None
+    text, scan, reader = None, None, None
     try:
         name, data = await documents.read_upload(request)
         suffix = PurePosixPath(name.lower()).suffix
@@ -1106,7 +1113,9 @@ async def upload_attachment(request: Request):
                 text = await asyncio.to_thread(documents.extract, name, data)
             kind, mime, body, download = "document", DOC_MIME[suffix], data, name
     except documents.DocumentError as e:
-        message = NO_OCR if str(e) == documents.SCAN else str(e)
+        message = str(e)
+        if message == documents.SCAN:                # подключение «Распознавания» есть, но адрес убран из списка
+            message = NO_OCR if reader is None else sections.unlisted(reader[0])
         raise HTTPException(e.status, {"code": "document", "message": message}) from None
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None

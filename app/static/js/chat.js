@@ -1153,6 +1153,7 @@ function build(view, ctx) {
       const remove = iconButton('x', `Убрать ${name}`, { class: 'icon-btn att-remove' });
       remove.addEventListener('click', () => {
         atts = atts.filter((x) => x !== a);
+        dropWaiting();
         paintAtts();
         // уже загружено, но не отправлено — и с сервера; отказ не важен: остаток уберёт уборка
         if (a.meta) api('DELETE', `/api/attachments/${a.meta.id}`).catch(() => {});
@@ -1197,7 +1198,8 @@ function build(view, ctx) {
 
   /* 409 `not_ready`: раз в NOT_READY_MS — документы сканов поля ввода (`ocr` ответа загрузки); пока какой-то
      идёт — ждём, затем ход заново (ход с неготовым сканом из истории диалога — тем же повтором). Смена диалога,
-     уход из раздела и «Отправить» человека ожидание снимают */
+     уход из раздела и «Отправить» человека ожидание снимают, правка поля и вложений — тоже (dropWaiting): по
+     таймеру ушло бы не то, что человек отправлял */
   function waitScans(args) {
     const mine = { timer: 0 };
     notReady = mine;
@@ -1223,6 +1225,12 @@ function build(view, ctx) {
   function stopWaiting() {
     if (notReady) clearTimeout(notReady.timer);
     notReady = null;
+  }
+
+  function dropWaiting() {
+    if (!notReady) return;
+    stopWaiting();
+    if (notice.textContent === NOT_READY) notice.textContent = '';
   }
 
   async function submit(regenerate, externalOk = false, webOk = false) {
@@ -1384,7 +1392,10 @@ function build(view, ctx) {
   scroller.addEventListener('scroll', () => {
     stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }, { passive: true });
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', () => {
+    autosize();
+    dropWaiting();
+  });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -1398,6 +1409,7 @@ function build(view, ctx) {
   file.addEventListener('change', () => {
     for (const f of file.files) atts.push({ file: f, meta: null, error: '', busy: false });
     file.value = '';
+    dropWaiting();
     paintAtts();
   });
   stop.addEventListener('click', async () => {

@@ -119,6 +119,7 @@ def studio(env, schema_db, monkeypatch):
     transcripts.JOBS.clear()
     ocr.JOBS.clear()
     ocr.RUNNERS.clear()
+    ocr.LEASED.clear()
     speeches.JOBS.clear()
     videos.WATCHING.clear()
     videos.PAUSED.clear()

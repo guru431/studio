@@ -130,6 +130,21 @@ def test_scan_text_is_found_and_removed_with_the_scan(studio):
     assert found("скан") == [] and state.DB.execute("SELECT COUNT(*) FROM search_docs").fetchone()[0] == 0
 
 
+def test_search_survives_a_section_this_code_does_not_know(studio):
+    """Строки раздела новее кода (откат install.sh после следующего шага схемы) — не в выдаче, не в
+    моделях и не 500: прежний _title искал бы их заголовок по TITLES (ревью I2)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    seed(uid)
+    state.DB.execute("INSERT INTO search_docs(section, item, part, user_id, model, created, body)"
+                     " VALUES ('future', 'f1', '', ?, 'm-next', ?, 'Кошка из будущего')", (uid, T0 + 99))
+    assert hits(search(studio, q="кошк")) == [("chat", "c"), ("speech", "s"), ("transcribe", "t"), ("photo", "i")]
+    assert hits(search(studio, q="будущ")) == [] and hits(search(studio, model="m-next")) == []
+    page = search(studio, q="кошк", limit=1)
+    cursor = {k: page.json()["items"][0][k] for k in ("created", "part")} | {"item": page.json()["items"][0]["id"]}
+    assert hits(search(studio, q="кошк", limit=1, before=cursor)) == [("speech", "s")]
+    assert "future" not in studio.c.get("/api/search/models").json()["models"]
+
+
 def test_reindex_repairs_the_index_and_keeps_yo_where_rebuild_loses_it(studio):
     """Ремонт индекса: штатный 'rebuild' FTS5 берёт тело search_docs как есть и теряет «ё» = «е»;
     search.reindex — 'delete-all' и вставка с той же заменой, что у триггеров."""

@@ -190,10 +190,52 @@ def test_failed_scan_is_an_error_answer_and_the_model_is_not_called(studio):
     studio.gw.ocr_replies = [(500, {"error": {"message": "внутренняя ошибка"}})]
     att = upload(studio, scan_pdf("ink"))
     events = sse(ask(studio, cid, ids=[att["id"]]))
-    assert events[-1][0] == "error" and events[-1][1]["message"].startswith("скан не распознан: ")
+    words = events[-1][1]["message"]
+    assert events[-1][0] == "error" and words.startswith("скан не распознан: ")
     assert studio.gw.chat_requests == []
     answer = messages(studio, cid)[1]
     assert answer["status"] == "error" and answer["ocr"] is None
+    # вернувшись в диалог, человек видит причину, а не «ответ не получен» (ревью M1); модели ответ не уходит
+    assert (answer["error"], answer["content"]) == (words, "")
+    assert messages(studio, cid)[0]["error"] is None
+    assert sse(ask(studio, cid, "ещё раз"))[-1] == ("done", {"status": "done"})
+    assert all(m["role"] != "assistant" for m in studio.gw.chat_requests[-1]["messages"])
+
+
+def test_sent_scan_is_found_by_the_chat_search(studio):
+    """Текст отправленного скана — в поиске раздела «Чат», и когда раннер дописал его после хода; документ
+    удалили в «Распознавании» — в диалоге текст остался, и в поиске тоже (ревью M2)."""
+    add_gateway(studio); cid = new_chat(studio)
+    held_until_the_turn_waits(studio)
+    att = upload(studio, scan_pdf("ink"))
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1] == ("done", {"status": "done"})
+    found = studio.c.post("/api/search", json={"q": "страницы", "section": "chat"}).json()["items"]
+    assert [(i["id"], i["part"]) for i in found] == [(cid, att["id"])]
+    assert studio.c.delete(f"/api/ocr/{att['ocr']['id']}").status_code == 204
+    found = studio.c.post("/api/search", json={"q": "страницы"}).json()["items"]
+    assert [(i["section"], i["id"], i["part"]) for i in found] == [("chat", cid, att["id"])]
+
+
+def test_direct_connection_scan_is_indexed_once(studio):
+    add_gateway(studio)
+    cloud = add_connection(studio)
+    cid = new_chat(studio, connection_id=cloud, model="local-gemma-abl")
+    att = upload(studio, scan_pdf("ink"))
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans").fetchone()[0] == "done")
+    assert ask(studio, cid, ids=[att["id"]]).status_code == 200
+    rows = on_loop(studio, lambda: state.DB.execute("SELECT section FROM search_docs WHERE part = ?",
+                                                    (att["id"],)).fetchall())
+    assert [r[0] for r in rows] == ["chat"]
+
+
+def test_scan_with_the_ocr_address_off_the_allowlist_says_so(studio):
+    """Подключение «Распознавания» есть, но адрес убран из списка: слова — как у sections.resolve (ревью M8)."""
+    add_gateway(studio)
+    on_loop(studio, lambda: state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'"))
+    r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf("ink"), "application/pdf")})
+    assert r.status_code == 422
+    assert r.json()["detail"]["message"] == ("адрес подключения «srvllm» убран из списка разрешённых — попросите"
+                                             " администратора внести его")
 
 
 def test_stop_while_waiting_cancels_the_scan(studio):
