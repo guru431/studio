@@ -84,8 +84,11 @@ def _gone() -> HTTPException:
 
 
 def _from_row(row) -> Connection:
+    # раздел новее этого кода (откат после шага схемы с новым разделом) — не виден: PATCH без `sections`
+    # иначе отказал бы 422 «разделы — …», а set_sections такие строки не трогает
+    linked = frozenset(json.loads(row["linked"])) & frozenset(sections.SECTIONS)
     return Connection(id=row["id"], user_id=row["user_id"], name=row["name"], kind=row["kind"],
-                      base_url=row["base_url"], sections=frozenset(json.loads(row["linked"])),
+                      base_url=row["base_url"], sections=linked,
                       proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]))
 
 

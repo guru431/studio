@@ -3,7 +3,8 @@
 Studio part — needs STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD of an administrator who already
 has the «srvllm» connection (`manage.py create-admin` with GATEWAY_KEY_OWNER_IMAGES). It logs in,
 generates a Lustify picture, edits half of it with the brush, describes it, makes a 1 s clip of it
-and asks local-gemma-abl about a PDF made here; then deletes only what it created (the owner's
+and asks local-gemma-abl about a PDF made here, recognizes a one-page scan in «Распознавание» and in the
+chat (gemma-abl answers without waiting out the ocr lease); then deletes only what it created (the owner's
 history stays) and releases the card. Gateway and PowerShell part — needs GATEWAY_KEY_OWNER_IMAGES
 and goes to the gateway directly, as the clients do. Pictures are synthetic: no user photos.
 """
@@ -20,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pypdfium2
 import pytest
 from PIL import Image, ImageChops, ImageDraw
 from pypdf import PdfWriter
@@ -38,6 +40,9 @@ BUSY_SEC = 300                 # the owner may be using the studio: wait for the
 IMAGE_SEC = 1400               # gateway holds a picture request up to 1300 s (card wait + generation)
 VIDEO_SEC = 1800
 SPEECH_SEC = 1800              # speech and transcription wait for the card up to 30 min (WAIT_MAX_SEC)
+OCR_SEC = 1800 + 700           # a page waits for the card up to 30 min, then the gateway reads it up to 660 s
+GEMMA_AFTER_OCR_SEC = 600      # cold gemma-abl ~300 s; the ocr lease left behind would hold the card 900 s
+GATEWAY_ROOT = GATEWAY.removesuffix("/slot")
 PHRASE = "Проверка студии: озвучка, расшифровка и голосовой ввод работают."
 # cold gemma loads up to ~300 s; the studio pings every 15 s, so a silent minute is a broken line
 STREAM = httpx.Timeout(60, connect=30, read=400)
@@ -62,6 +67,18 @@ def pdf(text: str) -> bytes:
     page[NameObject("/Contents")] = w._add_object(stream)
     out = io.BytesIO()
     w.write(out)
+    return out.getvalue()
+
+
+def scan_pdf(text: str) -> bytes:
+    """One page without a text layer: pdf(text) drawn by pdfium at 200 DPI and saved back as a picture."""
+    doc = pypdfium2.PdfDocument(pdf(text))
+    try:
+        image = doc[0].render(scale=200 / 72).to_pil().convert("RGB")
+    finally:
+        doc.close()
+    out = io.BytesIO()
+    image.save(out, "PDF", resolution=200)
     return out.getvalue()
 
 
@@ -100,7 +117,8 @@ def studio():
     login, password = os.environ.get("STUDIO_ADMIN_LOGIN"), os.environ.get("STUDIO_ADMIN_PASSWORD")
     if not login or not password:
         pytest.skip("STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required")
-    created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[], transcripts=[], speeches=[], voices=[])
+    created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[], transcripts=[], speeches=[], voices=[],
+                              scans=[])
     with httpx.Client(timeout=60, trust_env=False) as client:
         r = client.post(STUDIO + "/login", data={"login": login, "password": password},
                         headers={"Origin": STUDIO})
@@ -129,6 +147,13 @@ def cleanup(client, created):
         client.delete(f"{STUDIO}/api/voices/{voice_id}")
     for chat_id in created.chats:
         client.delete(f"{STUDIO}/api/chats/{chat_id}")
+    for scan_id in created.scans:          # a cancelled scan finishes its page first, then frees the card
+        if client.post(f"{STUDIO}/api/ocr/{scan_id}/cancel").status_code == 200:
+            try:
+                poll(client, f"{STUDIO}/api/ocr/{scan_id}", finished, 800, pause=5)
+            except (AssertionError, pytest.fail.Exception, httpx.HTTPError):
+                continue                   # the row stays for the owner to delete
+        client.delete(f"{STUDIO}/api/ocr/{scan_id}")
     for video_id in created.videos:
         client.delete(f"{STUDIO}/api/videos/{video_id}")     # a running clip is dropped at the gateway first
     for job_id in created.descriptions:                       # not in history; cancel if it still runs
@@ -270,6 +295,83 @@ def test_chat_answers_from_an_attached_pdf(studio):
     assert [m["role"] for m in saved] == ["user", "assistant"]
     assert saved[0]["attachments"][0]["id"] == attachment["id"]
     assert saved[1]["status"] == "done" and letters(code) in letters(saved[1]["content"])
+
+
+def read_scan_turn(client, url, body) -> tuple[str, str, list, float]:
+    """(answer, final status, `ocr` events, seconds from the scan being ready to `done`) of a turn whose
+    attachment is still being recognized: turn, ocr…, delta…, done | error."""
+    text, status, events, ready = [], None, [], None
+    with client.stream("POST", url, json=body, timeout=STREAM) as r:
+        if r.status_code != 200:
+            r.read()
+            pytest.fail(f"turn refused: {r.status_code} {r.text[:500]}")
+        event = None
+        for line in r.iter_lines():
+            if line.startswith("event:"):
+                event = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data = json.loads(line[len("data:"):])
+                if event == "ocr":
+                    events.append(data)
+                    if data["page"] >= data["pages"]:
+                        ready = time.monotonic()
+                elif event == "delta":
+                    ready = ready or time.monotonic()
+                    text.append(data["text"])
+                elif event == "done":
+                    status = data["status"]
+                    break
+                elif event == "error":
+                    pytest.fail(f"turn error: {data['message'][:300]}")
+    return "".join(text), status, events, time.monotonic() - (ready or time.monotonic())
+
+
+@pytest.mark.timeout(2 * OCR_SEC + 900)
+def test_scan_in_the_section_and_in_the_chat(studio):
+    """Одностраничный скан без текстового слоя: раздел «Распознавание» (HunyuanOCR читает код со
+    страницы), затем то же вложением в чат local-gemma-abl — ход ждёт распознавания, и после него
+    gemma-abl отвечает без ожидания аренды слота ocr (студия освобождает его сама)."""
+    c, made = studio.c, studio.created
+    code = f"AZURE-OTTER-{secrets.randbelow(9000) + 1000}"
+    scan = scan_pdf(f"The secret code phrase is {code}.")
+
+    # 1. The section: one PDF page, recognized as a picture
+    item = submit(c, STUDIO + "/api/ocr", 202, files={"file": ("live-scan.pdf", scan, "application/pdf")})
+    made.scans.append(item["id"])
+    assert item["pages"] == 1 and item["model"] == "hunyuan-ocr", item
+    doc = poll(c, f"{STUDIO}/api/ocr/{item['id']}", finished, OCR_SEC, pause=5)
+    assert doc["state"] == "done", doc["detail"]
+    [page] = doc["pages"]
+    assert page["state"] == "done" and letters(code) in letters(page["text"]), page
+    picture = c.get(f"{STUDIO}/api/media/{page['media_id']}")
+    assert picture.status_code == 200 and picture.headers["content-type"] == "image/png"
+    md = c.get(f"{STUDIO}/api/ocr/{item['id']}/export", params={"format": "md"})
+    assert md.status_code == 200 and letters(code) in letters(md.text)
+    token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
+    if token:                              # the studio's own key may free the ocr slot, and nothing holds it now
+        r = httpx.post(GATEWAY_ROOT + "/pages/ocr-release", json={},
+                       headers={"Authorization": "Bearer " + token}, timeout=60, trust_env=False)
+        assert r.status_code == 200, (r.status_code, r.text[:300])
+
+    # 2. The chat: the same scan goes at once, the turn waits for it, then gemma-abl answers from the text
+    r = c.post(STUDIO + "/api/chats", json={"model": CHAT_MODEL})
+    assert r.status_code == 201, (r.status_code, r.text[:300])
+    chat_id = r.json()["id"]
+    made.chats.append(chat_id)
+    r = c.post(STUDIO + "/api/attachments", files={"file": ("live-scan.pdf", scan, "application/pdf")})
+    assert r.status_code == 201, (r.status_code, r.text[:300])
+    attachment = r.json()
+    assert attachment["chars"] == 0 and attachment["ocr"]["pages"] == 1, attachment
+    made.scans.append(attachment["ocr"]["id"])
+    answer, status, events, after = read_scan_turn(c, f"{STUDIO}/api/chats/{chat_id}/turns", {
+        "text": "What is the secret code phrase in the attached document? Reply with the code phrase only.",
+        "attachment_ids": [attachment["id"]]})
+    assert status == "done", (status, answer[:300])
+    assert events and events[-1] == {"page": 1, "pages": 1}, events
+    assert letters(code) in letters(answer), answer[:300]
+    assert after < GEMMA_AFTER_OCR_SEC, f"gemma-abl answered {after:.0f} s after the scan: the ocr lease held the card"
+    saved = c.get(f"{STUDIO}/api/chats/{chat_id}").json()["messages"]
+    assert saved[0]["attachments"][0]["chars"] > 0 and saved[1]["ocr"] is None
 
 
 @pytest.mark.timeout(1500)
