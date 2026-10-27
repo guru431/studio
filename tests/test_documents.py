@@ -1,7 +1,9 @@
 """Текст документов чата (app/documents.py): PDF, DOCX, TXT и MD; отказы — словами."""
+import asyncio
 import io
 import zipfile
 
+import httpx
 import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -106,3 +108,37 @@ def test_docx_xml_is_limited_to_sixteen_mebibytes():
     fits = head + " " * (16 * 1024 * 1024 - len(head) - len(tail)) + tail
     assert documents.extract("fits.docx", docx(xml=fits)) == "x"
     assert refusal("over.docx", docx(xml=head + " " * (16 * 1024 * 1024) + tail)) == "документ повреждён"
+
+
+class Upload:
+    """Запрос с телом multipart, как его отдаёт Starlette: `headers` и поток `stream()`."""
+
+    def __init__(self, files):
+        built = httpx.Request("POST", "http://studio.test/", files=files)
+        self.body, self.headers = built.read(), {"content-type": built.headers["content-type"]}
+
+    async def stream(self):
+        for n in range(0, len(self.body), 65536):
+            yield self.body[n:n + 65536]
+
+
+def uploads(files, max_files=3):
+    return asyncio.run(documents.read_uploads(Upload(files), max_files))
+
+
+def upload_refusal(files, max_files=3) -> tuple[int, str]:
+    with pytest.raises(DocumentError) as e:
+        uploads(files, max_files)
+    return e.value.status, str(e.value)
+
+
+def test_read_uploads_takes_several_files_in_order_within_the_limits(monkeypatch):
+    got = uploads([("file", ("a/b.jpg", b"one", "image/jpeg")), ("file", ("c.png", b"two", "image/png"))])
+    assert got == [("b.jpg", b"one"), ("c.png", b"two")]
+    assert upload_refusal([("file", (f"{n}.png", b"x", "image/png")) for n in range(4)]) == (
+        422, "больше 3 файлов за раз")
+    assert upload_refusal([("file", ("a.png", b"x", "image/png")), ("other", ("b.png", b"y", "image/png"))])[0] == 400
+    assert upload_refusal([("file", ("a.png", b"", "image/png"))])[0] == 413
+    monkeypatch.setattr(documents, "DOC_MAX", 5)
+    status, message = upload_refusal([("file", ("a.png", b"xxx", "image/png")), ("file", ("b.png", b"yyy", "image/png"))])
+    assert status == 413 and "вместе" in message

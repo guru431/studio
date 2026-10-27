@@ -114,7 +114,8 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     files = {f"files/{mid}{media.EXT[mime]}" for mid, mime in
              ((r["id"], r["mime"]) for r in state.DB.execute("SELECT id, mime FROM media"))}
     assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images/0001.json",
-                          "videos/0001.json", "transcripts/0001.json", "speeches/0001.json", "voices/0001.json", "manifest.json"} | files
+                          "videos/0001.json", "transcripts/0001.json", "scans/0001.json", "speeches/0001.json",
+                          "voices/0001.json", "manifest.json"} | files
     assert {zipfile.ZIP_STORED} == {i.compress_type for i in zf.infolist()}
     chat = json.loads(zf.read("chats/minechat1.json"))
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
@@ -381,7 +382,7 @@ def test_export_sends_entry_headers_apart_from_their_data(studio):
     history(uid, "mine")
     pieces = drain(uid, prepare(studio).json()["id"])
     headers = [p for p in pieces if p[:4] == b"PK\x03\x04"]
-    assert len(headers) == 19                    # README, settings, 2 диалога, 5 разделов, 9 файлов, манифест
+    assert len(headers) == 20                    # README, settings, 2 диалога, 6 разделов, 9 файлов, манифест
     for p in headers:
         name_len, extra_len = struct.unpack_from("<HH", p, 26)
         assert len(p) == 30 + name_len + extra_len, p[30:30 + name_len]
@@ -408,6 +409,38 @@ def test_export_pages_big_sections(studio, monkeypatch):
     manifest = json.loads(zf.read("manifest.json"))
     assert manifest["counts"]["images"] == 5 and manifest["counts"]["voices"] == 1
     assert {"images/0001.json", "images/0003.json"} <= {e["path"] for e in manifest["entries"]}
+
+
+def test_takeout_has_scans_and_their_page_files(studio):
+    """Документ распознавания — JSON со страницами, исходник и картинки страниц — файлами; чужое — нет."""
+    bob = make_user(studio, "bob"); uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    ids = {}
+    for who, tag in ((bob, "theirs"), (uid, "mine")):
+        src, page = (save(who, DATA + role.encode(), mime, f"{tag}-{role}") for role, mime in
+                     (("pdf", "application/pdf"), ("page", "image/png")))
+        put("INSERT INTO scans(id, user_id, connection_id, model, name, source_media_id, origin, pages, done_pages,"
+            " state, detail, text, created, finished) VALUES (?, ?, 1, 'hunyuan-ocr', ?, ?, 'section', 2, 2, 'done',"
+            " 'готово', ?, ?, ?)", f"{tag}scan", who, f"{tag}.pdf", src, f"{tag} text", T0, T0 + 7)
+        put("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text, detail) VALUES (?, ?, 1, ?, 'done', ?,"
+            " NULL)", f"{tag}scan", who, page, f"{tag} page text")
+        put("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text, detail) VALUES (?, ?, 2, NULL,"
+            " 'failed', NULL, 'на странице не найден текст')", f"{tag}scan", who)
+        ids[tag] = (src, page)
+    est, z = download(studio, ["ocr"])
+    zf = unzip(z)
+    src, page = ids["mine"]
+    assert est["files"] == 2 and sorted(n for n in zf.namelist() if n.startswith("files/")) == sorted(
+        [f"files/{src}.pdf", f"files/{page}.png"])
+    assert zf.read(f"files/{page}.png") == DATA + b"page"
+    assert json.loads(zf.read("scans/0001.json")) == [{
+        "id": "minescan", "model": "hunyuan-ocr", "name": "mine.pdf", "origin": "section", "state": "done",
+        "detail": "готово", "created": T0, "finished": T0 + 7, "file": f"files/{src}.pdf",
+        "pages": [{"n": 1, "state": "done", "text": "mine page text", "detail": None, "file": f"files/{page}.png"},
+                  {"n": 2, "state": "failed", "text": None, "detail": "на странице не найден текст", "file": None}]}]
+    assert json.loads(zf.read("manifest.json"))["counts"]["scans"] == 1
+    assert "scans/" in zf.read("README.txt").decode("utf-8")
+    assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
 
 
 def test_export_of_an_empty_section_is_one_empty_page(studio):

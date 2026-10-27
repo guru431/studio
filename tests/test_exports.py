@@ -98,6 +98,40 @@ def test_control_characters_break_neither_srt_nor_docx():
     assert [t.text for t in root.iter(f"{W}t")] == ["Звонок ", "Иван  · 00:00", "Раз.  Два три ."]
 
 
+def test_md_plain_turns_tables_into_tab_rows_and_drops_the_marks():
+    md = ("## Итоги\n\n**Важно:** `код` и __подчёркнуто__\n\n<table>\n<tr>\n<th>Товар</th>\n<th>Цена</th>\n</tr>\n"
+          "<tr><td>Хлеб &amp; соль</td><td colspan=\"2\"> 50 </td></tr>\n</table>\n\nКонец<br>строки")
+    assert exports.md_plain(md) == "Итоги\n\nВажно: код и подчёркнуто\n\nТовар\tЦена\nХлеб & соль\t50\n\nКонец\nстроки"
+
+
+PAGES = [{"n": 1, "state": "done", "text": "# Заголовок\n\nТекст", "detail": None},
+         {"n": 2, "state": "layer", "text": "Слой", "detail": None},
+         {"n": 3, "state": "failed", "text": None, "detail": "на странице не найден текст"},
+         {"n": 4, "state": "blank", "text": None, "detail": None}]
+
+
+def test_pages_txt_and_md_mark_every_page():
+    assert exports.pages_txt(PAGES) == ("Страница 1\n\nЗаголовок\n\nТекст\n\nСтраница 2\n\nСлой\n\n"
+                                        "Страница 3\n\n[не распознана: на странице не найден текст]\n\n"
+                                        "Страница 4\n\n[пустая страница]\n")
+    assert exports.pages_md(PAGES) == ("## Страница 1\n\n# Заголовок\n\nТекст\n\n## Страница 2\n\nСлой\n\n"
+                                       "## Страница 3\n\n[не распознана: на странице не найден текст]\n\n"
+                                       "## Страница 4\n\n[пустая страница]\n")
+    assert exports.TYPES["md"] == "text/markdown; charset=utf-8"
+
+
+def test_pages_docx_is_a_valid_word_file():
+    pages = PAGES + [{"n": 5, "state": "done", "text": "<table><tr><td>a&lt;b</td><td>c\x0bd</td></tr></table>",
+                      "detail": None}]
+    with zipfile.ZipFile(io.BytesIO(exports.pages_docx(pages, "Скан & Co"))) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    paragraphs = [[(t.tag, t.text) for t in p.iter() if t.tag in (f"{W}t", f"{W}tab")] for p in root.iter(f"{W}p")]
+    assert paragraphs[:4] == [[(f"{W}t", "Скан & Co")], [(f"{W}t", "Страница 1")], [(f"{W}t", "Заголовок")],
+                              [(f"{W}t", "Текст")]]
+    assert [(f"{W}t", "[пустая страница]")] in paragraphs
+    assert paragraphs[-1] == [(f"{W}t", "a<b"), (f"{W}tab", None), (f"{W}t", "c d")]
+
+
 def test_export_route_names_the_file_after_the_recording(studio, fake_audio):
     add_gateway(studio)
     tid = upload(studio).json()["id"]

@@ -22,6 +22,8 @@
    (`attachment_text`) или пометка отказа (`attachment_marker`).
 7. Журнал — только id, коды и числа: имя файла, текст страниц и картинки туда не пишутся. База — только
    с цикла событий; рендер, чтение и запись файлов — в потоке.
+8. API раздела — `router` (`/api/ocr`, вторая половина файла): загрузка, лента, документ со страницами,
+   отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md».
 """
 import asyncio
 import base64
@@ -31,11 +33,17 @@ import uuid
 from dataclasses import dataclass
 
 import httpx
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 
+import chat
 import clock
+import db
+import documents
+import exports
 import media
 import ocr_render
+import sections
 import speech
 import state
 import upstream
@@ -430,3 +438,194 @@ async def stop() -> None:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ---- API раздела (спека 6.4, 6.6) --------------------------------------------------
+# Загрузка — multipart, части `file`: один PDF (все страницы ждут распознавания, слой не читается) или
+# 1…PAGES_MAX фото (каждое — как есть, `media_id` своей страницы). Отказы — до записи на шару. Ответы —
+# «item» (`_out`), у GET одного документа `pages` — список страниц, а не их число.
+
+router = APIRouter(prefix="/api/ocr")
+#: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску)
+COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, origin, attachment_id, pages, done_pages,"
+           " state, detail, created, finished")
+FORMAT = "нужен один PDF или фото PNG, JPEG, WebP"
+TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — разделите документ"
+PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+
+
+def _row(user_id: int, sid: str):
+    row = state.DB.execute(f"SELECT {COLUMNS} FROM scans WHERE id = ? AND user_id = ?", (sid, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
+    return row
+
+
+def _out(row) -> dict:
+    job = JOBS.get(row["id"])
+    return {"id": row["id"], "name": row["name"], "state": row["state"],
+            "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
+            "model": row["model"], "pages": row["pages"], "done_pages": row["done_pages"], "origin": row["origin"],
+            "created": row["created"], "finished": row["finished"]}
+
+
+def _page_list(sid: str) -> list[dict]:
+    return [dict(r) for r in state.DB.execute(
+        "SELECT n, state, text, detail, media_id FROM scan_pages WHERE scan_id = ? ORDER BY n", (sid,))]
+
+
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+def _inspect(files: list[tuple[str, bytes]]) -> tuple[int, list[str]]:
+    """Состав загрузки (в потоке): один PDF — (страниц, []), только фото — (фото, их форматы Pillow).
+    Иначе — ScanError словами."""
+    if any(data[:5] == b"%PDF-" or name.lower().endswith(".pdf") for name, data in files):
+        if len(files) != 1:
+            raise ocr_render.ScanError(FORMAT, 415)
+        pages = ocr_render.pdf_page_count(files[0][1])
+        if pages > ocr_render.PAGES_MAX:
+            raise ocr_render.ScanError(TOO_MANY_PAGES)
+        if pages == 0:
+            raise ocr_render.ScanError(ocr_render.BROKEN)
+        return pages, []
+    formats = []
+    for _, data in files:
+        try:
+            formats.append(ocr_render.check_photo(data))
+        except ocr_render.ScanError as e:
+            if e.status == 415:
+                raise ocr_render.ScanError(FORMAT, 415) from None
+            raise
+    return len(files), formats
+
+
+async def _drop(user_id: int, media_ids: list[str]) -> None:
+    for media_id in media_ids:
+        await media.delete_async(user_id, media_id)
+
+
+def _int_header(request: Request, key: str) -> "int | None":
+    value = request.headers.get(key, "").strip()
+    return int(value) if value.isdigit() else None
+
+
+@router.post("", status_code=202)
+async def upload(request: Request):
+    uid = request.state.user.id
+    conn, model = sections.resolve(uid, "ocr", _int_header(request, "x-studio-connection"),
+                                   request.headers.get("x-studio-model") or None)
+    try:
+        files = await documents.read_uploads(request, ocr_render.PAGES_MAX)
+        count, formats = await asyncio.to_thread(_inspect, files)
+    except documents.DocumentError as e:
+        raise HTTPException(e.status, {"code": "upload", "message": str(e)}) from None
+    except ocr_render.ScanError as e:
+        raise HTTPException(e.status, {"code": "format" if e.status == 415 else "scan", "message": str(e)}) from None
+    saved: list[str] = []
+    try:
+        if formats:
+            for (name, data), fmt in zip(files, formats):
+                saved.append(await media.save_async(uid, data, PHOTO_MIME[fmt], name))
+        else:
+            saved.append(await media.save_async(uid, files[0][1], "application/pdf", files[0][0]))
+    except media.StorageError as e:
+        await _drop(uid, saved)
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    if not all(media.alive(uid, m) for m in saved):          # история стёрта, пока шла запись
+        await _drop(uid, saved)
+        raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
+    if formats:
+        pages = [{"n": n, "state": "waiting", "media_id": m, "text": None} for n, m in enumerate(saved, 1)]
+    else:
+        pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} for n in range(1, count + 1)]
+    try:
+        sid = create(uid, conn, model, files[0][0], origin="section",
+                     source_media_id=None if formats else saved[0], pages=pages)
+    except HTTPException:                                    # очередь полна
+        await _drop(uid, saved)
+        raise
+    kick(uid)
+    log.info("ocr %s: принят, %d стр.", sid[:8], len(pages))
+    return _out(_row(uid, sid))
+
+
+@router.get("")
+async def list_scans(request: Request, before: "float | None" = None,
+                     before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
+    rows = db.page(state.DB, "scans", request.state.user.id, before, before_id, limit, COLUMNS)
+    return {"items": [_out(r) for r in rows]}
+
+
+@router.get("/{sid}")
+async def get_scan(sid: str, request: Request):
+    """Документ и его страницы: `pages` — список `{n, state, text, detail, media_id}`."""
+    row = _row(request.state.user.id, sid)
+    return _out(row) | {"pages": _page_list(sid)}
+
+
+@router.post("/{sid}/cancel")
+async def cancel(sid: str, request: Request):
+    return {"state": await request_cancel(request.state.user.id, sid)}
+
+
+@router.delete("/{sid}", status_code=204)
+async def delete(sid: str, request: Request):
+    """Строка (страницы — каскадом), затем файлы, на которые больше ничто не ссылается."""
+    uid = request.state.user.id
+    row = _row(uid, sid)
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
+    files = {row["source_media_id"], *(p["media_id"] for p in _page_list(sid))} - {None}
+    state.DB.execute("DELETE FROM scans WHERE id = ?", (sid,))
+    for media_id in files:
+        if not media.referenced(uid, media_id):
+            await media.delete_async(uid, media_id)
+    log.info("ocr %s: удалён", sid[:8])
+    return Response(status_code=204)
+
+
+def _done(user_id: int, sid: str):
+    row = _row(user_id, sid)
+    if row["state"] != "done":
+        raise HTTPException(409, {"code": "running", "message": "документ ещё не распознан"})
+    return row
+
+
+@router.get("/{sid}/export")
+async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
+    """Готовый документ файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
+    row = _done(request.state.user.id, sid)
+    pages, stem = _page_list(sid), _stem(row["name"])
+    if format == "docx":
+        body = exports.pages_docx(pages, stem)
+    else:
+        body = (exports.pages_txt(pages) if format == "txt" else exports.pages_md(pages)).encode("utf-8")
+    return Response(body, media_type=exports.TYPES[format],
+                    headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})
+
+
+@router.post("/{sid}/attachments", status_code=201)
+async def to_chat(sid: str, request: Request):
+    """Распознанный текст — неотправленным документом чата «<имя>.md» (свой файл): дальше это обычное
+    вложение. Подтверждения для внешней модели нет (спека 6.4): документ — свой."""
+    uid = request.state.user.id
+    row = _done(uid, sid)
+    text = exports.pages_md(_page_list(sid))
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise HTTPException(413, {"code": "too_big", "message": (
+            f"текст длиннее {documents.TEXT_MAX_CHARS:,} знаков — в чат его не передать".replace(",", " "))})
+    name = f"{_stem(row['name'])}.md"
+    try:
+        media_id = await media.save_async(uid, text.encode("utf-8"), "text/markdown", name)
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    att_id = uuid.uuid4().hex
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
+                     " VALUES (?, ?, NULL, 'document', ?, ?, ?, ?, ?)",
+                     (att_id, uid, name, media_id, text, len(text), clock.NOW()))
+    log.info("вложение %s: из распознавания %s, %d знаков", att_id[:8], sid[:8], len(text))
+    return {"id": att_id, "kind": "document", "name": name, "chars": len(text), "media_id": media_id, "text": text,
+            "tokens": chat.estimate_tokens([{"role": "user", "content": text}])}

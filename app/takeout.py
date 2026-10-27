@@ -38,7 +38,7 @@ import db
 import media
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices")
+SECTIONS = ("chat", "photo", "video", "transcribe", "ocr", "speech", "voices")
 #: большая выгрузка качается дольше 10 минут архива выделенного
 EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2
@@ -56,9 +56,12 @@ REFS = {
     "photo": ("images", ("media_id", "source_media_id", "mask_media_id"), ""),
     "video": ("videos", ("media_id", "source_media_id"), ""),
     "transcribe": ("transcripts", ("source_media_id", "result_media_id"), ""),
+    "ocr": ("scans", ("source_media_id",), ""),
     "speech": ("speeches", ("media_id",), ""),
     "voices": ("voices", ("media_id",), ""),
 }
+#: вторые таблицы раздела с файлами — так же, со своим user_id (картинки и фото страниц распознавания)
+MORE_REFS = {"ocr": (("scan_pages", ("media_id",), ""),)}
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
 BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
 
@@ -74,6 +77,8 @@ README = """Выгрузка истории студии
   цепочка промптов, файлы итога, исходника, маски.
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
   образцы голосов, так же страницами. Файлы — ссылками «files/…».
+- scans/ — распознанные документы, так же страницами: имя, состояние, страницы с текстом (Markdown) и
+  состоянием; исходный PDF и картинки страниц — ссылками «files/…».
 - files/<id>.<расширение> — сами файлы (без миниатюр).
 - manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
   (files) и каждой записи JSON и этого описания (entries), id файлов, которых на хранилище уже не
@@ -103,7 +108,8 @@ def _maybe_json(text):
 def _media_rows(user_id: int, sections: tuple[str, ...]) -> list:
     """Свои строки media, на которые ссылаются записи выбранных разделов, — по времени."""
     parts = [f"SELECT {col} FROM {table} WHERE user_id = ?{extra}"
-             for table, cols, extra in (REFS[s] for s in sections) for col in cols]
+             for table, cols, extra in (r for s in sections for r in (REFS[s], *MORE_REFS.get(s, ())))
+             for col in cols]
     if not parts:
         return []
     return state.DB.execute(
@@ -201,6 +207,20 @@ def _transcripts(user_id: int, rows: list, files: dict) -> list:
             for r in rows]
 
 
+def _scans(user_id: int, rows: list, files: dict) -> list:
+    """Документы распознавания со страницами (страницы — одним запросом на страницу выгрузки)."""
+    pages: dict[str, list] = {}
+    if rows:
+        marks = ", ".join("?" * len(rows))
+        for p in state.DB.execute(f"SELECT scan_id, n, state, text, detail, media_id FROM scan_pages WHERE user_id = ?"
+                                  f" AND scan_id IN ({marks}) ORDER BY scan_id, n", (user_id, *(r["id"] for r in rows))):
+            pages.setdefault(p["scan_id"], []).append(_pick(p, "n", "state", "text", "detail")
+                                                      | {"file": files.get(p["media_id"])})
+    return [_pick(r, "id", "model", "name", "origin", "state", "detail", "created", "finished")
+            | {"file": files.get(r["source_media_id"]), "pages": pages.get(r["id"], [])}
+            for r in rows]
+
+
 def _speeches(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "model", "voice", "text", "duration", "state", "detail", "created", "finished")
             | {"file": files.get(r["media_id"])} for r in rows]
@@ -213,7 +233,7 @@ def _voices(user_id: int, rows: list, files: dict) -> list:
 
 #: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
 TABLES = {"photo": ("images", _images), "video": ("videos", _videos), "transcribe": ("transcripts", _transcripts),
-          "speech": ("speeches", _speeches), "voices": ("voices", _voices)}
+          "ocr": ("scans", _scans), "speech": ("speeches", _speeches), "voices": ("voices", _voices)}
 
 
 # ---- запись: JSON и суммы — в потоке ------------------------------------------------

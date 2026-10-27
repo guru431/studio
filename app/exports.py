@@ -7,7 +7,12 @@ docx — минимальный OOXML без новых зависимостей
 абзац текста. Текст экранируется (xml.sax.saxutils): в расшифровке бывают `<`, `>` и `&`.
 Управляющих знаков (CONTROL) в SRT и DOCX нет: пустая строка внутри субтитра для плеера — его
 конец, а `\\x0b` и прочие C0 делают XML DOCX недействительным.
-Сегмент — словарь `{"speaker", "start", "end", "text"}` (итог transcripts.py)."""
+Сегмент — словарь `{"speaker", "start", "end", "text"}` (итог transcripts.py).
+
+Распознанный документ (ocr.py) — `pages_txt`, `pages_md`, `pages_docx`: страница за страницей с
+заголовком «Страница N»; в txt и docx Markdown модели — простым текстом (`md_plain`: таблицы — строками
+с табуляцией, в docx — `<w:tab/>`), в md — как есть."""
+import html
 import io
 import math
 import re
@@ -19,7 +24,8 @@ SRT_MAX_CHARS = 84               # две строки по 42
 SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")    # Unicode Cc
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-TYPES = {"txt": "text/plain; charset=utf-8", "srt": "application/x-subrip; charset=utf-8", "docx": DOCX_MIME}
+TYPES = {"txt": "text/plain; charset=utf-8", "srt": "application/x-subrip; charset=utf-8", "docx": DOCX_MIME,
+         "md": "text/markdown; charset=utf-8"}
 
 CONTENT_TYPES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -136,6 +142,56 @@ def docx(segments: list[dict], title: str) -> bytes:
     body = [_paragraph(title, bold=True, size=32)]
     for s in segments:
         body += [_paragraph(_head(s), bold=True), _paragraph(s["text"])]
+    return _package(body)
+
+
+# ---- распознавание (спека 2026-10-27-studio-ocr-design, 6.4): страница — {"n", "state", "text", "detail"} ----
+
+def md_plain(md: str) -> str:
+    """Markdown модели — простым текстом: строка таблицы HTML — ячейки через табуляцию, прочие теги
+    убраны (`<br>` — перенос), сущности раскрыты; знаки заголовков, `**`, `__` и `` ` `` сняты."""
+    text = re.sub(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b[^>]*>\s*", "", md, flags=re.I)
+    text = re.sub(r"\s*</t[dh]\s*>\s*", "\t", text, flags=re.I)
+    text = re.sub(r"\t*</tr\s*>\s*", "\n", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    text = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "", text, flags=re.M)
+    text = text.replace("**", "").replace("__", "").replace("`", "")
+    return re.sub(r"\n{3,}", "\n\n", text).strip("\n ")       # табуляция — пустая первая ячейка, не пробел
+
+
+def _page_body(page: dict, convert) -> str:
+    if page["state"] in ("done", "layer"):
+        return convert(page["text"] or "")
+    if page["state"] == "blank":
+        return "[пустая страница]"
+    return f"[не распознана: {page['detail']}]" if page["detail"] else "[не распознана]"
+
+
+def pages_txt(pages: list[dict]) -> str:
+    return "\n\n".join(f"Страница {p['n']}\n\n{_page_body(p, md_plain)}" for p in pages) + "\n"
+
+
+def pages_md(pages: list[dict]) -> str:
+    return "\n\n".join(f"## Страница {p['n']}\n\n{_page_body(p, str)}" for p in pages) + "\n"
+
+
+def _cells(line: str) -> str:
+    """Абзац DOCX: ячейки строки таблицы — через `<w:tab/>`."""
+    runs = "<w:tab/>".join(f'<w:t xml:space="preserve">{escape(CONTROL.sub(" ", cell))}</w:t>'
+                           for cell in line.split("\t"))
+    return f"<w:p><w:r>{runs}</w:r></w:p>"
+
+
+def pages_docx(pages: list[dict], title: str) -> bytes:
+    body = [_paragraph(title, bold=True, size=32)]
+    for p in pages:
+        body.append(_paragraph(f"Страница {p['n']}", bold=True))
+        body += [_cells(line) for line in _page_body(p, md_plain).split("\n") if line.strip()]
+    return _package(body)
+
+
+def _package(body: list[str]) -> bytes:
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                 f'<w:body>{"".join(body)}</w:body></w:document>')

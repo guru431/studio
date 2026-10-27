@@ -87,8 +87,9 @@ def render_page(data: bytes, index: int) -> bytes:
 
 # ---- фото --------------------------------------------------------------------
 
-def check_photo(raw: bytes) -> None:
-    """Только заголовок: PNG, JPEG или WebP (иначе 415) не больше VIDEO_PIXELS (иначе 413)."""
+def check_photo(raw: bytes) -> str:
+    """Только заголовок: PNG, JPEG или WebP (иначе 415) не больше VIDEO_PIXELS (иначе 413). Итог —
+    формат Pillow (PHOTO_FORMATS)."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -102,6 +103,7 @@ def check_photo(raw: bytes) -> None:
         raise ScanError(NOT_PHOTO, 415)
     if pixels > image_upload.VIDEO_PIXELS:
         raise ScanError(PHOTO_TOO_BIG, 413)
+    return fmt
 
 
 def photo_png(raw: bytes) -> bytes:

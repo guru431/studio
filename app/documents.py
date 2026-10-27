@@ -51,7 +51,9 @@ def clean_name(filename: str) -> str:
     return name[:NAME_MAX] or "file"
 
 
-def _parse(raw: bytes, content_type: str) -> tuple[str, bytes]:
+def _parts(raw: bytes, content_type: str, max_files: int) -> list[tuple[str, bytes]]:
+    """Части `file` по порядку: от 1 до max_files, каждая непустая, вместе — не больше DOC_MAX."""
+    wrong = "нужен ровно один файл в поле file" if max_files == 1 else "нужны файлы в поле file"
     if not content_type.lower().startswith("multipart/form-data;"):
         raise DocumentError("ожидается multipart/form-data с файлом в поле file", 400)
     try:
@@ -62,27 +64,48 @@ def _parse(raw: bytes, content_type: str) -> tuple[str, bytes]:
     if not message.is_multipart() or message.defects:
         raise DocumentError("некорректный multipart", 400)
     parts = list(message.iter_parts())
-    if len(parts) != 1:
-        raise DocumentError("нужен ровно один файл в поле file", 400)
-    part = parts[0]
-    filename = part.get_filename()
-    data = part.get_payload(decode=True)
-    if (part.defects or part.get_param("name", header="content-disposition") != "file"
-            or not filename or not isinstance(data, bytes)):
-        raise DocumentError("нужен ровно один файл в поле file", 400)
-    if not data or len(data) > DOC_MAX:
-        raise DocumentError(f"файл должен быть непустым и не больше {DOC_MAX >> 20} МиБ", 413)
-    return clean_name(filename), data
+    if not parts or (max_files == 1 and len(parts) != 1):
+        raise DocumentError(wrong, 400)
+    if len(parts) > max_files:
+        raise DocumentError(f"больше {max_files} файлов за раз", 422)
+    out = []
+    for part in parts:
+        filename = part.get_filename()
+        data = part.get_payload(decode=True)
+        if (part.defects or part.get_param("name", header="content-disposition") != "file"
+                or not filename or not isinstance(data, bytes)):
+            raise DocumentError(wrong, 400)
+        if not data or len(data) > DOC_MAX:
+            raise DocumentError(f"файл должен быть непустым и не больше {DOC_MAX >> 20} МиБ", 413)
+        out.append((clean_name(filename), data))
+    if sum(len(data) for _, data in out) > DOC_MAX:
+        raise DocumentError(f"файлы вместе больше {DOC_MAX >> 20} МиБ", 413)
+    return out
 
 
-async def read_upload(request) -> tuple[str, bytes]:
-    """(имя файла, байты) единственного поля `file`; тело читается потоком до BODY_MAX."""
+def _parse(raw: bytes, content_type: str) -> tuple[str, bytes]:
+    return _parts(raw, content_type, 1)[0]
+
+
+async def _body(request) -> bytes:
+    """Тело потоком до BODY_MAX."""
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)
         if len(raw) > BODY_MAX:
             raise DocumentError(f"файл больше {DOC_MAX >> 20} МиБ", 413)
-    return await asyncio.to_thread(_parse, bytes(raw), request.headers.get("content-type", ""))
+    return bytes(raw)
+
+
+async def read_upload(request) -> tuple[str, bytes]:
+    """(имя файла, байты) единственного поля `file`; тело читается потоком до BODY_MAX."""
+    return await asyncio.to_thread(_parse, await _body(request), request.headers.get("content-type", ""))
+
+
+async def read_uploads(request, max_files: int) -> list[tuple[str, bytes]]:
+    """(имя, байты) всех частей `file` по порядку: от 1 до max_files, вместе не больше DOC_MAX, тело —
+    до BODY_MAX; отказы — DocumentError."""
+    return await asyncio.to_thread(_parts, await _body(request), request.headers.get("content-type", ""), max_files)
 
 
 # ---- текст -------------------------------------------------------------------
