@@ -50,7 +50,13 @@
  * THINK_NOTE (подсказка «нет ключа» важнее). Событие SSE `think` — модель думает: над ответом «Думает… N с»
  * (счётчик страницы — сумма отрезков от `think` до текста или инструмента; крутится что-то одно: инструмент на
  * плашке или рассуждение) и текст рассуждения, если сервер его шлёт; готовый ответ с `reasoning`
- * — свёрнутое «💭 Рассуждала N с» (`reasoning_sec`). Рассуждение — только текстом, без разметки. */
+ * — свёрнутое «💭 Рассуждала N с» (`reasoning_sec`). Рассуждение — только текстом, без разметки.
+ *
+ * Сканы (спека 2026-10-27-studio-ocr, 6.5): ход через сервер ждёт распознавания там — событие SSE `ocr {page, pages}`
+ * (своя вкладка) или `ocr` идущего ответа (вкладка, что его не читает) дают плашку «📄 Распознаю скан · стр. N из M»
+ * до первого текста модели. Прямое подключение — 409 `not_ready`: под полем NOT_READY, страница опрашивает документы
+ * сканов поля ввода и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки, POST /api/ocr/<id>/attachments,
+ * модель — умолчание раздела, без окна внешней модели. */
 import { api, me } from './api.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
@@ -74,6 +80,14 @@ const ASKS = {                   // вопрос в поле диалога из
   summary: 'Составь краткие итоги этой записи: о чём говорили и к чему пришли.',
   tasks: 'Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы.',
 };
+const SCAN_ASKS = {              // вопрос в поле диалога из «Распознавания»
+  discuss: '',
+  summary: 'Кратко перескажи этот документ: о чём он и что в нём главное.',
+  translate: 'Переведи этот документ на русский',
+};
+const NOT_READY_MS = 3000;       // прямое подключение: опрос скана, затем ход заново
+const SCAN_RUNNING = ['queued', 'working', 'cancelling'];   // как ocr.RUNNING
+const NOT_READY = 'скан ещё распознаётся — отправлю, когда будет готов';
 const EXTERNAL_NOTE = 'Запись уйдёт во внешний сервис — выберите модель';
 const WEB_HINT = 'Задайте ключ Exa в Настройках → Прочее → Интернет';
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
@@ -162,8 +176,14 @@ function append(job, text) {
   thinkEnd(job);
   job.first = true;
   job.tool = null;                 // модель снова пишет — инструмент кончился
+  job.scan = null;                 // и скан распознан
   job.message.content += text;
   notify(job, false);
+}
+
+/* плашка скана: сервер шлёт `page` — страниц с итогом, а показываем ту, что распознаётся сейчас */
+function scanLine({ page, pages }) {
+  return `📄 Распознаю скан · стр. ${Math.min(page + 1, pages)} из ${pages}`;
 }
 
 /* строка хода инструмента: «Ищу: запрос»; подпись YouTube сервер начинает словом «субтитры» */
@@ -186,14 +206,19 @@ async function readServer(job, response) {
     for await (const { event, data } of readSSE(response)) {
       if (event === 'turn') adoptIds(job, data);
       else if (event === 'delta' && data && typeof data.text === 'string') append(job, data.text);
-      else if (event === 'tool' && data && typeof data.kind === 'string') {
+      else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
+        job.scan = data;                           // ответ ждёт распознавания скана — плашка до первого текста
+        notify(job, false);
+      } else if (event === 'tool' && data && typeof data.kind === 'string') {
         thinkEnd(job);                             // крутится одно: инструмент, а не «Думает…»
+        job.scan = null;
         job.tool = data;
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
         (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
         notify(job, false);
       } else if (event === 'think' && data) {      // {text} — ход мысли виден, {} — модель только думает
         job.tool = null;                           // модель снова думает — инструмент кончился
+        job.scan = null;
         if (!job.thinking) job.thinkFrom = Date.now();
         job.thinking = true;
         if (typeof data.text === 'string') job.message.reasoning = (job.message.reasoning || '') + data.text;
@@ -404,6 +429,7 @@ function build(view, ctx) {
   let stick = true;
   let opened = 0;              // медленный ответ прежнего диалога не перебьёт новый
   let poll = null;
+  let notReady = null;         // повтор хода прямого подключения, пока скан распознаётся (409 `not_ready`)
   let paintTimer = null;
   let lastPaint = 0;
   let menuFor = null;          // пункт списка с открытым меню
@@ -774,6 +800,26 @@ function build(view, ctx) {
     paintAtts();
   }
 
+  /* из «Распознавания» (#/chat?ocr=<id>&ask=…): как из расшифровки, но модель — умолчание раздела и без окна
+     внешней модели (спека OCR 6.4: документ свой) */
+  async function fromScan(sid, ask) {
+    history.replaceState(null, '', '#/chat');      // перезагрузка не сделает второе вложение
+    open(null);
+    if (ctx.hint) return;
+    notice.textContent = '';
+    input.value = SCAN_ASKS[ask] || '';
+    autosize();
+    let meta;
+    try {
+      meta = await api('POST', `/api/ocr/${encodeURIComponent(sid)}/attachments`);
+    } catch (err) {
+      notice.textContent = words(err);
+      return;
+    }
+    atts.push({ file: null, meta, error: '', busy: false, scan: sid });
+    paintAtts();
+  }
+
   function showText(a) {
     const tokens = (a.meta.tokens / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
     openDialog(root, { id: 'att-text-dialog', title: a.meta.name, cancelText: 'Закрыть',
@@ -834,7 +880,8 @@ function build(view, ctx) {
 
   function attLabel(a) {
     return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'image' : 'doc'), el('b', {}, a.name),
-      a.kind === 'document' ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
+      // скан этой вкладки (`ocr` ответа загрузки) знаков ещё не знает — их скажет перечитанный диалог
+      a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
         href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null);
   }
@@ -869,13 +916,15 @@ function build(view, ctx) {
   function paintBadge(p, m, job) {
     const tools = Array.isArray(m.tools) && m.tools.length ? m.tools : null;
     const steps = tools || m.calls || [];
+    // скан: своя вкладка — событие `ocr`, ответ, который читает не она, — `ocr` сообщения с сервера
+    const scan = m.status === 'streaming' ? (job ? job.scan : m.ocr) : null;
     const busy = m.status === 'streaming' && job && job.tool;
-    p.badge.hidden = !busy && !steps.length;
+    p.badge.hidden = !busy && !scan && !steps.length;
     if (p.badge.hidden) return;
-    if (busy) {
+    if (busy || scan) {
       p.badge.className = 'web-badge busy';
-      p.badge.replaceChildren(el('span', { class: 'spin', 'aria-hidden': 'true' }),
-        `${job.tool.kind === 'youtube' ? '▶' : '🌐'} ${toolLine(job.tool)}`);
+      p.badge.replaceChildren(el('span', { class: 'spin', 'aria-hidden': 'true' }), busy
+        ? `${job.tool.kind === 'youtube' ? '▶' : '🌐'} ${toolLine(job.tool)}` : scanLine(scan));
     } else {
       p.badge.className = `web-badge${tools ? (tools.some((s) => s.error) ? ' bad' : ' ok') : ''}`;
       p.badge.replaceChildren(badgeText(steps));
@@ -957,10 +1006,10 @@ function build(view, ctx) {
     let text = '';
     let kind = '';
     if (m.status === 'streaming') {
-      // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена
-      if (job) text = job.tool || job.first || job.thinkFrom ? '' : `загружаю модель · ${elapsed(job.started)}`;
+      // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке
+      if (job) text = job.tool || job.scan || job.first || job.thinkFrom ? '' : `загружаю модель · ${elapsed(job.started)}`;
       else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
-      else text = 'ответ ещё идёт…';
+      else text = m.ocr ? '' : 'ответ ещё идёт…';
     } else if (m.status === 'stopped') text = 'остановлено';
     else if (m.status === 'error') {
       text = m.error || (m.content ? 'ответ оборвался' : 'ответ не получен');
@@ -1057,6 +1106,7 @@ function build(view, ctx) {
     draftWeb = false;
     draftThink = false;
     clearTimeout(poll);
+    stopWaiting();                                  // ушли из диалога — скан больше не ждём
     notice.textContent = '';
     let listed = false;
     for (const link of list.querySelectorAll('.chat-link')) {
@@ -1108,12 +1158,12 @@ function build(view, ctx) {
         if (a.meta) api('DELETE', `/api/attachments/${a.meta.id}`).catch(() => {});
       });
       let label = el('span', { class: 'att-name' }, name);
-      if (a.transcript) {                            // весь передаваемый текст — по нажатию
+      if (a.transcript || a.scan) {                  // весь передаваемый текст — по нажатию
         label = el('button', { type: 'button', class: 'att-name att-open', title: 'Показать текст' }, name);
         label.addEventListener('click', () => showText(a));
       }
       return el('span', { class: `att-chip${a.error ? ' bad' : ''}` }, icon(image ? 'image' : 'doc'), label,
-        a.transcript ? el('span', { class: 'muted att-state' }, `${a.meta.chars.toLocaleString('ru-RU')} зн.`) : null,
+        a.transcript || a.scan ? el('span', { class: 'muted att-state' }, `${a.meta.chars.toLocaleString('ru-RU')} зн.`) : null,
         a.busy ? el('span', { class: 'muted att-state' }, 'загружаю…') : null,
         a.error ? el('span', { class: 'error att-state' }, a.error) : null,
         sending ? null : remove);
@@ -1145,7 +1195,38 @@ function build(view, ctx) {
     }
   }
 
+  /* 409 `not_ready`: раз в NOT_READY_MS — документы сканов поля ввода (`ocr` ответа загрузки); пока какой-то
+     идёт — ждём, затем ход заново (ход с неготовым сканом из истории диалога — тем же повтором). Смена диалога,
+     уход из раздела и «Отправить» человека ожидание снимают */
+  function waitScans(args) {
+    const mine = { timer: 0 };
+    notReady = mine;
+    const step = async () => {
+      const ids = atts.map((a) => a.meta && a.meta.ocr && a.meta.ocr.id).filter(Boolean);
+      try {
+        for (const id of ids) {
+          const { state } = await api('GET', `/api/ocr/${encodeURIComponent(id)}`);
+          if (notReady !== mine) return;
+          if (SCAN_RUNNING.includes(state)) {
+            mine.timer = setTimeout(step, NOT_READY_MS);
+            return;
+          }
+        }
+      } catch {
+        // документа нет или сеть — решит ход
+      }
+      if (notReady === mine) submit(...args);
+    };
+    mine.timer = setTimeout(step, NOT_READY_MS);
+  }
+
+  function stopWaiting() {
+    if (notReady) clearTimeout(notReady.timer);
+    notReady = null;
+  }
+
   async function submit(regenerate, externalOk = false, webOk = false) {
+    stopWaiting();                                 // ждали скан — ход идёт сейчас
     const text = input.value;
     if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
     if (!regenerate && blocked()) return;
@@ -1167,7 +1248,10 @@ function build(view, ctx) {
       // вкладка не знала (другая вкладка сменила модель, включила «Интернет», ключ Exa появился)
       if (err.code === 'external') askExternal(regenerate, webOk);
       else if (err.code === 'external_web') askWeb(regenerate, externalOk);
-      else if (!noKey(err)) notice.textContent = words(err);
+      else if (err.code === 'not_ready') {        // прямое подключение: скан ждёт страница
+        notice.textContent = NOT_READY;
+        waitScans([regenerate, externalOk, webOk]);
+      } else if (!noKey(err)) notice.textContent = words(err);
     } finally {
       sending = false;
       syncBusy();
@@ -1343,9 +1427,11 @@ function build(view, ctx) {
   return {
     open,
     refresh,
-    query(query) {                                 // #/chat?transcript=<id>&ask=…
+    query(query) {                                 // #/chat?transcript=<id>&ask=… или ?ocr=<id>&ask=…
       const tid = query && query.get('transcript');
+      const sid = query && query.get('ocr');
       if (tid) fromTranscript(tid, query.get('ask') || 'discuss');
+      else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
       document.removeEventListener('click', onDocClick);
@@ -1353,6 +1439,7 @@ function build(view, ctx) {
       document.removeEventListener('studio-me', paintWeb);
       clearInterval(tick);
       clearTimeout(poll);
+      stopWaiting();
       clearTimeout(paintTimer);
     },
   };
