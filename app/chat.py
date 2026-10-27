@@ -310,8 +310,14 @@ def _message_out(row, atts: list) -> dict:
 
 
 def _attachment_out(a) -> dict:
-    """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»)."""
+    """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»);
+    документ, чей скан ещё распознаётся, — `ocr {id}` (знаков у него пока нет; страница опрашивает документ).
+    Текст есть — скан кончился: запроса нет."""
     out = {"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"], "chars": a["chars"]}
+    if a["kind"] == "document" and a["text"] is None:
+        scans = ocr.pending(a["user_id"], [a["id"]])
+        if scans:
+            out["ocr"] = {"id": scans[0]}
     if a["source_transcript_id"] is not None:
         exists = state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
                                   (a["source_transcript_id"], a["user_id"])).fetchone() is not None

@@ -16,10 +16,12 @@
    обрывает (LiteLLM обрыв дальше не передаёт), поэтому раннер дожидается ответа, выбрасывает его и
    освобождает карту. Слот ocr освобождает студия, а не документ (`LEASED`, `_settle`): после каждого
    документа (звал он шлюз или нет) и после отмены ждущего — release шлюзов, чей слот взят, если в студии
-   не идёт и не ждёт другое распознавание (иначе следующее заплатит холодный старт).
+   не идёт и не ждёт другое распознавание (иначе следующее заплатит холодный старт). Из обработчиков
+   HTTP — фоном (`settle_later`, SETTLING): ответ шлюза не ждёт.
 5. Стирание истории, удаление и отключение учётки (`stop_user`) — ждущие отменены, идущий оборван
-   сразу (без release: шлюз ещё считает оборванную страницу); остановка службы (`stop`) — идущий —
-   ошибка «прервано», ждущие — их сделает ошибкой `recover` при старте.
+   сразу, затем release фоном (оборванную страницу шлюз ещё считает — 409 и повтор); остановка службы
+   (`stop`) — идущий — ошибка «прервано», ждущие — их сделает ошибкой `recover` при старте, release фоном
+   гаснут.
 6. У документа из чата (`attachment_id`) итог — текст вложения: страницы с пометкой «Страница N»
    (`attachment_text`) или пометка отказа (`attachment_marker`).
 7. Журнал — только id, коды и числа: имя файла, текст страниц и картинки туда не пишутся. База — только
@@ -115,8 +117,12 @@ JOBS: dict[str, Job] = {}
 #: раннер пользователя: одно распознавание за раз
 RUNNERS: dict[int, asyncio.Task] = {}
 #: шлюзы, чей слот ocr взят и ещё не освобождён (адрес → снимок подключения последнего звавшего): освобождает
-#: `_settle`, когда в студии нечего распознавать, — кто бы ни кончил последним, даже не звав шлюз
+#: `_settle`, когда в студии нечего распознавать, — кто бы ни кончил последним, даже не звав шлюз; запись
+#: снимает только удачный release
 LEASED: dict[str, object] = {}
+#: release фоном (`settle_later`): ответ отмены и стирания истории шлюза не ждёт; ход чата ждёт и их (`idle`),
+#: остановка службы гасит (`stop`)
+SETTLING: set[asyncio.Task] = set()
 
 
 # ---- шлюз --------------------------------------------------------------------
@@ -169,24 +175,29 @@ async def recognize(conn, png: bytes) -> str:
     return content.strip()
 
 
-async def release(conn) -> None:
+async def release(conn) -> bool:
     """Освобождение слота ocr: `POST /pages/ocr-release {}`. 409 — slot-gate ещё считает страницу
-    (свою или чужую): повтор через RETRY_SEC до RELEASE_RETRIES раз. Ошибки — в журнал, не наружу."""
+    (свою или чужую): повтор через RETRY_SEC до RELEASE_RETRIES раз. Ошибки — в журнал, не наружу.
+    Итог — снимать ли запись LEASED: True — слот освобождён или этим снимком его не освободить никогда
+    (адрес убран из списка, подключение сменилось или удалено — аренда кончится сама); False — повторить потом."""
     if conn.kind != "srvllm":
-        return
+        return True
     for attempt in range(RELEASE_RETRIES + 1):
         try:
             r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr-release",
                                        timeout=RELEASE_TIMEOUT_SEC, json={})
-        except (httpx.HTTPError, upstream.UpstreamRefused) as e:
+        except upstream.UpstreamRefused as e:
             log.warning("распознавание: release не прошёл (%s)", type(e).__name__)
-            return
+            return True
+        except httpx.HTTPError as e:
+            log.warning("распознавание: release не прошёл (%s)", type(e).__name__)
+            return False
         if r.status_code == 200:
             log.info("распознавание: карта освобождена")
-            return
+            return True
         if r.status_code != 409 or attempt == RELEASE_RETRIES:
             log.warning("распознавание: release ответил %s", r.status_code)
-            return
+            return False
         await clock.SLEEP(RETRY_SEC)
 
 
@@ -239,12 +250,14 @@ def progress(scan_ids: list[str]) -> tuple[int, int]:
 
 
 def idle(user_id: int) -> bool:
-    """Раннер пользователя не дописывает свой последний документ: после итога он ещё освобождает карту
-    (release), и ход чата, позвавший модель раньше, ждал бы её под арендой слота ocr. Идут другие его
-    документы — карту никто не освободит (`run`), ждать нечего."""
+    """Раннер пользователя не дописывает свой последний документ и нет release фоном (SETTLING): после итога
+    карту ещё освобождают, и ход чата, позвавший модель раньше, ждал бы её под арендой слота ocr. Идут другие
+    его документы — карту никто не освободит (`run`), ждать нечего."""
+    if state.DB.execute(f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1",
+                        (user_id,)).fetchone() is not None:
+        return True
     task = RUNNERS.get(user_id)
-    return task is None or task.done() or state.DB.execute(
-        f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1", (user_id,)).fetchone() is not None
+    return (task is None or task.done()) and all(t.done() for t in SETTLING)
 
 
 def create(user_id: int, conn, model: str, name: str, *, origin: str, source_media_id: "str | None",
@@ -392,19 +405,32 @@ async def _recognize_pages(job: Job, row) -> str:
 async def _settle() -> None:
     """Release слота ocr каждого шлюза из LEASED, если в студии нечего распознавать (ни идущего, ни ждущего
     документа): следующий за ним заплатил бы холодный старт. Решает студия, а не документ: последний
-    кончившийся мог шлюз и не звать (пустые страницы, отмена до первой страницы, отказ до шлюза)."""
-    if not LEASED or state.DB.execute(f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is not None:
-        return
-    leased = list(LEASED.values())
-    LEASED.clear()
-    for conn in leased:
-        await release(conn)
+    кончившийся мог шлюз и не звать (пустые страницы, отмена до первой страницы, отказ до шлюза).
+    Запись снимается только после удачного release, если она та же и документ в студии за это время не начался
+    (иначе новый потерял бы свою); неудачный оставляет её концу следующего документа. Два `_settle` сразу
+    безвредны: release дважды ничего не ломает, а запись снимает только удачный."""
+    for url, conn in list(LEASED.items()):
+        if _scanning():                              # начался документ — слот его
+            return
+        if await release(conn) and LEASED.get(url) is conn and not _scanning():
+            del LEASED[url]
+
+
+def _scanning() -> bool:
+    return state.DB.execute(f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is not None
+
+
+def settle_later() -> None:
+    """`_settle` фоном — для обработчиков HTTP: ответ не ждёт шлюза (409 — до RELEASE_RETRIES повторов)."""
+    task = asyncio.create_task(_settle())
+    SETTLING.add(task)
+    task.add_done_callback(SETTLING.discard)
 
 
 async def run(job: Job) -> None:
     """Один документ. Итог — в строку последним; затем — `_settle` (release, если в студии больше нечего
-    распознавать), звал этот документ шлюз или нет. Оборванный (stop_user, остановка службы) карту не
-    освобождает."""
+    распознавать), звал этот документ шлюз или нет. Оборванный сам карту не освобождает: после stop_user —
+    release фоном, после остановки службы — никто."""
     row = state.DB.execute("SELECT * FROM scans WHERE id = ?", (job.id,)).fetchone()
     outcome = ("error", INTERRUPTED, None)
     try:
@@ -460,7 +486,7 @@ async def request_cancel(user_id: int, scan_id: str) -> str:
         _finish(scan_id, "cancelled", CANCELLED)
         JOBS.pop(scan_id, None)
         log.info("распознавание %s: отменено в очереди", scan_id[:8])
-        await _settle()
+        settle_later()
         return "cancelled"
     job = JOBS.get(scan_id)
     if row["state"] == "working" and job is not None:
@@ -481,11 +507,12 @@ def recover() -> None:
 
 
 async def stop_user(user_id: int) -> None:
-    """Стирание истории, удаление и отключение учётки: ждущие отменены, идущий оборван."""
+    """Стирание истории, удаление и отключение учётки: ждущие отменены, идущий оборван сразу. Затем release
+    фоном (стирание его не ждёт): слот держали для отменённых, а оборванную страницу шлюз ещё считает —
+    на 409 release повторяет (`release`)."""
     for row in state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND state = 'queued'", (user_id,)).fetchall():
         _finish(row["id"], "cancelled", CANCELLED)
         JOBS.pop(row["id"], None)
-    await _settle()                    # ждали отменённые — слот держали для них
     task = RUNNERS.get(user_id)
     if task is not None and not task.done():
         for job in JOBS.values():
@@ -493,11 +520,12 @@ async def stop_user(user_id: int) -> None:
                 job.stopped = True
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+    settle_later()
 
 
 async def stop() -> None:
-    """Остановка службы: идущие пишут «прервано» и кончаются до закрытия базы."""
-    tasks = [t for t in RUNNERS.values() if not t.done()]
+    """Остановка службы: идущие пишут «прервано» и кончаются до закрытия базы; release фоном гаснут."""
+    tasks = [t for t in (*RUNNERS.values(), *SETTLING) if not t.done()]
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -623,10 +651,11 @@ async def list_scans(request: Request, before: "float | None" = None,
 
 
 @router.get("/{sid}")
-async def get_scan(sid: str, request: Request):
-    """Документ и его страницы: `pages` — список `{n, state, text, detail, media_id}`."""
+async def get_scan(sid: str, request: Request, brief: bool = False):
+    """Документ и его страницы: `pages` — список `{n, state, text, detail, media_id}`. `brief=1` — только
+    состояние, `pages` — число, как в ленте: опрос чата раз в секунды не тянет тексты всех страниц."""
     row = _row(request.state.user.id, sid)
-    return _out(row) | {"pages": _page_list(sid)}
+    return _out(row) if brief else _out(row) | {"pages": _page_list(sid)}
 
 
 @router.post("/{sid}/cancel")

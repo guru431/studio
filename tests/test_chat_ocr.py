@@ -269,11 +269,14 @@ def test_reload_shows_the_scan_progress(studio):
             assert next(d for e, d in events if e == "ocr") == {"page": 0, "pages": 2}
             user, answer = messages(studio, cid)
             assert (user["ocr"], answer["ocr"], answer["status"]) == (None, {"page": 0, "pages": 2}, "streaming")
+            # вложение идущего скана — с его id, а не «0 зн.»: страница прячет знаки и опрашивает документ
+            assert user["attachments"][0]["ocr"] == {"id": att["ocr"]["id"]}
             studio.gw.ocr_hold = False
             assert [(e, d) for e, d in events if e not in ("ping", "ocr", "delta")][-1] == ("done", {"status": "done"})
     finally:
         studio.gw.ocr_hold = False
-    assert messages(studio, cid)[1]["ocr"] is None
+    user, answer = messages(studio, cid)
+    assert answer["ocr"] is None and "ocr" not in user["attachments"][0] and user["attachments"][0]["chars"] > 0
 
 
 def test_restart_while_a_turn_waits_leaves_a_marker(studio):

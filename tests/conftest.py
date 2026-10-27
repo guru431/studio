@@ -120,6 +120,7 @@ def studio(env, schema_db, monkeypatch):
     ocr.JOBS.clear()
     ocr.RUNNERS.clear()
     ocr.LEASED.clear()
+    ocr.SETTLING.clear()
     speeches.JOBS.clear()
     videos.WATCHING.clear()
     videos.PAUSED.clear()

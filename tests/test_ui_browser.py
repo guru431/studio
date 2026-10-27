@@ -4558,6 +4558,61 @@ def test_chat_scan_wait_is_dropped_when_the_field_changes(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+def test_chat_retry_waits_for_a_scan_from_the_history(browser, live):
+    """Ход через сервер остановили посреди распознавания (скан ещё отменяется), выбрали облако и перечитали
+    диалог: у вложения истории — не «0 зн.». «Ответить заново» — 409 `not_ready`: страница опрашивает этот
+    документ (только состояние), а не шлёт ход раз в 3 с; набор следующего вопроса ожидание повтора не
+    снимает; скан кончился — повтор уходит сам, один раз, поле остаётся."""
+    import state
+    live.add_user("scanretry")
+    live.gw.ocr_hold = lambda request: state.DB.execute(
+        "SELECT 1 FROM chats WHERE title = 'скан повтор'").fetchone() is None
+    sent = len(live.cloud.chat_requests)
+    init = ("window.calls = []; const fetch0 = window.fetch; window.fetch = function (url, opts) {"
+            " window.calls.push(`${(opts && opts.method) || 'GET'} ${url}`); return fetch0.apply(this, arguments); };")
+    quiet = ("(async () => { const from = window.calls.length; await new Promise(r => setTimeout(r, 3500));"
+             " return window.calls.slice(from); })()")
+    # страница ушла в шлюз: остановленный раньше документ отменился бы сразу, не дожидаясь шлюза
+    sent_page = (f"(async () => {{ for (;;) {{ const {{ items }} = await {API}.api('GET', '/api/ocr');"
+                 " if (items[0] && items[0].detail.startsWith('распознаю')) return true;"
+                 " await new Promise(r => setTimeout(r, 50)); } })()")
+    try:
+        r = browser.drive(live.url + "/", [*signin("scanretry"), ("wait", READY), add_gateway(), add_cloud(live.cloud),
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            attach(scan_file()), ("wait", "document.querySelector('#composer .att-chip')"),
+            ("type", "#chat-input", "О чём документ?"), ("press", "Enter"),
+            ("wait", f"{SCAN_BADGE}?.includes('Распознаю скан')"), ("eval", "page", sent_page),
+            ("click", "#stop"), ("wait", ANSWERED),
+            ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+            ("click", ".model-option[data-model=\"cloud-chat\"]"),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('cloud-chat')"),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY} && {ANSWERED}"),
+            ("eval", "label", "document.querySelector('#messages .msg.user .att').textContent"),
+            ("click", "#messages .msg.assistant:last-child .msg-retry"),
+            ("wait", "document.querySelector('#chat-error').textContent"),
+            ("type", "#chat-input", "Следующий вопрос"),
+            ("eval", "typed", "document.querySelector('#chat-error').textContent"),
+            ("eval", "quiet", quiet),
+            ("eval", "seen", MARK % "скан повтор"),
+            ("wait", f"{ANSWERED} && {LAST_ANSWER}.querySelector('.md').textContent.trim() === 'Облако на связи.'"),
+            ("eval", "field", "document.querySelector('#chat-input').value")], init=init)
+    finally:
+        live.gw.ocr_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "скан.pdf" in v["label"] and "зн." not in v["label"]
+    assert v["typed"] == "скан ещё распознаётся — отправлю, когда будет готов"
+    assert not [c for c in v["quiet"] if c.startswith("POST") and c.endswith("/turns")], v["quiet"]
+    assert [c for c in v["quiet"] if c.startswith("GET /api/ocr/") and c.endswith("?brief=1")], v["quiet"]
+    assert v["field"] == "Следующий вопрос"
+    assert len(live.cloud.chat_requests) == sent + 1
+    content = live.cloud.chat_requests[-1]["messages"][-1]["content"]
+    assert content.startswith('<document name="скан.pdf">') and content.endswith("О чём документ?")
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_voice_is_added_in_settings(browser, live):
     live.add_user("voicer")
     dialog = "#voice-dialog"
