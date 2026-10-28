@@ -9,7 +9,7 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-from . import limits
+from . import VERSION, limits
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ DISCONNECT_SEC = 10
 MODELS_MAX = 50
 LABEL_MAX = 100
 SETTINGS = ["user", "project", "local"]
+ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
 
 
 def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
@@ -85,7 +86,7 @@ async def probe(root: str, cli_path: Path | None, factory=ClaudeSDKClient) -> tu
 
     try:
         client = factory(options=ClaudeAgentOptions(cwd=root, cli_path=cli_path, setting_sources=SETTINGS,
-                                                    stderr=_drop))
+                                                    env=dict(ENV), stderr=_drop))
         info = await asyncio.wait_for(ask(), PROBE_SEC)
     except Exception as e:
         log.warning("модели Claude Code: %s", type(e).__name__)

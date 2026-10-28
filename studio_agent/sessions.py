@@ -19,7 +19,7 @@ TITLE_MAX = 200
 PROMPT_TITLE = 120  # начало first_prompt в названии
 STEP_MAX = 2000  # строки шагов одиночного огромного элемента
 STEPS_CUT = "… первые шаги не показаны"
-HEAD_CUT = "… начало ответа не показано"
+HEAD_CUT = "… начало не показано"
 TAG = "studio"
 
 
@@ -141,7 +141,10 @@ def history(project: Path, chat: str, before: int | None, limit: int) -> dict:
 
 
 def exists(project: Path, chat: str) -> bool:
-    return get_session_info(chat, directory=str(project)) is not None
+    """Есть ли сессия: у сессии без извлекаемого названия SDK отдаёт `None` — тогда по первой записи."""
+    if get_session_info(chat, directory=str(project)) is not None:
+        return True
+    return bool(get_session_messages(chat, directory=str(project), limit=1))
 
 
 def last_model(project: Path, chat: str) -> str | None:

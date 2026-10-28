@@ -56,7 +56,7 @@ def test_history_page_keeps_start_true_when_the_budget_cuts_it(monkeypatch, tmp_
     monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **k: big)
     page = sessions.history(tmp_path, CHAT, None, 100)
     assert page["total"] == 1 and len(json.dumps(page, ensure_ascii=True)) <= limits.HISTORY_BUDGET + 1000
-    assert page["items"][0]["text"].startswith("… начало ответа не показано\nxxx")
+    assert page["items"][0]["text"].startswith("… начало не показано\nxxx")
 
 
 def test_history_of_an_unknown_chat_is_not_found(monkeypatch, tmp_path):
@@ -150,7 +150,18 @@ def test_last_model_skips_synthetic_and_subagents(monkeypatch, tmp_path):
 
 def test_exists_and_mark_studio(monkeypatch, tmp_path):
     monkeypatch.setattr(sessions, "get_session_info", lambda chat, directory=None: None)
+    monkeypatch.setattr(sessions, "get_session_messages", lambda chat, directory=None, limit=None: [])
     assert sessions.exists(tmp_path, CHAT) is False
+    # Сессия без извлекаемого названия: info — None, а записи есть.
+    seen = {}
+
+    def first(chat, directory=None, limit=None):
+        seen.update(chat=chat, directory=directory, limit=limit)
+        return [U("u1", "привет")]
+
+    monkeypatch.setattr(sessions, "get_session_messages", first)
+    assert sessions.exists(tmp_path, CHAT) is True
+    assert seen == {"chat": CHAT, "directory": str(tmp_path), "limit": 1}
     monkeypatch.setattr(sessions, "get_session_info",
                         lambda chat, directory=None: _info(chat, modified=1))
     assert sessions.exists(tmp_path, CHAT) is True
