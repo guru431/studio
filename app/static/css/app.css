@@ -380,6 +380,8 @@ label { font-size: 13px; color: var(--muted); }
 .voice b, .passkey b { font-weight: 600; }
 .voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
 .lock-block > .check { margin-bottom: 12px; }
+.lock-block > .pin-row, .lock-block > .pin-form { margin-bottom: 12px; }
+.pin-form > p { margin: 0 0 8px; }
 @media (max-width: 760px) {
   .settings { grid-template-columns: minmax(0, 1fr); }
   .settings[data-view="nav"] .settings-panel, .settings[data-view="panel"] .settings-nav { display: none; }

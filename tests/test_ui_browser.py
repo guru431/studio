@@ -4929,7 +4929,56 @@ def test_add_key_is_absent_on_a_computer(browser, live):
     assert not problems(r), problems(r)
 
 
-LOCK_OPEN = "!!document.querySelector('#lock')?.open"
+def server_pin_is(value):
+    """Ждать, пока сервер не скажет, что PIN учётки задан (True) или нет (False)."""
+    return ("wait", f"fetch('/api/me').then(r => r.json()).then(m => m.pin === {str(value).lower()})")
+
+
+PIN_BLOCK = """['#pin-state', '#pin-set', '#pin-remove', '#pin-form'].map(s => document.querySelector(s))
+  .map(e => e.id === 'pin-remove' || e.id === 'pin-form' ? e.hidden : e.textContent)"""
+PIN_FIELDS = "['#pin-password', '#pin-new', '#pin-repeat'].map(s => document.querySelector(s).value)"
+
+
+def test_lock_settings_set_change_and_remove_the_pin(browser, live):
+    """PIN задаётся с компьютера: пароль учётки, PIN и повтор; не совпал — запроса нет; убрать — без пароля."""
+    login = "pinset"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login), ("eval", "before", PIN_BLOCK),
+        ("click", "#pin-set"), ("type", "#pin-password", "password-123"), ("type", "#pin-new", "1234"),
+        ("type", "#pin-repeat", "1243"), ("click", "#pin-save"),
+        ("eval", "mismatch", "document.querySelector('#screen-lock-status').textContent"),
+        ("eval", "unset", "fetch('/api/me').then(r => r.json()).then(m => m.pin)"),
+        set_value("#pin-repeat", "1234"), ("click", "#pin-save"), server_pin_is(True),
+        ("wait", "document.querySelector('#pin-state').textContent === 'PIN задан'"),
+        ("eval", "set", PIN_BLOCK), ("eval", "fields", PIN_FIELDS),
+        ("click", "#pin-set"), ("eval", "again", PIN_BLOCK),
+        ("click", "#pin-remove"), server_pin_is(False),
+        ("wait", "document.querySelector('#pin-state').textContent === 'PIN: не задан'"),
+        ("eval", "removed", PIN_BLOCK), ("eval", "overflow", f"!({NO_OVERFLOW})")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == ["PIN: не задан", "Задать PIN", True, True]
+    assert v["mismatch"] == "PIN и повтор не совпадают" and v["unset"] is False
+    assert v["set"] == ["PIN задан", "Сменить PIN", False, True] and v["fields"] == ["", "", ""]
+    assert v["again"] == ["PIN задан", "Сменить PIN", False, False]
+    assert v["removed"] == ["PIN: не задан", "Задать PIN", True, True] and not v["overflow"]
+    assert r["sent"].count("PUT /api/me/pin") == 1, r["sent"]
+    assert not problems(r), problems(r)
+
+    phone = browser.drive(live.url + "/", [("wait", READY), *go("settings/other"),     # вход — из первой вкладки
+        ("wait", "document.querySelector('#pin-set')"), ("click", "#pin-set"),
+        ("eval", "keys", "['#pin-new', '#pin-repeat'].map(s => (e => [e.type, e.inputMode, e.autocomplete,"
+                         " e.maxLength])(document.querySelector(s)))"),
+        ("eval", "hint", "document.querySelector('#pin-form').textContent"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})")], width=320, mobile=True, touch=True)
+    assert not phone.get("failed"), phone
+    assert phone["values"]["keys"] == [["password", "numeric", "off", 8]] * 2
+    assert "От 4 до 8 цифр. Не совпадающий с кодом телефона" in phone["values"]["hint"]
+    assert not phone["values"]["overflow"]
+    assert not problems(phone), problems(phone)
+
+
+LOCK_OPEN ="!!document.querySelector('#lock')?.open"
 CURTAIN_OPEN = "!!document.querySelector('#curtain')?.open"
 ME_STATUS = "fetch('/api/me').then(r => r.status)"
 PASSKEY_READY = "document.querySelector('#lock-open').dataset.ready === '1'"

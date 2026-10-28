@@ -119,7 +119,7 @@ function day(ts) {
   return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
-/* «Блокировка»: переключатель (выключить — только с паролем учётки), ключи учётки с «Удалить» и — на
+/* «Блокировка»: переключатель (выключить — только с паролем учётки), PIN учётки, ключи учётки с «Удалить» и — на
  * телефоне и планшете — «Добавить Face ID / отпечаток»: пароль и «Далее» готовят варианты, и нажатие
  * «Добавить» сразу зовёт navigator.credentials.create (Safari без нажатия Face ID не покажет). Варианты
  * старше FRESH_SEC — снова к паролю и «Далее»: вызов на сервере истекает через 120 с. */
@@ -167,6 +167,70 @@ function lockBlock() {
       off.disabled = false;
     }
   });
+
+  // PIN учётки (спека 2026-10-28-studio-lock-pin): задать и сменить — с паролем учётки, убрать — без;
+  // повтор не совпал — запроса нет. На любом устройстве. Поля PIN — без автозаполнения.
+  const pinState = el('span', { id: 'pin-state' });
+  const pinSet = button('', { class: 'btn', id: 'pin-set' });
+  const pinRemove = button('Убрать PIN', { class: 'btn', id: 'pin-remove' });
+  const pinPassword = el('input', { class: 'input', id: 'pin-password', type: 'password',
+    autocomplete: 'current-password', maxlength: '1024' });
+  const pinInput = (id) => el('input', { class: 'input', id, type: 'password', inputmode: 'numeric',
+    autocomplete: 'off', maxlength: '8' });
+  const pinNew = pinInput('pin-new');
+  const pinRepeat = pinInput('pin-repeat');
+  const pinSave = button('Сохранить', { class: 'btn', id: 'pin-save' });
+  const pinForm = el('div', { id: 'pin-form', class: 'pin-form', hidden: true }, el('div', { class: 'grid3' },
+    field('Пароль учётки', pinPassword, 'pin-password'), field('PIN', pinNew, 'pin-new'),
+    field('Повтор PIN', pinRepeat, 'pin-repeat')),
+  el('p', { class: 'muted small' }, 'От 4 до 8 цифр. Не совпадающий с кодом телефона'), el('div', { class: 'row' }, pinSave));
+
+  function paintPin() {
+    pinState.textContent = me.pin ? 'PIN задан' : 'PIN: не задан';
+    pinSet.textContent = me.pin ? 'Сменить PIN' : 'Задать PIN';
+    pinRemove.hidden = !me.pin;
+  }
+
+  pinSet.addEventListener('click', () => {
+    say(note, '');
+    pinForm.hidden = false;
+    pinPassword.focus();
+  });
+  pinSave.addEventListener('click', async () => {
+    if (pinNew.value !== pinRepeat.value) {
+      say(note, 'PIN и повтор не совпадают', 'error');
+      return;
+    }
+    pinSave.disabled = true;
+    try {
+      await api('PUT', '/api/me/pin', { password: pinPassword.value, pin: pinNew.value });
+      me.pin = true;
+      pinPassword.value = pinNew.value = pinRepeat.value = '';
+      pinForm.hidden = true;
+      paintPin();
+      say(note, 'PIN задан', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      pinSave.disabled = false;
+    }
+  });
+  pinRemove.addEventListener('click', async () => {
+    pinRemove.disabled = true;
+    try {
+      await api('DELETE', '/api/me/pin');
+      me.pin = false;
+      pinPassword.value = pinNew.value = pinRepeat.value = '';
+      pinForm.hidden = true;
+      paintPin();
+      say(note, 'PIN убран', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      pinRemove.disabled = false;
+    }
+  });
+  paintPin();
 
   async function reload() {
     try {
@@ -258,7 +322,7 @@ function lockBlock() {
   reload();
   return el('section', { class: 'block lock-block' }, el('h2', {}, 'Блокировка'),
     el('label', { class: 'check' }, enabled, 'Запирать на телефоне и планшете через минуту после ухода с экрана'),
-    offBox, list, ...adding, note);
+    offBox, el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, ...adding, note);
 }
 
 /* «Хранилище»: свои файлы по видам (из базы: размер оригиналов, без миниатюр), итог и очередь удаления —
