@@ -47,6 +47,21 @@ Windows-мост к студии `https://studio.example.com`: держит ис
   2000, шаги с начала прочь «… первые шаги не показаны», затем хвост текста «… начало ответа не показано»), `history`
   (нет записей — `not_found` «нет такого чата»), `exists`, `last_model` (без `<synthetic>`), `mark_studio` (метка
   `studio`, сбой — в журнал).
+- `turns` — `Runner` (ходы через Agent SDK): клиент на ход (новая сессия — `session_id=chat`, есть — `resume=chat`;
+  `null` модели и усилия — запомненные `store.Choices`, иначе модель последнего ответа сессии), не больше `MAX_TURNS`
+  сразу и один в чате (`busy`, `running`); `can_use_tool` → событие `ask` и ожидание `answer` (карточка переживает
+  смену канала), `watch` — снимок `snapshot` (урезан `sessions.fit`), `stop` — отказ карточкам и `interrupt()`
+  (`idle` без хода), `close` — мост выходит (`done` «ход прерван: мост остановлен»); метка `studio` новой сессии — после
+  `disconnect`.
+- `link` — `ws_url` (`https://h` → `wss://h/api/agent/link`; `http` — только `localhost`, `127.0.0.1`, `[::1]`) и `Link`
+  (канал к студии): `connect` с `Authorization: Bearer <ключ>`, `max_size=FRAME_MAX`, пинги 20/20 с; первым — `hello`,
+  `welcome` ≤ `WELCOME_SEC`, затем `agent.new_link()` и `agent.send = link.send`; `req` — `agent.handle` своей задачей,
+  ответы подряд в очередь канала, по которому пришла просьба (оборвался — пропадают; задачи не отменяются); `close` —
+  `agent.close_session`; не JSON и прочие `t` — пропуск. Писатель — одна задача на канал, кадры — `ensure_ascii=True,
+  allow_nan=False`. Закрытие 4401 — `revoked`, 4409 — `replaced` (выход из `run()`), 4400 — пауза `PROTOCOL_PAUSE_SEC`,
+  прочее и отказ рукопожатия — `BACKOFF` по числу неудач подряд (сброс после `welcome`); `on_state`: `connecting`,
+  `online`, `offline` (перед каждой паузой), `revoked`, `replaced`, `stopped`. Паузы — параметр `sleep`; тесты —
+  подставная студия `tests/fake_studio.py` (`websockets` на `127.0.0.1:0`).
 - `agent` — `Agent` (просьбы студии): `hello`, `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
   исполнения, иначе `invalid`; `id` не вернуть — без ответа; `open` под замком — порядок Ruling 4: без PIN — открыть,
   `null` открытой — `{}`, блок — `pin_locked`, `null` — `pin_needed`, иначе `pins.check` в потоке; прочие — `touch`
