@@ -1,6 +1,6 @@
 """Сквозная проверка: живая студия (её среда, `tests/live_studio_server.py`) и настоящий Claude Code.
 
-Тратит квоту — два коротких хода. Мост — настоящие `Agent`, `Runner` (SDK и CLI) и `Link` в цикле теста;
+Тратит квоту — четыре коротких хода (ответ, карточка с allow, «Остановить», вопрос AskUserQuestion). Мост — настоящие `Agent`, `Runner` (SDK и CLI) и `Link` в цикле теста;
 сторона браузера — `urllib` в потоке: вход как в `tests/conftest.py` студии, cookie сессии — руками в `Cookie`
 (`__Host-` и Secure: cookiejar не шлёт её по http), CSRF — заголовком из `GET /api/me`."""
 
@@ -142,7 +142,11 @@ async def _until(fn, sec: float = ONLINE_SEC):
     raise AssertionError("не дождались")
 
 
-async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, home):
+async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, home, monkeypatch):
+    clean = dict(os.environ)
+    cli.drop_session_env(clean)                                 # как app.prepare_env: тест идёт и из Claude Code
+    for name in set(os.environ) - set(clean):
+        monkeypatch.delenv(name)
     url = studio
     agent_id, key = await asyncio.to_thread(enroll.enroll, url, "owner", PASSWORD, "Проба")
     cli_path = await asyncio.to_thread(cli.find_cli)
@@ -228,6 +232,47 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
         assert status == 200 and data["text"] == "# Проба\n"
         status, data = await asyncio.to_thread(b.call, "GET", f"{proj}/git")
         assert status == 200 and {"path": "a.md", "status": "??"} in data["files"]
+
+        # ход 3: карточка разрешения, «Остановить» — настоящий interrupt() CLI, done stopped
+        stops = []
+
+        def on_stop(kind, e):
+            if kind == "ask" and not stops:
+                stops.append(e)
+                status, _ = b.call("POST", f"{proj}/chats/{chat}/stop")
+                assert status == 204
+
+        events = await asyncio.to_thread(b.stream, f"{proj}/chats/{chat}/turn",
+                                         {"text": f"Выполни в Bash: echo {PROBE}-stop"}, on_stop)
+        kinds = [k for k, _ in events]
+        assert [(a["kind"], a["tool"]) for a in stops] == [("permission", "Bash")], kinds
+        assert kinds[-1] == "done" and events[-1][1] == {"status": "stopped"}, events[-1]
+        assert "asked" in kinds and not any(k == "result" and f"{PROBE}-stop" in e["text"] and not e["error"]
+                                            for k, e in events), kinds
+
+        # ход 4 того же чата (не running после остановки): вопрос AskUserQuestion → answers → ответ модели
+        questions = []
+
+        def on_question(kind, e):
+            if kind == "ask":
+                questions.append(e)
+                answers = {}
+                for q in e.get("questions") or []:
+                    labels = [o["label"] for o in q["options"]]
+                    answers[q["question"]] = next((x for x in labels if "син" in x.lower()), "синий")
+                status, _ = b.call("POST", f"{proj}/chats/{chat}/answer",
+                                   {"request_id": e["request_id"], "decision": "allow", "answers": answers})
+                assert status == 204
+
+        events = await asyncio.to_thread(
+            b.stream, f"{proj}/chats/{chat}/turn",
+            {"text": "Задай мне один вопрос инструментом AskUserQuestion с двумя вариантами: красный, синий; "
+                     "затем ответь одним словом, что я выбрал"}, on_question)
+        kinds = [k for k, _ in events]
+        assert kinds[0] == "turn" and kinds[-1] == "done" and events[-1][1] == {"status": "done"}, events[-1]
+        assert [q["kind"] for q in questions] == ["question"], kinds
+        assert len(questions[0]["questions"]) == 1 and len(questions[0]["questions"][0]["options"]) == 2
+        assert "син" in "".join(e["text"] for k, e in events if k == "text").lower(), kinds
 
         # PIN: задан на машине, канал заново — открытость сброшена, нужен PIN
         await asyncio.to_thread(pins.set_pin, "2468")

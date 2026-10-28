@@ -197,13 +197,15 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 (`tests/conftest.py`, `STUDIO_AGENT_HOME` во временной папке). Студия в быстрых тестах — подставная
 (`tests/fake_studio.py`, `websockets` на `127.0.0.1:0`), SDK — `tests/fake_sdk.py`.
 
-Сквозная проверка — `tests/test_live_studio.py` (`manual`, **два коротких хода квоты** — не гонять по
+Сквозная проверка — `tests/test_live_studio.py` (`manual`, **четыре коротких хода квоты** — не гонять по
 кругу): `tests/live_studio_server.py` поднимает живую студию её средой (`<STUDIO_REPO>/.venv`, по умолчанию
 `C:/work/projects/studio`; `start_live_app`, `READY <адрес>`, гаснет по закрытию stdin), мост — настоящие `Agent`,
 `Runner` (SDK и `claude.exe`) и `Link` в цикле теста, браузер — `urllib` в потоке. Сценарий: привязка, «на связи»,
 `open`, проекты, новый чат, ход «Ответь одним словом: готово», ход с Bash — карточка `permission`, `allow`, итог шага;
-чаты (`origin: "studio"`), история из 4 сообщений, файлы, чтение, git; PIN на машине и новый канал — `pin_needed`, с
-PIN — 204. Файл сессии пробы тест убирает из `~/.claude/projects`. Перед ним — отладить всё без хода.
+чаты (`origin: "studio"`), история из 4 сообщений, файлы, чтение, git; ход с Bash — карточка, «Остановить» (настоящий
+`interrupt()`) — `done` `stopped`; следующий ход того же чата (не `running`) — вопрос `AskUserQuestion`, `answers`,
+в ответе выбранный вариант; PIN на машине и новый канал — `pin_needed`, с PIN — 204. Окружение моста — как у
+`app.prepare_env` (тест идёт и из Claude Code). Файл сессии пробы тест убирает из `~/.claude/projects`. Перед ним — отладить всё без хода.
 
 ## Ловушки
 
