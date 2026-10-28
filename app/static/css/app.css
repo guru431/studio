@@ -1125,6 +1125,59 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .code-pick select { min-width: 0; max-width: 140px; }
 
+/* файлы и git (code-files.js): список, правка, .md, .pdf, статус */
+.code-files-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.code-path-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer;
+  overflow-wrap: anywhere; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+#code-files-error:empty { display: none; }
+.code-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.code-files:empty { display: none; }
+.code-files li + li { border-top: 1px solid var(--border); }
+.code-file-item { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; border: 0;
+  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.code-file-item:hover { background: var(--panel-2); }
+.code-file-icon { display: inline-flex; color: var(--muted); }
+.code-file-icon svg.ico { width: 17px; height: 17px; }
+.code-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.code-file-item.dir .code-file-name { font-weight: 600; }
+.code-file-size { flex: none; }
+.code-file { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.code-file[hidden] { display: none; }
+.code-file-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.code-file-bar:empty { display: none; }
+.code-file-bar #code-save { margin-left: auto; }
+.code-file-status { margin: 0; }
+.code-file-status:empty { display: none; }
+.code-editor { min-height: 55dvh; resize: vertical; font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  white-space: pre; overflow: auto; tab-size: 4; }
+.code-editor[hidden], .code-md[hidden] { display: none; }
+.code-md { min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.code-md-view { display: flex; gap: 6px; }
+.code-md-view .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.code-pdf-nav { display: flex; align-items: center; gap: 8px; }
+.code-pdf-nav .btn { min-width: 36px; font-size: 18px; line-height: 1; }
+.code-pdf-page { font-size: 14px; }
+.code-pdf { min-width: 0; }
+.code-pdf img { display: block; max-width: 100%; height: auto; margin: 0 auto; border: 1px solid var(--border);
+  border-radius: 8px; }
+/* узко список папки уступает место открытому файлу (назад ведёт путь); широко — рядом */
+.code-files-view.has-file .code-files { display: none; }
+@media (min-width: 900px) {
+  .code-files-view.has-file { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+  .code-files-view.has-file > :not(.code-files):not(.code-file) { grid-column: 1 / -1; }
+  .code-files-view.has-file .code-files { display: flex; align-self: start; }
+}
+.code-git { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.code-git-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; margin: 0; }
+.code-git-branch, .code-git-upstream { overflow-wrap: anywhere; min-width: 0; }
+.code-git-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.code-git-files li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.code-git-status { flex: none; font-family: var(--mono); font-size: 12px; }
+.code-git-path { min-width: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.code-git-empty, .code-git-none { margin: 0; }
+#code-git-error:empty { display: none; }
+
 /* заперто или под шторкой: содержимое скрыто и в миг, когда окно закрыли силой, а lock.js ещё не открыл его снова */
 html.shrouded #view, html.shrouded #rail, html.shrouded #menu,
 html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }

@@ -5,11 +5,12 @@
  *   Компьютер не на связи — только строка: нажатие говорит словами и ничего не запрашивает. На связи —
  *   POST …/open с pin: null; 204 — проекты, 409 pin_needed — панель PIN (#code-pin).
  * - #/code/<aid> — проекты (GET …/projects); #/code/<aid>/<pid> — проект: «Новый чат», вкладки «Чаты»,
- *   «Файлы», «Git» (две последние рисует code-files.js), чаты (GET …/chats) с пометками и «Закрыть» /
- *   «Открыть снова» (PATCH).
+ *   «Файлы», «Git» (две последние рисует code-files.js: «Файлы» — при первом показе вкладки, «Git» — заново
+ *   при каждом), чаты (GET …/chats) с пометками и «Закрыть» / «Открыть снова» (PATCH).
  * - #/code/<aid>/<pid>/<chat> — чат: section#code-chat сразу, затем компьютер, проект и откуда чат (GET агентов,
  *   проектов и чатов проекта — и при переходе по адресу из push) и chatView (code-chat.js). «Открыть файл»
- *   шага — вкладка «Файлы» проекта (#/code/<aid>/<pid>?tab=files; сам файл откроет code-files.js).
+ *   шага — вкладка «Файлы» проекта (#/code/<aid>/<pid>?tab=files) и filesView.open(путь): путь ждёт перехода
+ *   в памяти модуля (wantFile), в адрес не попадает.
  *
  * PIN проверяет мост: набранный PIN живёт только в поле и переменной обработчика, после ответа поле
  * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed (сессию закрыли:
@@ -18,6 +19,7 @@
  * Хвост не того вида — на #/code. Текст сервера и машины — только textContent. */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
+import { filesView, gitView } from './code-files.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 
@@ -34,7 +36,8 @@ const TABS = [['chats', 'Чаты'], ['files', 'Файлы'], ['git', 'Git']];
 let host = null;
 let ctx = null;
 let gen = 0;            // номер отрисовки: ответ прежнего уровня новый не перерисует
-let view = null;        // чат (chatView) — снимается со сменой уровня
+let view = null;        // чат (chatView) или вкладки проекта — снимается со сменой уровня
+let wantFile = null;    // путь файла из шага чата до перехода на вкладку «Файлы» — только в памяти
 
 function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -222,10 +225,16 @@ function chatRow(mine, aid, pid, chat, reload, status) {
     el('span', { class: 'code-marks' }, ...marks), toggle);
 }
 
-async function project(mine, aid, pid, tab) {
+async function project(mine, aid, pid, tab, path) {
   const [name, found] = await Promise.all([agentName(aid),
     api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid), () => null)]);
   if (mine !== gen) return;
+  let files = null;
+  let git = null;
+  view = { unmount() {
+    if (files) files.unmount();
+    if (git) git.unmount();
+  } };
   const { main, status } = frame([['Компьютеры', '#/code'], [name || 'Компьютер', `#/code/${aid}`],
     [found ? found.name : 'Проект', null]]);
   const add = el('button', { type: 'button', id: 'code-new-chat', class: 'btn btn-accent' }, 'Новый чат');
@@ -243,21 +252,33 @@ async function project(mine, aid, pid, tab) {
   const tabs = el('div', { class: 'code-tabs', role: 'tablist' });
   const panes = {};
   const first = TABS.some(([key]) => key === tab) ? tab : 'chats';
+  const refuse = (err, box) => {
+    if (mine === gen) failed(err, aid, box);
+  };
+  function show(key) {
+    for (const t of tabs.children) t.setAttribute('aria-selected', String(t.id === `code-tab-${key}`));
+    for (const [k, pane] of Object.entries(panes)) pane.hidden = k !== key;
+    if (key === 'files' && !files) {
+      files = filesView(panes.files, { aid, pid, name: found ? found.name : '', failed: refuse, path });
+    }
+    if (key === 'git') {
+      if (git) git.unmount();
+      git = gitView(panes.git, { aid, pid, failed: refuse });
+    }
+  }
   for (const [key, text] of TABS) {
     const tab = el('button', { type: 'button', role: 'tab', id: `code-tab-${key}`, class: 'chip',
       'aria-selected': String(key === first), 'aria-controls': `code-pane-${key}` }, text);
     panes[key] = el('div', { id: `code-pane-${key}`, role: 'tabpanel', 'aria-labelledby': `code-tab-${key}`,
       hidden: key !== first });
-    tab.addEventListener('click', () => {
-      for (const t of tabs.children) t.setAttribute('aria-selected', String(t === tab));
-      for (const [k, pane] of Object.entries(panes)) pane.hidden = k !== key;
-    });
+    tab.addEventListener('click', () => show(key));
     tabs.append(tab);
   }
   const list = el('ul', { id: 'code-chats', class: 'code-list code-chats' });
   panes.chats.append(list);
   main.insertBefore(el('div', { class: 'code-bar' }, add, tabs), status);
   main.append(panes.chats, panes.files, panes.git);
+  show(first);
 
   async function reload() {
     try {
@@ -300,7 +321,10 @@ async function chat(mine, aid, pid, id) {
   status.remove();                           // у чата своя строка #code-status
   view = chatView(section, { aid, pid, chat: id, agent, project: found ? { pid, name: found.name } : null,
     origin: row ? row.origin : 'studio', navigate: ctx.navigate,
-    openFile: () => ctx.navigate(`code/${aid}/${pid}?tab=files`) });
+    openFile: (path) => {
+      wantFile = path;
+      ctx.navigate(`code/${aid}/${pid}?tab=files`);
+    } });
 }
 
 /* ---- маршрут ---------------------------------------------------------------------- */
@@ -309,6 +333,8 @@ function render() {
   const mine = ++gen;
   if (view) view.unmount();
   view = null;
+  const path = wantFile;
+  wantFile = null;
   const parts = ctx.id ? ctx.id.split('/') : [];
   const [aid, pid, id] = parts;
   const ok = parts.length <= 3 && (!aid || AID_RE.test(aid)) && (!pid || PID_RE.test(pid)) && (!id || CHAT_RE.test(id));
@@ -317,7 +343,10 @@ function render() {
     return;
   }
   if (id) chat(mine, aid, pid, id);
-  else if (pid) project(mine, aid, pid, ctx.query && ctx.query.get('tab'));
+  else if (pid) {
+    const tab = ctx.query && ctx.query.get('tab');
+    project(mine, aid, pid, tab, tab === 'files' ? path : null);
+  }
   else if (aid) projects(mine, aid);
   else computers(mine);
 }
@@ -337,6 +366,7 @@ export function unmount() {
   gen += 1;
   if (view) view.unmount();
   view = null;
+  wantFile = null;
   host = null;
   ctx = null;
 }

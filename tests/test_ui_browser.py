@@ -7157,6 +7157,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
                       {"k": "result", "id": "s2", "text": "нет файла", "error": True},
                       {"k": "step", "id": "s3", "tool": "Edit", "input": {"file_path": "C:\\work\\projects\\beta\\x.py"}},
                       {"k": "text", "text": " Готово."}, {"k": "done", "status": "done"}]
+    machine.projects["alpha"]["files"] = {"src/app.py": b"print(1)\n"}   # ссылка шага его и откроет
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
@@ -7491,3 +7492,267 @@ def test_code_hidden_page_drops_its_stream_and_returns_to_live(browser, live):
     assert "watch" in ops[ops.index("turn"):], ops                  # по возвращении — снова live
     assert CODE_CHAT_A in machine.running
     assert not known_refusals(problems(r), 409), problems(r)
+
+
+# файлы и git проекта (code-files.js): список, правка, просмотр .md и .pdf, статус git, ссылка из шага чата
+
+CODE_APP = b"print(1)\r\nprint(2)\r\n"
+CODE_CONFLICT = "Файл изменился на компьютере — откройте его заново, чтобы не затереть правки"
+CODE_FILE_NAMES = "[...document.querySelectorAll('#code-files li[data-name]')].map((li) => li.dataset.name)"
+#: части пути файлов (без разделителей «›»)
+CODE_PATH = "[...document.querySelectorAll('#code-path > :not([aria-hidden])')].map((e) => e.textContent)"
+CODE_FILE_STATUS = "document.querySelector('#code-file-status').textContent"
+CODE_STORED = "JSON.stringify([{ ...localStorage }, { ...sessionStorage }, location.href])"
+
+
+def code_files_machine(chats=None):
+    """Компьютер без PIN; у alpha — папки src и src/lib, README.md, двухстраничный PDF, двоичный и большой файлы."""
+    from fake_bridge import FakeMachine
+    from scans import scan_pdf
+    files = {"README.md": "# Заголовок\n\nТекст **жирный**.\n".encode(), "src/app.py": CODE_APP,
+             "src/lib/util.py": b"x = 1\n", "a.pdf": scan_pdf("first page", "second page"), "bin.dat": b"ab\0cd",
+             "big.txt": b"x" * (2 * 1024 * 1024 + 1)}
+    return FakeMachine(projects={"alpha": {"files": files, "chats": chats or {}}})
+
+
+def code_tab(aid, tab, project="alpha"):
+    """«Код» → компьютер (без PIN) → проект → вкладка."""
+    from fake_bridge import pid
+    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
+            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
+            ("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid(project)}']\")"),
+            ("click", f"#code-projects li[data-pid='{pid(project)}'] a"),
+            ("wait", f"document.querySelector('.code-crumb-here')?.textContent === '{project}'"
+                     f" && !!document.querySelector('#code-tab-{tab}')"),
+            ("click", f"#code-tab-{tab}")]
+
+
+def code_item(name):
+    return f"#code-files li[data-name='{name}'] button"
+
+
+def code_root_names(n):
+    return ("wait", f"document.querySelectorAll('#code-files li[data-name]').length === {n}"
+                    " && document.querySelector('#code-file').hidden")
+
+
+def test_code_files_open_edit_and_save(browser, live):
+    """«Файлы»: корень (папки сначала), папка src, app.py в моноширинном редакторе; правка — «Сохранить» →
+    «Сохранено», у машины новые байты с прежними концами строк \\r\\n, второе сохранение — с новым version; путь
+    — только в теле запросов: ни в адресе, ни в хранилищах; 320 px без прокрутки вбок."""
+    from fake_bridge import _version, pid
+    login = "code-files"
+    live.add_user(login)
+    machine = code_files_machine()
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("eval", "root", CODE_FILE_NAMES), ("eval", "rootPath", CODE_PATH),
+            ("click", code_item("src")), ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("eval", "src", CODE_FILE_NAMES), ("eval", "srcPath", CODE_PATH),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            ("eval", "text", "document.querySelector('#code-editor').value"),
+            ("eval", "filePath", CODE_PATH),
+            ("eval", "save", "document.querySelector('#code-save').textContent"),
+            ("eval", "mono", "getComputedStyle(document.querySelector('#code-editor')).fontFamily"),
+            ("eval", "fits", NO_OVERFLOW),
+            set_value("#code-editor", "print(1)\nprint(3)\n"), ("click", "#code-save"),
+            ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
+            set_value("#code-editor", "print(4)\n"), ("eval", "cleared", CODE_FILE_STATUS), ("click", "#code-save"),
+            ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'"),
+            ("eval", "hash", "location.hash"), ("eval", "stored", CODE_STORED),
+            ("click", "#code-path .code-path-link"), code_root_names(5),
+            ("eval", "back", CODE_PATH)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["root"] == ["src", "README.md", "a.pdf", "big.txt", "bin.dat"] and v["rootPath"] == ["alpha"]
+    assert v["src"] == ["lib", "app.py"] and v["srcPath"] == ["alpha", "src"]
+    assert v["text"] == "print(1)\nprint(2)\n" and v["filePath"] == ["alpha", "src", "app.py"]
+    assert v["save"] == "Сохранить" and "monospace" in v["mono"] and v["fits"] is True
+    assert v["status"] == "Сохранено" and v["cleared"] == ""
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}"
+    assert "app.py" not in v["stored"] and "print" not in v["stored"]
+    assert v["back"] == ["alpha"]
+    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print(4)\r\n"
+    saves = code_requests(machine, "save")
+    assert [(q["path"], q["text"], q["version"]) for q in saves] == [
+        ("src/app.py", "print(1)\r\nprint(3)\r\n", _version(CODE_APP)),
+        ("src/app.py", "print(4)\r\n", _version(b"print(1)\r\nprint(3)\r\n"))]
+    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src", ""]
+    assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
+    assert not problems(r), problems(r)
+
+
+def test_code_file_conflict_is_said_in_words(browser, live):
+    """Файл открыт, а машина его меняет (его поправил Claude): «Сохранить» — 409 conflict, слова из «Текстов»;
+    на машине — её правка, в редакторе — своя."""
+    login = "code-conflict"
+    live.add_user(login)
+    machine = code_files_machine()
+    read = machine._op_read
+
+    def read_then_change(req, events):
+        out = read(req, events)
+        machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
+        return out
+
+    machine._op_read = read_then_change
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('мой')\n"), ("click", "#code-save"),
+            ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
+            ("eval", "error", "document.querySelector('#code-file-status').classList.contains('error')"),
+            ("eval", "text", "document.querySelector('#code-editor').value"),
+            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["status"] == CODE_CONFLICT and v["error"] is True and v["fits"] is True
+    assert v["text"] == "print('мой')\n"
+    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
+    assert len(code_requests(machine, "save")) == 1
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_markdown_and_pdf_view(browser, live):
+    """README.md: «Текст» / «Вид» — разметка с заголовком h1; a.pdf — страница картинкой, «›» — «Страница 2 из 2»,
+    прежний blob URL освобождён (и при уходе со страницы файла); двоичный и больше 2 МиБ — слова. Широкий экран:
+    список папки рядом с файлом."""
+    login = "code-view"
+    live.add_user(login)
+    machine = code_files_machine()
+    aid, sb = code_online(live, login, machine)
+    spy = """(() => { window.revoked = []; const real = URL.revokeObjectURL.bind(URL);
+      URL.revokeObjectURL = (u) => { window.revoked.push(u); real(u); }; return true; })()"""
+    page_is = ("document.querySelector('#code-pdf-page')?.textContent === 'Страница {n} из 2'"
+               " && document.querySelector('#code-pdf img').complete"
+               " && document.querySelector('#code-pdf img').naturalWidth > 0")
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("eval", "spy", spy),
+            ("click", code_item("README.md")), ("wait", "document.querySelector('#code-editor')"),
+            ("eval", "modes", "[...document.querySelectorAll('#code-md-view button')].map((b) => [b.textContent,"
+                              " b.getAttribute('aria-pressed')])"),
+            ("eval", "listShown", "getComputedStyle(document.querySelector('#code-files')).display !== 'none'"),
+            ("click", "#code-md-view [data-mode='view']"), ("wait", "document.querySelector('#code-md h1')"),
+            ("eval", "md", "[document.querySelector('#code-md h1').textContent,"
+                           " document.querySelector('#code-md strong').textContent,"
+                           " document.querySelector('#code-editor').hidden]"),
+            ("click", "#code-md-view [data-mode='text']"),
+            ("eval", "textAgain", "[document.querySelector('#code-editor').hidden, document.querySelector('#code-md').hidden]"),
+            ("click", code_item("a.pdf")), ("wait", page_is.format(n=1)),
+            ("eval", "first", "[document.querySelector('#code-pdf img').src, document.querySelector('#code-pdf-prev').disabled,"
+                              " document.querySelector('#code-pdf-next').disabled,"
+                              " document.querySelector('#code-pdf-prev').textContent,"
+                              " document.querySelector('#code-pdf-next').textContent]"),
+            ("click", "#code-pdf-next"), ("wait", page_is.format(n=2)),
+            ("eval", "second", "[document.querySelector('#code-pdf img').src, document.querySelector('#code-pdf-prev').disabled,"
+                               " document.querySelector('#code-pdf-next').disabled, [...window.revoked]]"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", code_item("bin.dat")), ("wait", f"{CODE_FILE_STATUS} !== ''"),
+            ("eval", "binary", CODE_FILE_STATUS), ("eval", "revoked", "window.revoked"),
+            ("eval", "noEditor", "!document.querySelector('#code-editor')"),
+            ("click", code_item("big.txt")), ("wait", f"{CODE_FILE_STATUS} !== ''"),
+            ("eval", "large", CODE_FILE_STATUS)])
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["modes"] == [["Текст", "true"], ["Вид", "false"]] and v["listShown"] is True
+    assert v["md"] == ["Заголовок", "жирный", True] and v["textAgain"] == [False, True]
+    first, second = v["first"], v["second"]
+    assert first[0].startswith("blob:") and first[1:] == [True, False, "‹", "›"]
+    assert second[0].startswith("blob:") and second[0] != first[0] and second[1:3] == [False, True]
+    assert second[3] == [first[0]]                           # прежняя страница освобождена
+    assert v["revoked"] == [first[0], second[0]] and v["fits"] is True
+    assert v["binary"] == "Двоичный файл — не открывается" and v["noEditor"] is True
+    assert v["large"] == "Файл больше 2 МиБ — не открывается"
+    assert [q["path"] for q in code_requests(machine, "raw")] == ["a.pdf"]          # листание — из памяти службы
+    assert not known_refusals(problems(r), 413, 415), problems(r)
+
+
+def test_code_git_panel(browser, live):
+    """«Git»: ветка, «впереди на N» / «позади на N» при upstream, изменённые файлы; чистый без upstream — «Изменений
+    нет»; не репозиторий — «Не репозиторий git»."""
+    from fake_bridge import FakeMachine, pid
+    login = "code-git"
+    live.add_user(login)
+    machine = FakeMachine(projects={
+        "alpha": {"git": {"branch": "main", "upstream": "origin/main", "ahead": 2, "behind": 1,
+                          "files": [{"path": "src/app.py", "status": "M"}, {"path": "новое/очень-длинное-имя-файла-без-"
+                                    "пробелов-которое-не-влезет-в-узкий-экран.txt", "status": "??"}]}},
+        "beta": {"git": None},
+        "gamma": {"git": {"branch": "work", "upstream": None, "ahead": 0, "behind": 0, "files": []}}})
+    aid, sb = code_online(live, login, machine)
+    head = """(() => { const g = document.querySelector('#code-git');
+      return [g.querySelector('.code-git-head').firstChild.textContent, g.querySelector('.code-git-branch').textContent,
+        g.querySelector('.code-git-ahead')?.textContent ?? null, g.querySelector('.code-git-behind')?.textContent ?? null]; })()"""
+    rows = "[...document.querySelectorAll('#code-git .code-git-files li')].map((li) => [li.querySelector('.code-git-status').textContent, li.querySelector('.code-git-path').textContent])"
+
+    def project_git(name):
+        return [*go(f"code/{aid}/{pid(name)}"),
+                ("wait", f"document.querySelector('.code-crumb-here')?.textContent === '{name}'"),
+                ("click", "#code-tab-git")]
+
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "git"),
+            ("wait", "document.querySelector('#code-git .code-git-head')"),
+            ("eval", "alpha", head), ("eval", "rows", rows), ("eval", "fits", NO_OVERFLOW),
+            *project_git("gamma"), ("wait", "document.querySelector('#code-git .code-git-empty')"),
+            ("eval", "gamma", head), ("eval", "empty", "document.querySelector('#code-git .code-git-empty').textContent"),
+            *project_git("beta"), ("wait", "document.querySelector('#code-git .code-git-none')"),
+            ("eval", "beta", "document.querySelector('#code-git').textContent")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["alpha"] == ["Ветка ", "main", "впереди на 2", "позади на 1"] and v["fits"] is True
+    assert v["rows"] == [["M", "src/app.py"], ["??", "новое/очень-длинное-имя-файла-без-пробелов-которое-не-влезет-в-узкий-экран.txt"]]
+    assert v["gamma"] == ["Ветка ", "work", None, None] and v["empty"] == "Изменений нет"
+    assert v["beta"] == "Не репозиторий git"
+    assert len(code_requests(machine, "git")) == 3
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_step_file_link_opens_the_file(browser, live):
+    """Шаг Edit с file_path внутри проекта — «Открыть файл»: вкладка «Файлы», папка файла и сам файл в редакторе;
+    путь — не в адресе и не в хранилищах. Шаг с путём вне проекта — без ссылки."""
+    from fake_bridge import T0, pid
+    login = "code-step-file"
+    live.add_user(login)
+    step = {"id": "s1", "tool": "Edit", "text": "ok", "error": False,
+            "input": {"file_path": "C:\\work\\projects\\alpha\\src\\app.py", "old_string": "2", "new_string": "3"}}
+    outside = {"id": "s2", "tool": "Edit", "text": "ok", "error": False,
+               "input": {"file_path": "C:\\work\\projects\\beta\\x.py", "old_string": "a", "new_string": "b"}}
+    messages = [{"id": "m-0", "role": "user", "text": "Поправь", "steps": [], "time": T0},
+                {"id": "m-1", "role": "assistant", "text": "Готово.", "steps": [step, outside], "time": T0}]
+    machine = code_files_machine({CODE_CHAT_A: code_session("Чат A", messages=messages)})
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "steps", CODE_STEPS),
+            ("click", ".code-step-file"), ("wait", "document.querySelector('#code-editor')"),
+            ("eval", "tab", "document.querySelector('#code-tab-files').getAttribute('aria-selected')"),
+            ("eval", "text", "document.querySelector('#code-editor').value"),
+            ("eval", "path", CODE_PATH), ("eval", "hash", "location.hash"), ("eval", "stored", CODE_STORED),
+            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["steps"] == [["Edit", "C:\\work\\projects\\alpha\\src\\app.py", "ok", False, "Открыть файл"],
+                          ["Edit", "C:\\work\\projects\\beta\\x.py", "ok", False, None]]
+    assert v["tab"] == "true" and v["text"] == "print(1)\nprint(2)\n"
+    assert v["path"] == ["alpha", "src", "app.py"] and v["fits"] is True
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}?tab=files"
+    assert "app.py" not in v["stored"]
+    assert [q["path"] for q in code_requests(machine, "files")] == ["src"]          # сразу папка файла
+    assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
+    assert not problems(r), problems(r)
