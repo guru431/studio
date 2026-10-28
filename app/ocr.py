@@ -229,7 +229,29 @@ def _attachment(attachment_id: "str | None", text: str) -> None:
         state.DB.execute("UPDATE attachments SET text = ?, chars = ? WHERE id = ?", (text, len(text), attachment_id))
 
 
-# ---- скан в чате (chat.py) -----------------------------------------------------
+# ---- скан в чате (chat.py) и в переводе (translate.py) ---------------------------
+
+def plan_pages(scanned: list[tuple[str, bool]]) -> "tuple[str | None, list[dict] | None]":
+    """PDF при подключении «Распознавания» (`ocr_render.pdf_scan_pages`: текст слоя и нужно ли распознавание):
+    распознавать нечего — (текст как у documents.extract, None); есть что — (None, страницы документа: прочие —
+    `layer` с текстом слоя, требующие распознавания — `waiting`). Пустые страницы определяет задание (рендер), а
+    не загрузка. Страниц на распознавание больше PAGES_MAX — отказ словами."""
+    texts = [t for t, _ in scanned]
+    pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} if wanted
+             else {"n": n, "state": "layer", "media_id": None, "text": t} for n, (t, wanted) in enumerate(scanned, 1)]
+    waiting = sum(p["state"] == "waiting" for p in pages)
+    if waiting > ocr_render.PAGES_MAX:
+        raise documents.DocumentError(f"больше {ocr_render.PAGES_MAX} страниц-сканов — распознайте его частями"
+                                      " в разделе «Распознавание»")
+    if waiting:
+        return None, pages
+    text = "\n\n".join(t for t in texts if t)
+    if not text:                                     # PDF без страниц
+        raise documents.DocumentError(documents.BROKEN)
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise documents.DocumentError(documents.TOO_LONG)
+    return text, None
+
 
 def pending(user_id: int, attachment_ids: list[str]) -> list[str]:
     """Идущие и ждущие документы (RUNNING) этих вложений чата."""

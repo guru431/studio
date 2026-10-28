@@ -19,26 +19,41 @@
    на следующей дельте (обрыв шлюз дальше не передаёт, карту он не держит — модель дочитает сама), готовые
    куски остаются. Перезапуск службы — недоделанное и ждущее становится ошибкой «прервано» (`recover`).
 5. «Продолжить» (`resume`) — та же модель и тот же язык, только непереведённые куски: `failed` снова `waiting`.
-6. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
+6. Файл (спека 6.4) — PDF, DOCX, TXT, MD: текст `documents.extract`, файл — в `media`. PDF со страницами без слоя
+   при подключении «Сканов» через сервер (`ocr.plan_pages`) — обычный документ «Сканов» (`origin` section, тот же
+   файл) в очереди распознавания пользователя, запись — без исходника, со `scan_id`. Её задание (`_await_scan`)
+   ждёт скан раз в POLL_SEC (этап — страницы), берёт его текст (`ocr.attachment_text`) в исходник и куски и
+   зовёт модель только после `ocr.idle`: карту освобождает раннер «Сканов» (`free_card`, `_settle`), и модель
+   перевода иначе ждала бы её под арендой слота ocr. Скан удалён, с ошибкой или отменён — ошибка записи «скан
+   не распознан: …»; «Остановить» во время ожидания отменяет и скан.
+7. Повтор (спека 6.2) — новая запись из прежней: исходник известен — он же (у снимка — блоки с рамками), без
+   нового распознавания; нет — файл с шары проходит путь загрузки заново. Выгрузка — txt и docx перевода.
+8. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
-7. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста, лента, запись с
-   кусками (`?from=` — только новые), остановка, «Продолжить», удаление.
+9. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
+   запись с кусками (`?from=` — только новые), остановка, «Продолжить», повтор, выгрузка, удаление.
 """
 import asyncio
 import json
 import logging
 import uuid
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import chat
 import clock
 import db
+import documents
+import exports
 import images
 import media
+import ocr
+import ocr_render
 import sections
 import state
 import translate_text
@@ -55,7 +70,8 @@ CANCELLING = "останавливаю"
 CANCELLED = "остановлено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
-NAME_CHARS = 60                  # имя текстовой записи — начало первой строки исходника
+SCAN_FAILED = "скан не распознан"
+NAME_CHARS = 60                 # имя текстовой записи — начало первой строки исходника
 HEAD_CHARS = 200                 # начало исходника и перевода в ленте
 #: полоса → виды записей в ней
 LANES = {"text": ("text",), "file": ("file", "photo")}
@@ -106,6 +122,11 @@ def _check_queue(user_id: int, lane: str) -> None:
             f"в очереди уже {QUEUE_MAX} переводов — дождитесь их или остановите")})
 
 
+def _chunks(source: str) -> list[tuple]:
+    """Строки кусков исходника: (текст, разделитель после, рамки нет)."""
+    return [(c, sep, None) for c, sep in translate_text.split(source, translate_text.CHUNK_CHARS)]
+
+
 def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang: str, target_lang: str,
            source: "str | None", source_media_id: "str | None" = None, scan_id: "str | None" = None,
            blocks: "list[dict] | None" = None, ocr_conn=None) -> str:
@@ -115,7 +136,7 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
     if blocks is not None:
         rows = [(b["source"], "\n", json.dumps(b["box"])) for b in blocks]
     else:
-        rows = [(c, sep, None) for c, sep in translate_text.split(source, translate_text.CHUNK_CHARS)] if source else []
+        rows = _chunks(source) if source else []
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("BEGIN")
     try:
@@ -249,10 +270,65 @@ async def _languages(job: Job, row) -> tuple[str, str]:
     return origin, lang
 
 
+async def _cancel_scan(user_id: int, scan_id: str) -> None:
+    try:
+        await ocr.request_cancel(user_id, scan_id)
+    except HTTPException:                        # документ уже удалён
+        pass
+
+
+async def _await_scan(job: Job, row):
+    """Скан записи-файла: ждать документ «Сканов» раз в POLL_SEC (этап — страница в работе), готовый — его текст
+    в исходник и куски; затем ждать `ocr.idle` (раннер «Сканов» освобождает слот ocr). Итог — строка записи заново."""
+    sid = row["scan_id"]
+    while True:
+        if job.cancel:                           # «Остановить» — и скан: его ждал только перевод
+            await _cancel_scan(job.user_id, sid)
+            raise _Cancelled
+        scan = state.DB.execute("SELECT state, detail FROM scans WHERE id = ? AND user_id = ?",
+                                (sid, job.user_id)).fetchone()
+        if scan is None:
+            raise translate_text.TranslateError(f"{SCAN_FAILED}: документ удалён")
+        if scan["state"] in ("error", "cancelled"):
+            raise translate_text.TranslateError(f"{SCAN_FAILED}: {scan['detail']}")
+        if scan["state"] == "done":
+            break
+        done, pages = ocr.progress([sid])
+        stage = f"распознаю · стр. {min(done + 1, pages)} из {pages}"
+        if stage != job.stage:
+            job.stage = stage
+            _store(job)
+        await clock.SLEEP(POLL_SEC)
+    source = translate_text.normalize(ocr.attachment_text(sid))
+    if not source:
+        raise translate_text.TranslateError(f"{SCAN_FAILED}: текст не найден")
+    if len(source) > translate_text.TEXT_MAX:
+        raise translate_text.TranslateError(TOO_LONG)
+    rows = _chunks(source)
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("UPDATE translations SET source = ?, parts = ? WHERE id = ?", (source, len(rows), job.id))
+        state.DB.executemany("INSERT INTO translation_parts(translation_id, n, source, sep, box, state)"
+                             " VALUES (?, ?, ?, ?, ?, 'waiting')", [(job.id, n, *r) for n, r in enumerate(rows, 1)])
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    log.info("перевод %s: скан готов, %d знаков, %d кусков", job.id[:8], len(source), len(rows))
+    job.stage = "готовлю"
+    _store(job)
+    while not ocr.idle(job.user_id):
+        _check(job)
+        await clock.SLEEP(POLL_SEC)
+    return state.DB.execute("SELECT * FROM translations WHERE id = ?", (job.id,)).fetchone()
+
+
 async def _translate(job: Job, row) -> None:
     """Куски `waiting` по порядку; отказ куска — ошибка записи с его номером."""
-    if row["source"] is None:                    # скан и снимок — исходник ещё распознаётся (задачи 4–5 плана)
-        raise translate_text.TranslateError("исходник не готов")
+    if row["source"] is None:
+        if row["scan_id"] is None:               # снимок — исходник ещё распознаётся (задача 5 плана)
+            raise translate_text.TranslateError("исходник не готов")
+        row = await _await_scan(job, row)
     if sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await _free(job.conn)                    # и до определения языка: оно — запрос к той же модели
@@ -330,6 +406,8 @@ async def request_cancel(user_id: int, tid: str) -> str:
     if row["state"] == "queued":
         _finish(tid, "cancelled", CANCELLED)
         JOBS.pop(tid, None)
+        if row["scan_id"] is not None and not row["has_source"]:
+            await _cancel_scan(user_id, row["scan_id"])
         return "cancelled"
     job = JOBS.get(tid)
     if row["state"] == "working" and job is not None:
@@ -409,11 +487,22 @@ COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, d
            f" source IS NOT NULL AS has_source, substr(source, 1, {HEAD_CHARS}) AS source_head,"
            f" substr(text, 1, {HEAD_CHARS}) AS text_head")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
+FORMAT = "нужен PDF, DOCX, TXT или MD"
+FILE_GONE = "исходный файл удалён"
+#: имя выгрузки текстовой записи: «Перевод.ru.txt»
+TEXT_STEM = "Перевод"
 
 
 class TextIn(BaseModel):
     # до нормализации: переносы Windows (`\r\n`) — два знака на один, предел TEXT_MAX сверяется после
     text: str = Field(max_length=2 * translate_text.TEXT_MAX)
+    source_lang: str = Field(max_length=8)
+    target_lang: str = Field(max_length=8)
+    connection_id: "int | None" = None
+    model: "str | None" = Field(None, max_length=sections.MODEL_MAX)
+
+
+class RepeatIn(BaseModel):
     source_lang: str = Field(max_length=8)
     target_lang: str = Field(max_length=8)
     connection_id: "int | None" = None
@@ -471,6 +560,104 @@ async def translate_field(body: TextIn, request: Request):
     return _out(_row(uid, tid))
 
 
+def _int_header(request: Request, key: str) -> "int | None":
+    value = request.headers.get(key, "").strip()
+    return int(value) if value.isdigit() else None
+
+
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+async def _read_file(user_id: int, name: str, data: bytes) -> "tuple[str | None, list[dict] | None, object]":
+    """(текст, None, _) документа или (None, страницы, (подключение, модель) «Сканов») скана — до записи на шару.
+    Скан — PDF со страницами без слоя (`ocr.plan_pages`), только при подключении «Сканов» через сервер; без него —
+    отказ `scan` словами. Отказы — HTTPException."""
+    suffix = PurePosixPath(name.lower()).suffix
+    if suffix not in documents.SUFFIXES:
+        raise HTTPException(415, {"code": "format", "message": FORMAT})
+    reader = sections.default(user_id, "ocr") if suffix == ".pdf" else None
+    try:
+        if reader is not None and reader[0].proxied:
+            text, pages = ocr.plan_pages(await asyncio.to_thread(ocr_render.pdf_scan_pages, data))
+        else:
+            text, pages = await asyncio.to_thread(documents.extract, name, data), None
+    except documents.DocumentError as e:
+        if str(e) == documents.SCAN:                 # подключение «Сканов» есть, но адрес убран из списка
+            raise HTTPException(422, {"code": "scan", "message": (
+                chat.NO_OCR if reader is None else sections.unlisted(reader[0]))}) from None
+        raise HTTPException(e.status, {"code": "document", "message": str(e)}) from None
+    if pages is not None:
+        return None, pages, reader
+    text = translate_text.normalize(text)
+    if not text:
+        raise HTTPException(422, {"code": "empty", "message": "в файле нет текста"})
+    if len(text) > translate_text.TEXT_MAX:
+        raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
+    return text, None, reader
+
+
+def _start_file(user_id: int, conn, model: str, *, name: str, source_lang: str, target_lang: str, media_id: str,
+                text: "str | None", pages: "list[dict] | None", reader) -> str:
+    """Запись-файл в полосу `file`; скан — сначала документ «Сканов» с тем же файлом. Без await: между проверкой
+    очереди и записью она не изменится, отказ (409 busy любой из двух очередей) не оставит половины."""
+    scan_id = None
+    if pages is not None:
+        _check_queue(user_id, "file")
+        scan_id = ocr.create(user_id, reader[0], reader[1], name, origin="section", source_media_id=media_id,
+                             pages=pages)
+    tid = create(user_id, conn, model, kind="file", name=name, source_lang=source_lang, target_lang=target_lang,
+                 source=text, source_media_id=media_id, scan_id=scan_id)
+    if scan_id is not None:
+        ocr.kick(user_id)
+        log.info("перевод %s: скан %s, %d стр. на распознавание", tid[:8], scan_id[:8],
+                 sum(p["state"] == "waiting" for p in pages))
+    kick(user_id, "file")
+    return tid
+
+
+@router.post("/files", status_code=202)
+async def translate_file(request: Request):
+    """Файл — multipart, одно поле `file` (имя — из части, не из строки запроса: её пишет журнал Apache); языки,
+    подключение и модель — заголовками `X-Studio-*`. Отказы — до записи на шару; после неё — файл удаляется."""
+    uid = request.state.user.id
+    source_lang = request.headers.get("x-studio-source-lang", "")
+    target_lang = request.headers.get("x-studio-target-lang", "")
+    _langs(source_lang, target_lang)
+    conn, model = sections.resolve(uid, "translate", _int_header(request, "x-studio-connection"),
+                                   request.headers.get("x-studio-model") or None)
+    try:
+        name, data = await documents.read_upload(request)
+    except documents.DocumentError as e:
+        raise HTTPException(e.status, {"code": "upload", "message": str(e)}) from None
+    text, pages, reader = await _read_file(uid, name, data)
+    _check_queue(uid, "file")                        # полная полоса — до записи на шару
+    try:
+        media_id = await media.save_async(uid, data, chat.DOC_MIME[PurePosixPath(name.lower()).suffix], name)
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    if not media.alive(uid, media_id):               # история стёрта, пока шла запись
+        await media.delete_async(uid, media_id)
+        raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
+    try:
+        tid = _start_file(uid, conn, model, name=name, source_lang=source_lang, target_lang=target_lang,
+                          media_id=media_id, text=text, pages=pages, reader=reader)
+    except HTTPException:                            # очередь заполнилась, пока шла запись
+        await media.delete_async(uid, media_id)
+        raise
+    return _out(_row(uid, tid))
+
+
+def _read_media(user_id: int, media_id: str) -> bytes:
+    """Исходный файл записи — в потоке; нет — 409 gone, шара не отвечает — 503."""
+    try:
+        return media.path(user_id, media_id).read_bytes()
+    except (HTTPException, FileNotFoundError):
+        raise HTTPException(409, {"code": "gone", "message": FILE_GONE}) from None
+    except OSError:
+        raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
+
+
 @router.get("")
 async def list_translations(request: Request, before: "float | None" = None,
                             before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
@@ -506,6 +693,52 @@ async def continue_(tid: str, request: Request):
     uid = request.state.user.id
     await resume(uid, tid)
     return _out(_row(uid, tid))
+
+
+@router.post("/{tid}/repeat", status_code=202)
+async def repeat(tid: str, body: RepeatIn, request: Request):
+    """Новая запись из прежней — тот же вид, имя и файл, свои языки и модель; прежняя не меняется. Исходник
+    известен — он же (у снимка — блоки с рамками), без нового распознавания; нет (скан не распознан) — файл с
+    шары проходит путь загрузки, скан — новым документом «Сканов». Файла нет — 409 gone."""
+    uid = request.state.user.id
+    row = _row(uid, tid)
+    _langs(body.source_lang, body.target_lang)
+    conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
+    langs = {"source_lang": body.source_lang, "target_lang": body.target_lang}
+    media_id = row["source_media_id"]
+    if row["has_source"]:
+        source = state.DB.execute("SELECT source FROM translations WHERE id = ?", (tid,)).fetchone()[0]
+        blocks = [{"source": p["source"], "box": json.loads(p["box"])} for p in state.DB.execute(
+            "SELECT source, box FROM translation_parts WHERE translation_id = ? AND box IS NOT NULL ORDER BY n", (tid,))]
+        new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
+                     scan_id=row["scan_id"], blocks=blocks or None, **langs)
+        kick(uid, lane_of(row["kind"]))
+    else:
+        if media_id is None or not media.alive(uid, media_id):
+            raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
+        data = await asyncio.to_thread(_read_media, uid, media_id)
+        text, pages, reader = await _read_file(uid, row["name"], data)
+        if not media.alive(uid, media_id):           # удалён, пока читали
+            raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
+        new = _start_file(uid, conn, model, name=row["name"], media_id=media_id, text=text, pages=pages,
+                          reader=reader, **langs)
+    log.info("перевод %s: повтор %s", new[:8], tid[:8])
+    return _out(_row(uid, new))
+
+
+@router.get("/{tid}/export")
+async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx)$")):  # noqa: A002
+    """Перевод файлом — у кончившейся записи с переведённым: «<имя без расширения>.<язык перевода>.<формат>»,
+    у текста — «Перевод.ru.txt»."""
+    row = _row(request.state.user.id, tid)
+    text = joined(tid) if row["state"] in TERMINAL else ""
+    if not text:
+        raise HTTPException(409, {"code": "running", "message": "перевода ещё нет"})
+    stem = TEXT_STEM if row["kind"] == "text" else _stem(row["name"])
+    body = exports.text_docx(text, stem) if format == "docx" else text.encode("utf-8")
+    name = f"{stem}.{row['result_lang'] or row['target_lang']}.{format}"
+    return Response(body, media_type=exports.TYPES[format],
+                    headers={"Content-Disposition": media.disposition(name), "Cache-Control": "no-store"})
 
 
 @router.delete("/{tid}", status_code=204)

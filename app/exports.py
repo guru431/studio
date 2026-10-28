@@ -191,6 +191,14 @@ def pages_docx(pages: list[dict], title: str) -> bytes:
     return _package(body)
 
 
+def text_docx(text: str, title: str) -> bytes:
+    """Перевод (спека 2026-10-28-studio-translator-design, 6.2): заголовок, затем абзац на строку `md_plain`
+    (строки таблиц — ячейки через табуляцию) — как pages_docx без страниц."""
+    body = [_paragraph(title, bold=True, size=32)]
+    body += [_cells(line) for line in md_plain(text).split("\n") if line.strip()]
+    return _package(body)
+
+
 def _package(body: list[str]) -> bytes:
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'

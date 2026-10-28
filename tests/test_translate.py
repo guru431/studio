@@ -2,20 +2,28 @@
 заданий на пользователя, ожидание карты, обрезанный кусок — половинками, ошибка куска — со своим номером,
 «Остановить» и перезапуск с готовыми кусками, «Продолжить» только оставшегося; текст — не в журнал."""
 import asyncio
+import io
 import json
 import logging
+import zipfile
+from xml.etree import ElementTree
 
 import httpx
+import pytest
 
 import clock
 import images
 import media
+import ocr
+import ocr_render
 import sections
 import state
 import translate
 import translate_text
 from conftest import add_connection, add_gateway, make_user, signin
 from fakes import FakeGateway
+from scans import scan_pdf
+from test_documents import docx, pdf
 
 MODEL = "local-gemma-abl"
 
@@ -456,3 +464,255 @@ def test_blocks_become_parts_with_boxes(studio):
     assert [(p["source"], p["sep"], p["box"]) for p in parts] == [
         ("Exit", "\n", [93, 146, 491, 214]), ("Staff only", "\n", [193, 640, 379, 706])]
     assert translate.lane_of("photo") == translate.lane_of("file") == "file" and translate.lane_of("text") == "text"
+
+
+# ---- файлы и сканы (спека 6.4, 6.5), повтор, выгрузка ----------------------------------------------
+
+@pytest.fixture
+def small_pages(monkeypatch):
+    """Рендер скана мелкий — быстрый; предел 2200 сверяет test_ocr_render."""
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 300)
+
+
+def send_file(s, name, data, source="en", target="ru", **headers):
+    return s.c.post("/api/translate/files", files={"file": (name, data, "application/octet-stream")},
+                    headers={"X-Studio-Source-Lang": source, "X-Studio-Target-Lang": target} | headers)
+
+
+def start_file(s, name, data, **extra) -> str:
+    r = send_file(s, name, data, **extra)
+    assert r.status_code == 202, r.text
+    return r.json()["id"]
+
+
+def count(s, table) -> int:
+    return on_loop(s, lambda: state.DB.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+
+
+def scan_row(s, sid):
+    return on_loop(s, lambda: (r := state.DB.execute("SELECT * FROM scans WHERE id = ?", (sid,)).fetchone()) and dict(r))
+
+
+def owner_of_tr(tid) -> int:
+    return state.DB.execute("SELECT user_id FROM translations WHERE id = ?", (tid,)).fetchone()[0]
+
+
+def paths(s) -> list:
+    return [r.url.path for r in s.gw.requests]
+
+
+def test_docx_and_pdf_with_a_layer_are_translated_from_their_text(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    tid = start_file(studio, "Записка.docx", docx(["Первый", " абзац"], ["Второй"]))
+    row = wait_row(studio, tid)
+    assert (row["state"], row["kind"], row["name"], row["source"]) == ("done", "file", "Записка.docx", "Первый абзац\nВторой")
+    assert row["scan_id"] is None and row["text"] == "Здравствуйте!"
+    uid = on_loop(studio, owner_of_tr, tid)
+    assert on_loop(studio, lambda: media.path(uid, row["source_media_id"]).read_bytes()) == docx(
+        ["Первый", " абзац"], ["Второй"])
+    pid = start_file(studio, "Договор.pdf", pdf("Payment is due in 30 days", "Second page"))
+    row = wait_row(studio, pid)
+    assert (row["state"], row["name"], row["source"]) == ("done", "Договор.pdf", "Payment is due in 30 days\n\nSecond page")
+    assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
+    assert "Записка" not in caplog.text and "Договор" not in caplog.text and "Payment" not in caplog.text
+    r = send_file(studio, "фото.jpg", b"\xff\xd8\xff")
+    assert r.status_code == 415 and r.json()["detail"] == {"code": "format", "message": "нужен PDF, DOCX, TXT или MD"}
+    r = send_file(studio, "Записка.txt", b"Hi", target="xx")
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "lang"
+    assert count(studio, "media") == 2
+
+
+def slow_ocr_release(s):
+    """Первый release слота ocr — 409 (slot-gate ещё считает чужую страницу): раннер «Сканов» повторит через
+    RETRY_SEC, и всё это время в студии идёт освобождение карты."""
+    busy = [True]
+
+    async def release(request):
+        if busy:
+            busy.pop()
+            s.gw.releases.append((None, request.headers.get("authorization")))
+            return httpx.Response(409, json={"error": {"message": "slot_busy"}})
+        return await s.gw.builtin(request)
+    s.gw.on["/pages/ocr-release"] = release
+
+
+def test_scanned_pdf_is_recognized_then_translated(studio, small_pages):
+    """…и модель перевода зовётся только после ocr.idle: release слота ocr (первый — 409 и повтор) — раньше
+    первого запроса к модели, иначе gemma-abl ждала бы карту под арендой ocr."""
+    add_gateway(studio)
+    slow_ocr_release(studio)
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink", "This page has a text layer long enough to be read as it is."))
+    row = wait_row(studio, tid)
+    assert row["state"] == "done", row["detail"]
+    scan = scan_row(studio, row["scan_id"])
+    assert (scan["origin"], scan["state"], scan["name"], scan["pages"]) == ("section", "done", "Скан.pdf", 2)
+    assert scan["source_media_id"] == row["source_media_id"]
+    assert row["source"] == on_loop(studio, ocr.attachment_text, row["scan_id"])
+    assert row["source"].startswith("Страница 1\n\n# Договор") and row["parts"] >= 1 and row["text"]
+    sent = paths(studio)
+    model_at = sent.index("/v1/chat/completions")
+    assert sent.count("/pages/ocr") == 1 and sent[:model_at].count("/pages/ocr-release") == 2
+    assert ocr.RETRY_SEC in studio.sleeps
+
+
+def test_scan_progress_is_the_stage_of_the_translation(studio, small_pages):
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    wait_until(studio, lambda: state.DB.execute("SELECT detail FROM translations WHERE id = ?",
+                                                (tid,)).fetchone()[0] == "распознаю · стр. 1 из 1")
+    assert studio.c.get(f"/api/translate/{tid}").json()["detail"] == "распознаю · стр. 1 из 1"
+    studio.gw.ocr_hold = False
+    assert wait_row(studio, tid)["state"] == "done"
+
+
+def test_scan_deleted_while_waiting_fails_the_translation(studio, small_pages):
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    sid = row_of(studio, tid)["scan_id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    assert studio.c.post(f"/api/ocr/{sid}/cancel").json() == {"state": "cancelling"}
+    studio.gw.ocr_hold = False
+    row = wait_row(studio, tid)
+    assert (row["state"], row["detail"], row["source"]) == ("error", "скан не распознан: отменено", None)
+    assert studio.gw.chat_requests == []
+
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    sid = row_of(studio, tid)["scan_id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 2)
+    on_loop(studio, lambda: state.DB.execute("DELETE FROM scans WHERE id = ?", (sid,)))
+    row = wait_row(studio, tid)
+    assert (row["state"], row["detail"]) == ("error", "скан не распознан: документ удалён")
+    studio.gw.ocr_hold = False
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert studio.gw.chat_requests == []
+
+
+def test_stopping_a_translation_cancels_its_scan(studio, small_pages):
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    sid = row_of(studio, tid)["scan_id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+    assert studio.c.post(f"/api/translate/{tid}/cancel").json() == {"state": "cancelling"}
+    row = wait_row(studio, tid)
+    assert (row["state"], row["detail"]) == ("cancelled", translate.CANCELLED)
+    assert scan_row(studio, sid)["state"] == "cancelling"
+    studio.gw.ocr_hold = False
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0]
+               == "cancelled")
+    assert studio.gw.chat_requests == []
+
+
+def test_scanned_pdf_without_ocr_is_refused_with_words(studio):
+    gw = add_gateway(studio)
+    assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
+    r = send_file(studio, "Скан.pdf", scan_pdf("ink"))
+    assert r.status_code == 422
+    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Распознавание» в настройках"}
+    assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
+
+
+def test_too_long_document_is_refused_before_a_job(studio, monkeypatch):
+    monkeypatch.setattr(translate_text, "TEXT_MAX", 50)
+    add_gateway(studio)
+    r = send_file(studio, "Записка.txt", ("a" * 60).encode())
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "too_long"
+    r = send_file(studio, "Пусто.txt", b" \r\n ")
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "empty", "message": "в файле нет текста"}
+    assert (count(studio, "media"), count(studio, "translations")) == (0, 0)
+
+
+def test_full_file_lane_drops_the_saved_file(studio):
+    uid, conn = gateway_conn(studio)
+    for _ in range(translate.QUEUE_MAX):
+        file_job(studio, uid, conn, kick=False)
+    r = send_file(studio, "Записка.txt", b"Hello.")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    assert count(studio, "media") == 0
+
+
+def test_repeat_reuses_the_stored_file(studio):
+    add_gateway(studio)
+    tid = start_file(studio, "Записка.docx", docx(["First."], ["Second."]))
+    first = wait_row(studio, tid)
+    files = count(studio, "media")
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "de"})
+    assert r.status_code == 202, r.text
+    assert r.json()["id"] != tid and r.json()["state"] == "queued" and r.json()["name"] == "Записка.docx"
+    row = wait_row(studio, r.json()["id"])
+    assert (row["state"], row["kind"], row["result_lang"]) == ("done", "file", "de")
+    assert (row["source_media_id"], row["source"]) == (first["source_media_id"], first["source"])
+    assert count(studio, "media") == files and row_of(studio, tid) == first
+    assert studio.gw.chat_requests[-1]["messages"][0]["content"] == translate_text.system_prompt("en", "de")
+
+    text = wait_row(studio, start(studio, "Hello."))
+    r = studio.c.post(f"/api/translate/{text['id']}/repeat", json={"source_lang": "en", "target_lang": "fr"})
+    row = wait_row(studio, r.json()["id"])
+    assert (row["kind"], row["source"], row["result_lang"], row["source_media_id"]) == ("text", "Hello.", "fr", None)
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "xx"})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "lang"
+
+
+def test_repeat_of_a_failed_scan_starts_a_new_scan(studio, small_pages):
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(400, {"error": {"message": "плохая страница"}})]
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    first = wait_row(studio, tid)
+    assert first["state"] == "error" and first["detail"].startswith("скан не распознан: ")
+    assert studio.c.get(f"/api/translate/{tid}").json()["can_continue"] is False
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "ru"})
+    assert r.status_code == 202, r.text
+    row = wait_row(studio, r.json()["id"])
+    assert row["state"] == "done" and row["scan_id"] not in (None, first["scan_id"])
+    assert row["source_media_id"] == first["source_media_id"] == scan_row(studio, row["scan_id"])["source_media_id"]
+    assert count(studio, "scans") == 2
+
+    uid = on_loop(studio, owner_of_tr, tid)
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    on_loop(studio, media.delete_async, uid, first["source_media_id"])
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "ru"})
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "gone", "message": "исходный файл удалён"}
+
+
+def test_export_gives_txt_and_docx_named_by_language(studio):
+    add_gateway(studio)
+    studio.gw.chat_script = [["Первая строка.\nВторая строка."]]
+    tid = start_file(studio, "Договор.txt", b"First line.\nSecond line.")
+    wait_row(studio, tid)
+    r = studio.c.get(f"/api/translate/{tid}/export?format=txt")
+    assert r.status_code == 200 and r.text == "Первая строка.\nВторая строка."
+    assert r.headers["content-disposition"] == media.disposition("Договор.ru.txt")
+    r = studio.c.get(f"/api/translate/{tid}/export?format=docx")
+    assert r.headers["content-disposition"] == media.disposition("Договор.ru.docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    assert ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in root.iter(f"{w}p")] == [
+        "Договор", "Первая строка.", "Вторая строка."]
+    assert studio.c.get(f"/api/translate/{tid}/export?format=pdf").status_code == 422
+
+    text = wait_row(studio, start(studio, "Hello."))["id"]
+    r = studio.c.get(f"/api/translate/{text}/export?format=txt")
+    assert r.headers["content-disposition"] == media.disposition("Перевод.ru.txt")
+    held = hold_chat(studio)
+    running = start(studio, "Hello again.")
+    r = studio.c.get(f"/api/translate/{running}/export?format=txt")
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "running", "message": "перевода ещё нет"}
+    held[0] = False
+    wait_row(studio, running)
+
+
+def test_deleting_a_translation_keeps_a_file_the_scan_still_uses(studio, small_pages):
+    add_gateway(studio)
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    row = wait_row(studio, tid)
+    uid, mid = on_loop(studio, owner_of_tr, tid), row["source_media_id"]
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert on_loop(studio, media.alive, uid, mid)
+    assert studio.c.delete(f"/api/ocr/{row['scan_id']}").status_code == 204
+    assert not on_loop(studio, media.alive, uid, mid)
