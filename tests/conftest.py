@@ -79,6 +79,7 @@ def studio(env, schema_db, monkeypatch):
 
     import auth
     import chat
+    import claude_code
     import clock
     import images
     import main
@@ -133,6 +134,7 @@ def studio(env, schema_db, monkeypatch):
     media.ARCHIVES.clear()
     takeout.EXPORTS.clear()
     takeout.RUNNING.clear()
+    claude_code.PDFS.clear()
     clear_bridge()
     if not env.db_path.exists():
         shutil.copyfile(schema_db, env.db_path)
@@ -142,6 +144,7 @@ def studio(env, schema_db, monkeypatch):
     screenlock.CHALLENGES.clear()
     images.JOBS.clear()
     chat.STREAMS.clear()
+    claude_code.PDFS.clear()
     clear_bridge()
 
 

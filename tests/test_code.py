@@ -1,15 +1,19 @@
 """Раздел «Claude Code» на сервере (app/claude_code.py): открыть компьютер PIN-ом моста, проекты, чаты (слияние сессий
 машины с отметками студии), история; чужое и недопустимое — до моста. Мост — подставной (tests/fake_bridge.py)."""
 import asyncio
+import hashlib
+import json
 import logging
 import uuid
 
 import bridge
 import claude_code
 import fake_bridge
+import ocr_render
 import state
 from conftest import make_user, signin
-from fake_bridge import FakeMachine, connect, enroll, pid, settle
+from fake_bridge import FakeMachine, Refused, connect, enroll, pid, settle
+from scans import scan_pdf
 from test_auth import guarded_routes
 from test_chat import events_of
 
@@ -32,6 +36,11 @@ BODIES = {
     ("GET", "/api/code/agents/1/projects/1/chats/1/live"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/answer"): {"request_id": "r1", "decision": "allow"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/stop"): None,
+    ("POST", "/api/code/agents/1/projects/1/files"): {"path": ""},
+    ("POST", "/api/code/agents/1/projects/1/read"): {"path": ""},
+    ("PUT", "/api/code/agents/1/projects/1/file"): {"path": "a", "text": "", "version": "v"},
+    ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},
+    ("GET", "/api/code/agents/1/projects/1/git"): None,
 }
 
 
@@ -519,4 +528,196 @@ def test_turn_text_never_reaches_the_log(studio, caplog):
                  f"пользователь {uid}: компьютер {aid} — stop: idle"):
         assert line in text_, line
     for secret in ("секрет", "7319", "Bash", "a.txt", "sonnet", "alpha", "Рабочий", ALPHA, A, "r1"):
+        assert secret not in text_, secret
+
+
+# ---- файлы, правка, просмотр PDF, git (задача 6) ------------------------------------
+
+PDF = scan_pdf("first page", "second page")
+APP = "print('привет')\n".encode()
+
+
+def with_files(s):
+    """Владелец, компьютер открыт; у «alpha» — README, исходник, двухстраничный PDF и двоичный файл."""
+    aid, m, link = setup(s)
+    m.projects["alpha"]["files"] = {"README.md": b"# alpha\n", "src/app.py": APP, "docs/a.pdf": PDF,
+                                    "bin/x.dat": b"ab\0cd"}
+    return aid, m, link
+
+
+def project_url(aid, *rest) -> str:
+    return url(aid, "projects", ALPHA, *rest)
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_files_list_and_read_and_save(studio):
+    aid, m, _ = with_files(studio)
+    r = studio.c.post(project_url(aid, "files"), json={"path": ""})
+    assert r.status_code == 200
+    assert [(i["name"], i["dir"]) for i in r.json()["items"]] == [
+        ("bin", True), ("docs", True), ("src", True), ("README.md", False)]
+    [item] = studio.c.post(project_url(aid, "files"), json={"path": "src"}).json()["items"]
+    assert (item["name"], item["dir"], item["size"]) == ("app.py", False, len(APP))
+    assert {k: m.requests[-1][k] for k in ("op", "project", "path")} == {"op": "files", "project": ALPHA,
+                                                                         "path": "src"}
+    r = studio.c.post(project_url(aid, "read"), json={"path": "src/app.py"})
+    assert (r.status_code, r.json()) == (200, {"text": "print('привет')\n", "version": sha(APP)})
+    new = "print('пока')\r\n"
+    r = studio.c.put(project_url(aid, "file"), json={"path": "src/app.py", "text": new, "version": sha(APP)})
+    assert (r.status_code, r.json()) == (200, {"version": sha(new.encode())})
+    assert m.projects["alpha"]["files"]["src/app.py"] == new.encode()              # концы строк как есть
+    r = studio.c.put(project_url(aid, "file"), json={"path": "src/app.py", "text": "x", "version": sha(APP)})
+    assert r.status_code == 409
+    assert {k: detail(r)[k] for k in ("code", "version")} == {"code": "conflict", "version": sha(new.encode())}
+    assert m.projects["alpha"]["files"]["src/app.py"] == new.encode()
+
+
+def test_bad_paths_never_reach_the_bridge(studio):
+    aid, m, _ = with_files(studio)
+    before = len(m.requests)
+    bad = ("../x", "/etc", "a\\b", "a//b", "./a", "a/..", "a\x00b", "a\nb", "a/", "x" * 1025, 5, None, ["a"])
+    for path in bad:
+        for r in (studio.c.post(project_url(aid, "files"), json={"path": path}),
+                  studio.c.post(project_url(aid, "read"), json={"path": path}),
+                  studio.c.put(project_url(aid, "file"), json={"path": path, "text": "", "version": "v"}),
+                  studio.c.post(project_url(aid, "pdf"), json={"path": path, "page": 1})):
+            assert (r.status_code, detail(r)) == (422, {"code": "path", "message": "неверный путь"}), (path, r.url)
+    assert len(m.requests) == before
+    r = studio.c.post(project_url(aid, "read"), json={"path": "x" * claude_code.PATH_MAX})     # длина на пределе
+    assert (r.status_code, detail(r)["code"]) == (404, "not_found")
+    assert claude_code.check_path("") == "" and claude_code.check_path("a/b.c/..d") == "a/b.c/..d"
+
+
+def test_bridge_refusals_map_to_statuses(studio, monkeypatch):
+    aid, m, _ = with_files(studio)
+    m.projects["alpha"]["files"]["big.txt"] = b"x" * (claude_code.FILE_MAX + 1)
+    for path, status, code in (("bin/x.dat", 415, "binary"), ("big.txt", 413, "too_large"),
+                               ("nope.txt", 404, "not_found")):
+        r = studio.c.post(project_url(aid, "read"), json={"path": path})
+        assert (r.status_code, detail(r)["code"]) == (status, code), path
+
+    def outside(req, events):
+        raise Refused("outside", "путь вне проекта")
+
+    monkeypatch.setattr(m, "_op_read", outside)
+    r = studio.c.post(project_url(aid, "read"), json={"path": "link/secret"})
+    assert (r.status_code, detail(r)) == (403, {"code": "outside", "message": "путь вне проекта"})
+
+
+def test_file_body_over_the_limit_is_413_before_the_bridge(studio):
+    aid, m, _ = with_files(studio)
+    before = len(m.requests)
+    words = {"code": "too_large", "message": "файл больше 2 МиБ"}
+    for text in ("x" * (claude_code.FILE_MAX + 1),                    # тело в пределе, текст — нет
+                 "я" * (claude_code.FILE_MAX // 2 + 1),               # знаков меньше предела, байтов больше
+                 "x" * claude_code.FILE_BODY_MAX):                    # тело больше предела
+        body = json.dumps({"path": "src/app.py", "text": text, "version": sha(APP)}, ensure_ascii=False).encode()
+        r = studio.c.put(project_url(aid, "file"), content=body, headers={"Content-Type": "application/json"})
+        assert (r.status_code, detail(r)) == (413, words), len(body)
+    for body in (b"not json", b"[]", json.dumps({"path": "src/app.py", "text": 5, "version": "v"}).encode(),
+                 json.dumps({"path": "src/app.py", "text": "x"}).encode(),
+                 b'{"path": "src/app.py", "text": "\\ud800", "version": "v"}'):
+        r = studio.c.put(project_url(aid, "file"), content=body, headers={"Content-Type": "application/json"})
+        assert (r.status_code, detail(r)["code"]) == (422, "invalid"), body
+    assert len(m.requests) == before
+    assert m.projects["alpha"]["files"]["src/app.py"] == APP
+    text = "x" * claude_code.FILE_MAX                                 # ровно предел — проходит
+    r = studio.c.put(project_url(aid, "file"), json={"path": "src/app.py", "text": text, "version": sha(APP)})
+    assert (r.status_code, r.json()) == (200, {"version": sha(text.encode())})
+
+
+def test_pdf_pages_render_once_per_fetch(studio, monkeypatch):
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)                  # рендер дёшев: тест не о качестве
+    aid, m, _ = with_files(studio)
+
+    def page(n, path="docs/a.pdf"):
+        return studio.c.post(project_url(aid, "pdf"), json={"path": path, "page": n})
+
+    r = page(1)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.content.startswith(b"\x89PNG") and r.headers["x-studio-pages"] == "2"
+    [raw] = sent(m, "raw")
+    assert (raw["project"], raw["path"]) == (ALPHA, "docs/a.pdf")
+    r = page(2)
+    assert r.status_code == 200 and r.content.startswith(b"\x89PNG") and r.headers["x-studio-pages"] == "2"
+    assert len(sent(m, "raw")) == 1                                   # тот же файл — из памяти
+    r = page(3)
+    assert (r.status_code, detail(r)) == (404, {"code": "page", "message": "нет такой страницы"})
+    assert len(sent(m, "raw")) == 1
+    studio.clock[0] += claude_code.PDF_TTL_SEC
+    assert page(1).status_code == 200 and len(sent(m, "raw")) == 2   # срок вышел — заново с машины
+    r = page(1, "README.md")
+    assert (r.status_code, detail(r)) == (415, {"code": "not_pdf", "message": "это не PDF"})
+    assert len(sent(m, "raw")) == 3
+    assert page(2).status_code == 200 and len(sent(m, "raw")) == 3   # не PDF не вытеснил прежний
+    m.projects["alpha"]["files"]["docs/b.pdf"] = PDF
+    assert page(1, "docs/b.pdf").status_code == 200 and len(sent(m, "raw")) == 4
+    assert page(1).status_code == 200 and len(sent(m, "raw")) == 5   # в памяти — один файл пользователя
+    for n in (0, -1, "1", True, 1.5, None):
+        assert page(n).status_code == 422, n
+    assert len(sent(m, "raw")) == 5
+
+
+def test_pdf_odd_bytes(studio, monkeypatch):
+    aid, m, _ = with_files(studio)
+    m.projects["alpha"]["files"]["bad.pdf"] = b"%PDF-1.7 garbage"
+    r = studio.c.post(project_url(aid, "pdf"), json={"path": "bad.pdf", "page": 1})
+    assert (r.status_code, detail(r)) == (422, {"code": "pdf", "message": ocr_render.BROKEN})
+    assert claude_code.PDFS == {}                                     # битое не запоминается
+    real = m._op_raw
+    monkeypatch.setattr(m, "_op_raw", lambda req, events: {**real(req, events), "data": "не base64!"})
+    r = studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 1})
+    assert (r.status_code, detail(r)) == (502, {"code": "bridge", "message": "мост ответил непонятно"})
+
+
+def test_pdf_memory_is_per_session(studio, monkeypatch):
+    """Страницы из памяти — только той сессии, что открыла компьютер: другая сессия того же пользователя
+    без PIN получает `closed` от моста, а не чужую память."""
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
+    aid, m, _ = with_files(studio)
+    assert studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 1}).status_code == 200
+    studio.c.cookies.clear()
+    signin(studio, "owner")
+    r = studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 2})
+    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+
+
+def test_git_status_passes_through_and_not_git_is_409(studio):
+    aid, m, _ = with_files(studio)
+    r = studio.c.get(project_url(aid, "git"))
+    assert (r.status_code, detail(r)["code"]) == (409, "not_git")
+    status = {"branch": "main", "upstream": "origin/main", "ahead": 2, "behind": 0,
+              "files": [{"path": "src/app.py", "status": "M"}]}
+    m.projects["alpha"]["git"] = status
+    r = studio.c.get(project_url(aid, "git"))
+    assert (r.status_code, r.json()) == (200, status)
+    assert {k: m.requests[-1][k] for k in ("op", "project")} == {"op": "git", "project": ALPHA}
+
+
+def test_file_paths_never_reach_the_log(studio, caplog, monkeypatch):
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
+    caplog.set_level(logging.DEBUG)
+    aid, m, _ = with_files(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    m.projects["alpha"]["files"]["тайное/план-секрет.md"] = "Содержимое-секрет".encode()
+    m.projects["alpha"]["files"]["тайное/скан-секрет.pdf"] = PDF
+    studio.c.post(project_url(aid, "files"), json={"path": "тайное"})
+    studio.c.post(project_url(aid, "read"), json={"path": "тайное/план-секрет.md"})
+    studio.c.post(project_url(aid, "read"), json={"path": "тайное/нет-секрет.md"})
+    studio.c.post(project_url(aid, "read"), json={"path": "../секрет"})
+    studio.c.put(project_url(aid, "file"), json={"path": "тайное/план-секрет.md", "text": "Новое-секрет",
+                                                 "version": "старая-секрет"})
+    studio.c.post(project_url(aid, "pdf"), json={"path": "тайное/скан-секрет.pdf", "page": 1})
+    studio.c.post(project_url(aid, "pdf"), json={"path": "тайное/скан-секрет.pdf", "page": 9})
+    studio.c.post(project_url(aid, "pdf"), json={"path": "тайное/план-секрет.md", "page": 1})
+    studio.c.get(project_url(aid, "git"))
+    text_ = "\n".join(r.getMessage() for r in caplog.records if r.name == "studio")
+    for line in (f"пользователь {uid}: компьютер {aid} — read: not_found",
+                 f"пользователь {uid}: компьютер {aid} — save: conflict",
+                 f"пользователь {uid}: компьютер {aid} — git: not_git"):
+        assert line in text_, line
+    for secret in ("секрет", "тайное", "alpha", "Рабочий", ALPHA, sha(PDF)):
         assert secret not in text_, secret
