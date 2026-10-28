@@ -34,10 +34,11 @@ const NOTICES = {
   video: ['ролик готов', 'ролик не получился'],
   transcribe: ['расшифровка готова', 'расшифровка не получилась'],
   ocr: ['распознавание готово', 'распознавание не получилось'],
+  translate: ['перевод готов', 'перевод не получился'],
   speech: ['озвучка готова', 'озвучка не получилась'],
 };
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. */
-export const HREF = /^(?:(?:photo|video|transcribe|ocr|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
+export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
 /** Значки разделов (и у строк «Поиска», search.js). */
 export const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -45,6 +46,7 @@ export const ICONS = {
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
+  translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
   speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
 };
 

@@ -1,7 +1,7 @@
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/search, #/settings, #/settings/<раздел>, #/admin (только
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/search, #/settings, #/settings/<раздел>, #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -35,6 +35,7 @@ const HINTS = {
   transcribe: 'Чтобы расшифровывать записи, выберите модель в настройках раздела «Расшифровка»',
   speech: 'Чтобы озвучивать текст, выберите модель в настройках раздела «Озвучка»',
   ocr: 'Чтобы распознавать сканы, выберите модель в настройках раздела «Распознавание»',
+  translate: 'Чтобы переводить, выберите модель в настройках раздела «Перевод»',
 };
 const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -44,6 +45,7 @@ const ICONS = {
   transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
   ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
+  translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
 };
 const THEME_ICONS = {
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -58,6 +60,7 @@ const SECTIONS = {
   transcribe: { title: 'Расшифровка', load: () => import('./transcribe.js') },
   speech: { title: 'Озвучка', load: () => import('./speech.js') },
   ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
+  translate: { title: 'Перевод', load: () => import('./translate.js') },
   search: { title: 'Поиск', load: () => import('./search.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },

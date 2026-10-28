@@ -15,7 +15,7 @@ const KINDS = {
   srvllm: { label: 'Шлюз srvllm', placeholder: 'адрес шлюза, http, IP и порт, без пути' },
 };
 export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Расшифровка',
-  speech: 'Озвучка', ocr: 'Распознавание', dictation: 'Голосовой ввод' };
+  speech: 'Озвучка', ocr: 'Распознавание', translate: 'Перевод', dictation: 'Голосовой ввод' };
 const ERROR_FIELD = { name: 'name', token: 'token' };   // прочие коды — под адресом
 
 export function sectionsText(sections) {
