@@ -1,3 +1,4 @@
+import json
 import logging
 
 import pytest
@@ -44,6 +45,27 @@ def test_write_atomic_replaces_and_leaves_no_temp_files(tmp_path):
     store.write_atomic(p, b"one")
     store.write_atomic(p, b"two")
     assert p.read_bytes() == b"two" and [f.name for f in tmp_path.iterdir()] == ["x.json"]
+
+
+def test_choices_remember_500_newest_chats(home):
+    c = store.Choices(home)
+    assert c.get("a") == (None, None)
+    c.put("a", "opus", None)
+    assert c.get("a") == ("opus", None)
+    old = json.loads((home / "choices.json").read_text("utf-8"))
+    old |= {f"c{i}": {"model": None, "effort": "high"} for i in range(499)}  # 500 чатов
+    (home / "choices.json").write_text(json.dumps(old), "utf-8")
+    c.put("c499", None, "high")
+    assert store.Choices(home).get("a") == (None, None)  # 501-й с конца — прочь
+    assert len(json.loads((home / "choices.json").read_text("utf-8"))) == 500
+    assert c.get("c0") == (None, "high")
+    c.put("c0", "sonnet", "low")  # свежий — в конец
+    c.put("d", "opus", "max")
+    assert c.get("c0") == ("sonnet", "low") and c.get("c1") == (None, None) and c.get("d") == ("opus", "max")
+    (home / "choices.json").write_text("{битый", "utf-8")
+    assert c.get("d") == (None, None)
+    c.put("e", "opus", None)
+    assert c.get("e") == ("opus", None)
 
 
 def test_refused_takes_its_words_from_the_table():
