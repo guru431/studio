@@ -9,6 +9,7 @@ tests/test_studio.py): создание, статус, `content`, удалени
 (`tts_replies`, последний повторяется); распознавание — `/pages/ocr` (`ocr_replies`, затем `ocr_reply`) и
 `/pages/ocr-release` (в `releases` с моделью None; пока страница идёт — 409). Чужой ключ — 401: верен только ключ подключения `TOKEN`.
 Запросы на хост `api.exa.ai` — Exa (`_exa`), мимо шлюза: ни `requests`, ни `down`, ни `reply`, ни `TOKEN`.
+Запросы к службам push (`push.allowed`) — в `push_requests`, ответ — `push_status` (или `push_raise`), тоже мимо шлюза.
 
 `FakeCloud` — облачный сервис для браузерных тестов: настоящий HTTP на localhost с CORS.
 """
@@ -25,6 +26,7 @@ import httpx
 from PIL import Image
 
 import clock
+import push
 from image_upload import VIDEO_FIELDS, VIDEO_UPLOAD, decode_form
 
 TOKEN = "owner-images-test-key"
@@ -140,10 +142,18 @@ class FakeGateway:
         self.exa_page_text = "Текст страницы."   # текст образца `/contents` (режется по maxCharacters, как у Exa)
         self.exa_html = False            # True — 403 text/html Cloudflare, как Exa отвечает debian
         self.exa_raise = None            # класс исключения httpx вместо ответа Exa
+        self.push_requests: list[httpx.Request] = []   # запросы к службам push (`push.HOSTS`)
+        self.push_status = 201           # код ответа службы push
+        self.push_raise = None           # класс исключения httpx вместо ответа службы push
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == EXA_HOST:
             return self._exa(request)
+        if push.allowed(str(request.url)):
+            self.push_requests.append(request)
+            if self.push_raise is not None:
+                raise self.push_raise("нет соединения", request=request)
+            return httpx.Response(self.push_status)
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("нет соединения", request=request)

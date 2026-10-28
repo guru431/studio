@@ -38,6 +38,7 @@ import media
 import ocr
 import presets
 import profile
+import push
 import screenlock
 import search
 import sections
@@ -97,6 +98,7 @@ async def lifespan(_app):
         await speeches.stop()
         await chat.stop_all()
         await bridge.stop()
+        await push.stop()
         await state.HTTP.aclose()
         state.DB.close()
 
@@ -140,6 +142,7 @@ app.include_router(takeout.router)
 app.include_router(agents.router)
 app.include_router(bridge.router)
 app.include_router(claude_code.router)
+app.include_router(push.router)
 
 
 @app.exception_handler(RequestValidationError)
