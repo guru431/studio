@@ -17,20 +17,23 @@
   `code`, а его берёт `pdb` (pytest импортирует `pdb` при старте и падал бы).
 """
 import asyncio
+import base64
 import json
 import logging
 import re
 import sqlite3
+import unicodedata
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 import auth
 import bridge
 import clock
+import ocr_render
 import state
 
 log = logging.getLogger("studio")
@@ -349,3 +352,137 @@ async def stop(aid: int, pid: str, chat: str, request: Request):
     check_chat(chat)
     await ask(request, aid, "stop", project=pid, chat=chat)
     return Response(status_code=204)
+
+
+# ---- файлы, правка, просмотр PDF, git -----------------------------------------------------
+
+BAD_PATH = "неверный путь"
+BAD_BODY = "неверный запрос"
+TOO_LARGE = "файл больше 2 МиБ"
+NOT_PDF = "это не PDF"
+NO_PAGE = "нет такой страницы"
+ODD = "мост ответил непонятно"
+#: последний открытый PDF пользователя: (ключ (aid, pid, path, сессия), байты, страниц, время) — листание
+#: не тянет файл с машины на каждую страницу; срок — PDF_TTL_SEC от загрузки
+PDFS: dict[int, tuple[tuple, bytes, int, float]] = {}
+
+
+class PathBody(BaseModel):
+    path: Any = None             # вид — check_path: свой 422 `path`, не общий FastAPI
+
+
+class PdfPage(PathBody):
+    page: StrictInt = Field(ge=1)
+
+
+def check_path(path: object) -> str:
+    """Путь внутри проекта (протокол §6): `""` — корень, иначе части через `/` — без пустых, `.` и `..`, без `\\`
+    и управляющих знаков, не длиннее PATH_MAX. Иное — 422 `path` до моста."""
+    if (isinstance(path, str) and len(path) <= PATH_MAX and "\\" not in path
+            and not any(unicodedata.category(c) == "Cc" for c in path)
+            and (path == "" or all(p not in ("", ".", "..") for p in path.split("/")))):
+        return path
+    raise _refuse(422, "path", BAD_PATH)
+
+
+def _strings(data: dict, *names: str) -> dict:
+    """Поля ответа моста, которые страница берёт строками; не строка — мост ответил непонятно."""
+    if not all(isinstance(data.get(n), str) for n in names):
+        raise _refuse(502, "bridge", ODD)
+    return {n: data[n] for n in names}
+
+
+@router.post("/agents/{aid}/projects/{pid}/files")
+async def files(aid: int, pid: str, body: PathBody, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    return await ask(request, aid, "files", project=pid, path=check_path(body.path))
+
+
+@router.post("/agents/{aid}/projects/{pid}/read")
+async def read(aid: int, pid: str, body: PathBody, request: Request):
+    """Чтение — POST: путь только в теле (строку запроса пишет журнал Apache)."""
+    own_agent(request, aid)
+    check_pid(pid)
+    data = await ask(request, aid, "read", project=pid, path=check_path(body.path))
+    return _strings(data, "text", "version")
+
+
+@router.put("/agents/{aid}/projects/{pid}/file")
+async def save(aid: int, pid: str, request: Request):
+    """Правка: тело читается с пределом FILE_BODY_MAX, текст — до FILE_MAX байтов UTF-8; мост пишет, только если
+    `version` совпал с нынешним (иначе 409 `conflict` с нынешним `version`)."""
+    own_agent(request, aid)
+    check_pid(pid)
+    raw = await auth.small_body(request, FILE_BODY_MAX)
+    if raw is None:
+        raise _refuse(413, "too_large", TOO_LARGE)
+    try:
+        body = json.loads(raw)
+    except (ValueError, RecursionError):
+        body = None
+    if not isinstance(body, dict):
+        raise _refuse(422, "invalid", BAD_BODY)
+    path = check_path(body.get("path"))
+    text, version = body.get("text"), body.get("version")
+    if not isinstance(text, str) or not isinstance(version, str):
+        raise _refuse(422, "invalid", BAD_BODY)
+    try:
+        size = len(text.encode())
+    except UnicodeEncodeError:                # одинокий суррогат из JSON — в UTF-8 его нет
+        raise _refuse(422, "invalid", BAD_BODY) from None
+    if size > FILE_MAX:
+        raise _refuse(413, "too_large", TOO_LARGE)
+    data = await ask(request, aid, "save", project=pid, path=path, text=text, version=version)
+    return _strings(data, "version")
+
+
+def _pdf_bytes(data: dict) -> bytes:
+    try:
+        raw = base64.b64decode(data.get("data"), validate=True)
+    except (TypeError, ValueError):           # не строка, не ASCII, не base64 (binascii.Error — ValueError)
+        raise _refuse(502, "bridge", ODD) from None
+    if not raw.startswith(b"%PDF-"):
+        raise _refuse(415, "not_pdf", NOT_PDF)
+    return raw
+
+
+async def _pdfium(fn, *args):
+    """PDFium — в потоке (замок `ocr_render.PDFIUM` держит он сам): страница 300 DPI — десятые доли секунды."""
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except ocr_render.ScanError as e:
+        raise _refuse(422, "pdf", str(e)) from None
+
+
+@router.post("/agents/{aid}/projects/{pid}/pdf")
+async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
+    """Страница PDF картинкой PNG, число страниц — заголовком `X-Studio-Pages`. Файл — просьба `raw`, затем
+    из PDFS: память одна на пользователя и привязана к сессии — другая сессия без PIN памятью не пройдёт мимо
+    `closed` моста."""
+    own_agent(request, aid)
+    check_pid(pid)
+    path = check_path(body.path)
+    uid, now = request.state.user.id, clock.NOW()
+    for user, kept in list(PDFS.items()):
+        if now - kept[3] >= PDF_TTL_SEC:
+            del PDFS[user]
+    key = (aid, pid, path, bridge.tag(request.state.digest))
+    kept = PDFS.get(uid)
+    if kept is not None and kept[0] == key:
+        _, data, pages, _ = kept
+    else:
+        data = _pdf_bytes(await ask(request, aid, "raw", project=pid, path=path))
+        pages = await _pdfium(ocr_render.pdf_page_count, data)
+        PDFS[uid] = (key, data, pages, now)
+    if body.page > pages:
+        raise _refuse(404, "page", NO_PAGE)
+    png = await _pdfium(ocr_render.render_page, data, body.page - 1)
+    return Response(png, media_type="image/png", headers={"X-Studio-Pages": str(pages)})
+
+
+@router.get("/agents/{aid}/projects/{pid}/git")
+async def git(aid: int, pid: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    return await ask(request, aid, "git", project=pid)
