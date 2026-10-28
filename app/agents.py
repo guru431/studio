@@ -4,8 +4,11 @@
 - Привязка — `POST /api/agent/enroll {login, password, name}` без сессии (`auth.OPEN_API`): учётка студии —
   право подключать компьютеры, поэтому логин и пароль проверяет `auth.check_password` — тем же путём, с теми
   же паузами и общим счётом неудач, что и `/login`. Ключ устройства — случайный, в ответе один раз, в базе —
-  только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — только `DELETE /api/agents/<id>`
-  (канал на связи закрывается 4401, `bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
+  только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` из
+  студии или `DELETE /api/agent/enroll` самим мостом (ключ — заголовком `Authorization`; «Отключиться» в окне
+  моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
+- Архив моста — `GET /api/agent/download` (только вошедшим): `AGENT_ZIP` рядом с кодом кладёт выкладка
+  (`deploy/deploy.sh` собирает его из закоммиченного HEAD `studio-agent`); секретов в нём нет.
 - Компьютеры и история подключений — только свои: чужой id — 404. История только добавляется (`bridge.record`)
   и только читается: ни DELETE, ни «Удалить всю историю».
 - Журнал — id и коды: ни ключа, ни логина и пароля, ни имени компьютера.
@@ -13,9 +16,10 @@
 import json
 import logging
 import unicodedata
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 import auth
 import bridge
@@ -28,10 +32,13 @@ router = APIRouter()
 
 NAME_MAX = 64
 EVENTS_PAGE = 50
+#: архив моста — `<корень кода>/agent/studio-agent.zip`, рядом с `app/` (кладёт выкладка; тесты подменяют)
+AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip"
+FOREIGN = "запрос пришёл с чужого сайта"
 
 
-def _refuse(ip: str, status: int, code: str, message: str) -> HTTPException:
-    log.warning("привязка с %s: %s", ip, code)
+def _refuse(ip: str, status: int, code: str, message: str, what: str = "привязка") -> HTTPException:
+    log.warning("%s с %s: %s", what, ip, code)
     return HTTPException(status, {"code": code, "message": message})
 
 
@@ -39,7 +46,7 @@ def _refuse(ip: str, status: int, code: str, message: str) -> HTTPException:
 async def enroll(request: Request):
     ip = auth.client_ip(request)
     if auth.foreign_origin(request):
-        raise _refuse(ip, 403, "origin", "запрос пришёл с чужого сайта")
+        raise _refuse(ip, 403, "origin", FOREIGN)
     body = await auth.small_body(request, auth.LOGIN_BODY_MAX)
     if body is None:
         raise _refuse(ip, 413, "too_long", "слишком длинный запрос")
@@ -64,8 +71,40 @@ async def enroll(request: Request):
                                 (uid, agent_name, security.digest(key), clock.NOW())).lastrowid
     bridge.record(uid, agent_id, agent_name, "enroll", ip=ip)
     log.info("пользователь %d: компьютер %d привязан", uid, agent_id)
-    return JSONResponse({"agent_id": agent_id, "device_key": key}, status_code=201,
+    return JSONResponse({"agent_id": agent_id, "device_key": key, "login": name}, status_code=201,
                         headers={"Cache-Control": "no-store"})
+
+
+@router.delete("/api/agent/enroll")
+async def unenroll(request: Request):
+    """Отвязка самим мостом («Отключиться»): ключ устройства — заголовком, как у канала; учётка может быть и
+    отключённой — забыть компьютер мост вправе. Дальше — как отзыв из студии: строка прочь, событие `revoke`
+    (устройство — «мост»), канал на связи — 4401."""
+    ip = auth.client_ip(request)
+    if auth.foreign_origin(request):
+        raise _refuse(ip, 403, "origin", FOREIGN, "отвязка")
+    header = request.headers.get("authorization", "")
+    row = None
+    if header.startswith("Bearer ") and len(header) > len("Bearer "):
+        row = state.DB.execute("DELETE FROM agents WHERE key_hash = ? RETURNING id, user_id, name",
+                               (security.digest(header[len("Bearer "):]),)).fetchone()
+    if row is None:
+        raise _refuse(ip, 401, "key", "ключ компьютера не принят", "отвязка")
+    bridge.record(row["user_id"], row["id"], row["name"], "revoke", device="мост", ip=ip)
+    log.info("компьютер %d: отвязан мостом", row["id"])
+    await bridge.drop(row["id"])
+    return Response(status_code=204)
+
+
+@router.get("/api/agent/download")
+async def download(request: Request):
+    """Архив моста для Windows — только вошедшим (любая учётка: секретов в мосте нет)."""
+    if not AGENT_ZIP.is_file():
+        raise HTTPException(404, {"code": "no_agent",
+                                  "message": "архива моста нет на сервере — его кладёт выкладка студии"})
+    log.info("пользователь %d: скачан мост", request.state.user.id)
+    return FileResponse(AGENT_ZIP, media_type="application/zip", filename="studio-agent.zip",
+                        headers={"Cache-Control": "private, no-cache"})
 
 
 @router.get("/api/agents")

@@ -1,6 +1,7 @@
 """Канал моста Claude Code (app/bridge.py): вход ключом устройства, знакомство, замена канала, просьбы с
 ответами, события наблюдателям, закрытие сессий, отзыв; подставная машина tests/fake_bridge.py — по протоколу
 docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md."""
+import asyncio
 import contextlib
 import logging
 import re
@@ -14,7 +15,7 @@ import bridge
 import security
 import state
 from conftest import T0, make_user, signin
-from fake_bridge import FakeMachine, connect, drop, emit, enroll, pid, settle
+from fake_bridge import FakeMachine, InProcessBridge, connect, drop, emit, enroll, pid, settle
 from test_screenlock import add_key, open_with
 
 CHAT = "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
@@ -78,7 +79,7 @@ def test_hello_brings_the_agent_online(studio):
     signin(studio, "owner")
     with link_ws(studio, key) as ws:
         ws.send_json(HELLO)
-        assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК"}
+        assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner"}
         [item] = agents(studio)
         assert {k: item[k] for k in ("online", "has_pin", "cc_version", "projects_root", "models", "efforts",
                                      "last_seen")} == {
@@ -152,6 +153,7 @@ def test_replacement_tells_watchers_offline_and_drops_the_old_links_frames(studi
     fut = start_call(studio, aid)
     q = studio.c.portal.call(bridge.watch, aid, CHAT)
     new = connect(studio, aid, FakeMachine())
+    settle(studio)                                   # прежний канал закрывается фоном
     assert isinstance(fut.exception(1), bridge.Offline) and old.closed_with == bridge.CLOSE_REPLACED
     assert studio.c.portal.call(q.get_nowait) == ("offline", None)
     ask = {"k": "ask", "request_id": "r1", "kind": "permission", "tool": "Bash", "input": {}, "always": False}
@@ -305,6 +307,7 @@ def test_admin_password_reset_and_user_delete(studio):
     assert studio.c.patch(f"/api/admin/users/{uid}", json={"password": "password-456"}).status_code == 200
     assert link.closed_with is None and bridge.LINKS[aid] is link
     assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    settle(studio)
     assert link.closed_with == bridge.CLOSE_AUTH and not bridge.LINKS
 
 
@@ -332,7 +335,7 @@ def test_lock_and_unlock_close_the_session_on_the_bridge(studio):
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
     close = {"t": "close", "session": session}
-    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК"}]
+    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner"}]
 
     def closes():
         settle(studio)
@@ -401,9 +404,66 @@ def test_stop_and_drop_user_close_links(studio):
     mine = connect(studio, enroll(studio)[0], FakeMachine())
     theirs = connect(studio, enroll(studio, login="friend")[0], FakeMachine())
     studio.c.portal.call(bridge.drop_user, owner)
+    settle(studio)
     assert (mine.closed_with, theirs.closed_with) == (bridge.CLOSE_AUTH, None)
     studio.c.portal.call(bridge.stop)
     assert theirs.closed_with == bridge.CLOSE_RESTART and not bridge.LINKS
+
+
+def test_welcome_carries_login(studio):
+    """Мост показывает учётку, под которой компьютер на связи: логин владельца компьютера."""
+    make_user(studio, "owner")
+    make_user(studio, "friend")
+    aid, _ = enroll(studio, login="friend", name="Ноутбук")
+    link = connect(studio, aid, FakeMachine())
+    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend"}]
+
+
+def test_hanging_close_holds_neither_the_new_link_nor_the_revoke(studio, monkeypatch):
+    """Закрытие сокета ждёт замок отправки, а висящая отправка держит его до таймаута пинга: прежний канал при
+    замене и снятый `drop` закрываются фоном — новый сразу получает `welcome`, отзыв не ждёт."""
+    uid = make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    release = studio.c.portal.call(asyncio.Event)
+
+    def hanging(link):
+        async def close(code):
+            await release.wait()
+            link.closed_with = code
+        monkeypatch.setattr(link, "close", close)
+
+    old = connect(studio, aid, FakeMachine())
+    hanging(old)
+    new = InProcessBridge(aid, uid, "Рабочий ПК", FakeMachine())
+    studio.c.portal.start_task_soon(bridge.attach, new).result(2)
+    assert [f["t"] for f in new.sent] == ["welcome"] and bridge.LINKS[aid] is new and old.closed_with is None
+    hanging(new)
+    studio.c.portal.start_task_soon(bridge.drop, aid).result(2)
+    assert aid not in bridge.LINKS and new.closed_with is None
+    studio.c.portal.call(release.set)
+    settle(studio)
+    assert (old.closed_with, new.closed_with) == (bridge.CLOSE_REPLACED, bridge.CLOSE_AUTH)
+
+
+def test_lagging_watcher_gets_offline_and_is_dropped(studio, monkeypatch, caplog):
+    """Очередь наблюдателя ограничена: застрявший поток SSE получает `offline` и снимается (страница дочитает
+    снимком), прочие наблюдатели чата получают события дальше."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(bridge, "WATCH_MAX", 3)
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    link = connect(studio, aid, FakeMachine())
+    slow = studio.c.portal.call(bridge.watch, aid, CHAT)
+    quick = studio.c.portal.call(bridge.watch, aid, CHAT)
+    texts = [{"k": "text", "text": str(i)} for i in range(5)]
+    emit(studio, link, pid("p"), CHAT, *texts[:3])
+    assert [studio.c.portal.call(quick.get_nowait) for _ in range(3)] == [("ev", e) for e in texts[:3]]
+    emit(studio, link, pid("p"), CHAT, *texts[3:])
+    got = [studio.c.portal.call(slow.get_nowait) for _ in range(4)]
+    assert got == [("ev", e) for e in texts[:3]] + [("offline", None)] and studio.c.portal.call(slow.empty)
+    assert bridge.WATCHERS[(aid, CHAT)] == {quick}
+    assert [studio.c.portal.call(quick.get_nowait) for _ in range(2)] == [("ev", e) for e in texts[3:]]
+    assert f"агент {aid}: наблюдатель отстал — снят" in caplog.text
 
 
 def test_link_log_holds_no_key(studio, caplog):

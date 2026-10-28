@@ -1,14 +1,21 @@
 """Привязка моста Claude Code к учётке, компьютеры учётки и история подключений (app/agents.py, app/bridge.py)."""
 import logging
 
+import agents
 import auth
 import bridge
 import security
 import state
 from conftest import login, make_user, signin
-from fake_bridge import enroll
+from fake_bridge import FakeMachine, connect, enroll, settle
 
 IP = "10.77.48.5"
+
+
+def unenroll(s, key, headers=None):
+    """Отвязка, как её делает мост: DELETE без тела и без Origin, ключ — заголовком."""
+    auth_header = {} if key is None else {"Authorization": f"Bearer {key}"}
+    return s.c.delete("/api/agent/enroll", headers={"X-Forwarded-For": IP, **auth_header, **(headers or {})})
 
 
 def post_enroll(s, body=None, content=None, headers=None):
@@ -125,6 +132,109 @@ def test_events_come_in_pages(studio):
     assert len(second["items"]) == 5 and second["next"] is None
     assert all(e["id"] < ids[-1] and e["agent_name"] == "Рабочий ПК" for e in second["items"])
     assert set(first["items"][0]) == {"id", "created", "kind", "agent_id", "agent_name", "device", "ip"}
+
+
+def test_enroll_answers_login(studio):
+    """Мост показывает, под какой учёткой он на связи: логин, как его проверила студия."""
+    make_user(studio, "owner")
+    r = post_enroll(studio, {"login": " Owner ", "password": "password-123", "name": "ПК"})
+    assert r.status_code == 201
+    assert set(r.json()) == {"agent_id", "device_key", "login"} and r.json()["login"] == "owner"
+
+
+def test_download_gives_the_archive(studio, monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.DEBUG)
+    archive = tmp_path / "studio-agent.zip"
+    archive.write_bytes(b"PK\x05\x06" + b"\0" * 18)
+    monkeypatch.setattr(agents, "AGENT_ZIP", archive)
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    r = studio.c.get("/api/agent/download")
+    assert r.status_code == 200 and r.content == archive.read_bytes()
+    assert r.headers["content-type"] == "application/zip"
+    assert "studio-agent.zip" in r.headers["content-disposition"]
+    assert r.headers["cache-control"] == "private, no-cache"
+    assert f"пользователь {uid}: скачан мост" in caplog.text
+
+
+def test_download_without_archive_is_404(studio, monkeypatch, tmp_path):
+    monkeypatch.setattr(agents, "AGENT_ZIP", tmp_path / "studio-agent.zip")
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    r = studio.c.get("/api/agent/download")
+    assert r.status_code == 404 and r.json()["detail"] == {
+        "code": "no_agent", "message": "архива моста нет на сервере — его кладёт выкладка студии"}
+
+
+def test_download_needs_a_session(studio, monkeypatch, tmp_path):
+    archive = tmp_path / "studio-agent.zip"
+    archive.write_bytes(b"PK")
+    monkeypatch.setattr(agents, "AGENT_ZIP", archive)
+    r = studio.c.get("/api/agent/download")
+    assert r.status_code == 401 and r.json()["detail"]["code"] == "login"
+    assert agents.AGENT_ZIP.name == "studio-agent.zip"
+
+
+def test_agent_zip_lies_next_to_the_code():
+    """Выкладка кладёт архив в <корень кода>/agent/ — рядом с app/ (deploy.sh, install.sh)."""
+    import pathlib
+    app_dir = pathlib.Path(agents.__file__).resolve().parent
+    assert agents.AGENT_ZIP == app_dir.parent / "agent" / "studio-agent.zip"
+
+
+def test_unenroll_by_key_drops_the_computer(studio):
+    uid = make_user(studio, "owner")
+    agent_id, key = enroll(studio)
+    link = connect(studio, agent_id, FakeMachine())
+    r = unenroll(studio, key)
+    assert r.status_code == 204 and not r.content
+    settle(studio)
+    assert link.closed_with == bridge.CLOSE_AUTH and agent_id not in bridge.LINKS
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
+    ev = state.DB.execute("SELECT * FROM agent_events WHERE kind = 'revoke'").fetchone()
+    assert (ev["user_id"], ev["agent_id"], ev["agent_name"], ev["device"], ev["ip"]) == (
+        uid, agent_id, "Рабочий ПК", "мост", IP)
+    assert unenroll(studio, key).status_code == 401           # второй раз ключа уже нет
+
+
+def test_unenroll_unknown_key_is_401(studio):
+    make_user(studio, "owner")
+    enroll(studio)
+    for key in ("nope", None):
+        r = unenroll(studio, key)
+        assert r.status_code == 401 and r.json()["detail"] == {"code": "key", "message": "ключ компьютера не принят"}
+    r = studio.c.delete("/api/agent/enroll", headers={"Authorization": "nope"})
+    assert r.status_code == 401 and r.json()["detail"]["code"] == "key"
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 1
+
+
+def test_unenroll_foreign_origin_is_403(studio):
+    make_user(studio, "owner")
+    _, key = enroll(studio)
+    r = unenroll(studio, key, headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403 and r.json()["detail"] == {"code": "origin", "message": "запрос пришёл с чужого сайта"}
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 1
+
+
+def test_unenroll_works_for_disabled_user(studio):
+    """Отключённой учётке канал закрыт, но забыть компьютер мост всё равно может."""
+    uid = make_user(studio, "owner")
+    _, key = enroll(studio)
+    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
+    assert unenroll(studio, key).status_code == 204
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
+
+
+def test_unenroll_log_has_no_name_or_key(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    make_user(studio, "owner")
+    agent_id, key = enroll(studio)
+    unenroll(studio, "foreign-key-123")
+    assert unenroll(studio, key).status_code == 204
+    text = caplog.text
+    assert f"компьютер {agent_id}: отвязан мостом" in text and f"отвязка с {IP}: key" in text
+    for secret in (key, security.digest(key), "foreign-key-123", "owner", "Рабочий", "ПК"):
+        assert secret not in text, secret
 
 
 def test_agent_log_holds_no_secrets(studio, caplog):

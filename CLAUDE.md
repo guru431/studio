@@ -261,11 +261,19 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   компьютера без FK, `device` — `bridge.device`), `code_chats` (отметки студии поверх сессий машины: какие чаты
   завела и `open`/`closed`; текста нет), `push_subs` (подписка устройства, каскад от `sessions`). `agents` —
   привязка `POST /api/agent/enroll` без сессии (`auth.OPEN_API`; `auth.check_password` — паузы и общий счёт неудач
-  `/login`), ключ — в ответе один раз, смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` (`bridge.drop`,
-  4401); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`. `bridge` —
+  `/login`), ключ — в ответе один раз (с ним `login` учётки — `strip().lower()` введённого), смена пароля его не
+  гасит; отзыв — `DELETE /api/agents/<id>` (`bridge.drop`, 4401) или самим мостом `DELETE /api/agent/enroll` (тоже
+  `OPEN_API`: ключ — только `Authorization: Bearer`, чужой `Origin` — 403 `origin`, ключ не найден — 401 `key`; учётка
+  может быть и отключённой; событие `revoke` с `device` «мост», 204; журнал — «компьютер N: отвязан мостом»); архив
+  моста — `GET /api/agent/download` (сессия; `agents.AGENT_ZIP` = `<корень кода>/agent/studio-agent.zip`, кладёт
+  выкладка; нет файла — 404 `no_agent`); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`. `bridge` —
   канал `/api/agent/link` (WebSocket, `Authorization: Bearer <ключ>`, не строка запроса): `hello` за `HELLO_SEC`,
-  кадр до `FRAME_MAX` (16 МиБ), канал один на компьютер — новый закрывает прежний 4409 и шлёт его наблюдателям
-  `offline`; 4400 — протокол, 4401 — ключ, 1012 — остановка службы; кадры снятого канала никуда не идут. Просьба
+  кадр до `FRAME_MAX` (16 МиБ; `--ws-max-size` юнита — на 1 КиБ больше, чтобы такой кадр получил 4400, а не 1009
+  uvicorn), канал один на компьютер — новый закрывает прежний 4409 и шлёт его наблюдателям `offline`; `welcome` —
+  с `login` учётки компьютера; 4400 — протокол, 4401 — ключ, 1012 — остановка службы; кадры снятого канала никуда не
+  идут. Закрытие сокета ждёт замок отправки, поэтому прежний канал при замене и снятый `drop` закрываются фоном
+  (`bridge.TASKS`, `_close_later`; `stop` ждёт их до `STOP_SEC`); очередь наблюдателя — до `WATCH_MAX` (1000)
+  событий, отставшему — `offline`, и он снят. Просьба
   `call` ждёт `res` до `CALL_SEC` (30 с; `Offline`, `BridgeError`, `TimeoutError`); события `ev` — очередям
   `WATCHERS` (`Watch.session` — `tag` сессии); ход на сервере не хранится — источник правды машина. `tag(digest)` —
   признак сессии для моста (производное дайджеста, не токен); `forget` — заперлась или отперлась (`screenlock`:
@@ -366,8 +374,9 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   PWA: `/static/*`, `/manifest.webmanifest`, `/sw.js`, `/offline.html`, значки из корня
   (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`, `/favicon.ico`); `/` без сессии уводит на
   вход, всё `/api/*` — через `auth.guard` (сессия + CSRF у изменяющих запросов). Страницы отвечают
-  и на HEAD. Два входа моста Claude Code: `POST /api/agent/enroll` — анонимен (`auth.OPEN_API`; это и есть
-  вход логином и паролем — свои паузы и счёт неудач `/login`, чужой `Origin` — 403); `/api/agent/link` — WebSocket,
+  и на HEAD. Два входа моста Claude Code: `/api/agent/enroll` — анонимен (`auth.OPEN_API`; `POST` — это и есть
+  вход логином и паролем — свои паузы и счёт неудач `/login`, `DELETE` — отвязка ключом устройства в заголовке,
+  чужой `Origin` — 403); `/api/agent/link` — WebSocket,
   вход ключом устройства (`Authorization`) в самом обработчике: `guard` — HTTP-middleware и WebSocket не видит.
 - Защита входа от перебора — паузы (на пару «логин + адрес» и на адрес); растущая задержка ответа
   на неверный пароль параллельные попытки не тормозит — на неё не полагаться.
@@ -475,7 +484,11 @@ not read Username`. Поэтому с workstation — только `origin`, а 
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
 
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt`); грязное
-дерево — отказ. Ключ данных при первой установке (в `studio.env` нет `STUDIO_DATA_KEY=`) едет сам.
+дерево — отказ. С ним едет архив моста Claude Code: `git archive --format=zip --prefix=studio-agent/ HEAD`
+репозитория `STUDIO_AGENT_REPO` (по умолчанию `../studio-agent`) → `.incoming/agent/studio-agent.zip`, строка
+`==> мост <хеш>`; нет репозитория моста или он грязный — отказ до копирования кода. `install.sh` без архива —
+отказ до подмены; `agent` переезжает в `SWAP` с кодом, и откат `.previous` возвращает прежний архив.
+Ключ данных при первой установке (в `studio.env` нет `STUDIO_DATA_KEY=`) едет сам.
 `--create-admin` берёт из vault `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`,
 `GATEWAY_KEY_OWNER_IMAGES` и через `install.sh --admin-stdin` отдаёт в `manage.py create-admin`
 (`systemd-run --pipe` от `studio` с окружением юнита); повтор безопасен, новый пароль гасит сессии.

@@ -236,6 +236,36 @@ def test_install_and_deploy_ship_the_same_parts():
     assert "URL=${STUDIO_URL:-https://studio.example.com}" in DEPLOY_SH and '"$URL/health"' in DEPLOY_SH
 
 
+def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
+    """Кадр больше FRAME_MAX — 4400 протокола, а не 1009 самого uvicorn: предел uvicorn чуть выше, и такой кадр
+    доходит до `bridge._frame`. Пинги, которые протокол §2 называет, — явными флагами, а не умолчаниями."""
+    exec_start = directives(UNIT, "ExecStart")[0]
+    assert int(re.search(r"--ws-max-size (\d+)", exec_start).group(1)) == bridge.FRAME_MAX + 1024
+    assert "--ws-ping-interval 20 --ws-ping-timeout 20" in exec_start
+
+
+def test_deploy_builds_the_bridge_archive_from_its_repository():
+    """Архив моста — закоммиченный HEAD studio-agent: нет репозитория или он грязный — отказ до копирования кода."""
+    code = uncommented(DEPLOY_SH)
+    assert 'AGENT=${STUDIO_AGENT_REPO:-$D/../studio-agent}' in code
+    assert ('git -C "$AGENT" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD' in code)
+    assert "$R/.incoming/agent/studio-agent.zip" in code
+    assert '"==> мост $(git -C "$AGENT" rev-parse --short HEAD) → agent/studio-agent.zip"' in code
+    first_ssh = code.index('"${SSH[@]}"')
+    assert code.index('git -C "$AGENT" status --porcelain') < first_ssh
+    assert code.index('git -C "$AGENT" rev-parse --verify -q HEAD') < first_ssh
+    archive = code.index("archive --format=zip")
+    assert code.index('"${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming') < archive
+
+
+def test_install_swaps_the_bridge_archive_with_the_code():
+    """`agent` переезжает вместе с кодом и откатывается с ним; без архива — отказ до подмены кода."""
+    code = uncommented(INSTALL)
+    assert 'SWAP=("${PARTS[@]}" agent)' in code
+    check = code.index('[ -s "$NEW/agent/studio-agent.zip" ]')
+    assert check < code.index('for p in "${SWAP[@]}"; do') and check < code.index('chown -R root:root "$NEW"')
+
+
 def test_requirements_are_exact_pins():
     lines = [line for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
              if line and not line.startswith("#")]
@@ -492,6 +522,8 @@ def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
         (base / "app").mkdir(parents=True)
         (base / "app" / "f").write_text(text)
         (base / "deploy").mkdir()
+        (base / "agent").mkdir()
+        (base / "agent" / "studio-agent.zip").write_text(text)
         (base / "requirements.txt").write_text("a==1\n", newline="\n")
     fake, log = tmp_path / "python", tmp_path / "log"
     fake.write_text(FAKE_PY, newline="\n")
@@ -529,6 +561,7 @@ def test_install_swaps_a_fresh_environment_and_restore_brings_the_old_one_back(t
                      f"-r {root.as_posix()}/.incoming/requirements.txt",
                      f"{new_py} -m compileall -q {root.as_posix()}/.incoming/app"]
     assert (root / "app" / "f").read_text() == "old"           # откат: прежний код
+    assert (root / "agent" / "studio-agent.zip").read_text() == "old"     # и прежний архив моста
     if first:
         assert not (root / ".venv").exists()
     else:
@@ -541,6 +574,8 @@ def test_install_swaps_the_new_environment_in_with_the_code(tmp_path):
     assert r.returncode == 0, r.stderr
     assert _stamp(root / ".venv") == SAME and _stamp(root / ".previous" / ".venv") == "old"
     assert (root / "app" / "f").read_text() == "new" and not (root / ".incoming").exists()
+    assert (root / "agent" / "studio-agent.zip").read_text() == "new"
+    assert (root / ".previous" / "agent" / "studio-agent.zip").read_text() == "old"
 
 
 @pytest.mark.integration
@@ -558,6 +593,33 @@ def test_install_failed_pip_leaves_the_running_code_and_environment(tmp_path):
     assert len(calls) == 1 and "-m pip install" in calls[0]
     assert (root / "app" / "f").read_text() == "old" and _stamp(root / ".venv") == "old"
     assert not (root / ".incoming" / ".venv").exists() and not (root / ".previous").exists()
+
+
+@pytest.mark.integration                   # git и bash на Windows — секунды
+def test_deploy_refuses_without_a_clean_bridge_repository(tmp_path):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    # хост — заведомо мёртвый: отказ должен случиться раньше любого ssh
+    env = {**os.environ, "STUDIO_SSH": "nobody@127.0.0.1", "STUDIO_SSH_PORT": "1"}
+
+    def deploy(repo):
+        return subprocess.run([bash, (DEPLOY / "deploy.sh").as_posix()], capture_output=True, text=True,
+                              encoding="utf-8", timeout=60, env={**env, "STUDIO_AGENT_REPO": repo.as_posix()})
+
+    r = deploy(tmp_path / "missing")
+    assert r.returncode == 1 and "нет репозитория моста" in r.stderr and "==> код" not in r.stdout, r
+    repo = tmp_path / "studio-agent"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True, timeout=20)
+    (repo / "install.cmd").write_text("x", newline="\n")
+    subprocess.run([*git, "add", "."], check=True, timeout=20)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], check=True, timeout=20)
+    (repo / "install.cmd").write_text("y", newline="\n")
+    r = deploy(repo)
+    assert r.returncode == 1 and "незакоммиченные изменения в репозитории моста" in r.stderr, r
+    assert "==> код" not in r.stdout
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():
