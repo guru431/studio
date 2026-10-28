@@ -9,7 +9,10 @@
  * Content-Length — до чтения, а без заголовка (chunked) — по настоящему размеру прочитанного.
  *
  * Несколько (saveMany): iPhone — все файлы одним меню «Поделиться», если вместе они не больше
- * SHARE_MAX; иначе и не на iPhone — один ZIP: POST /api/media/archives со списком, загрузка по токену. */
+ * SHARE_MAX; иначе и не на iPhone — один ZIP: POST /api/media/archives со списком, загрузка по токену.
+ *
+ * Файл, собранный самой страницей (saveFile: снимок «Перевода» с наложением), — тем же меню на iPhone, иначе —
+ * загрузка blob под его именем. */
 import { api } from './api.js';
 import { button, el, openDialog } from './ui.js';
 
@@ -86,6 +89,22 @@ export async function saveMedia(mediaId, host) {
   } catch (err) {
     if (err.name !== 'AbortError') download(mediaId);     // AbortError — человек закрыл меню
   }
+}
+
+/** Файл, собранный страницей (снимок «Перевода» с наложением): iPhone — меню «Поделиться» с ним, как saveMany;
+ * иначе или меню не открылось — загрузка ссылкой на blob под его именем. */
+export async function saveFile(file, host) {
+  if (isIOS() && typeof navigator.canShare === 'function' && file.size <= SHARE_MAX && navigator.canShare({ files: [file] })) {
+    try {
+      await offer([file], host);
+      return;
+    } catch {
+      // меню не открылось — загрузкой
+    }
+  }
+  const url = URL.createObjectURL(file);
+  el('a', { href: url, download: file.name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 /** Файлы в память телефона по одному; удалённый в другой вкладке (404) пропускается, как в архиве;

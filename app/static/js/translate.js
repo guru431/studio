@@ -28,11 +28,16 @@
  * состояние идущих; нажатие — запись в окнах, крестик — удаление с подтверждением. #/translate?id=<id>
  * («В работе», уведомление, «Поиск») открывает запись после загрузки истории, если её не выбрали сами; ?id из
  * адреса уходит. Раздел без модели (ctx.hint): история читается, скачивается и удаляется, вместо «Перевести»
- * — подсказка. Текст сервера — только textContent. */
+ * — подсказка. Текст сервера — только textContent.
+ *
+ * Запись-снимок (translate-photo.js) — над правым окном переключатель «Поверх снимка» (по умолчанию: снимок с
+ * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
+ * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me } from './api.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
+import { photoView } from './translate-photo.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 1000;                    // опрос открытой идущей записи
@@ -119,6 +124,8 @@ function build(view, ctx) {
   let picked = false;          // запись выбрали сами: ?id из адреса её не перебьёт
   let sending = false;
   let timer = null;
+  let photo = null;            // вид открытой записи-снимка: { id, node, setMode, update }
+  let photoMode = 'overlay';   // 'overlay' | 'text'
 
   const docs = createPicker({ url: '/api/translate', size: PAGE, pollMs: LIST_POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintHistory,
@@ -243,7 +250,7 @@ function build(view, ctx) {
     const shown = !pending && rec && rec.kind !== 'text' ? rec : null;
     textBox.box.hidden = !!(pending || shown);
     count.hidden = !!(pending || shown);
-    sourceText.hidden = !shown;
+    sourceText.hidden = !shown || (shown.kind === 'photo' && photoMode === 'overlay');
     chip.hidden = !(pending || shown);
     const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': 'Убрать' }, icon('x'));
     x.addEventListener('click', clearLeft);
@@ -264,8 +271,29 @@ function build(view, ctx) {
     goBtn.disabled = sending || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
   }
 
+  /** Вид записи-снимка над правым окном: новый — на новую запись, та же — новые переводы блоков на слой. */
+  function paintPhoto() {
+    const want = rec && rec.kind === 'photo' && rec.media_id ? rec : null;
+    if (photo && (!want || photo.id !== want.id)) {
+      photo.node.remove();
+      photo = null;
+    }
+    if (want && photo) {
+      photo.update(want, want.parts);
+    } else if (want) {
+      photo = { id: want.id, ...photoView(want, want.parts, { mode: photoMode, onMode(mode) {
+        photoMode = mode;
+        paintLeft();
+        paintRight();
+      } }) };
+      output.before(photo.node);
+    }
+    output.hidden = !!photo && photoMode === 'overlay';
+  }
+
   /** Правое окно: перевод, состояние, кнопки. */
   function paintRight() {
+    paintPhoto();
     const text = rec ? translation(rec) : loose;
     output.textContent = text;
     const running = !!rec && RUNNING.has(rec.state);
