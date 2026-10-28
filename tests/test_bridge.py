@@ -136,6 +136,63 @@ def test_new_link_replaces_the_old_one(studio):
     assert kinds() == ["offline", "online", "online", "enroll"]
 
 
+def test_replacement_tells_watchers_offline_and_drops_the_old_links_frames(studio, monkeypatch):
+    """Новый канал (4409 прежнему): начатые просьбы — `Offline`, наблюдатели — `offline` (сессии моста закрыты,
+    события «дырки» потеряны), а кадры прежнего канала, что ещё дочитываются, — никому и без push."""
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    old = connect(studio, aid, FakeMachine())
+
+    async def silent(frame):
+        old.sent.append(frame)
+
+    monkeypatch.setattr(old, "send", silent)
+    fut = start_call(studio, aid)
+    q = studio.c.portal.call(bridge.watch, aid, CHAT)
+    new = connect(studio, aid, FakeMachine())
+    assert isinstance(fut.exception(1), bridge.Offline) and old.closed_with == bridge.CLOSE_REPLACED
+    assert studio.c.portal.call(q.get_nowait) == ("offline", None)
+    ask = {"k": "ask", "request_id": "r1", "kind": "permission", "tool": "Bash", "input": {}, "always": False}
+    emit(studio, old, pid("p"), CHAT, {"k": "text", "text": "старое"})
+    assert studio.c.portal.call(q.empty)
+    studio.c.portal.call(bridge.unwatch, aid, CHAT, q)
+    emit(studio, old, pid("p"), CHAT, ask)           # наблюдателей нет, но и push от прежнего канала нет
+    assert pushed == []
+    emit(studio, new, pid("p"), CHAT, ask)
+    assert len(pushed) == 1
+    drop(studio, new)                                # снят — его кадры тоже никуда
+    emit(studio, new, pid("p"), CHAT, ask)
+    assert len(pushed) == 1
+
+
+def test_forget_closes_only_the_streams_of_that_session(studio):
+    uid = make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    mine = studio.c.portal.call(bridge.watch, aid, CHAT, bridge.tag("d" * 64))
+    other = studio.c.portal.call(bridge.watch, aid, CHAT, bridge.tag("e" * 64))
+    studio.c.portal.call(bridge.forget, uid, "d" * 64)
+    assert studio.c.portal.call(mine.get_nowait) == ("closed", None)
+    assert studio.c.portal.call(other.empty)
+
+
+def test_revoked_or_disabled_during_hello_is_4401(studio):
+    """Ключ верен на входе, а до `hello` компьютер отозвали или учётку отключили: 4401, на связь не встаёт."""
+    uid = make_user(studio, "owner")
+    aid, key = enroll(studio)
+    _, key2 = enroll(studio, name="Ноутбук")
+    with link_ws(studio, key) as ws:
+        state.DB.execute("DELETE FROM agents WHERE id = ?", (aid,))
+        ws.send_json(HELLO)
+        assert closed_with(ws) == bridge.CLOSE_AUTH
+    with link_ws(studio, key2) as ws:
+        state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
+        ws.send_json(HELLO)
+        assert closed_with(ws) == bridge.CLOSE_AUTH
+    assert not bridge.LINKS and "online" not in kinds()
+
+
 def test_call_round_trip_and_errors(studio, monkeypatch):
     make_user(studio, "owner")
     aid, key = enroll(studio)
@@ -168,12 +225,13 @@ def test_call_round_trip_and_errors(studio, monkeypatch):
         ws.receive_json()
         assert isinstance(fut.exception(1), TimeoutError)
         assert not bridge.LINKS[aid].pending
-        monkeypatch.setattr(bridge, "CALL_SEC", 30)
+        monkeypatch.setattr(bridge, "CALL_SEC", 2)
         fut = start_call(studio, aid)
         ws.receive_json()
-    started = time.monotonic()
-    assert isinstance(fut.exception(5), bridge.Offline)
-    assert time.monotonic() - started < 1
+        started = time.monotonic()
+        ws.close()                                   # мост оборвал канал посреди просьбы
+        e = fut.exception(5)                         # ждём дольше срока: без Offline был бы TimeoutError через 2 с
+        assert isinstance(e, bridge.Offline) and time.monotonic() - started < 1
 
 
 def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
