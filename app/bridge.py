@@ -7,12 +7,14 @@
   у компьютера один: новый заменяет прежний (4409). Отзыв, отключение и удаление учётки рвут канал (4401),
   смена пароля — нет: ключ устройства самостоятелен (спека 6.2).
 - Просьба (`call`) ждёт ответа с тем же `id` не дольше `CALL_SEC`; канал пропал — сразу `Offline`, а не по
-  сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал — им `("offline", None)`.
+  сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал или его заменил новый —
+  им `("offline", None)`. Кадры канала, который уже не текущий (заменён, снят), никуда не идут.
   Карточку (`ask`) или конец хода (`done`) чата без наблюдателей владельцу сообщает push (`push.notify_later`).
   Своего состояния хода студия не хранит: источник правды — машина (спека 6.10).
 - Признак сессии студии для моста — `tag`: не дайджест сессии и тем более не токен, а производное от
   дайджеста; мост открывает компьютер PIN-ом для этого признака. Заперлась сессия или отперлась —
-  `forget`: мост закрывает её (протокол §2.3), PIN — снова.
+  `forget`: мост закрывает её (протокол §2.3), PIN — снова; очереди наблюдателей этой сессии (`Watch.session`)
+  получают `("closed", None)` — открытость кончилась и для потоков, а не только для следующей просьбы.
 - История подключений — `agent_events`: только добавляется (`record`), «Удалить всю историю» её не трогает,
   уходит только с учёткой. Строка несёт id и имя компьютера на момент события (после отзыва строки `agents`
   нет), краткий признак устройства (`device`) и адрес — ни ключа, ни PIN, ни текстов.
@@ -105,10 +107,19 @@ class SocketLink(Link):
                 pass
 
 
+class Watch(asyncio.Queue):
+    """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("closed", None); `session` — `tag`
+    сессии студии, что смотрит (её `forget` кладёт `closed`)."""
+
+    def __init__(self, session: str | None):
+        super().__init__()
+        self.session = session
+
+
 #: agent_id → канал на связи
 LINKS: dict[int, Link] = {}
-#: (agent_id, chat) → очереди наблюдателей чата: ("ev", событие) | ("offline", None)
-WATCHERS: dict[tuple[int, str], set[asyncio.Queue]] = {}
+#: (agent_id, chat) → очереди наблюдателей чата
+WATCHERS: dict[tuple[int, str], set[Watch]] = {}
 #: фоновые отправки (`forget`): ссылка держит задачу до конца, `stop` их отменяет
 TASKS: set[asyncio.Task] = set()
 
@@ -180,6 +191,7 @@ async def attach(link: Link) -> None:
     if old is not None and old is not link:
         log.info("агент %d: прежний канал заменён", link.agent_id)
         _fail_pending(old)               # ответов по закрытому каналу уже не будет
+        _offline(link.agent_id)          # и событий тоже: новый канал закрыл все сессии моста (протокол §3)
         await old.close(CLOSE_REPLACED)
     try:
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name})
@@ -194,6 +206,14 @@ def _fail_pending(link: Link) -> None:
     link.pending.clear()
 
 
+def _offline(agent_id: int) -> None:
+    """Наблюдателям чатов компьютера — вестей по этому каналу больше не будет."""
+    for (aid, _chat), queues in WATCHERS.items():
+        if aid == agent_id:
+            for q in queues:
+                q.put_nowait(("offline", None))
+
+
 async def detach(link: Link) -> None:
     """Канал кончился. Без await внутри: зовётся из `finally` обработчика, и отмена задачи (остановка
     службы) не должна оборвать его посередине."""
@@ -201,10 +221,7 @@ async def detach(link: Link) -> None:
     if LINKS.get(link.agent_id) is not link:
         return
     del LINKS[link.agent_id]
-    for (agent_id, _chat), queues in WATCHERS.items():
-        if agent_id == link.agent_id:
-            for q in queues:
-                q.put_nowait(("offline", None))
+    _offline(link.agent_id)
     state.DB.execute("UPDATE agents SET last_seen = ? WHERE id = ?", (clock.NOW(), link.agent_id))
     record(link.user_id, link.agent_id, link.name, "offline", ip=link.ip)
     log.info("агент %d: связь потеряна", link.agent_id)
@@ -226,6 +243,8 @@ def deliver(link: Link, frame: dict) -> None:
         if fut is not None and not fut.done():
             fut.set_result(frame)
     elif t == "ev":
+        if LINKS.get(link.agent_id) is not link:
+            return                       # канал заменён или снят (отзыв): между detach и close сокет ещё читается
         if not _event_ok(frame):
             log.warning("агент %d: неверное событие", link.agent_id)
             return
@@ -295,13 +314,13 @@ async def call(agent_id: int, op: str, session: str, timeout: float | None = Non
 
 # ---- наблюдатели ---------------------------------------------------------------
 
-def watch(agent_id: int, chat: str) -> asyncio.Queue:
-    q: asyncio.Queue = asyncio.Queue()
+def watch(agent_id: int, chat: str, session: str | None = None) -> Watch:
+    q = Watch(session)
     WATCHERS.setdefault((agent_id, chat), set()).add(q)
     return q
 
 
-def unwatch(agent_id: int, chat: str, q: asyncio.Queue) -> None:
+def unwatch(agent_id: int, chat: str, q: Watch) -> None:
     queues = WATCHERS.get((agent_id, chat))
     if queues is not None:
         queues.discard(q)
@@ -316,9 +335,14 @@ def watching(agent_id: int, chat: str) -> bool:
 # ---- закрытие ------------------------------------------------------------------
 
 def forget(user_id: int, digest: str) -> None:
-    """Сессия заперлась или отперлась: каждому компьютеру учётки — `close` её признака (протокол §2.3).
-    Фоном: ответа нет, а запрос владельца не ждёт чужой сокет."""
-    frame = {"t": "close", "session": tag(digest)}
+    """Сессия заперлась или отперлась: каждому компьютеру учётки — `close` её признака (протокол §2.3), её
+    потокам — `("closed", None)`. Кадры — фоном: ответа нет, а запрос владельца не ждёт чужой сокет."""
+    session = tag(digest)
+    for queues in WATCHERS.values():
+        for q in queues:
+            if q.session == session:
+                q.put_nowait(("closed", None))
+    frame = {"t": "close", "session": session}
     for link in [x for x in LINKS.values() if x.user_id == user_id]:
         async def send(link=link):
             try:
@@ -362,7 +386,7 @@ def _frame(message: dict) -> dict:
         raise ProtocolError("frame")
     try:
         frame = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):          # RecursionError — вложенность глубже стека разбора
         raise ProtocolError("json") from None
     if not isinstance(frame, dict):
         raise ProtocolError("json")

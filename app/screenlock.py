@@ -6,8 +6,9 @@ auth.SCREEN_LOCK_PATHS. Сессия запроса — request.state.digest. Pa
 проверка ответов — библиотекой webauthn (origin, RP ID, вызов, UV, подпись, счётчик). PIN (спека
 2026-10-28-studio-lock-pin): 4–8 цифр ASCII, хеш users.pin_hash (scrypt, как пароль); задать и сменить —
 с паролем учётки, убрать — без. Заперлась сессия (`lock/now`) или отперлась — `bridge.forget`: мосты Claude
-Code закрывают её, и компьютер снова просит PIN (спека 2026-10-28-studio-claude-code-design, 6.3). Журнал — только события с id: credential id, открытый ключ, вызов, ответы
-устройства, пароль, PIN и его хеш туда не пишутся."""
+Code закрывают её, её потоки раздела кончаются `closed`, и компьютер снова просит PIN (спека
+2026-10-28-studio-claude-code-design, 6.3). Журнал — только события с id: credential id, открытый ключ,
+вызов, ответы устройства, пароль, PIN и его хеш туда не пишутся."""
 import asyncio
 import hashlib
 import json

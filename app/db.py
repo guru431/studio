@@ -269,9 +269,10 @@ CREATE TRIGGER search_translations_ad AFTER DELETE ON translations BEGIN
 #: projects_root, cc_version — что сказал мост при входе). События подключений — только добавляются (agent_id и
 #: agent_name без ссылки: компьютер отзывают, история остаётся), «Удалить всю историю» их не трогает. code_chats —
 #: слой студии поверх сессий машины (сессия — на компьютере, здесь только отметка и состояние). Подписка push живёт,
-#: пока жива сессия студии, что её завела
-CODE_19 = """CREATE TABLE agents(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
-       name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, has_pin INTEGER NOT NULL DEFAULT 0,
+#: пока жива сессия студии, что её завела. id компьютера — AUTOINCREMENT: id отозванного не достаётся новому
+#: (им ключуются agent_events без ссылки, память службы и адреса push `code/<id>/…`)
+CODE_19 = """CREATE TABLE agents(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, has_pin INTEGER NOT NULL DEFAULT 0,
        projects_root TEXT, cc_version TEXT, created REAL NOT NULL, last_seen REAL);
 CREATE INDEX agents_user ON agents(user_id);
 CREATE TABLE agent_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
@@ -291,7 +292,7 @@ CREATE INDEX push_subs_user ON push_subs(user_id);
 CREATE INDEX push_subs_digest ON push_subs(digest);
 """
 
-SCHEMA =SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
+SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
