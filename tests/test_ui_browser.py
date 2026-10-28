@@ -613,7 +613,8 @@ def test_settings_menu_and_old_profile_route(browser, live):
         ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => a.dataset.section)")])
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
-    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "dictation", "other"]
+    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation",
+                                  "other"]
     assert not problems(r), problems(r)
 
 
@@ -844,7 +845,8 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")]
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
+                                              "translate")]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
@@ -2370,20 +2372,22 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """Вкладки по порядку (спека 2026-10-27-studio-ui-tidy, 4.1): «Сканы» последней, вместо «Расшифровки» —
-    «Записи»; все подписи целиком и на 320 px. На телефоне шапка раздела кончается у лупы — справа сверху три
-    значка (поиск, «В работе», профиль), место прежней кнопки темы отдано заголовку."""
+    """Вкладки по порядку (спека 2026-10-27-studio-ui-tidy, 4.1): вместо «Расшифровки» — «Записи», «Перевод»
+    после «Сканов» (спека 2026-10-28-studio-translator, 6.1); все семь подписей целиком и на 320 px, страница
+    без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
+    «В работе», профиль), место прежней кнопки темы отдано заголовку."""
     fits = """[...document.querySelectorAll('#rail .tab span')].map(s => { const t = s.closest('.tab').getBoundingClientRect();
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= t.left - 0.5 && b.right <= t.right + 0.5,
       s.scrollWidth <= s.clientWidth]; })"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
       - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#search-open').getBoundingClientRect().left - end; })()"""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
-                                       ("eval", "fits", fits), ("eval", "room", room)],
+                                       ("eval", "fits", fits), ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
                       width=width, mobile=width < 760)
     assert not r.get("failed"), r
+    assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Записи", "Озвучка", "Сканы"]
+    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Записи", "Озвучка", "Сканы", "Перевод"]
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
         assert 0 <= r["values"]["room"] <= 16, r["values"]["room"]
@@ -6048,4 +6052,212 @@ def test_search_more_right_after_typing_starts_the_new_query(browser, live):
     v = r["values"]
     assert v["typed"] == "loading"
     assert len(v["titles"]) == 30 and all(t.startswith("пёс ") for t in v["titles"]), v["titles"]
+    assert not problems(r), problems(r)
+
+
+# ---- перевод ---------------------------------------------------------------------
+
+TL_OUTPUT = "document.querySelector('#tl-output').textContent"
+TL_DONE = "document.querySelector('.tl-row[data-state=done]')"
+TL_LANGS = "[document.querySelector('#tl-source').value, document.querySelector('#tl-target').value]"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def add_translator():
+    """Шлюз в чате, «Сканах» и «Переводе»; в переводчике отмечены локальная и облачная модели."""
+    return ("eval", "gateway", f"""(async () => {{ const m = {API};
+      const c = await m.api('POST', '/api/connections', {{ name: 'Шлюз', kind: 'srvllm', base_url: {GATEWAY_URL!r},
+        token: {GW_TOKEN!r}, sections: ['chat', 'ocr', 'translate'] }});
+      await m.api('PUT', '/api/sections/translate/links/' + c.id, {{ models: ['local-gemma-abl', 'gemma4-abl'] }});
+      await m.loadMe(); return true; }})()""")
+
+
+def translating(login):
+    """Вход, шлюз, раздел «Перевод» с загруженными моделями и языками."""
+    return [*signin(login), ("wait", READY), add_translator(), *go("translate"),
+            ("wait", "document.querySelectorAll('#tl-model option').length === 2"
+                     " && document.querySelectorAll('#tl-target option').length > 10")]
+
+
+@pytest.fixture
+def translator(live):
+    """Шлюз переводчика: определение языка (ответ без потока) — «en», переводы — `chat_script` по порядку."""
+    gw = live.gw
+    saved = gw.chat_reply, gw.chat_script
+    gw.chat_reply, gw.chat_script = ["en"], []
+    try:
+        yield gw
+    finally:
+        gw.chat_reply, gw.chat_script = saved
+        gw.__dict__.pop("_chat", None)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_translate_text_goes_right_and_into_history(browser, live, translator, width):
+    """«Hello» → «Перевести»: справа «Привет», строка истории «EN → RU», слева «Определить язык · английский».
+    Модель — умолчание раздела (локальная — без пометки, облачная — « · облако»). Широко окна рядом, на 320 px —
+    друг под другом и без горизонтальной прокрутки."""
+    login = f"tl-text{width}"
+    live.add_user(login)
+    translator.chat_script = [["При", "вет"]]
+    r = browser.drive(live.url + "/", [*translating(login),
+        ("eval", "models", "[...document.querySelectorAll('#tl-model option')].map(o => o.textContent)"),
+        ("eval", "model", "document.querySelector('#tl-model').selectedOptions[0].textContent"),
+        ("eval", "langs", TL_LANGS),
+        ("eval", "swap", "document.querySelector('#tl-swap').disabled"),
+        ("type", "#tl-input", "Hello"),
+        ("eval", "count", "document.querySelector('#tl-count').textContent"),
+        ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Привет'"),
+        ("eval", "pair", f"{TL_DONE}.querySelector('.tl-pair').textContent"),
+        ("eval", "row", f"[{TL_DONE}.querySelector('.tl-from').textContent, {TL_DONE}.querySelector('.tl-to').textContent,"
+                        f" {TL_DONE}.getAttribute('aria-current')]"),
+        ("eval", "auto", "document.querySelector('#tl-source').selectedOptions[0].textContent"),
+        ("eval", "placed", """(() => { const l = document.querySelector('.tl-left').getBoundingClientRect();
+          const r = document.querySelector('.tl-right').getBoundingClientRect();
+          return [l.bottom <= r.top + 0.5, l.right <= r.left + 0.5]; })()"""),
+        ("eval", "fits", NO_OVERFLOW)],
+        width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["models"] == ["Шлюз · local-gemma-abl", "Шлюз · gemma4-abl · облако"]
+    assert v["model"] == "Шлюз · local-gemma-abl" and v["langs"] == ["auto", "ru"] and v["swap"] is True
+    assert v["count"] == "5 / 300 000"
+    assert v["pair"] == "EN → RU" and v["row"] == ["Hello", "Привет", "true"]
+    assert v["auto"] == "Определить язык · английский"
+    assert v["placed"] == ([True, False] if width == 320 else [False, True])
+    assert v["fits"] is True
+    sent = [b for b in translator.chat_requests if b.get("stream")][-1]
+    assert sent["model"] == "local-gemma-abl" and sent["messages"][-1]["content"] == "Hello"
+    assert not problems(r), problems(r)
+
+
+def test_translate_swap_uses_the_detected_language(browser, live, translator):
+    """Облачная модель из шапки — следующий перевод идёт через неё. После перевода с «Определить язык» ⇄ берёт
+    определённый язык: «русский → английский», окна меняются текстом. Пара по умолчанию при следующем входе в
+    раздел — языки последней записи, а не выбор, который не перевели."""
+    live.add_user("tl-swap")
+    translator.chat_script = [["Привет"]]
+    pick_cloud = """(() => { const s = document.querySelector('#tl-model');
+      const o = [...s.options].find(o => o.textContent.endsWith(' · облако')); s.value = o.value;
+      s.dispatchEvent(new Event('change', { bubbles: true })); return o.textContent; })()"""
+    r = browser.drive(live.url + "/", [*translating("tl-swap"),
+        ("eval", "cloud", pick_cloud),
+        ("type", "#tl-input", "Hello"), ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Привет'"),
+        ("eval", "before", "document.querySelector('#tl-swap').disabled"),
+        ("click", "#tl-swap"),
+        ("eval", "after", f"[...{TL_LANGS}, document.querySelector('#tl-input').value, {TL_OUTPUT}]"),
+        set_value("#tl-target", "de"),
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+        *go("translate"), ("wait", f"{TL_DONE} && document.querySelectorAll('#tl-target option').length > 10"),
+        ("wait", f"{TL_LANGS}.join() === 'auto,ru'"),
+        ("eval", "again", TL_LANGS)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["cloud"] == "Шлюз · gemma4-abl · облако"
+    assert v["before"] is False
+    assert v["after"] == ["ru", "en", "Привет", "Hello"]
+    assert v["again"] == ["auto", "ru"]
+    assert [b["model"] for b in translator.chat_requests[-2:]] == ["gemma4-abl", "gemma4-abl"]   # язык и перевод
+    assert not problems(r), problems(r)
+
+
+def test_translate_file_shows_source_and_translation(browser, live, translator):
+    """Word в «Файл» — плашка с именем вместо поля; «Перевести» — слева текст документа и ссылка на исходник,
+    справа перевод; «Скачать ▾» — .txt и .docx перевода; крестик плашки — снова пустое поле."""
+    from test_documents import docx
+    live.add_user("tl-file")
+    translator.chat_script = [["Привет, мир."]]
+    r = browser.drive(live.url + "/", [*translating("tl-file"),
+        put_files("#tl-file-input", [("Записка.docx", docx(["Hello world."]))], DOCX_MIME),
+        ("wait", "!document.querySelector('#tl-chip').hidden"),
+        ("eval", "chosen", "[document.querySelector('#tl-chip').textContent,"
+                           " document.querySelector('#tl-input').closest('.field-box').hidden]"),
+        ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Привет, мир.'"),
+        ("eval", "tid", f"{TL_DONE}.dataset.id"),
+        ("eval", "left", "[document.querySelector('.tl-source-text').textContent,"
+                         " document.querySelector('#tl-chip a').getAttribute('href').startsWith('/api/media/'),"
+                         " document.querySelector('#tl-chip a').textContent]"),
+        ("eval", "kind", f"{TL_DONE}.querySelector('.tl-meta').textContent.includes('Word')"),
+        ("eval", "spy", CLICKS), ("click", "#tl-export"),
+        ("eval", "formats", "[...document.querySelectorAll('.tl-formats [data-format]')].map(b => b.dataset.format)"),
+        ("click", ".tl-formats [data-format=txt]"),
+        ("wait", "window.clicked.length === 1"), ("eval", "clicked", "window.clicked[0]"),
+        ("eval", "body", f"fetch('/api/translate/' + {TL_DONE}.dataset.id + '/export?format=txt').then(r => r.text())"),
+        ("click", "#tl-chip-x"),
+        ("eval", "cleared", f"[document.querySelector('#tl-chip').hidden, document.querySelector('#tl-input').value,"
+                            f" {TL_OUTPUT}]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "Записка.docx" in v["chosen"][0] and v["chosen"][1] is True
+    assert v["left"] == ["Hello world.", True, "Записка.docx"] and v["kind"] is True
+    assert v["formats"] == ["txt", "docx"]
+    assert v["clicked"] == [f"/api/translate/{v['tid']}/export?format=txt", True]
+    assert v["body"] == "Привет, мир."
+    assert v["cleared"] == [True, "", ""]
+    assert not problems(r), problems(r)
+
+
+def test_translate_continue_after_an_error(browser, live, translator):
+    """Второй кусок — отказ шлюза 400: запись — ошибка «кусок 2 из 2», первый кусок виден, «Продолжить» —
+    переводится только второй, готово."""
+    from fakes import FakeGateway
+    live.add_user("tl-cont")
+    gw = translator
+    gw.chat_script = [["Первый"], ["Второй"]]
+    real, streams = FakeGateway._chat.__get__(gw), []
+
+    def failing(request):
+        body = json.loads(request.content)
+        if body.get("stream"):
+            streams.append(body)
+            if len(streams) == 2:
+                return httpx.Response(400, json={"error": {"message": "bad request"}})
+        return real(request)
+
+    gw._chat = failing
+    paragraph = ("Hello world. " * 160).strip()
+    r = browser.drive(live.url + "/", [*translating("tl-cont"),
+        set_value("#tl-source", "en"),
+        set_value("#tl-input", f"{paragraph}\n\n{paragraph}"),
+        ("click", "#tl-go"),
+        ("wait", "document.querySelector('.tl-row[data-state=error]') && !document.querySelector('#tl-continue').hidden"),
+        ("eval", "failed", f"[document.querySelector('#tl-status').textContent, {TL_OUTPUT}]"),
+        ("click", "#tl-continue"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Первый\\n\\nВторой'"),
+        ("eval", "after", "[document.querySelector('#tl-continue').hidden, document.querySelector('#tl-status').textContent]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["failed"][0].startswith("кусок 2 из 2") and v["failed"][1] == "Первый"
+    assert v["after"] == [True, ""]
+    assert len(streams) == 3 and streams[2]["messages"][-1]["content"] == streams[1]["messages"][-1]["content"]
+    assert not problems(r), problems(r)
+
+
+def test_translate_opens_a_record_by_id(browser, live, translator):
+    """#/translate?id=<id> («В работе», уведомление, «Поиск»): запись в окнах, её языки, ?id из адреса ушёл;
+    адрес записи перевода проходит HREF jobs.js."""
+    live.add_user("tl-open")
+    translator.chat_script = [["Bonjour"]]
+    make = f"""(async () => {{ const m = {API};
+      const job = await m.api('POST', '/api/translate', {{ text: 'Привет', source_lang: 'ru', target_lang: 'fr' }});
+      for (let t = 0; t < 200; t++) {{
+        const item = await m.api('GET', '/api/translate/' + job.id);
+        if (item.state === 'done') {{ window.tid = job.id; return job.id; }}
+        await new Promise((ok) => setTimeout(ok, 50));
+      }}
+      return null; }})()"""
+    r = browser.drive(live.url + "/", [*signin("tl-open"), ("wait", READY), add_translator(),
+        ("eval", "tid", make),
+        ("eval", "href", "(async () => (await import('/static/js/jobs.js')).HREF.test('translate?id=a1-b2'))()"),
+        ("eval", "go", "location.hash = '#/translate?id=' + window.tid"),
+        ("wait", f"{TL_OUTPUT} === 'Bonjour'"),
+        ("eval", "shown", f"[location.hash, document.querySelector('#tl-input').value, ...{TL_LANGS},"
+                          " document.querySelector('.tl-row[aria-current=true]')?.dataset.id]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tid"] and v["href"] is True
+    assert v["shown"] == ["#/translate", "Привет", "ru", "fr", v["tid"]]
     assert not problems(r), problems(r)
