@@ -5425,6 +5425,140 @@ def test_curtain_leaves_when_the_mark_hangs(browser, live):
     assert not problems(r), problems(r)
 
 
+# ---- PIN на экране блокировки (спека 2026-10-28-studio-lock-pin) ---------------------
+
+PIN_SHOWN = "!document.querySelector('#lock-pin').hidden"
+DOTS = "document.querySelector('#lock-pin-dots').children.length"
+LOCK_NOTE = "document.querySelector('#lock-status').textContent"
+PIN_OK_OFF = "document.querySelector('#lock-pin-ok').disabled"
+EXHAUSTED = "PIN не принимается после 10 ошибок — откройте паролем учётки"
+#: что видно на экране блокировки: панель, форма пароля, «Открыть» (passkey), «Открыть паролем»
+LOCK_PARTS = "['#lock-pin', '#lock-password-form', '#lock-open', '#lock-use-password'].map(s => !document.querySelector(s).hidden)"
+
+
+def phone_with_pin(login, pin="2580"):
+    """Блокировка включена, PIN задан блоком настроек, ключей нет."""
+    return [*lock_settings(login), ("click", "#lock-enabled"), server_lock_is(True),
+            ("click", "#pin-set"), ("type", "#pin-password", "password-123"), ("type", "#pin-new", pin),
+            ("type", "#pin-repeat", pin), ("click", "#pin-save"), server_pin_is(True)]
+
+
+def pin_locked():
+    """Уход с экрана дольше минуты и возвращение: экран блокировки с панелью, сервер отказывает."""
+    return [hide(), ("wait", CURTAIN_OPEN), later(61000), show(), ("wait", LOCK_OPEN),
+            ("wait", f"{ME_STATUS}.then(s => s === 423)"), ("wait", PIN_SHOWN)]
+
+
+def tap(digits):
+    return [("click", f'[data-digit="{d}"]') for d in digits]
+
+
+def wrong(note):
+    """«0000», «OK» — ждать подписи."""
+    return [*tap("0000"), ("click", "#lock-pin-ok"), ("wait", f"{LOCK_NOTE} === {note!r}")]
+
+
+def test_phone_opens_with_the_pin_keeping_the_text(browser, live):
+    login = "pin-open"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), add_gateway(), *go("photo"),
+        ("wait", "document.querySelector('#photo-prompt')"), ("type", "#photo-prompt", "кот на крыше"),
+        *pin_locked(), ("eval", "parts", LOCK_PARTS),
+        *tap("1111"), ("eval", "typed", f"[{DOTS}, {PIN_OK_OFF}]"), ("click", "#lock-pin-ok"),
+        ("wait", f"{LOCK_NOTE} === 'Неверный PIN'"), ("eval", "wrong", f"[{DOTS}, {LOCK_OPEN}]"),
+        ("eval", "still", ME_STATUS),
+        *tap("2580"), ("click", "#lock-pin-ok"), ("wait", f"!{LOCK_OPEN} && !{CURTAIN_OPEN}"),
+        ("eval", "prompt", "document.querySelector('#photo-prompt').value"), ("eval", "after", ME_STATUS),
+        ("eval", "stored", "JSON.stringify({...localStorage}) + JSON.stringify({...sessionStorage})")], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["parts"] == [True, False, False, True]
+    assert v["typed"] == [4, False] and v["wrong"] == [0, True] and v["still"] == 423
+    assert v["prompt"] == "кот на крыше" and v["after"] == 200
+    assert "2580" not in v["stored"] and "1111" not in v["stored"]
+    assert r["sent"].count("POST /api/lock/pin") == 2, r["sent"]
+    assert not known_refusals(problems(r), 423, 403), problems(r)
+
+
+def test_ten_wrong_pins_turn_the_pad_into_the_password(browser, live):
+    login = "pin-ten"
+    live.add_user(login)
+    spend = f"""(async () => {{ const m = {API}; const codes = [];
+      for (let i = 0; i < 5; i++) {{ try {{ await m.api('POST', '/api/lock/pin', {{ pin: '9999' }}); }}
+        catch (e) {{ codes.push(e.code); }} }} return codes; }})()"""
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), ("eval", "spent", spend),
+        *wrong("Неверный PIN — осталось 4 попытки"), ("eval", "dots", DOTS),
+        *wrong("Неверный PIN — осталось 3 попытки"), *wrong("Неверный PIN — осталось 2 попытки"),
+        *wrong("Неверный PIN — осталась 1 попытка"),
+        *tap("0000"), ("click", "#lock-pin-ok"), ("wait", f"document.querySelector('#lock-pin').hidden"),
+        ("eval", "parts", LOCK_PARTS), ("eval", "note", LOCK_NOTE),
+        ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"), ("wait", f"!{LOCK_OPEN}"),
+        ("eval", "me", ME_STATUS), *pin_locked(), ("eval", "again", LOCK_PARTS)], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["spent"] == ["pin"] * 5 and v["dots"] == 0
+    assert v["parts"] == [False, True, False, False] and v["note"] == EXHAUSTED
+    assert v["me"] == 200 and v["again"] == [True, False, False, True]
+    assert not known_refusals(problems(r), 423, 403), problems(r)
+
+
+#: POST /api/lock/pin считаются (window.pins) и отвечают на 400 мс позже
+COUNT_PINS = """(() => { window.pins = 0; const real = window.fetch;
+  window.fetch = function (input, init) {
+    if (input !== '/api/lock/pin') return real.call(this, input, init);
+    window.pins += 1;
+    return new Promise(r => setTimeout(r, 400)).then(() => real.call(this, input, init)); }; })();"""
+
+
+def test_double_ok_sends_one_pin(browser, live):
+    """Двойное касание «OK» и Enter, пока идёт запрос, — один запрос и одна попытка."""
+    login = "pin-double"
+    live.add_user(login)
+    double = """(() => { const ok = document.querySelector('#lock-pin-ok'); ok.click(); ok.click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return ok.disabled; })()"""
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), *tap("0000"),
+        ("eval", "busy", double), ("click", "#lock-pin-ok"), ("press", "Enter"),
+        ("wait", f"{LOCK_NOTE} === 'Неверный PIN'"), ("press", "Enter"),
+        ("eval", "pins", settled("window.pins", 500)),
+        ("eval", "left", "fetch('/api/lock').then(r => r.json()).then(s => s.pin_left)")], init=COUNT_PINS, **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["busy"] is True and v["pins"] == 1 and v["left"] == 9
+    assert not known_refusals(problems(r), 423, 403), problems(r)
+
+
+def test_typed_pin_digits_are_gone_after_leaving(browser, live):
+    """После 8 цифр новые не принимаются, «OK» — от 4 цифр; уход с экрана стирает набранное. 320 px."""
+    login = "pin-gone"
+    live.add_user(login)
+    clear = "(() => { const b = document.querySelector('#lock-pin-back'); for (let i = 0; i < 7; i++) b.click(); return true; })()"
+    fits = f"""[{NO_OVERFLOW}, (b => b.width >= 64 && b.height >= 64)(document.querySelector('[data-digit="5"]').getBoundingClientRect()),
+      (b => b.left >= 0 && b.right <= innerWidth)(document.querySelector('#lock-pin').getBoundingClientRect()),
+      document.querySelector('#lock-pin-back').getAttribute('aria-label')]"""
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), ("eval", "fits", fits),
+        *tap("123456789"), ("eval", "nine", f"[{DOTS}, {PIN_OK_OFF}]"),
+        ("click", "#lock-pin-back"), ("eval", "back", DOTS),
+        ("eval", "clear", clear), *tap("25"), ("eval", "two", f"[{DOTS}, {PIN_OK_OFF}]"),
+        hide(), show(), ("eval", "after", DOTS)], **{**PHONE, "width": 320})
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["fits"] == [True, True, True, "Стереть"]
+    assert v["nine"] == [8, False] and v["back"] == 7 and v["two"] == [2, True] and v["after"] == 0
+    assert "POST /api/lock/pin" not in r["sent"], r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_physical_keys_type_the_pin(browser, live):
+    login = "pin-keys"
+    live.add_user(login)
+    keys = [("press", k) for k in ["2", "5", "9", "Backspace", "8", "0", "Enter"]]
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), *keys,
+        ("wait", f"!{LOCK_OPEN}"), ("eval", "me", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["me"] == 200 and r["sent"].count("POST /api/lock/pin") == 1, r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
 # ---- «В работе» и уведомления (спека 2026-10-21-studio-jobs-panel) ----------------------------
 
 JOBS_POLLED = "document.querySelector('#jobs').dataset.polled === '1'"

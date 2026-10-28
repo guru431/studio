@@ -57,6 +57,15 @@
   <img class="lock-logo" src="/static/icons/icon.svg" alt="">
   <h1 id="lock-title">Студия заперта</h1>
   <button id="lock-open" class="btn btn-accent" type="button">Открыть</button>
+  <div id="lock-pin" class="lock-pin" hidden>
+    <div id="lock-pin-dots" class="lock-pin-dots" aria-label="Набранные цифры PIN"></div>
+    <div class="lock-pin-pad">
+      <button type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
+      <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
+      <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
+      <button id="lock-pin-back" type="button" aria-label="Стереть">⌫</button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
+    </div>
+  </div>
   <button id="lock-use-password" class="btn-link" type="button">Открыть паролем</button>
   <form id="lock-password-form" class="lock-password" hidden>
     <input id="lock-password" class="input" type="password" autocomplete="current-password" maxlength="1024" aria-label="Пароль учётки" placeholder="Пароль учётки">
