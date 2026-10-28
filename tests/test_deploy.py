@@ -8,7 +8,9 @@ import subprocess
 
 import pytest
 
+import bridge
 import chat
+import claude_code
 import clock
 import config
 import db
@@ -106,6 +108,8 @@ def test_vhost_is_public_and_streams_chat():
     assert "ServerName studio.example.com" in v and "Require ip" not in v
     assert v.index("ProxyPass /api/chats/") < v.index("ProxyPass / ")
     assert v.index("ProxyPass /api/videos ") < v.index("ProxyPass / ")
+    assert v.index("ProxyPass /api/agent/link ") < v.index("ProxyPass / ")
+    assert v.index("ProxyPass /api/code/ ") < v.index("ProxyPass / ")
     assert "flushpackets=on" in v and "studio-backend" in v and "localhost" not in re.sub(r"^#.*$", "", v, flags=re.M)
 
 
@@ -119,6 +123,12 @@ def test_vhost_details():
         assert re.search(r"^\s*" + re.escape(line).replace(r"\ ", r"\s+") + r"\s*$", v, re.M), line
     assert (f"ProxyPass /api/chats/ unix:{SOCK}|http://studio-backend/api/chats/ timeout=600 flushpackets=on"
             in v)
+    assert (f"ProxyPass /api/agent/link unix:{SOCK}|http://studio-backend/api/agent/link upgrade=websocket"
+            " timeout=300" in v)
+    assert f"ProxyPassReverse /api/agent/link unix:{SOCK}|http://studio-backend/api/agent/link" in v
+    assert f"ProxyPass /api/code/ unix:{SOCK}|http://studio-backend/api/code/ timeout=600 flushpackets=on" in v
+    assert f"ProxyPassReverse /api/code/ unix:{SOCK}|http://studio-backend/api/code/" in v
+    assert 'SetEnvIf Request_URI "^/api/code/" no-gzip=1' in v
     assert f"ProxyPass / unix:{SOCK}|http://studio-backend/ timeout=150" in v
     assert f"ProxyPassReverse / unix:{SOCK}|http://studio-backend/" in v
     assert 'RequestHeader set X-Forwarded-Proto "https"' in v
@@ -136,6 +146,7 @@ def test_apache_lets_through_the_largest_body_the_studio_accepts():
     assert limit >= videos.BODY_MAX and videos.BODY_MAX > image_upload.VIDEO_UPLOAD   # картинка ролика
     assert limit >= image_upload.MAX_BODY + image_upload.MAX_UPLOAD                   # правка: фото и маска
     assert limit >= presets.BODY_MAX                                                  # пресет с длинным промптом
+    assert limit >= claude_code.FILE_BODY_MAX                                         # правка файла Claude Code
 
 
 def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
@@ -153,10 +164,19 @@ def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
 
 def _route_timeout(path: str) -> int:
     """Таймаут ProxyPass, которому достанется путь: mod_proxy берёт первое совпавшее правило."""
-    for prefix, timeout in re.findall(r"^\s*ProxyPass (\S+) \S+ timeout=(\d+)", uncommented(VHOST), re.M):
+    for prefix, timeout in re.findall(r"^\s*ProxyPass (\S+) \S+ (?:\S+=\S+ )*timeout=(\d+)", uncommented(VHOST), re.M):
         if path.startswith(prefix):
             return int(timeout)
     raise AssertionError(f"{path}: нет ProxyPass")
+
+
+def test_bridge_link_and_code_stream_routes():
+    """Канал моста — апгрейд WebSocket с пределом 300 с (тишину рвут пинги службы каждые 20 с); поток хода
+    Claude Code — как поток чата, дольше просьбы к мосту (спека claude-code 6.9)."""
+    assert _route_timeout("/api/agent/link") == 300
+    assert _route_timeout("/api/code/agents/1/projects/a/chats/b/turn") == 600 > bridge.CALL_SEC
+    upgrades = [s.strip() for s in uncommented(VHOST).splitlines() if "upgrade=websocket" in s]
+    assert len(upgrades) == 1 and upgrades[0].startswith("ProxyPass /api/agent/link ")
 
 
 def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
