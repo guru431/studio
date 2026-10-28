@@ -1,7 +1,7 @@
 /* Вкладки «Файлы» и «Git» проекта Claude Code (#/code/<aid>/<pid>) — спека 2026-10-28-studio-claude-code-design
  * 6.7, протокол канала §4 (files, read, raw, save, git) и §6 (пути).
  *
- * filesView(host, { aid, pid, name, failed, path }) → { open(path), leave(go), unmount() } (path — открыть сразу, иначе корень):
+ * filesView(host, { aid, pid, name, failed, path }) → { open(path), leave(go), dirty(), unmount() } (path — открыть сразу, иначе корень):
  * - путь #code-path (корень — имя проекта, части — к своей папке), папка #code-files — li[data-name] в порядке
  *   моста (папки сначала); нажатие на папку — её список, на файл — сам файл; на узком экране, пока открыт
  *   файл, список папки скрыт (назад ведёт путь), на широком — рядом;
@@ -13,13 +13,14 @@
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
  * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата);
  * - текст правлен и не сохранён, а уходят на другой файл, папку (путь, список) или вкладку (leave(go) из
- *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться»;
+ *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться»; уход с
+ *   уровня проекта и из раздела ловит code.js (dirty, тот же leave), закрытие вкладки — beforeunload;
  * - «Сохранить» получило 409 closed — правка и её version ждут в памяти модуля (edits, ключ aid/pid/путь), а
  *   failed(err, box, path) уводит к PIN; файл, открытый снова (code.js возвращает к нему после PIN), берёт
  *   правку поверх прочитанного с прежним version: изменил его за это время Claude — «Сохранить» скажет
  *   conflict. В хранилище браузера правка не попадает.
  * gitView(host, { aid, pid, failed }) → { unmount() }: #code-git — «Ветка», «впереди на N» / «позади на N»
- * (если есть upstream), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
+ * (если есть upstream; нулевые не показываются), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
  * failed(err, box, path) — общие отказы раздела из code.js (closed — к PIN этого компьютера, с path — назад к
  * этому файлу; offline — слова).
@@ -86,9 +87,21 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     blobUrl = null;
   }
 
+  /** Открытый текст правлен и не сохранён. */
+  function dirty() {
+    return !!editing && editing.editor.value !== editing.base;
+  }
+
+  /** Закрытие вкладки и перезагрузка с несохранённой правкой — вопрос браузера. */
+  function unload(event) {
+    if (!dirty()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
   /** Уйти с открытого текста: правка не сохранена — сначала спросить; «Уйти без сохранения» её отбрасывает. */
   function leave(go) {
-    if (!editing || editing.editor.value === editing.base) {
+    if (!dirty()) {
       go();
       return;
     }
@@ -312,13 +325,16 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     openFile(path);
   }
 
+  window.addEventListener('beforeunload', unload);
   if (start) open(start);
   else listDir('');
   return {
     open,
     leave,
+    dirty,
     unmount() {
       alive = false;
+      window.removeEventListener('beforeunload', unload);
       closeFile();
     },
   };
@@ -334,9 +350,11 @@ export function gitView(host, { aid, pid, failed }) {
     const head = el('p', { class: 'code-git-head' }, 'Ветка ',
       el('b', { class: 'code-git-branch' }, typeof git.branch === 'string' && git.branch ? git.branch : '—'));
     if (typeof git.upstream === 'string' && git.upstream) {
-      head.append(el('span', { class: 'muted code-git-upstream' }, git.upstream),
-        el('span', { class: 'tag code-git-ahead' }, `впереди на ${Number(git.ahead) || 0}`),
-        el('span', { class: 'tag code-git-behind' }, `позади на ${Number(git.behind) || 0}`));
+      const ahead = Number(git.ahead) || 0;
+      const behind = Number(git.behind) || 0;
+      head.append(el('span', { class: 'muted code-git-upstream' }, git.upstream));
+      if (ahead) head.append(el('span', { class: 'tag code-git-ahead' }, `впереди на ${ahead}`));
+      if (behind) head.append(el('span', { class: 'tag code-git-behind' }, `позади на ${behind}`));
     }
     const files = Array.isArray(git.files) ? git.files : [];
     box.replaceChildren(head, files.length

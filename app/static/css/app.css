@@ -1071,8 +1071,14 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-pin-name { margin: 0; overflow-wrap: anywhere; }
 .code-pin-row { display: flex; gap: 8px; }
 .code-pin-row .input { flex: 1; min-width: 0; max-width: 220px; background: var(--bg); letter-spacing: .2em; }
+/* PIN — не пароль: поле text с точками вместо цифр, менеджеры паролей его не сохраняют */
+#code-pin-input { -webkit-text-security: disc; }
 .code-pin .error { margin: 0; }
 .code-pin .error:empty { display: none; }
+/* «Скачать мост» (ui.js agentDownload): здесь — пустой список компьютеров, в «Настройках» — блок «Компьютеры» */
+.agent-download { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.agent-download p { margin: 0; overflow-wrap: anywhere; }
+.empty .agent-download { align-items: center; }
 .code-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .code-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .code-tabs .chip[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }

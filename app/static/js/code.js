@@ -1,9 +1,12 @@
 /* Раздел «Claude Code» (#/code) — спека 2026-10-28-studio-claude-code-design, 6.3 и 6.5.
  *
- * Уровни по хвосту адреса (ctx.id, делится по «/»):
- * - #/code — компьютеры учётки (GET /api/agents, без моста): имя, «на связи» / «не на связи», значок «PIN».
+ * Уровни по хвосту адреса (ctx.id, делится по «/»); рамка уровня (шапка, строка пути) рисуется сразу, список —
+ * по ответу (прежний уровень, например панель PIN, до ответа не остаётся):
+ * - #/code — компьютеры учётки (GET /api/agents, без моста): имя, «на связи» / «не на связи», значок «PIN»;
+ *   пусто — «Компьютеров пока нет.» и ссылка «Скачать мост» (ui.js agentDownload).
  *   Компьютер не на связи — только строка: нажатие говорит словами и ничего не запрашивает. На связи —
- *   POST …/open с pin: null; 204 — проекты, 409 pin_needed — панель PIN (#code-pin).
+ *   POST …/open с pin: null; 204 — проекты, 409 pin_needed — панель PIN (#code-pin: не <form> и не password —
+ *   менеджеры паролей не предложат сохранить PIN; Enter и «Открыть» отправляют).
  * - #/code/<aid> — проекты (GET …/projects); #/code/<aid>/<pid> — проект: «Новый чат», вкладки «Чаты»,
  *   «Файлы», «Git» (две последние рисует code-files.js: «Файлы» — при первом показе вкладки, «Git» — заново
  *   при каждом), чаты (GET …/chats) с пометками и «Закрыть» / «Открыть снова» (PATCH).
@@ -16,18 +19,23 @@
  * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed или событие closed потока
  * (сессию закрыли: блокировка, выход, 30 минут простоя, перезапуск моста) — toPin: адрес уровня, где это
  * случилось, — в памяти модуля (returnTo), переход на #/code?pin=<aid>: у компьютера с PIN сразу панель, без
- * PIN — тот же POST open, что и нажатие; ?pin из адреса уходит. Открылся — назад на запомненный адрес
+ * PIN — тот же POST open, что и нажатие, не на связи — слова; ?pin из адреса уходит. Второй отказ до перехода
+ * (параллельные запросы уровня) адрес возврата не трогает. Открылся — назад на запомненный адрес
  * (чат, проект; отказ «Сохранить» — вкладка «Файлы» с этим файлом и правкой), а не к проектам. Перенаправления (к PIN и назад, хвост не того вида — на #/code, компьютера
- * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent. */
+ * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent.
+ *
+ * Правка файла не сохранена, а адрес уходит (строка пути, «Назад», другой раздел студии) — адрес возвращается
+ * (history.replaceState) и спрашивает окно «Изменения не сохранены» вкладки «Файлы»; «Уйти без сохранения» —
+ * снова туда (hold — его зовёт роутер app.js до смены уровня или раздела). */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
 import { attemptsLeft } from './lock.js';
-import { el, words } from './ui.js';
+import { agentDownload, el, words } from './ui.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
-const EMPTY = 'Компьютеров пока нет. Поставьте мост Claude Code на компьютер и войдите в нём логином студии.';
+const NONE = 'Компьютеров пока нет.';
 const UNTITLED = 'Новый чат';
 const AID_RE = /^\d+$/;
 const PID_RE = /^[0-9a-f]{16}$/;
@@ -42,15 +50,29 @@ let view = null;        // чат (chatView) или вкладки проект�
 let wantFile = null;    // путь файла из шага чата до перехода на вкладку «Файлы» — только в памяти
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
+let shownHash = null;   // адрес отрисованного уровня: сюда возвращает несохранённая правка
 
-/** Перенаправление без записи в истории браузера. */
+/** Перенаправление без записи в истории браузера; своё — без вопроса о несохранённой правке. */
 function redirect(path) {
-  location.replace(`#/${path}`);
+  shownHash = `#/${path}`;
+  location.replace(shownHash);
+}
+
+/** Роутер app.js перед любой сменой адреса (уровень, раздел, «Назад»): правка файла не сохранена — адрес назад,
+ * вопрос окном вкладки «Файлы»; «Уйти без сохранения» — снова на новый адрес. true — переход задержан. */
+export function hold() {
+  if (!view || !view.dirty || !view.dirty() || !shownHash || location.hash === shownHash) return false;
+  const target = location.hash;
+  history.replaceState(null, '', shownHash);
+  view.leave(() => location.replace(target));
+  return true;
 }
 
 /** Компьютер закрыт для сессии — к его панели PIN, запомнив, откуда (`back` и `file` — вкладка «Файлы» и файл,
- * чьё сохранение застал отказ: после PIN он откроется с правкой). */
+ * чьё сохранение застал отказ: после PIN он откроется с правкой). Адрес уже ведёт к PIN (второй отказ того же
+ * уровня раньше hashchange первого) — запомненное не трогать. */
 function toPin(aid, back = location.hash, file = null) {
+  if (location.hash.startsWith('#/code?pin=')) return;
   returnTo = { aid: String(aid), hash: back, file };
   redirect(`code?pin=${aid}`);
 }
@@ -118,15 +140,23 @@ function computers(mine) {
 
   function showPin(agent) {
     if (pinBox) pinBox.remove();
-    const input = el('input', { id: 'code-pin-input', class: 'input', type: 'password', inputmode: 'numeric',
-      autocomplete: 'off', maxlength: '64', 'aria-label': 'PIN компьютера' });
-    const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'submit' }, 'Открыть');
+    // не <form> и не password: исчезнув после удачного запроса, они дали бы менеджеру паролей сохранить PIN
+    // компьютера в синхронизируемое хранилище браузера; точки вместо цифр — -webkit-text-security (app.css)
+    const input = el('input', { id: 'code-pin-input', class: 'input', type: 'text', inputmode: 'numeric',
+      autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64',
+      'aria-label': 'PIN компьютера' });
+    const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'button' }, 'Открыть');
     const error = el('p', { id: 'code-pin-error', class: 'error', 'aria-live': 'polite' });
-    pinBox = el('form', { id: 'code-pin', class: 'code-pin', 'data-id': agent.id },
+    pinBox = el('div', { id: 'code-pin', class: 'code-pin', role: 'group', 'aria-label': 'PIN компьютера', 'data-id': agent.id },
       el('h2', {}, 'PIN компьютера'), el('p', { class: 'muted code-pin-name' }, agent.name),
       el('div', { class: 'code-pin-row' }, input, go), error);
-    pinBox.addEventListener('submit', async (event) => {
+    go.addEventListener('click', send);
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.isComposing) return;
       event.preventDefault();
+      send();
+    });
+    async function send() {
       if (go.disabled || !input.value) return;
       const pin = input.value;
       go.disabled = true;
@@ -147,7 +177,7 @@ function computers(mine) {
         go.disabled = false;
       }
       input.focus();
-    });
+    }
     main.append(pinBox);
     input.focus();
   }
@@ -176,7 +206,7 @@ function computers(mine) {
     if (!items.length) {
       const badge = el('span', { class: 'badge', 'aria-hidden': 'true' });
       badge.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${CODE_ICON}</svg>`;   // константа выше
-      main.append(el('div', { id: 'code-empty', class: 'empty' }, badge, el('p', {}, EMPTY)));
+      main.append(el('div', { id: 'code-empty', class: 'empty' }, badge, el('p', {}, NONE), agentDownload()));
       return;
     }
     const list = el('ul', { id: 'code-agents', class: 'code-list' });
@@ -194,7 +224,7 @@ function computers(mine) {
     if (back && back.online) {
       if (back.has_pin) showPin(back);
       else choose(back);
-    }
+    } else if (back) status.textContent = OFFLINE;   // пропал, пока шёл переход к PIN
   }, (err) => {
     if (mine === gen) status.textContent = words(err);
   });
@@ -212,10 +242,11 @@ async function agentName(aid) {
 }
 
 async function projects(mine, aid) {
+  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Компьютер', null]]);
   const [name, out] = await Promise.all([agentName(aid),
     api('GET', `${base(aid)}/projects`).then((o) => ({ items: o.items }), (err) => ({ err }))]);
   if (mine !== gen) return;
-  const { main, status } = frame([['Компьютеры', '#/code'], [name || 'Компьютер', null]]);
+  if (name) nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [name, null]]));
   if (out.err) {
     failed(out.err, aid, status);
     return;
@@ -256,17 +287,22 @@ function chatRow(mine, aid, pid, chat, reload, status) {
 }
 
 async function project(mine, aid, pid, tab, path) {
+  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Компьютер', `#/code/${aid}`], ['Проект', null]]);
   const [name, found] = await Promise.all([agentName(aid),
     api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid), () => null)]);
   if (mine !== gen) return;
   let files = null;
   let git = null;
-  view = { unmount() {
-    if (files) files.unmount();
-    if (git) git.unmount();
-  } };
-  const { main, status } = frame([['Компьютеры', '#/code'], [name || 'Компьютер', `#/code/${aid}`],
-    [found ? found.name : 'Проект', null]]);
+  view = {
+    dirty: () => !!files && files.dirty(),             // несохранённая правка вкладки «Файлы» (hold)
+    leave: (go) => files.leave(go),
+    unmount() {
+      if (files) files.unmount();
+      if (git) git.unmount();
+    },
+  };
+  nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [name || 'Компьютер', `#/code/${aid}`],
+    [found ? found.name : 'Проект', null]]));
   const add = el('button', { type: 'button', id: 'code-new-chat', class: 'btn btn-accent' }, 'Новый чат');
   add.addEventListener('click', async () => {
     add.disabled = true;
@@ -379,6 +415,7 @@ function render() {
   const mine = ++gen;
   if (view) view.unmount();
   view = null;
+  shownHash = location.hash;
   const path = wantFile;
   wantFile = null;
   const parts = ctx.id ? ctx.id.split('/') : [];
@@ -411,6 +448,7 @@ export function update(context) {
 }
 
 export function unmount() {
+  shownHash = null;
   gen += 1;
   if (view) view.unmount();
   view = null;

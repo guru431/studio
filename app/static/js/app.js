@@ -8,7 +8,8 @@
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
  * (#/video?source=<media_id> — «Оживить» из раздела фото; ?id=<запись> — переход к записи из
  * «В работе», jobs.js: раздел открывает её и убирает ?id из адреса). Смена id в том же разделе зовёт
- * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново.
+ * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново. Раздел с `hold()`
+ * может задержать любую смену адреса (true — он сам вернул адрес и спросит; code.js — несохранённая правка).
  * Раздел без готовой модели (me.capabilities.photo === false) открывается всё равно — история
  * читается, скачивается и удаляется; hint(cls) — подсказка со ссылкой на настройки раздела, её
  * раздел ставит вместо поля создания (у готового раздела hint — null). Готовность
@@ -184,6 +185,7 @@ function allowed({ section, id }) {
 }
 
 async function render() {
+  if (current && current.module.hold && current.module.hold()) return;
   let route = parse(location.hash);
   if (route.section === 'profile') {            // прежний адрес профиля — настройки
     route = { section: 'settings', id: null, query: new URLSearchParams() };
