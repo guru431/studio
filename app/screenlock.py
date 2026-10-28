@@ -64,6 +64,10 @@ class KeyPassword(BaseModel):
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
 
 
+class Pin(BaseModel):
+    pin: str = Field(max_length=PIN_MAX)
+
+
 class NewPin(BaseModel):
     password: str | None = Field(None, max_length=PASSWORD_MAX)
     pin: str = Field(max_length=PIN_MAX)
@@ -127,8 +131,12 @@ def _descriptors(uid: int) -> list[PublicKeyCredentialDescriptor]:
 
 @router.get("/lock")
 async def lock_state(request: Request):
-    """Только «заперто ли», «есть ли ключи» и CSRF (без него не отправить отпирание) — профиля нет."""
-    return {"locked": request.state.locked, "keys": _has_keys(request.state.user.id), "csrf": request.state.csrf}
+    """Только «заперто ли», «есть ли ключи», CSRF (без него не отправить отпирание), задан ли PIN и
+    сколько попыток PIN осталось — профиля нет."""
+    uid = request.state.user.id
+    row = state.DB.execute("SELECT pin_hash IS NOT NULL AS pin, pin_fails FROM users WHERE id = ?", (uid,)).fetchone()
+    return {"locked": request.state.locked, "keys": _has_keys(uid), "csrf": request.state.csrf,
+            "pin": bool(row["pin"]), "pin_left": max(0, PIN_FAILS - row["pin_fails"])}
 
 
 @router.post("/lock/alive")
@@ -161,9 +169,40 @@ async def lock_now(request: Request):
 async def open_with_password(body: Password, request: Request):
     uid = request.state.user.id
     await auth.confirm_password(uid, body.password, "отпирание")
+    state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ?", (uid,))    # PIN снова работает везде
     _seen(request, clock.NOW())
     log.info("пользователь %d: открыто (пароль)", uid)
     return Response(status_code=204)
+
+
+@router.post("/lock/pin", status_code=204)
+async def open_with_pin(body: Pin, request: Request):
+    """Счёт неверных PIN — один на учётку (все её сессии). Попытка сначала занимает место в счёте одним
+    UPDATE и лишь потом считает scrypt: пачка параллельных запросов не проверит больше PIN_FAILS PIN.
+    Верный засчитывается, только если хеш после scrypt тот же (PIN не сменили и не убрали). Не 4–8 цифр —
+    неверный PIN с тратой попытки: формат ничего не подсказывает. Пауза пароля PIN не касается."""
+    uid = request.state.user.id
+    rows = state.DB.execute("UPDATE users SET pin_fails = pin_fails + 1"
+                            " WHERE id = ? AND pin_hash IS NOT NULL AND pin_fails < ?"
+                            " RETURNING pin_fails, pin_hash", (uid, PIN_FAILS)).fetchall()
+    if not rows:
+        row = state.DB.execute("SELECT pin_hash FROM users WHERE id = ?", (uid,)).fetchone()
+        if row is None or row["pin_hash"] is None:
+            raise HTTPException(409, {"code": "no_pin", "message": "PIN не задан — откройте паролем"})
+        log.warning("пользователь %d: PIN исчерпан", uid)
+        raise HTTPException(403, {"code": "pin_exhausted",
+                                  "message": "PIN не принимается после 10 ошибок — откройте паролем учётки"})
+    fails, stored = rows[0]["pin_fails"], rows[0]["pin_hash"]
+    right = bool(PIN_RE.fullmatch(body.pin)) and await asyncio.to_thread(security.verify_password, body.pin, stored)
+    if right and state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ? AND pin_hash = ? AND disabled = 0",
+                                  (uid, stored)).rowcount == 1:
+        _seen(request, clock.NOW())
+        log.info("пользователь %d: открыто (PIN)", uid)
+        return Response(status_code=204)
+    log.warning("пользователь %d: PIN неверен", uid)
+    if fails >= PIN_FAILS:
+        log.warning("пользователь %d: PIN исчерпан", uid)
+    raise HTTPException(403, {"code": "pin", "message": "неверный PIN", "left": PIN_FAILS - fails})
 
 
 @router.post("/me/screen-lock")

@@ -1,13 +1,18 @@
 """Блокировка на телефоне (app/screenlock.py, признак «заперто» в auth.guard): спека
 2026-10-21-studio-screen-lock, раздел 6."""
+import asyncio
 import base64
 import hashlib
 import logging
+import time
+
+import httpx
 
 import auth
 import security
 import state
 from conftest import make_user, signin
+from screenlock import PIN_FAILS, PIN_MAX
 from softkey import SoftKey, unb64u
 
 
@@ -165,7 +170,8 @@ def test_lock_state_gives_csrf_and_keys_but_no_profile(studio):
     lock_on(uid); phone(studio)
     studio.c.post("/api/lock/now")
     r = studio.c.get("/api/lock")
-    assert r.status_code == 200 and r.json() == {"locked": True, "keys": False, "csrf": csrf}
+    assert r.status_code == 200 and r.json() == {"locked": True, "keys": False, "csrf": csrf, "pin": False,
+                                                 "pin_left": 10}
     assert "owner" not in r.text
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     assert studio.c.get("/api/lock").json()["locked"] is False
@@ -246,10 +252,23 @@ def test_lock_events_log_only_ids(studio, caplog):
     uid = locked_owner(studio)
     studio.c.post("/api/lock/password", json={"password": "wrong-secret-9"})
     studio.c.post("/api/lock/password", json={"password": "password-123"})
+    set_pin(uid, "0007")
+    studio.c.post("/api/lock/now")
+    assert pin(studio, "9876").status_code == 403
+    assert pin(studio, "0007").status_code == 204
+    studio.c.post("/api/lock/now")
+    for _ in range(PIN_FAILS):
+        pin(studio, "9876")
+    assert code(pin(studio, "9876")) == "pin_exhausted"
+    studio.c.post("/api/lock/password", json={"password": "password-123"})
     studio.c.post("/api/me/screen-lock", json={"enabled": False, "password": "password-123"})
     assert f"пользователь {uid}: заперто" in caplog.text
     assert f"пользователь {uid}: открыто (пароль)" in caplog.text
+    assert f"пользователь {uid}: открыто (PIN)" in caplog.text
+    assert f"пользователь {uid}: PIN неверен" in caplog.text
+    assert f"пользователь {uid}: PIN исчерпан" in caplog.text
     assert "wrong-secret-9" not in caplog.text and "password-123" not in caplog.text
+    assert "0007" not in caplog.text and "9876" not in caplog.text
 
 
 # ---- ключи passkey -----------------------------------------------------------
@@ -348,7 +367,8 @@ def test_passkey_opens_a_locked_phone(studio):
     key = add_key(studio)
     lock_on(uid); phone(studio)
     assert studio.c.post("/api/lock/now").status_code == 204
-    assert studio.c.get("/api/lock").json() == {"locked": True, "keys": True, "csrf": studio.c.headers[auth.CSRF_HEADER]}
+    assert studio.c.get("/api/lock").json() == {"locked": True, "keys": True, "csrf": studio.c.headers[auth.CSRF_HEADER],
+                                                "pin": False, "pin_left": 10}
     options = studio.c.post("/api/lock/challenge").json()
     assert [(c["id"], c["transports"]) for c in options["allowCredentials"]] == [(key.id, ["internal"])]
     assert options["userVerification"] == "required" and options["rpId"] == "testserver"
@@ -508,3 +528,197 @@ def test_pin_events_log_only_ids(studio, caplog):
     assert f"пользователь {uid}: PIN задан" in caplog.text
     assert f"пользователь {uid}: PIN убран" in caplog.text
     assert "0007" not in caplog.text and h.split("$")[-1] not in caplog.text
+
+
+# ---- отпирание PIN-кодом ------------------------------------------------------
+
+def set_pin(uid, value) -> None:
+    """Хеш прямо в базу — мимо пароля и паузы."""
+    state.DB.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (security.hash_password(value), uid))
+
+
+def pin(s, value):
+    client = s.c if hasattr(s, "c") else s
+    return client.post("/api/lock/pin", json={"pin": value})
+
+
+def pin_fails(uid) -> int:
+    return state.DB.execute("SELECT pin_fails FROM users WHERE id = ?", (uid,)).fetchone()[0]
+
+
+def locked_phone(s, client):
+    """Вторая сессия той же учётки — тоже телефон, и тоже заперта."""
+    state.DB.execute("UPDATE sessions SET mobile = 1 WHERE digest = ?", (security.digest(client.cookies[auth.COOKIE]),))
+    assert client.post("/api/lock/now").status_code == 204
+    return client
+
+
+def test_right_pin_opens_and_resets_the_count(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    for left, wrong in zip((9, 8, 7), ("1234", "7", "007")):
+        r = pin(studio, wrong)
+        assert r.status_code == 403 and r.json()["detail"] == {"code": "pin", "message": "неверный PIN", "left": left}
+        assert studio.c.get("/api/me").status_code == 423
+    studio.clock[0] += 5
+    assert pin(studio, "0007").status_code == 204
+    assert studio.c.get("/api/me").status_code == 200
+    assert pin_fails(uid) == 0 and session_row(studio)["seen"] == studio.clock[0]
+
+
+def test_ten_wrong_pins_leave_only_the_password(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    for left in range(PIN_FAILS - 1, -1, -1):
+        r = pin(studio, "1111")
+        assert r.status_code == 403 and code(r) == "pin" and r.json()["detail"]["left"] == left
+    r = pin(studio, "0007")
+    assert r.status_code == 403 and r.json()["detail"] == {
+        "code": "pin_exhausted", "message": "PIN не принимается после 10 ошибок — откройте паролем учётки"}
+    assert studio.c.get("/api/me").status_code == 423
+    state_ = studio.c.get("/api/lock").json()
+    assert state_["pin"] is True and state_["pin_left"] == 0
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    assert pin_fails(uid) == 0 and studio.c.get("/api/lock").json()["pin_left"] == PIN_FAILS
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert pin(studio, "0007").status_code == 204
+
+
+def test_wrong_pins_of_two_sessions_add_up_and_a_password_elsewhere_resets(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    other = locked_phone(studio, second_session(studio))
+    for client in (studio.c, other):
+        for _ in range(5):
+            assert code(pin(client, "1111")) == "pin"
+    for client in (studio.c, other):
+        assert code(pin(client, "0007")) == "pin_exhausted"
+    assert other.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    assert pin(studio, "0007").status_code == 204
+    assert studio.c.get("/api/me").status_code == 200
+
+
+def test_new_pin_and_new_login_do_not_reset_the_count(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    for _ in range(PIN_FAILS):
+        pin(studio, "1111")
+    computer = second_session(studio)
+    assert computer.put("/api/me/pin", json={"password": "password-123", "pin": "4321"}).status_code == 200
+    second_session(studio)                                       # и ещё один вход логином и паролем
+    assert pin_fails(uid) == PIN_FAILS
+    for value in ("0007", "4321"):
+        assert code(pin(studio, value)) == "pin_exhausted", value
+    assert studio.c.get("/api/me").status_code == 423
+
+
+def test_the_attempt_is_counted_before_the_hash_is_checked(studio, monkeypatch):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    seen, real = [], security.verify_password
+
+    def counting(value, stored):
+        seen.append(pin_fails(uid))
+        return real(value, stored)
+
+    monkeypatch.setattr(security, "verify_password", counting)
+    pin(studio, "1111")
+    assert seen == [1]
+    seen.clear()
+    state.DB.execute("UPDATE users SET pin_fails = ? WHERE id = ?", (PIN_FAILS - 1, uid))
+    assert pin(studio, "1111").json()["detail"]["left"] == 0
+    assert code(pin(studio, "0007")) == "pin_exhausted"
+    assert seen == [PIN_FAILS]
+
+
+def test_parallel_pins_of_two_sessions_check_the_hash_once(studio, monkeypatch):
+    """Пачка параллельных попыток из двух сессий при девяти ошибках: место в счёте занимает одна, и
+    scrypt считается один раз (спека 6.2, 6.6)."""
+    import main
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    other = locked_phone(studio, second_session(studio))
+    state.DB.execute("UPDATE users SET pin_fails = ? WHERE id = ?", (PIN_FAILS - 1, uid))
+    calls, real = [], security.verify_password
+
+    def slow(value, stored):
+        calls.append(value)
+        time.sleep(0.05)                 # scrypt идёт в потоке — остальные запросы пачки успевают прийти
+        return real(value, stored)
+
+    monkeypatch.setattr(security, "verify_password", slow)
+    sessions = [(c.cookies[auth.COOKIE], c.headers[auth.CSRF_HEADER]) for c in (studio.c, other)]
+
+    async def batch():
+        clients = [httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="https://testserver",
+                                     cookies={auth.COOKIE: cookie}, headers={auth.CSRF_HEADER: csrf})
+                   for cookie, csrf in sessions]
+        try:
+            return await asyncio.gather(*(clients[i % 2].post("/api/lock/pin", json={"pin": f"{1000 + i}"})
+                                          for i in range(8)))
+        finally:
+            for c in clients:
+                await c.aclose()
+
+    answers = studio.c.portal.call(batch)
+    assert len(calls) == 1
+    assert sorted(r.json()["detail"]["code"] for r in answers) == ["pin"] + ["pin_exhausted"] * 7
+    assert pin_fails(uid) == PIN_FAILS
+
+
+def test_pin_changed_during_the_check_opens_nothing(studio, monkeypatch):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    new_hash, real = security.hash_password("4321"), security.verify_password
+
+    def racing(value, stored):
+        ok = real(value, stored)
+        state.DB.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (new_hash, uid))
+        return ok
+
+    monkeypatch.setattr(security, "verify_password", racing)
+    r = pin(studio, "0007")
+    assert r.status_code == 403 and code(r) == "pin" and r.json()["detail"]["left"] == PIN_FAILS - 1
+    assert studio.c.get("/api/me").status_code == 423
+
+
+def test_malformed_pin_is_a_wrong_pin(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "1234")
+    for left, value in zip((9, 8, 7), ("１２３４", "12a4", "")):
+        r = pin(studio, value)
+        assert r.status_code == 403 and code(r) == "pin" and r.json()["detail"]["left"] == left, value
+    assert pin(studio, "1" * (PIN_MAX + 1)).status_code == 422
+    assert pin_fails(uid) == 3
+    assert studio.c.get("/api/me").status_code == 423
+
+
+def test_pin_without_a_pin_is_409_and_passkey_still_opens_an_exhausted_one(studio):
+    uid = owner(studio)
+    key = add_key(studio)
+    lock_on(uid); phone(studio)
+    assert studio.c.post("/api/lock/now").status_code == 204
+    r = pin(studio, "0007")
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "no_pin", "message": "PIN не задан — откройте паролем"}
+    assert pin_fails(uid) == 0
+    set_pin(uid, "0007")
+    for _ in range(PIN_FAILS):
+        pin(studio, "1111")
+    assert open_with(studio, key).status_code == 204
+    assert studio.c.get("/api/me").status_code == 200
+    assert pin_fails(uid) == PIN_FAILS                           # passkey счёт не трогает
+
+
+def test_pin_and_password_pauses_are_apart(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, "0007")
+    for _ in range(PIN_FAILS):
+        pin(studio, "1111")
+    assert ("pw", uid) not in auth.FAILS
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    studio.c.post("/api/lock/now")
+    for _ in range(5):
+        studio.c.post("/api/lock/password", json={"password": "wrong-password"})
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 429
+    assert pin(studio, "0007").status_code == 204
+    assert studio.c.get("/api/me").status_code == 200

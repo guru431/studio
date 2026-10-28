@@ -36,7 +36,12 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 - `app/main.py` — приложение FastAPI (`main:app`) от корня `/`; разделы — `auth` (вход, сессии,
   CSRF, пауза после неудач, признак «заперто» блокировки на телефоне), `profile`, `screenlock`
   (блокировка на телефоне: отметки «на экране», «заперто», отпирание паролем и passkey библиотекой
-  `webauthn`, ключи учётки — таблица `passkeys`), `connections` (подключения — адрес с ключом), `sections`
+  `webauthn`, ключи учётки — таблица `passkeys`; PIN учётки — спека 2026-10-28-studio-lock-pin, шаг схемы 17:
+  4–8 цифр ASCII (`PIN_RE`), хеш `users.pin_hash` scrypt, `PUT /api/me/pin` — с паролем учётки,
+  `DELETE` — без; `POST /api/lock/pin` — счёт `users.pin_fails` один на учётку, попытка занимает место
+  атомарным `UPDATE … RETURNING` до scrypt, верный — только при том же хеше после scrypt; после `PIN_FAILS`
+  (10) — 403 `pin_exhausted`, обнуляют только верный PIN и отпирание паролем (не passkey, не новый вход и
+  не смена PIN); пауза пароля `("pw", uid)` PIN не касается; `GET /api/lock` — `pin`, `pin_left`), `connections` (подключения — адрес с ключом), `sections`
   (разделы: подключения раздела, отмеченные модели, умолчание; `resolve` — пара запроса),
   `upstream` (список разрешённых адресов и имён, запросы к ним), речь — `speech` (WhisperX, GigaAM,
   Qwen3-TTS шлюза и внешний сервис), `audio` (ffmpeg debian: длительность, сжатие, WAV образца,
