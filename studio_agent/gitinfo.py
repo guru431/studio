@@ -48,8 +48,11 @@ def parse(out: bytes) -> dict:
 def status(project: Path) -> dict:
     """`git -C <проект> status` без окна и без необязательных замков; код ≠ 0 или нет git — `not_git`.
 
+    Выше проекта git не ищет (`GIT_CEILING_DIRECTORIES` — родитель настоящего пути): проект без своего `.git` внутри
+    чужого репозитория — `not_git`, ветка и пути внешнего не уходят в студию.
     Срок вышел — `subprocess.TimeoutExpired` летит наружу (просьба получит `error`)."""
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
+               GIT_CEILING_DIRECTORIES=str(Path(os.path.realpath(project)).parent))
     try:
         r = subprocess.run(["git", "-C", str(project), "status", "--porcelain=v2", "--branch", "-z"],
                            capture_output=True, env=env, timeout=GIT_SEC,

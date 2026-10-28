@@ -21,6 +21,12 @@ WRAP = 360
 _window: tk.Toplevel | None = None
 
 
+def name_state(enrolled: bool, login: str) -> str:
+    """Имя компьютера меняет только новая привязка: у привязанного моста поле только для чтения, пока не введён
+    логин (`setup.apply` берёт имя лишь вместе с логином)."""
+    return "normal" if not enrolled or login.strip() else "readonly"
+
+
 def open_setup(root: tk.Tk, controller) -> tk.Toplevel:
     global _window
     if _window is not None and _window.winfo_exists():
@@ -67,7 +73,16 @@ def open_setup(root: tk.Tk, controller) -> tk.Toplevel:
     first = field("Логин", login)
     field("Пароль", password, secret=True)
     note(NOTE_PASSWORD)
-    field("Имя компьютера", name)
+    name_entry = field("Имя компьютера", name)
+    name_entry.configure(state=name_state(enrolled, ""))
+
+    def on_login(*_) -> None:  # имя меняет только новая привязка: без логина — прежнее
+        state = name_state(enrolled, login.get())
+        if state == "readonly":
+            name.set(cfg.name or os.environ.get("COMPUTERNAME", ""))
+        name_entry.configure(state=state)
+
+    login.trace_add("write", on_login)
     field("Папка проектов", folder)
 
     def browse() -> None:

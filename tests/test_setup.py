@@ -126,3 +126,11 @@ def test_status_shows_no_key(home, form, capsys):
     out = capsys.readouterr().out
     assert "секретный-ключ-устройства" not in out
     assert "7" in out and "Рабочий" in out
+
+
+def test_computer_name_changes_only_with_a_new_enrollment():
+    from studio_agent import window
+    assert window.name_state(False, "") == "normal"            # первая привязка — имя вводится
+    assert window.name_state(True, "") == "readonly"           # привязан: «Сохранить» имя не меняет
+    assert window.name_state(True, "  ") == "readonly"
+    assert window.name_state(True, "owner") == "normal"        # логин — новая привязка, с новым именем

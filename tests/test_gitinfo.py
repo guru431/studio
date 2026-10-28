@@ -41,6 +41,7 @@ def test_status_runs_git_without_shell_window_and_locks(monkeypatch, tmp_path):
     assert seen["args"] == ["git", "-C", str(tmp_path), "status", "--porcelain=v2", "--branch", "-z"]
     assert seen["env"]["GIT_OPTIONAL_LOCKS"] == "0" and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert seen["env"]["PATH"] == os.environ["PATH"]
+    assert seen["env"]["GIT_CEILING_DIRECTORIES"] == os.path.realpath(tmp_path.parent)  # выше проекта не искать
     assert seen["timeout"] == 25 and seen["capture_output"] is True
     assert seen["creationflags"] == subprocess.CREATE_NO_WINDOW and not seen.get("shell")
 
@@ -75,3 +76,18 @@ def test_status_of_a_real_repository(tmp_path, monkeypatch):
     with pytest.raises(errors.Refused) as e:
         gitinfo.status(plain)
     assert e.value.code == "not_git"
+
+
+@pytest.mark.integration
+def test_a_project_inside_someone_elses_repository_is_not_git(tmp_path, monkeypatch):
+    monkeypatch.delenv("GIT_CEILING_DIRECTORIES", raising=False)
+    outer = tmp_path / "outer"
+    project = outer / "projects" / "demo"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(outer)], check=True)
+    (project / "a.txt").write_text("a")
+    with pytest.raises(errors.Refused) as e:
+        gitinfo.status(project)                                # ветка и пути внешнего репозитория не уходят
+    assert e.value.code == "not_git"
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    assert gitinfo.status(project)["files"] == [{"path": "a.txt", "status": "??"}]  # свой .git — как обычно

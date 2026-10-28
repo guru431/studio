@@ -18,13 +18,27 @@ function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
 }
 
 if (-not (Test-Path -LiteralPath $py)) {
+    # Python для среды: -Python, иначе новейший 3.x лаунчера py, нет лаунчера — python из PATH.
+    $base = @()
     if ($Python) {
-        Invoke-Checked $Python @('-m', 'venv', $venv)
+        $exe = $Python
     } elseif (Get-Command py -ErrorAction SilentlyContinue) {
-        Invoke-Checked 'py' @('-3.14', '-m', 'venv', $venv)
+        $exe = 'py'
+        $base = @('-3')
     } else {
-        Invoke-Checked 'python' @('-m', 'venv', $venv)
+        $exe = 'python'
     }
+    $ok = $false
+    try {
+        & $exe ($base + @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'))
+        $ok = ($LASTEXITCODE -eq 0)
+    } catch {
+        $ok = $false
+    }
+    if (-not $ok) {
+        throw "Нужен Python 3.11 или новее ($exe $base не подходит): поставьте его или укажите -Python <путь к python.exe>"
+    }
+    Invoke-Checked $exe ($base + @('-m', 'venv', $venv))
 }
 
 Invoke-Checked $py @('-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', (Join-Path $repo 'requirements.txt'))

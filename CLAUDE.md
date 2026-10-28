@@ -24,7 +24,8 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - `dpapi` — `protect`/`unprotect` (DPAPI области пользователя, `CRYPTPROTECT_UI_FORBIDDEN`, энтропия
   `b"studio-agent\0v1"`); чужой или битый блоб — `OSError`.
 - `store` — каталог моста `home()` (`STUDIO_AGENT_HOME`, иначе `%LOCALAPPDATA%\studio-agent`), `Config` в
-  `config.json`, ключ устройства в `key.bin` под DPAPI (не читается — `None`), `write_atomic`.
+  `config.json` (битый — не JSON, не объект, поле не того вида — `Config()` и строка в журнале, файл не трогается до
+  «Сохранить»), ключ устройства в `key.bin` под DPAPI (не читается — `None`), `write_atomic`.
 - `journal` — логгер `studio_agent` в `agent.log` (1 МиБ × 3, UTF-8).
 - `pin` — `PinStore` (`pin.bin` под DPAPI: scrypt-хеш и счёт неверных; попытка пишется на диск до scrypt, проверки
   идут по одной — замок процесса; 5 подряд — `pin_locked` до `reset` на машине; нет файла — PIN не задан, блоб не
@@ -34,14 +35,19 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - `files` — `resolve` (вид пути проверяется **до диска**: имена устройств, ADS `:`, точка или пробел в конце части —
   `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
   (`version` — sha256 байтов, запись через `store.write_atomic`).
-- `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с; код ≠ 0 или нет
-  git — `not_git`, срок вышел — `TimeoutExpired` наружу).
+- `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
+  `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
+  `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).
 - `cli` — `find_cli` (`claude.exe` новейшего расширения VS Code, версии числами; нет — CLI, встроенный в SDK),
+  `current(path, find)` (прежний путь, пока файл есть, иначе `find()` заново — как `worker.py::_claude_bin`),
+  `drop_session_env` (из окружения моста прочь `SESSION_ENV`, `SESSION_PREFIXES` и `TERM_PROGRAM=vscode`),
   `cli_version` (первое слово `--version`, 30 с; сбой — «встроенный в SDK»), `models_from` (`get_server_info()["models"]`
   без `default` → `{"id", "label"}` и усилия в порядке `EFFORTS`), `probe` (короткий клиент в папке проектов,
   `setting_sources` user/project/local, ≤ 60 с, `disconnect` и при сбое; stderr Claude Code отбрасывается).
-- `events` — `clip` (строки на любой глубине — до `CLIP` знаков с «…»), `text_of` (текст блоков содержимого, картинка —
-  «[изображение]»).
+- `events` — `clip` (строки на любой глубине — до `CLIP` знаков с «…»), `bound` (событие `step`, `result`, `ask` больше
+  `EVENT_MAX` 1 МиБ в ASCII-JSON — `input`/`text`/`questions` до `CLIP_TIGHT` 2000, всё ещё больше — `input` пометкой
+  `HIDDEN`; шаг снимка хранится уже урезанным, CLI получает ввод целиком), `text_of` (текст блоков содержимого,
+  картинка — «[изображение]»).
 - `sessions` — функции SDK атрибутами модуля (тесты подменяют): `chats` (сессии проекта без worktree, только `chat`-UUID,
   мс → с, новые сверху, `running`/`asking` из ходов моста), `normalize` (главный агент; ответы до следующего вопроса —
   одно сообщение, итоги инструментов — к шагам), `fit` (хвост ≤ `HISTORY_BUDGET`; одиночный огромный — строки шагов до
@@ -52,18 +58,22 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   `null` модели и усилия — запомненные `store.Choices`, иначе модель последнего ответа сессии), не больше `MAX_TURNS`
   сразу и один в чате (`busy`, `running`); `can_use_tool` → событие `ask` и ожидание `answer` (карточка переживает
   смену канала), `watch` — снимок `snapshot` (урезан `sessions.fit`), `stop` — отказ карточкам и `interrupt()`
-  (`idle` без хода), `close` — мост выходит (`done` «ход прерван: мост остановлен»); метка `studio` новой сессии — после
-  `disconnect`.
+  (`idle` без хода; interrupt упал или не успел, или `stop` повторный — отмена задачи хода: `_run` доводит `done`
+  `stopped`, `disconnect` гасит процесс), `close` — мост выходит или отозван (`done` «ход прерван: мост остановлен»;
+  пока идёт — `start` отвечает `busy`); путь `claude.exe` — `cli.current` в начале каждого хода (в потоке `_choose`);
+  метка `studio` новой сессии — после `disconnect`.
 - `link` — `ws_url` (`https://h` → `wss://h/api/agent/link`; `http` — только `localhost`, `127.0.0.1`, `[::1]`) и `Link`
   (канал к студии): `connect` с `Authorization: Bearer <ключ>`, `max_size=FRAME_MAX`, пинги 20/20 с; первым — `hello`,
   `welcome` ≤ `WELCOME_SEC`, затем `agent.new_link()` и `agent.send = link.send`; `req` — `agent.handle` своей задачей,
   ответы подряд в очередь канала, по которому пришла просьба (оборвался — пропадают; задачи не отменяются); `close` —
   `agent.close_session`; не JSON и прочие `t` — пропуск. Писатель — одна задача на канал, кадры — `ensure_ascii=True,
   allow_nan=False`. Закрытие 4401 — `revoked`, 4409 — `replaced` (выход из `run()`), 4400 — пауза `PROTOCOL_PAUSE_SEC`,
-  прочее и отказ рукопожатия — `BACKOFF` по числу неудач подряд (сброс после `welcome`); `on_state`: `connecting`,
+  прочее, отказ рукопожатия и любое неожиданное исключение канала (в журнал — имя типа) — `BACKOFF` по числу неудач
+  подряд (сброс после `welcome`); `stop()` досылает очередь писателю не дольше `FLUSH_SEC` (2 с: `done` ходов при
+  выходе), затем закрывает; `on_state`: `connecting`,
   `online`, `offline` (перед каждой паузой), `revoked`, `replaced`, `stopped`. Паузы — параметр `sleep`; тесты —
   подставная студия `tests/fake_studio.py` (`websockets` на `127.0.0.1:0`).
-- `agent` — `Agent` (просьбы студии): `hello`, `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
+- `agent` — `Agent` (просьбы студии): `hello` (нечитаемый `pin.bin` — `has_pin: true`), `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
   исполнения, иначе `invalid`; `id` не вернуть — без ответа; `open` под замком — порядок Ruling 4: без PIN — открыть,
   `null` открытой — `{}`, блок — `pin_locked`, `null` — `pin_needed`, иначе `pins.check` в потоке; прочие — `touch`
   или `closed`; `watch` без хода — `{"running": false}` без проверки чата; не `Refused` — `error`, в журнал `op` и
@@ -90,6 +100,10 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   затем `link.stop()`), `state` + `on_state`: `setup` (нет ключа или папки — канал не поднимается), `connecting`,
   `online`, `offline`, `revoked`, `replaced` (оба — до новой настройки), слова — `WORDS`. Зависимости (Link, SDK, CLI,
   probe, привязка, автозапуск, `sleep`) — параметры: тесты `tests/test_app.py` без сети и реального времени.
+  `_refresh_cli` (перед каждым каналом `_relink` и перед часовой пробой) — `cli.current` и, если путь сменился, версия
+  заново в `agent.cc_version` (студия видит её в следующем `hello`). Канал кончился `revoked`/`replaced` текущего
+  поколения — `runner.close()` (ходы прерваны, карточкам отказ, `claude.exe` гаснет) и `agent.open.clear()`.
+  `prepare_env()` — `cli.drop_session_env` до `Controller` (зовут `app.main` и `run --console`).
 - `__main__` — `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status`: пароль
   и PIN — `getpass`; `run --console` — мьютекс, журнал ещё и в stderr, выход на `setup`/`revoked`/`replaced` и Ctrl+C.
 - `journal.setup` ставит логгеру `websockets` уровень не ниже INFO: на DEBUG он пишет заголовок `Authorization`.
@@ -101,11 +115,14 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   красный `revoked`/`replaced` (`COLORS`, `image`), подсказка «Studio Agent — <состояние>» (`title`), меню «Настройка…»
   (по умолчанию — щелчок по значку), «Снять блок PIN» (активен при блоке), «Открыть журнал», «Выход».
 - `window` — `open_setup(root, controller)`: `Toplevel` «Studio Agent — настройка» (одно окно — повтор поднимает
-  открытое), поля и подписи «Текстов» плана; «Привязать» / «Сохранить», ошибки под формой; `apply_setup` — в своём
-  потоке (привязка до 30 с), окно ждёт итог `root.after`; пароль стирается из поля сразу после отправки.
+  открытое), поля и подписи «Текстов» плана; «Имя компьютера» у привязанного моста только для чтения, пока не введён
+  логин (`name_state`: имя меняет только новая привязка); «Привязать» / «Сохранить», ошибки под формой;
+  `apply_setup` — в своём потоке (привязка до 30 с), окно ждёт итог `root.after`; пароль стирается из поля сразу после
+  отправки.
 - `studio_agent.pyw` (корень репозитория) — запуск без консоли: `.venv\Scripts\pythonw.exe studio_agent.pyw`.
-- `install.ps1` (UTF-8 с BOM, CRLF) — `.venv` рядом (`-Python`, иначе `py -3.14`, нет `py` — `python`), `pip install -r
-  requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; повтор безопасен; автозапуск ставит окно.
+- `install.ps1` (UTF-8 с BOM, CRLF) — `.venv` рядом (`-Python`, иначе `py -3`, нет `py` — `python`; проверка ≥ 3.11
+  до `venv` с понятной ошибкой), `pip install -r requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания;
+  повтор безопасен; автозапуск ставит окно.
 
 ## Решения
 
@@ -119,9 +136,13 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - `null` модели — `choices.json` чата, иначе модель последнего ответа сессии (без `<synthetic>`: продолжение сессии VS
   Code не меняет её модель), иначе умолчание Claude Code; `null` усилия — запомненное или умолчание.
 - **`setting_sources=["user", "project", "local"]`** явно, `permission_mode` не задаётся: правила разрешений, CLAUDE.md
-  и `env` проекта действуют, как в VS Code. Окружение `claude.exe` не вычищается; добавляется только
-  `CLAUDE_AGENT_SDK_CLIENT_APP=studio-agent/<версия>` — и в ходе, и в `cli.probe` (Ruling 10).
-- CLI — новейший `claude.exe` расширения VS Code, нет — встроенный в SDK. Модели — `get_server_info()["models"]`
+  и `env` проекта действуют, как в VS Code. Окружение `claude.exe` — окружение моста: при старте из него убраны только
+  переменные сессии того, кто запустил мост (`cli.SESSION_ENV`, `CLAUDE_CODE_MESSAGING_*`, `VSCODE_*`,
+  `TERM_PROGRAM=vscode`; `install.ps1` запускают и из Claude Code), прочее (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`) —
+  как есть; добавляется только `CLAUDE_AGENT_SDK_CLIENT_APP=studio-agent/<версия>` — и в ходе, и в `cli.probe` (Ruling 10).
+- CLI — новейший `claude.exe` расширения VS Code, нет — встроенный в SDK; путь сверяется перед каждым ходом и пробой
+  (VS Code ставит обновление в новую папку и удаляет прежнюю — без этого мост после первого обновления отвечал бы
+  «Claude Code не найден на компьютере» до перезапуска). Модели — `get_server_info()["models"]`
   короткого клиента до первого канала и раз в час; новые студия видит только в следующем `hello` (обновить знакомство
   протокол v1 не умеет).
 - Текст хода — по `text_delta` (`include_partial_messages=True`), без дельт — блоками `AssistantMessage`; шаги и итоги —
