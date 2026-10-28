@@ -4,7 +4,8 @@
 - Привязка — `POST /api/agent/enroll {login, password, name}` без сессии (`auth.OPEN_API`): учётка студии —
   право подключать компьютеры, поэтому логин и пароль проверяет `auth.check_password` — тем же путём, с теми
   же паузами и общим счётом неудач, что и `/login`. Ключ устройства — случайный, в ответе один раз, в базе —
-  только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — только `DELETE /api/agents/<id>`.
+  только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — только `DELETE /api/agents/<id>`
+  (канал на связи закрывается 4401, `bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
 - Компьютеры и история подключений — только свои: чужой id — 404. История только добавляется (`bridge.record`)
   и только читается: ни DELETE, ни «Удалить всю историю».
 - Журнал — id и коды: ни ключа, ни логина и пароля, ни имени компьютера.
@@ -71,9 +72,15 @@ async def enroll(request: Request):
 async def list_agents(request: Request):
     rows = state.DB.execute("SELECT id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
                             " WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
-    return {"items": [{"id": r["id"], "name": r["name"], "online": False, "has_pin": bool(r["has_pin"]),
-                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
-                       "last_seen": r["last_seen"], "models": [], "efforts": []} for r in rows]}
+    items = []
+    for r in rows:
+        link = bridge.LINKS.get(r["id"])
+        hello = link.hello if link is not None else {}
+        items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
+                      "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
+                      "last_seen": r["last_seen"], "models": hello.get("models", []),
+                      "efforts": hello.get("efforts", [])})
+    return {"items": items}
 
 
 @router.get("/api/agents/events")
@@ -94,4 +101,5 @@ async def revoke(request: Request, aid: int):
         raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
     bridge.record(uid, aid, row["name"], "revoke", device=bridge.device(request), ip=auth.client_ip(request))
     log.info("пользователь %d: компьютер %d отозван", uid, aid)
+    await bridge.drop(aid)
     return Response(status_code=204)

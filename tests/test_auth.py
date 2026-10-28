@@ -269,7 +269,7 @@ def guarded_routes() -> list[tuple[str, str]]:
     бы открытым, а ни один тест не заметил бы. Обход — двумя тестами (сессия, CSRF): ~320 запросов
     одним тестом шли дольше секунды."""
     import re
-    from starlette.routing import Mount, Route
+    from starlette.routing import Mount, Route, WebSocketRoute
     import main
 
     def walk(items, prefix=""):
@@ -283,6 +283,10 @@ def guarded_routes() -> list[tuple[str, str]]:
     for prefix, route in walk(main.app.routes):
         if isinstance(route, Mount):
             assert prefix + route.path == "/static", route.path            # статика — открыта, больше ничего
+            continue
+        if isinstance(route, WebSocketRoute):
+            # канал моста: http-заслон его не видит, вход — ключом устройства (test_bridge.py)
+            assert prefix + route.path == "/api/agent/link", route.path
             continue
         assert isinstance(route, Route), route
         full = prefix + route.path

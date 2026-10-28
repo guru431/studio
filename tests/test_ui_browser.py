@@ -6606,3 +6606,29 @@ def test_translate_photo_save_gives_a_png(browser, live, spotted, width):
         assert darkest < 200                                         # текст перевода нарисован
     assert v["shared"] == [[".png", "image/png", True]]
     assert not problems(r), problems(r)
+
+
+def wait_for(cond, sec=5.0):
+    deadline = time.monotonic() + sec
+    while not cond():
+        assert time.monotonic() < deadline, "не дождался"
+        time.sleep(0.02)
+
+
+def test_socket_bridge_comes_online(live):
+    """Подставной мост через настоящий WebSocket uvicorn: привязка, знакомство, конец связи."""
+    import bridge
+    from fake_bridge import FakeMachine, SocketBridge
+    r = httpx.post(f"{live.url}/api/agent/enroll", json={"login": "owner", "password": "password-123",
+                                                          "name": "Сетевой ПК"}, timeout=10)
+    assert r.status_code == 201, r.text
+    aid, key = r.json()["agent_id"], r.json()["device_key"]
+    machine = FakeMachine(pin="1234")
+    sb = SocketBridge(live.url, key, machine).start()
+    try:
+        assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК"}
+        wait_for(lambda: aid in bridge.LINKS)
+        assert bridge.LINKS[aid].hello["has_pin"] is True
+    finally:
+        sb.stop()
+    wait_for(lambda: aid not in bridge.LINKS)

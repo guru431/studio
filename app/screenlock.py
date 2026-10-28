@@ -5,7 +5,8 @@
 auth.SCREEN_LOCK_PATHS. Сессия запроса — request.state.digest. Passkey: RP ID — хост STUDIO_ORIGIN,
 проверка ответов — библиотекой webauthn (origin, RP ID, вызов, UV, подпись, счётчик). PIN (спека
 2026-10-28-studio-lock-pin): 4–8 цифр ASCII, хеш users.pin_hash (scrypt, как пароль); задать и сменить —
-с паролем учётки, убрать — без. Журнал — только события с id: credential id, открытый ключ, вызов, ответы
+с паролем учётки, убрать — без. Заперлась сессия (`lock/now`) или отперлась — `bridge.forget`: мосты Claude
+Code закрывают её, и компьютер снова просит PIN (спека 2026-10-28-studio-claude-code-design, 6.3). Журнал — только события с id: credential id, открытый ключ, вызов, ответы
 устройства, пароль, PIN и его хеш туда не пишутся."""
 import asyncio
 import hashlib
@@ -27,6 +28,7 @@ from webauthn.helpers.structs import (AttestationConveyancePreference, Authentic
                                       UserVerificationRequirement)
 
 import auth
+import bridge
 import clock
 import security
 import state
@@ -161,6 +163,7 @@ async def alive(body: Alive, request: Request):
 async def lock_now(request: Request):
     """Студия на телефоне заперлась сама (ушла с экрана дольше минуты): сервер с ней согласен."""
     _seen(request, None)
+    bridge.forget(request.state.user.id, request.state.digest)     # компьютеры Claude Code — снова PIN
     log.info("пользователь %d: заперто", request.state.user.id)
     return Response(status_code=204)
 
@@ -171,6 +174,7 @@ async def open_with_password(body: Password, request: Request):
     await auth.confirm_password(uid, body.password, "отпирание")
     state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ?", (uid,))    # PIN снова работает везде
     _seen(request, clock.NOW())
+    bridge.forget(uid, request.state.digest)
     log.info("пользователь %d: открыто (пароль)", uid)
     return Response(status_code=204)
 
@@ -197,6 +201,7 @@ async def open_with_pin(body: Pin, request: Request):
     if right and state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ? AND pin_hash = ? AND disabled = 0",
                                   (uid, stored)).rowcount == 1:
         _seen(request, clock.NOW())
+        bridge.forget(uid, request.state.digest)
         log.info("пользователь %d: открыто (PIN)", uid)
         return Response(status_code=204)
     log.warning("пользователь %d: PIN неверен", uid)
@@ -354,5 +359,6 @@ async def open_with_passkey(body: Answer, request: Request):
     state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",
                      (verified.new_sign_count, now, row["id"]))
     _seen(request, now)
+    bridge.forget(uid, request.state.digest)
     log.info("пользователь %d: открыто (passkey)", uid)
     return Response(status_code=204)
