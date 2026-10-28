@@ -6170,6 +6170,8 @@ def test_translate_swap_uses_the_detected_language(browser, live, translator):
         ("eval", "before", "document.querySelector('#tl-swap').disabled"),
         ("click", "#tl-swap"),
         ("eval", "after", f"[...{TL_LANGS}, document.querySelector('#tl-input').value, {TL_OUTPUT}]"),
+        ("click", "#tl-swap"),                                            # второй ⇄ — тексты обратно вместе с языками
+        ("eval", "back", f"[...{TL_LANGS}, document.querySelector('#tl-input').value, {TL_OUTPUT}]"),
         set_value("#tl-target", "de"),
         *go("chat"), ("wait", "document.querySelector('#chat-input')"),
         *go("translate"), ("wait", f"{TL_DONE} && document.querySelectorAll('#tl-target option').length > 10"),
@@ -6180,6 +6182,7 @@ def test_translate_swap_uses_the_detected_language(browser, live, translator):
     assert v["cloud"] == "Шлюз · gemma4-abl · облако"
     assert v["before"] is False
     assert v["after"] == ["ru", "en", "Привет", "Hello"]
+    assert v["back"] == ["en", "ru", "Hello", "Привет"]
     assert v["again"] == ["auto", "ru"]
     assert [b["model"] for b in translator.chat_requests[-2:]] == ["gemma4-abl", "gemma4-abl"]   # язык и перевод
     assert not problems(r), problems(r)
@@ -6255,6 +6258,176 @@ def test_translate_continue_after_an_error(browser, live, translator):
     assert v["failed"][0].startswith("кусок 2 из 2") and v["failed"][1] == "Первый"
     assert v["after"] == [True, ""]
     assert len(streams) == 3 and streams[2]["messages"][-1]["content"] == streams[1]["messages"][-1]["content"]
+    assert not problems(r), problems(r)
+
+
+def test_translate_continue_without_connection_says_why(browser, live, translator):
+    """«Продолжить», когда подключение записи удалено, — 409 `no_connection`: слова под окном, запись на месте
+    (перевод, строка истории, «Продолжить»)."""
+    from fakes import FakeGateway
+    live.add_user("tl-noconn")
+    gw = translator
+    gw.chat_script = [["Первый"]]
+    real, streams = FakeGateway._chat.__get__(gw), []
+
+    def failing(request):
+        body = json.loads(request.content)
+        if body.get("stream"):
+            streams.append(body)
+            if len(streams) == 2:
+                return httpx.Response(400, json={"error": {"message": "bad request"}})
+        return real(request)
+
+    gw._chat = failing
+    paragraph = ("Hello world. " * 160).strip()
+    drop = f"""(async () => {{ const m = {API};
+      const id = (await m.api('GET', '/api/sections')).sections.find(s => s.id === 'translate').links[0].connection.id;
+      await m.api('DELETE', '/api/connections/' + id); return true; }})()"""
+    r = browser.drive(live.url + "/", [*translating("tl-noconn"),
+        set_value("#tl-source", "en"),
+        set_value("#tl-input", f"{paragraph}\n\n{paragraph}"),
+        ("click", "#tl-go"),
+        ("wait", "document.querySelector('.tl-row[data-state=error]') && !document.querySelector('#tl-continue').hidden"),
+        ("eval", "drop", drop),
+        ("click", "#tl-continue"),
+        ("wait", "document.querySelector('#tl-status').textContent.startsWith('Подключение')"),
+        ("eval", "after", f"[document.querySelector('#tl-status').textContent,"
+                          " document.querySelector('#tl-status').classList.contains('error'),"
+                          f" {TL_OUTPUT}, document.querySelector('.tl-row[aria-current=true]')?.dataset.state,"
+                          " document.querySelector('#tl-continue').hidden, document.querySelector('#tl-continue').disabled]")])
+    assert not r.get("failed"), r
+    assert r["values"]["after"] == ["Подключение перевода удалено — переведите заново", True, "Первый", "error",
+                                    False, False]
+    assert len(streams) == 2                                         # «Продолжить» модель не звал
+    assert not [p for p in problems(r) if "409 (Conflict)" not in p or not p.endswith("/continue)")], problems(r)
+
+
+def test_translate_running_record_grows_in_place_and_stops(browser, live, translator):
+    """Идущая запись: справа — готовый кусок и `live` идущего, слова состояния; опрос раз в секунду не
+    пересобирает строки истории и перевод (фокус на строке остаётся, текстовый узел тот же), aria-live — у
+    состояния, не у перевода; сбой опроса — слова, следующий удачный их убирает. Ушли из раздела — опросов нет;
+    вернулись и открыли — «Остановить»: «остановлено», готовый кусок на месте, «Продолжить»."""
+    import state
+    live.add_user("tl-stop")
+    gw = translator
+    gw.chat_script = [["Первый"], ["Вто", "рой"]]
+    base = sum(1 for b in gw.chat_requests if b.get("stream"))
+    gw.chat_hold = lambda: (sum(1 for b in gw.chat_requests if b.get("stream")) >= base + 2
+                            and state.DB.execute("SELECT 1 FROM translations t JOIN users u ON u.id = t.user_id"
+                                                 " WHERE u.login = 'tl-stop' AND t.state = 'cancelling'").fetchone() is None)
+    spy = r"""(() => { window.polls = 0; window.lists = 0; window.failPolls = 0; const real = window.fetch;
+      window.fetch = (url, opts) => {
+        if (/\/api\/translate\/[^/?]+\?from=/.test(url)) {
+          window.polls += 1;
+          if (window.failPolls > 0) { window.failPolls -= 1; return Promise.reject(new TypeError('Failed to fetch')); }
+        }
+        if (/\/api\/translate\?limit=/.test(url)) window.lists += 1;
+        return real(url, opts); };
+      return true; })()"""
+    growing = f"{TL_OUTPUT} === 'Первый\\n\\nВто' && !document.querySelector('#tl-stop').hidden"
+    paragraph = ("Hello world. " * 160).strip()
+    try:
+        r = browser.drive(live.url + "/", [*translating("tl-stop"),
+            ("eval", "spy", spy),
+            set_value("#tl-source", "en"),
+            set_value("#tl-input", f"{paragraph}\n\n{paragraph}"),
+            ("click", "#tl-go"),
+            ("wait", growing),
+            ("eval", "running", "[document.querySelector('#tl-status').textContent,"
+                                " document.querySelector('#tl-output').getAttribute('aria-live'),"
+                                " document.querySelector('#tl-status').getAttribute('aria-live'),"
+                                " document.querySelector('.tl-row[aria-current=true]').dataset.state]"),
+            ("eval", "mark", """(() => { const b = document.querySelector('.tl-row[aria-current=true] .tl-open');
+              window.keep = [b, document.querySelector('#tl-output').firstChild, window.polls, window.lists];
+              b.focus(); window.t0 = Date.now(); return true; })()"""),
+            ("wait", "Date.now() - window.t0 > 3500"),
+            ("eval", "kept", """[window.keep[0].isConnected, document.activeElement === window.keep[0],
+              window.keep[1] === document.querySelector('#tl-output').firstChild,
+              window.polls - window.keep[2] >= 2, window.lists - window.keep[3] >= 1]"""),
+            ("eval", "fail", "window.failPolls = 2"),
+            ("wait", "document.querySelector('.tl-error').textContent === 'Нет связи с сервером'"),
+            ("wait", "window.failPolls === 0 && document.querySelector('.tl-error').textContent === ''"),
+            *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+            ("eval", "left", "window.left = [window.polls, window.lists, Date.now()]"),
+            ("wait", "Date.now() - window.left[2] > 3500"),
+            ("eval", "quiet", "[window.polls - window.left[0], window.lists - window.left[1]]"),
+            *go("translate"), ("wait", "document.querySelector('.tl-row[data-state=working]')"),
+            ("click", ".tl-row[data-state=working] .tl-open"),
+            ("wait", growing),
+            ("click", "#tl-stop"),
+            ("wait", "document.querySelector('.tl-row[data-state=cancelled]')"
+                     " && document.querySelector('#tl-status').textContent === 'остановлено'"),
+            ("eval", "stopped", f"[{TL_OUTPUT}, document.querySelector('#tl-stop').hidden,"
+                                " document.querySelector('#tl-continue').hidden]")])
+    finally:
+        gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["running"] == ["перевожу · 2 из 2", None, "polite", "working"]
+    assert v["kept"] == [True, True, True, True, True]
+    assert v["quiet"] == [0, 0]
+    assert v["stopped"] == ["Первый", True, False]
+    assert not problems(r), problems(r)
+
+
+def finished_record(text="Привет", target="fr"):
+    """Запись «Привет» → fr готова (через API, без экрана): window.tid — её id."""
+    return ("eval", "tid", f"""(async () => {{ const m = {API};
+      const job = await m.api('POST', '/api/translate', {{ text: {text!r}, source_lang: 'ru', target_lang: {target!r} }});
+      for (let t = 0; t < 200; t++) {{
+        const item = await m.api('GET', '/api/translate/' + job.id);
+        if (item.state === 'done') {{ window.tid = job.id; return job.id; }}
+        await new Promise((ok) => setTimeout(ok, 50));
+      }}
+      return null; }})()""")
+
+
+def test_translate_delete_from_history(browser, live, translator):
+    """Крестик строки истории — окно «Удалить перевод?»; «Удалить» — строки нет, показанная запись убрана из окон,
+    сервер записи не знает."""
+    live.add_user("tl-del")
+    translator.chat_script = [["Bonjour"]]
+    r = browser.drive(live.url + "/", [*signin("tl-del"), ("wait", READY), add_translator(), finished_record(),
+        *go("translate"), ("wait", TL_DONE),
+        ("click", ".tl-row[data-state=done] .tl-open"), ("wait", f"{TL_OUTPUT} === 'Bonjour'"),
+        ("click", ".tl-row[data-state=done] .tl-delete"),
+        ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "asked", "document.querySelector('#tl-delete-dialog').textContent.includes('Удалить перевод?')"),
+        ("click", "#tl-delete-confirm"),
+        ("wait", "!document.querySelector('.tl-row') && !document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "after", f"[{TL_OUTPUT}, document.querySelector('#tl-history').textContent,"
+                          " document.querySelector('.tl-acts').hidden]"),
+        ("eval", "gone", "fetch('/api/translate/' + window.tid).then(r => r.status)")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["asked"] is True
+    assert v["after"] == ["", "Здесь появятся ваши переводы", True]
+    assert v["gone"] == 404
+    own = f"404 (Not Found) ({live.url}/api/translate/{v['tid']})"     # сам тест спросил удалённую запись
+    assert not [p for p in problems(r) if not p.endswith(own)], problems(r)
+
+
+def test_translate_without_model_reads_history(browser, live, translator):
+    """Раздел без модели: вместо «Перевести», «Файл» и «Фото» — подсказка со ссылкой на настройки; история
+    открывается в окнах и скачивается."""
+    live.add_user("tl-nomodel")
+    translator.chat_script = [["Bonjour"]]
+    unlink = f"""(async () => {{ const m = {API};
+      const id = (await m.api('GET', '/api/sections')).sections.find(s => s.id === 'translate').links[0].connection.id;
+      await m.api('DELETE', '/api/sections/translate/links/' + id); await m.loadMe(); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin("tl-nomodel"), ("wait", READY), add_translator(), finished_record(),
+        ("eval", "unlink", unlink),
+        *go("translate"), ("wait", f"document.querySelector('#view .hint-bar') && {TL_DONE}"),
+        ("eval", "bare", "[!!document.querySelector('#tl-go'), !!document.querySelector('#tl-file-input'),"
+                         " !!document.querySelector('#tl-photo-input'),"
+                         " document.querySelector('#view .hint-bar a').getAttribute('href')]"),
+        ("click", ".tl-row[data-state=done] .tl-open"), ("wait", f"{TL_OUTPUT} === 'Bonjour'"),
+        ("eval", "shown", "[document.querySelector('.tl-acts').hidden, document.querySelector('#tl-export').hidden,"
+                          " document.querySelector('#tl-continue').hidden]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["bare"] == [False, False, False, "#/settings/translate"]
+    assert v["shown"] == [False, False, True]
     assert not problems(r), problems(r)
 
 
@@ -6371,29 +6544,55 @@ def test_translate_photo_overlay_and_text_modes(browser, live, spotted, width):
     assert not problems(r), problems(r)
 
 
-def test_translate_photo_save_gives_a_png(browser, live, spotted):
+@pytest.mark.parametrize("width", [320, 1280])
+def test_translate_photo_save_gives_a_png(browser, live, spotted, width):
     """«Сохранить снимок» — PNG в натуральном размере: снимок, на месте блока — белая подложка с тёмным текстом,
-    вне блоков — исходные пиксели; имя «<имя>.<язык>.png». На iPhone — меню «Поделиться» с тем же PNG."""
-    live.add_user("tl-save")
-    spy = """(() => { window.clicked = []; window.made = [];
+    вне блоков — исходные пиксели; имя «<имя>.<язык>.png». На iPhone — меню «Поделиться» с тем же PNG.
+    Кегль блока на PNG подогнан под рамку в натуральном размере, а не перенят с экрана: на 320 px рамка «Только
+    персонал» на экране ниже 8 px, а на PNG текст блока нарисован весь и не выходит за рамку."""
+    login = f"tl-save{width}"
+    live.add_user(login)
+    spy = """(() => { window.clicked = []; window.made = []; window.drawn = [];
       HTMLAnchorElement.prototype.click = function () {
         window.clicked.push([this.getAttribute('href').slice(0, 5), this.getAttribute('download')]); };
       const real = URL.createObjectURL; URL.createObjectURL = (b) => { window.made.push(b); return real.call(URL, b); };
+      const fill = CanvasRenderingContext2D.prototype.fillText;
+      CanvasRenderingContext2D.prototype.fillText = function (text, x, y) {
+        window.drawn.push([text, x, y, parseFloat(this.font), this.measureText(text).width, this.canvas.width]);
+        return fill.apply(this, arguments); };
       return true; })()"""
     png = """(async () => { const b = window.made[0]; const u = new Uint8Array(await b.arrayBuffer()); let s = '';
       for (const x of u) s += String.fromCharCode(x); return [b.type, btoa(s)]; })()"""
-    r = browser.drive(live.url + "/", [*photo_translated("tl-save"),
+    r = browser.drive(live.url + "/", [*photo_translated(login),
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),          # снова — из истории
+        *go("translate"), ("wait", TL_DONE), ("click", ".tl-row[data-state=done] .tl-open"), ("wait", TL_FITTED),
+        ("eval", "screen", f"{TL_BLOCKS}[1].clientHeight"),
         ("eval", "spy", spy),
         ("click", "#tl-save"),
         ("wait", "window.clicked.length === 1 && !document.querySelector('#tl-save').disabled"),
         ("eval", "clicked", "window.clicked[0]"),
+        ("eval", "drawn", "window.drawn"),
         ("eval", "png", png),
         iphone(),
         ("click", "#tl-save"),
         ("wait", "window.shared.length === 1"),
-        ("eval", "shared", "window.shared[0]")])
+        ("eval", "shared", "window.shared[0]")],
+        width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
+    if width == 320:
+        assert v["screen"] < 16, v["screen"]                         # на экране блок мельче, чем в PNG
+    # Каждая строка, что canvas нарисовал в рамке блока (по вертикали — с запасом на обрезанные строки ниже
+    # рамки): текст блока целиком, кегль не меньше 8, строка не выходит за рамку ни вправо, ни вниз.
+    width_px, height_px = TL_SIGN[:2]
+    for text, (x1, y1, x2, y2) in [("Выход", (93, 146, 491, 214)), ("Только персонал", (193, 640, 379, 706))]:
+        left, top = x1 * width_px / 1000, y1 * height_px / 1000
+        right, bottom = x2 * width_px / 1000, y2 * height_px / 1000
+        lines = [d for d in v["drawn"] if d[5] == width_px and left <= d[1] < right
+                 and top <= d[2] < bottom + 2 * (bottom - top)]
+        assert " ".join(d[0] for d in lines) == text, (text, lines)
+        for line, x, y, size, measured, _ in lines:
+            assert size >= 8 and x + measured <= right + 0.5 and y + size <= bottom + 0.5, (text, lines)
     assert v["clicked"] == ["blob:", "Вывеска.ru.png"]
     assert v["png"][0] == "image/png"
     with Image.open(io.BytesIO(base64.b64decode(v["png"][1]))) as im:

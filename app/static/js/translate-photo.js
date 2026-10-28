@@ -6,12 +6,13 @@
  * блок `.tl-block` в рамке `box` (доли 0…1000 того же повёрнутого PNG, что ушёл в распознавание, — left/top/
  * width/height = box / 10 процентов). Кегль блока — наибольший от MIN_PX до высоты рамки, при котором текст
  * помещается (scrollWidth/scrollHeight ≤ client*); не помещается и на MIN_PX — MIN_PX с обрезкой. Подгонка —
- * при смене размера кадра (ResizeObserver: загрузка картинки, ширина окна, возвращение из «Текстом») и при новых
- * блоках; отношение кегля к высоте рамки запоминается (FIT) для savePng. «Текстом» страница показывает сама
- * (translate.js): режим она узнаёт через `onMode`.
+ * при смене размера кадра (ResizeObserver: загрузка картинки, ширина окна, возвращение из «Текстом»), при новых
+ * блоках и при возвращении слоя после «Исходника» (спрятанный слой не подгоняется). «Текстом» страница
+ * показывает сама (translate.js): режим она узнаёт через `onMode`; `destroy()` — узел больше не нужен.
  *
- * savePng(record, parts) — PNG в натуральном размере на canvas: картинка, подложки и переводы с тем же
- * отношением кегля к высоте рамки, перенос по словам; блок, которого экран не подгонял, — подгонкой на canvas.
+ * savePng(record, parts) — PNG в натуральном размере на canvas: картинка, подложки и переводы, перенос по
+ * словам; кегль каждого блока подгоняется заново на canvas под рамку в натуральном размере (fitCanvas), а не
+ * берётся с экрана: на телефоне рамки на экране мельче MIN_PX, и экранный кегль обрезал бы перевод на PNG.
  * Текст сервера — только textContent и canvas. */
 import { saveFile } from './save.js';
 import { el, words } from './ui.js';
@@ -23,9 +24,6 @@ const PAD_Y = 0.06;
 const BACKING = 'rgba(255, 255, 255, .92)';
 const INK = '#111';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-
-/** Отношение подогнанного на экране кегля к высоте рамки — по куску (savePng рисует так же). */
-const FIT = new WeakMap();
 
 /** Переведённые блоки с рамкой. */
 function shown(parts) {
@@ -44,9 +42,9 @@ function fits(node) {
 }
 
 /** Наибольший кегль от MIN_PX до высоты рамки, при котором текст помещается; иначе — MIN_PX с обрезкой. */
-function fitBlock(node, part) {
+function fitBlock(node) {
   const height = node.clientHeight;
-  if (!height) return;                   // кадр спрятан («Текстом») — подгонка при возвращении
+  if (!height) return;                   // кадр или слой спрятан — подгонка при возвращении
   let lo = MIN_PX;
   let hi = Math.max(MIN_PX, Math.floor(height));
   node.style.fontSize = `${lo}px`;
@@ -59,7 +57,6 @@ function fitBlock(node, part) {
     }
   }
   node.style.fontSize = `${lo}px`;
-  FIT.set(part, lo / height);
 }
 
 export function photoView(record, parts, { mode = 'overlay', onMode = () => {} } = {}) {
@@ -81,7 +78,7 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
       toOverlay, toText), tools), fail, frame);
 
   function fitAll() {
-    for (const b of layer.children) fitBlock(b, b.part);
+    for (const b of layer.children) fitBlock(b);
   }
 
   function paintBlocks() {
@@ -97,7 +94,6 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
         b.style.width = `${(x2 - x1) / 10}%`;
         b.style.height = `${(y2 - y1) / 10}%`;
         b.textContent = p.text;
-        b.part = p;
         return b;
       }));
       fitAll();
@@ -126,6 +122,7 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
     const on = original.getAttribute('aria-pressed') !== 'true';
     original.setAttribute('aria-pressed', String(on));
     layer.hidden = on;
+    if (!on) fitAll();                   // пока слой был спрятан, кадр мог смениться и прийти новые блоки
   });
   save.addEventListener('click', async () => {
     save.disabled = true;
@@ -138,7 +135,8 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
     }
     paintBlocks();
   });
-  new ResizeObserver(fitAll).observe(frame);   // загрузка картинки, ширина окна, возвращение из «Текстом»
+  const sized = new ResizeObserver(fitAll);    // загрузка картинки, ширина окна, возвращение из «Текстом»
+  sized.observe(frame);
 
   setMode(mode);
   paintBlocks();
@@ -146,6 +144,9 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
   return {
     node,
     setMode,
+    destroy() {
+      sized.disconnect();
+    },
     /** Та же запись после опроса: новые переводы блоков — на слой. */
     update(nextRecord, nextParts) {
       rec = nextRecord;
@@ -180,7 +181,8 @@ function canvasFont(size, family) {
   return `${size}px ${family}`;
 }
 
-/** Подгонка на canvas — для блока, которого экран не подгонял. */
+/** Кегль блока на canvas: наибольший от MIN_PX до высоты рамки, при котором строки по словам помещаются в
+ * рамку по ширине и высоте; не помещается и на MIN_PX — MIN_PX (рамка обрежет). */
 function fitCanvas(ctx, text, w, h, family) {
   const ok = (size) => {
     ctx.font = canvasFont(size, family);
@@ -219,7 +221,7 @@ export async function savePng(record, parts) {
     const h = (y2 - y1) * canvas.height / 1000;
     ctx.fillStyle = BACKING;
     ctx.fillRect(x, y, w, h);
-    const size = FIT.has(p) ? Math.max(1, FIT.get(p) * h) : fitCanvas(ctx, p.text, w, h, family);
+    const size = fitCanvas(ctx, p.text, w, h, family);
     ctx.font = canvasFont(size, family);
     ctx.save();
     ctx.beginPath();

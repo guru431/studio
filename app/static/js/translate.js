@@ -17,12 +17,15 @@
  * заново; открыта запись-файл или снимок — POST /<id>/repeat (новая запись из сохранённого исходника); иначе —
  * текст поля POST /api/translate. Принятая запись открывается, зовётся jobs.kick(). Открытая идущая запись
  * опрашивается раз в POLL_MS: GET /<id>?from=k, k — число готовых кусков подряд (сервер шлёт только куски
- * после них), справа — готовые куски с разделителями и `live` идущего.
+ * после них), справа — готовые куски с разделителями и `live` идущего. Опрос той же записи перерисовывает только
+ * перемены: перевод дописывается в конец, плашка, строки истории и «Показать ещё» — те же узлы, пока их данные те
+ * же; aria-live — только у состояния, не у перевода. «Перевести» закрыта, пока принятая запись не открыта.
  *
  * Языки при входе — пара последней записи истории, без истории — «Определить язык» → умолчание сервера.
  * Открытая запись ставит свои: исходник — выбранный, справа — куда переведено на деле (`result_lang`);
  * определённый язык виден в «Определить язык · английский». ⇄ при «Определить язык» берёт определённый
- * язык показанной записи (нет — кнопка закрыта); у готовой текстовой записи окна меняются текстом.
+ * язык показанной записи (нет — кнопка закрыта); у готовой текстовой записи окна меняются текстом (запись
+ * отпущена), следующий ⇄ меняет тексты обратно вместе с языками. × и ⇄ сильнее перечитывания в пути (deselect).
  *
  * История — createPicker (feed.js) под окнами: по дням, «EN → RU», время, вид, начала исходника и перевода,
  * состояние идущих; нажатие — запись в окнах, крестик — удаление с подтверждением. #/translate?id=<id>
@@ -124,11 +127,21 @@ function build(view, ctx) {
   let picked = false;          // запись выбрали сами: ?id из адреса её не перебьёт
   let sending = false;
   let timer = null;
-  let photo = null;            // вид открытой записи-снимка: { id, node, setMode, update }
+  let photo = null;            // вид открытой записи-снимка: { id, node, setMode, update, destroy }
   let photoMode = 'overlay';   // 'overlay' | 'text'
+  let listed = false;          // первая страница истории пришла (до неё — не «Здесь появятся ваши переводы»)
+  let pollWords = '';          // слова неудачного опроса записи: удачный опрос их уберёт
+  let chipKey = '';            // что показывает плашка: та же — не пересобирается
+  let statusKey = '';          // что показывает #tl-status: то же — не перерисовывается (aria-live — только перемены)
+  let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
+  const dayNodes = new Map();  // подпись дня → узел
 
   const docs = createPicker({ url: '/api/translate', size: PAGE, pollMs: LIST_POLL_MS,
-    running: (i) => RUNNING.has(i.state), paint: paintHistory,
+    running: (i) => RUNNING.has(i.state),
+    paint() {
+      listed = true;
+      paintHistory();
+    },
     show() { open(docs.current); },
     fail(err) { error.textContent = words(err); } });
 
@@ -161,7 +174,8 @@ function build(view, ctx) {
   const status = el('p', { id: 'tl-status', class: 'tl-status small', 'aria-live': 'polite' });
   const stop = el('button', { type: 'button', id: 'tl-stop', class: 'btn btn-sm', hidden: true }, 'Остановить');
   const cont = el('button', { type: 'button', id: 'tl-continue', class: 'btn btn-sm', hidden: true }, 'Продолжить');
-  const output = el('div', { id: 'tl-output', class: 'tl-output', 'aria-live': 'polite', 'data-placeholder': 'Перевод' });
+  const outText = document.createTextNode('');   // перевод одним текстовым узлом: растёт — дописывается
+  const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': 'Перевод' }, outText);
   const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, 'Копировать');
   const formats = el('div', { class: 'tr-formats tl-formats', hidden: true }, ...FORMATS.map(([key, label]) => {
     const b = el('button', { type: 'button', class: 'btn btn-sm', 'data-format': key }, label);
@@ -177,6 +191,9 @@ function build(view, ctx) {
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
+  const empty = el('p', { class: 'muted small' }, 'Здесь появятся ваши переводы');
+  const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, 'Показать ещё');
+  more.addEventListener('click', () => docs.more());
   const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, langRow,
     el('div', { class: 'tl-panes' }, left, right), error,
     el('section', { class: 'tl-past', 'aria-label': 'История переводов' }, el('h2', {}, 'История'), list));
@@ -234,7 +251,8 @@ function build(view, ctx) {
     const auto = source.options[0];
     if (!auto) return;
     const found = rec && rec.source_lang === AUTO && rec.detected_lang;
-    auto.textContent = found ? `Определить язык · ${langName(rec.detected_lang)}` : 'Определить язык';
+    const label = found ? `Определить язык · ${langName(rec.detected_lang)}` : 'Определить язык';
+    if (auto.textContent !== label) auto.textContent = label;   // опрос раскрытый список не трогает
     swap.disabled = !languages.length || (source.value === AUTO && !(rec && rec.detected_lang));
   }
 
@@ -252,17 +270,25 @@ function build(view, ctx) {
     count.hidden = !!(pending || shown);
     sourceText.hidden = !shown || (shown.kind === 'photo' && photoMode === 'overlay');
     chip.hidden = !(pending || shown);
-    const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': 'Убрать' }, icon('x'));
-    x.addEventListener('click', clearLeft);
-    if (pending) {
-      chip.replaceChildren(icon(pending.photo ? 'photo' : 'file'), el('span', { class: 'att-name' }, pending.file.name), x);
-    } else if (shown) {
-      const name = shown.media_id
-        ? el('a', { class: 'att-name', href: `/api/media/${encodeURIComponent(shown.media_id)}`, target: '_blank',
-          rel: 'noopener' }, shown.name)
-        : el('span', { class: 'att-name' }, shown.name);
-      chip.replaceChildren(icon(shown.kind === 'photo' ? 'photo' : 'file'), name, x);
-      sourceText.textContent = shown.source || (RUNNING.has(shown.state) ? 'исходник ещё готовится…' : '');
+    const key = pending ? `pending:${pending.photo}:${pending.file.name}`
+      : shown ? `record:${shown.id}:${shown.kind}:${shown.media_id}:${shown.name}` : '';
+    if (key !== chipKey) {               // опрос той же записи плашку не пересобирает: нажатие и фокус — на месте
+      chipKey = key;
+      const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': 'Убрать' }, icon('x'));
+      x.addEventListener('click', clearLeft);
+      if (pending) {
+        chip.replaceChildren(icon(pending.photo ? 'photo' : 'file'), el('span', { class: 'att-name' }, pending.file.name), x);
+      } else if (shown) {
+        const name = shown.media_id
+          ? el('a', { class: 'att-name', href: `/api/media/${encodeURIComponent(shown.media_id)}`, target: '_blank',
+            rel: 'noopener' }, shown.name)
+          : el('span', { class: 'att-name' }, shown.name);
+        chip.replaceChildren(icon(shown.kind === 'photo' ? 'photo' : 'file'), name, x);
+      }
+    }
+    if (shown) {
+      const text = shown.source || (RUNNING.has(shown.state) ? 'исходник ещё готовится…' : '');
+      if (sourceText.textContent !== text) sourceText.textContent = text;
     }
     paintGo();
   }
@@ -275,6 +301,7 @@ function build(view, ctx) {
   function paintPhoto() {
     const want = rec && rec.kind === 'photo' && rec.media_id ? rec : null;
     if (photo && (!want || photo.id !== want.id)) {
+      photo.destroy();
       photo.node.remove();
       photo = null;
     }
@@ -291,31 +318,35 @@ function build(view, ctx) {
     output.hidden = !!photo && photoMode === 'overlay';
   }
 
-  /** Правое окно: перевод, состояние, кнопки. */
+  /** Состояние над правым окном (kind — '', 'error', 'muted'); то же — без перерисовки: aria-live читает перемены. */
+  function setStatus(kind, text, ring = false) {
+    const next = `${kind}|${ring}|${text}`;
+    if (next === statusKey) return;
+    statusKey = next;
+    status.className = `tl-status small${kind ? ` ${kind}` : ''}`;
+    status.replaceChildren(...(ring ? [el('span', { class: 'ring', 'aria-hidden': 'true' })] : []), ...(text ? [text] : []));
+  }
+
+  /** Правое окно: перевод, состояние, кнопки. Перевод растёт — дописывается в конец (выделение на месте). */
   function paintRight() {
     paintPhoto();
     const text = rec ? translation(rec) : loose;
-    output.textContent = text;
-    const running = !!rec && RUNNING.has(rec.state);
-    status.className = 'tl-status small';
-    if (!rec) {
-      status.replaceChildren();
-    } else if (running) {
-      status.replaceChildren(el('span', { class: 'ring', 'aria-hidden': 'true' }), rec.detail || '');
-    } else if (rec.state === 'error') {
-      status.classList.add('error');
-      status.replaceChildren(rec.detail || 'ошибка');
-    } else if (rec.state === 'cancelled' || !text) {
-      status.classList.add('muted');
-      status.replaceChildren(rec.detail || '');
-    } else {
-      status.replaceChildren();
+    const was = outText.data;
+    if (text !== was) {
+      if (was && text.startsWith(was)) outText.appendData(text.slice(was.length));
+      else outText.data = text;
+      copy.textContent = 'Копировать';
     }
+    const running = !!rec && RUNNING.has(rec.state);
+    if (!rec) setStatus('', '');
+    else if (running) setStatus('', rec.detail || '', true);
+    else if (rec.state === 'error') setStatus('error', rec.detail || 'ошибка');
+    else if (rec.state === 'cancelled' || !text) setStatus('muted', rec.detail || '');
+    else setStatus('', '');
     stop.hidden = !running || rec.state === 'cancelling';
     cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
     acts.hidden = running || !text;
     exportBtn.hidden = !rec;
-    copy.textContent = 'Копировать';
   }
 
   function schedulePoll() {
@@ -338,6 +369,8 @@ function build(view, ctx) {
         paintCount();
       }
       error.textContent = '';
+      pollWords = '';
+      copy.textContent = 'Копировать';
     } else if (!before.result_lang && record.result_lang) {
       setLangs(source.value, record.result_lang);          // перевод ушёл не на выбранный язык — правый выбор скажет
     }
@@ -358,12 +391,15 @@ function build(view, ctx) {
       got = await api('GET', `/api/translate/${encodeURIComponent(id)}?from=${k}`);
     } catch (err) {
       if (alive && rec && rec.id === id) {
-        error.textContent = words(err);
+        pollWords = words(err);
+        error.textContent = pollWords;
         if (err.code !== 'gone') schedulePoll();
       }
       return;
     }
     if (!alive || !rec || rec.id !== id) return;
+    if (pollWords && error.textContent === pollWords) error.textContent = '';   // связь вернулась
+    pollWords = '';
     const kept = rec.parts.filter((p) => p.n <= k);
     open({ ...got, source: got.source !== undefined ? got.source : rec.source, parts: [...kept, ...got.parts] });
   }
@@ -373,7 +409,7 @@ function build(view, ctx) {
       pending = null;
     } else {
       rec = null;
-      docs.current = null;
+      docs.deselect();                   // перечитывание в пути запись не вернёт
       loose = '';
       input.value = '';
       paintCount();
@@ -420,10 +456,9 @@ function build(view, ctx) {
       return;
     }
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) status.textContent = `Загружаю · ${Math.round(event.loaded * 100 / event.total)}%`;
+      if (event.lengthComputable) setStatus('', `Загружаю · ${Math.round(event.loaded * 100 / event.total)}%`);
     });
     xhr.addEventListener('loadend', async () => {
-      sending = false;
       let answer = null;
       try {
         answer = JSON.parse(xhr.responseText);
@@ -431,10 +466,15 @@ function build(view, ctx) {
         // не JSON — ниже словами по коду
       }
       if (xhr.status === 202 && answer) {
-        await started(answer);
-        paintGo();
+        try {
+          await started(answer);           // «Перевести» закрыта, пока новая запись не открыта
+        } finally {
+          sending = false;
+          paintGo();
+        }
         return;
       }
+      sending = false;
       paintRight();
       paintGo();
       if (xhr.status === 401) location.href = '/login';
@@ -524,19 +564,18 @@ function build(view, ctx) {
     const running = RUNNING.has(item.state);
     const state = running ? item.detail : item.state === 'error' ? 'ошибка' : item.state === 'cancelled' ? 'остановлено' : '';
     const from = item.kind === 'file' ? item.name : item.source_head || item.name;
-    const open = el('button', { type: 'button', class: 'tl-open' },
+    const opener = el('button', { type: 'button', class: 'tl-open' },
       el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'photo' : 'file'),
         el('b', { class: 'tl-pair' }, pair(item)),
         el('span', { class: `tl-meta${item.state === 'error' ? ' error' : ''}` },
           [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · '))),
       el('span', { class: 'tl-from' }, from || ''),
       item.text_head ? el('span', { class: 'tl-to muted' }, item.text_head) : null);
-    open.addEventListener('click', () => {
+    opener.addEventListener('click', () => {
       picked = true;
       langsReady.then(() => docs.select(item.id));
     });
-    const node = el('div', { class: 'tl-row', 'data-id': item.id, 'data-state': item.state,
-      'aria-current': rec && rec.id === item.id ? 'true' : null }, open);
+    const node = el('div', { class: 'tl-row', 'data-id': item.id, 'data-state': item.state }, opener);   // aria-current — paintHistory
     if (!running) {
       const del = el('button', { type: 'button', class: 'icon-btn tl-delete', 'aria-label': 'Удалить перевод',
         title: 'Удалить' }, icon('x'));
@@ -546,29 +585,45 @@ function build(view, ctx) {
     return node;
   }
 
+  /** История: строки с прежними данными и подписи дней — те же узлы, в списке меняется только то, что
+   * сменилось (опрос раз в секунду не сбивает нажатие и фокус); у показанной записи — aria-current. */
   function paintHistory() {
     const { items } = docs;
-    if (!items.length) {
-      list.replaceChildren(el('p', { class: 'muted small' }, 'Здесь появятся ваши переводы'));
-      return;
-    }
     const nodes = [];
+    const kept = new Map();
     let last = '';
     for (const item of items) {
       const label = dayTitle(item.created);
       if (label !== last) {
-        nodes.push(el('p', { class: 'tr-group tl-day' }, label));
+        if (!dayNodes.has(label)) dayNodes.set(label, el('p', { class: 'tr-group tl-day' }, label));
+        nodes.push(dayNodes.get(label));
         last = label;
       }
-      nodes.push(row(item));
+      const sig = JSON.stringify(item);
+      const old = rows.get(item.id);
+      const r = old && old.sig === sig ? old : { sig, node: row(item) };
+      kept.set(item.id, r);
+      nodes.push(r.node);
     }
-    if (!docs.done) {
-      const next = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more', disabled: docs.paging },
-        docs.paging ? 'Загружаю…' : 'Показать ещё');
-      next.addEventListener('click', docs.more);
-      nodes.push(next);
+    rows = kept;
+    for (const [id, { node }] of rows) {
+      if (rec && rec.id === id) node.setAttribute('aria-current', 'true');
+      else node.removeAttribute('aria-current');
     }
-    list.replaceChildren(...nodes);
+    if (!items.length && listed) nodes.push(empty);
+    if (items.length && !docs.done) {
+      const label = docs.paging ? 'Загружаю…' : 'Показать ещё';
+      more.disabled = docs.paging;
+      if (more.textContent !== label) more.textContent = label;
+      nodes.push(more);
+    }
+    const keep = new Set(nodes);
+    for (const child of [...list.children]) if (!keep.has(child)) child.remove();
+    let at = list.firstChild;
+    for (const node of nodes) {
+      if (node === at) at = at.nextSibling;
+      else list.insertBefore(node, at);
+    }
   }
 
   /* события */
@@ -601,12 +656,16 @@ function build(view, ctx) {
       const done = translation(rec);
       loose = rec.source || '';
       rec = null;
-      docs.current = null;
+      docs.deselect();                   // перечитывание в пути запись не вернёт
       clearTimeout(timer);
       input.value = done;
       paintCount();
       paintRight();
       paintHistory();
+    } else if (!rec && loose) {          // окна уже поменяны текстом — обратно вместе с языками
+      [input.value, loose] = [loose, input.value];
+      paintCount();
+      paintRight();
     }
     paintAuto();
     paintGo();
@@ -632,8 +691,7 @@ function build(view, ctx) {
       await docs.select(id);
       docs.load();
     } catch (err) {
-      status.className = 'tl-status small error';
-      status.textContent = words(err);
+      setStatus('error', words(err));
     }
     cont.disabled = false;
   });
@@ -677,6 +735,7 @@ function build(view, ctx) {
       alive = false;
       clearTimeout(timer);
       docs.stop();
+      if (photo) photo.destroy();
     },
   };
 }
