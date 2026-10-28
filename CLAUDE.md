@@ -69,6 +69,29 @@ Windows-мост к студии `https://studio.example.com`: держит ис
   тип; ответ больше `FRAME_MAX` — `too_large`, не кодируется — `error`), `close_session`, `new_link` (все сессии
   прочь), `emit` (в `send`, его ставит `Link`; нет — событие пропадает). `Runner` создаётся раньше и получает `emit`
   поздним связыванием (`lambda f: agent.emit(f)`).
+- `enroll` — `enroll(url, login, password, name)` → `(agent_id, device_key)`: `POST <адрес>/api/agent/enroll` JSON
+  через `urllib`, без `Origin`, перенаправлениям не следует; адрес — по правилу `link.ws_url` (`base_url`); отказы —
+  `EnrollError(code, words)`: 401 `login`, 429 `locked`, 422 с `detail.code == "name"` — `name`, прочее —
+  `unavailable` «Студия недоступна (HTTP n | тип ошибки)».
+- `setup` — `validate(form, enrolled=)` (слова окна; не привязан — логин и пароль обязательны, привязан — оба или ни
+  одного; имя как у студии — 1–64 без управляющих; папка есть; PIN — `pin_errors`) и `apply(h, form)`: с логином —
+  привязка, `save_key`, `agent_id`, `name`; всегда — `url`, `projects_root`, `autostart`; PIN — `no_pin` убирает,
+  заполненный задаёт, пустой не трогает. Пароль не сохраняется нигде.
+- `single` — `acquire()`: мьютекс `Local\StudioAgent`, уже есть — `None` (второй мост выходит).
+- `autostart` — `HKCU\…\Run` значение `StudioAgent` = `command()` (`.venv\Scripts\pythonw.exe` + `studio_agent.pyw`
+  репозитория), `enabled`, `set_enabled`; `key` — параметр (тесты пишут в `Software\studio-agent-test\Run`).
+- `app.Controller` — ядро без Tk и трея (его же берёт `run --console`): поток с циклом `asyncio` — `find_cli`,
+  `cli_version`, `Runner` и `Agent` (поздний `emit`), `cli.probe` до первого канала и раз в `PROBE_EVERY_SEC` (пустой
+  итог прежние модели не стирает, новые уйдут в следующий `hello`), `Link`. Публичные методы — из любого потока:
+  `restart_link()` (канал заново с перечитанными ключом, настройками и `has_pin`; состояния прежнего канала отсекает
+  поколение `_gen`), `apply_setup(form)` (блокирует — не из потока Tk; «привязан» — есть ключ **для этого адреса**:
+  другой адрес требует новой привязки, ключ чужой студии туда не уходит), `reset_pin()`, `quit()` (`runner.close()`,
+  затем `link.stop()`), `state` + `on_state`: `setup` (нет ключа или папки — канал не поднимается), `connecting`,
+  `online`, `offline`, `revoked`, `replaced` (оба — до новой настройки), слова — `WORDS`. Зависимости (Link, SDK, CLI,
+  probe, привязка, автозапуск, `sleep`) — параметры: тесты `tests/test_app.py` без сети и реального времени.
+- `__main__` — `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status`: пароль
+  и PIN — `getpass`; `run --console` — мьютекс, журнал ещё и в stderr, выход на `setup`/`revoked`/`replaced` и Ctrl+C.
+- `journal.setup` ставит логгеру `websockets` уровень не ниже INFO: на DEBUG он пишет заголовок `Authorization`.
 
 ## Правила
 

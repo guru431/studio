@@ -25,4 +25,6 @@ def setup(h: Path, console: bool = False) -> logging.Logger:
         handler.setFormatter(logging.Formatter(FORMAT))
         log.addHandler(handler)
     log.setLevel(logging.INFO)
+    ws = logging.getLogger("websockets")  # на DEBUG пишет заголовок Authorization с ключом устройства
+    ws.setLevel(max(ws.level, logging.INFO))
     return log
