@@ -22,3 +22,4 @@ BACKOFF = (1, 2, 4, 8, 16, 32, 60)  # паузы переподключения,
 PROTOCOL_PAUSE_SEC = 60  # пауза после закрытия 4400
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]-]{1,100}")
+CHAT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")  # UUID строчными
