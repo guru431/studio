@@ -52,6 +52,8 @@ STALE_SEC = 75
 #: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
 SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
                                "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
+#: /api/* без сессии и CSRF: привязка моста Claude Code (agents.py) входит логином и паролем сама
+OPEN_API = frozenset({"/api/agent/enroll"})
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
@@ -161,9 +163,11 @@ def require_admin(request: Request) -> User:
 
 async def guard(request: Request, call_next):
     """Все /api/* — только с живой сессией; не-GET — ещё и с заголовком CSRF этой сессии; запертой
-    сессии — только запросы блокировки. Порядок: сессия → CSRF → блокировка."""
+    сессии — только запросы блокировки. Порядок: сессия → CSRF → блокировка. OPEN_API — без сессии."""
     path = request.url.path
     if path != "/api" and not path.startswith("/api/"):
+        return await call_next(request)
+    if path in OPEN_API:
         return await call_next(request)
     live = _live(request.cookies.get(COOKIE))
     if live is None:
@@ -263,7 +267,7 @@ def _login_page(error: str = "", status: int = 200) -> HTMLResponse:
     return HTMLResponse(page("login.html", error), status_code=status, headers={"Cache-Control": "no-store"})
 
 
-def _foreign(request: Request) -> bool:
+def foreign_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
     return origin is not None and origin != state.CFG.origin.rstrip("/")
 
@@ -289,7 +293,7 @@ async def login_page(request: Request):
 @router.post("/login")
 async def login(request: Request):
     ip = client_ip(request)
-    if _foreign(request):
+    if foreign_origin(request):
         log.warning("вход с %s: чужой Origin", ip)
         return _login_page("Запрос пришёл с чужого сайта", 403)
     body = await small_body(request, LOGIN_BODY_MAX)
@@ -302,6 +306,25 @@ async def login(request: Request):
     if locked(name, ip):
         log.warning("вход с %s: пауза", ip)
         return _login_page("Слишком много попыток — подождите 15 минут", 429)
+    uid = await check_password(name, password, ip)
+    if uid is not None:               # сессия — без await после сверки
+        replaced = request.cookies.get(COOKIE)
+        if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
+            state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
+        value, _ = create_session(uid)
+        log.info("вход с %s: успешно", ip)
+        response = RedirectResponse("/", status_code=303)
+        _set_cookie(response, value)
+        return response
+    log.warning("вход с %s: неверно", ip)
+    return _login_page("Неверный логин или пароль", 401)
+
+
+async def check_password(name: str, password: str, ip: str) -> int | None:
+    """id учётки, если логин (уже `strip().lower()`) и пароль верны, иначе None — после растущей задержки.
+    Общая для входа и привязки моста (agents.py): неудачи и пауза у них одни. Паузу (`locked`) вызывающий
+    проверил сам. Верный ответ возвращается без await после сверки учётки: вызывающий заводит сессию
+    или ключ на проверенную учётку."""
     # неудача записывается ДО проверки пароля и снимается при успехе: пачка параллельных попыток
     # не проходит проверку паузы разом, пока считается хеш
     attempt = clock.NOW()
@@ -313,27 +336,19 @@ async def login(request: Request):
     # неизвестный логин проверяется против DUMMY_HASH: по времени ответа его не отличить
     ok = await asyncio.to_thread(security.verify_password, password,
                                  row["pw_hash"] if row else security.DUMMY_HASH)
-    if ok and row and still_valid(row["id"], row["pw_hash"]):   # сессия — без await после сверки
+    if ok and row and still_valid(row["id"], row["pw_hash"]):
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса
-        replaced = request.cookies.get(COOKIE)
-        if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
-            state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
-        value, _ = create_session(row["id"])
-        log.info("вход с %s: успешно", ip)
-        response = RedirectResponse("/", status_code=303)
-        _set_cookie(response, value)
-        return response
+        return row["id"]
     fails = _login_fails(name)
     if fails > LOCK_FAILS:
         await clock.SLEEP(min(2 ** (fails - LOCK_FAILS), DELAY_MAX))
-    log.warning("вход с %s: неверно", ip)
-    return _login_page("Неверный логин или пароль", 401)
+    return None
 
 
 @router.post("/logout")
 async def logout(request: Request):
-    if _foreign(request):
+    if foreign_origin(request):
         return _login_page("Запрос пришёл с чужого сайта", 403)
     value = request.cookies.get(COOKIE)
     if value:
