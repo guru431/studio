@@ -60,10 +60,11 @@ export function withFirstPage(first, items, size) {
  * GET url/<id> (select(id, quiet): quiet — отказ молча, запись по ссылке могли удалить).
  * Номера чтений и выбора: запоздалый ответ прежнего не ляжет и вид не займёт.
  * paint() — перерисовать список, show() — выбор занял вид (current), fail(err) — ошибка.
- * Ответ — { items, current, done, paging, load, more, refresh, select, forget(id), stop };
+ * Ответ — { items, current, done, paging, load, more, refresh, select, deselect, forget(id), stop };
+ * deselect() — вид убрали сами: выбор в пути (и перечитывание refresh) его не займёт;
  * forget(id) — запись удалена на сервере (дальше — вид и load()). */
 export function createPicker({ url, size, pollMs, running, paint, show, fail }) {
-  const s = { items: [], current: null, done: false, paging: false, load, more, refresh, select, forget, stop };
+  const s = { items: [], current: null, done: false, paging: false, load, more, refresh, select, deselect, forget, stop };
   let alive = true;
   let poll = null;
   let listing = 0;             // номер чтения первой страницы: запоздавшее прежнее не ляжет
@@ -130,12 +131,16 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail }) 
     show();
   }
 
+  function deselect() {
+    picking += 1;                                     // выбор, начатый раньше, вид не займёт
+    wanted = null;
+    s.current = null;
+  }
+
   function forget(id) {
     removals += 1;
     s.items = s.items.filter((x) => x.id !== id);
-    picking += 1;                                     // выбор, начатый до удаления, вид не займёт
-    wanted = null;
-    s.current = null;
+    deselect();
   }
 
   function stop() {

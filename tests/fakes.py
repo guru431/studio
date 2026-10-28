@@ -119,7 +119,7 @@ class FakeGateway:
         self.think_hold = False
         self.chat_error = None           # (код, тело) вместо ответа
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
-        self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут
+        self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут; функция — пока она истинна
         self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
         self.asr_requests = []           # запросы распознавания (asr, transcriptions, lite)
         self.asr_replies = []            # (код, тело) по очереди, затем — (200, asr_reply)
@@ -243,7 +243,7 @@ class FakeGateway:
                     await asyncio.sleep(0.001)
             for i, piece in enumerate(pieces):
                 yield data({"content": piece})
-                while i == 0 and self.chat_hold:
+                while i == 0 and (self.chat_hold() if callable(self.chat_hold) else self.chat_hold):
                     await asyncio.sleep(0.001)
             for thought in then.get("reasoning", []):    # модель снова думает после текста того же круга
                 yield data({self.reasoning_field: thought})
