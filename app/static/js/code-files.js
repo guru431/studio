@@ -13,11 +13,16 @@
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
  * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата);
  * - текст правлен и не сохранён, а уходят на другой файл, папку (путь, список) или вкладку (leave(go) из
- *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться».
+ *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться»;
+ * - «Сохранить» получило 409 closed — правка и её version ждут в памяти модуля (edits, ключ aid/pid/путь), а
+ *   failed(err, box, path) уводит к PIN; файл, открытый снова (code.js возвращает к нему после PIN), берёт
+ *   правку поверх прочитанного с прежним version: изменил его за это время Claude — «Сохранить» скажет
+ *   conflict. В хранилище браузера правка не попадает.
  * gitView(host, { aid, pid, failed }) → { unmount() }: #code-git — «Ветка», «впереди на N» / «позади на N»
  * (если есть upstream), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
- * failed(err, box) — общие отказы раздела из code.js (closed — к PIN этого компьютера, offline — слова).
+ * failed(err, box, path) — общие отказы раздела из code.js (closed — к PIN этого компьютера, с path — назад к
+ * этому файлу; offline — слова).
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
@@ -53,6 +58,9 @@ function join(dir, name) {
   return dir ? `${dir}/${name}` : name;
 }
 
+/** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
+const edits = new Map();
+
 export function filesView(host, { aid, pid, name, failed, path: start = null }) {
   const url = `/api/code/agents/${aid}/projects/${pid}`;
   let alive = true;
@@ -69,8 +77,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
   const view = el('div', { class: 'code-files-view' }, crumbs, listError, list, file);
   host.replaceChildren(view);
 
-  function refuse(err, box) {
-    if (alive) failed(err, box);
+  function refuse(err, box, path) {
+    if (alive) failed(err, box, path);
   }
 
   function dropBlob() {
@@ -191,8 +199,16 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     const editor = el('textarea', { id: 'code-editor', class: 'input code-editor', spellcheck: 'false',
       autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': nameOf(path) });
     editor.value = got.text;
+    const base = editor.value;
+    const key = `${aid}/${pid}/${path}`;
+    const kept = edits.get(key);                        // правка, чьё сохранение застал closed
+    if (kept) {
+      edits.delete(key);
+      editor.value = kept.text;
+      version = kept.version;                           // правка Claude за это время — conflict, а не затирание
+    }
     let shown = null;                                   // разметка .md («Вид»)
-    const mark = { editor, base: editor.value, reset() {
+    const mark = { editor, base, reset() {
       editor.value = mark.base;
       if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
     } };
@@ -212,7 +228,10 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
       } catch (err) {
         if (!alive || mine !== fileGen) return;
         if (err.code === 'conflict') say(status, CONFLICT, true);
-        else {
+        else if (err.code === 'closed') {
+          edits.set(key, { text: editor.value, version });
+          refuse(err, status, path);
+        } else {
           say(status, '', true);
           refuse(err, status);
         }
