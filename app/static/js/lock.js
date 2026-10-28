@@ -22,16 +22,31 @@
  * иначе теряет «нажатие» и Face ID не показывает. Поэтому варианты (options) готовят заранее и
  * заново, пока они не старше FRESH_SEC (вызов на сервере живёт 120 с): по таймеру отметок и при
  * возвращении на экран, а не по нажатию. Пока готовятся или идёт вызов устройства, «Открыть»
- * выключена («Готовлю…»), а подготовки не начинаются: новый вызов заменил бы подписываемый. */
+ * выключена («Готовлю…»), а подготовки не начинаются: новый вызов заменил бы подписываемый.
+ *
+ * PIN (спека 2026-10-28-studio-lock-pin): GET /api/lock дал pin и pin_left > 0 — цифровая панель вместо
+ * поля пароля (кнопки страницы, не поле: системная клавиатура и менеджер паролей молчат; цифры,
+ * Backspace и Enter с клавиатуры — тоже). Набранное — только в переменной digits, стирается после каждой
+ * попытки, отпирания и ухода с экрана. Пока идёт запрос, панель нажатий не принимает. Исчерпан
+ * (pin_exhausted, left 0, pin_left 0) или убран на другом устройстве (no_pin) — панель уходит, остаётся пароль. */
 import { api, hooks, loadMe, me, useCsrf } from './api.js';
 import { cancelRecording } from './mic.js';
-import { words } from './ui.js';
+import { plural, words } from './ui.js';
 
 const AWAY_SEC = 60;
 const ALIVE_SEC = 15;
 const MARK_SEC = 8;
 /** Вызов passkey живёт на сервере 120 с (screenlock.CHALLENGE_SEC): варианты старше — готовить заново. */
 export const FRESH_SEC = 100;
+const PIN_MIN = 4;
+const PIN_MAX = 8;
+const PIN_WARN = 5;                    // с этого остатка подпись называет число попыток
+const EXHAUSTED = 'PIN не принимается после 10 ошибок — откройте паролем учётки';     // = screenlock pin_exhausted
+
+/** «осталась 1 попытка», «осталось 3 попытки», «осталось 5 попыток». */
+export function attemptsLeft(n) {
+  return `${plural(n, ['осталась', 'осталось', 'осталось'])} ${n} ${plural(n, ['попытка', 'попытки', 'попыток'])}`;
+}
 
 /** Основной указатель — палец: телефон или планшет (не User-Agent: его меняет «версия для ПК»). */
 export function isTouch() {
@@ -118,6 +133,12 @@ let options = null;      // варианты входа passkey — готовы
 let optionsAt = 0;       // Date.now() их выдачи
 let preparing = null;    // идущая подготовка: нажатия и возвращения её не перезапускают
 let calling = false;     // идёт navigator.credentials.get и его проверка: нажатия и подготовки — мимо
+let pinPad;
+let pinDots;
+let pinOk;
+let pinOn = false;       // у учётки задан PIN и попытки остались — панель вместо пароля
+let digits = '';         // набранные цифры: только здесь, ни в DOM, ни в хранилище
+let pinGoing = false;    // идёт POST /api/lock/pin: нажатия, «OK» и Enter — мимо
 
 function say(text, kind) {
   note.textContent = text || '';
@@ -199,16 +220,47 @@ async function load() {
   } catch (err) {
     if (err.code === 'no_keys') {      // ключи удалили на другом устройстве
       keys = false;
-      offerPassword();
+      if (pinOn && passwordForm.hidden) openButton.hidden = true;       // панель PIN остаётся
+      else offerPassword();
     } else say(words(err), 'error');
   }
 }
 
+/** Точки по числу набранных цифр (длина PIN странице неизвестна); «OK» — от PIN_MIN цифр; пока идёт
+ * запрос — панель выключена. */
+function paintPin() {
+  pinDots.replaceChildren(...Array.from(digits, () => document.createElement('span')));
+  for (const key of pinPad.querySelectorAll('button')) key.disabled = pinGoing;
+  pinOk.disabled = pinGoing || digits.length < PIN_MIN;
+}
+
+function forgetDigits() {
+  digits = '';
+  paintPin();
+}
+
+function offerPin() {
+  forgetDigits();
+  openButton.hidden = !keys;
+  pinPad.hidden = false;
+  usePassword.hidden = false;
+  passwordForm.hidden = true;
+}
+
 function offerPassword() {
+  forgetDigits();
+  pinPad.hidden = true;
   openButton.hidden = !keys;
   usePassword.hidden = true;
   passwordForm.hidden = false;
   passwordInput.focus();
+}
+
+/** PIN больше не открывает (исчерпан или убран): панель уходит, остаётся пароль (и passkey, если есть ключ). */
+function pinGone(text) {
+  pinOn = false;
+  offerPassword();
+  say(text, 'error');
 }
 
 /** Экран блокировки. lockNow — обещание запроса «заперто» (true — сервер согласился): пока он не
@@ -219,6 +271,9 @@ async function showLock(lockNow) {
   for (const player of document.querySelectorAll('video, audio')) player.pause();
   options = null;
   paintOpen();
+  pinOn = false;
+  forgetDigits();
+  pinPad.hidden = true;
   openButton.hidden = false;
   usePassword.hidden = false;
   passwordForm.hidden = true;
@@ -237,8 +292,11 @@ async function showLock(lockNow) {
     return;
   }
   keys = state.keys;
+  pinOn = !!state.pin && state.pin_left > 0;
+  if (pinOn) offerPin();
+  else if (state.pin) pinGone(EXHAUSTED);
+  else if (!keys) offerPassword();
   if (keys) prepare();
-  else offerPassword();
 }
 
 function waitOpen(lockNow = null) {
@@ -276,6 +334,7 @@ async function opened() {
   if (document.visibilityState === 'visible') cover(false);     // скрытая — под шторкой до возвращения
   shroud();
   passwordInput.value = '';
+  forgetDigits();
   if (done) done.resolve();
 }
 
@@ -322,8 +381,58 @@ async function openWithPassword(event) {
   await opened();
 }
 
+function typeDigit(digit) {
+  if (pinGoing || digits.length >= PIN_MAX) return;
+  digits += digit;
+  paintPin();
+}
+
+function eraseDigit() {
+  if (pinGoing) return;
+  digits = digits.slice(0, -1);
+  paintPin();
+}
+
+/** «OK»: одна попытка за раз (повторное касание и Enter, пока идёт запрос, — мимо); цифры стираются сразу. */
+async function openWithPin() {
+  if (pinGoing || digits.length < PIN_MIN) return;
+  const pin = digits;
+  pinGoing = true;
+  digits = '';
+  paintPin();
+  say('');
+  try {
+    if (!me && !token) await lockState();          // холодный старт без связи: CSRF ещё нет
+    await api('POST', '/api/lock/pin', { pin });
+  } catch (err) {
+    pinGoing = false;
+    paintPin();
+    const left = err.detail ? err.detail.left : undefined;
+    if (err.code === 'pin_exhausted' || (err.code === 'pin' && left === 0)) pinGone(EXHAUSTED);
+    else if (err.code === 'no_pin') pinGone('');                // PIN убрали на другом устройстве
+    else if (err.code === 'pin') say(left <= PIN_WARN ? `Неверный PIN — ${attemptsLeft(left)}` : 'Неверный PIN', 'error');
+    else say(words(err), 'error');
+    return;
+  }
+  pinGoing = false;
+  paintPin();
+  await opened();
+}
+
+/** Клавиатура: цифры, Backspace и Enter — пока на экране панель (не поле пароля). */
+function onKey(event) {
+  if (!screen.open || pinPad.hidden || event.target === passwordInput) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (/^[0-9]$/.test(event.key)) typeDigit(event.key);
+  else if (event.key === 'Backspace') eraseDigit();
+  else if (event.key === 'Enter') openWithPin();
+  else return;
+  event.preventDefault();              // Enter не «нажимает» кнопку в фокусе (цифру или «OK» второй раз)
+}
+
 async function onVisibility() {
   if (document.visibilityState !== 'visible') {
+    forgetDigits();                    // набранное не переживает уход с экрана
     if (guarded()) {                   // и при открытом экране блокировки: отпирание могло пройти уже без человека
       hiddenAt = Date.now();
       cover(true);
@@ -369,6 +478,9 @@ export function installLock() {
   passwordForm = document.getElementById('lock-password-form');
   passwordInput = document.getElementById('lock-password');
   note = document.getElementById('lock-status');
+  pinPad = document.getElementById('lock-pin');
+  pinDots = document.getElementById('lock-pin-dots');
+  pinOk = document.getElementById('lock-pin-ok');
   hooks.locked = () => waitOpen();
   for (const dialog of [curtain, screen]) dialog.addEventListener('cancel', (event) => event.preventDefault());
   screen.addEventListener('close', () => { if (waiting) screen.showModal(); });
@@ -376,6 +488,10 @@ export function installLock() {
   openButton.addEventListener('click', openWithPasskey);
   usePassword.addEventListener('click', offerPassword);
   passwordForm.addEventListener('submit', openWithPassword);
+  for (const key of pinPad.querySelectorAll('[data-digit]')) key.addEventListener('click', () => typeDigit(key.dataset.digit));
+  document.getElementById('lock-pin-back').addEventListener('click', eraseDigit);
+  pinOk.addEventListener('click', openWithPin);
+  document.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;

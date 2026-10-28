@@ -936,6 +936,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .curtain::backdrop, .lock::backdrop { background: var(--bg); }
 .curtain[open], .lock[open] { display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; text-align: center; }
+/* с панелью PIN экран выше иного телефона: прокрутка, и верх не уходит за край */
+.lock[open] { justify-content: safe center; overflow-y: auto; }
 .lock-logo { width: 64px; height: 64px; border-radius: 16px; }
 .lock h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
 .lock #lock-open { min-width: 200px; min-height: 44px; justify-content: center; }
@@ -944,6 +946,19 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .lock-password .input { flex: 1 1 auto; min-width: 0; }
 .lock .status { max-width: 340px; }
 .lock form { margin: 0; }
+/* цифровая панель PIN: точки по числу набранных цифр, кнопки 3×4 — круглые, 64 px (248 px в ширину) */
+.lock-pin { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.lock-pin-dots { display: flex; align-items: center; justify-content: center; gap: 12px; height: 14px; }
+.lock-pin-dots span { width: 12px; height: 12px; border-radius: 50%; background: var(--text); }
+.lock-pin-pad { display: grid; grid-template-columns: repeat(3, 64px); gap: 12px 28px; }
+.lock-pin-pad button { width: 64px; height: 64px; padding: 0; border: 1px solid var(--border); border-radius: 50%;
+  background: var(--panel-2); color: var(--text); font-size: 26px; line-height: 1; touch-action: manipulation;
+  -webkit-user-select: none; user-select: none; }
+.lock-pin-pad button:active:not(:disabled) { background: var(--border); }
+.lock-pin-pad button:disabled { opacity: .45; cursor: default; }
+.lock-pin-pad #lock-pin-back { background: none; border-color: transparent; font-size: 22px; }
+.lock-pin-pad #lock-pin-ok { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-size: 17px;
+  font-weight: 600; }
 /* «Поиск» (search.js): поле, чипы раздела, модель и период, выдача по дням */
 .search-page { gap: 10px; }
 .search-chips, .search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

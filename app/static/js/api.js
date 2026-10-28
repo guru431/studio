@@ -3,7 +3,7 @@
  * api(метод, путь, тело, { signal }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
  * signal — обрыв запроса (AbortSignal, например срок).
  * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
- * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message)
+ * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message, detail)
  * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа.
  * 423 `screen_locked` (студия заперта, lock.js) при заданном hooks.locked ждёт отпирания и повторяет
  * тот же запрос: опрос хода задания не показывает ошибку из-за блокировки.
@@ -12,11 +12,12 @@
  * его адрес с ?v= и второй импорт без версии запустил бы оболочку дважды). */
 
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, detail = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.detail = detail;        // объект detail ответа целиком (например, left у неверного PIN)
   }
 }
 
@@ -59,11 +60,13 @@ export async function api(method, path, body, { signal } = {}) {
   if (!response.ok) {
     let code = 'http';
     let message = `Ошибка сервера (${response.status})`;
+    let fields = null;
     try {
       const detail = (await response.json()).detail;
       if (detail && typeof detail === 'object') {
         code = detail.code || code;
         message = detail.message || message;
+        fields = detail;
       } else if (typeof detail === 'string') message = detail;
     } catch {
       // тело не JSON — остаётся общий текст
@@ -73,7 +76,7 @@ export async function api(method, path, body, { signal } = {}) {
       await hooks.locked();
       return api(method, path, body, { signal });
     }
-    throw new ApiError(response.status, code, message);
+    throw new ApiError(response.status, code, message, fields);
   }
   if (response.status === 204) return null;
   if ((response.headers.get('content-type') || '').startsWith('application/json')) return response.json();

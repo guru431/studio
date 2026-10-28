@@ -35,7 +35,8 @@ import process from 'node:process';
 
 const POLL_MS = 50;
 const IDLE_MS = 300;
-const KEYS = { Escape: 27, Enter: 13, Tab: 9 };
+const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8,
+  ...Object.fromEntries([...'0123456789'].map((d) => [d, 48 + Number(d)])) };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
