@@ -25,6 +25,9 @@ Windows-мост к студии `https://studio.example.com`: держит ис
 - `store` — каталог моста `home()` (`STUDIO_AGENT_HOME`, иначе `%LOCALAPPDATA%\studio-agent`), `Config` в
   `config.json`, ключ устройства в `key.bin` под DPAPI (не читается — `None`), `write_atomic`.
 - `journal` — логгер `studio_agent` в `agent.log` (1 МиБ × 3, UTF-8).
+- `pin` — `PinStore` (`pin.bin` под DPAPI: scrypt-хеш и счёт неверных; попытка пишется на диск до scrypt, проверки
+  идут по одной — замок процесса; 5 подряд — `pin_locked` до `reset` на машине; нет файла — PIN не задан, блоб не
+  читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`).
 
 ## Правила
 
