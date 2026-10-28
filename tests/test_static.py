@@ -144,6 +144,20 @@ def test_service_worker_opens_the_job_from_a_notification():
     assert "registration.showNotification(" in code and not re.search(r"new\s+Notification\s*\(", code)
 
 
+def test_service_worker_shows_a_push_and_opens_it_like_a_job():
+    """Push «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): обработчик `push` показывает
+    уведомление регистрации из полезной нагрузки (сбой разбора — пустая), адрес — в data.href для того же
+    notificationclick; шапка больше не говорит, что push нет."""
+    sw = (STATIC / "sw.js").read_text(encoding="utf-8")
+    assert "addEventListener('push'" in sw and "event.data.json()" in sw
+    assert "self.registration.showNotification(" in sw and "data: { href:" in sw and "'Студия'" in sw
+    assert "push здесь нет" not in sw
+    settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
+    # в localStorage — только флаг устройства, ни ключей, ни адреса подписки
+    assert re.findall(r"localStorage\.setItem\(([^,]+),", settings) == ["PUSH_KEY"]
+    assert "const PUSH_KEY = 'studio-push';" in settings and "userVisibleOnly: true" in settings
+
+
 def test_pages_send_csp_and_nosniff(studio):
     def check(r):
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
