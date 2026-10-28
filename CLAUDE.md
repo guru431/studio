@@ -46,7 +46,7 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   `upstream` (список разрешённых адресов и имён, запросы к ним), речь — `speech` (WhisperX, GigaAM,
   Qwen3-TTS шлюза и внешний сервис), `audio` (ffmpeg debian: длительность, сжатие, WAV образца,
   склейка), `dictation` (голосовой ввод), `transcripts` (расшифровка в фоне), `ocr` и `ocr_render`
-  (распознавание сканов — абзац ниже), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
+  (распознавание сканов — абзац ниже), `translate`, `translate_text`, `translate_spot` (перевод — абзац ниже), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
   готовые за час задания всех разделов — только база и память модулей, к шлюзу не ходит), `search`
   (поиск по своей истории: `POST /api/search`, `GET /api/search/models`; страница — `search.js`), `admin`, `chat` (поток SSE;
   дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения;
@@ -117,7 +117,8 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   записей ленты фото и видео (отметки, долгое нажатие, «Скачать» и «Удалить» пачкой) —
   `select.js` (действия раздела — `extraActions`: «Сравнить» у фото), групповое сохранение —
   `save.js` `saveMany` (предел iPhone `SHARE_MAX` — по Content-Length до чтения и по настоящему размеру
-  после: на заголовок не полагается). Фото (спека 2026-10-21-studio-photo-presets-compare-series): пресеты —
+  после: на заголовок не полагается); файл, собранный браузером (снимок перевода с наложением), — `saveFile`
+  тем же путём iPhone («Поделиться»). Фото (спека 2026-10-21-studio-photo-presets-compare-series): пресеты —
   `presets.py` (таблица `presets`, роутер `/api/images/presets` подключён раньше `images`; не
   история — стирание их не трогает, учётка уносит каскадом) и `presets.js` (чип «★»); серия —
   поле `series` у `POST /api/images` (`images.run_series`: строки `queued` по одной в слоте
@@ -141,7 +142,7 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   ключ прежнему адресу не уходит. PATCH подключения проверяет адрес (`check_base_url`), только если
   меняются вид или адрес: убранное из списка (`dropped`) можно переименовать и убрать из разделов,
   новый раздел, кроме чата, — 422 `server`.
-- Разделы (`chat`, `photo`, `video`, `transcribe`, `ocr`, `speech`, `dictation`) — таблицы `section_links`
+- Разделы (`chat`, `photo`, `video`, `transcribe`, `ocr`, `translate`, `speech`, `dictation`) — таблицы `section_links`
   (подключение в разделе и его отмеченные модели) и `section_defaults`; встроенный перечень srvllm —
   `sections.CATALOG`. Строки раздела, которого код не знает (новее его — после отката), `connections`
   не видит (`_from_row` фильтрует `linked` по `SECTIONS`), а `set_sections` не трогает. Старые `connections.sections` и `users.default_*` остаются для отката и
@@ -210,6 +211,44 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   `documents.TEXT_MAX_CHARS` — дальше обрезка с пометкой); дописанный после хода — в поиске чата
   (триггер `search_attachments_text`). Файлы — исходный PDF и PNG страниц в `media`;
   «Хранилище» считает их по MIME.
+- Перевод (спека 2026-10-28-studio-translator-design, шаг схемы 18 `db.TRANSLATE_18`): раздел `translate`
+  «Перевод», вкладка рельса после «Сканов» (`translate.js`, `#/translate`); только через сервер, оба вида
+  подключений, модели — чат-модели подключения (без `CATALOG`; новая связь srvllm — `CHAT_INITIAL`). Связи
+  чата через сервер с их моделями и умолчанием раздел получил при старте `sections.adopt("translate", "chat")`
+  — один раз на базу (флаг `settings` `adopted:translate`), дальше разделы порознь. `translate_text` — языки
+  `LANGS` и `redirect` (исходник совпал с целевым — на английский, английский — на русский), определение языка
+  моделью (`detect`), `normalize` (`\r\n` → `\n`) до `split`: куски до `CHUNK_CHARS` (3000) по абзацам, затем
+  предложениям, пробелам, жёстко, склейка с разделителями — исходник байт в байт; указание `PROMPT` — текст
+  данные, не просьбы, только перевод; кусок — поток `chat/completions` подключения; `temperature`, `max_tokens`
+  и `chat_template_kwargs.enable_thinking: False` — только `sections.is_local`, облачным ничего из этого (модели
+  рассуждений OpenAI — 400); `finish_reason` не `stop` — ошибка, `length` — кусок пополам (обрезка половинки —
+  ошибка). `translate_spot` — разбор ответа HunyuanOCR с координатами (`parse`, доли 0…1000) и сборка строк в
+  блоки (`group`). `translate` — записи `translations` (`text`, `file`, `photo`), куски `translation_parts`
+  (`waiting`, `done`, `failed`; у снимка — блок с `box`), API `/api/translate`; две полосы на пользователя
+  (`text` — поле, `file` — файлы и снимки; в полосе одно идёт, ждущих до `QUEUE_MAX` 5, дальше 409 `busy`).
+  Текст — до `TEXT_MAX` (300 000) знаков после `normalize`; отказ куска — `failed` со словами, запись — «кусок
+  n из N: …», готовое видно; 503 — повтор раз в `RETRY_SEC` до `WAIT_MAX_SEC`; локальной модели — release
+  моделей картинок раз на задание. «Остановить» бросает поток куска на следующей дельте, `recover` — «прервано»;
+  «Продолжить» (`resume`) — та же модель и язык, только непереведённые куски (подключения нет — 409
+  `no_connection`); «Перевести» у записи-файла и снимка — `…/repeat`, новая запись из исходника (снимок — те
+  же блоки, скан — текст готового скана) без загрузки и распознавания. Файл — PDF, DOCX, TXT, MD
+  (`documents.extract`, до `DOC_MAX`), исходник — в `media` (`source_media_id` знает `media.referenced`). PDF
+  со страницами без слоя при подключении `ocr` через сервер — документ «Сканов» `origin=section` с тем же
+  файлом (`ocr.plan_pages`), запись — со `scan_id` без исходника; задание ждёт скан, берёт
+  `ocr.attachment_text` и зовёт модель после `ocr.idle`; скан удалён, отменён или без текста — «скан не
+  распознан: …». Без такого подключения PDF со страницами `ocr_render.is_scan` (слоя мало и есть картинка;
+  `pdf_layer_pages`) — 422 `scan`, и когда сканы — часть страниц; пустая страница без картинки — не скан,
+  пропускается. Снимок (PNG, JPEG, WebP; только с `ocr` через сервер, иначе 409 `no_ocr`) — на шару PNG
+  `ocr_render.photo_png` (EXIF, ≤ 2200), те же байты распознаются и показываются: один `/pages/ocr` с
+  `translate_spot.PROMPT` под `ocr.borrowed` (`free_card` до, `_settle` после, учёт в `ocr.EXTERNAL`); пустой
+  ответ (`ocr.EMPTY`) — «готово» со словами «текст на снимке не найден», без модели; текст без координат —
+  ошибка `NO_BOXES`; блоки — пачками до `CHUNK_CHARS` нумерованным запросом (`numbered`, `parse_numbered`),
+  вернулись не все номера — по одному; модель — после `ocr.idle`. Поиск — триггеры `search_translations_*`
+  (имя, исходник и перевод по `INDEX_CHARS`; `text` пишется по готовности, остановке и ошибке); выгрузка —
+  `translations/` с кусками и файлами; скачивание — `…/export?format=txt|docx` (Markdown в docx — только у
+  перевода скана). Журнал — id, коды и числа: текст, имя файла и языки исходника — нет. Наложение —
+  `translate-photo.js` (`photoView`, `savePng` — PNG рисует canvas); страница опрашивает идущую запись
+  `?from=k` — только новые куски.
 - Поиск (спека 2026-10-21-studio-history-search-design, шаг схемы 13): документы — таблица `search_docs`
   (`section`, `item` — id записи или диалога, `part` — `''`, у чата `title`, id сообщения или вложения,
   `user_id`, `model`, `created`, `body`), над ней FTS5 `search` с внешним содержимым
@@ -396,8 +435,27 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 копии базы, который не включился, — ошибка с кодом не 0 (служба уже обновлена). Перенесённая среда — с чужим shebang в
 `bin/`: всё запускается `.venv/bin/python` (`-m uvicorn`, `-m pip`, `manage.py`), не `bin/<скрипт>`. Перезапуск ждёт
 открытые потоки чата не дольше 10 с (`--timeout-graceful-shutdown`, `TimeoutStopSec=30`);
-недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` при старте. Смоук —
+недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` / `translate.recover()` при старте. Смоук —
 `https://studio.example.com/health`; живая приёмка — `tests/test_studio_upload_live.py` (ниже).
+
+**Откат на код до шага схемы 18** (`.previous`): прежний код не знает раздела `translate` и таблиц
+`translations`, `translation_parts` — вкладки «Перевод» нет, а строки раздела он не видит (`connections._from_row`
+и `search.KNOWN`: правка подключения и поиск работают, сторожит `test_code_without_the_translate_section_ignores_its_rows`).
+SQL — как у шага 16 ниже.
+
+- «Удалить всю историю» прежнего кода уносит строки `media` и файлы, но не `translations`: тексты переводов
+  остаются в базе и после возврата вперёд снова видны (файлы — 404, повтор — 409 `gone`). Вернувшись вперёд —
+  тем, кто стирал историю, стереть её снова, или `PRAGMA foreign_keys=ON; DELETE FROM translations WHERE user_id
+  IN (…);` (куски — каскадом, строки поиска — триггером `search_translations_ad`).
+- Прежний `media.referenced` не знает `translations`: удаление в «Сканах» документа того же PDF (скан перевода —
+  обычный документ `origin=section` с тем же файлом) уносит файл перевода — повтор записи без файла — 409 `gone`.
+- Флаг `settings` `adopted:translate` остаётся: вернувшись вперёд, связи чата в переводчик заново не копируются
+  (связи `translate`, что были до отката, прежний код не трогал — `set_sections` их не видит).
+- Ждущие и идущие в момент отката переводы прежний код не трогает; вернувшись вперёд, `translate.recover()`
+  делает их «прервано» — их можно «Продолжить».
+
+Откат на код до шага схемы 17 (PIN) сверх этого обхода не требует: прежний код не читает `users.pin_hash` и
+`pin_fails` (запертая студия открывается паролем и passkey; заданный PIN снова действует после возврата).
 
 **Откат на код до шага схемы 16** (`.previous`): прежний код не знает раздела `ocr`. SQL ниже — служба
 остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`.
@@ -437,7 +495,8 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 `https://studio.example.com`), делает Lustify, правку кистью (Lustify, вне маски — пиксели исходника),
 описание gemma-abl, ролик 1 с, ответ `local-gemma-abl` по PDF и одностраничный скан — в разделе
 «Распознавание» и вложением в чате (затем `/pages/ocr-release` — 200 и ответ gemma-abl без ожидания
-аренды); удаляет только своё и освобождает карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
+аренды), «Перевод» на `local-gemma-abl` — текст, одностраничный PDF со слоем и снимок вывески (блоки с рамками,
+перевод gemma-abl без ожидания аренды `ocr`, затем `/pages/ocr-release` — 200); удаляет только своё и освобождает карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
 напрямую (`STUDIO_LIVE_GATEWAY`) и `client/studio-batch.local.ps1`.
 
 **`STUDIO_ADMIN_PASSWORD` в vault — пароль восстановления, не рабочий:** владелец входит своим
@@ -514,7 +573,9 @@ tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие наст
   фоном: шлюз ещё считает оборванную страницу, 409 и повтор). Из обработчиков HTTP (отмена ждущего,
   `stop_user`) release — фоном, `ocr.settle_later` (`ocr.SETTLING`, гасит `ocr.stop`): ответ шлюза не ждёт.
   Ход чата со сканом зовёт модель только после `ocr.idle` — раннер уже освободил слот и release фоном нет:
-  итог документа пишется раньше release, и gemma-abl иначе ждала бы карту под арендой `ocr`.
+  итог документа пишется раньше release, и gemma-abl иначе ждала бы карту под арендой `ocr`. Перевод — так
+  же; снимок перевода распознаётся вне раннера, под `ocr.borrowed`: пока он идёт, он в `ocr.EXTERNAL`, и
+  release другого распознавания его не оборвёт.
 - Имя файла записи едет заголовком `X-Studio-Name`, а не строкой запроса: строку пишет журнал Apache.
 - Перевод промпта («EN», `POST /api/images/translations`) идёт маршрутом описания
   `/slot/images/descriptions` — текстом, без картинки, а не чат-ролью `local-gemma-abl`: у этого
