@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 import admin
+import agents
 import audio
 import auth
 import chat
@@ -133,6 +134,7 @@ app.include_router(speeches.router)
 app.include_router(jobs.router)
 app.include_router(search.router)
 app.include_router(takeout.router)
+app.include_router(agents.router)
 
 
 @app.exception_handler(RequestValidationError)
