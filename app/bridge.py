@@ -48,6 +48,8 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10
 CALL_SEC = 30
+WATCH_MAX = 1000
+STOP_SEC = 2
 MESSAGE_MAX = 300
 CODE_MAX = 40
 MODELS_MAX = 50
@@ -109,7 +111,8 @@ class SocketLink(Link):
 
 class Watch(asyncio.Queue):
     """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("closed", None); `session` — `tag`
-    сессии студии, что смотрит (её `forget` кладёт `closed`)."""
+    сессии студии, что смотрит (её `forget` кладёт `closed`). Событий в ней — не больше `WATCH_MAX`: застрявший
+    поток SSE (TCP жив, страница не читает) получает `offline` и снимается (`_put_event`)."""
 
     def __init__(self, session: str | None):
         super().__init__()
@@ -120,8 +123,21 @@ class Watch(asyncio.Queue):
 LINKS: dict[int, Link] = {}
 #: (agent_id, chat) → очереди наблюдателей чата
 WATCHERS: dict[tuple[int, str], set[Watch]] = {}
-#: фоновые отправки (`forget`): ссылка держит задачу до конца, `stop` их отменяет
+#: фоновые отправки (`forget`) и закрытия каналов (`_close_later`): ссылка держит задачу до конца, `stop` ждёт
+#: их не дольше `STOP_SEC` и отменяет остаток
 TASKS: set[asyncio.Task] = set()
+
+
+def _background(coro) -> None:
+    task = asyncio.get_running_loop().create_task(coro)
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
+
+
+def _close_later(link: "Link", code: int) -> None:
+    """Закрыть сокет канала фоном: `close` ждёт замок отправки, а висящая отправка (полный буфер, мёртвая сеть
+    посреди большого кадра) держит его до таймаута пинга — столько же ждали бы новый канал и отзыв."""
+    _background(link.close(code))
 
 
 def tag(digest: str) -> str:
@@ -172,12 +188,14 @@ def parse_hello(frame: dict) -> dict:
 
 
 async def attach(link: Link) -> None:
-    """Канал на связи: прежний канал компьютера закрывается 4409. Компьютер отозвали или учётку отключили,
-    пока шло знакомство, — 4401 и в `LINKS` его нет."""
+    """Канал на связи: прежний канал компьютера закрывается 4409 (фоном — `welcome` новому сразу). Компьютер
+    отозвали или учётку отключили, пока шло знакомство, — 4401 и в `LINKS` его нет. `welcome` несёт логин
+    учётки компьютера — мост показывает, под кем он на связи."""
     hello = link.hello
     row = state.DB.execute(
         "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?"
-        " WHERE id = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0) RETURNING name",
+        " WHERE id = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
+        " RETURNING name, (SELECT login FROM users WHERE users.id = agents.user_id) AS login",
         (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(), link.agent_id)).fetchone()
     if row is None:
         log.warning("агент %d: отозван до знакомства", link.agent_id)
@@ -192,9 +210,9 @@ async def attach(link: Link) -> None:
         log.info("агент %d: прежний канал заменён", link.agent_id)
         _fail_pending(old)               # ответов по закрытому каналу уже не будет
         _offline(link.agent_id)          # и событий тоже: новый канал закрыл все сессии моста (протокол §3)
-        await old.close(CLOSE_REPLACED)
+        _close_later(old, CLOSE_REPLACED)
     try:
-        await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name})
+        await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"]})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
 
@@ -248,8 +266,8 @@ def deliver(link: Link, frame: dict) -> None:
         if not _event_ok(frame):
             log.warning("агент %d: неверное событие", link.agent_id)
             return
-        for q in WATCHERS.get((link.agent_id, frame["chat"]), ()):
-            q.put_nowait(("ev", frame["e"]))
+        for q in list(WATCHERS.get((link.agent_id, frame["chat"]), ())):
+            _put_event(link.agent_id, frame["chat"], q, frame["e"])
         _push(link, frame)
     else:
         raise ProtocolError("t")
@@ -337,6 +355,17 @@ def watching(agent_id: int, chat: str) -> bool:
     return bool(WATCHERS.get((agent_id, chat)))
 
 
+def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:
+    """Событие наблюдателю; отстал на `WATCH_MAX` — вместо события `offline` (поток кончится, страница дочитает
+    снимком `live`), и очередь снята: больше в неё ничего не идёт."""
+    if q.qsize() < WATCH_MAX:
+        q.put_nowait(("ev", e))
+        return
+    unwatch(agent_id, chat, q)
+    q.put_nowait(("offline", None))
+    log.warning("агент %d: наблюдатель отстал — снят", agent_id)
+
+
 # ---- закрытие ------------------------------------------------------------------
 
 def forget(user_id: int, digest: str) -> None:
@@ -354,17 +383,16 @@ def forget(user_id: int, digest: str) -> None:
                 await link.send(frame)
             except Exception as e:
                 log.warning("агент %d: закрытие сессии не отправлено (%s)", link.agent_id, type(e).__name__)
-        task = asyncio.get_running_loop().create_task(send())
-        TASKS.add(task)
-        task.add_done_callback(TASKS.discard)
+        _background(send())
 
 
 async def drop(agent_id: int, code: int = CLOSE_AUTH) -> None:
-    """Канал компьютера — закрыть: сперва снять с учёта (новые просьбы — `Offline`), потом закрыть сокет."""
+    """Канал компьютера — закрыть: сперва снять с учёта (новые просьбы — `Offline`), потом закрыть сокет —
+    фоном (`_close_later`): отзыв и удаление учётки не ждут висящую отправку."""
     link = LINKS.get(agent_id)
     if link is not None:
         await detach(link)
-        await link.close(code)
+        _close_later(link, code)
 
 
 async def drop_user(user_id: int) -> None:
@@ -373,9 +401,12 @@ async def drop_user(user_id: int) -> None:
 
 
 async def stop() -> None:
-    """Остановка службы: каналы — 1012 (мост переподключится), фоновые отправки — отменить."""
+    """Остановка службы: каналы — 1012 (мост переподключится); фоновые закрытия и отправки ждут не дольше
+    `STOP_SEC`, остаток отменяется (висящий сокет закроет сам uvicorn)."""
     for agent_id in list(LINKS):
         await drop(agent_id, CLOSE_RESTART)
+    if TASKS:
+        await asyncio.wait(list(TASKS), timeout=STOP_SEC)
     for task in list(TASKS):
         task.cancel()
     await asyncio.gather(*list(TASKS), return_exceptions=True)

@@ -6642,7 +6642,7 @@ def test_socket_bridge_comes_online(live):
     machine = FakeMachine(pin="1234")
     sb = SocketBridge(live.url, key, machine).start()
     try:
-        assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК"}
+        assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК", "login": "owner"}
         wait_for(lambda: aid in bridge.LINKS)
         assert bridge.LINKS[aid].hello["has_pin"] is True
     finally:

@@ -69,6 +69,12 @@ command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get insta
 # Субтитры YouTube в чате — общий yt-dlp debian (root обновляет его ночью из /etc/crontab): своей копии нет,
 # поэтому без него только предупреждение, выкладка идёт дальше
 command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — чтение YouTube в чате недоступно" >&2
+# Архив моста Claude Code (GET /api/agent/download) кладёт deploy.sh; без него подмена agent/ оборвалась бы
+# посреди переезда кода — проверка до неё
+[ -s "$NEW/agent/studio-agent.zip" ] || {
+    echo "ОШИБКА: нет $NEW/agent/studio-agent.zip — deploy.sh собирает его из репозитория studio-agent" >&2
+    exit 1
+}
 
 # Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
 # Собирается в $NEW/.venv, только если сменились requirements.txt или python3 (штамп в самой
@@ -78,7 +84,7 @@ command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — ч
 # копия базы и manage.py запускаются интерпретатором среды (`.venv/bin/python -m …`), pip — тоже.
 STAMP=.studio-requirements
 want="$(sha256sum < "$NEW/requirements.txt" | cut -d' ' -f1) $(python3 -V 2>&1)"
-SWAP=("${PARTS[@]}")
+SWAP=("${PARTS[@]}" agent)      # архив моста (agent/) переезжает и откатывается вместе с кодом
 PY=$R/.venv/bin/python
 if ! [ -x "$PY" ] || [ "$(cat "$R/.venv/$STAMP" 2>/dev/null)" != "$want" ]; then
     rm -rf "$NEW/.venv"
