@@ -272,8 +272,8 @@ CREATE TRIGGER search_translations_ad AFTER DELETE ON translations BEGIN
 #: пока жива сессия студии, что её завела. id компьютера — AUTOINCREMENT: id отозванного не достаётся новому
 #: (им ключуются agent_events без ссылки, память службы и адреса push `code/<id>/…`)
 CODE_19 = """CREATE TABLE agents(id INTEGER PRIMARY KEY AUTOINCREMENT,
-       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, has_pin INTEGER NOT NULL DEFAULT 0,
-       projects_root TEXT, cc_version TEXT, created REAL NOT NULL, last_seen REAL);
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE,
+       has_pin INTEGER NOT NULL DEFAULT 0, projects_root TEXT, cc_version TEXT, created REAL NOT NULL, last_seen REAL);
 CREATE INDEX agents_user ON agents(user_id);
 CREATE TABLE agent_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
        agent_id INTEGER NOT NULL, agent_name TEXT NOT NULL, created REAL NOT NULL,

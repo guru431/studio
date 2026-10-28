@@ -273,16 +273,21 @@ def _push(link: Link, frame: dict) -> None:
 
 # ---- просьбы -------------------------------------------------------------------
 
+SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
 def _refusal(frame: dict) -> BridgeError:
+    """Слова и `version` отказа уходят браузеру обычным ответом FastAPI (UTF-8): одинокий суррогат (Node режет
+    UTF-16 посреди эмодзи) уронил бы его 500 — в словах он заменяется «�», `version` с ним не передаётся."""
     code = frame.get("code")
     message = frame.get("message")
     extra = {}
     if type(frame.get("left")) is int:
         extra["left"] = frame["left"]
-    if isinstance(frame.get("version"), str):
+    if isinstance(frame.get("version"), str) and not SURROGATE.search(frame["version"]):
         extra["version"] = frame["version"]
     return BridgeError(code[:CODE_MAX] if isinstance(code, str) and code else "bridge",
-                       message[:MESSAGE_MAX] if isinstance(message, str) else "", extra)
+                       SURROGATE.sub("�", message[:MESSAGE_MAX]) if isinstance(message, str) else "", extra)
 
 
 async def call(agent_id: int, op: str, session: str, timeout: float | None = None, **args) -> dict:
