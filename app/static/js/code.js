@@ -13,10 +13,12 @@
  *   в памяти модуля (wantFile), в адрес не попадает.
  *
  * PIN проверяет мост: набранный PIN живёт только в поле и переменной обработчика, после ответа поле
- * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed (сессию закрыли:
- * блокировка, выход, 30 минут простоя, перезапуск моста) — переход на #/code?pin=<aid>: у компьютера с PIN
- * сразу панель, без PIN — тот же POST open, что и нажатие; ?pin из адреса уходит.
- * Хвост не того вида — на #/code. Текст сервера и машины — только textContent. */
+ * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed или событие closed потока
+ * (сессию закрыли: блокировка, выход, 30 минут простоя, перезапуск моста) — toPin: адрес уровня, где это
+ * случилось, — в памяти модуля (returnTo), переход на #/code?pin=<aid>: у компьютера с PIN сразу панель, без
+ * PIN — тот же POST open, что и нажатие; ?pin из адреса уходит. Открылся — назад на запомненный адрес
+ * (чат, проект), а не к проектам. Перенаправления (к PIN и назад, хвост не того вида — на #/code, компьютера
+ * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent. */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
@@ -38,6 +40,27 @@ let ctx = null;
 let gen = 0;            // номер отрисовки: ответ прежнего уровня новый не перерисует
 let view = null;        // чат (chatView) или вкладки проекта — снимается со сменой уровня
 let wantFile = null;    // путь файла из шага чата до перехода на вкладку «Файлы» — только в памяти
+let returnTo = null;    // { aid, hash } — где компьютер оказался закрыт: после PIN — туда
+let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне: ему — выбор модели устройства
+
+/** Перенаправление без записи в истории браузера. */
+function redirect(path) {
+  location.replace(`#/${path}`);
+}
+
+/** Компьютер закрыт для сессии — к его панели PIN, запомнив, откуда. */
+function toPin(aid) {
+  returnTo = { aid: String(aid), hash: location.hash };
+  redirect(`code?pin=${aid}`);
+}
+
+/** Компьютер открыт: назад, где его закрытость застала, иначе — его проекты. */
+function opened(aid) {
+  const back = returnTo && returnTo.aid === String(aid) ? returnTo.hash : null;
+  returnTo = null;
+  if (back) location.replace(back);
+  else ctx.navigate(`code/${aid}`);
+}
 
 function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -68,7 +91,7 @@ function frame(crumbs) {
 /** Отказ запроса: closed — к панели PIN этого компьютера, offline — словами из «Текстов», прочее — словами. */
 function failed(err, aid, status) {
   if (err && err.code === 'closed') {
-    ctx.navigate(`code?pin=${aid}`);
+    toPin(aid);
     return;
   }
   status.textContent = err && err.code === 'offline' ? OFFLINE : words(err);
@@ -103,7 +126,7 @@ function computers(mine) {
       error.textContent = '';
       try {
         await api('POST', `${base(agent.id)}/open`, { pin });
-        if (mine === gen) ctx.navigate(`code/${agent.id}`);
+        if (mine === gen) opened(agent.id);
         return;
       } catch (err) {
         if (mine !== gen) return;
@@ -132,7 +155,7 @@ function computers(mine) {
     }
     try {
       await api('POST', `${base(agent.id)}/open`, { pin: null });
-      if (mine === gen) ctx.navigate(`code/${agent.id}`);
+      if (mine === gen) opened(agent.id);
     } catch (err) {
       if (mine !== gen) return;
       if (err.code === 'pin_needed') showPin(agent);
@@ -243,7 +266,9 @@ async function project(mine, aid, pid, tab, path) {
     status.textContent = '';
     try {
       const { chat } = await api('POST', `${base(aid, pid)}/chats`);
-      if (mine === gen) ctx.navigate(`code/${aid}/${pid}/${chat}`);
+      if (mine !== gen) return;
+      freshChat = chat;
+      ctx.navigate(`code/${aid}/${pid}/${chat}`);
     } catch (err) {
       add.disabled = false;
       if (mine === gen) failed(err, aid, status);
@@ -255,7 +280,18 @@ async function project(mine, aid, pid, tab, path) {
   const refuse = (err, box) => {
     if (mine === gen) failed(err, aid, box);
   };
+  let shown = null;
   function show(key) {
+    if (shown === 'files' && key !== 'files' && files) {
+      files.leave(() => {
+        if (mine === gen) showTab(key);
+      });
+      return;
+    }
+    showTab(key);
+  }
+  function showTab(key) {
+    shown = key;
     for (const t of tabs.children) t.setAttribute('aria-selected', String(t.id === `code-tab-${key}`));
     for (const [k, pane] of Object.entries(panes)) pane.hidden = k !== key;
     if (key === 'files' && !files) {
@@ -313,14 +349,15 @@ async function chat(mine, aid, pid, id) {
   if (mine !== gen) return;
   const agent = agents.find((a) => String(a.id) === aid);
   if (!agent) {
-    ctx.navigate('code');
+    redirect('code');
     return;
   }
   nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [agent.name, `#/code/${aid}`],
     [found ? found.name : 'Проект', `#/code/${aid}/${pid}`], [(row && row.title) || UNTITLED, null]]));
   status.remove();                           // у чата своя строка #code-status
   view = chatView(section, { aid, pid, chat: id, agent, project: found ? { pid, name: found.name } : null,
-    origin: row ? row.origin : 'studio', navigate: ctx.navigate,
+    origin: row ? row.origin : 'studio', fresh: freshChat === id, navigate: ctx.navigate,
+    closed: () => toPin(aid),
     openFile: (path) => {
       wantFile = path;
       ctx.navigate(`code/${aid}/${pid}?tab=files`);
@@ -339,9 +376,11 @@ function render() {
   const [aid, pid, id] = parts;
   const ok = parts.length <= 3 && (!aid || AID_RE.test(aid)) && (!pid || PID_RE.test(pid)) && (!id || CHAT_RE.test(id));
   if (!ok) {
-    ctx.navigate('code');
+    redirect('code');
     return;
   }
+  // запомненный адрес живёт только до панели PIN своего компьютера: ушли куда-то ещё — забыт
+  if (returnTo && (aid || !ctx.query || ctx.query.get('pin') !== returnTo.aid)) returnTo = null;
   if (id) chat(mine, aid, pid, id);
   else if (pid) {
     const tab = ctx.query && ctx.query.get('tab');
@@ -367,6 +406,7 @@ export function unmount() {
   if (view) view.unmount();
   view = null;
   wantFile = null;
+  returnTo = null;
   host = null;
   ctx = null;
 }

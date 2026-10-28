@@ -152,7 +152,9 @@ def test_service_worker_shows_a_push_and_opens_it_like_a_job():
     assert "addEventListener('push'" in sw and "event.data.json()" in sw
     assert "self.registration.showNotification(" in sw and "data: { href:" in sw and "'Студия'" in sw
     assert "push здесь нет" not in sw
-    settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
+    # тот же tag (чат) — снова звук; без tag renotify бросил бы TypeError — только условно
+    assert "...(tag ? { renotify: true } : {})" in sw and sw.count("renotify: true") == 1
+    settings =(STATIC / "js" / "settings.js").read_text(encoding="utf-8")
     # в localStorage — только флаг устройства, ни ключей, ни адреса подписки
     assert re.findall(r"localStorage\.setItem\(([^,]+),", settings) == ["PUSH_KEY"]
     assert "const PUSH_KEY = 'studio-push';" in settings and "userVisibleOnly: true" in settings
