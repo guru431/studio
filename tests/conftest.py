@@ -136,6 +136,7 @@ def studio(env, schema_db, monkeypatch):
     takeout.RUNNING.clear()
     claude_code.PDFS.clear()
     clear_bridge()
+    clear_push()
     if not env.db_path.exists():
         shutil.copyfile(schema_db, env.db_path)
     with TestClient(main.app, base_url="https://testserver") as client:
@@ -146,6 +147,7 @@ def studio(env, schema_db, monkeypatch):
     chat.STREAMS.clear()
     claude_code.PDFS.clear()
     clear_bridge()
+    clear_push()
 
 
 def clear_bridge() -> None:
@@ -161,6 +163,19 @@ def clear_bridge() -> None:
     bridge.TASKS.clear()
     bridge.LINKS.clear()
     bridge.WATCHERS.clear()
+
+
+def clear_push() -> None:
+    """Ключ VAPID и фоновые отправки push — модульные (как у моста)."""
+    import push
+    push.KEY = None
+    for task in list(push.TASKS):
+        if not task.done():
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass
+    push.TASKS.clear()
 
 
 @pytest.fixture

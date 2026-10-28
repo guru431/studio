@@ -8,6 +8,7 @@
   смена пароля — нет: ключ устройства самостоятелен (спека 6.2).
 - Просьба (`call`) ждёт ответа с тем же `id` не дольше `CALL_SEC`; канал пропал — сразу `Offline`, а не по
   сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал — им `("offline", None)`.
+  Карточку (`ask`) или конец хода (`done`) чата без наблюдателей владельцу сообщает push (`push.notify_later`).
   Своего состояния хода студия не хранит: источник правды — машина (спека 6.10).
 - Признак сессии студии для моста — `tag`: не дайджест сессии и тем более не токен, а производное от
   дайджеста; мост открывает компьютер PIN-ом для этого признака. Заперлась сессия или отперлась —
@@ -29,6 +30,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import auth
 import clock
+import push
 import security
 import state
 
@@ -229,8 +231,25 @@ def deliver(link: Link, frame: dict) -> None:
             return
         for q in WATCHERS.get((link.agent_id, frame["chat"]), ()):
             q.put_nowait(("ev", frame["e"]))
+        _push(link, frame)
     else:
         raise ProtocolError("t")
+
+
+#: повод push → слова тела (тексты сервера плана)
+ASK_WORDS = {"permission": "ждёт подтверждения", "question": "вопрос"}
+DONE_WORDS = {"done": "ход окончен", "stopped": "ход прерван", "error": "ошибка"}
+
+
+def _push(link: Link, frame: dict) -> None:
+    """Карточка или конец хода, которых никто не смотрит, — push владельцу (спека 6.8)."""
+    e = frame["e"]
+    words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
+    text = words.get(value) if isinstance(value, str) else None
+    if text is None or watching(link.agent_id, frame["chat"]):
+        return
+    push.notify_later(link.user_id, f"{link.name}: {text}",
+                      f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
 
 
 # ---- просьбы -------------------------------------------------------------------
