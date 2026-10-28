@@ -112,3 +112,30 @@ async def test_probe_failure_is_empty_and_still_disconnects(tmp_path, caplog):
     assert await cli.probe(str(tmp_path), None, factory) == ([], [])
     assert made[0].disconnected
     assert "RuntimeError" in caplog.text and "claude.exe" not in caplog.text
+
+
+def test_current_keeps_the_path_while_the_file_exists_then_finds_the_newest(tmp_path):
+    old = _ext(tmp_path, "2.1.311")
+    new = _ext(tmp_path, "2.1.312")
+    find = lambda: cli.find_cli(tmp_path)  # noqa: E731
+    assert cli.current(old, find) == old                       # прежний ещё на месте — не меняется
+    old.unlink()                                               # VS Code удалил прежнюю папку
+    assert cli.current(old, find) == new
+    assert cli.current(None, find) == new                      # встроенный в SDK — ищется снова
+    new.unlink()
+    assert cli.current(new, find) is None                      # ничего нет — CLI SDK
+
+
+def test_drop_session_env_removes_only_the_launching_session():
+    env = {"CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "claude-vscode", "CLAUDE_CODE_SESSION_ID": "s",
+           "CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_CODE_SSE_PORT": "1",
+           "CLAUDE_PID": "1", "CLAUDE_CODE_EXECPATH": "x", "CLAUDE_PLUGIN_DATA": "x",
+           "CLAUDE_CODE_MESSAGING_SOCKET": "x", "CLAUDE_CODE_MESSAGING_TOKEN": "x", "VSCODE_PID": "1",
+           "VSCODE_GIT_IPC_HANDLE": "x", "TERM_PROGRAM": "vscode",
+           "ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
+           "CLAUDE_EFFORT": "high", "PATH": "x"}
+    assert cli.drop_session_env(env) == 14
+    assert env == {"ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
+                   "CLAUDE_EFFORT": "high", "PATH": "x"}
+    other = {"TERM_PROGRAM": "WezTerm"}
+    assert cli.drop_session_env(other) == 0 and other == {"TERM_PROGRAM": "WezTerm"}

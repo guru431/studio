@@ -270,6 +270,61 @@ async def test_events_without_a_channel_are_dropped(fake_studio, agent):
     await task
 
 
+async def test_an_unexpected_failure_pauses_and_reconnects(fake_studio, agent, caplog):
+    real, calls = agent.hello, []
+
+    def hello():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("сбой вне сети")
+        return real()
+
+    agent.hello = hello
+    pauses = Pauses()
+    lk, states, task = start(fake_studio, agent, sleep=pauses)
+    await fake_studio.connected()                               # не конец канала навсегда: пауза и снова
+    await until(lambda: states[-1] == "online")
+    assert pauses.list == [1] and states == ["connecting", "offline", "connecting", "online"]
+    assert "канал: сбой: RuntimeError" in caplog.text
+    await lk.stop()
+    assert await task == "stopped"
+
+
+async def test_stop_sends_what_is_queued_before_closing(fake_studio, agent):
+    def connect(uri, **kw):
+        return Slow(real_connect(uri, **kw))
+
+    class Slow:
+        """Канал с медленной отправкой: без досылки кадры очереди пропали бы при `stop()`."""
+
+        def __init__(self, cm):
+            self.cm = cm
+
+        def __await__(self):
+            return self._open().__await__()
+
+        async def _open(self):
+            self.ws = await self.cm
+            return self
+
+        async def send(self, text):
+            await asyncio.sleep(0.005)
+            await self.ws.send(text)
+
+        def __getattr__(self, name):
+            return getattr(self.ws, name)
+
+    lk, states, task = start(fake_studio, agent, connect=connect)
+    await fake_studio.connected()
+    await until(lambda: states[-1] == "online")
+    for n in range(20):
+        lk.send({"t": "ev", "e": {"k": "done", "status": "error", "message": f"ход прерван {n}"}})
+    await lk.stop()
+    assert await task == "stopped"
+    await until(lambda: len(fake_studio.events) == 20)
+    assert [e["e"]["message"] for e in fake_studio.events] == [f"ход прерван {n}" for n in range(20)]
+
+
 async def test_stop_before_run(agent):
     lk = Link("http://127.0.0.1:9", KEY, agent, sleep=Pauses())
     await lk.stop()

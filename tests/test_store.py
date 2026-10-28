@@ -100,3 +100,11 @@ def test_journal_setup_twice_keeps_one_file_handler(home):
         for h in list(log.handlers):
             h.close()
             log.removeHandler(h)
+
+
+@pytest.mark.parametrize("text", ["{", "[1]", '{"projects_root": 5}', '{"agent_id": "7"}', '{"autostart": "да"}'])
+def test_a_broken_config_reads_as_defaults_and_is_left_alone(home, caplog, text):
+    (home / "config.json").write_text(text, encoding="utf-8")
+    assert store.load_config(home) == store.Config()
+    assert (home / "config.json").read_text(encoding="utf-8") == text
+    assert "config.json не читается" in caplog.text

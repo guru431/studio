@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from claude_agent_sdk import (CLINotFoundError, PermissionResultAllow, PermissionResultDeny, PermissionUpdate,
@@ -7,7 +8,7 @@ from claude_agent_sdk.types import PermissionRuleValue
 
 from fake_sdk import (HOLD, FakeFactory, assistant, block_start, delta, result, result_ok, text, tool_result,
                       tool_use, user)
-from studio_agent import errors, events, limits, sessions, store
+from studio_agent import cli, errors, events, limits, sessions, store
 from studio_agent.turns import Runner
 
 PID = "a1b2c3d4e5f60718"
@@ -323,6 +324,126 @@ async def test_close_stops_every_turn_with_words(home, project):
     done = [s["e"] for s in sent if s["e"]["k"] == "done"]
     assert done == [{"k": "done", "status": "error", "message": "ход прерван: мост остановлен"}] * 2
     assert all(c.decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)] for c in f.clients)
+
+
+async def test_each_turn_takes_the_newest_cli_when_the_old_one_is_gone(home, project, tmp_path):
+    def ext(version):
+        d = tmp_path / "ext" / f"anthropic.claude-code-{version}-win32-x64" / "resources" / "native-binary"
+        d.mkdir(parents=True)
+        (d / "claude.exe").write_bytes(b"")
+        return d / "claude.exe"
+
+    old = ext("2.1.311")
+    sent, f = [], FakeFactory([result_ok()])
+    r = Runner(sent.append, choices=store.Choices(home), cli_path=old, factory=f,
+               find_cli=lambda: cli.find_cli(tmp_path / "ext"))
+    r.start(project, PID, CHAT, "1", None, None)
+    await settle(r)
+    new = ext("2.1.312")
+    r.start(project, PID, CHAT, "2", None, None)              # прежний ещё есть — не меняется
+    await settle(r)
+    old.unlink()                                               # VS Code обновил расширение и удалил прежнюю папку
+    r.start(project, PID, CHAT, "3", None, None)
+    await settle(r)
+    assert [o.cli_path for o in f.options] == [old, old, new] and r.cli_path == new
+    assert [s["e"]["status"] for s in sent] == ["done"] * 3
+
+
+async def test_second_stop_cancels_a_turn_that_ignored_interrupt(home, project):
+    sent, f = [], FakeFactory([delta("Думаю"), HOLD, result_ok()])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "Долго", None, None)
+    await until(lambda: kinds(sent) == ["text"])
+
+    async def deaf():                                          # interrupt прошёл, а CLI не остановился
+        f.clients[0].interrupted = False
+
+    f.clients[0].interrupt = deaf
+    await r.stop(CHAT)
+    await asyncio.sleep(0.01)
+    assert r.live() == {CHAT: False} and kinds(sent) == ["text"]
+    await r.stop(CHAT)                                         # повторное «Остановить» — отмена задачи хода
+    await settle(r)
+    assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and r.live() == {}
+    assert f.clients[0].disconnected
+
+
+async def test_a_failing_interrupt_cancels_the_turn_at_once(home, project):
+    sent, f = [], FakeFactory([delta("Думаю"), HOLD, result_ok()])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "Долго", None, None)
+    await until(lambda: kinds(sent) == ["text"])
+
+    async def broken():
+        raise RuntimeError("interrupt")
+
+    f.clients[0].interrupt = broken
+    await r.stop(CHAT)
+    await settle(r)
+    assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and f.clients[0].disconnected
+
+
+async def test_a_turn_during_close_is_busy(home, project):
+    gate = asyncio.Event()
+    sent, f = [], FakeFactory([HOLD])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: f.clients and f.clients[0].queries)
+    real = f.clients[0].interrupt
+
+    async def slow():
+        await gate.wait()
+        await real()
+
+    f.clients[0].interrupt = slow
+    closing = asyncio.create_task(r.close())
+    await asyncio.sleep(0.01)
+    with pytest.raises(errors.Refused) as e:
+        r.start(project, PID, OTHER, "2", None, None)          # мост закрывает ходы — новый не начинается
+    assert e.value.code == "busy" and len(f.clients) == 1
+    gate.set()
+    await closing
+    assert r.live() == {}
+    f.script = [result_ok()]
+    r.start(project, PID, OTHER, "3", None, None)              # закрытие кончилось — ходы снова можно
+    await settle(r)
+    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+def _ascii_size(e) -> int:
+    return len(json.dumps(e, ensure_ascii=True))
+
+
+def test_huge_step_input_is_clipped_harder_then_hidden():
+    feed = events.Feed()
+    lines = {f"строка {i}": "ж" * 30_000 for i in range(30)}  # 30 × 20 000 × 6 байт — больше 1 МиБ
+    [step] = feed.events(assistant(tool_use("t1", "mcp__x", lines)))
+    assert _ascii_size(step) <= limits.EVENT_MAX
+    assert step["input"]["строка 0"] == "ж" * 1999 + "…" and feed.steps[0]["input"] == step["input"]
+    many = {f"строка {i}": "ж" * 30_000 for i in range(100)}  # и по 2000 знаков больше 1 МиБ — пометка
+    [step] = feed.events(assistant(tool_use("t2", "mcp__x", many)))
+    assert step["input"] == {"…": "ввод не показан — слишком большой"}
+    assert feed.steps[1]["input"] == step["input"]
+    [res] = feed.events(user(tool_result("t2", "ж" * 200_000 + "конец")))
+    assert len(res["text"]) == limits.CLIP and _ascii_size(res) < limits.EVENT_MAX  # одна строка — CLIP хватает
+    ask = events.ask_event("r1", "mcp__x", many, False)
+    assert ask["input"] == {"…": "ввод не показан — слишком большой"} and ask["tool"] == "mcp__x"
+    small = events.ask_event("r2", "Bash", {"command": "ls"}, True)
+    assert small["input"] == {"command": "ls"} and small["always"] is True
+
+
+async def test_a_card_with_a_huge_input_still_gets_the_whole_input_back(home, project):
+    many = {f"строка {i}": "ж" * 30_000 for i in range(100)}
+    sent, f = [], FakeFactory([("ask", "mcp__x", many, []), result_ok()])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: r.live().get(CHAT))
+    assert all(_ascii_size(s) <= limits.EVENT_MAX + 1000 for s in sent)
+    running, [snap] = r.watch(CHAT)
+    assert _ascii_size(snap) < limits.EVENT_MAX + 10_000
+    r.answer(CHAT, sent[-1]["e"]["request_id"], "allow", None, None)
+    await settle(r)
+    assert f.clients[0].decisions == [PermissionResultAllow(updated_input=many)]  # CLI получает ввод целиком
 
 
 def test_feed_falls_back_to_assistant_text_and_skips_subagents():

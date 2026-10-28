@@ -77,6 +77,12 @@ def test_hello(agent):
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
 
+def test_hello_with_an_unreadable_pin_says_there_is_a_pin(agent, home, caplog):
+    (home / "pin.bin").write_bytes(b"not a dpapi blob")             # сброс пароля Windows, порча
+    assert agent.hello()["has_pin"] is True                          # безопасная сторона, канал не падает
+    assert "PIN не читается: OSError" in caplog.text
+
+
 async def test_everything_but_open_is_closed_until_opened(agent):
     assert (await agent.handle(req("projects")))[0]["code"] == "closed"
     assert (await agent.handle(req("open", pin=None)))[0]["ok"] is True

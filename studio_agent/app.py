@@ -65,7 +65,7 @@ class Controller:
         self._thread: threading.Thread | None = None
         self.agent: Agent | None = None
         self.runner: Runner | None = None
-        self._cli_path = None
+        self._versioned = None  # путь `claude.exe`, чья версия — в `agent.cc_version`
         self._probed = False
         self._link = None
         self._link_task: asyncio.Task | None = None
@@ -167,14 +167,14 @@ class Controller:
                 log.warning("подписчик состояния: %s", type(e).__name__)
 
     async def _main(self) -> None:
-        self._cli_path = await asyncio.to_thread(self._find_cli)
-        version = await asyncio.to_thread(self._cli_version, self._cli_path)
+        path = self._versioned = await asyncio.to_thread(self._find_cli)
+        version = await asyncio.to_thread(self._cli_version, path)
         agent = None
-        self.runner = Runner(lambda f: agent.emit(f), choices=store.Choices(self.h), cli_path=self._cli_path,
-                             factory=self._sdk_factory)
+        self.runner = Runner(lambda f: agent.emit(f), choices=store.Choices(self.h), cli_path=path,
+                             factory=self._sdk_factory, find_cli=self._find_cli)
         agent = self.agent = Agent(store.load_config(self.h), PinStore(self.h), self.runner, cc_version=version,
                                    models=[], efforts=[])
-        log.info("Claude Code: %s", "расширение VS Code" if self._cli_path is not None else cli.BUILTIN)
+        log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
         first = asyncio.create_task(self._relink_task())
@@ -207,6 +207,7 @@ class Controller:
                 self._set_state("setup")
                 return
             self._set_state("connecting")
+            await self._refresh_cli()
             if not self._probed:
                 await self._refresh_models()
             gen = self._gen
@@ -218,12 +219,18 @@ class Controller:
             self._set_state(state)
 
     async def _run_link(self, lk, gen: int) -> None:
+        """Канал до конца; отозван (4401) или заменён (4409) — идущие ходы прерываются, открытые сессии прочь:
+        отзыв — защита, а заменённому экземпляру просьбы студии больше не придут."""
         try:
-            await lk.run()
+            state = await lk.run()
         except Exception as e:
             log.error("канал: %s", type(e).__name__)
             if gen == self._gen:
                 self._set_state("offline")
+            return
+        if state in ("revoked", "replaced") and gen == self._gen:
+            await self.runner.close()
+            self.agent.open.clear()
 
     async def _drop_link(self) -> None:
         lk, task = self._link, self._link_task
@@ -235,9 +242,19 @@ class Controller:
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
+    async def _refresh_cli(self) -> None:
+        """Путь `claude.exe` — прежний, пока файл есть, иначе новейший (`cli.current`); сменился — версия заново
+        (студия увидит её в следующем `hello`)."""
+        path = self.runner.cli_path = await asyncio.to_thread(cli.current, self.runner.cli_path, self._find_cli)
+        if path != self._versioned:
+            self.agent.cc_version = await asyncio.to_thread(self._cli_version, path)
+            self._versioned = path
+            log.info("Claude Code: сменился, версия %s", self.agent.cc_version)
+
     async def _refresh_models(self) -> None:
         """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает."""
-        models, efforts = await self._probe(self.agent.cfg.projects_root, self._cli_path, factory=self._sdk_factory)
+        models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
+                                            factory=self._sdk_factory)
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
@@ -247,7 +264,16 @@ class Controller:
         while True:
             await self._sleep(PROBE_EVERY_SEC)
             if self.agent.cfg.projects_root:
+                await self._refresh_cli()
                 await self._refresh_models()
+
+
+def prepare_env() -> None:
+    """Перед `Controller` (трей и `run --console`): окружение моста без привязки к сессии того, кто его запустил —
+    `claude.exe` ходов наследует `os.environ`."""
+    dropped = cli.drop_session_env()
+    if dropped:
+        log.info("окружение: убрано переменных сессии: %d", dropped)
 
 
 def main(argv: list[str]) -> int:
@@ -273,6 +299,7 @@ def main(argv: list[str]) -> int:
     journal.setup(h)
     log.info("мост %s: старт", VERSION)
     threading.excepthook = lambda a: log.error("поток: %s", a.exc_type.__name__)
+    prepare_env()
     ctrl = Controller(h)
     commands: queue.Queue = queue.Queue()
     root = tk.Tk()

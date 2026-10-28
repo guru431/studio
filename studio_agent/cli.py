@@ -1,8 +1,9 @@
-"""Claude Code на машине: `claude.exe` расширения VS Code, его версия, модели и усилия."""
+"""Claude Code на машине: `claude.exe` расширения VS Code, его версия, модели и усилия; окружение моста."""
 
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -24,6 +25,11 @@ MODELS_MAX = 50
 LABEL_MAX = 100
 SETTINGS = ["user", "project", "local"]
 ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
+# Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
+SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+                         "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SSE_PORT", "CLAUDE_PID", "CLAUDE_CODE_EXECPATH",
+                         "CLAUDE_PLUGIN_DATA"})
+SESSION_PREFIXES = ("CLAUDE_CODE_MESSAGING_", "VSCODE_")
 
 
 def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
@@ -36,6 +42,24 @@ def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
             if match and exe.is_file():
                 found.append((tuple(int(part) for part in match.group(1).split(".")), exe))
     return max(found, key=lambda item: item[0])[1] if found else None
+
+
+def current(path: Path | None, find=find_cli) -> Path | None:
+    """Прежний `claude.exe`, пока файл есть; иначе новейший заново (VS Code обновил расширение и удалил прежнюю
+    папку — как `worker.py::_claude_bin`); нет — `None`, CLI встроенный в SDK. Блокирует — звать в потоке."""
+    if path is not None and path.is_file():
+        return path
+    return find()
+
+
+def drop_session_env(environ=os.environ) -> int:
+    """Убрать из окружения моста привязку к чужой сессии (`SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode`);
+    прочее окружение владельца (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`) не трогается. Итог — сколько убрано."""
+    names = [k for k, v in environ.items() if k.upper() in SESSION_ENV or k.upper().startswith(SESSION_PREFIXES)
+             or (k.upper() == "TERM_PROGRAM" and v.lower() == "vscode")]
+    for k in names:
+        del environ[k]
+    return len(names)
 
 
 def cli_version(path: Path | None) -> str:

@@ -1,8 +1,13 @@
-"""События хода (протокол §7): урезка строк до `CLIP`, текст блоков, разбор потока SDK, карточки."""
+"""События хода (протокол §7): урезка строк до `CLIP`, предел события `EVENT_MAX`, текст блоков, разбор потока SDK,
+карточки."""
+
+import json
 
 from claude_agent_sdk import AssistantMessage, StreamEvent, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 
 from . import limits
+
+HIDDEN = {"…": "ввод не показан — слишком большой"}
 
 
 def clip(value, limit: int = limits.CLIP):
@@ -14,6 +19,21 @@ def clip(value, limit: int = limits.CLIP):
     if isinstance(value, list):
         return [clip(v, limit) for v in value]
     return value
+
+
+def _size(e: dict) -> int:
+    return len(json.dumps(e, ensure_ascii=True))
+
+
+def bound(e: dict) -> dict:
+    """Событие больше `EVENT_MAX` в ASCII-JSON (кириллица — ×6): `input`, `text`, `questions` — строки до
+    `CLIP_TIGHT`; всё ещё больше — `input` пометкой `HIDDEN`. Кадр так не подходит к `FRAME_MAX` и сам по себе."""
+    if _size(e) <= limits.EVENT_MAX:
+        return e
+    e = {k: clip(v, limits.CLIP_TIGHT) if k in ("input", "text", "questions") else v for k, v in e.items()}
+    if "input" in e and _size(e) > limits.EVENT_MAX:
+        e["input"] = dict(HIDDEN)
+    return e
 
 
 def text_of(content) -> str:
@@ -68,20 +88,21 @@ class Feed:
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
-                    step = {"id": block.id, "tool": block.name, "input": clip(block.input)}
-                    self.steps.append(dict(step, text="", error=False))
+                    step = bound({"k": "step", "id": block.id, "tool": block.name, "input": clip(block.input)})
+                    self.steps.append({k: v for k, v in step.items() if k != "k"} | {"text": "", "error": False})
                     self._by_id[block.id] = self.steps[-1]
-                    out.append({"k": "step", **step})
+                    out.append(step)
                 elif isinstance(block, TextBlock) and block.text and not self._deltas:
                     out += self._gap() + self._text(block.text)
         elif isinstance(message, UserMessage) and isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
-                    text, error = clip(text_of(block.content)), bool(block.is_error)
+                    e = bound({"k": "result", "id": block.tool_use_id, "text": clip(text_of(block.content)),
+                               "error": bool(block.is_error)})
                     step = self._by_id.get(block.tool_use_id)
                     if step is not None:
-                        step.update(text=text, error=error)
-                    out.append({"k": "result", "id": block.tool_use_id, "text": text, "error": error})
+                        step.update(text=e["text"], error=e["error"])
+                    out.append(e)
         return out
 
 
@@ -96,6 +117,6 @@ def ask_event(request_id: str, tool: str, data: dict, always: bool) -> dict:
                        for o in q.get("options") or [] if isinstance(o, dict)]
             questions.append({"question": q.get("question"), "header": q.get("header"),
                               "multi": bool(q.get("multiSelect")), "options": options})
-        return {"k": "ask", "request_id": request_id, "kind": "question", "questions": clip(questions)}
-    return {"k": "ask", "request_id": request_id, "kind": "permission", "tool": tool, "input": clip(data),
-            "always": always}
+        return bound({"k": "ask", "request_id": request_id, "kind": "question", "questions": clip(questions)})
+    return bound({"k": "ask", "request_id": request_id, "kind": "permission", "tool": tool, "input": clip(data),
+                  "always": always})

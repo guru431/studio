@@ -4,8 +4,10 @@ import asyncio
 import time
 
 import pytest
+from claude_agent_sdk import PermissionResultDeny
 
-from studio_agent import app, autostart, store, tray
+from fake_sdk import FakeFactory, result_ok
+from studio_agent import app, autostart, projects, sessions, store, tray, turns
 from studio_agent.pin import PinStore
 
 MODELS = [{"id": "opus", "label": "Opus"}]
@@ -18,6 +20,7 @@ class FakeLink:
         self.url, self.key, self.on_state, self.result = url, key, on_state, result
         self.hello = agent.hello()
         self.stopped = False
+        self.ending = None
         self._stop = asyncio.Event()
 
     async def run(self):
@@ -27,11 +30,17 @@ class FakeLink:
         self.on_state("connecting")
         self.on_state("online")
         await self._stop.wait()
-        self.on_state("stopped")
-        return "stopped"
+        state = self.ending or "stopped"
+        self.on_state(state)
+        return state
 
     async def stop(self):
         self.stopped = True
+        self._stop.set()
+
+    def end(self, state):
+        """Студия закрыла канал (`revoked`, `replaced`); звать в цикле ядра."""
+        self.ending = state
         self._stop.set()
 
 
@@ -75,8 +84,9 @@ def configured(home, root):
 def make(home):
     made = []
 
-    def build(result=None, probe=None, enroll_calls=None, sleep=forever):
-        links, probes = [], []
+    def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
+              cli_version=lambda p: "2.3.1", sdk=None):
+        links, probes, probe_paths = [], [], []
 
         def link_factory(url, key, agent, on_state):
             links.append(FakeLink(url, key, agent, on_state, result))
@@ -84,15 +94,17 @@ def make(home):
 
         async def fake_probe(root, cli_path, factory=None):
             probes.append((root, len(links)))
+            probe_paths.append(cli_path)
             return (MODELS, ["low", "high"]) if probe is None else probe(len(probes))
 
         def fake_enroll(url, login, password, name):
             enroll_calls.append((url, login, name)) if enroll_calls is not None else None
             return 7, "k"
 
-        ctrl = app.Controller(home, link_factory=link_factory, find_cli=lambda: None, cli_version=lambda p: "2.3.1",
-                              probe=fake_probe, enroll_fn=fake_enroll, autostart=FakeAutostart(), sleep=sleep)
-        ctrl.links, ctrl.probes = links, probes
+        extra = {"sdk_factory": sdk} if sdk is not None else {}
+        ctrl = app.Controller(home, link_factory=link_factory, find_cli=find_cli, cli_version=cli_version,
+                              probe=fake_probe, enroll_fn=fake_enroll, autostart=FakeAutostart(), sleep=sleep, **extra)
+        ctrl.links, ctrl.probes, ctrl.probe_paths = links, probes, probe_paths
         made.append(ctrl)
         return ctrl
 
@@ -195,6 +207,60 @@ def test_revoked_or_replaced_link_stays_down(make, configured, result):
     until(lambda: ctrl.state == result)
     time.sleep(0.05)
     assert len(ctrl.links) == 1 and ctrl.state == result
+
+
+def test_a_vanished_cli_is_found_again_and_its_version_goes_to_the_next_hello(make, configured, tmp_path):
+    old, new = tmp_path / "2.1.311.exe", tmp_path / "2.1.312.exe"
+    old.write_bytes(b"")
+    found = [old]
+    ctrl = make(find_cli=lambda: found[-1], cli_version=lambda p: p.stem if p is not None else "встроенный")
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.links[0].hello["cc_version"] == "2.1.311" and ctrl.probe_paths == [old]
+    old.unlink()                                                # VS Code обновил расширение
+    new.write_bytes(b"")
+    found.append(new)
+    ctrl.restart_link().result(5)
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    assert ctrl.links[1].hello["cc_version"] == "2.1.312" and ctrl.runner.cli_path == new
+
+
+@pytest.mark.parametrize("result", ["revoked", "replaced"])
+def test_revoked_or_replaced_link_stops_running_turns(make, configured, root, monkeypatch, result):
+    monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
+    monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: None)
+    (root / "demo").mkdir()
+    chat, session = "0b1e2c3d-4f50-4617-8899-aabbccddeeff", "3b1e" * 8
+    sdk = FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()])
+    ctrl = make(sdk=sdk)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    sent = []
+    ctrl.agent.send = sent.append
+    ctrl._loop.call_soon_threadsafe(ctrl.agent.open.open, session)
+    ctrl._loop.call_soon_threadsafe(ctrl.runner.start, root / "demo", projects.pid("demo"), chat, "x", None, None)
+    until(lambda: dict(ctrl.runner.live()).get(chat))           # карточка открыта
+    ctrl._loop.call_soon_threadsafe(ctrl.links[0].end, result)
+    until(lambda: ctrl.state == result and not ctrl.runner._turns)
+    client = sdk.clients[0]
+    assert client.decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)] and client.disconnected
+    until(lambda: sent and sent[-1]["e"]["k"] == "done")
+    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    until(lambda: not ctrl.agent.open._seen)                    # открытые сессии прочь
+    assert len(ctrl.links) == 1
+
+
+def test_a_broken_config_starts_as_not_configured(make, home, caplog):
+    store.save_key(home, "k0")
+    (home / "config.json").write_text("{битый", encoding="utf-8")
+    ctrl = make()
+    assert ctrl.state == "setup"                                # окно настройки, а не тихий незапуск
+    ctrl.start()
+    ctrl.restart_link().result(5)
+    assert ctrl.state == "setup" and ctrl.links == []
+    assert (home / "config.json").read_text(encoding="utf-8") == "{битый"
+    assert "config.json не читается: JSONDecodeError" in caplog.text
 
 
 def test_reset_pin_unlocks(make, home, configured):

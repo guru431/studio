@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 PATH = "/api/agent/link"
 LOCAL = ("localhost", "127.0.0.1", "::1")  # http — только для тестов на этой машине
 WELCOME_SEC = limits.WELCOME_SEC
+FLUSH_SEC = 2  # stop(): дослать очередь (`done` ходов) не дольше
 CLOSE_PROTOCOL = 4400
 CLOSE_REVOKED = 4401
 CLOSE_REPLACED = 4409
@@ -115,7 +116,11 @@ class Link:
         fails = 0  # неудач подряд; после welcome — сначала
         while True:
             self.on_state("connecting")
-            code, welcomed = await self._channel()
+            try:
+                code, welcomed = await self._channel()
+            except Exception as e:  # сбой вне сети (нечитаемый pin.bin, …) — пауза и снова, не конец канала
+                log.warning("канал: сбой: %s", type(e).__name__)
+                code, welcomed = None, False
             if code == CLOSE_REVOKED:
                 return "revoked"
             if code == CLOSE_REPLACED:
@@ -172,6 +177,9 @@ class Link:
         finally:
             if self._queue is queue:
                 self._queue = None
+            if writer is not None and self._stop.is_set():  # выход: дослать, что уже в очереди (`done` ходов)
+                queue.put_nowait(None)
+                await asyncio.wait({writer}, timeout=FLUSH_SEC)
             if writer is not None:
                 writer.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -204,9 +212,11 @@ class Link:
 
     @staticmethod
     async def _write(ws, queue: asyncio.Queue) -> None:
-        """Писатель канала: один на канал, кадры — по порядку очереди."""
+        """Писатель канала: один на канал, кадры — по порядку очереди; `None` — очередь дослана, конец."""
         while True:
             frame = await queue.get()
+            if frame is None:
+                return
             try:
                 text = _dumps(frame)
             except (TypeError, ValueError) as e:

@@ -56,8 +56,14 @@ class Agent:
         self._open_lock = asyncio.Lock()
 
     def hello(self) -> dict:
+        """Знакомство; `pin.bin` не читается (сброс пароля Windows, порча) — `has_pin: true`: безопасная сторона."""
+        try:
+            has_pin = self.pins.has_pin
+        except (OSError, ValueError) as e:
+            log.warning("PIN не читается: %s", type(e).__name__)
+            has_pin = True
         return {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                "has_pin": self.pins.has_pin, "models": self.models, "efforts": self.efforts}
+                "has_pin": has_pin, "models": self.models, "efforts": self.efforts}
 
     def set_models(self, models: list[dict], efforts: list[str]) -> None:
         self.models, self.efforts = models, efforts

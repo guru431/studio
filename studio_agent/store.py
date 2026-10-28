@@ -2,12 +2,15 @@
 
 import dataclasses
 import json
+import logging
 import os
 import tempfile
 import threading
 from pathlib import Path
 
 from . import dpapi
+
+log = logging.getLogger(__name__)
 
 CONFIG = "config.json"
 KEY = "key.bin"
@@ -46,12 +49,23 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 
 def load_config(h: Path) -> Config:
+    """Настройки; нет файла — по умолчанию. Битый файл (не JSON, не объект, поле не того вида) — тоже по умолчанию
+    («не настроен», окно настройки) со строкой в журнале; файл не перезаписывается, пока владелец не сохранит."""
     try:
         raw = json.loads((h / CONFIG).read_text("utf-8"))
+        if not (isinstance(raw, dict) and all(_KINDS[k](v) for k, v in raw.items() if k in _KINDS)):
+            raise ValueError("поля")
     except FileNotFoundError:
         return Config()
-    known = {f.name for f in dataclasses.fields(Config)}
-    return Config(**{k: v for k, v in raw.items() if k in known})
+    except ValueError as e:
+        log.warning("config.json не читается: %s", type(e).__name__)
+        return Config()
+    return Config(**{k: v for k, v in raw.items() if k in _KINDS})
+
+
+_KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, str),
+          "projects_root": lambda v: isinstance(v, str), "autostart": lambda v: isinstance(v, bool),
+          "agent_id": lambda v: v is None or (type(v) is int)}
 
 
 def save_config(h: Path, cfg: Config) -> None:

@@ -28,6 +28,7 @@ def _run_console(h) -> int:
         return 1
     log = journal.setup(h, console=True)
     log.info("мост: старт в консоли")
+    app.prepare_env()
     ctrl = app.Controller(h)
     finished = threading.Event()
 

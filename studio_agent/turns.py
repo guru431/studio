@@ -79,16 +79,20 @@ class _Turn:
 
 
 class Runner:
-    """Ходы машины: не больше `max_turns` сразу, в чате — один."""
+    """Ходы машины: не больше `max_turns` сразу, в чате — один.
+
+    `cli_path` сверяется перед каждым ходом (`cli.current`): VS Code обновляет расширение и удаляет прежнюю папку."""
 
     def __init__(self, emit: Callable[[dict], None], *, choices: store.Choices, cli_path: Path | None,
-                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS):
+                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli):
         self.emit = emit
         self.choices = choices
         self.cli_path = cli_path
         self.factory = factory
         self.max_turns = max_turns
+        self.find_cli = find_cli
         self._turns: dict[str, _Turn] = {}
+        self._closing = False  # close() идёт: новых ходов нет
 
     # --- просьбы студии ---
 
@@ -96,7 +100,7 @@ class Runner:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
-        if len(self._turns) >= self.max_turns:
+        if self._closing or len(self._turns) >= self.max_turns:
             raise Refused("busy")
         t = _Turn(project, pid, chat, secrets.token_hex(8))
         self._turns[chat] = t
@@ -137,27 +141,41 @@ class Runner:
         self._settle(t, request_id, result)
 
     async def stop(self, chat: str) -> None:
-        """Карточки хода — отказ, затем `interrupt()`; ход кончится `done` со `stopped`."""
+        """Карточки хода — отказ, затем `interrupt()`; ход кончится `done` со `stopped`.
+
+        `interrupt()` упал или не успел, или `stop` того же хода повторный — задача хода отменяется: `_run` доводит
+        конец, `disconnect` гасит `claude.exe`."""
         t = self._turns.get(chat)
         if t is None:
             raise Refused("idle")
+        if t.stopped:
+            log.info("ход %s: повторная остановка — отмена", t.turn)
+            t.task.cancel()
+            return
         t.stopped = True
-        await self._halt(t)
+        if not await self._halt(t) and self._turns.get(chat) is t:
+            log.info("ход %s: interrupt не прошёл — отмена", t.turn)
+            t.task.cancel()
 
     async def close(self) -> None:
-        """Мост выходит: остановить все ходы и дождаться их задач (дальше `CLOSE_SEC` — отмена)."""
-        turns = list(self._turns.values())
-        for t in turns:
-            t.closing = True
-        await asyncio.gather(*(self._halt(t) for t in turns))
-        tasks = {t.task for t in turns}
-        if not tasks:
-            return
-        _, pending = await asyncio.wait(tasks, timeout=CLOSE_SEC)
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.wait(pending, timeout=CLOSE_SEC)
+        """Мост выходит (или отозван): остановить все ходы и дождаться их задач (дальше `CLOSE_SEC` — отмена);
+        пока идёт — новые ходы `busy`."""
+        self._closing = True
+        try:
+            turns = list(self._turns.values())
+            for t in turns:
+                t.closing = True
+            await asyncio.gather(*(self._halt(t) for t in turns))
+            tasks = {t.task for t in turns}
+            if not tasks:
+                return
+            _, pending = await asyncio.wait(tasks, timeout=CLOSE_SEC)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.wait(pending, timeout=CLOSE_SEC)
+        finally:
+            self._closing = False
 
     def live(self) -> dict[str, bool]:
         """Идущие ходы: чат → ждёт ли ход ответа на карточку."""
@@ -195,7 +213,9 @@ class Runner:
             raise asyncio.CancelledError
 
     def _choose(self, t: _Turn, model: str | None, effort: str | None) -> tuple[bool, str | None, str | None]:
-        """В потоке: новая ли сессия, модель и усилие хода (явные запоминаются; `None` — запомненное)."""
+        """В потоке: путь `claude.exe`, новая ли сессия, модель и усилие хода (явные запоминаются; `None` —
+        запомненное)."""
+        self.cli_path = cli.current(self.cli_path, self.find_cli)
         new = not sessions.exists(t.project, t.chat)
         saved_model, saved_effort = self.choices.get(t.chat)
         if model is not None or effort is not None:
@@ -234,11 +254,17 @@ class Runner:
         log.info("ход %s: %s", t.turn, done["status"])
         return done
 
-    async def _halt(self, t: _Turn) -> None:
+    async def _halt(self, t: _Turn) -> bool:
+        """Карточки — отказ, клиенту — `interrupt()`; `False` — interrupt упал или не успел за `INTERRUPT_SEC`."""
         self._deny_all(t)
-        if t.client is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(t.client.interrupt(), INTERRUPT_SEC)
+        if t.client is None:
+            return True  # клиента ещё нет: ход сверит `stopped` до запуска
+        try:
+            await asyncio.wait_for(t.client.interrupt(), INTERRUPT_SEC)
+        except Exception as e:
+            log.info("ход %s: interrupt: %s", t.turn, type(e).__name__)
+            return False
+        return True
 
     # --- карточки ---
 
