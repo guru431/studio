@@ -16,6 +16,8 @@
 - Имя модуля — не `code.py`: каталог службы стоит в `sys.path` первым, и такой файл заслонил бы стандартный
   `code`, а его берёт `pdb` (pytest импортирует `pdb` при старте и падал бы).
 """
+import asyncio
+import json
 import logging
 import re
 import sqlite3
@@ -23,8 +25,8 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import auth
 import bridge
@@ -47,6 +49,11 @@ PATH_MAX = 1024
 HISTORY_PAGE = 100
 PING_SEC = 15
 PDF_TTL_SEC = 300
+ANSWER_MAX = 2000                # знаков в словах отказа и в каждом вопросе и ответе
+ANSWERS_MAX = 20                 # пар «вопрос → ответ»
+NO_TEXT = "задание пустое или длиннее 100 000 знаков"
+NO_MODEL = "такой модели нет на компьютере"
+NO_EFFORT = "такого усилия нет на компьютере"
 
 
 class Open(BaseModel):
@@ -55,6 +62,33 @@ class Open(BaseModel):
 
 class ChatState(BaseModel):
     state: Literal["open", "closed"]
+
+
+class Turn(BaseModel):
+    text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
+    model: str | None = None
+    effort: str | None = None
+
+
+class Answer(BaseModel):
+    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    decision: Literal["allow", "always", "deny"]
+    message: str | None = Field(None, max_length=ANSWER_MAX)
+    answers: dict[str, str] | None = None
+
+    @field_validator("answers")
+    @classmethod
+    def _answers(cls, value):
+        if value is not None and (len(value) > ANSWERS_MAX
+                                  or any(len(k) > ANSWER_MAX or len(v) > ANSWER_MAX for k, v in value.items())):
+            raise ValueError("answers")
+        return value
+
+    @model_validator(mode="after")
+    def _message_only_with_deny(self):
+        if self.message is not None and self.decision != "deny":
+            raise ValueError("message")
+        return self
 
 
 def _refuse(status: int, code: str, message: str, **extra) -> HTTPException:
@@ -192,3 +226,126 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
     check_pid(pid)
     check_chat(chat)
     return await ask(request, aid, "history", project=pid, chat=chat, before=before, limit=HISTORY_PAGE)
+
+
+# ---- ход: поток, наблюдение, карточки, остановка ------------------------------------------
+
+SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _events(q: asyncio.Queue, first: tuple[str, dict] | None, live: bool):
+    """События SSE из очереди наблюдателя: `event: <k>`, данные — событие без `k`; без событий `PING_SEC` —
+    `: ping`. Конец — `done` или `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет).
+    Поток `live` до первого `snapshot` пропускает прочие события: мост шлёт снимок после них, они в нём есть."""
+    if first is not None:
+        yield _sse(*first)
+    waiting = live
+    while True:
+        try:
+            kind, e = await asyncio.wait_for(q.get(), PING_SEC)
+        except TimeoutError:
+            yield ": ping\n\n"
+            continue
+        if kind == "offline":
+            yield _sse("offline", {})
+            return
+        k = e["k"]
+        if waiting and k not in ("snapshot", "done"):
+            continue
+        waiting = False
+        yield _sse(k, {name: value for name, value in e.items() if name != "k"})
+        if k == "done":
+            return
+
+
+class _Watch(StreamingResponse):
+    """Поток SSE чата для одного наблюдателя. Очередь снимает сам ответ, а не finally генератора: отмена может
+    застать ответ в `send` или ещё до первого куска (тела генератора не было вовсе) — как `chat._EventStream`."""
+
+    def __init__(self, aid: int, chat: str, q: asyncio.Queue, first: tuple[str, dict] | None = None,
+                 live: bool = False):
+        super().__init__(_events(q, first, live), media_type="text/event-stream", headers=SSE_HEADERS)
+        self.aid, self.chat, self.q = aid, chat, q
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            bridge.unwatch(self.aid, self.chat, self.q)
+            await self.body_iterator.aclose()
+
+
+async def _idle():
+    yield _sse("idle", {})
+
+
+async def _watched(request: Request, aid: int, chat: str, op: str, **args) -> tuple[asyncio.Queue, dict]:
+    """Очередь наблюдателя — до просьбы: события хода идут сразу за ответом моста и не должны пройти мимо.
+    Отказ — очередь прочь."""
+    q = bridge.watch(aid, chat)
+    try:
+        return q, await ask(request, aid, op, chat=chat, **args)
+    except BaseException:
+        bridge.unwatch(aid, chat, q)
+        raise
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/turn")
+async def turn(aid: int, pid: str, chat: str, body: Turn, request: Request):
+    """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
+    сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    if not body.text.strip() or len(body.text) > TEXT_MAX:
+        raise _refuse(422, "text", NO_TEXT)
+    link = bridge.LINKS.get(aid)
+    if link is not None:
+        if body.model is not None and body.model not in {m["id"] for m in link.hello.get("models", ())}:
+            raise _refuse(422, "model", NO_MODEL)
+        if body.effort is not None and body.effort not in link.hello.get("efforts", ()):
+            raise _refuse(422, "effort", NO_EFFORT)
+    q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
+                             effort=body.effort)
+    log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
+    turn_id = data.get("turn")
+    return _Watch(aid, chat, q, first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}))
+
+
+@router.get("/agents/{aid}/projects/{pid}/chats/{chat}/live")
+async def live(aid: int, pid: str, chat: str, request: Request):
+    """Вернуться к чату: хода нет — одно `idle`; идёт — снимок (мост шлёт его за ответом на `watch`), дальше
+    события. Студия хода не помнит: всё состояние — у моста."""
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    q, data = await _watched(request, aid, chat, "watch", project=pid)
+    if data.get("running") is not True:
+        bridge.unwatch(aid, chat, q)
+        return StreamingResponse(_idle(), media_type="text/event-stream", headers=SSE_HEADERS)
+    return _Watch(aid, chat, q, live=True)
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/answer", status_code=204)
+async def answer(aid: int, pid: str, chat: str, body: Answer, request: Request):
+    """Ответ на карточку — мосту как есть: о самой карточке студия ничего не помнит (перезапуск, другая
+    вкладка), её нет у моста — 410 `gone`. Закрытие карточки (`asked`) мост шлёт всем наблюдателям."""
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    await ask(request, aid, "answer", project=pid, chat=chat, request_id=body.request_id, decision=body.decision,
+              message=body.message, answers=body.answers)
+    return Response(status_code=204)
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/stop", status_code=204)
+async def stop(aid: int, pid: str, chat: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    await ask(request, aid, "stop", project=pid, chat=chat)
+    return Response(status_code=204)

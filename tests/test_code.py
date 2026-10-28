@@ -1,14 +1,17 @@
 """Раздел «Claude Code» на сервере (app/claude_code.py): открыть компьютер PIN-ом моста, проекты, чаты (слияние сессий
 машины с отметками студии), история; чужое и недопустимое — до моста. Мост — подставной (tests/fake_bridge.py)."""
+import asyncio
 import logging
 import uuid
 
 import bridge
 import claude_code
+import fake_bridge
 import state
 from conftest import make_user, signin
 from fake_bridge import FakeMachine, connect, enroll, pid, settle
 from test_auth import guarded_routes
+from test_chat import events_of
 
 A = "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
 B = "11111111-2222-4333-8444-555555555555"
@@ -25,6 +28,10 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/chats"): None,
     ("PATCH", "/api/code/agents/1/projects/1/chats/1"): {"state": "closed"},
     ("GET", "/api/code/agents/1/projects/1/chats/1"): None,
+    ("POST", "/api/code/agents/1/projects/1/chats/1/turn"): {"text": "x"},
+    ("GET", "/api/code/agents/1/projects/1/chats/1/live"): None,
+    ("POST", "/api/code/agents/1/projects/1/chats/1/answer"): {"request_id": "r1", "decision": "allow"},
+    ("POST", "/api/code/agents/1/projects/1/chats/1/stop"): None,
 }
 
 
@@ -258,3 +265,258 @@ def test_code_log_holds_no_names(studio, caplog):
         assert line in text, line
     for secret in ("alpha", "beta", "Чат студии", "Чат терминала", "1357", "2580", "Рабочий", ALPHA, BETA, A, B):
         assert secret not in text, secret
+
+
+# ---- ход потоком, наблюдение, карточки, остановка (задача 5) ------------------------
+
+def text(t: str) -> dict:
+    return {"k": "text", "text": t}
+
+
+STEP = {"k": "step", "id": "s1", "tool": "Bash", "input": {"command": "ls"}}
+RESULT = {"k": "result", "id": "s1", "text": "a.txt", "error": False}
+DONE = {"k": "done", "status": "done"}
+ASK = {"k": "ask", "request_id": "r1", "kind": "permission", "tool": "Bash", "input": {"command": "rm a.txt"},
+       "always": True}
+QUESTION = {"k": "ask", "request_id": "q1", "kind": "question", "questions": [
+    {"question": "Какой цвет?", "header": "Цвет", "multi": False,
+     "options": [{"label": "Синий", "description": ""}, {"label": "Красный", "description": ""}]}]}
+CARD = {k: v for k, v in ASK.items() if k != "k"}
+
+
+def chat_url(aid, *rest) -> str:
+    return url(aid, "projects", ALPHA, "chats", A, *rest)
+
+
+def sent(m: FakeMachine, op: str) -> list[dict]:
+    return [r for r in m.requests if r["op"] == op]
+
+
+def no_watchers(s) -> None:
+    """Поток кончился — его очередь снята (finally ответа идёт на цикле службы чуть позже конца тела)."""
+    for _ in range(3000):
+        if not s.c.portal.call(lambda: bool(bridge.WATCHERS)):
+            return
+        s.c.portal.call(asyncio.sleep, 0.001)
+    raise AssertionError("очередь наблюдателя не снята")
+
+
+def until(events, kind: str) -> list:
+    """События потока до `kind` включительно."""
+    out = []
+    for e, d in events:
+        out.append((e, d))
+        if e == kind:
+            return out
+    raise AssertionError(f"поток кончился без {kind}: {out}")
+
+
+def test_turn_streams_until_done(studio):
+    aid, m, _ = setup(studio)
+    m.script = [text("При"), text("вет"), STEP, RESULT, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Привет"}) as r:
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        got = list(events_of(r.iter_lines()))
+    assert got == [("turn", {"turn": "t-1"}), ("text", {"text": "При"}), ("text", {"text": "вет"}),
+                   ("step", {"id": "s1", "tool": "Bash", "input": {"command": "ls"}}),
+                   ("result", {"id": "s1", "text": "a.txt", "error": False}), ("done", {"status": "done"})]
+    [req] = sent(m, "turn")
+    assert {k: req[k] for k in ("project", "chat", "text", "model", "effort")} == {
+        "project": ALPHA, "chat": A, "text": "Привет", "model": None, "effort": None}
+    assert req["session"] == m.requests[0]["session"]           # сессия, открывшая компьютер
+    no_watchers(studio)
+
+
+def test_turn_checks_text_model_and_effort(studio):
+    aid, m, _ = setup(studio)
+    words = {"text": "задание пустое или длиннее 100 000 знаков", "model": "такой модели нет на компьютере",
+             "effort": "такого усилия нет на компьютере"}
+    for body, code in (({"text": ""}, "text"), ({"text": " \n\t"}, "text"),
+                       ({"text": "x" * (claude_code.TEXT_MAX + 1)}, "text"),
+                       ({"text": "Привет", "model": "gpt"}, "model"),
+                       ({"text": "Привет", "effort": "max"}, "effort")):
+        r = studio.c.post(chat_url(aid, "turn"), json=body)
+        assert (r.status_code, detail(r)) == (422, {"code": code, "message": words[code]}), body
+    assert sent(m, "turn") == [] and not bridge.WATCHERS
+    assert claude_code.TEXT_MAX == 100_000
+    for body in ({"text": "Привет", "model": "sonnet", "effort": "high"}, {"text": "x" * claude_code.TEXT_MAX}):
+        m.script = [DONE]
+        with studio.c.stream("POST", chat_url(aid, "turn"), json=body) as r:
+            assert [e for e, _ in events_of(r.iter_lines())] == ["turn", "done"]
+    assert [(q["model"], q["effort"], len(q["text"])) for q in sent(m, "turn")] == [
+        ("sonnet", "high", 6), (None, None, claude_code.TEXT_MAX)]
+
+
+def test_second_turn_in_a_running_chat_is_409_running(studio):
+    aid, m, _ = setup(studio)
+    m.script = [text("При"), ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Привет"}) as r:
+        events = events_of(r.iter_lines())            # ссылка держит поток: брошенный генератор закрыл бы ответ
+        until(events, "ask")
+        r2 = studio.c.post(chat_url(aid, "turn"), json={"text": "Ещё"})
+        assert (r2.status_code, detail(r2)) == (409, {"code": "running", "message": "в чате уже идёт ход"})
+        assert len(studio.c.portal.call(lambda: bridge.WATCHERS[(aid, A)])) == 1     # отказ свою очередь снял
+    assert len(sent(m, "turn")) == 2
+
+
+def test_permission_card_round_trip(studio):
+    aid, m, _ = setup(studio)
+    m.script = [text("Удаляю"), ASK, text("Готово"), DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        assert until(events, "ask") == [("turn", {"turn": "t-1"}), ("text", {"text": "Удаляю"}), ("ask", CARD)]
+        a = studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "always"})
+        assert (a.status_code, a.content) == (204, b"")
+        rest = list(events)
+    assert rest == [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", {"status": "done"})]
+    [req] = sent(m, "answer")
+    assert {k: req[k] for k in ("project", "chat", "request_id", "decision", "message", "answers")} == {
+        "project": ALPHA, "chat": A, "request_id": "r1", "decision": "always", "message": None, "answers": None}
+
+
+def test_question_answers_reach_the_bridge(studio):
+    aid, m, _ = setup(studio)
+    m.script = [QUESTION, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Покрась кнопку"}) as r:
+        events = events_of(r.iter_lines())
+        assert until(events, "ask")[-1] == ("ask", {k: v for k, v in QUESTION.items() if k != "k"})
+        before = len(m.requests)
+        for bad in ({"request_id": "q 1", "decision": "allow"}, {"request_id": "q" * 65, "decision": "allow"},
+                    {"request_id": "q1", "decision": "yes"},
+                    {"request_id": "q1", "decision": "allow", "message": "не к отказу"},
+                    {"request_id": "q1", "decision": "deny", "message": "м" * 2001},
+                    {"request_id": "q1", "decision": "allow", "answers": {f"в{i}": "о" for i in range(21)}},
+                    {"request_id": "q1", "decision": "allow", "answers": {"Какой цвет?": "о" * 2001}},
+                    {"request_id": "q1", "decision": "allow", "answers": {"в" * 2001: "о"}}):
+            assert studio.c.post(chat_url(aid, "answer"), json=bad).status_code == 422, bad
+        assert len(m.requests) == before                       # неверное — до моста
+        answers = {"Какой цвет?": "Синий"}
+        assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "q1", "decision": "allow",
+                                                              "answers": answers}).status_code == 204
+        assert list(events) == [("asked", {"request_id": "q1"}), ("done", {"status": "done"})]
+    assert {k: sent(m, "answer")[-1][k] for k in ("decision", "message", "answers")} == {
+        "decision": "allow", "message": None, "answers": answers}
+    m.script = [ASK, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "deny",
+                                                              "message": "Сначала покажи"}).status_code == 204
+        assert [e for e, _ in events] == ["asked", "done"]
+    assert {k: sent(m, "answer")[-1][k] for k in ("decision", "message", "answers")} == {
+        "decision": "deny", "message": "Сначала покажи", "answers": None}
+
+
+def test_two_watchers_see_the_card_and_its_close(studio):
+    aid, m, _ = setup(studio)
+    m.script = [text("Удаляю"), ASK, text("Готово"), DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        first = events_of(r.iter_lines())
+        until(first, "ask")
+        with studio.c.stream("GET", chat_url(aid, "live")) as r2:
+            assert r2.status_code == 200 and r2.headers["content-type"].startswith("text/event-stream")
+            second = events_of(r2.iter_lines())
+            assert next(second) == ("snapshot", {"text": "Удаляю", "steps": [], "asks": [CARD]})
+            assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"}).status_code == 204
+            tail = [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", {"status": "done"})]
+            assert list(second) == tail
+            # снимок раздаётся всем наблюдателям чата («вместо прежнего» — потоку хода он не мешает)
+            assert list(first) == [("snapshot", {"text": "Удаляю", "steps": [], "asks": [CARD]}), *tail]
+    assert [r["op"] for r in m.requests][-3:] == ["turn", "watch", "answer"]
+    no_watchers(studio)
+
+
+def test_live_of_an_idle_chat_says_idle(studio):
+    aid, m, _ = setup(studio)
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        assert list(events_of(r.iter_lines())) == [("idle", {})]
+    [req] = sent(m, "watch")
+    assert (req["project"], req["chat"]) == (ALPHA, A)
+    no_watchers(studio)
+    r = studio.c.get(url(aid, "projects", ALPHA, "chats", "22222222-2222-4222-8222-222222222222", "live"))
+    assert (r.status_code, detail(r)["code"]) == (404, "not_found")
+    assert not bridge.WATCHERS
+
+
+def test_stop_ends_the_turn_stopped(studio):
+    aid, m, _ = setup(studio)
+    m.script = [text("Удаляю"), ASK, text("Готово"), DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        s = studio.c.post(chat_url(aid, "stop"))
+        assert (s.status_code, s.content) == (204, b"")
+        assert list(events) == [("asked", {"request_id": "r1"}), ("done", {"status": "stopped"})]
+    assert {k: sent(m, "stop")[0][k] for k in ("project", "chat")} == {"project": ALPHA, "chat": A}
+    r = studio.c.post(chat_url(aid, "stop"))
+    assert (r.status_code, detail(r)["code"]) == (409, "idle")
+
+
+def test_lost_link_ends_streams_with_offline(studio):
+    aid, m, link = setup(studio)
+    m.script = [text("Удаляю"), ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        fake_bridge.drop(studio, link)
+        assert list(events) == [("offline", {})]
+    no_watchers(studio)
+    r = studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"})
+    assert (r.status_code, detail(r)) == (409, {"code": "offline", "message": "компьютер не на связи"})
+    r = studio.c.get(chat_url(aid, "live"))
+    assert (r.status_code, detail(r)["code"]) == (409, "offline")
+    assert not bridge.WATCHERS
+
+
+def test_answer_needs_no_memory_of_the_card(studio):
+    aid, m, _ = setup(studio)
+    r = studio.c.post(chat_url(aid, "answer"), json={"request_id": "never-seen_1", "decision": "allow"})
+    assert (r.status_code, detail(r)) == (410, {"code": "gone", "message": "запроса уже нет"})
+    assert sent(m, "answer")[0]["request_id"] == "never-seen_1"
+    # карточку видел поток, которого уже нет: ответ всё равно доходит
+    m.script = [ASK, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        until(events_of(r.iter_lines()), "ask")
+    no_watchers(studio)
+    assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"}).status_code == 204
+    assert A not in m.running
+
+
+def test_idle_stream_pings(studio, monkeypatch):
+    monkeypatch.setattr(claude_code, "PING_SEC", 0.01)
+    aid, m, _ = setup(studio)
+    m.script = [ASK, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        assert next(events) == ("ping", None)
+        assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"}).status_code == 204
+        assert [e for e, _ in events if e != "ping"] == ["asked", "done"]
+
+
+def test_turn_text_never_reaches_the_log(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    aid, m, _ = setup(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    m.script = [text("Ответ-секрет"), ASK, DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Задание-секрет 7319", "model": "sonnet",
+                                                            "effort": "high"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        assert studio.c.post(chat_url(aid, "turn"), json={"text": "Второе-секрет"}).status_code == 409
+        assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "deny",
+                                                              "message": "Отказ-секрет"}).status_code == 204
+        list(events)
+    studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow",
+                                                 "answers": {"Вопрос-секрет": "Ответ-секрет"}})
+    studio.c.post(chat_url(aid, "stop"))
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        list(events_of(r.iter_lines()))
+    text_ = "\n".join(r.getMessage() for r in caplog.records if r.name == "studio")
+    for line in (f"пользователь {uid}: компьютер {aid} — ход",
+                 f"пользователь {uid}: компьютер {aid} — turn: running",
+                 f"пользователь {uid}: компьютер {aid} — answer: gone",
+                 f"пользователь {uid}: компьютер {aid} — stop: idle"):
+        assert line in text_, line
+    for secret in ("секрет", "7319", "Bash", "a.txt", "sonnet", "alpha", "Рабочий", ALPHA, A, "r1"):
+        assert secret not in text_, secret
