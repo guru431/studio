@@ -38,7 +38,7 @@ import db
 import media
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")   # порядок вкладок студии
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate")   # порядок вкладок студии
 #: большая выгрузка качается дольше 10 минут архива выделенного
 EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2
@@ -59,6 +59,7 @@ REFS = {
     "ocr": ("scans", ("source_media_id",), ""),
     "speech": ("speeches", ("media_id",), ""),
     "voices": ("voices", ("media_id",), ""),
+    "translate": ("translations", ("source_media_id",), ""),
 }
 #: вторые таблицы раздела с файлами — так же, со своим user_id (картинки и фото страниц распознавания)
 MORE_REFS = {"ocr": (("scan_pages", ("media_id",), ""),)}
@@ -79,6 +80,9 @@ README = """Выгрузка истории студии
   образцы голосов, так же страницами. Файлы — ссылками «files/…».
 - scans/ — распознанные документы, так же страницами: имя, состояние, страницы с текстом (Markdown) и
   состоянием; исходный PDF и картинки страниц — ссылками «files/…».
+- translations/0001.json … — переводы, так же страницами: вид (текст, файл, снимок), языки (выбранные,
+  определённый, итоговый), исходный текст и перевод, куски по порядку (у снимка — рамка блока в долях
+  0…1000) с состоянием; исходный файл или снимок — ссылкой «files/…».
 - files/<id>.<расширение> — сами файлы (без миниатюр).
 - manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
   (files) и каждой записи JSON и этого описания (entries), id файлов, которых на хранилище уже не
@@ -231,9 +235,27 @@ def _voices(user_id: int, rows: list, files: dict) -> list:
             for r in rows]
 
 
+def _translations(user_id: int, rows: list, files: dict) -> list:
+    """Переводы с кусками (куски — одним запросом на страницу выгрузки; своего user_id у них нет — только
+    записи из `rows`, а те — свои)."""
+    parts: dict[str, list] = {}
+    if rows:
+        marks = ", ".join("?" * len(rows))
+        for p in state.DB.execute(f"SELECT translation_id, n, source, box, text, state, detail FROM translation_parts"
+                                  f" WHERE translation_id IN ({marks}) ORDER BY translation_id, n",
+                                  tuple(r["id"] for r in rows)):
+            parts.setdefault(p["translation_id"], []).append(_pick(p, "n", "source", "text", "state", "detail")
+                                                             | {"box": _maybe_json(p["box"])})
+    return [_pick(r, "id", "kind", "model", "name", "source_lang", "target_lang", "detected_lang", "result_lang",
+                  "source", "text", "state", "detail", "created", "finished")
+            | {"file": files.get(r["source_media_id"]), "parts": parts.get(r["id"], [])}
+            for r in rows]
+
+
 #: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
 TABLES = {"photo": ("images", _images), "video": ("videos", _videos), "transcribe": ("transcripts", _transcripts),
-          "ocr": ("scans", _scans), "speech": ("speeches", _speeches), "voices": ("voices", _voices)}
+          "ocr": ("scans", _scans), "speech": ("speeches", _speeches), "voices": ("voices", _voices),
+          "translate": ("translations", _translations)}
 
 
 # ---- запись: JSON и суммы — в потоке ------------------------------------------------

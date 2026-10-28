@@ -116,7 +116,7 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
              ((r["id"], r["mime"]) for r in state.DB.execute("SELECT id, mime FROM media"))}
     assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images/0001.json",
                           "videos/0001.json", "transcripts/0001.json", "scans/0001.json", "speeches/0001.json",
-                          "voices/0001.json", "manifest.json"} | files
+                          "voices/0001.json", "translations/0001.json", "manifest.json"} | files
     assert {zipfile.ZIP_STORED} == {i.compress_type for i in zf.infolist()}
     chat = json.loads(zf.read("chats/minechat1.json"))
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
@@ -163,7 +163,7 @@ def test_export_takes_only_chosen_sections(studio):
                                                                "manifest.json"}
     assert json.loads(unzip(z).read("manifest.json"))["sections"] == ["photo"]
     # разделы — по порядку вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1), голоса — за озвучкой
-    assert takeout.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr")
+    assert takeout.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate")
 
 
 def test_export_never_holds_another_users_rows_or_files(studio):
@@ -388,7 +388,7 @@ def test_export_sends_entry_headers_apart_from_their_data(studio):
     history(uid, "mine")
     pieces = drain(uid, prepare(studio).json()["id"])
     headers = [p for p in pieces if p[:4] == b"PK\x03\x04"]
-    assert len(headers) == 20                    # README, settings, 2 диалога, 6 разделов, 9 файлов, манифест
+    assert len(headers) == 21                    # README, settings, 2 диалога, 7 разделов, 9 файлов, манифест
     for p in headers:
         name_len, extra_len = struct.unpack_from("<HH", p, 26)
         assert len(p) == 30 + name_len + extra_len, p[30:30 + name_len]
@@ -446,6 +446,40 @@ def test_takeout_has_scans_and_their_page_files(studio):
                   {"n": 2, "state": "failed", "text": None, "detail": "на странице не найден текст", "file": None}]}]
     assert json.loads(zf.read("manifest.json"))["counts"]["scans"] == 1
     assert "scans/" in zf.read("README.txt").decode("utf-8")
+    assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
+
+
+def test_export_holds_translations_with_parts_and_files(studio):
+    """Запись перевода — JSON с исходником, переводом и кусками (у снимка — рамка), исходный файл — файлом;
+    чужое — нет."""
+    bob = make_user(studio, "bob"); uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    files = {}
+    for who, tag in ((bob, "theirs"), (uid, "mine")):
+        files[tag] = save(who, DATA + b"photo", "image/png", f"{tag}.png")
+        put("INSERT INTO translations(id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang,"
+            " result_lang, name, source_media_id, scan_id, source, text, parts, done_parts, state, detail, created,"
+            " finished) VALUES (?, ?, 'photo', 1, 'm', 'auto', 'ru', 'en', 'ru', ?, ?, NULL, ?, ?, 2, 1, 'error',"
+            " 'кусок 2 из 2: отказ', ?, ?)", f"{tag}tr", who, f"{tag}.png", files[tag], f"{tag} exit\n{tag} staff",
+            f"{tag} выход", T0, T0 + 4)
+        put("INSERT INTO translation_parts(translation_id, n, source, sep, box, text, state, detail)"
+            " VALUES (?, 1, ?, '\n', '[93, 146, 491, 214]', ?, 'done', NULL)", f"{tag}tr", f"{tag} exit", f"{tag} выход")
+        put("INSERT INTO translation_parts(translation_id, n, source, sep, box, text, state, detail)"
+            " VALUES (?, 2, ?, '\n', NULL, NULL, 'failed', 'отказ')", f"{tag}tr", f"{tag} staff")
+    est, z = download(studio, ["translate"])
+    zf = unzip(z)
+    mine = files["mine"]
+    assert est["files"] == 1 and [n for n in zf.namelist() if n.startswith("files/")] == [f"files/{mine}.png"]
+    assert json.loads(zf.read("translations/0001.json")) == [{
+        "id": "minetr", "kind": "photo", "model": "m", "name": "mine.png", "source_lang": "auto", "target_lang": "ru",
+        "detected_lang": "en", "result_lang": "ru", "source": "mine exit\nmine staff", "text": "mine выход",
+        "state": "error", "detail": "кусок 2 из 2: отказ", "created": T0, "finished": T0 + 4,
+        "file": f"files/{mine}.png",
+        "parts": [{"n": 1, "source": "mine exit", "box": [93, 146, 491, 214], "text": "mine выход", "state": "done",
+                   "detail": None},
+                  {"n": 2, "source": "mine staff", "box": None, "text": None, "state": "failed", "detail": "отказ"}]}]
+    assert json.loads(zf.read("manifest.json"))["counts"]["translations"] == 1
+    assert "translations/" in zf.read("README.txt").decode("utf-8")
     assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
 
 

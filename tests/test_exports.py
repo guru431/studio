@@ -132,6 +132,15 @@ def test_pages_docx_is_a_valid_word_file():
     assert paragraphs[-1] == [(f"{W}t", "a<b"), (f"{W}tab", None), (f"{W}t", "c d")]
 
 
+def test_text_docx_has_a_title_and_a_paragraph_per_line():
+    text = "## Договор\n\n**Срок** — 30 дней.\n<table><tr><td>a&lt;b</td><td>c\x0bd</td></tr></table>"
+    with zipfile.ZipFile(io.BytesIO(exports.text_docx(text, "Договор & Co"))) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    paragraphs = [[(t.tag, t.text) for t in p.iter() if t.tag in (f"{W}t", f"{W}tab")] for p in root.iter(f"{W}p")]
+    assert paragraphs == [[(f"{W}t", "Договор & Co")], [(f"{W}t", "Договор")], [(f"{W}t", "Срок — 30 дней.")],
+                          [(f"{W}t", "a<b"), (f"{W}tab", None), (f"{W}t", "c d")]]
+
+
 def test_export_route_names_the_file_after_the_recording(studio, fake_audio):
     add_gateway(studio)
     tid = upload(studio).json()["id"]
