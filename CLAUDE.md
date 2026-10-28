@@ -46,7 +46,7 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   `upstream` (список разрешённых адресов и имён, запросы к ним), речь — `speech` (WhisperX, GigaAM,
   Qwen3-TTS шлюза и внешний сервис), `audio` (ffmpeg debian: длительность, сжатие, WAV образца,
   склейка), `dictation` (голосовой ввод), `transcripts` (расшифровка в фоне), `ocr` и `ocr_render`
-  (распознавание сканов — абзац ниже), `translate`, `translate_text`, `translate_spot` (перевод — абзац ниже), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
+  (распознавание сканов — абзац ниже), `translate`, `translate_text`, `translate_spot` (перевод — абзац ниже), `agents`, `bridge`, `claude_code`, `push` (Claude Code — абзац ниже), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`), `voices` (образцы голосов), `speeches` (озвучка в фоне), `jobs` («В работе»: свои идущие и
   готовые за час задания всех разделов — только база и память модулей, к шлюзу не ходит), `search`
   (поиск по своей истории: `POST /api/search`, `GET /api/search/models`; страница — `search.js`), `admin`, `chat` (поток SSE;
   дата по UTC+3 — `chat.with_date` первым системным сообщением каждого запроса, и прямого подключения;
@@ -249,6 +249,54 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   перевода скана). Журнал — id, коды и числа: текст, имя файла и языки исходника — нет. Наложение —
   `translate-photo.js` (`photoView`, `savePng` — PNG рисует canvas); страница опрашивает идущую запись
   `?from=k` — только новые куски.
+- Claude Code (спека 2026-10-28-studio-claude-code-design; канал — протокол
+  [docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md),
+  версия 1 — контракт с мостом, отдельным приватным проектом `studio-agent` (вторым планом, ещё нет); шаг схемы 19
+  `db.CODE_19`): вкладка рельса «Claude Code» после «Перевода» (`code.js` — уровни `#/code/<aid>/<pid>/<chat>`,
+  `code-chat.js` — лента и поток, `code-files.js` — «Файлы» и «Git»); не раздел `section_links` — модели и усилия
+  сообщает мост. Таблицы: `agents` (компьютер: `key_hash` — `security.digest` ключа устройства, `has_pin`,
+  `cc_version`, `projects_root` — из `hello`; id `AUTOINCREMENT` — id отозванного не достаётся новому: им ключуются
+  `agent_events` без FK, память службы и адреса push), `agent_events` (история подключений, только добавляется —
+  `bridge.record`: `enroll`, `revoke`, `online`, `offline`, `open`, `pin_ok`, `pin_fail`, `session_start`; id и имя
+  компьютера без FK, `device` — `bridge.device`), `code_chats` (отметки студии поверх сессий машины: какие чаты
+  завела и `open`/`closed`; текста нет), `push_subs` (подписка устройства, каскад от `sessions`). `agents` —
+  привязка `POST /api/agent/enroll` без сессии (`auth.OPEN_API`; `auth.check_password` — паузы и общий счёт неудач
+  `/login`), ключ — в ответе один раз, смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` (`bridge.drop`,
+  4401); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`. `bridge` —
+  канал `/api/agent/link` (WebSocket, `Authorization: Bearer <ключ>`, не строка запроса): `hello` за `HELLO_SEC`,
+  кадр до `FRAME_MAX` (16 МиБ), канал один на компьютер — новый закрывает прежний 4409 и шлёт его наблюдателям
+  `offline`; 4400 — протокол, 4401 — ключ, 1012 — остановка службы; кадры снятого канала никуда не идут. Просьба
+  `call` ждёт `res` до `CALL_SEC` (30 с; `Offline`, `BridgeError`, `TimeoutError`); события `ev` — очередям
+  `WATCHERS` (`Watch.session` — `tag` сессии); ход на сервере не хранится — источник правды машина. `tag(digest)` —
+  признак сессии для моста (производное дайджеста, не токен); `forget` — заперлась или отперлась (`screenlock`:
+  `lock/now`, отпирание паролем, PIN, passkey): мостам учётки `close` фоном (`TASKS`), потокам этой сессии
+  `closed`. `drop_user` — только отключение и удаление учётки (`admin`): смена пароля мосты не рвёт (ключ
+  самостоятелен); выход и конец сессий мосту не сообщаются — мёртвая сессия не пришлёт просьб, её запись на мосте
+  уйдёт по 30-минутному сроку. `claude_code` (`/api/code/*`; не `code.py` — «Ловушки») ретранслирует: запрос —
+  просьба `bridge.call` от сессии запроса, ответ — `data` моста ASCII-JSON без NaN (`_BridgeJSON`, иначе 502
+  `bridge`), отказ — код моста со статусом `STATUS`: `closed` — 409, а не 423 (423 — только экран блокировки от
+  `guard`), `pin`/`pin_locked` — 403 (`left`). Чужой компьютер — 404, `pid` не 16 hex и `chat` не UUID — 422 до
+  моста. В адресе — только id: имена проектов, пути, PIN и тексты — в теле (чтения — `POST …/files`, `…/read`,
+  `…/pdf`). `open` — PIN проверяет мост, итог — `open`/`pin_ok`/`pin_fail`. Чаты — слияние сессий машины с
+  `code_chats` (на GET записи нет); «Новый чат» заводит UUID без моста, без хода `history` — пустая, `live` —
+  `idle` (`_new_chat`). Ход — `turn` → SSE (`_Watch`; очередь — до просьбы), `live` — `snapshot` идущего хода;
+  поток кончается `done`, `offline` (канал пропал или заменён) или `closed` (`forget`, а сам поток на тике
+  `PING_SEC` и на событиях не чаще `CHECK_SEC` сверяет сессию `_session_open`: вышли, погасили, истекла, заперта
+  по сроку). Пределы — `TEXT_MAX` (100 000 знаков задания), `FILE_MAX` (2 МиБ текста, тело `FILE_BODY_MAX` 3
+  МиБ), `RAW_MAX` (10 МиБ PDF), `PATH_MAX`, `HISTORY_PAGE` (100). PDF — `ocr_render` под `PDFIUM`, память `PDFS`
+  одна на пользователя на `PDF_TTL_SEC`, ключ — с `tag`; из памяти — только после просьбы `projects` (открыт ли
+  компьютер, решает мост). Модель и усилие сверяются с `hello`; `null` — прежние модель и усилие чата (страница:
+  первый пункт «по умолчанию», выбор устройства `studio-code-choice:<aid>` — только в новый чат). `push` — Web
+  Push (спека 6.8): ключ VAPID (P-256) в `settings` `vapid` шифром `STUDIO_DATA_KEY` (`vapid_key`), тело — RFC
+  8291 aes128gcm одной записью, подпись — JWT ES256, всё на `cryptography`; `GET/POST/DELETE /api/me/push`, флаг
+  устройства `studio-push` (`settings.js`); адреса — только `push.HOSTS` («Правила»). Повод — `bridge._push`:
+  `ask` и `done`, только если чат никто не смотрит (`bridge.watching`); страница снимает поток на
+  `visibilitychange: hidden` и открывает `live` на `visible`; текст — «<имя компьютера>: <повод>», `href`
+  `code/<aid>/<pid>/<chat>`, `tag` `code-<chat>`; 404 и 410 службы — подписка снята; `sw.js` — `push` с
+  `renotify`. Стирание истории — только `code_chats`; выгрузка — `code_chats/` и `agent_events/`, без `key_hash`.
+  Журнал — «агент N: …», «пользователь N: компьютер M — <op>: <код>», адрес неизвестного ключа: ни ключа, ни PIN,
+  ни имён компьютеров, проектов и файлов, ни текстов. Тесты — подставной мост `tests/fake_bridge.py` (`enroll`,
+  `FakeMachine` по протоколу, `InProcessBridge` — быстрые, `SocketBridge` — настоящий WebSocket к `live_app`).
 - Поиск (спека 2026-10-21-studio-history-search-design, шаг схемы 13): документы — таблица `search_docs`
   (`section`, `item` — id записи или диалога, `part` — `''`, у чата `title`, id сообщения или вложения,
   `user_id`, `model`, `created`, `body`), над ней FTS5 `search` с внешним содержимым
@@ -318,13 +366,15 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   PWA: `/static/*`, `/manifest.webmanifest`, `/sw.js`, `/offline.html`, значки из корня
   (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`, `/favicon.ico`); `/` без сессии уводит на
   вход, всё `/api/*` — через `auth.guard` (сессия + CSRF у изменяющих запросов). Страницы отвечают
-  и на HEAD.
+  и на HEAD. Два входа моста Claude Code: `POST /api/agent/enroll` — анонимен (`auth.OPEN_API`; это и есть
+  вход логином и паролем — свои паузы и счёт неудач `/login`, чужой `Origin` — 403); `/api/agent/link` — WebSocket,
+  вход ключом устройства (`Authorization`) в самом обработчике: `guard` — HTTP-middleware и WebSocket не видит.
 - Защита входа от перебора — паузы (на пару «логин + адрес» и на адрес); растущая задержка ответа
   на неверный пароль параллельные попытки не тормозит — на неё не полагаться.
 - **Пользователь видит только своё**: каждый запрос к истории, файлам и подключениям — с
   `user_id` сессии; панель администратора чужую историю не показывает.
 - **Исключение из правила списка разрешённых адресов** («Устройство» → подключения) — только адреса,
-  зашитые в `web.py`: `api.exa.ai` и YouTube через yt-dlp. Их не выбирают ни пользователь, ни модель:
+  зашитые в `web.py` (`api.exa.ai` и YouTube через yt-dlp) и в `push.py` (службы push, ниже). Первые не выбирают ни пользователь, ни модель:
   адрес страницы уходит в Exa данными, сервер по нему не ходит, и `read_page` берёт только адреса из
   сообщений и документов диалога или из `results[].url` поиска (иначе — шаг-ошибка, в Exa ничего: страница
   или выдача не уведут переписку на чужой сайт краулером Exa; сравнение — `web.norm`, а в Exa уходит адрес, как
@@ -437,8 +487,25 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 копии базы, который не включился, — ошибка с кодом не 0 (служба уже обновлена). Перенесённая среда — с чужим shebang в
 `bin/`: всё запускается `.venv/bin/python` (`-m uvicorn`, `-m pip`, `manage.py`), не `bin/<скрипт>`. Перезапуск ждёт
 открытые потоки чата не дольше 10 с (`--timeout-graceful-shutdown`, `TimeoutStopSec=30`);
-недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` / `translate.recover()` при старте. Смоук —
+недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` / `translate.recover()` при старте. Каналы мостов Claude Code остановка закрывает 1012 (`bridge.stop`): мосты
+переподключаются сами, ходы на машинах идут дальше, а открытость компьютеров пропадает — PIN вводят снова. Смоук —
 `https://studio.example.com/health`; живая приёмка — `tests/test_studio_upload_live.py` (ниже).
+
+**Откат на код до шага схемы 19** (`.previous`): прежний код таблиц `agents`, `agent_events`, `code_chats`,
+`push_subs` и `settings` `vapid` не читает — вкладки «Claude Code», компьютеров в «Настройках» и push нет; SQL-обхода
+не нужно (таблицы не связаны с разделами `section_links` и поиском).
+
+- Мосты получают отказ рукопожатия, а не закрытие 4401: у прежнего vhost (он едет с кодом) нет правила
+  `upgrade=websocket`, и `/api/agent/link` уходит общим `ProxyPass /` в `guard` — 401 HTTP (до `reload apache2` —
+  403 Starlette: маршрута нет). Мост должен переподключаться с паузой, как при обрыве, пока код не вернётся
+  (протокол §2 этого случая не называет — `FINDINGS.md`). Привязка нового моста — тоже 401
+  `login` от `guard` («нужен вход»): мост скажет «неверный логин или пароль».
+- «Удалить всю историю» прежнего кода `code_chats` не стирает: вернувшись вперёд, отметки чатов снова видны. Тем,
+  кто стирал историю, — стереть её снова, или `DELETE FROM code_chats WHERE user_id IN (…);`.
+- Отозвать компьютер прежний код не может (вкладки нет): ключ устройства в базе остаётся и снова действует после
+  возврата. Срочно — `DELETE FROM agents WHERE id = …;` (с `PRAGMA foreign_keys=ON` — и его `code_chats`).
+- Каскады работают (FK в схеме): удаление учётки уносит её `agents`, `agent_events`, `code_chats`, `push_subs`;
+  выход и конец сессии — её `push_subs`.
 
 **Откат на код до шага схемы 18** (`.previous`): прежний код не знает раздела `translate` и таблиц
 `translations`, `translation_parts` — вкладки «Перевод» нет, а строки раздела он не видит (`connections._from_row`
@@ -606,3 +673,18 @@ tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие наст
 - id ключа в API — хеш credential id, а не он сам: `DELETE /api/passkeys/<id>` пишет журнал Apache.
 - `seen` сессии — только по отметке `POST /api/lock/alive`, а не по любому запросу: опросы разделов
   идут на Android и при погасшем экране.
+- Канал моста — свой `ProxyPass /api/agent/link … upgrade=websocket timeout=300` раньше общего: без
+  `upgrade=websocket` `mod_proxy_http` апгрейд не пропустит (нужен Apache ≥ 2.4.47, на debian — 2.4.69). Тишину
+  канала рвут штатные пинги uvicorn каждые 20 с, так что живой канал под 300 с не попадает. Поток хода —
+  `ProxyPass /api/code/` как у чата (600 с, `flushpackets=on`, `no-gzip`). Сверяет `test_deploy.py`.
+- `auth.guard` — HTTP-middleware (`app.middleware("http")`), WebSocket его не проходит: вход канала
+  (`bridge.link_socket` — ключ устройства, отключённая учётка) проверяет сам обработчик, и новый WebSocket-маршрут
+  без своей проверки был бы анонимным. Ключ — только заголовком: строку запроса пишет журнал Apache.
+- Ключ VAPID — в базе (`settings` `vapid`) шифром `STUDIO_DATA_KEY`, не в vault: сменили ключ данных — служба
+  заводит новый ключ VAPID и стирает все `push_subs` (браузеры подписаны на прежний открытый ключ), push на
+  устройствах включают заново.
+- Модуль раздела — `claude_code.py`, не `code.py`: каталог службы стоит в `sys.path` первым, и `code.py` заслонил
+  бы стандартный модуль `code`, который импортирует `pdb` (pytest падал INTERNALERROR при старте). Маршруты
+  `/api/code/*` и `tests/test_code.py` — прежние имена.
+- Раздел Claude Code 423 не отдаёт: «компьютер закрыт» — 409 `closed` (страница ведёт к PIN), а 423 ловит экран
+  блокировки студии и повторяет запрос после отпирания — тот же код увёл бы в шторку вместо PIN.
