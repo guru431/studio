@@ -37,8 +37,9 @@ const NOTICES = {
   translate: ['перевод готов', 'перевод не получился'],
   speech: ['озвучка готова', 'озвучка не получилась'],
 };
-/** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. */
-export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+)$/;
+/** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. Push Claude Code
+ * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
+export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
 /** Значки разделов (и у строк «Поиска», search.js). */
 export const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
