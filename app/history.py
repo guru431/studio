@@ -10,6 +10,7 @@ import ocr
 import speeches
 import state
 import transcripts
+import translate
 import videos
 
 log = logging.getLogger("studio")
@@ -24,6 +25,7 @@ async def stop_user(user_id: int) -> None:
     await videos.cancel_user(user_id)
     await transcripts.stop_user(user_id)
     await ocr.stop_user(user_id)
+    await translate.stop_user(user_id)
     await speeches.stop_user(user_id)
 
 
@@ -53,7 +55,8 @@ async def delete_all(user_id: int) -> int:
         media.queue(user_id, failed)
         state.DB.execute("DELETE FROM attachments WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))      # сообщения — каскадом
-        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "media"):   # scan_pages — каскадом
+        # scan_pages и translation_parts — каскадом
+        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "media"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         state.DB.execute("COMMIT")
     except BaseException:
