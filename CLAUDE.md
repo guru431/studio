@@ -92,6 +92,19 @@ Windows-мост к студии `https://studio.example.com`: держит ис
 - `__main__` — `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status`: пароль
   и PIN — `getpass`; `run --console` — мьютекс, журнал ещё и в stderr, выход на `setup`/`revoked`/`replaced` и Ctrl+C.
 - `journal.setup` ставит логгеру `websockets` уровень не ниже INFO: на DEBUG он пишет заголовок `Authorization`.
+- `app.main` — мост с треем: `single.acquire` (занят — окно «Мост уже запущен», выход), `journal.setup`; главный поток —
+  скрытый корень Tk и опрос очереди команд `root.after(100, …)` (меню трея и состояния ядра — только через очередь);
+  не настроен — окно настройки сразу; «Выход» — трей прочь, `Controller.quit()`, конец `mainloop`. Tk и pystray
+  импортируются только здесь — `Controller` и консоль без них.
+- `tray` — `Tray` (pystray в своём потоке): круг Pillow — зелёный `online`, серый `connecting`/`offline`/`setup`,
+  красный `revoked`/`replaced` (`COLORS`, `image`), подсказка «Studio Agent — <состояние>» (`title`), меню «Настройка…»
+  (по умолчанию — щелчок по значку), «Снять блок PIN» (активен при блоке), «Открыть журнал», «Выход».
+- `window` — `open_setup(root, controller)`: `Toplevel` «Studio Agent — настройка» (одно окно — повтор поднимает
+  открытое), поля и подписи «Текстов» плана; «Привязать» / «Сохранить», ошибки под формой; `apply_setup` — в своём
+  потоке (привязка до 30 с), окно ждёт итог `root.after`; пароль стирается из поля сразу после отправки.
+- `studio_agent.pyw` (корень репозитория) — запуск без консоли: `.venv\Scripts\pythonw.exe studio_agent.pyw`.
+- `install.ps1` (UTF-8 с BOM, CRLF) — `.venv` рядом (`-Python`, иначе `py -3.14`, нет `py` — `python`), `pip install -r
+  requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; повтор безопасен; автозапуск ставит окно.
 
 ## Правила
 

@@ -248,3 +248,67 @@ class Controller:
             await self._sleep(PROBE_EVERY_SEC)
             if self.agent.cfg.projects_root:
                 await self._refresh_models()
+
+
+def main(argv: list[str]) -> int:
+    """Мост с треем: один экземпляр, главный поток — скрытый корень Tk и очередь команд трея и ядра."""
+    import ctypes
+    import os
+    import queue
+    import tkinter as tk
+    from tkinter import messagebox
+
+    from . import VERSION, journal, single, tray, window
+
+    with contextlib.suppress(Exception):  # чёткие шрифты окна на экранах с масштабом
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    h = store.home()
+    mutex = single.acquire()
+    if mutex is None:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo(TITLE, ALREADY, parent=root)
+        root.destroy()
+        return 1
+    journal.setup(h)
+    log.info("мост %s: старт", VERSION)
+    threading.excepthook = lambda a: log.error("поток: %s", a.exc_type.__name__)
+    ctrl = Controller(h)
+    commands: queue.Queue = queue.Queue()
+    root = tk.Tk()
+    root.withdraw()
+    root.report_callback_exception = lambda exc, value, tb: log.error("окно: %s", exc.__name__)
+    icon = tray.Tray(ctrl.state, commands.put, lambda: ctrl.pin_locked)
+    ctrl.on_state(lambda state: commands.put(("state", state)))
+
+    def poll() -> None:
+        while True:
+            try:
+                cmd = commands.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(cmd, tuple):
+                icon.show(cmd[1])
+            elif cmd == "setup":
+                window.open_setup(root, ctrl)
+            elif cmd == "reset_pin":
+                ctrl.reset_pin()
+            elif cmd == "log":
+                with contextlib.suppress(OSError):
+                    os.startfile(h / "agent.log")
+            elif cmd == "quit":
+                icon.stop()
+                ctrl.quit()
+                root.destroy()
+                return
+        root.after(100, poll)
+
+    icon.start()
+    ctrl.start()
+    if ctrl.state == "setup":
+        window.open_setup(root, ctrl)
+    root.after(100, poll)
+    root.mainloop()
+    mutex.close()
+    log.info("мост: остановлен")
+    return 0

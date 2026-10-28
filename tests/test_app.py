@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from studio_agent import app, store
+from studio_agent import app, autostart, store, tray
 from studio_agent.pin import PinStore
 
 MODELS = [{"id": "opus", "label": "Opus"}]
@@ -224,3 +224,20 @@ def test_quit_closes_runner_and_link(make, configured):
     assert closed == [True]
     assert ctrl.links[0].stopped
     assert not ctrl._thread.is_alive()
+
+
+def test_autostart_command_runs_the_pyw_of_this_repo():
+    repo = autostart.REPO
+    assert autostart.command() == f'"{repo}\.venv\Scripts\pythonw.exe" "{repo}\studio_agent.pyw"'
+    assert (repo / "studio_agent.pyw").is_file()
+
+
+def test_tray_icon_colour_and_title_follow_the_state():
+    green, grey, red = tray.COLORS["online"], tray.COLORS["offline"], tray.COLORS["revoked"]
+    assert len({green, grey, red}) == 3
+    for state in ("connecting", "offline", "setup"):
+        assert tray.COLORS[state] == grey
+    assert tray.COLORS["replaced"] == red
+    image = tray.image("online")
+    assert image.size == (64, 64) and image.getpixel((32, 32))[:3] == green
+    assert tray.title("replaced") == "Studio Agent — ключ используется другим мостом"
