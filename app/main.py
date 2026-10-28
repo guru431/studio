@@ -24,6 +24,7 @@ import admin
 import agents
 import audio
 import auth
+import bridge
 import chat
 import checks
 import config
@@ -94,6 +95,7 @@ async def lifespan(_app):
         await ocr.stop()
         await speeches.stop()
         await chat.stop_all()
+        await bridge.stop()
         await state.HTTP.aclose()
         state.DB.close()
 
@@ -135,6 +137,7 @@ app.include_router(jobs.router)
 app.include_router(search.router)
 app.include_router(takeout.router)
 app.include_router(agents.router)
+app.include_router(bridge.router)
 
 
 @app.exception_handler(RequestValidationError)

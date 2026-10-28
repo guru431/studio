@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import auth
+import bridge
 import clock
 import connections
 import history
@@ -153,6 +154,8 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     log.info("администратор %d: пользователь %d изменён (%s)", admin.id, uid,
              ", ".join(sorted(k if k != "pw_hash" else "password" for k in changes)) or "ничего")
     if body.disabled:
+        # мосты Claude Code — 4401; смена пароля их не рвёт: ключ устройства самостоятелен (спека 6.2)
+        await bridge.drop_user(uid)
         await history.stop_user(uid)          # отключённая учётка не держит карту и очередь шлюза
     return _user_out(uid)
 
@@ -165,6 +168,7 @@ async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
+    await bridge.drop_user(uid)
     await history.delete_all(uid)
     # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;
     # не дождались (images.SETTLE_SEC) — карту освободит конец аренды шлюза

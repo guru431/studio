@@ -133,6 +133,7 @@ def studio(env, schema_db, monkeypatch):
     media.ARCHIVES.clear()
     takeout.EXPORTS.clear()
     takeout.RUNNING.clear()
+    clear_bridge()
     if not env.db_path.exists():
         shutil.copyfile(schema_db, env.db_path)
     with TestClient(main.app, base_url="https://testserver") as client:
@@ -141,6 +142,22 @@ def studio(env, schema_db, monkeypatch):
     screenlock.CHALLENGES.clear()
     images.JOBS.clear()
     chat.STREAMS.clear()
+    clear_bridge()
+
+
+def clear_bridge() -> None:
+    """Каналы, наблюдатели и фоновые отправки моста — модульные; незаконченные задачи прошлого цикла
+    событий отменяются (цикл уже закрыт — отмена ему не нужна)."""
+    import bridge
+    for task in list(bridge.TASKS):
+        if not task.done():
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass
+    bridge.TASKS.clear()
+    bridge.LINKS.clear()
+    bridge.WATCHERS.clear()
 
 
 @pytest.fixture
