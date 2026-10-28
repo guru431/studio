@@ -129,6 +129,9 @@ SETTLING: set[asyncio.Task] = set()
 #: распознавание вне раздела (`borrowed`): ключ задания → пользователь. Пока оно идёт, слот ocr не освобождают
 #: (`_scanning`), а ход чата этого пользователя ждёт (`idle`)
 EXTERNAL: dict[str, int] = {}
+#: распознавание вне раздела кончилось и освобождает карту (`_settle` в `borrowed`): ключ → пользователь. Пока
+#: отметка стоит, `idle` его пользователя ложна — модель, позванная раньше, ждала бы карту под арендой слота ocr
+RELEASING: dict[str, int] = {}
 
 
 # ---- шлюз --------------------------------------------------------------------
@@ -280,15 +283,25 @@ def progress(scan_ids: list[str]) -> tuple[int, int]:
 def idle(user_id: int) -> bool:
     """Раннер пользователя не дописывает свой последний документ и нет release фоном (SETTLING): после итога
     карту ещё освобождают, и ход чата, позвавший модель раньше, ждал бы её под арендой слота ocr. Идут другие
-    его документы — карту никто не освободит (`run`), ждать нечего. Его распознавание вне раздела (EXTERNAL) —
-    ждать: слот освободит его конец."""
-    if user_id in EXTERNAL.values():
+    его документы — карту никто не освободит (`run`), ждать нечего. Его распознавание вне раздела (EXTERNAL) и
+    release после него (RELEASING) — ждать: слот освободит его конец."""
+    if user_id in EXTERNAL.values() or user_id in RELEASING.values():
         return False
     if state.DB.execute(f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1",
                         (user_id,)).fetchone() is not None:
         return True
     task = RUNNERS.get(user_id)
     return (task is None or task.done()) and all(t.done() for t in SETTLING)
+
+
+def holding(user_id: int, key: "str | None" = None) -> bool:
+    """Карту держит своё распознавание пользователя: идёт или ждёт его документ, идёт или освобождает карту его
+    распознавание вне раздела (кроме `key` — того, кто спрашивает). Пока так, ожидание карты его перевода срока
+    не считает: карту освободит конец своего распознавания, а не чужое."""
+    if any(uid == user_id for k, uid in (*EXTERNAL.items(), *RELEASING.items()) if k != key):
+        return True
+    return state.DB.execute(f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1",
+                            (user_id,)).fetchone() is not None
 
 
 def create(user_id: int, conn, model: str, name: str, *, origin: str, source_media_id: "str | None",
@@ -456,8 +469,9 @@ def _scanning() -> bool:
 async def borrowed(key: str, user_id: int, conn):
     """Распознавание вне раздела (снимок перевода) — с картой, как документ: до — `speech.free_card`, слот —
     в LEASED, после — `_settle` (и после обычного исключения: ответ шлюза уже пришёл). Пока идёт — в EXTERNAL:
-    `_scanning` истинна, release другого его не оборвёт. Оборванное (CancelledError) карту не освобождает, как
-    `run`: его отпускает фоном stop_user."""
+    `_scanning` истинна, release другого его не оборвёт; пока идёт его `_settle` — в RELEASING: `idle` ложна, ход
+    чата не позовёт модель под арендой слота ocr. Оборванное (CancelledError) карту не освобождает, как `run`: его
+    отпускает фоном stop_user."""
     EXTERNAL[key] = user_id
     cancelled = False
     try:
@@ -470,7 +484,11 @@ async def borrowed(key: str, user_id: int, conn):
     finally:
         EXTERNAL.pop(key, None)
         if not cancelled:
-            await _settle()
+            RELEASING[key] = user_id
+            try:
+                await _settle()
+            finally:
+                RELEASING.pop(key, None)
 
 
 def settle_later() -> None:
@@ -723,13 +741,20 @@ async def delete(sid: str, request: Request):
     row = _row(uid, sid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
+    await remove(uid, row)
+    return Response(status_code=204)
+
+
+async def remove(user_id: int, row) -> None:
+    """Кончившийся документ (строка `scans` с `id` и `source_media_id`): строка (страницы — каскадом), затем
+    файлы, на которые больше ничто не ссылается. И удаление записи перевода с её сканом (translate.py)."""
+    sid = row["id"]
     files = {row["source_media_id"], *(p["media_id"] for p in _page_list(sid))} - {None}
     state.DB.execute("DELETE FROM scans WHERE id = ?", (sid,))
     for media_id in files:
-        if not media.referenced(uid, media_id):
-            await media.delete_async(uid, media_id)
+        if not media.referenced(user_id, media_id):
+            await media.delete_async(user_id, media_id)
     log.info("ocr %s: удалён", sid[:8])
-    return Response(status_code=204)
 
 
 def _done(user_id: int, sid: str):

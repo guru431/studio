@@ -60,10 +60,11 @@ export function withFirstPage(first, items, size) {
  * GET url/<id> (select(id, quiet): quiet — отказ молча, запись по ссылке могли удалить).
  * Номера чтений и выбора: запоздалый ответ прежнего не ляжет и вид не займёт.
  * paint() — перерисовать список, show() — выбор занял вид (current), fail(err) — ошибка.
+ * polled — выбранную идущую запись ведёт свой опрос раздела («Перевод»): опрос ленты её не перечитывает.
  * Ответ — { items, current, done, paging, load, more, refresh, select, deselect, forget(id), stop };
  * deselect() — вид убрали сами: выбор в пути (и перечитывание refresh) его не займёт;
  * forget(id) — запись удалена на сервере (дальше — вид и load()). */
-export function createPicker({ url, size, pollMs, running, paint, show, fail }) {
+export function createPicker({ url, size, pollMs, running, paint, show, fail, polled = false }) {
   const s = { items: [], current: null, done: false, paging: false, load, more, refresh, select, deselect, forget, stop };
   let alive = true;
   let poll = null;
@@ -110,7 +111,7 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail }) 
   async function refresh() {
     await load();
     const { current } = s;
-    if (current && wanted === current.id) {           // выбор другой записи в пути — его не перебивать
+    if (current && wanted === current.id && !(polled && running(current))) {   // выбор другой в пути — не перебивать
       const fresh = s.items.find((i) => i.id === current.id);
       if (fresh && (fresh.state !== current.state || fresh.detail !== current.detail)) await select(current.id);
     }

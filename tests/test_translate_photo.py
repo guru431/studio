@@ -1,6 +1,7 @@
 """Перевод снимка (спека 2026-10-28-studio-translator-design, 6.5, 6.6): разбор ответа HunyuanOCR с координатами
 (`translate_spot`), строки в блоки, распознавание тем же PNG, что хранит запись, нумерованный перевод блоков и
 учёт карты слота ocr (`ocr.borrowed`, `ocr.EXTERNAL`): free_card до, release после, чужой идущий не задет."""
+import asyncio
 import base64
 import io
 import json
@@ -11,13 +12,14 @@ from PIL import Image
 
 import images
 import ocr
+import sections
 import state
 import translate
 import translate_spot
 from conftest import add_gateway, make_user, signin
 from scans import photo
-from test_translate import (count, on_loop, owner_of_tr, parts_of, paths, row_of, send_file, start_file, wait_row,
-                            wait_until)
+from test_translate import (count, on_loop, owner_of, owner_of_tr, parts_of, paths, row_of, send_file, start_file,
+                            wait_row, wait_until)
 from translate_spot import Line
 
 SPOTTED = "Exit(93,146),(491,214)Staff only(193,640),(379,706)"
@@ -236,6 +238,49 @@ def test_busy_card_is_waited_for_while_spotting(studio):
     row = wait_row(studio, start_file(studio, "Снимок.png", photo("PNG", (60, 40))))
     assert (row["state"], row["source"]) == ("done", "Exit") and len(studio.gw.ocr_requests) == 3
     assert studio.sleeps.count(translate.RETRY_SEC) == 2 and ocr.EXTERNAL == {} and ocr_releases(studio) == 1
+
+
+def test_photo_after_slow_ocr_releases_images(studio):
+    """Ревью M3: распознавание снимка ждало карту (503) — за это время мог начаться Lustify: перед переводом
+    модели картинок отпускают снова. Быстрое — нет (сверяет test_photo_frees_and_releases_the_ocr_slot_around_spotting)."""
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(503, {"error": {"message": "slot busy"}}), (200, spot_reply("Exit(93,146),(491,214)"))]
+    row = wait_row(studio, start_file(studio, "Снимок.png", photo("PNG", (60, 40))))
+    assert row["state"] == "done", row["detail"]
+    sent = paths(studio)
+    after = sent[len(sent) - 1 - sent[::-1].index("/pages/ocr-release"):]
+    assert after == ["/pages/ocr-release", *["/slot/images/release"] * len(images.MODELS), "/v1/chat/completions"]
+
+
+def test_borrowed_marks_settling(studio):
+    """Ревью M2: распознавание вне раздела кончилось, а release слота ocr ещё идёт — `ocr.idle` ложна (ход чата не
+    позовёт модель под арендой ocr); release кончился — истинна."""
+    cid = add_gateway(studio)
+    uid = owner_of(cid)
+    conn = on_loop(studio, lambda: sections.resolve(uid, "ocr", cid, None)[0])
+    gate = [True]
+
+    async def release(request):
+        while gate[0]:
+            await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+    studio.gw.on["/pages/ocr-release"] = release
+
+    async def borrow():
+        async with ocr.borrowed("снимок", uid, conn):
+            assert not ocr.idle(uid)
+
+    async def go():
+        return asyncio.create_task(borrow())
+    task = on_loop(studio, go)
+    try:
+        wait_until(studio, lambda: "/pages/ocr-release" in paths(studio))
+        assert ocr.EXTERNAL == {} and ocr.RELEASING == {"снимок": uid}
+        assert not on_loop(studio, ocr.idle, uid) and not on_loop(studio, ocr._scanning)   # release не отменит себя
+    finally:
+        gate[0] = False
+    wait_until(studio, task.done)
+    assert task.exception() is None and ocr.RELEASING == {} and on_loop(studio, ocr.idle, uid)
 
 
 def test_stop_user_ends_spotting_and_releases_in_the_background(studio):

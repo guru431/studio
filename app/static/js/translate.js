@@ -136,7 +136,7 @@ function build(view, ctx) {
   let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
   const dayNodes = new Map();  // подпись дня → узел
 
-  const docs = createPicker({ url: '/api/translate', size: PAGE, pollMs: LIST_POLL_MS,
+  const docs = createPicker({ url: '/api/translate', size: PAGE, pollMs: LIST_POLL_MS, polled: true,
     running: (i) => RUNNING.has(i.state),
     paint() {
       listed = true;
@@ -371,8 +371,12 @@ function build(view, ctx) {
       error.textContent = '';
       pollWords = '';
       copy.textContent = 'Копировать';
-    } else if (!before.result_lang && record.result_lang) {
-      setLangs(source.value, record.result_lang);          // перевод ушёл не на выбранный язык — правый выбор скажет
+    } else {
+      if (pollWords && error.textContent === pollWords) error.textContent = '';   // свежая копия — связь есть
+      pollWords = '';
+      if (!before.result_lang && record.result_lang) {
+        setLangs(source.value, record.result_lang);        // перевод ушёл не на выбранный язык — правый выбор скажет
+      }
     }
     paintLeft();
     paintAuto();
@@ -398,10 +402,10 @@ function build(view, ctx) {
       return;
     }
     if (!alive || !rec || rec.id !== id) return;
-    if (pollWords && error.textContent === pollWords) error.textContent = '';   // связь вернулась
-    pollWords = '';
     const kept = rec.parts.filter((p) => p.n <= k);
-    open({ ...got, source: got.source !== undefined ? got.source : rec.source, parts: [...kept, ...got.parts] });
+    const had = new Map(rec.parts.map((p) => [p.n, p.source]));   // исходник ждущих куски опроса не несут
+    const fresh = got.parts.map((p) => (p.source === undefined ? { ...p, source: had.get(p.n) } : p));
+    open({ ...got, source: got.source !== undefined ? got.source : rec.source, parts: [...kept, ...fresh] });
   }
 
   function clearLeft() {
@@ -537,7 +541,8 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, 'Удалить');
     const dialog = openDialog(body, { id: 'tl-delete-dialog', title: 'Удалить перевод?', actions: [yes],
-      body: [el('p', {}, 'Удалятся исходник, перевод и исходный файл.'), fail] });
+      body: [el('p', {}, 'Удалятся исходник, перевод и исходный файл.'),
+        item.scan_id ? el('p', {}, 'Распознанный документ в «Сканах» удалится вместе с переводом.') : null, fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -560,15 +565,20 @@ function build(view, ctx) {
     });
   }
 
-  function row(item) {
+  /** Строка под парой языков: время, вид, состояние словами (у идущей — «жду карту · м:сс», каждую секунду новое). */
+  function metaText(item) {
     const running = RUNNING.has(item.state);
     const state = running ? item.detail : item.state === 'error' ? 'ошибка' : item.state === 'cancelled' ? 'остановлено' : '';
+    return [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · ');
+  }
+
+  function row(item) {
+    const running = RUNNING.has(item.state);
     const from = item.kind === 'file' ? item.name : item.source_head || item.name;
+    const meta = el('span', { class: `tl-meta${item.state === 'error' ? ' error' : ''}` }, metaText(item));
     const opener = el('button', { type: 'button', class: 'tl-open' },
       el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'photo' : 'file'),
-        el('b', { class: 'tl-pair' }, pair(item)),
-        el('span', { class: `tl-meta${item.state === 'error' ? ' error' : ''}` },
-          [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · '))),
+        el('b', { class: 'tl-pair' }, pair(item)), meta),
       el('span', { class: 'tl-from' }, from || ''),
       item.text_head ? el('span', { class: 'tl-to muted' }, item.text_head) : null);
     opener.addEventListener('click', () => {
@@ -582,11 +592,12 @@ function build(view, ctx) {
       del.addEventListener('click', () => confirmDelete(item));
       node.append(del);
     }
-    return node;
+    return { node, meta };
   }
 
   /** История: строки с прежними данными и подписи дней — те же узлы, в списке меняется только то, что
-   * сменилось (опрос раз в секунду не сбивает нажатие и фокус); у показанной записи — aria-current. */
+   * сменилось (опрос раз в секунду не сбивает нажатие и фокус); слова состояния идущей — на месте, без новой
+   * строки; у показанной записи — aria-current. */
   function paintHistory() {
     const { items } = docs;
     const nodes = [];
@@ -599,9 +610,11 @@ function build(view, ctx) {
         nodes.push(dayNodes.get(label));
         last = label;
       }
-      const sig = JSON.stringify(item);
+      const sig = JSON.stringify({ ...item, detail: undefined });   // слова состояния — ниже, на месте
       const old = rows.get(item.id);
-      const r = old && old.sig === sig ? old : { sig, node: row(item) };
+      const r = old && old.sig === sig ? old : { sig, ...row(item) };
+      const meta = metaText(item);
+      if (r.meta.textContent !== meta) r.meta.textContent = meta;
       kept.set(item.id, r);
       nodes.push(r.node);
     }

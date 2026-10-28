@@ -241,15 +241,20 @@ def _voices(user_id: int, rows: list, files: dict) -> list:
 
 def _translations(user_id: int, rows: list, files: dict) -> list:
     """Переводы с кусками (куски — одним запросом на страницу выгрузки; своего user_id у них нет — только
-    записи из `rows`, а те — свои)."""
+    записи из `rows`, а те — свои). Тексты кусков — только у снимка (блоки с рамками): у текста и файла исходник
+    и перевод уже в записи, куски — номер, состояние и слова отказа."""
     parts: dict[str, list] = {}
     if rows:
         marks = ", ".join("?" * len(rows))
-        for p in state.DB.execute(f"SELECT translation_id, n, source, box, text, state, detail FROM translation_parts"
-                                  f" WHERE translation_id IN ({marks}) ORDER BY translation_id, n",
+        for p in state.DB.execute(f"SELECT p.translation_id, t.kind = 'photo' AS photo, p.n, p.state, p.detail,"
+                                  f" CASE WHEN t.kind = 'photo' THEN p.source END AS source,"
+                                  f" CASE WHEN t.kind = 'photo' THEN p.text END AS text, p.box"
+                                  f" FROM translation_parts p JOIN translations t ON t.id = p.translation_id"
+                                  f" WHERE p.translation_id IN ({marks}) ORDER BY p.translation_id, p.n",
                                   tuple(r["id"] for r in rows)):
-            parts.setdefault(p["translation_id"], []).append(_pick(p, "n", "source", "text", "state", "detail")
-                                                             | {"box": _maybe_json(p["box"])})
+            part = (_pick(p, "n", "source", "text", "state", "detail") | {"box": _maybe_json(p["box"])} if p["photo"]
+                    else _pick(p, "n", "state", "detail"))
+            parts.setdefault(p["translation_id"], []).append(part)
     return [_pick(r, "id", "kind", "model", "name", "source_lang", "target_lang", "detected_lang", "result_lang",
                   "source", "text", "state", "detail", "created", "finished")
             | {"file": files.get(r["source_media_id"]), "parts": parts.get(r["id"], [])}

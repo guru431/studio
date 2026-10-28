@@ -77,6 +77,10 @@ TERMINAL = ("done", "error", "cancelled")
 RETRY_SEC = 15
 WAIT_MAX_SEC = 1800
 POLL_SEC = 1
+#: распознавание снимка короче — модели картинок, отпущенные free_card перед ним, перед переводом не отпускают
+#: снова; не короче (хоть одна пауза 503 — карту кто-то держал, холодный старт слота) — за это время мог начаться
+#: Lustify, и локальная модель ждала бы карту под его арендой
+FREED_FRESH_SEC = 15
 QUEUED = "в очереди"
 CANCELLING = "останавливаю"
 CANCELLED = "остановлено"
@@ -229,28 +233,32 @@ async def _free(conn) -> None:
         return
 
 
-async def _busy(job: Job, waited_from: "float | None") -> float:
+async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, float]:
     """503 шлюза: пауза RETRY_SEC с этапом «жду карту · м:сс» от первого отказа; дольше WAIT_MAX_SEC — ошибка,
-    остановка — сразу после паузы. Итог — начало ожидания."""
+    остановка — сразу после паузы. Срок не идёт, пока карту держит своё распознавание пользователя
+    (`ocr.holding`: следующий его скан, другой снимок): её освободит его конец, а не «попробуйте позже». Итог —
+    (начало ожидания для слов, начало отсчёта срока)."""
     now = clock.NOW()
-    waited_from = now if waited_from is None else waited_from
-    if now - waited_from >= WAIT_MAX_SEC:
+    shown, counted = waited or (now, now)
+    if ocr.holding(job.user_id, job.id):
+        counted = now
+    if now - counted >= WAIT_MAX_SEC:
         raise translate_text.TranslateError(f"карта занята дольше {WAIT_MAX_SEC // 60} минут — попробуйте позже")
     stage = job.stage
-    job.stage, job.stage_at = "жду карту", waited_from
+    job.stage, job.stage_at = "жду карту", shown
     _store(job)
     await clock.SLEEP(RETRY_SEC)
     _check(job)
     job.stage = stage
     _store(job)
-    return waited_from
+    return shown, counted
 
 
 async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = False) -> str:
     """Перевод текста одним запросом; 503 — ждать и повторять (остановка между попытками — сразу).
     Дельты дописываются к `job.live` после уже готового (половинка обрезанного куска); у нумерованного
     списка блоков (`blocks`) — нет: «[1] …» — не перевод для показа."""
-    head, waited_from = job.live, None
+    head, waited = job.live, None
 
     def on_delta(piece: str) -> None:
         _check(job)                                   # «Остановить» — поток бросается на следующей дельте
@@ -262,7 +270,7 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
         try:
             return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks)
         except translate_text.Busy:
-            waited_from = await _busy(job, waited_from)
+            waited = await _busy(job, waited)
 
 
 async def _chunk(job: Job, text: str, origin: str, lang: str) -> str:
@@ -379,12 +387,12 @@ def _read_source(job: Job, media_id: str) -> bytes:
 
 async def _spotted(job: Job, png: bytes) -> str:
     """Ответ распознавания снимка с координатами; 503 — ждать и повторять, как кусок."""
-    waited_from = None
+    waited = None
     while True:
         try:
             return await ocr.recognize(job.ocr_conn, png, translate_spot.PROMPT)
         except ocr.Busy:
-            waited_from = await _busy(job, waited_from)
+            waited = await _busy(job, waited)
 
 
 async def _spot(job: Job, row):
@@ -394,6 +402,7 @@ async def _spot(job: Job, row):
     _store(job)
     png = await asyncio.to_thread(_read_source, job, row["source_media_id"])
     _check(job)
+    freed_at = clock.NOW()                           # free_card — в начале borrowed
     try:
         async with ocr.borrowed(job.id, job.user_id, job.ocr_conn):
             content = await _spotted(job, png)
@@ -404,8 +413,9 @@ async def _spot(job: Job, row):
         content = ""
     except ocr.OcrError as e:
         raise translate_text.TranslateError(f"{PHOTO_FAILED}: {e}") from None
-    if job.ocr_conn.kind == "srvllm" and job.ocr_conn.base_url == job.conn.base_url:
-        job.freed = True                             # free_card того же шлюза уже отпустил модели картинок
+    if (job.ocr_conn.kind == "srvllm" and job.ocr_conn.base_url == job.conn.base_url
+            and clock.NOW() - freed_at < FREED_FRESH_SEC):
+        job.freed = True                             # free_card того же шлюза только что отпустил модели картинок
     blocks = translate_spot.group(translate_spot.parse(content))
     log.info("перевод %s: снимок, %d блоков", job.id[:8], len(blocks))
     if not blocks:
@@ -637,11 +647,15 @@ async def stop() -> None:
 # и дописывает новое) и, при k = 0, весь исходник.
 
 router = APIRouter(prefix="/api/translate")
-#: столбцы ленты и ответов — без исходника и перевода целиком (до 300 000 знаков): их начала и признак исходника
+#: столбцы ленты и ответов — без исходника и перевода целиком (до 300 000 знаков): признак исходника и начала —
+#: из первого куска (`substr` записи SQLite читал бы весь текст строки — страница ленты из больших документов —
+#: десятки МБ на цикле событий; кусок — до CHUNK_CHARS)
+_HEAD = ("(SELECT substr({0}, 1, %d) FROM translation_parts WHERE translation_id = translations.id AND n = 1)"
+         % HEAD_CHARS)
 COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang, result_lang, name,"
            " source_media_id, scan_id, parts, done_parts, state, detail, created, finished,"
-           f" source IS NOT NULL AS has_source, substr(source, 1, {HEAD_CHARS}) AS source_head,"
-           f" substr(text, 1, {HEAD_CHARS}) AS text_head")
+           f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
+           f" {_HEAD.format('text')} AS text_head")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
 FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
@@ -682,7 +696,8 @@ def _out(row) -> dict:
             "model": row["model"], "source_lang": row["source_lang"], "target_lang": row["target_lang"],
             "detected_lang": row["detected_lang"], "result_lang": row["result_lang"], "parts": row["parts"],
             "done_parts": row["done_parts"], "created": row["created"], "finished": row["finished"],
-            "source_head": row["source_head"], "text_head": row["text_head"], "can_continue": _can_continue(row)}
+            "source_head": row["source_head"], "text_head": row["text_head"], "can_continue": _can_continue(row),
+            "scan_id": row["scan_id"]}
 
 
 def _name(text: str) -> str:
@@ -872,13 +887,18 @@ async def list_translations(request: Request, before: "float | None" = None,
 
 @router.get("/{tid}")
 async def get_translation(tid: str, request: Request, start: int = Query(0, alias="from", ge=0)):
-    """Запись и её куски с n > `from`; при `from=0` — ещё весь исходник. `live` — перевод идущего куска."""
+    """Запись и её куски с n > `from`; при `from=0` — ещё весь исходник. `live` — перевод идущего куска. Опрос
+    (`from` > 0) не шлёт исходник ждущих кусков — он у страницы с первого ответа (раз в секунду это были бы сотни
+    КБ), кроме снимка: его блоки короткие, а рамки и исходник нужны слою."""
     row = _row(request.state.user.id, tid)
     job = JOBS.get(tid)
-    parts = [{"n": p["n"], "source": p["source"], "sep": p["sep"], "box": json.loads(p["box"]) if p["box"] else None,
+    full = start == 0 or row["kind"] == "photo"
+    parts = [{"n": p["n"], "sep": p["sep"], "box": json.loads(p["box"]) if p["box"] else None,
               "text": p["text"], "state": p["state"], "detail": p["detail"]}
-             for p in state.DB.execute("SELECT n, source, sep, box, text, state, detail FROM translation_parts"
-                                       " WHERE translation_id = ? AND n > ? ORDER BY n", (tid, start))]
+             | ({"source": p["source"]} if p["source"] is not None else {})
+             for p in state.DB.execute("SELECT n, CASE WHEN ? OR state != 'waiting' THEN source END AS source, sep,"
+                                       " box, text, state, detail FROM translation_parts"
+                                       " WHERE translation_id = ? AND n > ? ORDER BY n", (full, tid, start))]
     out = _out(row) | {"connection_id": row["connection_id"], "media_id": row["source_media_id"],
                        "scan_id": row["scan_id"], "live": job.live if job is not None and row["state"] == "working" else "",
                        "parts": parts}
@@ -968,12 +988,26 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
 
 @router.delete("/{tid}", status_code=204)
 async def delete(tid: str, request: Request):
-    """Строка (куски — каскадом), затем исходный файл, если на него больше ничто не ссылается."""
+    """Строка (куски — каскадом), с ней — её скан (документ «Сканов», что завёл перевод PDF), если на него не
+    ссылается другая запись (повтор берёт тот же скан): удалённый в «Переводе» договор не остаётся в «Сканах».
+    Скан ещё останавливается (только что «Остановить») — 409. Затем исходный файл, если на него больше ничто не
+    ссылается."""
     uid = request.state.user.id
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала остановите"})
+    scan = None
+    if row["scan_id"] is not None and state.DB.execute(
+            "SELECT 1 FROM translations WHERE user_id = ? AND scan_id = ? AND id != ? LIMIT 1",
+            (uid, row["scan_id"], tid)).fetchone() is None:
+        scan = state.DB.execute("SELECT id, source_media_id, state FROM scans WHERE id = ? AND user_id = ?",
+                                (row["scan_id"], uid)).fetchone()
+        if scan is not None and scan["state"] not in ocr.TERMINAL:
+            raise HTTPException(409, {"code": "running", "message": (
+                "распознавание ещё останавливается — удалите чуть позже")})
     state.DB.execute("DELETE FROM translations WHERE id = ?", (tid,))
+    if scan is not None:
+        await ocr.remove(uid, scan)
     media_id = row["source_media_id"]
     if media_id is not None and not media.referenced(uid, media_id):
         await media.delete_async(uid, media_id)
