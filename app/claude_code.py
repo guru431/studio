@@ -13,6 +13,11 @@
 - В строке запроса — только id (`agent_id`, `pid` — 16 hex, `chat` — UUID): её пишет журнал Apache. Имена
   проектов, PIN, тексты — только в теле. Журнал службы — «пользователь N: компьютер M — <op>: <код>» на
   отказ, без имён и текстов.
+- Открытость кончается и для потоков: поток хода и `live` помнит свою сессию — `bridge.forget` (заперлась,
+  отперлась) кладёт в его очередь `closed`, а сам поток на тике пинга и на событиях (не чаще `CHECK_SEC`)
+  сверяет строку сессии: вышли, погасили, истекла или заперта по сроку отметки — `event: closed` и конец.
+- Данные моста браузеру — только ASCII-JSON без NaN (`_BridgeJSON`): одинокий суррогат или `NaN` из JSON
+  моста дали бы 500; не закодировать — 502 `bridge`.
 - Имя модуля — не `code.py`: каталог службы стоит в `sys.path` первым, и такой файл заслонил бы стандартный
   `code`, а его берёт `pdb` (pytest импортирует `pdb` при старте и падал бы).
 """
@@ -20,6 +25,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import re
 import sqlite3
 import unicodedata
@@ -37,7 +43,20 @@ import ocr_render
 import state
 
 log = logging.getLogger("studio")
-router = APIRouter(prefix="/api/code")
+ODD = "мост ответил непонятно"
+
+
+class _BridgeJSON(JSONResponse):
+    """Ответ раздела: JSON только ASCII и без NaN/Infinity (Python их читает, в JSON их нет)."""
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return json.dumps(content, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
+        except (ValueError, RecursionError):
+            raise _refuse(502, "bridge", ODD) from None
+
+
+router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
@@ -51,6 +70,7 @@ RAW_MAX = 10 * 1024 * 1024
 PATH_MAX = 1024
 HISTORY_PAGE = 100
 PING_SEC = 15
+CHECK_SEC = 1                    # поток сверяет свою сессию на событиях не чаще
 PDF_TTL_SEC = 300
 ANSWER_MAX = 2000                # знаков в словах отказа и в каждом вопросе и ответе
 ANSWERS_MAX = 20                 # пар «вопрос → ответ»
@@ -123,7 +143,12 @@ def check_chat(chat: str) -> str:
 
 
 async def ask(request: Request, aid: int, op: str, **args) -> dict:
-    """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим."""
+    """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим. Строка с одиноким
+    суррогатом (из JSON запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
+    try:
+        json.dumps(args, ensure_ascii=False).encode()
+    except UnicodeEncodeError:
+        raise _refuse(422, "invalid", BAD_BODY) from None
     try:
         return await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
     except bridge.Offline:
@@ -152,7 +177,7 @@ async def open_agent(aid: int, body: Open, request: Request):
         if e.detail["code"] in ("pin", "pin_locked"):
             _event(request, agent, "pin_fail")
         raise
-    _event(request, agent, "open" if body.pin is None else "pin_ok")
+    _event(request, agent, "pin_ok" if body.pin is not None and agent["has_pin"] else "open")
     return Response(status_code=204)
 
 
@@ -165,8 +190,10 @@ async def projects(aid: int, request: Request):
                       and isinstance(i.get("name"), str)]}
 
 
-def _number(value) -> float:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+def _time(value) -> float | None:
+    """Время из ответа моста: число (не bool, не NaN/Infinity) или None."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    return value if ok else None
 
 
 @router.get("/agents/{aid}/projects/{pid}/chats")
@@ -181,19 +208,23 @@ async def chats(aid: int, pid: str, request: Request):
         (aid, request.state.user.id))}
     items, seen = [], set()
     for i in (found if isinstance(found, list) else []):
-        if not isinstance(i, dict) or not isinstance(i.get("chat"), str) or i["chat"] in seen:
+        # чат не UUID страница не откроет (422 на каждом маршруте), а кусок пути лёг бы в адрес её запроса
+        if (not isinstance(i, dict) or not isinstance(i.get("chat"), str) or not bridge.UUID.fullmatch(i["chat"])
+                or i["chat"] in seen):
             continue
         seen.add(i["chat"])
         mark = marks.get(i["chat"])
-        items.append({"chat": i["chat"], "title": i.get("title"), "created": i.get("created"),
-                      "modified": i.get("modified"), "origin": "studio" if i.get("tag") == "studio" else "other",
+        title = i.get("title")
+        items.append({"chat": i["chat"], "title": title if isinstance(title, str) else None,
+                      "created": _time(i.get("created")), "modified": _time(i.get("modified")),
+                      "origin": "studio" if i.get("tag") == "studio" else "other",
                       "state": mark["state"] if mark is not None else "open", "running": bool(i.get("running")),
                       "asking": bool(i.get("asking"))})
     for chat, mark in marks.items():
         if chat not in seen and mark["project"] == pid:
             items.append({"chat": chat, "title": None, "created": mark["created"], "modified": mark["updated"],
                           "origin": "studio", "state": mark["state"], "running": False, "asking": False})
-    items.sort(key=lambda i: (i["state"] == "closed", -_number(i["modified"])))
+    items.sort(key=lambda i: (i["state"] == "closed", -(i["modified"] or 0)))
     return {"items": items}
 
 
@@ -223,12 +254,25 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
     return {"state": body.state}
 
 
+def _new_chat(request: Request, aid: int, pid: str, chat: str, e: HTTPException) -> bool:
+    """Мост не знает чата, а студия его завела («Новый чат», хода ещё не было — сессии на машине нет)."""
+    return e.detail["code"] == "not_found" and state.DB.execute(
+        "SELECT 1 FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ? AND session_id = ?",
+        (request.state.user.id, aid, pid, chat)).fetchone() is not None
+
+
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}")
 async def history(aid: int, pid: str, chat: str, request: Request, before: int | None = None):
+    """Страница истории от моста; новый чат студии без хода — пустая страница, а не 404."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
-    return await ask(request, aid, "history", project=pid, chat=chat, before=before, limit=HISTORY_PAGE)
+    try:
+        return await ask(request, aid, "history", project=pid, chat=chat, before=before, limit=HISTORY_PAGE)
+    except HTTPException as e:
+        if _new_chat(request, aid, pid, chat, e):
+            return {"items": [], "start": 0, "total": 0}
+        raise
 
 
 # ---- ход: поток, наблюдение, карточки, остановка ------------------------------------------
@@ -237,30 +281,55 @@ SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
 def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    """Строка SSE; данные — ASCII-JSON (одинокий суррогат из JSON моста уронил бы поток), NaN — ValueError."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, allow_nan=False)}\n\n"
 
 
-async def _events(q: asyncio.Queue, first: tuple[str, dict] | None, live: bool):
+def _session_open(digest: str) -> bool:
+    """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления)."""
+    row = state.DB.execute("SELECT u.disabled, u.screen_lock, s.expires, s.mobile, s.seen FROM sessions s"
+                           " JOIN users u ON u.id = s.user_id WHERE s.digest = ?", (digest,)).fetchone()
+    now = clock.NOW()
+    return (row is not None and not row["disabled"] and row["expires"] > now
+            and not auth.screen_locked(row["screen_lock"], row["mobile"], row["seen"], now))
+
+
+async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, digest: str):
     """События SSE из очереди наблюдателя: `event: <k>`, данные — событие без `k`; без событий `PING_SEC` —
-    `: ping`. Конец — `done` или `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет).
+    `: ping`. Конец — `done`, `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет) или
+    `closed` (сессия студии заперлась, отперлась, вышла или истекла — компьютер для неё закрыт: страница
+    спросит PIN). Свою сессию поток сверяет на каждом тике пинга и на событиях не чаще `CHECK_SEC`.
     Поток `live` до первого `snapshot` пропускает прочие события: мост шлёт снимок после них, они в нём есть."""
     if first is not None:
         yield _sse(*first)
-    waiting = live
+    waiting, checked = live, clock.NOW()
     while True:
         try:
             kind, e = await asyncio.wait_for(q.get(), PING_SEC)
         except TimeoutError:
+            kind, e = "ping", None
+        now = clock.NOW()
+        if kind == "ping" or (kind == "ev" and now - checked >= CHECK_SEC):
+            checked = now
+            if not _session_open(digest):
+                kind = "closed"
+        if kind == "ping":
             yield ": ping\n\n"
             continue
-        if kind == "offline":
-            yield _sse("offline", {})
+        if kind in ("offline", "closed"):
+            yield _sse(kind, {})
             return
         k = e["k"]
         if waiting and k not in ("snapshot", "done"):
             continue
+        try:
+            line = _sse(k, {name: value for name, value in e.items() if name != "k"})
+        except (ValueError, RecursionError):          # NaN или Infinity в событии моста — не JSON
+            if k != "done":
+                continue
+            line = _sse("done", {})
         waiting = False
-        yield _sse(k, {name: value for name, value in e.items() if name != "k"})
+        yield line
         if k == "done":
             return
 
@@ -269,9 +338,9 @@ class _Watch(StreamingResponse):
     """Поток SSE чата для одного наблюдателя. Очередь снимает сам ответ, а не finally генератора: отмена может
     застать ответ в `send` или ещё до первого куска (тела генератора не было вовсе) — как `chat._EventStream`."""
 
-    def __init__(self, aid: int, chat: str, q: asyncio.Queue, first: tuple[str, dict] | None = None,
+    def __init__(self, aid: int, chat: str, q: bridge.Watch, digest: str, first: tuple[str, dict] | None = None,
                  live: bool = False):
-        super().__init__(_events(q, first, live), media_type="text/event-stream", headers=SSE_HEADERS)
+        super().__init__(_events(q, first, live, digest), media_type="text/event-stream", headers=SSE_HEADERS)
         self.aid, self.chat, self.q = aid, chat, q
 
     async def __call__(self, scope, receive, send) -> None:
@@ -286,10 +355,10 @@ async def _idle():
     yield _sse("idle", {})
 
 
-async def _watched(request: Request, aid: int, chat: str, op: str, **args) -> tuple[asyncio.Queue, dict]:
-    """Очередь наблюдателя — до просьбы: события хода идут сразу за ответом моста и не должны пройти мимо.
-    Отказ — очередь прочь."""
-    q = bridge.watch(aid, chat)
+async def _watched(request: Request, aid: int, chat: str, op: str, **args) -> tuple[bridge.Watch, dict]:
+    """Очередь наблюдателя (с признаком сессии запроса) — до просьбы: события хода идут сразу за ответом моста
+    и не должны пройти мимо. Отказ — очередь прочь."""
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
     try:
         return q, await ask(request, aid, op, chat=chat, **args)
     except BaseException:
@@ -316,21 +385,28 @@ async def turn(aid: int, pid: str, chat: str, body: Turn, request: Request):
                              effort=body.effort)
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
-    return _Watch(aid, chat, q, first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}))
+    return _Watch(aid, chat, q, request.state.digest,
+                  first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}))
 
 
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}/live")
 async def live(aid: int, pid: str, chat: str, request: Request):
     """Вернуться к чату: хода нет — одно `idle`; идёт — снимок (мост шлёт его за ответом на `watch`), дальше
-    события. Студия хода не помнит: всё состояние — у моста."""
+    события. Студия хода не помнит: всё состояние — у моста. Новый чат студии без хода — тоже `idle`."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
-    q, data = await _watched(request, aid, chat, "watch", project=pid)
+    try:
+        q, data = await _watched(request, aid, chat, "watch", project=pid)
+    except HTTPException as e:
+        if not _new_chat(request, aid, pid, chat, e):
+            raise
+        q, data = None, {}
     if data.get("running") is not True:
-        bridge.unwatch(aid, chat, q)
+        if q is not None:
+            bridge.unwatch(aid, chat, q)
         return StreamingResponse(_idle(), media_type="text/event-stream", headers=SSE_HEADERS)
-    return _Watch(aid, chat, q, live=True)
+    return _Watch(aid, chat, q, request.state.digest, live=True)
 
 
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/answer", status_code=204)
@@ -359,9 +435,9 @@ async def stop(aid: int, pid: str, chat: str, request: Request):
 BAD_PATH = "неверный путь"
 BAD_BODY = "неверный запрос"
 TOO_LARGE = "файл больше 2 МиБ"
+TOO_LARGE_RAW = "файл больше 10 МиБ"
 NOT_PDF = "это не PDF"
 NO_PAGE = "нет такой страницы"
-ODD = "мост ответил непонятно"
 #: последний открытый PDF пользователя: (ключ (aid, pid, path, сессия), байты, страниц, время) — листание
 #: не тянет файл с машины на каждую страницу; срок — PDF_TTL_SEC от загрузки
 PDFS: dict[int, tuple[tuple, bytes, int, float]] = {}
@@ -376,10 +452,10 @@ class PdfPage(PathBody):
 
 
 def check_path(path: object) -> str:
-    """Путь внутри проекта (протокол §6): `""` — корень, иначе части через `/` — без пустых, `.` и `..`, без `\\`
-    и управляющих знаков, не длиннее PATH_MAX. Иное — 422 `path` до моста."""
+    """Путь внутри проекта (протокол §6): `""` — корень, иначе части через `/` — без пустых, `.` и `..`, без `\\`,
+    управляющих знаков и одиноких суррогатов, не длиннее PATH_MAX. Иное — 422 `path` до моста."""
     if (isinstance(path, str) and len(path) <= PATH_MAX and "\\" not in path
-            and not any(unicodedata.category(c) == "Cc" for c in path)
+            and not any(unicodedata.category(c) in ("Cc", "Cs") for c in path)
             and (path == "" or all(p not in ("", ".", "..") for p in path.split("/")))):
         return path
     raise _refuse(422, "path", BAD_PATH)
@@ -438,10 +514,16 @@ async def save(aid: int, pid: str, request: Request):
 
 
 def _pdf_bytes(data: dict) -> bytes:
+    """Файл из ответа `raw`: не больше RAW_MAX (предел протокола держит и мост) — иначе 413 `too_large`."""
+    text = data.get("data")
+    if isinstance(text, str) and len(text) > (RAW_MAX + 2) // 3 * 4:          # не раскодировать заведомо лишнее
+        raise _refuse(413, "too_large", TOO_LARGE_RAW)
     try:
-        raw = base64.b64decode(data.get("data"), validate=True)
+        raw = base64.b64decode(text, validate=True)
     except (TypeError, ValueError):           # не строка, не ASCII, не base64 (binascii.Error — ValueError)
         raise _refuse(502, "bridge", ODD) from None
+    if len(raw) > RAW_MAX:
+        raise _refuse(413, "too_large", TOO_LARGE_RAW)
     if not raw.startswith(b"%PDF-"):
         raise _refuse(415, "not_pdf", NOT_PDF)
     return raw
@@ -459,7 +541,8 @@ async def _pdfium(fn, *args):
 async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
     """Страница PDF картинкой PNG, число страниц — заголовком `X-Studio-Pages`. Файл — просьба `raw`, затем
     из PDFS: память одна на пользователя и привязана к сессии — другая сессия без PIN памятью не пройдёт мимо
-    `closed` моста."""
+    `closed` моста. И из памяти страница — только после дешёвой просьбы `projects`: открыт ли компьютер этой
+    сессии (заперлась и отперлась, новый канал, мост перезапущен, не на связи), решает мост, а не память."""
     own_agent(request, aid)
     check_pid(pid)
     path = check_path(body.path)
@@ -470,6 +553,7 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
     key = (aid, pid, path, bridge.tag(request.state.digest))
     kept = PDFS.get(uid)
     if kept is not None and kept[0] == key:
+        await ask(request, aid, "projects")
         _, data, pages, _ = kept
     else:
         data = _pdf_bytes(await ask(request, aid, "raw", project=pid, path=path))

@@ -6,10 +6,12 @@ import json
 import logging
 import uuid
 
+import auth
 import bridge
 import claude_code
 import fake_bridge
 import ocr_render
+import security
 import state
 from conftest import make_user, signin
 from fake_bridge import FakeMachine, Refused, connect, enroll, pid, settle
@@ -136,6 +138,31 @@ def test_pin_opens_and_failures_are_recorded(studio):
     assert studio.c.post(url(aid, "open"), json={}).status_code == 204
 
 
+def test_pin_sent_to_a_computer_without_pin_is_recorded_as_open(studio):
+    """«открыт PIN» в неудаляемой истории — только у компьютера с PIN: строка от страницы у компьютера без PIN
+    ничего не проверяла."""
+    aid, _, _ = setup(studio, opened=False)
+    assert studio.c.post(url(aid, "open"), json={"pin": "1234"}).status_code == 204
+    assert events()[-1]["kind"] == "open"
+
+
+def test_lone_surrogates_are_422_before_the_bridge(studio):
+    """Одинокий суррогат из JSON запроса в кадр UTF-8 не ляжет: 422 до моста, а не 409 «не на связи»."""
+    aid, m, link = setup(studio)
+    before = len(m.requests)
+    raw = {"Content-Type": "application/json"}
+    for method, path, body in (
+            ("POST", chat_url(aid, "turn"), b'{"text": "\\ud83d"}'),
+            ("POST", chat_url(aid, "answer"), b'{"request_id": "r1", "decision": "deny", "message": "\\udc00"}'),
+            ("POST", chat_url(aid, "answer"), b'{"request_id": "r1", "decision": "allow", "answers": {"a": "\\ud83d"}}'),
+            ("POST", url(aid, "open"), b'{"pin": "\\ud83d"}')):
+        r = studio.c.request(method, path, content=body, headers=raw)
+        assert (r.status_code, detail(r)["code"]) == (422, "invalid"), body
+    r = studio.c.post(project_url(aid, "read"), content=b'{"path": "a\\ud83d"}', headers=raw)
+    assert (r.status_code, detail(r)["code"]) == (422, "path")
+    assert len(m.requests) == before and link.closed_with is None and not bridge.WATCHERS
+
+
 def test_unopened_computer_is_409_closed_and_unlock_closes_it_again(studio):
     aid, _, _ = setup(studio, opened=False)
     r = studio.c.get(url(aid, "projects"))
@@ -240,6 +267,35 @@ def test_odd_bridge_answers_are_502_and_long_words_are_cut(studio, monkeypatch):
     answer.update(ok=True, data={"items": [{"chat": 5}, "x", {"chat": A, "title": "t", "modified": "вчера"}]})
     [item] = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
     assert (item["chat"], item["origin"], item["state"], item["running"]) == (A, "other", "open", False)
+    # чат не UUID — мимо; не строка и не число там, где их ждут, — None; NaN — не JSON
+    answer.update(ok=True, data={"items": [{"chat": "../.."}, {"chat": A.upper()}, {"chat": A + "/x"},
+                                           {"chat": A, "title": {"x": 1}, "created": float("nan"),
+                                            "modified": float("inf")}]})
+    [item] = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
+    assert (item["chat"], item["title"], item["created"], item["modified"]) == (A, None, None, None)
+    # одинокий суррогат (Node режет UTF-16 посреди эмодзи) — проходит как есть, а не 500
+    answer.update(ok=True, data={"items": [{"text": "\ud83d"}], "start": 0, "total": 1})
+    r = studio.c.get(url(aid, "projects", ALPHA, "chats", A))
+    assert (r.status_code, r.json()["items"]) == (200, [{"text": "\ud83d"}])
+    for odd in ({"total": float("nan")}, {"size": float("-inf")}):
+        answer.update(ok=True, data=odd)
+        for r in (studio.c.get(url(aid, "projects", ALPHA, "chats", A)),
+                  studio.c.get(url(aid, "projects", ALPHA, "git")),
+                  studio.c.post(url(aid, "projects", ALPHA, "files"), json={"path": ""})):
+            assert (r.status_code, detail(r)) == (502, {"code": "bridge", "message": "мост ответил непонятно"}), odd
+    answer.update(ok=True, data={"text": "\ud83d", "version": "v"})
+    r = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a"})
+    assert (r.status_code, r.json()) == (200, {"text": "\ud83d", "version": "v"})
+
+
+def test_odd_events_neither_break_nor_stall_the_stream(studio):
+    """Одинокий суррогат в событии — проходит (ASCII-JSON), событие с NaN — мимо, `done` с NaN — всё же конец."""
+    aid, m, _ = setup(studio)
+    m.script = [text("\ud83d"), {**STEP, "input": {"n": float("nan")}}, {"k": "done", "status": float("nan")}]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Привет"}) as r:
+        assert list(events_of(r.iter_lines())) == [("turn", {"turn": "t-1"}), ("text", {"text": "\ud83d"}),
+                                                   ("done", {})]
+    no_watchers(studio)
 
 
 def test_slow_bridge_is_504(studio, monkeypatch):
@@ -445,6 +501,98 @@ def test_live_of_an_idle_chat_says_idle(studio):
     r = studio.c.get(url(aid, "projects", ALPHA, "chats", "22222222-2222-4222-8222-222222222222", "live"))
     assert (r.status_code, detail(r)["code"]) == (404, "not_found")
     assert not bridge.WATCHERS
+
+
+def test_new_studio_chat_has_empty_history_and_idle_live(studio):
+    """«Новый чат» без хода: на машине сессии нет (мост — `not_found`), а строка студии есть — пустая история и
+    `idle`, не 404. Без строки (чужой проект с тем же чатом) — 404, как раньше."""
+    aid, m, _ = setup(studio)
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    r = studio.c.get(url(aid, "projects", ALPHA, "chats", chat))
+    assert (r.status_code, r.json()) == (200, {"items": [], "start": 0, "total": 0})
+    with studio.c.stream("GET", url(aid, "projects", ALPHA, "chats", chat, "live")) as r:
+        assert list(events_of(r.iter_lines())) == [("idle", {})]
+    assert not bridge.WATCHERS
+    for path in ((), ("live",)):
+        r = studio.c.get(url(aid, "projects", BETA, "chats", chat, *path))
+        assert (r.status_code, detail(r)["code"]) == (404, "not_found"), path
+    assert [q["op"] for q in m.requests][-4:] == ["history", "watch", "history", "watch"]
+
+
+def test_live_skips_events_before_the_first_snapshot(studio, monkeypatch):
+    """Мост мог успеть послать события хода раньше снимка — они уже в снимке: поток `live` их пропускает.
+    `done` до снимка — ход кончился, поток тоже."""
+    aid, m, link = setup(studio)
+    m.running[A] = {"turn": "t-9", "project": ALPHA, "rest": [], "text": "Уже", "steps": [], "asks": {}}
+    real = m._op_watch
+    before = []
+
+    def watch(req, evs):
+        data = real(req, evs)
+        evs[:0] = [m._ev(A, e) for e in before]
+        return data
+
+    monkeypatch.setattr(m, "_op_watch", watch)
+    before[:] = [text("раньше снимка"), STEP]
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        events = events_of(r.iter_lines())
+        assert next(events) == ("snapshot", {"text": "Уже", "steps": [], "asks": []})
+        fake_bridge.emit(studio, link, ALPHA, A, text("дальше"), DONE)
+        assert list(events) == [("text", {"text": "дальше"}), ("done", {"status": "done"})]
+    before[:] = [text("x"), DONE]
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        assert list(events_of(r.iter_lines())) == [("done", {"status": "done"})]
+    no_watchers(studio)
+
+
+def test_lock_ends_the_streams_of_the_session_with_closed(studio):
+    """Студия заперлась: поток хода этой сессии кончается `closed` (страница спросит PIN), ход на машине жив;
+    после отпирания компьютер для сессии закрыт."""
+    aid, m, _ = setup(studio)
+    m.script = [text("Удаляю"), ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        assert studio.c.post("/api/lock/now").status_code == 204
+        assert list(events) == [("closed", {})]
+    no_watchers(studio)
+    assert A in m.running
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    settle(studio)
+    r = studio.c.get(chat_url(aid, "live"))
+    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+
+
+def test_streams_end_closed_when_the_session_ends_or_locks_by_time(studio, monkeypatch):
+    """Выход, смена пароля, отключение (`forget` не зовётся) и блокировка по сроку отметки: поток ловит это сам —
+    на тике пинга и на событии, если с прошлой сверки прошло `CHECK_SEC`."""
+    aid, m, link = setup(studio)
+    digest = security.digest(studio.c.cookies[auth.COOKIE])
+    m.script = [ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        state.DB.execute("DELETE FROM sessions WHERE digest = ?", (digest,))
+        fake_bridge.emit(studio, link, ALPHA, A, text("сразу"))         # сверка была только что — не сверяет
+        assert next(events) == ("text", {"text": "сразу"})
+        studio.clock[0] += claude_code.CHECK_SEC
+        fake_bridge.emit(studio, link, ALPHA, A, text("тайна"))
+        assert list(events) == [("closed", {})]
+    no_watchers(studio)
+    monkeypatch.setattr(claude_code, "PING_SEC", 0.01)
+    signin(studio, "owner")
+    assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
+    state.DB.execute("UPDATE users SET screen_lock = 1")
+    assert studio.c.post("/api/lock/alive", json={"touch": True}).status_code == 200      # телефон, на экране
+    m.running.clear()
+    m.script = [ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
+        events = events_of(r.iter_lines())
+        until(events, "ask")
+        assert next(events) == ("ping", None)
+        studio.clock[0] += auth.STALE_SEC + 1                          # отметок нет — заперто, без lock/now
+        assert [e for e, _ in events if e != "ping"] == ["closed"]
+    no_watchers(studio)
 
 
 def test_stop_ends_the_turn_stopped(studio):
@@ -683,6 +831,38 @@ def test_pdf_memory_is_per_session(studio, monkeypatch):
     signin(studio, "owner")
     r = studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 2})
     assert (r.status_code, detail(r)["code"]) == (409, "closed")
+
+
+def test_pdf_memory_still_asks_the_bridge(studio, monkeypatch):
+    """Страница из памяти — только после просьбы `projects` той же сессии: заперлась и отперлась — `closed`,
+    компьютер не на связи — `offline`; файл с машины заново не тянется."""
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
+    aid, m, link = with_files(studio)
+
+    def page(n):
+        return studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": n})
+
+    assert page(1).status_code == 200
+    assert page(2).status_code == 200 and len(sent(m, "raw")) == 1 and sent(m, "projects")
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    settle(studio)
+    r = page(2)
+    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+    assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
+    assert page(2).status_code == 200 and len(sent(m, "raw")) == 1
+    fake_bridge.drop(studio, link)
+    r = page(2)
+    assert (r.status_code, detail(r)["code"]) == (409, "offline")
+
+
+def test_pdf_over_the_raw_limit_is_413(studio, monkeypatch):
+    aid, m, _ = with_files(studio)
+    for limit in (len(PDF) - 1, 10):                 # байтом меньше файла и далеко меньше
+        monkeypatch.setattr(claude_code, "RAW_MAX", limit)
+        r = studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 1})
+        assert (r.status_code, detail(r)) == (413, {"code": "too_large", "message": "файл больше 10 МиБ"}), limit
+    assert claude_code.PDFS == {} and len(sent(m, "raw")) == 2
 
 
 def test_git_status_passes_through_and_not_git_is_409(studio):
