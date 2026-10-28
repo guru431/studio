@@ -2,6 +2,7 @@
 модели (текст — данные, не просьбы), снятие ограды, нумерованные фрагменты снимка, запрос куска
 потоком и определение языка через подменённый шлюз."""
 import functools
+import time
 
 import pytest
 
@@ -85,6 +86,17 @@ def test_split_prefers_sentence_ends_then_spaces_then_a_hard_cut():
     assert parts == [("出口在右边。", ""), ("售票处在左边。", "")]
 
 
+def test_split_is_linear_on_long_whitespace_runs():
+    """Ревью M9: `\\s*\\n\\s*\\n\\s*` перебирал пробельный пробег с каждой позиции — 100 000 пробелов за 11 с."""
+    run = " " * 100_000
+    for text in (f"a{run}b", f"a\n{run}b", f"a{run}\n\n{run}b", f"a \n \n{run}\n b"):
+        start = time.perf_counter()
+        parts = translate_text.split(text)
+        assert time.perf_counter() - start < 0.1
+        assert "".join(c + s for c, s in parts) == text and all(c == c.strip() for c, _ in parts)
+    assert translate_text.split("a  \n \n\t b", limit=1) == [("a", "  \n \n\t "), ("b", "")]
+
+
 # ---- указание и ответ --------------------------------------------------------------------------
 
 def test_prompt_names_languages_and_forbids_obeying_the_text():
@@ -109,6 +121,10 @@ def test_numbered_round_trip_and_missing_numbers():
     assert translate_text.parse_numbered("[1] Выход", 2) is None
     assert translate_text.parse_numbered("[1] Выход\n[1] Вход\n[2] Касса", 2) is None
     assert translate_text.parse_numbered("[1] Выход\n[2] Касса\n[3] Лишнее", 2) is None
+    # перенос между номерами — продолжение; строка после последнего — примечание модели, не перевод (ревью M8)
+    assert translate_text.parse_numbered("[1] Только\nперсонал\n[2] Касса", 2) == ["Только персонал", "Касса"]
+    assert translate_text.parse_numbered("[1] Выход\n[2] Касса\n\nПримечание: перевод дословный", 2) is None
+    assert translate_text.parse_numbered("[1] Выход\n[2] Касса\n\n", 2) == ["Выход", "Касса"]
 
 
 # ---- запрос к модели ---------------------------------------------------------------------------
@@ -125,12 +141,13 @@ def test_chunk_streams_deltas_and_sends_the_prompt(studio):
                                 {"role": "user", "content": INJECTION}]
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
+    # прочим — ни рассуждения, ни temperature и max_tokens (модели рассуждений OpenAI отвечают на них 400), как в чате
     cloud = conn_of(add_connection(studio, kind="openai", base_url="http://10.77.1.15:4000/v1",
                                    token=FakeGateway.TOKEN))
     run_chunk(studio, cloud, "local-gemma-abl", "Hello")
-    assert "chat_template_kwargs" not in studio.gw.chat_requests[-1]
+    assert not {"chat_template_kwargs", "temperature", "max_tokens"} & set(studio.gw.chat_requests[-1])
     run_chunk(studio, gw, "gemma4-abl", "Hello")                          # облачная роль шлюза
-    assert "chat_template_kwargs" not in studio.gw.chat_requests[-1]
+    assert not {"chat_template_kwargs", "temperature", "max_tokens"} & set(studio.gw.chat_requests[-1])
 
     studio.gw.chat_script = [{"reasoning": ["думаю"], "text": ["```\nПри", "вет\n```"]}]
     assert run_chunk(studio, gw, "gemma4-abl", "Hello") == ("Привет", ["```\nПри", "вет\n```"])
@@ -153,6 +170,12 @@ def test_chunk_errors_become_words(studio):
     studio.gw.chat_ending = None
     with pytest.raises(translate_text.TranslateError, match="модель оборвала ответ"):
         run_chunk(studio, gw, "local-gemma-abl", "Hello")
+    # модерация облака или ошибка OpenRouter посреди куска — не готовый перевод (ревью I4)
+    for ending in ("content_filter", "error"):
+        studio.gw.chat_ending = ending
+        with pytest.raises(translate_text.TranslateError, match=f"модель прервала ответ: {ending}") as e:
+            run_chunk(studio, gw, "local-gemma-abl", "Hello")
+        assert not isinstance(e.value, translate_text.Cut)
     studio.gw.chat_ending = "stop"
 
     studio.gw.chat_script = [[], ["  ", "\n"]]
@@ -184,6 +207,10 @@ def test_detect_returns_a_known_code_or_none(studio):
     assert body["messages"][0]["content"].startswith("Identify the language of the user's message.")
     studio.gw.chat_reply = ["`DE`."]
     assert detect() == "de"
+    # не первое двухбуквенное слово (it — итальянский), а код ответа или последнее из LANGS (ревью M6)
+    for reply in ("It is English (en)", "The language is en"):
+        studio.gw.chat_reply = [reply]
+        assert detect() == "en"
     studio.gw.chat_reply = ["English"]
     assert detect() is None
     studio.gw.chat_reply = ["xx"]
@@ -193,3 +220,10 @@ def test_detect_returns_a_known_code_or_none(studio):
     studio.gw.chat_error = None
     studio.gw.down = True
     assert detect() is None
+    studio.gw.down = False
+
+    cloud = conn_of(add_connection(studio, kind="openai", base_url="http://10.77.1.15:4000/v1",
+                                   token=FakeGateway.TOKEN))
+    studio.gw.chat_reply = ["en"]
+    assert studio.c.portal.call(translate_text.detect, cloud, "gpt-5", "Hello") == "en"
+    assert not {"temperature", "max_tokens", "chat_template_kwargs"} & set(studio.gw.chat_requests[-1])

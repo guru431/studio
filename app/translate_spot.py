@@ -21,7 +21,8 @@ GAP = 0.8                        # зазор до строки выше — д�
 HEIGHTS = 1.6                    # высоты строк одного блока отличаются не больше чем во столько раз
 
 _POINT = r"\((\d+),(\d+)\)"
-_LINE = re.compile(rf"(.*?){_POINT},{_POINT}((?:,\(\d+,\d+\))*)", re.S)
+#: ищутся пары точек, а не текст перед ними: ленивое `(.*?)` до пары на ответе без координат — O(n²)
+_BOX = re.compile(rf"{_POINT},{_POINT}((?:,\(\d+,\d+\))*)")
 _NUMBERS = re.compile(r"\d+")
 
 
@@ -37,12 +38,12 @@ def _clamp(v: str) -> int:
 
 def parse(content: str) -> list[Line]:
     """Строки ответа по порядку; без координат — мимо."""
-    lines = []
-    for m in _LINE.finditer(content):
-        text = m.group(1).strip()
+    lines, pos = [], 0
+    for m in _BOX.finditer(content):
+        text, pos = content[pos:m.start()].strip(), m.end()
         if not text:
             continue
-        values = [_clamp(v) for v in m.groups()[1:5]] + [_clamp(v) for v in _NUMBERS.findall(m.group(6))]
+        values = [_clamp(v) for v in m.groups()[:4]] + [_clamp(v) for v in _NUMBERS.findall(m.group(5))]
         xs, ys = values[0::2], values[1::2]
         lines.append(Line(text, (min(xs), min(ys), max(xs), max(ys))))
     return lines
