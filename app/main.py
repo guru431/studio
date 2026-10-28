@@ -42,6 +42,7 @@ import speeches
 import state
 import takeout
 import transcripts
+import translate
 import videos
 import voices
 
@@ -75,6 +76,7 @@ async def lifespan(_app):
     chat.recover()
     transcripts.recover()
     ocr.recover()
+    translate.recover()
     speeches.recover()
     state.HTTP = state.make_http()
     loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill()]
@@ -88,6 +90,7 @@ async def lifespan(_app):
         await images.stop()
         await transcripts.stop()
         await ocr.stop()
+        await translate.stop()
         await speeches.stop()
         await chat.stop_all()
         await state.HTTP.aclose()
@@ -124,6 +127,7 @@ app.include_router(chat.router)
 app.include_router(dictation.router)
 app.include_router(transcripts.router)
 app.include_router(ocr.router)
+app.include_router(translate.router)
 app.include_router(voices.router)
 app.include_router(speeches.router)
 app.include_router(jobs.router)

@@ -90,6 +90,7 @@ def studio(env, schema_db, monkeypatch):
     import speeches
     import takeout
     import transcripts
+    import translate
     import videos
     from fakes import FakeGateway
 
@@ -121,6 +122,8 @@ def studio(env, schema_db, monkeypatch):
     ocr.RUNNERS.clear()
     ocr.LEASED.clear()
     ocr.SETTLING.clear()
+    translate.JOBS.clear()
+    translate.RUNNERS.clear()
     speeches.JOBS.clear()
     videos.WATCHING.clear()
     videos.PAUSED.clear()

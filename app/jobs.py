@@ -2,7 +2,7 @@
 
 `GET /api/jobs?since=<время>` → `{now, running, finished}`. Идущие — картинки `working`,
 `cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`,
-распознавания `queued`/`working`/`cancelling`,
+распознавания и переводы `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
 не старше JOBS_RECENT_SEC, не больше FINISHED_MAX (чат сюда не попадает: ответ виден в диалоге).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
@@ -21,6 +21,7 @@ import ocr
 import speeches
 import state
 import transcripts
+import translate
 
 router = APIRouter(prefix="/api/jobs")
 
@@ -39,13 +40,13 @@ def _item(section: str, row, title: str, detail: str, href: str) -> dict:
             "started": row["created"], "finished": finished, "href": href}
 
 
-def _rows(table: str, uid: int, running: tuple, after: float) -> tuple[list, list]:
+def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*") -> tuple[list, list]:
     """Идущие и готовые после `after` строки таблицы истории пользователя."""
     marks = ", ".join("?" * len(running))
-    going = state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ? AND state IN ({marks})"
+    going = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({marks})"
                              " ORDER BY created DESC", (uid, *running)).fetchall()
     ends = ", ".join("?" * len(TERMINAL))
-    done = state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ? AND state IN ({ends}) AND finished >= ?"
+    done = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({ends}) AND finished >= ?"
                             " ORDER BY finished DESC LIMIT ?", (uid, *TERMINAL, after, FINISHED_MAX)).fetchall()
     return going, done
 
@@ -96,6 +97,17 @@ def _ocr(uid: int, after: float) -> list:
     return out
 
 
+def _translate(uid: int, after: float) -> list:
+    # без исходника и перевода: до 300 000 знаков каждой записи на каждый опрос
+    going, done = _rows("translations", uid, translate.RUNNING, after, "id, name, state, detail, created, finished")
+    out = []
+    for row in going + done:
+        job = translate.JOBS.get(row["id"])
+        detail = job.stage if job is not None and row["state"] == "working" else row["detail"]
+        out.append(_item("translate", row, f"Перевод «{row['name']}»", detail, f"translate?id={row['id']}"))
+    return out
+
+
 def _speech(uid: int, after: float) -> list:
     going, done = _rows("speeches", uid, ("working",), after)
     out = []
@@ -127,7 +139,8 @@ def _chat(uid: int) -> list:
 async def list_jobs(request: Request, since: "float | None" = None):
     uid, now = request.state.user.id, clock.NOW()
     after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
-    items = _photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after) + _speech(uid, after)
+    items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after)
+             + _translate(uid, after) + _speech(uid, after))
     running = sorted([i for i in items if i["finished"] is None] + _chat(uid), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
     return {"now": now, "running": running, "finished": finished[:FINISHED_MAX]}

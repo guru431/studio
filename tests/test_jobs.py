@@ -9,6 +9,7 @@ import ocr
 import speeches
 import state
 import transcripts
+import translate
 from conftest import T0, add_gateway, make_user, signin
 
 NAME = "Звонок Ивану.m4a"
@@ -213,6 +214,30 @@ def test_jobs_panel_lists_running_and_done_scans(studio, caplog):
     assert run["o2"]["detail"] == "в очереди" and run["o3"]["detail"] == "отменяю"
     assert (fin["o4"]["state"], fin["o5"]["state"], fin["o5"]["detail"]) == ("done", "error", "файл документа удалён")
     assert SCAN not in caplog.text
+
+
+def translation(uid, tid, state_="working", created=T0 - 30, finished=None, detail="готовлю"):
+    state.DB.execute("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source, parts,"
+                     " state, detail, created, finished) VALUES (?, ?, 'file', 'local-gemma-abl', 'en', 'ru', ?,"
+                     " 'секретный исходник', 3, ?, ?, ?, ?)", (tid, uid, SCAN, state_, detail, created, finished))
+
+
+def test_jobs_list_translations(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    uid = me(studio)
+    translation(uid, "r1")
+    translate.JOBS["r1"] = SimpleNamespace(stage="перевожу · 2 из 3", stage_at=T0 - 10)
+    translation(uid, "r2", state_="queued", detail="в очереди")
+    translation(uid, "r3", state_="done", detail="готово", finished=T0 - 2)
+    translation(make_user(studio, "friend"), "r9")
+    out = get(studio)
+    run, fin = by_id(out["running"]), by_id(out["finished"])
+    assert set(run) == {"r1", "r2"} and set(fin) == {"r3"}
+    assert run["r1"] == {"section": "translate", "id": "r1", "state": "running", "title": f"Перевод «{SCAN}»",
+                         "detail": "перевожу · 2 из 3", "started": T0 - 30, "finished": None,
+                         "href": "translate?id=r1"}
+    assert run["r2"]["detail"] == "в очереди" and fin["r3"]["state"] == "done"
+    assert "секретный" not in str(out) and SCAN not in caplog.text
 
 
 def test_window_constants():
