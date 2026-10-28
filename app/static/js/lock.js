@@ -453,15 +453,17 @@ async function openWithPin() {
   await opened();
 }
 
-/** Клавиатура: цифры, Backspace и Enter — пока на экране панель и фокус на ней или ни на чём (экран,
- * body); в поле пароля и на «Открыть», «Открыть паролем», «Выйти» клавиши — их, Enter нажимает кнопку. */
+/** Клавиатура, пока на экране панель: цифры и Backspace — панели при любом фокусе, кроме поля ввода
+ * (поле пароля — его клавиши); Enter — PIN, только если фокус на панели или ни на чём (экран, body):
+ * на «Открыть», «Открыть паролем», «Выйти» Enter нажимает кнопку. */
 function onKey(event) {
   if (!screen.open || pinPad.hidden) return;
-  if (event.target !== document.body && event.target !== screen && !pinPad.contains(event.target)) return;
+  if (event.target === passwordInput || (event.target.closest && event.target.closest('input, textarea'))) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const onPad = event.target === document.body || event.target === screen || pinPad.contains(event.target);
   if (/^[0-9]$/.test(event.key)) typeDigit(event.key);
   else if (event.key === 'Backspace') eraseDigit();
-  else if (event.key === 'Enter') openWithPin();
+  else if (event.key === 'Enter' && onPad) openWithPin();
   else return;
   event.preventDefault();              // Enter не «нажимает» кнопку в фокусе (цифру или «OK» второй раз)
 }
