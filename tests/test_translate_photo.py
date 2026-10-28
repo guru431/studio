@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import logging
+import time
 
 from PIL import Image
 
@@ -60,6 +61,14 @@ def test_parse_survives_odd_answers():
     # наклонная строка четырьмя точками — рамка-объединение, а не «,» строкой
     assert translate_spot.parse("Tilted(10,20),(110,25),(108,60),(8,55)Next(1,2),(3,4)") == [
         Line("Tilted", (8, 20, 110, 60)), Line("Next", (1, 2, 3, 4))]
+
+
+def test_parse_is_linear_on_long_answers_without_coordinates():
+    """Ревью I1: ленивое `(.*?)` до пары точек на 50 000 знаков без координат — 11 с цикла событий."""
+    for content in ("слово (и скобка) " * 3000, "Exit(93,146),(491,214)" + "x(1,2)" * 9000):
+        start = time.perf_counter()
+        lines = translate_spot.parse(content)
+        assert time.perf_counter() - start < 0.1 and len(lines) <= 1
 
 
 def test_group_joins_close_aligned_lines_and_splits_far_ones():
@@ -136,11 +145,14 @@ def test_numbering_mismatch_falls_back_to_one_block_per_request(studio):
 
 
 def test_photo_without_text_is_done_with_words(studio):
+    """Пустой ответ — «готово» без текста; текст без координат — ошибка (повтор может помочь), а не «не найден»."""
     add_gateway(studio)
     studio.gw.ocr_replies = [(200, spot_reply("")), (200, spot_reply("просто слова без рамок"))]
-    for _ in range(2):
-        row = wait_row(studio, start_file(studio, "Стена.png", photo("PNG", (60, 40))))
-        assert (row["state"], row["detail"], row["parts"], row["text"]) == ("done", "текст на снимке не найден", 0, None)
+    row = wait_row(studio, start_file(studio, "Стена.png", photo("PNG", (60, 40))))
+    assert (row["state"], row["detail"], row["parts"], row["text"]) == ("done", "текст на снимке не найден", 0, None)
+    row = wait_row(studio, start_file(studio, "Стена.png", photo("PNG", (60, 40))))
+    assert (row["state"], row["detail"], row["parts"], row["text"]) == (
+        "error", "распознавание вернуло текст без координат — попробуйте ещё раз", 0, None)
     assert studio.gw.chat_requests == [] and len(studio.gw.ocr_requests) == 2
     assert ocr.EXTERNAL == {} and ocr_releases(studio) == 2
 

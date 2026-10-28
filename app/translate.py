@@ -24,17 +24,20 @@
    файл) в очереди распознавания пользователя, запись — без исходника, со `scan_id`. Её задание (`_await_scan`)
    ждёт скан раз в POLL_SEC (этап — страницы), берёт его текст (`ocr.attachment_text`) в исходник и куски и
    зовёт модель только после `ocr.idle`: карту освобождает раннер «Сканов» (`free_card`, `_settle`), и модель
-   перевода иначе ждала бы её под арендой слота ocr. Скан удалён, с ошибкой или отменён — ошибка записи «скан
-   не распознан: …»; «Остановить» во время ожидания отменяет и скан.
+   перевода иначе ждала бы её под арендой слота ocr. Скан удалён, с ошибкой, отменён или без единой страницы с
+   текстом — ошибка записи «скан не распознан: …»; «Остановить» во время ожидания отменяет и скан. PDF со
+   страницами-сканами без такого подключения — отказ загрузки, и когда сканы — только часть страниц.
 7. Снимок (спека 6.5, 6.6) — PNG, JPEG, WebP при подключении «Сканов» через сервер: на шару — только PNG после
    поворота по EXIF (`ocr_render.photo_png`), его же байты уходят в распознавание и показываются — рамки лягут на
    свои места. Задание (`_spot`) распознаёт его одним запросом `/pages/ocr` с указанием `translate_spot.PROMPT`
    под `ocr.borrowed` (free_card до, release слота ocr после, учёт в `ocr.EXTERNAL`), строки собирает в блоки
-   (`translate_spot.group`) — куски с рамкой; текста нет — запись «готово» со словами, без модели. Модель — после
+   (`translate_spot.group`) — куски с рамкой; текста нет — запись «готово» со словами, без модели; текст без
+   координат — ошибка NO_BOXES (повтор может помочь). Модель — после
    `ocr.idle`. Блоки переводятся пачками соседних до CHUNK_CHARS одним нумерованным запросом (`_blocks`); номера
    вернулись не все — каждый блок пачки отдельно.
 8. Повтор (спека 6.2) — новая запись из прежней: исходник известен — он же (у снимка — блоки с рамками), без
-   нового распознавания; нет — файл с шары проходит путь загрузки заново. Выгрузка — txt и docx перевода.
+   нового распознавания; нет, но скан готов — его текст; иначе файл с шары проходит путь загрузки заново.
+   Выгрузка — txt и docx перевода (docx через `md_plain` — только у перевода скана: прочее — не Markdown).
 9. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
 10. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
@@ -54,6 +57,7 @@ from pydantic import BaseModel, Field
 
 import chat
 import clock
+import connections
 import db
 import documents
 import exports
@@ -78,9 +82,11 @@ CANCELLING = "останавливаю"
 CANCELLED = "остановлено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
+NO_CONNECTION = "подключение перевода удалено — переведите заново"
 SCAN_FAILED = "скан не распознан"
 PHOTO_FAILED = "снимок не распознан"
 NO_TEXT = "текст на снимке не найден"
+NO_BOXES = "распознавание вернуло текст без координат — попробуйте ещё раз"
 NAME_CHARS = 60                 # имя текстовой записи — начало первой строки исходника
 HEAD_CHARS = 200                 # начало исходника и перевода в ленте
 #: полоса → виды записей в ней
@@ -317,15 +323,26 @@ async def _await_scan(job: Job, row):
             job.stage = stage
             _store(job)
         await clock.SLEEP(POLL_SEC)
+    unread = _unread(sid)
+    if unread is not None:
+        raise translate_text.TranslateError(f"{SCAN_FAILED}: {unread}")
     source = translate_text.normalize(ocr.attachment_text(sid))
-    if not source:
-        raise translate_text.TranslateError(f"{SCAN_FAILED}: текст не найден")
     if len(source) > translate_text.TEXT_MAX:
         raise translate_text.TranslateError(TOO_LONG)
     rows = _chunks(source)
     _set_source(job, source, rows)
     log.info("перевод %s: скан готов, %d знаков, %d кусков", job.id[:8], len(source), len(rows))
     return await _await_idle(job)
+
+
+def _unread(sid: str) -> "str | None":
+    """Готовый скан без единой страницы с текстом (распознанной или слоя) — слова (отказ первой нераспознанной
+    или «текст не найден»): переводить нечего, кроме пометок. Есть текст — None."""
+    pages = state.DB.execute("SELECT state, detail FROM scan_pages WHERE scan_id = ? ORDER BY n", (sid,)).fetchall()
+    if any(p["state"] in ("done", "layer") for p in pages):
+        return None
+    failed = next((p for p in pages if p["state"] == "failed"), None)
+    return failed["detail"] if failed is not None and failed["detail"] else "текст не найден"
 
 
 def _set_source(job: Job, source: str, rows: list[tuple]) -> None:
@@ -392,6 +409,8 @@ async def _spot(job: Job, row):
     blocks = translate_spot.group(translate_spot.parse(content))
     log.info("перевод %s: снимок, %d блоков", job.id[:8], len(blocks))
     if not blocks:
+        if content.strip():                          # текст есть, координат нет — повтор может помочь
+            raise translate_text.TranslateError(NO_BOXES)
         return None
     source = "\n".join(b["source"] for b in blocks)
     _set_source(job, source, [(b["source"], "\n", json.dumps(b["box"])) for b in blocks])
@@ -475,7 +494,7 @@ async def _translate(job: Job, row) -> "str | None":
     if sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await _free(job.conn)                    # и до определения языка: оно — запрос к той же модели
-        _check(job)
+    _check(job)                                  # «Остановить» до определения языка — без запроса к модели
     origin, lang = await _languages(job, row)
     waiting = state.DB.execute("SELECT n, source FROM translation_parts WHERE translation_id = ? AND state = 'waiting'"
                                " ORDER BY n", (job.id,)).fetchall()
@@ -559,6 +578,10 @@ async def resume(user_id: int, tid: str) -> None:
     row = _row(user_id, tid)
     if not _can_continue(row):
         raise HTTPException(409, {"code": "nothing", "message": "нечего продолжать — переведите заново"})
+    try:
+        connections.get(user_id, row["connection_id"])
+    except HTTPException:                        # 404 gone — «такого перевода нет» для страницы, а запись есть
+        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
     conn, model = sections.resolve(user_id, "translate", row["connection_id"], row["model"])
     _check_queue(user_id, lane_of(row["kind"]))
     state.DB.execute("BEGIN")
@@ -620,7 +643,8 @@ COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, d
            f" source IS NOT NULL AS has_source, substr(source, 1, {HEAD_CHARS}) AS source_head,"
            f" substr(text, 1, {HEAD_CHARS}) AS text_head")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
-FORMAT = "нужен PDF, DOCX, TXT или MD"
+FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
+SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
 FILE_GONE = "исходный файл удалён"
 NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Распознавание» в настройках"
 #: имя выгрузки текстовой записи: «Перевод.ru.txt»
@@ -706,20 +730,30 @@ def _stem(name: str) -> str:
 async def _read_file(user_id: int, name: str, data: bytes) -> "tuple[str | None, list[dict] | None, object]":
     """(текст, None, _) документа или (None, страницы, (подключение, модель) «Сканов») скана — до записи на шару.
     Скан — PDF со страницами без слоя (`ocr.plan_pages`), только при подключении «Сканов» через сервер; без него —
-    отказ `scan` словами. Отказы — HTTPException."""
+    отказ `scan` словами, и когда сканы — только часть страниц. Отказы — HTTPException."""
     suffix = PurePosixPath(name.lower()).suffix
     if suffix not in documents.SUFFIXES:
         raise HTTPException(415, {"code": "format", "message": FORMAT})
     reader = sections.default(user_id, "ocr") if suffix == ".pdf" else None
     try:
-        if reader is not None and reader[0].proxied:
-            text, pages = ocr.plan_pages(await asyncio.to_thread(ocr_render.pdf_scan_pages, data))
+        if suffix == ".pdf":
+            scanned = await asyncio.to_thread(ocr_render.pdf_scan_pages, data)
+            wanted = sum(w for _, w in scanned)
+            if wanted and (reader is None or not reader[0].proxied):
+                # и часть страниц-сканов — отказ: иначе перевод молча вышел бы без них
+                if wanted == len(scanned):
+                    words = chat.NO_OCR if reader is None else sections.unlisted(reader[0])
+                else:
+                    words = SOME_SCANS.format(wanted, len(scanned)) + (
+                        " — подключите «Распознавание» в настройках" if reader is None
+                        else f"; {sections.unlisted(reader[0])}")
+                raise HTTPException(422, {"code": "scan", "message": words})
+            text, pages = ocr.plan_pages(scanned)
         else:
             text, pages = await asyncio.to_thread(documents.extract, name, data), None
     except documents.DocumentError as e:
-        if str(e) == documents.SCAN:                 # подключение «Сканов» есть, но адрес убран из списка
-            raise HTTPException(422, {"code": "scan", "message": (
-                chat.NO_OCR if reader is None else sections.unlisted(reader[0]))}) from None
+        if str(e) == documents.TOO_LONG:             # предел перевода меньше, его слова — свои
+            raise HTTPException(422, {"code": "too_long", "message": TOO_LONG}) from None
         raise HTTPException(e.status, {"code": "document", "message": str(e)}) from None
     if pages is not None:
         return None, pages, reader
@@ -865,8 +899,9 @@ async def continue_(tid: str, request: Request):
 @router.post("/{tid}/repeat", status_code=202)
 async def repeat(tid: str, body: RepeatIn, request: Request):
     """Новая запись из прежней — тот же вид, имя и файл, свои языки и модель; прежняя не меняется. Исходник
-    известен — он же (у снимка — блоки с рамками), без нового распознавания; нет (скан не распознан) — файл с
-    шары проходит путь загрузки, скан — новым документом «Сканов». Файла нет — 409 gone."""
+    известен — он же (у снимка — блоки с рамками), без нового распознавания; нет, но скан записи готов — его
+    текст, тоже без распознавания; иначе (скан не распознан) — файл с шары проходит путь загрузки, скан — новым
+    документом «Сканов». Файла нет — 409 gone."""
     uid = request.state.user.id
     row = _row(uid, tid)
     _langs(body.source_lang, body.target_lang)
@@ -879,6 +914,13 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
             "SELECT source, box FROM translation_parts WHERE translation_id = ? AND box IS NOT NULL ORDER BY n", (tid,))]
         new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
                      scan_id=row["scan_id"], blocks=blocks or None, **langs)
+        kick(uid, lane_of(row["kind"]))
+    elif _scan_done(uid, row["scan_id"]):            # скан распознан, перевод не дошёл до кусков — без нового
+        source = translate_text.normalize(ocr.attachment_text(row["scan_id"]))
+        if len(source) > translate_text.TEXT_MAX:
+            raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
+        new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
+                     scan_id=row["scan_id"], **langs)
         kick(uid, lane_of(row["kind"]))
     else:
         if media_id is None or not media.alive(uid, media_id):
@@ -896,6 +938,14 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
     return _out(_row(uid, new))
 
 
+def _scan_done(user_id: int, sid: "str | None") -> bool:
+    """Скан записи готов и есть что переводить (`_unread`) — повтор берёт его текст, не распознавая заново."""
+    if sid is None:
+        return False
+    scan = state.DB.execute("SELECT state FROM scans WHERE id = ? AND user_id = ?", (sid, user_id)).fetchone()
+    return scan is not None and scan["state"] == "done" and _unread(sid) is None
+
+
 @router.get("/{tid}/export")
 async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx)$")):  # noqa: A002
     """Перевод файлом — у кончившейся записи с переведённым: «<имя без расширения>.<язык перевода>.<формат>»,
@@ -905,7 +955,9 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
     if not text:
         raise HTTPException(409, {"code": "running", "message": "перевода ещё нет"})
     stem = TEXT_STEM if row["kind"] == "text" else _stem(row["name"])
-    body = exports.text_docx(text, stem) if format == "docx" else text.encode("utf-8")
+    # Markdown — только у перевода распознанного скана; текст поля и документа — как есть
+    body = (exports.text_docx(text, stem, markdown=row["scan_id"] is not None) if format == "docx"
+            else text.encode("utf-8"))
     name = f"{stem}.{row['result_lang'] or row['target_lang']}.{format}"
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(name), "Cache-Control": "no-store"})

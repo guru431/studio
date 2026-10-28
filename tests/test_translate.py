@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 import clock
+import documents
 import images
 import media
 import ocr
@@ -517,7 +518,8 @@ def test_docx_and_pdf_with_a_layer_are_translated_from_their_text(studio, caplog
     assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
     assert "Записка" not in caplog.text and "Договор" not in caplog.text and "Payment" not in caplog.text
     r = send_file(studio, "фото.jpg", b"\xff\xd8\xff")
-    assert r.status_code == 415 and r.json()["detail"] == {"code": "format", "message": "нужен PDF, DOCX, TXT или MD"}
+    assert r.status_code == 415 and r.json()["detail"] == {
+        "code": "format", "message": "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"}
     r = send_file(studio, "Записка.txt", b"Hi", target="xx")
     assert r.status_code == 422 and r.json()["detail"]["code"] == "lang"
     assert count(studio, "media") == 2
@@ -616,11 +618,28 @@ def test_scanned_pdf_without_ocr_is_refused_with_words(studio):
     assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
 
 
+def test_partly_scanned_pdf_without_ocr_is_refused_too(studio):
+    """Ревью I2: без «Распознавания» страницы-сканы пропали бы из перевода молча."""
+    gw = add_gateway(studio)
+    assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
+    r = send_file(studio, "Договор.pdf", scan_pdf("This page has a text layer long enough to be read as it is.", "ink"))
+    assert r.status_code == 422
+    assert r.json()["detail"] == {"code": "scan", "message": (
+        "страниц-сканов в PDF — 1 из 2, без распознавания перевод вышел бы без них"
+        " — подключите «Распознавание» в настройках")}
+    assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
+    assert studio.gw.chat_requests == []
+
+
 def test_too_long_document_is_refused_before_a_job(studio, monkeypatch):
     monkeypatch.setattr(translate_text, "TEXT_MAX", 50)
     add_gateway(studio)
     r = send_file(studio, "Записка.txt", ("a" * 60).encode())
     assert r.status_code == 422 and r.json()["detail"]["code"] == "too_long"
+    monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 10)               # предел извлечения — слова перевода
+    for name, data in (("Договор.pdf", pdf("Payment is due in 30 days")), ("Записка.txt", b"a" * 20)):
+        r = send_file(studio, name, data)
+        assert r.status_code == 422 and r.json()["detail"] == {"code": "too_long", "message": translate.TOO_LONG}
     r = send_file(studio, "Пусто.txt", b" \r\n ")
     assert r.status_code == 422 and r.json()["detail"] == {"code": "empty", "message": "в файле нет текста"}
     assert (count(studio, "media"), count(studio, "translations")) == (0, 0)
@@ -676,6 +695,88 @@ def test_repeat_of_a_failed_scan_starts_a_new_scan(studio, small_pages):
     on_loop(studio, media.delete_async, uid, first["source_media_id"])
     r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "ru"})
     assert r.status_code == 409 and r.json()["detail"] == {"code": "gone", "message": "исходный файл удалён"}
+
+
+def test_scan_without_a_recognized_page_fails_with_words(studio, small_pages):
+    """Ревью M11: скан «готов», но ни одна страница не распознана — не перевод пометок, а ошибка словами."""
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(200, {"choices": [{"message": {"content": "  "}, "finish_reason": "stop"}]})]
+    row = wait_row(studio, start_file(studio, "Скан.pdf", scan_pdf("ink")))
+    assert scan_row(studio, row["scan_id"])["state"] == "done"
+    assert (row["state"], row["detail"], row["source"]) == ("error", "скан не распознан: на странице не найден текст", None)
+    assert studio.gw.chat_requests == []
+
+
+def test_repeat_reuses_a_recognized_scan(studio, small_pages, monkeypatch):
+    """Ревью M12: перевод не дошёл до кусков (здесь — длиннее предела), скан готов — повтор берёт его текст, без
+    нового документа «Сканов» и без распознавания."""
+    add_gateway(studio)
+    limit = translate_text.TEXT_MAX
+    monkeypatch.setattr(translate_text, "TEXT_MAX", 10)
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    first = wait_row(studio, tid)
+    assert (first["state"], first["detail"], first["source"]) == ("error", translate.TOO_LONG, None)
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    body = {"source_lang": "en", "target_lang": "ru"}
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json=body)
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "too_long", "message": translate.TOO_LONG}
+    monkeypatch.setattr(translate_text, "TEXT_MAX", limit)
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json=body)
+    assert r.status_code == 202, r.text
+    row = wait_row(studio, r.json()["id"])
+    assert row["state"] == "done" and row["scan_id"] == first["scan_id"]
+    assert row["source"] == translate_text.normalize(on_loop(studio, ocr.attachment_text, first["scan_id"]))
+    assert count(studio, "scans") == 1 and len(studio.gw.ocr_requests) == 1
+
+
+def test_continue_with_a_deleted_connection_says_so(studio, monkeypatch):
+    """Ревью M14: не 404 gone — страница приняла бы его за удалённую запись."""
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    cid = add_gateway(studio)
+    failing_second(studio)
+    tid = start(studio, THREE)
+    before = wait_row(studio, tid)
+    assert studio.c.delete(f"/api/connections/{cid}").status_code == 204
+    r = studio.c.post(f"/api/translate/{tid}/continue")
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "no_connection", "message": translate.NO_CONNECTION}
+    assert row_of(studio, tid) == before and tid not in translate.JOBS
+
+
+def test_stop_before_detection_costs_no_model_call(studio):
+    """Ревью M7: и у облачной модели остановка до определения языка запроса не делает."""
+    add_gateway(studio)
+    cloud = add_connection(studio, kind="openai", base_url="http://10.77.1.15:4000/v1", token=FakeGateway.TOKEN,
+                           sections=["translate"], name="cloud")
+    uid = owner_of(cloud)
+    sections.set_models(uid, "translate", cloud, ["gpt-5"])
+    conn = on_loop(studio, lambda: sections.resolve(uid, "translate", cloud, "gpt-5")[0])
+
+    async def go():
+        tid = translate.create(uid, conn, "gpt-5", kind="text", name="Hello.", source_lang="auto", target_lang="ru",
+                               source="Hello.")
+        translate.JOBS[tid].cancel = True
+        translate.kick(uid, "text")
+        return tid
+    row = wait_row(studio, on_loop(studio, go))
+    assert (row["state"], row["detected_lang"]) == ("cancelled", None) and studio.gw.chat_requests == []
+
+
+def test_docx_export_keeps_plain_text_and_strips_markdown_only_of_scans(studio):
+    """Ревью M10: `md_plain` убрал бы `<…>` и обратные кавычки у перевода, который не Markdown."""
+    uid, conn = gateway_conn(studio)
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+    def docx_lines(tid):
+        r = studio.c.get(f"/api/translate/{tid}/export?format=docx")
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            root = ElementTree.fromstring(z.read("word/document.xml"))
+        return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in root.iter(f"{w}p")][1:]
+
+    studio.gw.chat_script = [["Тип `List<int>`, a < b > c, **жирно**"], ["Тип `List<int>`, **жирно**"]]
+    plain = wait_row(studio, file_job(studio, uid, conn, text="Type `List<int>`, a < b > c, **bold**"))["id"]
+    assert docx_lines(plain) == ["Тип `List<int>`, a < b > c, **жирно**"]
+    scanned = wait_row(studio, file_job(studio, uid, conn, text="Type `List<int>`, **bold**", scan_id="0" * 32))["id"]
+    assert docx_lines(scanned) == ["Тип List, жирно"]
 
 
 def test_export_gives_txt_and_docx_named_by_language(studio):

@@ -3,8 +3,9 @@
 
 1. Языки — `LANGS` (ISO 639-1 → русское и английское название) в порядке показа; `AUTO` — «Определить
    язык». Исходник совпал с языком перевода — переводить на английский, а английский — на русский
-   (`redirect`). Язык определяет сама модель (`detect`): первые DETECT_CHARS знаков, ответ — код; любой
-   отказ — None, перевод тогда идёт «с исходного языка».
+   (`redirect`). Язык определяет сама модель (`detect`): первые DETECT_CHARS знаков, ответ — код (или
+   последнее двухбуквенное слово из LANGS); любой отказ — None, перевод тогда идёт «с исходного языка».
+   `temperature` и `max_tokens` — только локальной модели srvllm (`_body`): облачные, как и в чате, без них.
 2. Текст — `normalize` (переносы Windows и старого Mac → `\n`, снаружи без пробельных), затем `split`:
    куски до CHUNK_CHARS по границам абзацев, соседние абзацы — в один кусок; абзац длиннее — по концам
    предложений, затем по пробельным, затем жёстко. Каждый кусок несёт разделитель после себя: склейка
@@ -15,7 +16,8 @@
    пропускается, у локальной модели оно выключено (`chat_template_kwargs`). Ответ, целиком завёрнутый в
    ограду ```, — без неё (`unwrap`), если исходник сам не код в ограде.
 4. Отказы — `TranslateError` словами для человека: 503 — `Busy` (ждать карту и повторить), обрезанный
-   ответ — `Cut`; решает, что с ними делать, вызывающий.
+   ответ — `Cut`, иной конец, чем `stop` (`content_filter`, `error`), — ошибка; решает, что с ними делать,
+   вызывающий.
 5. Снимок — фрагменты одним запросом: `numbered` строками «[n] текст», ответ — `parse_numbered`, а не
    вернулись все номера — None (вызывающий переводит по одному).
 6. В журнал модуль ничего не пишет: текст и языки исходника — данные пользователя.
@@ -92,7 +94,9 @@ DETECT_PROMPT = "Identify the language of the user's message. Answer with its IS
 
 #: границы разреза по убыванию: абзац (пустая строка, с пробельными вокруг), конец предложения (в китайском
 #: и японском пробела после него нет — разрез и без пробельных), пробельные
-_CUTS = (re.compile(r"\s*\n\s*\n\s*"), re.compile(r"(?<=[.!?…])\s+|(?<=[。！？])\s*"), re.compile(r"\s+"))
+#: абзац ищется без пробельных вокруг и расширяется до них вручную (`_cuts`): `\s*` впереди перебирал бы
+#: длинный пробельный пробег с каждой позиции — O(n²)
+_CUTS = (re.compile(r"\n\s*\n"), re.compile(r"(?<=[.!?…])\s+|(?<=[。！？])\s*"), re.compile(r"\s+"))
 _FENCE = re.compile(r"\s*```[^\n`]*\n(.*?)\n?```\s*", re.S)
 _NUMBERED = re.compile(r"\s*\[(\d+)\]\s?(.*)")
 _LINES = re.compile(r"\s*\n\s*")
@@ -130,6 +134,22 @@ def normalize(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def _cuts(text: str, level: int):
+    """(начало, конец) разрезов уровня; абзац — со всеми пробельными вокруг пустой строки."""
+    if level:
+        yield from (m.span() for m in _CUTS[level].finditer(text))
+        return
+    pos = 0
+    while (m := _CUTS[0].search(text, pos)) is not None:
+        start, end = m.span()
+        while start > pos and text[start - 1].isspace():
+            start -= 1
+        while end < len(text) and text[end].isspace():
+            end += 1
+        yield start, end
+        pos = end
+
+
 def _atoms(text: str, limit: int, level: int = 0) -> list[list[str]]:
     """Части текста не длиннее limit, каждая — [часть, разделитель после]: разрез по границам уровня
     `_CUTS[level]`, слишком длинная часть — следующим уровнем, после последнего — жёстко."""
@@ -138,10 +158,10 @@ def _atoms(text: str, limit: int, level: int = 0) -> list[list[str]]:
     if level == len(_CUTS):
         return [[text[i:i + limit], ""] for i in range(0, len(text), limit)]
     out, pos = [], 0
-    for m in _CUTS[level].finditer(text):
-        out += _atoms(text[pos:m.start()], limit, level + 1)
-        out[-1][1] = m.group()
-        pos = m.end()
+    for start, end in _cuts(text, level):
+        out += _atoms(text[pos:start], limit, level + 1)
+        out[-1][1] = text[start:end]
+        pos = end
     tail = text[pos:]            # пусто — разрез без пробельных после «。» в самом конце
     return out + _atoms(tail, limit, level + 1) if tail else out
 
@@ -184,38 +204,54 @@ def numbered(fragments: list[str]) -> str:
 
 
 def parse_numbered(answer: str, count: int) -> "list[str] | None":
-    """Переводы фрагментов по номерам 1…count. Строка без номера — продолжение предыдущего фрагмента
-    (модель перенесла), до первого номера — пропускается. Номер дважды, лишний, пропущенный или пустой
+    """Переводы фрагментов по номерам 1…count. Строка без номера между номерами — продолжение предыдущего
+    фрагмента (модель перенесла), до первого номера — пропускается, после последнего — None: это скорее
+    примечание модели, чем перенос, и на снимок его не наложить. Номер дважды, лишний, пропущенный или пустой
     перевод — None."""
     found: dict[int, str] = {}
-    current = None
+    current, tail = None, False
     for line in answer.splitlines():
         m = _NUMBERED.fullmatch(line)
         if m is not None:
-            current = int(m.group(1))
+            current, tail = int(m.group(1)), False
             if current in found:
                 return None
             found[current] = m.group(2).strip()
         elif current is not None and line.strip():
             found[current] = f"{found[current]} {line.strip()}".strip()
-    if set(found) != set(range(1, count + 1)) or not all(found.values()):
+            tail = True
+    if tail or set(found) != set(range(1, count + 1)) or not all(found.values()):
         return None
     return [found[n] for n in range(1, count + 1)]
 
 
 # ---- запросы к модели ------------------------------------------------------------
 
-def _body(conn, model: str, system: str, text: str) -> dict:
+def _body(conn, model: str, system: str, text: str, temperature: float, max_tokens: int) -> dict:
+    """Тело запроса. `temperature` и `max_tokens` — только локальной модели srvllm (vLLM их берёт): прочим —
+    как в чате, без них — модели рассуждений OpenAI отвечают 400 на `max_tokens` и на `temperature` не 1."""
     body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]}
     if sections.is_local(conn, model):
         # рассуждение не перевод: у локальной модели — выключено, как в чате без кнопки «Рассуждение»
-        body["chat_template_kwargs"] = {"enable_thinking": False}
+        body |= {"temperature": temperature, "max_tokens": max_tokens,
+                 "chat_template_kwargs": {"enable_thinking": False}}
     return body
 
 
+def _code(content: str) -> "str | None":
+    """Код языка в ответе: ответ — только код, иначе последнее двухбуквенное слово из LANGS («It is English
+    (en)» — en, а не it)."""
+    content = content.strip().lower()
+    m = re.fullmatch(r"\W*([a-z]{2})\W*", content)
+    if m is not None and m.group(1) in LANGS:
+        return m.group(1)
+    codes = [w for w in re.findall(r"\b[a-z]{2}\b", content) if w in LANGS]
+    return codes[-1] if codes else None
+
+
 async def detect(conn, model: str, text: str) -> "str | None":
-    """Код языка первых DETECT_CHARS знаков — ответом модели без потока; отказ, ответ не код из LANGS — None."""
-    body = _body(conn, model, DETECT_PROMPT, text[:DETECT_CHARS]) | {"temperature": 0, "max_tokens": 8}
+    """Код языка первых DETECT_CHARS знаков — ответом модели без потока; отказ, ответ без кода из LANGS — None."""
+    body = _body(conn, model, DETECT_PROMPT, text[:DETECT_CHARS], 0, 8)
     try:
         r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body,
                                    timeout=httpx.Timeout(DETECT_SEC, connect=30))
@@ -227,15 +263,14 @@ async def detect(conn, model: str, text: str) -> "str | None":
         content = upstream.json_body(r)["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         return None
-    m = re.search(r"\b[a-z]{2}\b", content.lower()) if isinstance(content, str) else None
-    return m.group() if m is not None and m.group() in LANGS else None
+    return _code(content) if isinstance(content, str) else None
 
 
 async def chunk(conn, model: str, text: str, source: str, target: str, on_delta, *, blocks: bool = False) -> str:
     """Перевод одного куска потоком: каждая дельта `content` — в `on_delta`, итог — весь ответ без ограды
-    (`unwrap`). Конец — `[DONE]` или `finish_reason`; поток без них (обрыв) — ошибка, а не готовый перевод."""
-    body = _body(conn, model, system_prompt(source, target, blocks), text) | {
-        "stream": True, "temperature": 0.2, "max_tokens": MAX_TOKENS}
+    (`unwrap`). Конец — `finish_reason: stop` или `[DONE]` без иного; `length` — `Cut`, прочий (`content_filter`,
+    `error`) и поток без конца (обрыв) — ошибка, а не готовый перевод."""
+    body = _body(conn, model, system_prompt(source, target, blocks), text, 0.2, MAX_TOKENS) | {"stream": True}
     answer, ending = "", None
     try:
         async with upstream.stream(conn, "POST", connections.chat_url(conn), json=body,
@@ -282,6 +317,8 @@ async def chunk(conn, model: str, text: str, source: str, target: str, on_delta,
         raise Cut("ответ модели обрезан")
     if ending is None:
         raise TranslateError("модель оборвала ответ")
+    if ending != "stop":                         # content_filter, error: перевод куска оборван посередине
+        raise TranslateError(f"модель прервала ответ: {ending[:60]}")
     result = unwrap(answer, text).strip()
     if not result:
         raise TranslateError("модель вернула пустой ответ")

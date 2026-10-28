@@ -191,11 +191,12 @@ def pages_docx(pages: list[dict], title: str) -> bytes:
     return _package(body)
 
 
-def text_docx(text: str, title: str) -> bytes:
-    """Перевод (спека 2026-10-28-studio-translator-design, 6.2): заголовок, затем абзац на строку `md_plain`
-    (строки таблиц — ячейки через табуляцию) — как pages_docx без страниц."""
+def text_docx(text: str, title: str, markdown: bool = True) -> bytes:
+    """Перевод (спека 2026-10-28-studio-translator-design, 6.2): заголовок, затем абзац на строку — как
+    pages_docx без страниц. Markdown распознавания (`markdown`) — через `md_plain` (строки таблиц — ячейки через
+    табуляцию); простой текст — как есть: `List<int>` и обратные кавычки остаются."""
     body = [_paragraph(title, bold=True, size=32)]
-    body += [_cells(line) for line in md_plain(text).split("\n") if line.strip()]
+    body += [_cells(line) for line in (md_plain(text) if markdown else text).split("\n") if line.strip()]
     return _package(body)
 
 

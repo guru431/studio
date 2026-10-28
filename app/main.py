@@ -89,8 +89,8 @@ async def lifespan(_app):
         await asyncio.gather(*loops, return_exceptions=True)
         await images.stop()
         await transcripts.stop()
+        await translate.stop()                   # раньше ocr: перевод, ждущий скан, не начнёт следующее
         await ocr.stop()
-        await translate.stop()
         await speeches.stop()
         await chat.stop_all()
         await state.HTTP.aclose()
