@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 
 import httpx
@@ -4978,7 +4979,7 @@ def test_lock_settings_set_change_and_remove_the_pin(browser, live):
     assert not problems(phone), problems(phone)
 
 
-LOCK_OPEN ="!!document.querySelector('#lock')?.open"
+LOCK_OPEN = "!!document.querySelector('#lock')?.open"
 CURTAIN_OPEN = "!!document.querySelector('#curtain')?.open"
 ME_STATUS = "fetch('/api/me').then(r => r.status)"
 PASSKEY_READY = "document.querySelector('#lock-open').dataset.ready === '1'"
@@ -5557,6 +5558,104 @@ def test_physical_keys_type_the_pin(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["me"] == 200 and r["sent"].count("POST /api/lock/pin") == 1, r["sent"]
     assert not known_refusals(problems(r), 423), problems(r)
+
+
+@pytest.mark.parametrize("way", ["return", "open"])
+def test_pin_pad_comes_back_when_the_lock_state_was_lost(browser, live, way):
+    """GET /api/lock при показе экрана не пришёл (нет связи): «Открыть» и «Нет связи». Возвращение на экран
+    или «Открыть» перечитывают состояние — панель PIN, и PIN открывает; подготовки passkey (её no_keys
+    увёл бы учётку без ключей к паролю) нет."""
+    login = f"pin-stale-{way}"
+    live.add_user(login)
+    retry = [hide(), show()] if way == "return" else [("click", "#lock-open")]
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), hide(), ("wait", CURTAIN_OPEN),
+        ("eval", "cut", "sessionStorage.setItem('fail', JSON.stringify({'/api/lock': 1}))"),
+        later(61000), show(), ("wait", LOCK_OPEN), ("wait", f"{LOCK_NOTE} === 'Нет связи с сервером'"),
+        ("eval", "lost", LOCK_PARTS), *retry, ("wait", PIN_SHOWN), ("eval", "back", LOCK_PARTS),
+        ("eval", "note", LOCK_NOTE),
+        *tap("2580"), ("click", "#lock-pin-ok"), ("wait", f"!{LOCK_OPEN}"), ("eval", "me", ME_STATUS)],
+        init=FAIL_GETS, **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["lost"] == [False, False, True, True] and v["back"] == [True, False, False, True]
+    assert v["note"] == "" and v["me"] == 200
+    assert "POST /api/lock/challenge" not in r["sent"], r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_enter_on_a_lock_button_presses_it_not_the_pin(browser, live):
+    """Панель на экране, фокус на «Открыть паролем»: цифра с клавиатуры не набирается, Enter не шлёт
+    набранный PIN и не отменён — его действие по умолчанию нажимает кнопку в фокусе. (Нажатие драйвера —
+    keyDown без text: кнопку оно само не нажимает, поэтому отмену проверяет событие страницы.)"""
+    login = "pin-enter"
+    live.add_user(login)
+    focus = "(() => { document.querySelector('#lock-use-password').focus(); return document.activeElement.id; })()"
+    prevented = "!document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))"
+    r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), *tap("2580"),
+        ("eval", "focus", focus), ("press", "5"), ("press", "Enter"), ("eval", "after", settled(f"[{DOTS}, {PIN_SHOWN}]")),
+        ("eval", "prevented", prevented), ("click", "#lock-use-password"),
+        ("wait", "!document.querySelector('#lock-password-form').hidden")], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["focus"] == "lock-use-password" and v["after"] == [4, True] and v["prevented"] is False
+    assert "POST /api/lock/pin" not in r["sent"], r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def remove_pin_after_a_wrong_one(live, login):
+    """«Убрать PIN» на другом устройстве: как только учётка потратила попытку PIN, сервер убирает PIN
+    (своё DELETE /api/me/pin запертая страница не сделает — 423). Поток; вернуть — join."""
+    import db
+
+    def run():
+        conn = db.connect(live.db_path)
+        try:
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                if conn.execute("SELECT pin_fails FROM users WHERE login = ?", (login,)).fetchone()[0] >= 1:
+                    conn.execute("UPDATE users SET pin_hash = NULL WHERE login = ?", (login,))
+                    return
+                time.sleep(0.05)
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+@pytest.mark.parametrize("gone", ["no_pin", "pin_exhausted"])
+def test_pin_taken_away_elsewhere_turns_the_pad_into_the_password(browser, live, gone):
+    """Панель на экране, а PIN тем временем убрали (no_pin) или исчерпали (pin_exhausted) на другом
+    устройстве: «OK» — панель уходит, поле пароля, при исчерпанном — подпись; пароль открывает."""
+    login = f"pin-{gone}"
+    live.add_user(login)
+    if gone == "no_pin":
+        thread = remove_pin_after_a_wrong_one(live, login)
+        meanwhile = [*wrong("Неверный PIN"), ("wait", "fetch('/api/lock').then(r => r.json()).then(s => !s.pin)")]
+    else:
+        thread = None
+        spend = f"""(async () => {{ const m = {API}; const left = [];
+          for (let i = 0; i < 10; i++) {{ try {{ await m.api('POST', '/api/lock/pin', {{ pin: '9999' }}); }}
+            catch (e) {{ left.push(e.detail.left); }} }} return left.at(-1); }})()"""
+        meanwhile = [("eval", "spent", spend)]
+    try:
+        r = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(), *meanwhile,
+            ("eval", "still", PIN_SHOWN), *tap("2580"), ("click", "#lock-pin-ok"),
+            ("wait", "document.querySelector('#lock-pin').hidden"),
+            ("eval", "parts", LOCK_PARTS), ("eval", "note", LOCK_NOTE),
+            ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"), ("wait", f"!{LOCK_OPEN}"),
+            ("eval", "me", ME_STATUS)], **PHONE)
+    finally:
+        if thread:
+            thread.join(5)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["still"] is True and v["parts"] == [False, True, False, False]
+    assert v["note"] == ("" if gone == "no_pin" else EXHAUSTED) and v["me"] == 200
+    if gone == "pin_exhausted":
+        assert v["spent"] == 0
+    assert not known_refusals(problems(r), 423, 403, 409), problems(r)
 
 
 # ---- «В работе» и уведомления (спека 2026-10-21-studio-jobs-panel) ----------------------------

@@ -28,7 +28,9 @@
  * поля пароля (кнопки страницы, не поле: системная клавиатура и менеджер паролей молчат; цифры,
  * Backspace и Enter с клавиатуры — тоже). Набранное — только в переменной digits, стирается после каждой
  * попытки, отпирания и ухода с экрана. Пока идёт запрос, панель нажатий не принимает. Исчерпан
- * (pin_exhausted, left 0, pin_left 0) или убран на другом устройстве (no_pin) — панель уходит, остаётся пароль. */
+ * (pin_exhausted, left 0, pin_left 0) или убран на другом устройстве (no_pin) — панель уходит, остаётся пароль.
+ * GET /api/lock не пришёл при показе экрана — состояние перечитывают возвращение, таймер отметок и «Открыть»
+ * (stale), а не подготовка passkey: иначе no_keys учётки с PIN увёл бы к паролю. */
 import { api, hooks, loadMe, me, useCsrf } from './api.js';
 import { cancelRecording } from './mic.js';
 import { plural, words } from './ui.js';
@@ -139,6 +141,8 @@ let pinOk;
 let pinOn = false;       // у учётки задан PIN и попытки остались — панель вместо пароля
 let digits = '';         // набранные цифры: только здесь, ни в DOM, ни в хранилище
 let pinGoing = false;    // идёт POST /api/lock/pin: нажатия, «OK» и Enter — мимо
+let stale = false;       // GET /api/lock при показе экрана не пришёл: ключи и PIN неизвестны — перечитать
+let rereading = null;    // идущее перечитывание: возвращение, таймер и «Открыть» его не повторяют
 
 function say(text, kind) {
   note.textContent = text || '';
@@ -220,6 +224,7 @@ async function load() {
   } catch (err) {
     if (err.code === 'no_keys') {      // ключи удалили на другом устройстве
       keys = false;
+      if (stale) await refresh();      // состояние экрана не пришло: может, у учётки есть PIN
       if (pinOn && passwordForm.hidden) openButton.hidden = true;       // панель PIN остаётся
       else offerPassword();
     } else say(words(err), 'error');
@@ -277,13 +282,15 @@ async function showLock(lockNow) {
   openButton.hidden = false;
   usePassword.hidden = false;
   passwordForm.hidden = true;
+  stale = false;
   if (!screen.open) screen.showModal();
   const trusted = lockNow ? await lockNow : true;
   let state;
   try {
     state = await lockState();
   } catch (err) {
-    keys = true;                       // неизвестно: «Открыть» попробует подготовить вход ещё раз
+    keys = true;                       // неизвестно: «Открыть», возвращение и таймер перечитают состояние
+    stale = true;
     say(words(err), 'error');
     return;
   }
@@ -291,12 +298,38 @@ async function showLock(lockNow) {
     await opened();
     return;
   }
+  applyState(state);
+}
+
+/** Экран по состоянию блокировки: панель PIN, пароль, «Открыть» (passkey). Поле пароля, выбранное
+ * «Открыть паролем», не отнимает. */
+function applyState(state) {
+  stale = false;
   keys = state.keys;
   pinOn = !!state.pin && state.pin_left > 0;
-  if (pinOn) offerPin();
+  if (!passwordForm.hidden) openButton.hidden = !keys;
+  else if (pinOn) offerPin();
   else if (state.pin) pinGone(EXHAUSTED);
   else if (!keys) offerPassword();
   if (keys) prepare();
+}
+
+/** Перечитать состояние, не пришедшее при показе экрана: панель PIN появится, как только вернётся связь.
+ * Экран не открывает — «не заперто» здесь не проверено запросом «заперто». */
+function refresh() {
+  if (!rereading) {
+    rereading = (async () => {
+      try {
+        const state = await lockState();
+        if (!waiting || !stale) return;
+        say('');
+        applyState(state);
+      } catch (err) {
+        say(words(err), 'error');
+      }
+    })().finally(() => { rereading = null; });
+  }
+  return rereading;
 }
 
 function waitOpen(lockNow = null) {
@@ -342,7 +375,8 @@ async function openWithPasskey() {
   if (calling || preparing) return;    // кнопка выключена; на случай нажатия, пришедшего раньше перерисовки
   if (!options) {                      // вариантов нет (не было связи) — готовим, нажать ещё раз
     say('');
-    prepare();
+    if (stale) refresh();              // сначала состояние: у учётки может не быть ключей, а быть PIN
+    else prepare();
     return;
   }
   const pending = navigator.credentials.get({ publicKey: options });   // сразу: до любого запроса (Safari)
@@ -419,9 +453,11 @@ async function openWithPin() {
   await opened();
 }
 
-/** Клавиатура: цифры, Backspace и Enter — пока на экране панель (не поле пароля). */
+/** Клавиатура: цифры, Backspace и Enter — пока на экране панель и фокус на ней или ни на чём (экран,
+ * body); в поле пароля и на «Открыть», «Открыть паролем», «Выйти» клавиши — их, Enter нажимает кнопку. */
 function onKey(event) {
-  if (!screen.open || pinPad.hidden || event.target === passwordInput) return;
+  if (!screen.open || pinPad.hidden) return;
+  if (event.target !== document.body && event.target !== screen && !pinPad.contains(event.target)) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   if (/^[0-9]$/.test(event.key)) typeDigit(event.key);
   else if (event.key === 'Backspace') eraseDigit();
@@ -443,7 +479,8 @@ async function onVisibility() {
   hiddenAt = null;
   if (waiting) {                       // уже заперта: варианты passkey могли истечь, пока экран был погашен
     cover(false);
-    if (keys && screen.open && !fresh()) prepare();
+    if (stale && screen.open) refresh();          // состояние не пришло при показе экрана — перечитать
+    else if (keys && screen.open && !fresh()) prepare();
     return;
   }
   if (since === null) {
@@ -496,8 +533,9 @@ export function installLock() {
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     mark();
+    if (waiting && stale && screen.open) refresh();   // связь вернулась — панель PIN без нажатий
     // экран блокировки открыт давно: вызов на сервере истечёт раньше нажатия — готовить заранее, а не по нажатию (Safari)
-    if (waiting && keys && screen.open && options && !fresh()) prepare();
+    else if (waiting && keys && screen.open && options && !fresh()) prepare();
   }, ALIVE_SEC * 1000);
   begin();
 }

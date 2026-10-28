@@ -685,11 +685,11 @@ def test_pin_changed_during_the_check_opens_nothing(studio, monkeypatch):
 def test_malformed_pin_is_a_wrong_pin(studio):
     uid = locked_owner(studio)
     set_pin(uid, "1234")
-    for left, value in zip((9, 8, 7), ("１２３４", "12a4", "")):
+    for left, value in zip((9, 8, 7, 6), ("１２３４", "١٢٣٤", "12a4", "")):
         r = pin(studio, value)
         assert r.status_code == 403 and code(r) == "pin" and r.json()["detail"]["left"] == left, value
     assert pin(studio, "1" * (PIN_MAX + 1)).status_code == 422
-    assert pin_fails(uid) == 3
+    assert pin_fails(uid) == 4
     assert studio.c.get("/api/me").status_code == 423
 
 
