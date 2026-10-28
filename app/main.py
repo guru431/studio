@@ -27,6 +27,7 @@ import auth
 import bridge
 import chat
 import checks
+import claude_code
 import config
 import connections
 import db
@@ -138,6 +139,7 @@ app.include_router(search.router)
 app.include_router(takeout.router)
 app.include_router(agents.router)
 app.include_router(bridge.router)
+app.include_router(claude_code.router)
 
 
 @app.exception_handler(RequestValidationError)
