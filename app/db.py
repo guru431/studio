@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 18
+VERSION = 19
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -264,7 +264,34 @@ CREATE TRIGGER search_translations_ad AFTER DELETE ON translations BEGIN
   DELETE FROM search_docs WHERE section = 'translate' AND item = old.id; END;
 """
 
-SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
+#: Claude Code (agents.py, bridge.py, code.py, push.py; спека 2026-10-28-studio-claude-code-design, 6.1 и 6.8):
+#: агент — компьютер с мостом (key_hash — security.digest ключа устройства, сам ключ не хранится; has_pin,
+#: projects_root, cc_version — что сказал мост при входе). События подключений — только добавляются (agent_id и
+#: agent_name без ссылки: компьютер отзывают, история остаётся), «Удалить всю историю» их не трогает. code_chats —
+#: слой студии поверх сессий машины (сессия — на компьютере, здесь только отметка и состояние). Подписка push живёт,
+#: пока жива сессия студии, что её завела
+CODE_19 = """CREATE TABLE agents(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, has_pin INTEGER NOT NULL DEFAULT 0,
+       projects_root TEXT, cc_version TEXT, created REAL NOT NULL, last_seen REAL);
+CREATE INDEX agents_user ON agents(user_id);
+CREATE TABLE agent_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL, agent_name TEXT NOT NULL, created REAL NOT NULL,
+       kind TEXT NOT NULL CHECK (kind IN ('enroll','revoke','online','offline','open','pin_ok','pin_fail','session_start')),
+       device TEXT, ip TEXT);
+CREATE INDEX agent_events_user ON agent_events(user_id, id);
+CREATE TABLE code_chats(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE, project TEXT NOT NULL, session_id TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('open','closed')), created REAL NOT NULL, updated REAL NOT NULL,
+       UNIQUE (agent_id, session_id));
+CREATE INDEX code_chats_user ON code_chats(user_id, created);
+CREATE TABLE push_subs(endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       digest TEXT NOT NULL REFERENCES sessions ON DELETE CASCADE, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+       created REAL NOT NULL);
+CREATE INDEX push_subs_user ON push_subs(user_id);
+CREATE INDEX push_subs_digest ON push_subs(digest);
+"""
+
+SCHEMA =SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
       theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
@@ -306,7 +333,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -373,6 +400,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     17: PIN_17,
     # перевод: записи и куски, поиск по ним (связи раздела translate — sections.adopt при старте)
     18: TRANSLATE_18,
+    # Claude Code: компьютеры с мостом, история подключений, чаты студии, подписки push
+    19: CODE_19,
 }
 
 
