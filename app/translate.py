@@ -26,11 +26,18 @@
    зовёт модель только после `ocr.idle`: карту освобождает раннер «Сканов» (`free_card`, `_settle`), и модель
    перевода иначе ждала бы её под арендой слота ocr. Скан удалён, с ошибкой или отменён — ошибка записи «скан
    не распознан: …»; «Остановить» во время ожидания отменяет и скан.
-7. Повтор (спека 6.2) — новая запись из прежней: исходник известен — он же (у снимка — блоки с рамками), без
+7. Снимок (спека 6.5, 6.6) — PNG, JPEG, WebP при подключении «Сканов» через сервер: на шару — только PNG после
+   поворота по EXIF (`ocr_render.photo_png`), его же байты уходят в распознавание и показываются — рамки лягут на
+   свои места. Задание (`_spot`) распознаёт его одним запросом `/pages/ocr` с указанием `translate_spot.PROMPT`
+   под `ocr.borrowed` (free_card до, release слота ocr после, учёт в `ocr.EXTERNAL`), строки собирает в блоки
+   (`translate_spot.group`) — куски с рамкой; текста нет — запись «готово» со словами, без модели. Модель — после
+   `ocr.idle`. Блоки переводятся пачками соседних до CHUNK_CHARS одним нумерованным запросом (`_blocks`); номера
+   вернулись не все — каждый блок пачки отдельно.
+8. Повтор (спека 6.2) — новая запись из прежней: исходник известен — он же (у снимка — блоки с рамками), без
    нового распознавания; нет — файл с шары проходит путь загрузки заново. Выгрузка — txt и docx перевода.
-8. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
+9. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
-9. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
+10. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
    запись с кусками (`?from=` — только новые), остановка, «Продолжить», повтор, выгрузка, удаление.
 """
 import asyncio
@@ -56,6 +63,7 @@ import ocr
 import ocr_render
 import sections
 import state
+import translate_spot
 import translate_text
 import upstream
 
@@ -71,6 +79,8 @@ CANCELLED = "остановлено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
 SCAN_FAILED = "скан не распознан"
+PHOTO_FAILED = "снимок не распознан"
+NO_TEXT = "текст на снимке не найден"
 NAME_CHARS = 60                 # имя текстовой записи — начало первой строки исходника
 HEAD_CHARS = 200                 # начало исходника и перевода в ленте
 #: полоса → виды записей в ней
@@ -213,32 +223,40 @@ async def _free(conn) -> None:
         return
 
 
-async def _attempt(job: Job, text: str, origin: str, lang: str) -> str:
+async def _busy(job: Job, waited_from: "float | None") -> float:
+    """503 шлюза: пауза RETRY_SEC с этапом «жду карту · м:сс» от первого отказа; дольше WAIT_MAX_SEC — ошибка,
+    остановка — сразу после паузы. Итог — начало ожидания."""
+    now = clock.NOW()
+    waited_from = now if waited_from is None else waited_from
+    if now - waited_from >= WAIT_MAX_SEC:
+        raise translate_text.TranslateError(f"карта занята дольше {WAIT_MAX_SEC // 60} минут — попробуйте позже")
+    stage = job.stage
+    job.stage, job.stage_at = "жду карту", waited_from
+    _store(job)
+    await clock.SLEEP(RETRY_SEC)
+    _check(job)
+    job.stage = stage
+    _store(job)
+    return waited_from
+
+
+async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = False) -> str:
     """Перевод текста одним запросом; 503 — ждать и повторять (остановка между попытками — сразу).
-    Дельты дописываются к `job.live` после уже готового (половинка обрезанного куска)."""
+    Дельты дописываются к `job.live` после уже готового (половинка обрезанного куска); у нумерованного
+    списка блоков (`blocks`) — нет: «[1] …» — не перевод для показа."""
     head, waited_from = job.live, None
 
     def on_delta(piece: str) -> None:
         _check(job)                                   # «Остановить» — поток бросается на следующей дельте
-        job.live += piece
+        if not blocks:
+            job.live += piece
 
     while True:
         job.live = head
         try:
-            return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta)
+            return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks)
         except translate_text.Busy:
-            now = clock.NOW()
-            waited_from = now if waited_from is None else waited_from
-            if now - waited_from >= WAIT_MAX_SEC:
-                raise translate_text.TranslateError(
-                    f"карта занята дольше {WAIT_MAX_SEC // 60} минут — попробуйте позже") from None
-            stage = job.stage
-            job.stage, job.stage_at = "жду карту", waited_from
-            _store(job)
-            await clock.SLEEP(RETRY_SEC)
-            _check(job)
-            job.stage = stage
-            _store(job)
+            waited_from = await _busy(job, waited_from)
 
 
 async def _chunk(job: Job, text: str, origin: str, lang: str) -> str:
@@ -305,6 +323,13 @@ async def _await_scan(job: Job, row):
     if len(source) > translate_text.TEXT_MAX:
         raise translate_text.TranslateError(TOO_LONG)
     rows = _chunks(source)
+    _set_source(job, source, rows)
+    log.info("перевод %s: скан готов, %d знаков, %d кусков", job.id[:8], len(source), len(rows))
+    return await _await_idle(job)
+
+
+def _set_source(job: Job, source: str, rows: list[tuple]) -> None:
+    """Распознанный исходник и его куски — одной транзакцией."""
     state.DB.execute("BEGIN")
     try:
         state.DB.execute("UPDATE translations SET source = ?, parts = ? WHERE id = ?", (source, len(rows), job.id))
@@ -314,7 +339,11 @@ async def _await_scan(job: Job, row):
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    log.info("перевод %s: скан готов, %d знаков, %d кусков", job.id[:8], len(source), len(rows))
+
+
+async def _await_idle(job: Job):
+    """Модель — только после `ocr.idle`: иначе локальная ждала бы карту под арендой слота ocr. Итог — строка
+    записи заново."""
     job.stage = "готовлю"
     _store(job)
     while not ocr.idle(job.user_id):
@@ -323,12 +352,126 @@ async def _await_scan(job: Job, row):
     return state.DB.execute("SELECT * FROM translations WHERE id = ?", (job.id,)).fetchone()
 
 
-async def _translate(job: Job, row) -> None:
-    """Куски `waiting` по порядку; отказ куска — ошибка записи с его номером."""
+def _read_source(job: Job, media_id: str) -> bytes:
+    """Файл записи — в потоке; нет или шара не отвечает — отказ словами."""
+    try:
+        return _read_media(job.user_id, media_id)
+    except HTTPException as e:
+        raise translate_text.TranslateError(e.detail["message"]) from None
+
+
+async def _spotted(job: Job, png: bytes) -> str:
+    """Ответ распознавания снимка с координатами; 503 — ждать и повторять, как кусок."""
+    waited_from = None
+    while True:
+        try:
+            return await ocr.recognize(job.ocr_conn, png, translate_spot.PROMPT)
+        except ocr.Busy:
+            waited_from = await _busy(job, waited_from)
+
+
+async def _spot(job: Job, row):
+    """Снимок без исходника: распознать под учётом карты (`ocr.borrowed`), блоки — в исходник и куски с рамкой.
+    Текста нет — None (запись «готово» без модели); иначе — строка записи после `ocr.idle`."""
+    job.stage = "распознаю снимок"
+    _store(job)
+    png = await asyncio.to_thread(_read_source, job, row["source_media_id"])
+    _check(job)
+    try:
+        async with ocr.borrowed(job.id, job.user_id, job.ocr_conn):
+            content = await _spotted(job, png)
+            _check(job)                              # ответ остановленного — выбросить
+    except ocr.PageFailed as e:
+        if str(e) != ocr.EMPTY:
+            raise translate_text.TranslateError(f"{PHOTO_FAILED}: {e}") from None
+        content = ""
+    except ocr.OcrError as e:
+        raise translate_text.TranslateError(f"{PHOTO_FAILED}: {e}") from None
+    if job.ocr_conn.kind == "srvllm" and job.ocr_conn.base_url == job.conn.base_url:
+        job.freed = True                             # free_card того же шлюза уже отпустил модели картинок
+    blocks = translate_spot.group(translate_spot.parse(content))
+    log.info("перевод %s: снимок, %d блоков", job.id[:8], len(blocks))
+    if not blocks:
+        return None
+    source = "\n".join(b["source"] for b in blocks)
+    _set_source(job, source, [(b["source"], "\n", json.dumps(b["box"])) for b in blocks])
+    return await _await_idle(job)
+
+
+def _done(job: Job, n: int, text: str) -> None:
+    state.DB.execute("UPDATE translation_parts SET state = 'done', text = ?, detail = NULL"
+                     " WHERE translation_id = ? AND n = ?", (text, job.id, n))
+    state.DB.execute("UPDATE translations SET done_parts = done_parts + 1 WHERE id = ?", (job.id,))
+
+
+def _failed(job: Job, n: int, parts: int, e: Exception) -> translate_text.TranslateError:
+    state.DB.execute("UPDATE translation_parts SET state = 'failed', detail = ? WHERE translation_id = ? AND n = ?",
+                     (str(e), job.id, n))
+    return translate_text.TranslateError(f"кусок {n} из {parts}: {e}")
+
+
+async def _part(job: Job, n: int, source: str, parts: int, origin: str, lang: str) -> None:
+    """Один кусок (или блок снимка) — своим запросом; отказ — кусок `failed`, ошибка записи с его номером."""
+    _check(job)
+    job.stage, job.live = f"перевожу · {n} из {parts}", ""
+    _store(job)
+    try:
+        text = await _chunk(job, source, origin, lang)
+    except translate_text.TranslateError as e:
+        raise _failed(job, n, parts, e) from e
+    _check(job)                                  # ответ остановленного — выбросить
+    _done(job, n, text)
+    job.live = ""
+
+
+def _batches(waiting: list) -> list[list]:
+    """Соседние блоки пачками суммой не длиннее CHUNK_CHARS (длинный блок — пачка сам)."""
+    out: list[list] = []
+    for part in waiting:
+        if out and out[-1][-1]["n"] + 1 == part["n"] and sum(len(p["source"]) for p in out[-1]) + len(
+                part["source"]) <= translate_text.CHUNK_CHARS:
+            out[-1].append(part)
+        else:
+            out.append([part])
+    return out
+
+
+async def _blocks(job: Job, waiting: list, parts: int, origin: str, lang: str) -> None:
+    """Блоки снимка: пачка — одним нумерованным запросом; номера вернулись не все или ответ обрезан — каждый
+    блок пачки отдельно. Каждый блок — свой кусок `done`."""
+    for batch in _batches(waiting):
+        if len(batch) == 1:
+            await _part(job, batch[0]["n"], batch[0]["source"], parts, origin, lang)
+            continue
+        _check(job)
+        first, last = batch[0]["n"], batch[-1]["n"]
+        job.stage, job.live = f"перевожу · {first}–{last} из {parts}", ""
+        _store(job)
+        try:
+            answer = await _attempt(job, translate_text.numbered([p["source"] for p in batch]), origin, lang,
+                                    blocks=True)
+            texts = translate_text.parse_numbered(answer, len(batch))
+        except translate_text.Cut:
+            texts = None
+        except translate_text.TranslateError as e:
+            raise _failed(job, first, parts, e) from e
+        _check(job)                              # ответ остановленного — выбросить
+        if texts is None:
+            log.info("перевод %s: номера блоков %d–%d не сошлись — по одному", job.id[:8], first, last)
+            for p in batch:
+                await _part(job, p["n"], p["source"], parts, origin, lang)
+            continue
+        for p, text in zip(batch, texts):
+            _done(job, p["n"], text)
+
+
+async def _translate(job: Job, row) -> "str | None":
+    """Куски `waiting` по порядку; отказ куска — ошибка записи с его номером. Итог — слова «готово» иные, чем
+    DONE (снимок без текста), или None."""
     if row["source"] is None:
-        if row["scan_id"] is None:               # снимок — исходник ещё распознаётся (задача 5 плана)
-            raise translate_text.TranslateError("исходник не готов")
-        row = await _await_scan(job, row)
+        row = await (_await_scan(job, row) if row["scan_id"] is not None else _spot(job, row))
+        if row is None:
+            return NO_TEXT
     if sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await _free(job.conn)                    # и до определения языка: оно — запрос к той же модели
@@ -336,22 +479,12 @@ async def _translate(job: Job, row) -> None:
     origin, lang = await _languages(job, row)
     waiting = state.DB.execute("SELECT n, source FROM translation_parts WHERE translation_id = ? AND state = 'waiting'"
                                " ORDER BY n", (job.id,)).fetchall()
+    if row["kind"] == "photo":
+        await _blocks(job, waiting, row["parts"], origin, lang)
+        return None
     for part in waiting:
-        _check(job)
-        n = part["n"]
-        job.stage, job.live = f"перевожу · {n} из {row['parts']}", ""
-        _store(job)
-        try:
-            text = await _chunk(job, part["source"], origin, lang)
-        except translate_text.TranslateError as e:
-            state.DB.execute("UPDATE translation_parts SET state = 'failed', detail = ? WHERE translation_id = ? AND n = ?",
-                             (str(e), job.id, n))
-            raise translate_text.TranslateError(f"кусок {n} из {row['parts']}: {e}") from e
-        _check(job)                              # ответ остановленного — выбросить
-        state.DB.execute("UPDATE translation_parts SET state = 'done', text = ?, detail = NULL"
-                         " WHERE translation_id = ? AND n = ?", (text, job.id, n))
-        state.DB.execute("UPDATE translations SET done_parts = done_parts + 1 WHERE id = ?", (job.id,))
-        job.live = ""
+        await _part(job, part["n"], part["source"], row["parts"], origin, lang)
+    return None
 
 
 async def run(job: Job) -> None:
@@ -362,8 +495,7 @@ async def run(job: Job) -> None:
         try:
             job.stage, job.stage_at = "готовлю", clock.NOW()
             state.DB.execute("UPDATE translations SET state = 'working', detail = ? WHERE id = ?", (job.stage, job.id))
-            await _translate(job, row)
-            outcome = ("done", DONE)
+            outcome = ("done", await _translate(job, row) or DONE)
             log.info("перевод %s: готово", job.id[:8])
         except _Cancelled:
             outcome = ("cancelled", CANCELLED)
@@ -466,6 +598,7 @@ async def stop_user(user_id: int) -> None:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        ocr.settle_later()                       # оборванный снимок карту не освободил (`ocr.borrowed`)
 
 
 async def stop() -> None:
@@ -489,6 +622,7 @@ COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, d
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
 FORMAT = "нужен PDF, DOCX, TXT или MD"
 FILE_GONE = "исходный файл удалён"
+NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Распознавание» в настройках"
 #: имя выгрузки текстовой записи: «Перевод.ru.txt»
 TEXT_STEM = "Перевод"
 
@@ -597,17 +731,39 @@ async def _read_file(user_id: int, name: str, data: bytes) -> "tuple[str | None,
     return text, None, reader
 
 
+def _is_photo(data: bytes) -> bool:
+    """Снимок PNG, JPEG, WebP (в потоке: заголовок Pillow); слишком большой — отказ 413, не снимок — False."""
+    try:
+        ocr_render.check_photo(data)
+    except ocr_render.ScanError as e:
+        if e.status == 415:
+            return False
+        raise HTTPException(e.status, {"code": "photo", "message": str(e)}) from None
+    return True
+
+
+def _photo_reader(user_id: int):
+    """(подключение, модель) «Сканов» для снимка: только через сервер, иначе 409 no_ocr словами."""
+    reader = sections.default(user_id, "ocr")
+    if reader is None or not reader[0].proxied:
+        raise HTTPException(409, {"code": "no_ocr", "message": (
+            NO_OCR_PHOTO if reader is None else sections.unlisted(reader[0]))})
+    return reader
+
+
 def _start_file(user_id: int, conn, model: str, *, name: str, source_lang: str, target_lang: str, media_id: str,
-                text: "str | None", pages: "list[dict] | None", reader) -> str:
-    """Запись-файл в полосу `file`; скан — сначала документ «Сканов» с тем же файлом. Без await: между проверкой
-    очереди и записью она не изменится, отказ (409 busy любой из двух очередей) не оставит половины."""
+                text: "str | None", pages: "list[dict] | None", reader, kind: str = "file") -> str:
+    """Запись-файл или снимок (`kind`, исходник распознает задание) в полосу `file`; скан — сначала документ
+    «Сканов» с тем же файлом. Без await: между проверкой очереди и записью она не изменится, отказ (409 busy любой
+    из двух очередей) не оставит половины."""
     scan_id = None
     if pages is not None:
         _check_queue(user_id, "file")
         scan_id = ocr.create(user_id, reader[0], reader[1], name, origin="section", source_media_id=media_id,
                              pages=pages)
-    tid = create(user_id, conn, model, kind="file", name=name, source_lang=source_lang, target_lang=target_lang,
-                 source=text, source_media_id=media_id, scan_id=scan_id)
+    tid = create(user_id, conn, model, kind=kind, name=name, source_lang=source_lang, target_lang=target_lang,
+                 source=text, source_media_id=media_id, scan_id=scan_id,
+                 ocr_conn=reader[0] if kind == "photo" else None)
     if scan_id is not None:
         ocr.kick(user_id)
         log.info("перевод %s: скан %s, %d стр. на распознавание", tid[:8], scan_id[:8],
@@ -619,7 +775,9 @@ def _start_file(user_id: int, conn, model: str, *, name: str, source_lang: str, 
 @router.post("/files", status_code=202)
 async def translate_file(request: Request):
     """Файл — multipart, одно поле `file` (имя — из части, не из строки запроса: её пишет журнал Apache); языки,
-    подключение и модель — заголовками `X-Studio-*`. Отказы — до записи на шару; после неё — файл удаляется."""
+    подключение и модель — заголовками `X-Studio-*`. Отказы — до записи на шару; после неё — файл удаляется.
+    Снимок (`ocr_render.check_photo` его принял) — нужно подключение «Сканов» через сервер; на шару — только PNG
+    после поворота по EXIF: его байты и распознаются, и показываются."""
     uid = request.state.user.id
     source_lang = request.headers.get("x-studio-source-lang", "")
     target_lang = request.headers.get("x-studio-target-lang", "")
@@ -630,10 +788,19 @@ async def translate_file(request: Request):
         name, data = await documents.read_upload(request)
     except documents.DocumentError as e:
         raise HTTPException(e.status, {"code": "upload", "message": str(e)}) from None
-    text, pages, reader = await _read_file(uid, name, data)
+    if await asyncio.to_thread(_is_photo, data):
+        kind, text, pages, reader = "photo", None, None, _photo_reader(uid)
+        try:
+            data = await asyncio.to_thread(ocr_render.photo_png, data)
+        except ocr_render.ScanError as e:
+            raise HTTPException(e.status, {"code": "format", "message": str(e)}) from None
+        mime, stored = "image/png", f"{_stem(name)}.png"
+    else:
+        kind, (text, pages, reader) = "file", await _read_file(uid, name, data)
+        mime, stored = chat.DOC_MIME[PurePosixPath(name.lower()).suffix], name
     _check_queue(uid, "file")                        # полная полоса — до записи на шару
     try:
-        media_id = await media.save_async(uid, data, chat.DOC_MIME[PurePosixPath(name.lower()).suffix], name)
+        media_id = await media.save_async(uid, data, mime, stored)
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
     if not media.alive(uid, media_id):               # история стёрта, пока шла запись
@@ -641,7 +808,7 @@ async def translate_file(request: Request):
         raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
     try:
         tid = _start_file(uid, conn, model, name=name, source_lang=source_lang, target_lang=target_lang,
-                          media_id=media_id, text=text, pages=pages, reader=reader)
+                          media_id=media_id, text=text, pages=pages, reader=reader, kind=kind)
     except HTTPException:                            # очередь заполнилась, пока шла запись
         await media.delete_async(uid, media_id)
         raise
@@ -716,12 +883,15 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
     else:
         if media_id is None or not media.alive(uid, media_id):
             raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
-        data = await asyncio.to_thread(_read_media, uid, media_id)
-        text, pages, reader = await _read_file(uid, row["name"], data)
-        if not media.alive(uid, media_id):           # удалён, пока читали
-            raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
+        if row["kind"] == "photo":                   # PNG на шаре уже повёрнут — распознает задание
+            text, pages, reader = None, None, _photo_reader(uid)
+        else:
+            data = await asyncio.to_thread(_read_media, uid, media_id)
+            text, pages, reader = await _read_file(uid, row["name"], data)
+            if not media.alive(uid, media_id):       # удалён, пока читали
+                raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
         new = _start_file(uid, conn, model, name=row["name"], media_id=media_id, text=text, pages=pages,
-                          reader=reader, **langs)
+                          reader=reader, kind=row["kind"], **langs)
     log.info("перевод %s: повтор %s", new[:8], tid[:8])
     return _out(_row(uid, new))
 

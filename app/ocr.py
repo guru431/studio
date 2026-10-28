@@ -17,7 +17,8 @@
    освобождает карту. Слот ocr освобождает студия, а не документ (`LEASED`, `_settle`): после каждого
    документа (звал он шлюз или нет) и после отмены ждущего — release шлюзов, чей слот взят, если в студии
    не идёт и не ждёт другое распознавание (иначе следующее заплатит холодный старт). Из обработчиков
-   HTTP — фоном (`settle_later`, SETTLING): ответ шлюза не ждёт.
+   HTTP — фоном (`settle_later`, SETTLING): ответ шлюза не ждёт. Распознавание вне раздела (снимок перевода)
+   идёт под `borrowed`: тот же порядок карты, а учёт — в EXTERNAL, чтобы release одного не бил по идущему другому.
 5. Стирание истории, удаление и отключение учётки (`stop_user`) — ждущие отменены, идущий оборван
    сразу, затем release фоном (оборванную страницу шлюз ещё считает — 409 и повтор); остановка службы
    (`stop`) — идущий — ошибка «прервано», ждущие — их сделает ошибкой `recover` при старте, release фоном
@@ -34,6 +35,7 @@ import base64
 import json
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import httpx
@@ -80,6 +82,7 @@ CANCELLED = "отменено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
 UNREADABLE = "страница не читается — файл повреждён"
+EMPTY = "на странице не найден текст"
 
 log = logging.getLogger("studio")
 
@@ -123,6 +126,9 @@ LEASED: dict[str, object] = {}
 #: release фоном (`settle_later`): ответ отмены и стирания истории шлюза не ждёт; ход чата ждёт и их (`idle`),
 #: остановка службы гасит (`stop`)
 SETTLING: set[asyncio.Task] = set()
+#: распознавание вне раздела (`borrowed`): ключ задания → пользователь. Пока оно идёт, слот ocr не освобождают
+#: (`_scanning`), а ход чата этого пользователя ждёт (`idle`)
+EXTERNAL: dict[str, int] = {}
 
 
 # ---- шлюз --------------------------------------------------------------------
@@ -142,13 +148,13 @@ def _layout_only(text: str) -> bool:
         for block in blocks)
 
 
-async def recognize(conn, png: bytes) -> str:
-    """Markdown одной страницы."""
+async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
+    """Ответ модели на страницу: с PROMPT — Markdown, со своим указанием (`translate_spot`) — его формат."""
     body = {"model": MODEL, "temperature": 0, "max_tokens": MAX_TOKENS, "messages": [
         {"role": "system", "content": ""},
         {"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"}},
-            {"type": "text", "text": PROMPT}]}]}
+            {"type": "text", "text": prompt}]}]}
     try:
         r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr", timeout=PAGE_TIMEOUT_SEC, json=body)
     except httpx.TimeoutException:
@@ -169,7 +175,7 @@ async def recognize(conn, png: bytes) -> str:
     if finish == "length":
         raise PageFailed("ответ модели обрезан — страница слишком плотная")
     if not isinstance(content, str) or not content.strip():
-        raise PageFailed("на странице не найден текст")
+        raise PageFailed(EMPTY)
     if _layout_only(content):
         raise PageFailed("модель вернула разметку без текста")
     return content.strip()
@@ -274,7 +280,10 @@ def progress(scan_ids: list[str]) -> tuple[int, int]:
 def idle(user_id: int) -> bool:
     """Раннер пользователя не дописывает свой последний документ и нет release фоном (SETTLING): после итога
     карту ещё освобождают, и ход чата, позвавший модель раньше, ждал бы её под арендой слота ocr. Идут другие
-    его документы — карту никто не освободит (`run`), ждать нечего."""
+    его документы — карту никто не освободит (`run`), ждать нечего. Его распознавание вне раздела (EXTERNAL) —
+    ждать: слот освободит его конец."""
+    if user_id in EXTERNAL.values():
+        return False
     if state.DB.execute(f"SELECT 1 FROM scans WHERE user_id = ? AND state IN {RUNNING} LIMIT 1",
                         (user_id,)).fetchone() is not None:
         return True
@@ -439,7 +448,29 @@ async def _settle() -> None:
 
 
 def _scanning() -> bool:
-    return state.DB.execute(f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is not None
+    return bool(EXTERNAL) or state.DB.execute(
+        f"SELECT 1 FROM scans WHERE state IN {RUNNING} LIMIT 1").fetchone() is not None
+
+
+@asynccontextmanager
+async def borrowed(key: str, user_id: int, conn):
+    """Распознавание вне раздела (снимок перевода) — с картой, как документ: до — `speech.free_card`, слот —
+    в LEASED, после — `_settle` (и после обычного исключения: ответ шлюза уже пришёл). Пока идёт — в EXTERNAL:
+    `_scanning` истинна, release другого его не оборвёт. Оборванное (CancelledError) карту не освобождает, как
+    `run`: его отпускает фоном stop_user."""
+    EXTERNAL[key] = user_id
+    cancelled = False
+    try:
+        await speech.free_card(conn)
+        LEASED[conn.base_url] = conn
+        yield
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        EXTERNAL.pop(key, None)
+        if not cancelled:
+            await _settle()
 
 
 def settle_later() -> None:
