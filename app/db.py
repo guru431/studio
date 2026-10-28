@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 17
+VERSION = 18
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -235,6 +235,35 @@ PIN_17 = """ALTER TABLE users ADD COLUMN pin_hash TEXT;
 ALTER TABLE users ADD COLUMN pin_fails INTEGER NOT NULL DEFAULT 0;
 """
 
+#: перевод (translate.py, спека 2026-10-28-studio-translator-design, 6.7 и 6.8): запись — `translations` (kind —
+#: текст, файл, снимок; name — у текста начало первой строки исходника, у файла и снимка — имя файла; scan_id —
+#: документ «Сканов» без ссылки; source — NULL, пока исходник не известен; text — склейка готовых кусков, пишется
+#: в конце задания), куски — `translation_parts` с n от 1 (у снимка — блок, box — JSON [x1, y1, x2, y2] в долях
+#: 0…1000). Поиск — триггерами: имя, исходник и перевод (каждый — первые INDEX_CHARS). Связи раздела translate
+#: ставит код при старте (sections.adopt): список разрешённых адресов в SQL не виден
+_TRANSLATION = (f"new.name || ' ' || substr(COALESCE(new.source, ''), 1, {INDEX_CHARS})"
+                f" || ' ' || substr(COALESCE(new.text, ''), 1, {INDEX_CHARS})")
+TRANSLATE_18 = f"""CREATE TABLE translations(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('text','file','photo')), connection_id INTEGER, model TEXT NOT NULL,
+      source_lang TEXT NOT NULL, target_lang TEXT NOT NULL, detected_lang TEXT, result_lang TEXT,
+      name TEXT NOT NULL, source_media_id TEXT, scan_id TEXT, source TEXT, text TEXT,
+      parts INTEGER NOT NULL DEFAULT 0, done_parts INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL, detail TEXT NOT NULL, created REAL NOT NULL, finished REAL);
+CREATE TABLE translation_parts(translation_id TEXT NOT NULL REFERENCES translations ON DELETE CASCADE,
+      n INTEGER NOT NULL, source TEXT NOT NULL, sep TEXT NOT NULL DEFAULT '', box TEXT, text TEXT,
+      state TEXT NOT NULL CHECK (state IN ('waiting','done','failed')), detail TEXT, PRIMARY KEY (translation_id, n));
+CREATE INDEX translations_user_created ON translations(user_id, created);
+CREATE INDEX translations_state ON translations(state);
+CREATE TRIGGER search_translations_ai AFTER INSERT ON translations BEGIN
+  {_DOC} ('translate', new.id, '', new.user_id, new.model, new.created, {_TRANSLATION}); END;
+CREATE TRIGGER search_translations_au AFTER UPDATE OF name, source, text ON translations
+  WHEN old.name IS NOT new.name OR old.source IS NOT new.source OR old.text IS NOT new.text BEGIN
+  DELETE FROM search_docs WHERE section = 'translate' AND item = old.id;
+  {_DOC} ('translate', new.id, '', new.user_id, new.model, new.created, {_TRANSLATION}); END;
+CREATE TRIGGER search_translations_ad AFTER DELETE ON translations BEGIN
+  DELETE FROM search_docs WHERE section = 'translate' AND item = old.id; END;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -277,7 +306,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -342,6 +371,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     16: OCR_16,
     # PIN блокировки на телефоне: хеш PIN учётки и счёт неверных
     17: PIN_17,
+    # перевод: записи и куски, поиск по ним (связи раздела translate — sections.adopt при старте)
+    18: TRANSLATE_18,
 }
 
 

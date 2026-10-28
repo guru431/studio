@@ -20,7 +20,7 @@ def test_gateway_joins_every_section_with_its_catalog(studio):
     cid = add_gateway(studio)
     uid = uid_of_owner()
     # порядок вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1): API отдаёт разделы в нём
-    assert sections.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "ocr", "dictation")
+    assert sections.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation")
     assert sections.sections_of(uid, cid) == list(sections.SECTIONS)
     assert [link.models for link in sections.links(uid, "photo")] == [("lustify", "flux")]
     assert sections.default(uid, "photo")[1] == "lustify" and sections.default(uid, "chat")[1] == "local-gemma-abl"
@@ -36,6 +36,57 @@ def test_new_srvllm_connection_gets_ocr(studio):
     assert ocr["links"][0]["models"] == ["hunyuan-ocr"] and ocr["default"] == {"connection_id": cid, "model": "hunyuan-ocr"}
     assert "ocr" in sections.SERVER_ONLY and sections.capabilities(uid_of_owner())["ocr"] is True
     assert studio.c.get(f"/api/sections/ocr/links/{cid}/found").json()["items"] == ["hunyuan-ocr"]
+
+
+def _forget_translate(uid: int) -> None:
+    """Как до выкладки раздела: связей и умолчания translate нет, флага переноса нет."""
+    state.DB.execute("DELETE FROM section_links WHERE user_id = ? AND section = 'translate'", (uid,))
+    state.DB.execute("DELETE FROM section_defaults WHERE user_id = ? AND section = 'translate'", (uid,))
+    state.DB.execute("DELETE FROM settings WHERE key = 'adopted:translate'")
+
+
+def test_adopt_copies_server_chat_links_and_the_default_once(studio):
+    """«Перевод» после выкладки: связи чата через сервер — в переводчике с теми же моделями, прямое — нет;
+    умолчание — умолчание чата. Второй вызов не возвращает связь, которую пользователь убрал."""
+    assert state.DB.execute("SELECT value FROM settings WHERE key = 'adopted:translate'").fetchone() is not None
+    gw = add_gateway(studio)
+    listed = add_connection(studio, base_url="http://10.77.1.15:4000/v1", name="listed", chat_models=("gpt-x",))
+    add_connection(studio, base_url="https://direct.test/v1", name="direct", chat_models=("gpt-y",))
+    uid = uid_of_owner()
+    _forget_translate(uid)
+    sections.adopt("translate", "chat")
+    out = sections.section_out(uid, "translate")
+    assert [(l["connection"]["id"], l["models"]) for l in out["links"]] == [(gw, ["local-gemma-abl"]), (listed, ["gpt-x"])]
+    assert out["default"] == {"connection_id": gw, "model": "local-gemma-abl"}
+    sections.unlink(uid, "translate", listed)
+    sections.adopt("translate", "chat")                  # флаг стоит — не возвращает
+    assert [l["connection"]["id"] for l in sections.section_out(uid, "translate")["links"]] == [gw]
+    # умолчание чата — у перенесённого подключения: оно и в переводчике
+    _forget_translate(uid)
+    sections.set_default(uid, "chat", listed, "gpt-x")
+    sections.adopt("translate", "chat")
+    assert sections.section_out(uid, "translate")["default"] == {"connection_id": listed, "model": "gpt-x"}
+
+
+def test_adopt_without_a_server_chat_default_settles_the_first_link(studio):
+    """Умолчание чата — прямое подключение: в переводчик не переносится, умолчание — общее правило."""
+    gw = add_gateway(studio)
+    direct = add_connection(studio, base_url="https://direct.test/v1", name="direct", chat_models=("gpt-y",))
+    uid = uid_of_owner()
+    sections.set_default(uid, "chat", direct, "gpt-y")
+    _forget_translate(uid)
+    sections.adopt("translate", "chat")
+    assert sections.section_out(uid, "translate")["default"] == {"connection_id": gw, "model": "local-gemma-abl"}
+
+
+def test_translate_is_server_only_for_both_kinds(studio):
+    """Перевод идёт в фоне — только через сервер, у обоих видов подключений; прямое — 422 server."""
+    assert "translate" in sections.SERVER_ONLY and all("translate" in k for k in connections.KINDS.values())
+    assert sections.NAMES["translate"] == "Перевод"
+    add_gateway(studio)
+    direct = add_connection(studio, base_url="https://direct.test/v1", name="direct")
+    r = studio.c.post("/api/sections/translate/links", json={"connection_id": direct})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "server"
 
 
 def test_openai_cannot_join_video_and_outside_the_list_only_chat(studio):

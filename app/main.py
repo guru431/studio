@@ -69,6 +69,7 @@ async def lifespan(_app):
     state.CFG = config.load()
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
+    sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     audio.clean_tmp()
     images.recover()
     chat.recover()
