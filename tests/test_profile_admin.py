@@ -378,6 +378,28 @@ def test_deleting_a_user_removes_rows_and_files(studio, env):
     assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 404
 
 
+def test_deleting_a_user_drops_its_links_and_rows(studio):
+    """Удаление учётки в панели: канал её моста закрыт 4401, компьютеры, история подключений, отметки чатов
+    Claude Code и подписки push уходят с ней (спека claude-code 6.1)."""
+    from fake_bridge import FakeMachine, connect, enroll, pid
+    from test_push import Device
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob")
+    aid, _ = enroll(studio, login="bob")
+    link = connect(studio, aid, FakeMachine({"alpha": {"files": {}, "git": None, "chats": {}}}))
+    signin(studio, "bob")
+    assert studio.c.post(f"/api/code/agents/{aid}/open", json={"pin": None}).status_code == 204
+    assert studio.c.post(f"/api/code/agents/{aid}/projects/{pid('alpha')}/chats").status_code == 201
+    assert studio.c.post("/api/me/push", json=Device().body()).status_code == 204
+    tables = ("agents", "agent_events", "code_chats", "push_subs")
+    rows = lambda: [state.DB.execute(f"SELECT COUNT(*) FROM {t} WHERE user_id = ?", (bob,)).fetchone()[0]  # noqa: E731
+                    for t in tables]
+    assert all(rows())
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    assert link.closed_with == 4401
+    assert rows() == [0, 0, 0, 0]
+
+
 def test_a_missing_file_does_not_stop_the_wipe(studio, env):
     make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
     add_history(studio, env, bob).unlink()

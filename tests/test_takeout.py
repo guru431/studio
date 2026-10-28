@@ -81,6 +81,27 @@ def history(uid, tag):
     return m
 
 
+def code_history(uid, tag):
+    """Компьютер Claude Code учётки с двумя событиями, чатом студии и подпиской push (на новую сессию).
+    Возвращает (id компьютера, хеш ключа устройства, адрес подписки)."""
+    key_hash = hashlib.sha256(f"{tag}-device-key".encode()).hexdigest()
+    aid = state.DB.execute("INSERT INTO agents(user_id, name, key_hash, has_pin, projects_root, cc_version, created,"
+                           " last_seen) VALUES (?, ?, ?, 1, ?, '2.3.1', ?, ?)",
+                           (uid, f"{tag} ПК", key_hash, f"C:\\{tag}-root", T0, T0 + 1)).lastrowid
+    put("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind, device, ip)"
+        " VALUES (?, ?, ?, ?, 'enroll', NULL, '10.77.48.5')", uid, aid, f"{tag} ПК", T0)
+    put("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind, device, ip)"
+        " VALUES (?, ?, ?, ?, 'pin_ok', 'телефон Safari', '10.77.1.1')", uid, aid, f"{tag} ПК", T0 + 3)
+    put("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
+        " VALUES (?, ?, '0123456789abcdef', ?, 'closed', ?, ?)", uid, aid, f"{tag}-session", T0, T0 + 2)
+    auth.create_session(uid)
+    digest = state.DB.execute("SELECT digest FROM sessions WHERE user_id = ? ORDER BY rowid DESC", (uid,)).fetchone()[0]
+    endpoint = f"https://fcm.googleapis.com/fcm/send/{tag}-endpoint-secret"
+    put("INSERT INTO push_subs(endpoint, user_id, digest, p256dh, auth, created) VALUES (?, ?, ?, ?, ?, ?)",
+        endpoint, uid, digest, f"{tag}-p256dh-secret", f"{tag}-auth-secret", T0)
+    return aid, key_hash, endpoint
+
+
 def prepare(studio, sections=None):
     return studio.c.post("/api/me/export", json={"sections": ALL if sections is None else sections})
 
@@ -116,7 +137,8 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
              ((r["id"], r["mime"]) for r in state.DB.execute("SELECT id, mime FROM media"))}
     assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images/0001.json",
                           "videos/0001.json", "transcripts/0001.json", "scans/0001.json", "speeches/0001.json",
-                          "voices/0001.json", "translations/0001.json", "manifest.json"} | files
+                          "voices/0001.json", "translations/0001.json", "code_chats/0001.json",
+                          "agent_events/0001.json", "manifest.json"} | files
     assert {zipfile.ZIP_STORED} == {i.compress_type for i in zf.infolist()}
     chat = json.loads(zf.read("chats/minechat1.json"))
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
@@ -163,7 +185,8 @@ def test_export_takes_only_chosen_sections(studio):
                                                                "manifest.json"}
     assert json.loads(unzip(z).read("manifest.json"))["sections"] == ["photo"]
     # разделы — по порядку вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1), голоса — за озвучкой
-    assert takeout.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate")
+    assert takeout.SECTIONS == ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate",
+                                "code", "agents")
 
 
 def test_export_never_holds_another_users_rows_or_files(studio):
@@ -185,6 +208,7 @@ def test_export_holds_no_secrets(studio):
     pin_hash = security.hash_password("0007")
     put("UPDATE users SET pin_hash = ? WHERE id = ?", pin_hash, uid)
     history(uid, "mine")
+    _, key_hash, endpoint = code_history(uid, "mine")
     _, z = download(studio)
     settings = json.loads(unzip(z).read("settings.json"))
     assert settings["connections"][0] == {"id": settings["connections"][0]["id"], "name": "openai", "kind": "openai",
@@ -195,7 +219,9 @@ def test_export_holds_no_secrets(studio):
     session = state.DB.execute("SELECT digest, csrf FROM sessions WHERE user_id = ?", (uid,)).fetchone()
     for secret in (pw_hash.split("$")[-1].encode(), token_enc, b"cloud-key-very-secret", session["digest"].encode(),
                    session["csrf"].encode(), b"pk-credential-id", b"token", b"pw_hash", b"csrf",
-                   pin_hash.split("$")[-1].encode(), pin_hash.split("$")[-2].encode(), b"pin_hash"):
+                   pin_hash.split("$")[-1].encode(), pin_hash.split("$")[-2].encode(), b"pin_hash",
+                   key_hash.encode(), b"key_hash", b"mine-device-key", endpoint.encode(), b"endpoint-secret",
+                   b"mine-p256dh-secret", b"mine-auth-secret"):
         assert secret not in z.content, secret
 
 
@@ -388,7 +414,7 @@ def test_export_sends_entry_headers_apart_from_their_data(studio):
     history(uid, "mine")
     pieces = drain(uid, prepare(studio).json()["id"])
     headers = [p for p in pieces if p[:4] == b"PK\x03\x04"]
-    assert len(headers) == 21                    # README, settings, 2 диалога, 7 разделов, 9 файлов, манифест
+    assert len(headers) == 23                    # README, settings, 2 диалога, 9 разделов, 9 файлов, манифест
     for p in headers:
         name_len, extra_len = struct.unpack_from("<HH", p, 26)
         assert len(p) == 30 + name_len + extra_len, p[30:30 + name_len]
@@ -480,6 +506,38 @@ def test_export_holds_translations_with_parts_and_files(studio):
                   {"n": 2, "source": "mine staff", "box": None, "text": None, "state": "failed", "detail": "отказ"}]}]
     assert json.loads(zf.read("manifest.json"))["counts"]["translations"] == 1
     assert "translations/" in zf.read("README.txt").decode("utf-8")
+    assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
+
+
+def test_export_has_code_chats_and_agent_events(studio):
+    """Claude Code: отметки чатов студии и история подключений (с именем компьютера) — страницами; файлов у них
+    нет; ключа устройства, подписки push и чужого — нет (спека claude-code 6.1)."""
+    bob = make_user(studio, "bob"); uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    code_history(bob, "theirs")
+    aid, _, _ = code_history(uid, "mine")
+    est, z = download(studio, ["code", "agents"])
+    zf = unzip(z)
+    assert est["files"] == 0
+    assert set(zf.namelist()) == {"README.txt", "settings.json", "code_chats/0001.json", "agent_events/0001.json",
+                                  "manifest.json"}
+    assert json.loads(zf.read("code_chats/0001.json")) == [{
+        "agent_id": aid, "project": "0123456789abcdef", "session_id": "mine-session", "state": "closed",
+        "created": T0, "updated": T0 + 2}]
+    events = json.loads(zf.read("agent_events/0001.json"))
+    assert [{k: v for k, v in e.items() if k != "id"} for e in events] == [
+        {"created": T0, "kind": "enroll", "agent_id": aid, "agent_name": "mine ПК", "device": None, "ip": "10.77.48.5"},
+        {"created": T0 + 3, "kind": "pin_ok", "agent_id": aid, "agent_name": "mine ПК", "device": "телефон Safari",
+         "ip": "10.77.1.1"}]
+    assert list(events[0]) == ["id", "created", "kind", "agent_id", "agent_name", "device", "ip"]
+    manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["sections"] == ["code", "agents"]
+    assert manifest["counts"] == {"code_chats": 1, "agent_events": 2, "files": 0}
+    readme = zf.read("README.txt").decode("utf-8")
+    assert ("- code_chats/ — чаты Claude Code: компьютер, проект (id), номер сессии, открыт или закрыт; текста нет —"
+            " он на компьютере.") in readme.replace("\n  ", " ")
+    assert "- agent_events/ — история подключений компьютеров Claude Code." in readme.replace("\n  ", " ")
+    assert "ключей устройств" in readme.replace("\n", " ")
     assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
 
 

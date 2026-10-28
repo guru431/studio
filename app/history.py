@@ -1,5 +1,5 @@
 """Вся история пользователя: чаты с сообщениями, вложения, картинки, ролики, расшифровки, голоса,
-озвучки и файлы media."""
+озвучки, отметки чатов Claude Code и файлы media."""
 import asyncio
 import logging
 
@@ -55,8 +55,10 @@ async def delete_all(user_id: int) -> int:
         media.queue(user_id, failed)
         state.DB.execute("DELETE FROM attachments WHERE user_id = ?", (user_id,))
         state.DB.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))      # сообщения — каскадом
-        # scan_pages и translation_parts — каскадом
-        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "media"):
+        # scan_pages и translation_parts — каскадом; code_chats — отметки студии, сессии остаются на машинах;
+        # agents, agent_events и push_subs — не история (спека claude-code 6.1)
+        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
+                      "media"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         state.DB.execute("COMMIT")
     except BaseException:
