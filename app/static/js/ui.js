@@ -52,6 +52,17 @@ export function button(text, attrs = {}, onClick) {
   return node;
 }
 
+/** «Скачать мост для Windows» (спека 2026-10-28-studio-agent-download-and-window-design, 4.2): ссылка на ZIP моста
+ * Claude Code, что нужно и шаги установки. Один источник — «Claude Code» без компьютеров и «Настройки» → «Прочее». */
+export function agentDownload() {
+  return el('div', { class: 'agent-download' },
+    el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: true },
+      'Скачать мост для Windows'),
+    el('p', { class: 'muted small agent-download-needs' }, 'ZIP, нужны Python 3.11+ и Claude Code'),
+    el('p', { class: 'agent-download-steps' }, 'Распакуйте архив и запустите install.cmd. В окне моста войдите логином'
+      + ' и паролем студии — компьютер появится здесь.'));
+}
+
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.
  * Закрылось (Escape, «Отмена», close()) — убирается со страницы. */
 export function openDialog(host, { id, title, body = [], actions = [], cancelText = 'Отмена' }) {
