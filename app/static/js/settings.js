@@ -361,7 +361,8 @@ export function queueText(pending) {
  * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
 const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
-  ['speech', 'Озвучка'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод']];
+  ['speech', 'Озвучка'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
+  ['code', 'Claude Code: чаты'], ['agents', 'Claude Code: подключения']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -489,7 +490,8 @@ function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
-    const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.');
+    const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.'
+      + ' Чаты Claude Code хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
     const fail = el('p', { class: 'error' });
     const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });

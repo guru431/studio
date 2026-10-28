@@ -8,7 +8,8 @@
   (`images/0001.json` …; пустой раздел — одна пустая страница), `files/<media id><расширение>`,
   последним — manifest.json с sha256 всего записанного. Идёт не больше одной выгрузки у пользователя
   (RUNNING): вторая загрузка, пока идёт первая, — 409 `busy` словами.
-- Всё — своё (`user_id` сессии). Нет токенов подключений, хеша пароля, сессий, CSRF, passkey.
+- Всё — своё (`user_id` сессии). Нет токенов подключений, хеша пароля, сессий, CSRF, passkey, хешей ключей
+  устройств Claude Code (`agents` не выгружается — только `agent_events`) и подписок push.
 - База — только с цикла событий (одна state.DB): генератор асинхронный, строки читает порциями —
   диалог, страница раздела. JSON, CRC-32 и sha256 — в потоке (asyncio.to_thread, `_pack`): страница
   картинок с цепочками — мегабайты, и цикл событий (потоки чата всех) их не ждёт; заголовок записи и
@@ -38,7 +39,8 @@ import db
 import media
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate")   # порядок вкладок студии
+#: порядок вкладок студии; Claude Code — в конце: отметки чатов (code) и история подключений (agents)
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate", "code", "agents")
 #: большая выгрузка качается дольше 10 минут архива выделенного
 EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2
@@ -83,12 +85,14 @@ README = """Выгрузка истории студии
 - translations/0001.json … — переводы, так же страницами: вид (текст, файл, снимок), языки (выбранные,
   определённый, итоговый), исходный текст и перевод, куски по порядку (у снимка — рамка блока в долях
   0…1000) с состоянием; исходный файл или снимок — ссылкой «files/…».
+- code_chats/ — чаты Claude Code: компьютер, проект (id), номер сессии, открыт или закрыт; текста нет — он на компьютере.
+- agent_events/ — история подключений компьютеров Claude Code.
 - files/<id>.<расширение> — сами файлы (без миниатюр).
 - manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
   (files) и каждой записи JSON и этого описания (entries), id файлов, которых на хранилище уже не
   было (missing).
 
-Ключей подключений, ключа Exa, пароля и сессий в выгрузке нет. Обратно в студию выгрузка не загружается —
+Ключей подключений, ключа Exa, ключей устройств, пароля и сессий в выгрузке нет. Обратно в студию выгрузка не загружается —
 это формат для чтения и хранения. Время — секунды Unix (UTC).
 """
 
@@ -112,7 +116,7 @@ def _maybe_json(text):
 def _media_rows(user_id: int, sections: tuple[str, ...]) -> list:
     """Свои строки media, на которые ссылаются записи выбранных разделов, — по времени."""
     parts = [f"SELECT {col} FROM {table} WHERE user_id = ?{extra}"
-             for table, cols, extra in (r for s in sections for r in (REFS[s], *MORE_REFS.get(s, ())))
+             for table, cols, extra in (r for s in sections if s in REFS for r in (REFS[s], *MORE_REFS.get(s, ())))
              for col in cols]
     if not parts:
         return []
@@ -252,10 +256,21 @@ def _translations(user_id: int, rows: list, files: dict) -> list:
             for r in rows]
 
 
+def _code_chats(user_id: int, rows: list, files: dict) -> list:
+    """Отметки студии о чатах Claude Code — без текста: он на компьютере."""
+    return [_pick(r, "agent_id", "project", "session_id", "state", "created", "updated") for r in rows]
+
+
+def _agent_events(user_id: int, rows: list, files: dict) -> list:
+    """История подключений компьютеров (с именем компьютера на момент события); ключа устройства тут нет."""
+    return [_pick(r, "id", "created", "kind", "agent_id", "agent_name", "device", "ip") for r in rows]
+
+
 #: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
 TABLES = {"photo": ("images", _images), "video": ("videos", _videos), "transcribe": ("transcripts", _transcripts),
           "ocr": ("scans", _scans), "speech": ("speeches", _speeches), "voices": ("voices", _voices),
-          "translate": ("translations", _translations)}
+          "translate": ("translations", _translations), "code": ("code_chats", _code_chats),
+          "agents": ("agent_events", _agent_events)}
 
 
 # ---- запись: JSON и суммы — в потоке ------------------------------------------------

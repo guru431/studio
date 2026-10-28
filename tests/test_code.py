@@ -721,3 +721,25 @@ def test_file_paths_never_reach_the_log(studio, caplog, monkeypatch):
         assert line in text_, line
     for secret in ("секрет", "тайное", "alpha", "Рабочий", ALPHA, sha(PDF)):
         assert secret not in text_, secret
+
+
+# ---- стирание истории ----------------------------------------------------------------
+
+def test_wipe_forgets_code_chats_but_keeps_agents_events_and_push(studio):
+    """«Удалить всю историю» стирает отметки студии (code_chats), но не компьютеры, не историю подключений и
+    не подписки push (спека 6.1); сами сессии — на машине, мост ничего не получает."""
+    from test_push import Device
+    aid, m, link = setup(studio)
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+    assert studio.c.patch(url(aid, "projects", ALPHA, "chats", B), json={"state": "closed"}).status_code == 200
+    assert studio.c.post("/api/me/push", json=Device().body()).status_code == 204
+    count = lambda table: state.DB.execute(f"SELECT count(*) FROM {table}").fetchone()[0]     # noqa: E731
+    before = {t: count(t) for t in ("agents", "agent_events", "push_subs")}
+    assert count("code_chats") == 2 and all(before.values())
+    requests, frames = len(m.requests), len(link.sent)
+    assert studio.c.delete("/api/history").status_code == 200
+    assert count("code_chats") == 0
+    assert {t: count(t) for t in ("agents", "agent_events", "push_subs")} == before
+    assert len(m.requests) == requests and len(link.sent) == frames and link.closed_with is None
+    items = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
+    assert {i["chat"]: i["state"] for i in items} == {A: "open", B: "open"}          # сессии машины остались

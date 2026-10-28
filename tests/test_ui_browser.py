@@ -767,6 +767,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
         *go("settings/other"), ("wait", "document.querySelector('#history-wipe')"),
         ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")),
         ("eval", "confirmHidden", "document.querySelector('#wipe-confirm').hidden"),
+        ("eval", "warning", "document.querySelector('#wipe-dialog p').textContent"),
         ("click", "#wipe-next"), ("wait", "!document.querySelector('#wipe-confirm').hidden"),
         ("click", "#wipe-confirm"),
         # начало: Windows иногда на миг держит свежий файл (антивирус) — он уходит в очередь удаления,
@@ -780,6 +781,8 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     v = r["values"]
     assert v["made"] is True and v["before"] == [1, 1]
     assert v["confirmHidden"] is True and v["closed"] is True
+    assert v["warning"].endswith(" Чаты Claude Code хранятся на компьютерах — студия забудет только свои отметки,"
+                                 " сами сессии останутся.")
     assert v["after"] == [0, 0] and v["conns"] == 1
     assert not problems(r), problems(r)
 
@@ -833,6 +836,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         *go("settings/other"), ("wait", "document.querySelector('#export-open')"),
         ("click", "#export-open"), ("wait", is_open("#export-dialog")),
         ("eval", "boxes", f"{boxes}.map((b) => [b.value, b.checked])"),
+        ("eval", "labels", f"{boxes}.slice(-2).map((b) => b.closest('label').textContent)"),
         ("eval", "none", f"{boxes}.forEach((b) => {{ b.checked = false; }})"),
         ("click", "#export-prepare"), ("wait", "document.querySelector('#export-error').textContent"),
         ("eval", "empty", "document.querySelector('#export-error').textContent"),
@@ -846,7 +850,8 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
-                                              "translate")]
+                                              "translate", "code", "agents")]
+    assert v["labels"] == ["Claude Code: чаты", "Claude Code: подключения"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
