@@ -17,7 +17,8 @@
   отперлась) кладёт в его очередь `closed`, а сам поток на тике пинга и на событиях (не чаще `CHECK_SEC`)
   сверяет строку сессии: вышли, погасили, истекла или заперта по сроку отметки — `event: closed` и конец.
 - Данные моста браузеру — только ASCII-JSON без NaN (`_BridgeJSON`): одинокий суррогат или `NaN` из JSON
-  моста дали бы 500; не закодировать — 502 `bridge`.
+  моста дали бы 500; не закодировать — 502 `bridge`. Отказы идут обычным ответом FastAPI: суррогаты из их
+  слов убирает `bridge._refusal`.
 - Имя модуля — не `code.py`: каталог службы стоит в `sys.path` первым, и такой файл заслонил бы стандартный
   `code`, а его берёт `pdb` (pytest импортирует `pdb` при старте и падал бы).
 """
@@ -142,9 +143,14 @@ def check_chat(chat: str) -> str:
     return chat
 
 
-async def ask(request: Request, aid: int, op: str, **args) -> dict:
-    """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим. Строка с одиноким
-    суррогатом (из JSON запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
+def _warn(request: Request, aid: int, op: str, error: HTTPException) -> None:
+    log.warning("пользователь %d: компьютер %d — %s: %s", request.state.user.id, aid, op, error.detail["code"])
+
+
+async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **args) -> dict:
+    """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
+    (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
+    запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
     try:
         json.dumps(args, ensure_ascii=False).encode()
     except UnicodeEncodeError:
@@ -159,7 +165,8 @@ async def ask(request: Request, aid: int, op: str, **args) -> dict:
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
-    log.warning("пользователь %d: компьютер %d — %s: %s", request.state.user.id, aid, op, error.detail["code"])
+    if not quiet:
+        _warn(request, aid, op, error)
     raise error
 
 
@@ -268,10 +275,12 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
     check_pid(pid)
     check_chat(chat)
     try:
-        return await ask(request, aid, "history", project=pid, chat=chat, before=before, limit=HISTORY_PAGE)
+        return await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
+                         limit=HISTORY_PAGE)
     except HTTPException as e:
         if _new_chat(request, aid, pid, chat, e):
             return {"items": [], "start": 0, "total": 0}
+        _warn(request, aid, "history", e)
         raise
 
 
@@ -355,12 +364,13 @@ async def _idle():
     yield _sse("idle", {})
 
 
-async def _watched(request: Request, aid: int, chat: str, op: str, **args) -> tuple[bridge.Watch, dict]:
+async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: bool = False,
+                   **args) -> tuple[bridge.Watch, dict]:
     """Очередь наблюдателя (с признаком сессии запроса) — до просьбы: события хода идут сразу за ответом моста
     и не должны пройти мимо. Отказ — очередь прочь."""
     q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
     try:
-        return q, await ask(request, aid, op, chat=chat, **args)
+        return q, await ask(request, aid, op, quiet=quiet, chat=chat, **args)
     except BaseException:
         bridge.unwatch(aid, chat, q)
         raise
@@ -397,9 +407,10 @@ async def live(aid: int, pid: str, chat: str, request: Request):
     check_pid(pid)
     check_chat(chat)
     try:
-        q, data = await _watched(request, aid, chat, "watch", project=pid)
+        q, data = await _watched(request, aid, chat, "watch", quiet=True, project=pid)
     except HTTPException as e:
         if not _new_chat(request, aid, pid, chat, e):
+            _warn(request, aid, "watch", e)
             raise
         q, data = None, {}
     if data.get("running") is not True:

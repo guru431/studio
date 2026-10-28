@@ -286,6 +286,14 @@ def test_odd_bridge_answers_are_502_and_long_words_are_cut(studio, monkeypatch):
     answer.update(ok=True, data={"text": "\ud83d", "version": "v"})
     r = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a"})
     assert (r.status_code, r.json()) == (200, {"text": "\ud83d", "version": "v"})
+    # и в отказе: слова и version идут обычным ответом FastAPI (UTF-8) — не 500
+    answer.clear()
+    answer.update(ok=False, code="conflict", message="файл \ud83d изменился", version="v\ud83d")
+    r = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a"})
+    assert (r.status_code, detail(r)) == (409, {"code": "conflict", "message": "файл � изменился"})
+    answer.update(ok=False, code="zz\ud83d", message="x")
+    r = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a"})
+    assert (r.status_code, detail(r)["code"]) == (502, "bridge")
 
 
 def test_odd_events_neither_break_nor_stall_the_stream(studio):
@@ -517,6 +525,23 @@ def test_new_studio_chat_has_empty_history_and_idle_live(studio):
         r = studio.c.get(url(aid, "projects", BETA, "chats", chat, *path))
         assert (r.status_code, detail(r)["code"]) == (404, "not_found"), path
     assert [q["op"] for q in m.requests][-4:] == ["history", "watch", "history", "watch"]
+
+
+def test_new_studio_chat_refusal_is_not_a_warning(studio, caplog):
+    """`not_found` нового чата студии — норма, не WARNING на каждое открытие; без строки студии — WARNING."""
+    caplog.set_level(logging.DEBUG)
+    aid, m, _ = setup(studio)
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    assert studio.c.get(url(aid, "projects", ALPHA, "chats", chat)).status_code == 200
+    with studio.c.stream("GET", url(aid, "projects", ALPHA, "chats", chat, "live")) as r:
+        assert list(events_of(r.iter_lines())) == [("idle", {})]
+    warned = lambda: [r.getMessage() for r in caplog.records if r.name == "studio" and r.levelno >= logging.WARNING]  # noqa: E731
+    assert warned() == []
+    for path in ((), ("live",)):
+        assert studio.c.get(url(aid, "projects", BETA, "chats", chat, *path)).status_code == 404
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    assert warned() == [f"пользователь {uid}: компьютер {aid} — history: not_found",
+                        f"пользователь {uid}: компьютер {aid} — watch: not_found"]
 
 
 def test_live_skips_events_before_the_first_snapshot(studio, monkeypatch):
