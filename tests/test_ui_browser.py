@@ -5588,7 +5588,7 @@ def test_pin_pad_comes_back_when_the_lock_state_was_lost(browser, live, way):
 
 
 def test_enter_on_a_lock_button_presses_it_not_the_pin(browser, live):
-    """Панель на экране, фокус на «Открыть паролем»: цифра с клавиатуры не набирается, Enter не шлёт
+    """Панель на экране, фокус на «Открыть паролем»: цифра с клавиатуры набирается, а Enter не шлёт
     набранный PIN и не отменён — его действие по умолчанию нажимает кнопку в фокусе. (Нажатие драйвера —
     keyDown без text: кнопку оно само не нажимает, поэтому отмену проверяет событие страницы.)"""
     login = "pin-enter"
@@ -5601,8 +5601,30 @@ def test_enter_on_a_lock_button_presses_it_not_the_pin(browser, live):
         ("wait", "!document.querySelector('#lock-password-form').hidden")], **PHONE)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["focus"] == "lock-use-password" and v["after"] == [4, True] and v["prevented"] is False
+    assert v["focus"] == "lock-use-password" and v["after"] == [5, True] and v["prevented"] is False
     assert "POST /api/lock/pin" not in r["sent"], r["sent"]
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_physical_keys_type_the_pin_with_focus_on_open(browser, live):
+    """Учётка с ключом и PIN: showModal() ставит фокус на «Открыть». Цифры и Backspace с клавиатуры без
+    касания панели набираются; Enter на «Открыть» PIN не шлёт (нажимает кнопку); фокус ни на чём — Enter открывает."""
+    login = "pin-keys-open"
+    live.add_user(login)
+    pin = [("click", "#pin-set"), ("type", "#pin-password", "password-123"), ("type", "#pin-new", "2580"),
+           ("type", "#pin-repeat", "2580"), ("click", "#pin-save"), server_pin_is(True)]
+    focus = "(() => { document.querySelector('#lock-open').focus(); return document.activeElement.id; })()"
+    keys = [("press", k) for k in ["2", "5", "9", "Backspace", "8", "0"]]
+    r = browser.drive(live.url + "/", [*phone_with_key(login), *pin, *pin_locked(), ("wait", PASSKEY_READY),
+        ("eval", "parts", LOCK_PARTS), ("eval", "shown", "document.activeElement.id"), ("eval", "focus", focus),
+        *keys, ("eval", "dots", DOTS), ("press", "Enter"), ("eval", "after", settled(f"[{DOTS}, {LOCK_OPEN}]")),
+        ("eval", "blur", "(() => { document.activeElement.blur(); return document.activeElement === document.body; })()"),
+        ("press", "Enter"), ("wait", f"!{LOCK_OPEN}"), ("eval", "me", ME_STATUS)], **PHONE)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["parts"] == [True, False, True, True] and v["focus"] == "lock-open"
+    assert v["dots"] == 4 and v["after"] == [4, True] and v["blur"] is True and v["me"] == 200
+    assert r["sent"].count("POST /api/lock/pin") == 1, r["sent"]
     assert not known_refusals(problems(r), 423), problems(r)
 
 
