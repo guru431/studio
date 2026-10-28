@@ -251,7 +251,7 @@ not read Username`. Поэтому с workstation — только `origin`, а 
   `?from=k` — только новые куски.
 - Claude Code (спека 2026-10-28-studio-claude-code-design; канал — протокол
   [docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md),
-  версия 1 — контракт с мостом, отдельным приватным проектом `studio-agent` (вторым планом, ещё нет); шаг схемы 19
+  версия 1 — контракт с мостом, отдельным приватным проектом `C:/work/projects/studio-agent`; шаг схемы 19
   `db.CODE_19`): вкладка рельса «Claude Code» после «Перевода» (`code.js` — уровни `#/code/<aid>/<pid>/<chat>`,
   `code-chat.js` — лента и поток, `code-files.js` — «Файлы» и «Git»); не раздел `section_links` — модели и усилия
   сообщает мост. Таблицы: `agents` (компьютер: `key_hash` — `security.digest` ключа устройства, `has_pin`,
