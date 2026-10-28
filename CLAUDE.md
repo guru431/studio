@@ -28,6 +28,13 @@ Windows-мост к студии `https://studio.example.com`: держит ис
 - `pin` — `PinStore` (`pin.bin` под DPAPI: scrypt-хеш и счёт неверных; попытка пишется на диск до scrypt, проверки
   идут по одной — замок процесса; 5 подряд — `pin_locked` до `reset` на машине; нет файла — PIN не задан, блоб не
   читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`).
+- `projects` — `pid`, `list_projects` (подпапки корня без `.`-имён, скрытых, системных и ведущих наружу), `find_project`
+  (настоящий путь или `not_found`).
+- `files` — `resolve` (вид пути проверяется **до диска**: имена устройств, ADS `:`, точка или пробел в конце части —
+  `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
+  (`version` — sha256 байтов, запись через `store.write_atomic`).
+- `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с; код ≠ 0 или нет
+  git — `not_git`, срок вышел — `TimeoutExpired` наружу).
 
 ## Правила
 
