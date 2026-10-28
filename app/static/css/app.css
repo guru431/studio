@@ -352,6 +352,17 @@ label { font-size: 13px; color: var(--muted); }
 .tl-from, .tl-to { max-width: 100%; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-to { font-size: 13px; }
 .tl-delete { margin-top: 6px; color: var(--muted); }
+/* снимок «Поверх снимка» (translate-photo.js): подложка и текст — одни в обеих темах, как на сохранённом PNG */
+.tl-photo-view { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tl-photo-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.tl-modes, .tl-photo-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tl-photo-error { margin: 0; }
+.tl-photo-error:empty { display: none; }
+.tl-photo { position: relative; align-self: flex-start; width: fit-content; max-width: 100%; line-height: 0; }
+.tl-photo-img { display: block; max-width: 100%; height: auto; max-height: 70dvh; border-radius: 8px; }
+.tl-layer { position: absolute; inset: 0; line-height: normal; }
+.tl-block { position: absolute; box-sizing: border-box; overflow: hidden; padding: .06em .2em; line-height: 1.15;
+  background: rgba(255, 255, 255, .92); color: #111; white-space: pre-wrap; overflow-wrap: normal; word-break: normal; }
 @media (max-width: 760px) {
   .tl-panes { grid-template-columns: minmax(0, 1fr); }
   .tl-input, .tl-source-text, .tl-output { min-height: 120px; }

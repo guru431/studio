@@ -6261,3 +6261,127 @@ def test_translate_opens_a_record_by_id(browser, live, translator):
     assert v["tid"] and v["href"] is True
     assert v["shown"] == ["#/translate", "Привет", "ru", "fr", v["tid"]]
     assert not problems(r), problems(r)
+
+
+#: ответ HunyuanOCR с координатами (доли 0…1000) — две далёкие строки, два блока
+TL_SPOTTED = "Exit(93,146),(491,214)Staff only(193,640),(379,706)"
+TL_SIGN = (1000, 600, (30, 90, 200))
+TL_BLOCKS = "document.querySelectorAll('#tl-photo .tl-block')"
+TL_FITTED = (f"{TL_BLOCKS}.length === 2 && document.querySelector('#tl-photo img').naturalWidth > 0"
+             f" && parseFloat({TL_BLOCKS}[0].style.fontSize) > 0")
+
+
+@pytest.fixture
+def spotted(live, translator):
+    """Снимок: распознавание — TL_SPOTTED, перевод блоков — один нумерованный ответ."""
+    before = live.gw.ocr_reply
+    live.gw.ocr_reply = {"choices": [{"message": {"content": TL_SPOTTED}, "finish_reason": "stop"}]}
+    translator.chat_script = [["[1] Выход\n[2] Только персонал"]]
+    try:
+        yield translator
+    finally:
+        live.gw.ocr_reply = before
+
+
+def photo_translated(login):
+    """Вход, «Перевод», снимок «Фото» → «Перевести» — запись готова, слой из двух блоков подогнан."""
+    return [*translating(login),
+            put_files("#tl-photo-input", [("Вывеска.png", png_of(*TL_SIGN))]),
+            ("wait", "!document.querySelector('#tl-chip').hidden"),
+            ("click", "#tl-go"),
+            ("wait", f"{TL_DONE} && {TL_FITTED}")]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_translate_photo_overlay_and_text_modes(browser, live, spotted, width):
+    """Снимок — по умолчанию «Поверх снимка»: блок перевода в рамке своего исходного блока (left = x1 / 10 %),
+    шрифт подогнан под рамку, подложка белая и текст тёмный в обеих темах. «Исходник» прячет слой; «Текстом» —
+    слева распознанный текст, справа перевод; переключение не распознаёт заново. На 320 px — без прокрутки вбок."""
+    login = f"tl-photo{width}"
+    live.add_user(login)
+    asked = len(live.gw.ocr_requests)
+    block = f"{TL_BLOCKS}[0]"
+    r = browser.drive(live.url + "/", [*photo_translated(login),
+        ("eval", "blocks", f"[...{TL_BLOCKS}].map(b => [b.textContent, b.style.left, b.style.top, b.style.width])"),
+        ("eval", "placed", f"""(() => {{ const i = document.querySelector('#tl-photo img').getBoundingClientRect();
+          const b = {block}.getBoundingClientRect();
+          return [Math.abs(b.left - (i.left + .093 * i.width)) < 1, Math.abs(b.top - (i.top + .146 * i.height)) < 1,
+                  Math.abs(b.width - .398 * i.width) < 1, Math.abs(b.height - .068 * i.height) < 1]; }})()"""),
+        ("eval", "fitted", f"""(() => {{ const b = {block}; const size = parseFloat(b.style.fontSize);
+          const fits = b.scrollWidth <= b.clientWidth && b.scrollHeight <= b.clientHeight;
+          b.style.fontSize = (size + 1) + 'px';
+          const bigger = b.scrollWidth <= b.clientWidth && b.scrollHeight <= b.clientHeight;
+          b.style.fontSize = size + 'px';
+          return [size >= 8, size <= b.clientHeight, fits || size === 8, bigger && size < b.clientHeight]; }})()"""),
+        ("eval", "light", f"[getComputedStyle({block}).backgroundColor, getComputedStyle({block}).color]"),
+        ("eval", "dark", f"""(() => {{ document.documentElement.dataset.theme = 'dark';
+          const s = getComputedStyle({block}); const out = [s.backgroundColor, s.color];
+          delete document.documentElement.dataset.theme; return out; }})()"""),
+        ("eval", "modes", "[document.querySelector('#tl-mode-overlay').getAttribute('aria-pressed'),"
+                          " document.querySelector('#tl-mode-text').getAttribute('aria-pressed'),"
+                          " document.querySelector('#tl-output').hidden, document.querySelector('.tl-source-text').hidden,"
+                          " document.querySelector('#tl-original').getAttribute('aria-pressed')]"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", "#tl-original"),
+        ("eval", "original", "[document.querySelector('#tl-original').getAttribute('aria-pressed'),"
+                             " document.querySelector('#tl-photo .tl-layer').hidden,"
+                             " !document.querySelector('#tl-photo').hidden]"),
+        ("click", "#tl-mode-text"),
+        ("eval", "text", f"[{TL_OUTPUT}, document.querySelector('#tl-output').hidden,"
+                         " document.querySelector('.tl-source-text').textContent, document.querySelector('.tl-source-text').hidden,"
+                         " document.querySelector('#tl-photo').hidden, document.querySelector('#tl-save').closest('[hidden]') !== null]"),
+        ("click", "#tl-mode-overlay"),
+        ("eval", "back", "[document.querySelector('#tl-output').hidden, document.querySelector('#tl-photo').hidden]")],
+        width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["blocks"] == [["Выход", "9.3%", "14.6%", "39.8%"], ["Только персонал", "19.3%", "64%", "18.6%"]]
+    assert v["placed"] == [True, True, True, True]
+    assert v["fitted"] == [True, True, True, False], v["fitted"]   # наибольший помещающийся кегль
+    white, ink = "rgba(255, 255, 255, 0.92)", "rgb(17, 17, 17)"
+    assert v["light"] == [white, ink] and v["dark"] == [white, ink]
+    assert v["modes"] == ["true", "false", True, True, "false"]
+    assert v["fits"] is True
+    assert v["original"] == ["true", True, True]
+    assert v["text"] == ["Выход\nТолько персонал", False, "Exit\nStaff only", False, True, True]
+    assert v["back"] == [True, False]
+    assert len(live.gw.ocr_requests) == asked + 1                    # переключение не распознаёт заново
+    assert not problems(r), problems(r)
+
+
+def test_translate_photo_save_gives_a_png(browser, live, spotted):
+    """«Сохранить снимок» — PNG в натуральном размере: снимок, на месте блока — белая подложка с тёмным текстом,
+    вне блоков — исходные пиксели; имя «<имя>.<язык>.png». На iPhone — меню «Поделиться» с тем же PNG."""
+    live.add_user("tl-save")
+    spy = """(() => { window.clicked = []; window.made = [];
+      HTMLAnchorElement.prototype.click = function () {
+        window.clicked.push([this.getAttribute('href').slice(0, 5), this.getAttribute('download')]); };
+      const real = URL.createObjectURL; URL.createObjectURL = (b) => { window.made.push(b); return real.call(URL, b); };
+      return true; })()"""
+    png = """(async () => { const b = window.made[0]; const u = new Uint8Array(await b.arrayBuffer()); let s = '';
+      for (const x of u) s += String.fromCharCode(x); return [b.type, btoa(s)]; })()"""
+    r = browser.drive(live.url + "/", [*photo_translated("tl-save"),
+        ("eval", "spy", spy),
+        ("click", "#tl-save"),
+        ("wait", "window.clicked.length === 1 && !document.querySelector('#tl-save').disabled"),
+        ("eval", "clicked", "window.clicked[0]"),
+        ("eval", "png", png),
+        iphone(),
+        ("click", "#tl-save"),
+        ("wait", "window.shared.length === 1"),
+        ("eval", "shared", "window.shared[0]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["clicked"] == ["blob:", "Вывеска.ru.png"]
+    assert v["png"][0] == "image/png"
+    with Image.open(io.BytesIO(base64.b64decode(v["png"][1]))) as im:
+        rgb = im.convert("RGB")
+        assert rgb.size == TL_SIGN[:2]
+        assert rgb.getpixel((10, 10)) == TL_SIGN[2]                  # вне блоков — снимок как есть
+        assert all(c > 225 for c in rgb.getpixel((95, 89)))           # угол рамки «Выход» — подложка
+        assert all(c > 225 for c in rgb.getpixel((489, 127)))
+        assert rgb.getpixel((88, 140)) == TL_SIGN[2]                  # рядом, но вне рамки
+        darkest = min(sum(rgb.getpixel((x, y))) for x in range(93, 491, 3) for y in range(88, 128, 2))
+        assert darkest < 200                                         # текст перевода нарисован
+    assert v["shared"] == [[".png", "image/png", True]]
+    assert not problems(r), problems(r)
