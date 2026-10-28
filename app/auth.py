@@ -51,7 +51,7 @@ DELAY_MAX = 30
 STALE_SEC = 75
 #: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
 SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
-                               "/api/lock/open", "/api/lock/password"})
+                               "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
