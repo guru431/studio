@@ -3,13 +3,12 @@
 Всё блокирующее — в потоке (`asyncio.to_thread`): цикл держит пинги канала."""
 
 import asyncio
-import json
 import logging
 import re
 import time
 from collections.abc import Callable
 
-from . import files, gitinfo, limits, projects, sessions, store
+from . import events, files, gitinfo, limits, projects, sessions, store
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -40,30 +39,44 @@ OPS = {
 }
 
 
+def read_has_pin(pins: PinStore) -> bool:
+    """Задан ли PIN (DPAPI — звать в потоке); `pin.bin` не читается (сброс пароля Windows, порча) — `True`:
+    безопасная сторона."""
+    try:
+        return pins.has_pin
+    except (OSError, ValueError) as e:
+        log.warning("PIN не читается: %s", type(e).__name__)
+        return True
+
+
 class Agent:
-    """Просьбы студии одного моста; `send` ставит канал (`Link`), без него события хода пропадают."""
+    """Просьбы студии одного моста; `send` ставит канал (`Link`), без него события хода пропадают.
+
+    `has_pin` для `hello` — в памяти: `hello` идёт на цикле канала, а `pin.bin` — DPAPI. Читается при создании (без
+    `has_pin` — сразу, ядро читает в потоке и передаёт) и `refresh_pin` — перед каждым новым каналом ядра."""
 
     def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = time.monotonic,
-                 cc_version: str, models: list[dict], efforts: list[str]):
+                 cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None):
         self.cfg = cfg
         self.pins = pins
         self.runner = runner
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
+        self.has_pin = read_has_pin(pins) if has_pin is None else has_pin
         self.open = OpenSessions(now)
         self.send: Callable[[dict], None] | None = None
         self._open_lock = asyncio.Lock()
+        self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
     def hello(self) -> dict:
-        """Знакомство; `pin.bin` не читается (сброс пароля Windows, порча) — `has_pin: true`: безопасная сторона."""
-        try:
-            has_pin = self.pins.has_pin
-        except (OSError, ValueError) as e:
-            log.warning("PIN не читается: %s", type(e).__name__)
-            has_pin = True
+        """Знакомство; к диску не обращается."""
         return {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                "has_pin": has_pin, "models": self.models, "efforts": self.efforts}
+                "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts}
+
+    async def refresh_pin(self) -> None:
+        """`has_pin` заново из `pin.bin` (в потоке): PIN сменили на машине — студия узнает в следующем `hello`."""
+        self.has_pin = await asyncio.to_thread(read_has_pin, self.pins)
 
     def set_models(self, models: list[dict], efforts: list[str]) -> None:
         self.models, self.efforts = models, efforts
@@ -72,7 +85,8 @@ class Agent:
         self.open.close(session)
 
     def new_link(self) -> None:
-        """Новый канал: все открытые сессии прочь (протокол §3)."""
+        """Новый канал: все открытые сессии прочь (протокол §3), и те, что открываются сейчас (`_open`)."""
+        self._link += 1
         self.open.clear()
 
     def emit(self, frame: dict) -> None:
@@ -102,10 +116,11 @@ class Agent:
             log.warning("просьба %s: %s", name, type(e).__name__)
             return [_error(rid)]
         try:
-            size = len(json.dumps(res, ensure_ascii=True, allow_nan=False))
+            res = events.ready(res)  # кодируется один раз: писатель канала шлёт готовую строку
         except ValueError as e:
             log.warning("просьба %s: ответ не кодируется: %s", name, type(e).__name__)
             return [_error(rid)]
+        size = len(res.text)
         if size > limits.FRAME_MAX:
             log.warning("просьба %s: ответ %d байт больше предела", name, size)
             return [{"t": "res", "id": rid, "ok": False, "code": "too_large", "message": "ответ больше предела канала"}]
@@ -157,13 +172,17 @@ class Agent:
         raise AssertionError(name)
 
     async def _open(self, session: str, pin) -> dict:
-        """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить; блок; `null` — нужен PIN; проверка."""
+        """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить; блок; `null` — нужен PIN; проверка.
+
+        Пока шла проверка, пришёл новый канал (`new_link`) — сессия не открывается, `closed`: новый канал сбрасывает
+        открытость и той сессии, что открывалась по прежнему (протокол §3)."""
         if not (pin is None or (isinstance(pin, str) and len(pin) <= PIN_FIELD_MAX)):
             raise Refused("invalid")
+        link = self._link
         async with self._open_lock:
             has_pin, locked = await asyncio.to_thread(lambda: (self.pins.has_pin, self.pins.locked))
             if not has_pin:
-                self.open.open(session)
+                self._open_now(session, link)
                 return {}
             if pin is None and self.open.touch(session):
                 return {}
@@ -176,8 +195,14 @@ class Agent:
                 raise Refused("pin", left=left)
             if code == "pin_locked":
                 raise Refused("pin_locked")
-            self.open.open(session)
+            self._open_now(session, link)
             return {}
+
+    def _open_now(self, session: str, link: int) -> None:
+        if link != self._link:
+            log.info("открытие: канал сменился")
+            raise Refused("closed")
+        self.open.open(session)
 
     async def _project(self, frame: dict):
         return await asyncio.to_thread(projects.find_project, self.cfg.projects_root, frame["project"])
@@ -201,18 +226,19 @@ class Agent:
                                           frame.get("model"), frame.get("effort"))}
 
     async def _op_watch(self, frame, after):
-        """Хода нет — `{"running": false}` без проверки чата (протокол §4); идёт — снимок за ответом."""
-        running, frames = self.runner.watch(frame["chat"])
+        """Хода нет (или он другого проекта) — `{"running": false}` без проверки чата (протокол §4); идёт — снимок
+        за ответом."""
+        running, frames = await self.runner.watch(frame["project"], frame["chat"])
         after.extend(frames)
         return {"running": running}
 
     async def _op_answer(self, frame, after):
-        self.runner.answer(frame["chat"], frame["request_id"], frame.get("decision"), frame.get("message"),
-                           frame.get("answers"))
+        self.runner.answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
+                           frame.get("message"), frame.get("answers"))
         return {}
 
     async def _op_stop(self, frame, after):
-        await self.runner.stop(frame["chat"])
+        await self.runner.stop(frame["project"], frame["chat"])
         return {}
 
     async def _op_files(self, frame, after):

@@ -91,23 +91,23 @@ async def test_permission_card_allow_always_deny(home, project):
     assert ask == {"k": "ask", "request_id": "toolu_1", "kind": "permission", "tool": "Bash",
                    "input": {"command": "ls"}, "always": True}
     with pytest.raises(errors.Refused) as e:
-        r.answer(CHAT, "toolu_1", "maybe", None, None)
+        r.answer(PID, CHAT, "toolu_1", "maybe", None, None)
     assert e.value.code == "invalid"
     with pytest.raises(errors.Refused) as e:
-        r.answer(CHAT, "toolu_1", "allow", None, {"вопрос": "ответ"})
+        r.answer(PID, CHAT, "toolu_1", "allow", None, {"вопрос": "ответ"})
     assert e.value.code == "invalid"
     with pytest.raises(errors.Refused) as e:
-        r.answer(CHAT, "toolu_1", "deny", "x" * 2001, None)
+        r.answer(PID, CHAT, "toolu_1", "deny", "x" * 2001, None)
     assert e.value.code == "invalid"
-    r.answer(CHAT, "toolu_1", "always", None, None)
+    r.answer(PID, CHAT, "toolu_1", "always", None, None)
     with pytest.raises(errors.Refused) as e:
-        r.answer(CHAT, "toolu_1", "allow", None, None)
+        r.answer(PID, CHAT, "toolu_1", "allow", None, None)
     assert e.value.code == "gone" and e.value.message == "запроса уже нет"
     await until(lambda: len(f.clients[0].decisions) == 1 and r.live().get(CHAT))
     assert sent[-1]["e"]["always"] is False and sent[-1]["e"]["request_id"] == "toolu_2"
-    r.answer(CHAT, "toolu_2", "deny", None, None)
+    r.answer(PID, CHAT, "toolu_2", "deny", None, None)
     await until(lambda: len(f.clients[0].decisions) == 2 and r.live().get(CHAT))
-    r.answer(CHAT, "toolu_3", "deny", "Не так", None)
+    r.answer(PID, CHAT, "toolu_3", "deny", "Не так", None)
     await settle(r)
     assert f.clients[0].decisions == [
         PermissionResultAllow(updated_input={"command": "ls"}, updated_permissions=[RULE]),
@@ -116,7 +116,7 @@ async def test_permission_card_allow_always_deny(home, project):
     assert kinds(sent) == ["ask", "asked", "ask", "asked", "ask", "asked", "done"]
     assert sent[1]["e"] == {"k": "asked", "request_id": "toolu_1"}
     with pytest.raises(errors.Refused) as e:
-        r.answer(CHAT, "toolu_1", "allow", None, None)
+        r.answer(PID, CHAT, "toolu_1", "allow", None, None)
     assert e.value.code == "gone"
 
 
@@ -127,7 +127,7 @@ async def test_plain_allow_and_odd_tool_use_id(home, project):
     await until(lambda: r.live().get(CHAT))
     rid = sent[-1]["e"]["request_id"]
     assert rid != "плохой id" and len(rid) == 16
-    r.answer(CHAT, rid, "allow", None, None)
+    r.answer(PID, CHAT, rid, "allow", None, None)
     await settle(r)
     assert f.clients[0].decisions == [PermissionResultAllow(updated_input={"file_path": "c"})]
 
@@ -145,9 +145,9 @@ async def test_question_returns_answers_in_updated_input(home, project):
     for decision, answers in (("deny", None), ("always", {"Какой?": "А"}), ("allow", None),
                               ("allow", {"Какой?": 5}), ("allow", {"Какой?": ["А", 1]}), ("allow", ["А"])):
         with pytest.raises(errors.Refused) as e:
-            r.answer(CHAT, "toolu_1", decision, None, answers)
+            r.answer(PID, CHAT, "toolu_1", decision, None, answers)
         assert e.value.code == "invalid"
-    r.answer(CHAT, "toolu_1", "allow", None, {"Какой?": ["А", "Б"]})
+    r.answer(PID, CHAT, "toolu_1", "allow", None, {"Какой?": ["А", "Б"]})
     await settle(r)
     assert f.clients[0].decisions == [PermissionResultAllow(updated_input={**data, "answers": {"Какой?": ["А", "Б"]}})]
     assert kinds(sent) == ["ask", "asked", "done"]
@@ -158,14 +158,14 @@ async def test_stop_during_a_card_denies_it_and_ends_stopped(home, project):
     r = runner(home, f, sent)
     r.start(project, PID, CHAT, "Удали", None, None)
     await until(lambda: r.live().get(CHAT))
-    await r.stop(CHAT)
+    await r.stop(PID, CHAT)
     await settle(r)
     assert kinds(sent) == ["ask", "asked", "done"]
     assert sent[-1]["e"] == {"k": "done", "status": "stopped"}
     assert f.clients[0].decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)]
     assert f.clients[0].interrupted and f.clients[0].disconnected
     with pytest.raises(errors.Refused) as e:
-        await r.stop(CHAT)
+        await r.stop(PID, CHAT)
     assert e.value.code == "idle" and e.value.message == "хода нет"
 
 
@@ -174,7 +174,7 @@ async def test_stop_without_a_card_interrupts(home, project):
     r = runner(home, f, sent)
     r.start(project, PID, CHAT, "Долго", None, None)
     await until(lambda: kinds(sent) == ["text"])
-    await r.stop(CHAT)
+    await r.stop(PID, CHAT)
     await settle(r)
     assert kinds(sent) == ["text", "done"] and sent[-1]["e"]["status"] == "stopped"
 
@@ -191,8 +191,8 @@ async def test_second_turn_in_the_chat_is_running_and_third_chat_is_busy(home, p
         r.start(project, PID, THIRD, "4", None, None)
     assert e.value.code == "busy" and e.value.message == "на компьютере уже идут 2 хода — дождитесь конца"
     assert r.live() == {CHAT: False, OTHER: False}
-    await r.stop(CHAT)
-    await r.stop(OTHER)
+    await r.stop(PID, CHAT)
+    await r.stop(PID, OTHER)
     await settle(r)
     assert r.live() == {}
 
@@ -267,17 +267,17 @@ async def test_watch_gives_a_snapshot_with_the_open_card_and_answer_still_works(
                                block_start(), delta("Дальше"), ("ask", "Bash", {"command": "ls"}, []),
                                delta("."), result_ok()])
     r = runner(home, f, sent)
-    assert r.watch(CHAT) == (False, [])
+    assert await r.watch(PID, CHAT) == (False, [])
     turn = r.start(project, PID, CHAT, "Привет", None, None)
     await until(lambda: r.live().get(CHAT))
     sent.clear()  # канал оборвался: прежние события пропали
-    running, frames = r.watch(CHAT)
+    running, frames = await r.watch(PID, CHAT)
     assert running is True and frames == [{"t": "ev", "project": PID, "chat": CHAT, "turn": turn, "e": {
         "k": "snapshot", "text": "Смотрю\n\nДальше",
         "steps": [{"id": "t1", "tool": "Read", "input": {"file_path": "a"}, "text": "строки", "error": True}],
         "asks": [{"request_id": "toolu_1", "kind": "permission", "tool": "Bash", "input": {"command": "ls"},
                   "always": False}]}}]
-    r.answer(CHAT, "toolu_1", "allow", None, None)
+    r.answer(PID, CHAT, "toolu_1", "allow", None, None)
     await settle(r)
     assert kinds(sent) == ["asked", "text", "done"] and sent[-1]["e"]["status"] == "done"
 
@@ -308,7 +308,7 @@ async def test_a_failing_emit_does_not_leave_the_chat_running(home, project):
     r = Runner(emit, choices=store.Choices(home), cli_path=None, factory=f)
     r.start(project, PID, CHAT, "1", None, None)
     await until(lambda: r.live().get(CHAT))
-    await r.stop(CHAT)
+    await r.stop(PID, CHAT)
     await settle(r)
     assert r.live() == {}
 
@@ -359,10 +359,10 @@ async def test_second_stop_cancels_a_turn_that_ignored_interrupt(home, project):
         f.clients[0].interrupted = False
 
     f.clients[0].interrupt = deaf
-    await r.stop(CHAT)
+    await r.stop(PID, CHAT)
     await asyncio.sleep(0.01)
     assert r.live() == {CHAT: False} and kinds(sent) == ["text"]
-    await r.stop(CHAT)                                         # повторное «Остановить» — отмена задачи хода
+    await r.stop(PID, CHAT)                                         # повторное «Остановить» — отмена задачи хода
     await settle(r)
     assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and r.live() == {}
     assert f.clients[0].disconnected
@@ -378,7 +378,7 @@ async def test_a_failing_interrupt_cancels_the_turn_at_once(home, project):
         raise RuntimeError("interrupt")
 
     f.clients[0].interrupt = broken
-    await r.stop(CHAT)
+    await r.stop(PID, CHAT)
     await settle(r)
     assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and f.clients[0].disconnected
 
@@ -400,7 +400,7 @@ async def test_a_turn_during_close_is_busy(home, project):
     await asyncio.sleep(0.01)
     with pytest.raises(errors.Refused) as e:
         r.start(project, PID, OTHER, "2", None, None)          # мост закрывает ходы — новый не начинается
-    assert e.value.code == "busy" and len(f.clients) == 1
+    assert (e.value.code, e.value.message) == ("busy", "мост выходит") and len(f.clients) == 1
     gate.set()
     await closing
     assert r.live() == {}
@@ -408,6 +408,100 @@ async def test_a_turn_during_close_is_busy(home, project):
     r.start(project, PID, OTHER, "3", None, None)              # закрытие кончилось — ходы снова можно
     await settle(r)
     assert sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_after_the_final_close_turns_stay_refused(home, project):
+    sent, f = [], FakeFactory([HOLD])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: f.clients and f.clients[0].queries)
+    await r.close(final=True)                                  # мост выходит: канал ещё досылает очередь
+    assert r.live() == {} and sent[-1]["e"]["message"] == "ход прерван: мост остановлен"
+    with pytest.raises(errors.Refused) as e:
+        r.start(project, PID, OTHER, "2", None, None)
+    assert (e.value.code, e.value.message) == ("busy", "мост выходит") and len(f.clients) == 1
+
+
+async def test_stop_while_the_turn_finishes_does_not_cancel_it(home, project, marked):
+    gate = asyncio.Event()
+    sent, f = [], FakeFactory([delta("x"), result_ok()])
+
+    def factory(options):
+        client = f(options)
+        real = client.disconnect
+
+        async def slow():                                      # disconnect гасит claude.exe — секунды
+            await gate.wait()
+            await real()
+
+        async def broken():                                    # транспорт уже закрывается
+            raise RuntimeError("interrupt")
+
+        client.disconnect, client.interrupt = slow, broken
+        return client
+
+    r = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=factory)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: CHAT in r._turns and getattr(r._turns[CHAT], "finishing", False))
+    client = f.clients[0]
+    await r.stop(PID, CHAT)                                    # первое: interrupt упал
+    await r.stop(PID, CHAT)                                    # второе
+    await asyncio.sleep(0.01)
+    assert not r._turns[CHAT].task.cancelled() and not r._turns[CHAT].task.done()
+    gate.set()
+    await settle(r)
+    assert client.disconnected and marked == [(project, CHAT)]  # claude.exe погашен, метка studio — есть
+    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_answer_stop_watch_of_another_project_see_no_turn(home, project):
+    sent, f = [], FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: r.live().get(CHAT))
+    other = "0" * 16
+    assert await r.watch(other, CHAT) == (False, [])
+    with pytest.raises(errors.Refused) as e:
+        r.answer(other, CHAT, "toolu_1", "allow", None, None)
+    assert e.value.code == "gone"
+    with pytest.raises(errors.Refused) as e:
+        await r.stop(other, CHAT)
+    assert e.value.code == "idle"
+    assert r.live() == {CHAT: True} and f.clients[0].decisions == []
+    r.answer(PID, CHAT, "toolu_1", "allow", None, None)
+    await settle(r)
+    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_events_while_the_snapshot_is_made_follow_it(home, project, monkeypatch):
+    sent, f = [], FakeFactory([delta("А"), HOLD, result_ok()])
+    r = runner(home, f, sent)
+    r.start(project, PID, CHAT, "1", None, None)
+    await until(lambda: kinds(sent) == ["text"])
+    entered, release = asyncio.Event(), __import__("threading").Event()
+    loop = asyncio.get_running_loop()
+    real = sessions.fit
+
+    def fit(items, budget):                                    # в потоке: снимок готовится долго
+        loop.call_soon_threadsafe(entered.set)
+        release.wait(5)
+        return real(items, budget)
+
+    monkeypatch.setattr(sessions, "fit", fit)
+    watching = asyncio.create_task(r.watch(PID, CHAT))
+    await entered.wait()
+    t = r._turns[CHAT]
+    t.feed.text += "Б"                                         # ход идёт дальше, пока снимок в потоке
+    r._send(t, {"k": "text", "text": "Б"})
+    assert kinds(sent) == ["text"]                             # событие — не в канал раньше снимка
+    release.set()
+    running, frames = await watching
+    assert running and [json.loads(frames[0].text)["e"]["text"], frames[1]["e"]] == ["А", {"k": "text", "text": "Б"}]
+    assert json.loads(frames[0].text) == frames[0]             # снимок уже закодирован — писатель шлёт строку
+    r._send(t, {"k": "text", "text": "В"})
+    assert kinds(sent) == ["text", "text"]                     # после снимка — снова прямо в канал
+    await r.stop(PID, CHAT)
+    await settle(r)
 
 
 def _ascii_size(e) -> int:
@@ -439,9 +533,9 @@ async def test_a_card_with_a_huge_input_still_gets_the_whole_input_back(home, pr
     r.start(project, PID, CHAT, "1", None, None)
     await until(lambda: r.live().get(CHAT))
     assert all(_ascii_size(s) <= limits.EVENT_MAX + 1000 for s in sent)
-    running, [snap] = r.watch(CHAT)
+    running, [snap] = await r.watch(PID, CHAT)
     assert _ascii_size(snap) < limits.EVENT_MAX + 10_000
-    r.answer(CHAT, sent[-1]["e"]["request_id"], "allow", None, None)
+    r.answer(PID, CHAT, sent[-1]["e"]["request_id"], "allow", None, None)
     await settle(r)
     assert f.clients[0].decisions == [PermissionResultAllow(updated_input=many)]  # CLI получает ввод целиком
 

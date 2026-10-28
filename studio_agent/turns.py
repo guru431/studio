@@ -33,6 +33,7 @@ REFUSED = "Пользователь отказал"
 NO_CLI = "Claude Code не найден на компьютере"
 NO_START = "Claude Code не запустился"
 BRIDGE_STOPPED = "ход прерван: мост остановлен"
+CLOSING = "мост выходит"  # start() во время close(): ходы закрываются
 
 
 async def _keep_alive(_input, _tool_use_id, _context) -> dict:
@@ -76,6 +77,9 @@ class _Turn:
     client: object | None = None
     stopped: bool = False  # stop()
     closing: bool = False  # close(): мост выходит
+    finishing: bool = False  # _finish() идёт: stop() задачу не отменяет
+    held: list | None = None  # watch() готовит снимок: события хода — сюда, за снимок
+    watch_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class Runner:
@@ -92,7 +96,7 @@ class Runner:
         self.max_turns = max_turns
         self.find_cli = find_cli
         self._turns: dict[str, _Turn] = {}
-        self._closing = False  # close() идёт: новых ходов нет
+        self._closing = False  # close() идёт (или прошёл с `final`): новых ходов нет
 
     # --- просьбы студии ---
 
@@ -100,7 +104,9 @@ class Runner:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
-        if self._closing or len(self._turns) >= self.max_turns:
+        if self._closing:
+            raise Refused("busy", CLOSING)
+        if len(self._turns) >= self.max_turns:
             raise Refused("busy")
         t = _Turn(project, pid, chat, secrets.token_hex(8))
         self._turns[chat] = t
@@ -108,22 +114,47 @@ class Runner:
         log.info("ход %s: начат", t.turn)
         return t.turn
 
-    def watch(self, chat: str) -> tuple[bool, list[dict]]:
-        """Идёт ли ход; идёт — кадр снимка: текст, шаги с итогами, открытые карточки."""
+    def _turn(self, pid: str, chat: str) -> _Turn | None:
+        """Ход чата — только того же проекта: `pid` просьбы не совпал — хода как будто нет."""
         t = self._turns.get(chat)
+        return t if t is not None and t.pid == pid else None
+
+    async def watch(self, pid: str, chat: str) -> tuple[bool, list[dict]]:
+        """Идёт ли ход; идёт — кадр снимка (текст, шаги с итогами, открытые карточки), уже в ASCII-JSON
+        (`events.Ready`), и события, что пришли, пока он готовился.
+
+        Урезка и кодирование — в потоке: снимок бывает в мегабайты. Пока он готовится, события хода копятся в
+        `held` и идут за снимком: студия до снимка события пропускает — в снимке их нет, они бы пропали."""
+        t = self._turn(pid, chat)
         if t is None:
             return False, []
-        asks = [{k: v for k, v in a.event.items() if k != "k"} for a in t.asks.values()]
-        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True))
-        body = sessions.fit([{"text": t.feed.text, "steps": [dict(s) for s in t.feed.steps]}], room)[0]
-        return True, [self._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"], "asks": asks})]
+        async with t.watch_lock:
+            held = t.held = []
+            try:
+                asks = [{k: v for k, v in a.event.items() if k != "k"} for a in t.asks.values()]
+                snap = await asyncio.to_thread(self._snapshot, t, t.feed.text, [dict(s) for s in t.feed.steps], asks)
+            except BaseException:
+                t.held = None
+                for frame in held:
+                    self._emit(t, frame)
+                raise
+            t.held = None
+            return True, [snap, *held]
 
-    def answer(self, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
-        """Ответ на карточку; неверные поля — `invalid`, карточки нет — `gone`."""
+    @classmethod
+    def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict]) -> events.Ready:
+        """В потоке: снимок в пределах `HISTORY_BUDGET` и его ASCII-JSON."""
+        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True))
+        body = sessions.fit([{"text": text, "steps": steps}], room)[0]
+        return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
+                                           "asks": asks}))
+
+    def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
+        """Ответ на карточку; неверные поля — `invalid`, карточки нет (или ход другого проекта) — `gone`."""
         if decision not in DECISIONS or not (message is None or (isinstance(message, str)
                                                                   and len(message) <= ANSWER_MESSAGE_MAX)):
             raise Refused("invalid")
-        t = self._turns.get(chat)
+        t = self._turn(pid, chat)
         ask = t.asks.get(request_id) if t is not None else None
         if ask is None:
             raise Refused("gone")
@@ -140,26 +171,32 @@ class Runner:
                                            updated_permissions=ask.suggestions if decision == "always" else None)
         self._settle(t, request_id, result)
 
-    async def stop(self, chat: str) -> None:
-        """Карточки хода — отказ, затем `interrupt()`; ход кончится `done` со `stopped`.
+    async def stop(self, pid: str, chat: str) -> None:
+        """Карточки хода — отказ, затем `interrupt()`; ход кончится `done` со `stopped`. Хода нет (или он другого
+        проекта) — `idle`.
 
         `interrupt()` упал или не успел, или `stop` того же хода повторный — задача хода отменяется: `_run` доводит
-        конец, `disconnect` гасит `claude.exe`."""
-        t = self._turns.get(chat)
+        конец, `disconnect` гасит `claude.exe`. Ход уже кончается (`_finish`) — не отменяется: голая отмена посреди
+        `disconnect` пропустила бы гашение `claude.exe` и метку `studio`."""
+        t = self._turn(pid, chat)
         if t is None:
             raise Refused("idle")
+        if t.finishing:
+            log.info("ход %s: остановка — ход уже кончается", t.turn)
+            return
         if t.stopped:
             log.info("ход %s: повторная остановка — отмена", t.turn)
             t.task.cancel()
             return
         t.stopped = True
-        if not await self._halt(t) and self._turns.get(chat) is t:
+        if not await self._halt(t) and self._turns.get(chat) is t and not t.finishing:
             log.info("ход %s: interrupt не прошёл — отмена", t.turn)
             t.task.cancel()
 
-    async def close(self) -> None:
+    async def close(self, final: bool = False) -> None:
         """Мост выходит (или отозван): остановить все ходы и дождаться их задач (дальше `CLOSE_SEC` — отмена);
-        пока идёт — новые ходы `busy`."""
+        пока идёт — новые ходы `busy` «мост выходит». `final` (выход моста) — и после: канал ещё досылает очередь,
+        а ход, начатый в этот миг, погиб бы с циклом без `done`."""
         self._closing = True
         try:
             turns = list(self._turns.values())
@@ -175,7 +212,8 @@ class Runner:
             if pending:
                 await asyncio.wait(pending, timeout=CLOSE_SEC)
         finally:
-            self._closing = False
+            if not final:
+                self._closing = False
 
     def live(self) -> dict[str, bool]:
         """Идущие ходы: чат → ждёт ли ход ответа на карточку."""
@@ -229,6 +267,7 @@ class Runner:
 
     async def _finish(self, t: _Turn, mark: bool, failure: str | None) -> None:
         """Конец хода: карточки — отказ, клиент гаснет, новой сессии — метка, чат свободен, затем `done`."""
+        t.finishing = True
         try:
             self._deny_all(t)
             if t.client is not None:
@@ -304,9 +343,16 @@ class Runner:
         return {"t": "ev", "project": t.pid, "chat": t.chat, "turn": t.turn, "e": e}
 
     def _send(self, t: _Turn, e: dict) -> None:
-        """Событие в канал; сбой канала ход не роняет."""
+        """Событие в канал (готовится снимок `watch` — за него); сбой канала ход не роняет."""
+        frame = self._frame(t, e)
+        if t.held is not None:
+            t.held.append(frame)
+        else:
+            self._emit(t, frame)
+
+    def _emit(self, t: _Turn, frame: dict) -> None:
         try:
-            self.emit(self._frame(t, e))
+            self.emit(frame)
         except Exception as exc:
             log.warning("ход %s: событие не ушло: %s", t.turn, type(exc).__name__)
 

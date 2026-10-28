@@ -21,6 +21,19 @@ def clip(value, limit: int = limits.CLIP):
     return value
 
 
+class Ready(dict):
+    """Кадр, уже закодированный в ASCII-JSON (`text`): писатель канала шлёт его как есть, второй раз не кодирует."""
+
+    __slots__ = ("text",)
+
+
+def ready(frame: dict) -> Ready:
+    """Кадр и его ASCII-JSON (`allow_nan=False`: не кодируется — `ValueError`)."""
+    r = Ready(frame)
+    r.text = json.dumps(frame, ensure_ascii=True, allow_nan=False)
+    return r
+
+
 def _size(e: dict) -> int:
     return len(json.dumps(e, ensure_ascii=True))
 

@@ -150,14 +150,41 @@ def test_models_are_probed_again_every_hour(make, configured):
         await gate.wait()
         gate.clear()
 
-    ctrl = make(sleep=sleep, probe=lambda n: ([{"id": f"m{n}", "label": "M"}], ["low"]))
+    found = {1: ["m1"], 2: ["m1"], 3: ["m1", "m3"], 4: []}
+
+    def probe(n):
+        return [{"id": m, "label": "M"} for m in found[n]], ["low"] if found[n] else []
+
+    ctrl = make(sleep=sleep, probe=probe)
     ctrl.start()
     until(lambda: ctrl.state == "online" and pauses)
     assert pauses == [app.PROBE_EVERY_SEC]
     ctrl._loop.call_soon_threadsafe(gate.set)
-    until(lambda: len(ctrl.probes) == 2)
-    until(lambda: ctrl.agent.models == [{"id": "m2", "label": "M"}])
-    assert len(ctrl.links) == 1  # модели уйдут в следующий hello
+    until(lambda: len(ctrl.probes) == 2 and len(pauses) == 2)
+    assert len(ctrl.links) == 1                                 # набор тот же — канал прежний
+    ctrl._loop.call_soon_threadsafe(gate.set)
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online" and len(pauses) == 3)
+    assert ctrl.links[0].stopped                                # набор сменился — новый hello с новыми моделями
+    assert [m["id"] for m in ctrl.links[1].hello["models"]] == ["m1", "m3"]
+    ctrl._loop.call_soon_threadsafe(gate.set)
+    until(lambda: len(ctrl.probes) == 4 and len(pauses) == 4)
+    assert len(ctrl.links) == 2 and [m["id"] for m in ctrl.agent.models] == ["m1", "m3"]  # сбой пробы — без канала
+
+
+def test_models_changed_while_revoked_do_not_bring_the_link_back(make, configured):
+    gate, pauses = asyncio.Event(), []
+
+    async def sleep(sec):
+        pauses.append(sec)
+        await gate.wait()
+        gate.clear()
+
+    ctrl = make(result="revoked", sleep=sleep, probe=lambda n: ([{"id": f"m{n}", "label": "M"}], ["low"]))
+    ctrl.start()
+    until(lambda: ctrl.state == "revoked" and pauses)
+    ctrl._loop.call_soon_threadsafe(gate.set)
+    until(lambda: len(ctrl.probes) == 2 and len(pauses) == 2)
+    assert len(ctrl.links) == 1 and ctrl.state == "revoked"
 
 
 def test_setup_errors_change_nothing(make, root):
@@ -281,20 +308,20 @@ def test_quit_closes_runner_and_link(make, configured):
     closed = []
     real_close = ctrl.runner.close
 
-    async def close():
-        closed.append(True)
-        await real_close()
+    async def close(**kw):
+        closed.append(kw)
+        await real_close(**kw)
 
     ctrl.runner.close = close
     ctrl.quit()
-    assert closed == [True]
+    assert closed == [{"final": True}]                          # ходы после выхода не начинаются
     assert ctrl.links[0].stopped
     assert not ctrl._thread.is_alive()
 
 
 def test_autostart_command_runs_the_pyw_of_this_repo():
     repo = autostart.REPO
-    assert autostart.command() == f'"{repo}\.venv\Scripts\pythonw.exe" "{repo}\studio_agent.pyw"'
+    assert autostart.command() == rf'"{repo}\.venv\Scripts\pythonw.exe" "{repo}\studio_agent.pyw"'
     assert (repo / "studio_agent.pyw").is_file()
 
 

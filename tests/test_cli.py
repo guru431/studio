@@ -133,9 +133,17 @@ def test_drop_session_env_removes_only_the_launching_session():
            "CLAUDE_CODE_MESSAGING_SOCKET": "x", "CLAUDE_CODE_MESSAGING_TOKEN": "x", "VSCODE_PID": "1",
            "VSCODE_GIT_IPC_HANDLE": "x", "TERM_PROGRAM": "vscode",
            "ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
-           "CLAUDE_EFFORT": "high", "PATH": "x"}
-    assert cli.drop_session_env(env) == 14
+           "CLAUDE_EFFORT": "high", "TRACEPARENT": "00-x-y-01", "CLAUDE_CODE_INVOKED_SKILLS": "x",
+           "CODEX_COMPANION_SESSION_ID": "s", "CODEX_COMPANION_TRANSCRIPT_PATH": "x", "ELECTRON_RUN_AS_NODE": "1",
+           "GIT_ASKPASS": r"c:\Users\u\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions\git\dist"
+                          r"\askpass.sh",
+           "GIT_EDITOR": r'"C:/Program Files/Microsoft VS Code/resources/app/extensions/git/dist/git-editor.sh"',
+           "CLAUDE_CODE_EFFORT_LEVEL": "high", "PATH": "x"}
+    assert cli.drop_session_env(env) == 22
     assert env == {"ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
-                   "CLAUDE_EFFORT": "high", "PATH": "x"}
-    other = {"TERM_PROGRAM": "WezTerm"}
-    assert cli.drop_session_env(other) == 0 and other == {"TERM_PROGRAM": "WezTerm"}
+                   "CLAUDE_CODE_EFFORT_LEVEL": "high", "PATH": "x"}   # настройка усилия владельца — остаётся
+    other = {"TERM_PROGRAM": "WezTerm", "GIT_ASKPASS": r"C:\Tools\askpass.exe", "GIT_EDITOR": "notepad"}
+    kept = dict(other)
+    assert cli.drop_session_env(other) == 0 and other == kept
+    insiders = {"GIT_EDITOR": r"C:\Users\u\AppData\Local\Programs\Microsoft VS Code Insiders\bin\code --wait"}
+    assert cli.drop_session_env(insiders) == 1 and insiders == {}

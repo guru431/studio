@@ -164,3 +164,30 @@ def test_raw_gives_base64_and_refuses_over_10_mib(tmp_path):
     with pytest.raises(errors.Refused) as e:
         files.read_raw(tmp_path, "huge.pdf")
     assert (e.value.code, e.value.message) == ("too_large", "файл больше 10 МиБ")
+
+
+def _attributes(p) -> int:
+    return ctypes.windll.kernel32.GetFileAttributesW(str(p))
+
+
+def test_save_of_a_read_only_file_is_refused_with_words_and_writes_nothing(tmp_path):
+    f = tmp_path / "a.txt"; f.write_bytes(b"x")
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x1)  # FILE_ATTRIBUTE_READONLY
+    try:
+        with pytest.raises(errors.Refused) as e:
+            files.save_text(tmp_path, "a.txt", "y", hashlib.sha256(b"x").hexdigest())
+        assert (e.value.code, e.value.message) == ("read_only", "файл только для чтения")
+        assert f.read_bytes() == b"x" and [p.name for p in tmp_path.iterdir()] == ["a.txt"]
+    finally:
+        ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x80)  # иначе tmp_path не убрать
+
+
+def test_save_keeps_hidden_and_system_attributes(tmp_path):
+    f = tmp_path / "a.txt"; f.write_bytes(b"x")
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x2 | 0x4)  # HIDDEN | SYSTEM, без ARCHIVE
+    files.save_text(tmp_path, "a.txt", "y", hashlib.sha256(b"x").hexdigest())
+    assert f.read_bytes() == b"y" and _attributes(f) & 0x27 == 0x2 | 0x4
+    plain = tmp_path / "b.txt"; plain.write_bytes(b"x")
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(plain), 0x20)  # ARCHIVE
+    files.save_text(tmp_path, "b.txt", "y", hashlib.sha256(b"x").hexdigest())
+    assert _attributes(plain) & 0x27 == 0x20

@@ -12,7 +12,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient
 
 from . import autostart, cli, enroll, setup, store
-from .agent import Agent
+from .agent import Agent, read_has_pin
 from .link import Link
 from .pin import PinStore
 from .turns import Runner
@@ -172,8 +172,10 @@ class Controller:
         agent = None
         self.runner = Runner(lambda f: agent.emit(f), choices=store.Choices(self.h), cli_path=path,
                              factory=self._sdk_factory, find_cli=self._find_cli)
-        agent = self.agent = Agent(store.load_config(self.h), PinStore(self.h), self.runner, cc_version=version,
-                                   models=[], efforts=[])
+        pins = PinStore(self.h)
+        has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
+        agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
+                                   models=[], efforts=[], has_pin=has_pin)
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
@@ -183,7 +185,7 @@ class Controller:
         for task in [first, *self._relinks]:
             task.cancel()
         await asyncio.gather(prober, first, *self._relinks, return_exceptions=True)
-        await self.runner.close()
+        await self.runner.close(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
         log.info("мост: выход")
 
@@ -207,6 +209,7 @@ class Controller:
                 self._set_state("setup")
                 return
             self._set_state("connecting")
+            await self.agent.refresh_pin()
             await self._refresh_cli()
             if not self._probed:
                 await self._refresh_models()
@@ -251,21 +254,29 @@ class Controller:
             self._versioned = path
             log.info("Claude Code: сменился, версия %s", self.agent.cc_version)
 
-    async def _refresh_models(self) -> None:
-        """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает."""
+    async def _refresh_models(self) -> bool:
+        """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает. Итог — сменился ли
+        набор."""
         models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
                                             factory=self._sdk_factory)
+        changed = bool(models) and (models, efforts) != (self.agent.models, self.agent.efforts)
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
         log.info("модели Claude Code: %d", len(models))
+        return changed
 
     async def _probe_loop(self) -> None:
+        """Раз в час — путь `claude.exe` и модели; набор моделей или усилий сменился — канал заново: обновить
+        знакомство протокол v1 не умеет, а студия сверяет выбор со списком своего `hello`. Канал, что не поднят
+        (`setup`) или погашен студией (`revoked`, `replaced`), проба не поднимает."""
         while True:
             await self._sleep(PROBE_EVERY_SEC)
             if self.agent.cfg.projects_root:
                 await self._refresh_cli()
-                await self._refresh_models()
+                if await self._refresh_models() and self.state in ("connecting", "online", "offline"):
+                    log.info("модели Claude Code сменились: %d — канал заново", len(self.agent.models))
+                    await self._relink_task()
 
 
 def prepare_env() -> None:

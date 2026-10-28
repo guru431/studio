@@ -57,7 +57,7 @@ def load_config(h: Path) -> Config:
             raise ValueError("поля")
     except FileNotFoundError:
         return Config()
-    except ValueError as e:
+    except (OSError, ValueError) as e:  # и без прав на чтение: окно настройки, а не молчаливый незапуск
         log.warning("config.json не читается: %s", type(e).__name__)
         return Config()
     return Config(**{k: v for k, v in raw.items() if k in _KINDS})

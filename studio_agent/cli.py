@@ -28,8 +28,17 @@ ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решени
 # Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
 SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
                          "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SSE_PORT", "CLAUDE_PID", "CLAUDE_CODE_EXECPATH",
-                         "CLAUDE_PLUGIN_DATA"})
-SESSION_PREFIXES = ("CLAUDE_CODE_MESSAGING_", "VSCODE_")
+                         "CLAUDE_PLUGIN_DATA", "CLAUDE_EFFORT", "TRACEPARENT", "CLAUDE_CODE_INVOKED_SKILLS",
+                         "ELECTRON_RUN_AS_NODE"})
+SESSION_PREFIXES = ("CLAUDE_CODE_MESSAGING_", "VSCODE_", "CODEX_COMPANION_")
+# git VS Code: помощники в его папке; без `VSCODE_GIT_IPC_HANDLE` (он уходит с `VSCODE_*`) они не работают.
+VSCODE_GIT = frozenset({"GIT_ASKPASS", "GIT_EDITOR"})
+VSCODE_MARKS = ("\\resources\\app\\extensions\\git\\", "vs code", "vscode")
+
+
+def _vscode_path(value: str) -> bool:
+    v = value.lower().replace("/", "\\")
+    return any(mark in v for mark in VSCODE_MARKS)
 
 
 def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
@@ -53,10 +62,12 @@ def current(path: Path | None, find=find_cli) -> Path | None:
 
 
 def drop_session_env(environ=os.environ) -> int:
-    """Убрать из окружения моста привязку к чужой сессии (`SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode`);
-    прочее окружение владельца (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`) не трогается. Итог — сколько убрано."""
+    """Убрать из окружения моста привязку к чужой сессии (`SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode`,
+    `GIT_ASKPASS`/`GIT_EDITOR` из папки VS Code); прочее окружение владельца (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`)
+    не трогается. Итог — сколько убрано."""
     names = [k for k, v in environ.items() if k.upper() in SESSION_ENV or k.upper().startswith(SESSION_PREFIXES)
-             or (k.upper() == "TERM_PROGRAM" and v.lower() == "vscode")]
+             or (k.upper() == "TERM_PROGRAM" and v.lower() == "vscode")
+             or (k.upper() in VSCODE_GIT and _vscode_path(v))]
     for k in names:
         del environ[k]
     return len(names)

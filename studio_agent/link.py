@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus, InvalidURI
 
-from . import VERSION, limits
+from . import VERSION, events, limits
 from .agent import Agent
 
 log = logging.getLogger(__name__)
@@ -212,13 +212,14 @@ class Link:
 
     @staticmethod
     async def _write(ws, queue: asyncio.Queue) -> None:
-        """Писатель канала: один на канал, кадры — по порядку очереди; `None` — очередь дослана, конец."""
+        """Писатель канала: один на канал, кадры — по порядку очереди (`events.Ready` — уже закодирован); `None` —
+        очередь дослана, конец."""
         while True:
             frame = await queue.get()
             if frame is None:
                 return
             try:
-                text = _dumps(frame)
+                text = frame.text if isinstance(frame, events.Ready) else _dumps(frame)
             except (TypeError, ValueError) as e:
                 log.warning("канал: кадр не кодируется: %s", type(e).__name__)
                 continue

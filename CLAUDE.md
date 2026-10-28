@@ -34,13 +34,15 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   (настоящий путь или `not_found`).
 - `files` — `resolve` (вид пути проверяется **до диска**: имена устройств, ADS `:`, точка или пробел в конце части —
   `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
-  (`version` — sha256 байтов, запись через `store.write_atomic`).
+  (`version` — sha256 байтов, запись через `store.write_atomic`; «только чтение» — `read_only` «файл только для
+  чтения» до записи, прочие атрибуты прежнего файла — новому `SetFileAttributesW`).
 - `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
   `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
   `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).
 - `cli` — `find_cli` (`claude.exe` новейшего расширения VS Code, версии числами; нет — CLI, встроенный в SDK),
   `current(path, find)` (прежний путь, пока файл есть, иначе `find()` заново — как `worker.py::_claude_bin`),
-  `drop_session_env` (из окружения моста прочь `SESSION_ENV`, `SESSION_PREFIXES` и `TERM_PROGRAM=vscode`),
+  `drop_session_env` (из окружения моста прочь `SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode` и
+  `GIT_ASKPASS`/`GIT_EDITOR`, ведущие в папку VS Code),
   `cli_version` (первое слово `--version`, 30 с; сбой — «встроенный в SDK»), `models_from` (`get_server_info()["models"]`
   без `default` → `{"id", "label"}` и усилия в порядке `EFFORTS`), `probe` (короткий клиент в папке проектов,
   `setting_sources` user/project/local, ≤ 60 с, `disconnect` и при сбое; stderr Claude Code отбрасывается).
@@ -57,28 +59,33 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - `turns` — `Runner` (ходы через Agent SDK): клиент на ход (новая сессия — `session_id=chat`, есть — `resume=chat`;
   `null` модели и усилия — запомненные `store.Choices`, иначе модель последнего ответа сессии), не больше `MAX_TURNS`
   сразу и один в чате (`busy`, `running`); `can_use_tool` → событие `ask` и ожидание `answer` (карточка переживает
-  смену канала), `watch` — снимок `snapshot` (урезан `sessions.fit`), `stop` — отказ карточкам и `interrupt()`
+  смену канала), `answer`/`stop`/`watch` — только хода того же `pid` (иначе как без хода), `watch` — снимок `snapshot` (урезан
+  `sessions.fit` и закодирован в потоке; события хода тем временем — в `held`, за снимком), `stop` — отказ карточкам
+  и `interrupt()`
   (`idle` без хода; interrupt упал или не успел, или `stop` повторный — отмена задачи хода: `_run` доводит `done`
   `stopped`, `disconnect` гасит процесс), `close` — мост выходит или отозван (`done` «ход прерван: мост остановлен»;
-  пока идёт — `start` отвечает `busy`); путь `claude.exe` — `cli.current` в начале каждого хода (в потоке `_choose`);
+  пока идёт — `start` отвечает `busy` «мост выходит»; `final` — выход моста — и после; `stop` во время `_finish`
+  задачу не отменяет — `finishing`); путь `claude.exe` — `cli.current` в начале каждого хода (в потоке `_choose`);
   метка `studio` новой сессии — после `disconnect`.
 - `link` — `ws_url` (`https://h` → `wss://h/api/agent/link`; `http` — только `localhost`, `127.0.0.1`, `[::1]`) и `Link`
   (канал к студии): `connect` с `Authorization: Bearer <ключ>`, `max_size=FRAME_MAX`, пинги 20/20 с; первым — `hello`,
   `welcome` ≤ `WELCOME_SEC`, затем `agent.new_link()` и `agent.send = link.send`; `req` — `agent.handle` своей задачей,
   ответы подряд в очередь канала, по которому пришла просьба (оборвался — пропадают; задачи не отменяются); `close` —
   `agent.close_session`; не JSON и прочие `t` — пропуск. Писатель — одна задача на канал, кадры — `ensure_ascii=True,
-  allow_nan=False`. Закрытие 4401 — `revoked`, 4409 — `replaced` (выход из `run()`), 4400 — пауза `PROTOCOL_PAUSE_SEC`,
+  allow_nan=False` (`events.Ready` — готовой строкой). Закрытие 4401 — `revoked`, 4409 — `replaced` (выход из `run()`), 4400 — пауза `PROTOCOL_PAUSE_SEC`,
   прочее, отказ рукопожатия и любое неожиданное исключение канала (в журнал — имя типа) — `BACKOFF` по числу неудач
   подряд (сброс после `welcome`); `stop()` досылает очередь писателю не дольше `FLUSH_SEC` (2 с: `done` ходов при
   выходе), затем закрывает; `on_state`: `connecting`,
   `online`, `offline` (перед каждой паузой), `revoked`, `replaced`, `stopped`. Паузы — параметр `sleep`; тесты —
   подставная студия `tests/fake_studio.py` (`websockets` на `127.0.0.1:0`).
-- `agent` — `Agent` (просьбы студии): `hello` (нечитаемый `pin.bin` — `has_pin: true`), `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
+- `agent` — `Agent` (просьбы студии): `hello` (`has_pin` — в памяти, к диску не ходит: читается при создании и `refresh_pin` ядра перед каждым каналом;
+  нечитаемый `pin.bin` — `true`), `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
   исполнения, иначе `invalid`; `id` не вернуть — без ответа; `open` под замком — порядок Ruling 4: без PIN — открыть,
   `null` открытой — `{}`, блок — `pin_locked`, `null` — `pin_needed`, иначе `pins.check` в потоке; прочие — `touch`
   или `closed`; `watch` без хода — `{"running": false}` без проверки чата; не `Refused` — `error`, в журнал `op` и
-  тип; ответ больше `FRAME_MAX` — `too_large`, не кодируется — `error`), `close_session`, `new_link` (все сессии
-  прочь), `emit` (в `send`, его ставит `Link`; нет — событие пропадает). `Runner` создаётся раньше и получает `emit`
+  тип; ответ кодируется один раз — `events.Ready`; больше `FRAME_MAX` — `too_large`, не кодируется — `error`),
+  `close_session`, `new_link` (все сессии прочь и поколение канала: `open`, чья проверка PIN пережила новый канал, —
+  `closed`), `emit` (в `send`, его ставит `Link`; нет — событие пропадает). `Runner` создаётся раньше и получает `emit`
   поздним связыванием (`lambda f: agent.emit(f)`).
 - `enroll` — `enroll(url, login, password, name)` → `(agent_id, device_key)`: `POST <адрес>/api/agent/enroll` JSON
   через `urllib`, без `Origin`, перенаправлениям не следует; адрес — по правилу `link.ws_url` (`base_url`); отказы —
@@ -93,7 +100,7 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   репозитория), `enabled`, `set_enabled`; `key` — параметр (тесты пишут в `Software\studio-agent-test\Run`).
 - `app.Controller` — ядро без Tk и трея (его же берёт `run --console`): поток с циклом `asyncio` — `find_cli`,
   `cli_version`, `Runner` и `Agent` (поздний `emit`), `cli.probe` до первого канала и раз в `PROBE_EVERY_SEC` (пустой
-  итог прежние модели не стирает, новые уйдут в следующий `hello`), `Link`. Публичные методы — из любого потока:
+  итог прежние модели не стирает; набор сменился — канал заново, новый `hello`, кроме `setup`/`revoked`/`replaced`), `Link`. Публичные методы — из любого потока:
   `restart_link()` (канал заново с перечитанными ключом, настройками и `has_pin`; состояния прежнего канала отсекает
   поколение `_gen`), `apply_setup(form)` (блокирует — не из потока Tk; «привязан» — есть ключ **для этого адреса**:
   другой адрес требует новой привязки, ключ чужой студии туда не уходит), `reset_pin()`, `quit()` (`runner.close()`,
@@ -138,13 +145,14 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - **`setting_sources=["user", "project", "local"]`** явно, `permission_mode` не задаётся: правила разрешений, CLAUDE.md
   и `env` проекта действуют, как в VS Code. Окружение `claude.exe` — окружение моста: при старте из него убраны только
   переменные сессии того, кто запустил мост (`cli.SESSION_ENV`, `CLAUDE_CODE_MESSAGING_*`, `VSCODE_*`,
-  `TERM_PROGRAM=vscode`; `install.ps1` запускают и из Claude Code), прочее (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`) —
+  `CODEX_COMPANION_*`, `TERM_PROGRAM=vscode`, `GIT_ASKPASS`/`GIT_EDITOR` из папки VS Code; `install.ps1` запускают и из
+  Claude Code), прочее (`ANTHROPIC_*`, настройки `CLAUDE_CODE_*`) —
   как есть; добавляется только `CLAUDE_AGENT_SDK_CLIENT_APP=studio-agent/<версия>` — и в ходе, и в `cli.probe` (Ruling 10).
 - CLI — новейший `claude.exe` расширения VS Code, нет — встроенный в SDK; путь сверяется перед каждым ходом и пробой
   (VS Code ставит обновление в новую папку и удаляет прежнюю — без этого мост после первого обновления отвечал бы
   «Claude Code не найден на компьютере» до перезапуска). Модели — `get_server_info()["models"]`
   короткого клиента до первого канала и раз в час; новые студия видит только в следующем `hello` (обновить знакомство
-  протокол v1 не умеет).
+  протокол v1 не умеет), поэтому сменившийся набор моделей или усилий поднимает канал заново.
 - Текст хода — по `text_delta` (`include_partial_messages=True`), без дельт — блоками `AssistantMessage`; шаги и итоги —
   только главного агента, карточки подагентов — показываются. Метка `studio` — новой сессии после `disconnect` (файл
   сессии не пишут двое) и только если запрос ушёл к CLI. Время сообщений истории — `null`.
@@ -213,8 +221,9 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   строку запроса пишет журнал Apache. Логгер `websockets` на DEBUG пишет заголовки — с ключом; `journal.setup` держит
   его не ниже INFO.
 - **PIN проверяет мост, не студия**: хеш и счёт — в `pin.bin` машины; студия знает только `has_pin` из `hello`. Значит,
-  `set-pin`/`clear-pin` из консоли при работающем мосте действуют на новые `open` сразу, а `has_pin` студии и уже
-  открытые сессии — до нового канала (окно «Сохранить» делает `restart_link` само).
+  `set-pin`/`clear-pin` из консоли при работающем мосте действуют на новые `open` сразу, уже открытые сессии — до
+  нового канала, а `has_pin` студии — до перезапуска моста или `restart_link` (переподключение самого `Link` берёт
+  `has_pin` из памяти; окно «Сохранить» делает `restart_link` само).
 - **Кадры — ASCII-JSON** (`ensure_ascii=True, allow_nan=False`): имя файла Windows с одиноким суррогатом в UTF-8 не
   кодируется — канал упал бы на первом таком списке.
 - **`setting_sources` задавать явно**: без него SDK не грузит настройки — ни правил разрешений проекта, ни CLAUDE.md,

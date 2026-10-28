@@ -276,6 +276,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
 
         # PIN: задан на машине, канал заново — открытость сброшена, нужен PIN
         await asyncio.to_thread(pins.set_pin, "2468")
+        await agent.refresh_pin()                                # как ядро перед новым каналом
         await link.stop()
         await task
         link, task = start_link()

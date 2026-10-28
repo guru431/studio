@@ -1,7 +1,9 @@
 """Пути внутри проекта и файлы (протокол §4, §6): список папки, чтение, raw, правка."""
 
 import base64
+import ctypes
 import hashlib
+import logging
 import os
 import re
 import stat
@@ -9,6 +11,8 @@ from pathlib import Path
 
 from . import limits, store
 from .errors import Refused
+
+log = logging.getLogger(__name__)
 
 # Имена устройств Windows — по части пути, с любым расширением. Сверх брифа: CONIN$, CONOUT$, COM¹²³ и
 # LPT¹²³ и пробелы перед точкой («NUL .txt») — Win32 считает их устройствами так же.
@@ -20,6 +24,11 @@ TOO_BIG_TEXT = "файл больше 2 МиБ"
 TOO_BIG_RAW = "файл больше 10 МиБ"
 NO_FILE = "нет такого файла"
 NO_DIR = "нет такой папки"
+READ_ONLY = "файл только для чтения"
+# Атрибуты, что `SetFileAttributesW` умеет ставить (без READONLY: такой файл не правится).
+KEEP_ATTRIBUTES = (stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM | stat.FILE_ATTRIBUTE_ARCHIVE
+                   | stat.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED | stat.FILE_ATTRIBUTE_OFFLINE
+                   | stat.FILE_ATTRIBUTE_TEMPORARY)
 
 
 def _parts(path: str) -> list[str]:
@@ -123,7 +132,10 @@ def read_raw(project: Path, path: str) -> dict:
 
 
 def save_text(project: Path, path: str, text: str, ver: str) -> dict:
-    """Только существующий текстовый файл и только при том же `version`; байты — UTF-8 текста как есть."""
+    """Только существующий текстовый файл и только при том же `version`; байты — UTF-8 текста как есть.
+
+    «Только чтение» — отказ до записи; скрытый, системный и прочие атрибуты прежнего файла — новому (запись идёт
+    временным файлом и `os.replace`, новый файл получил бы атрибуты по умолчанию)."""
     p, data = _read(project, path, limits.TEXT_MAX, TOO_BIG_TEXT)
     _text(data)
     now = version(data)
@@ -135,5 +147,11 @@ def save_text(project: Path, path: str, text: str, ver: str) -> dict:
         raise Refused("invalid") from None
     if len(new) > limits.TEXT_MAX:
         raise Refused("too_large", TOO_BIG_TEXT)
+    attrs = os.stat(p).st_file_attributes
+    if attrs & stat.FILE_ATTRIBUTE_READONLY:
+        raise Refused("read_only", READ_ONLY)
     store.write_atomic(p, new)
+    keep = attrs & KEEP_ATTRIBUTES
+    if not ctypes.windll.kernel32.SetFileAttributesW(str(p), keep or stat.FILE_ATTRIBUTE_NORMAL):
+        log.warning("правка: атрибуты файла не перенесены")
     return {"version": version(new)}

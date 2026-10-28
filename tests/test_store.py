@@ -108,3 +108,9 @@ def test_a_broken_config_reads_as_defaults_and_is_left_alone(home, caplog, text)
     assert store.load_config(home) == store.Config()
     assert (home / "config.json").read_text(encoding="utf-8") == text
     assert "config.json не читается" in caplog.text
+
+
+def test_an_unreadable_config_reads_as_defaults(home, caplog):
+    (home / "config.json").mkdir()                                  # чтение — PermissionError, как у файла без прав
+    assert store.load_config(home) == store.Config()
+    assert "config.json не читается: PermissionError" in caplog.text

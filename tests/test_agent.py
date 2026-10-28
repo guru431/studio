@@ -77,10 +77,22 @@ def test_hello(agent):
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
 
-def test_hello_with_an_unreadable_pin_says_there_is_a_pin(agent, home, caplog):
+def test_hello_with_an_unreadable_pin_says_there_is_a_pin(home, root, caplog):
     (home / "pin.bin").write_bytes(b"not a dpapi blob")             # сброс пароля Windows, порча
-    assert agent.hello()["has_pin"] is True                          # безопасная сторона, канал не падает
+    assert make(home, root).hello()["has_pin"] is True              # безопасная сторона, канал не падает
     assert "PIN не читается: OSError" in caplog.text
+
+
+async def test_hello_does_not_read_the_pin_and_refresh_pin_does(agent, home, monkeypatch):
+    def boom(self):
+        raise AssertionError("pin.bin на цикле канала")
+
+    PinStore(home).set_pin("2468")
+    monkeypatch.setattr(PinStore, "has_pin", property(boom))
+    assert agent.hello()["has_pin"] is False                        # в памяти: DPAPI на цикле не зовётся
+    monkeypatch.undo()
+    await agent.refresh_pin()                                       # новый канал ядра — заново, в потоке
+    assert agent.hello()["has_pin"] is True
 
 
 async def test_everything_but_open_is_closed_until_opened(agent):
@@ -137,6 +149,23 @@ async def test_close_and_new_link_close_sessions(agent):
     assert (await agent.handle(req("projects", session=other)))[0]["code"] == "closed"
 
 
+async def test_a_pin_checked_across_a_new_link_does_not_open_the_session(agent_with_pin, monkeypatch):
+    a = agent_with_pin
+    real = a.pins.check
+
+    def check(pin):                                                 # scrypt кончился уже после нового канала
+        a.new_link()
+        return real(pin)
+
+    monkeypatch.setattr(a.pins, "check", check)
+    res = (await a.handle(req("open", pin="2468")))[0]
+    assert (res["ok"], res["code"]) == (False, "closed")
+    assert (await a.handle(req("projects")))[0]["code"] == "closed"
+    monkeypatch.undo()
+    await opened(a, pin="2468")                                     # по новому каналу — открывается
+    assert (await a.handle(req("projects")))[0]["ok"]
+
+
 async def test_turn_events_go_to_send_and_only_when_it_is_set(home, root):
     a = make(home, root, FakeFactory([delta("При"), result_ok()]))
     await opened(a)
@@ -166,6 +195,28 @@ async def test_watch_sends_res_then_snapshot(home, root):
     assert (await a.handle(req("stop", project=pid, chat=CHAT)))[0]["ok"]
     await settle(a)
     assert (await a.handle(req("stop", project=pid, chat=CHAT)))[0]["code"] == "idle"
+
+
+async def test_answer_stop_watch_of_another_project_do_not_see_the_turn(home, root):
+    (root / "other").mkdir()
+    a = make(home, root, FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()]))
+    await opened(a)
+    pid, other = projects.pid("demo"), projects.pid("other")
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None))
+    for _ in range(2000):
+        if a.runner.live().get(CHAT):
+            break
+        await asyncio.sleep(0.001)
+    rid = a.sent[-1]["e"]["request_id"]
+    out = await a.handle(req("watch", project=other, chat=CHAT))
+    assert len(out) == 1 and out[0]["data"] == {"running": False}
+    res = (await a.handle(req("answer", project=other, chat=CHAT, request_id=rid, decision="allow")))[0]
+    assert res["code"] == "gone"
+    assert (await a.handle(req("stop", project=other, chat=CHAT)))[0]["code"] == "idle"
+    assert a.runner.live() == {CHAT: True}                              # ход и карточка — на месте
+    assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
+    await settle(a)
+    assert a.sent[-1]["e"] == {"k": "done", "status": "done"}
 
 
 async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):
