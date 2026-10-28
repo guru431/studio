@@ -4,8 +4,9 @@ Studio part — needs STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD of an adminis
 has the «srvllm» connection (`manage.py create-admin` with GATEWAY_KEY_OWNER_IMAGES). It logs in,
 generates a Lustify picture, edits half of it with the brush, describes it, makes a 1 s clip of it
 and asks local-gemma-abl about a PDF made here, recognizes a one-page scan in «Распознавание» and in the
-chat (gemma-abl answers without waiting out the ocr lease); then deletes only what it created (the owner's
-history stays) and releases the card. Gateway and PowerShell part — needs GATEWAY_KEY_OWNER_IMAGES
+chat (gemma-abl answers without waiting out the ocr lease), translates a text, a one-page text PDF and a
+picture of a sign in «Перевод» (blocks with boxes; gemma-abl translates them without waiting out the ocr
+lease); then deletes only what it created (the owner's history stays) and releases the card. Gateway and PowerShell part — needs GATEWAY_KEY_OWNER_IMAGES
 and goes to the gateway directly, as the clients do. Pictures are synthetic: no user photos.
 """
 import base64
@@ -42,6 +43,7 @@ VIDEO_SEC = 1800
 SPEECH_SEC = 1800              # speech and transcription wait for the card up to 30 min (WAIT_MAX_SEC)
 OCR_SEC = 1800 + 700           # a page waits for the card up to 30 min, then the gateway reads it up to 660 s
 GEMMA_AFTER_OCR_SEC = 600      # cold gemma-abl ~300 s; the ocr lease left behind would hold the card 900 s
+TRANSLATE_SEC = 1800 + 420     # a chunk waits for the card up to 30 min, then the model reads it up to 420 s
 GATEWAY_ROOT = GATEWAY.removesuffix("/slot")
 PHRASE = "Проверка студии: озвучка, расшифровка и голосовой ввод работают."
 # cold gemma loads up to ~300 s; the studio pings every 15 s, so a silent minute is a broken line
@@ -82,6 +84,16 @@ def scan_pdf(text: str) -> bytes:
     return out.getvalue()
 
 
+def sign_png(text: str) -> bytes:
+    """A picture of a sign: the line of pdf(text) drawn by pdfium at 200 DPI, the top strip of the page."""
+    doc = pypdfium2.PdfDocument(pdf(text))
+    try:
+        image = doc[0].render(scale=200 / 72).to_pil().convert("RGB")
+    finally:
+        doc.close()
+    return png(image.crop((0, 0, image.width, 500)))
+
+
 def poll(client, url, done, seconds, pause=2):
     """GET url until done(body) — the body is returned; deadline — fail with the last state."""
     deadline, body = time.monotonic() + seconds, None
@@ -118,7 +130,7 @@ def studio():
     if not login or not password:
         pytest.skip("STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required")
     created = SimpleNamespace(chats=[], videos=[], images=[], descriptions=[], transcripts=[], speeches=[], voices=[],
-                              scans=[])
+                              scans=[], translations=[])
     with httpx.Client(timeout=60, trust_env=False) as client:
         r = client.post(STUDIO + "/login", data={"login": login, "password": password},
                         headers={"Origin": STUDIO})
@@ -154,6 +166,13 @@ def cleanup(client, created):
             except (AssertionError, pytest.fail.Exception, httpx.HTTPError):
                 continue                   # the row stays for the owner to delete
         client.delete(f"{STUDIO}/api/ocr/{scan_id}")
+    for tid in created.translations:      # a stopped translation drops its chunk at the next delta
+        if client.post(f"{STUDIO}/api/translate/{tid}/cancel").status_code == 200:
+            try:
+                poll(client, f"{STUDIO}/api/translate/{tid}", finished, 800, pause=5)
+            except (AssertionError, pytest.fail.Exception, httpx.HTTPError):
+                continue                   # the row stays for the owner to delete
+        client.delete(f"{STUDIO}/api/translate/{tid}")
     for video_id in created.videos:
         client.delete(f"{STUDIO}/api/videos/{video_id}")     # a running clip is dropped at the gateway first
     for job_id in created.descriptions:                       # not in history; cancel if it still runs
@@ -372,6 +391,92 @@ def test_scan_in_the_section_and_in_the_chat(studio):
     assert after < GEMMA_AFTER_OCR_SEC, f"gemma-abl answered {after:.0f} s after the scan: the ocr lease held the card"
     saved = c.get(f"{STUDIO}/api/chats/{chat_id}").json()["messages"]
     assert saved[0]["attachments"][0]["chars"] > 0 and saved[1]["ocr"] is None
+
+
+def cyrillic(text: str) -> bool:
+    return re.search(r"[а-яё]{3}", text.lower()) is not None
+
+
+def exported(client, tid: str) -> str:
+    """The translation as the «Скачать» .txt of a finished record (and its .docx is a Word file)."""
+    r = client.get(f"{STUDIO}/api/translate/{tid}/export", params={"format": "txt"})
+    assert r.status_code == 200, (r.status_code, r.text[:300])
+    docx = client.get(f"{STUDIO}/api/translate/{tid}/export", params={"format": "docx"})
+    assert docx.status_code == 200 and docx.content[:2] == b"PK"
+    return r.text
+
+
+@pytest.mark.timeout(3 * TRANSLATE_SEC + OCR_SEC + 600)
+def test_translator_text_pdf_and_photo(studio):
+    """«Перевод» на local-gemma-abl: текст из поля (язык определяет модель), одностраничный PDF со слоем (без
+    распознавания) и снимок вывески — HunyuanOCR находит строки с рамками, gemma-abl переводит блоки и не
+    ждёт аренды слота ocr (студия освобождает его сама)."""
+    c, made = studio.c, studio.created
+    code = f"AZURE-OTTER-{secrets.randbelow(9000) + 1000}"
+    langs = {"source_lang": "auto", "target_lang": "ru", "model": CHAT_MODEL}
+    headers = {"x-studio-source-lang": "auto", "x-studio-target-lang": "ru", "x-studio-model": CHAT_MODEL}
+
+    # 1. Text from the field: English detected, Russian translation, the code kept as is
+    item = submit(c, STUDIO + "/api/translate", 202, json={
+        "text": f"The secret code phrase is {code}.\n\nPlease keep it safe and do not share it with anyone.", **langs})
+    made.translations.append(item["id"])
+    assert item["kind"] == "text" and item["model"] == CHAT_MODEL, item
+    done = poll(c, f"{STUDIO}/api/translate/{item['id']}", finished, TRANSLATE_SEC, pause=3)
+    assert done["state"] == "done", done["detail"]
+    assert done["detected_lang"] == "en" and done["result_lang"] == "ru", done
+    text = exported(c, item["id"])
+    assert cyrillic(text) and letters(code) in letters(text), text[:300]
+
+    # 2. A one-page PDF with a text layer: translated from the layer, no scan
+    item = submit(c, STUDIO + "/api/translate/files", 202, headers=headers,
+                  files={"file": ("live-translate.pdf", pdf(f"The secret code phrase is {code}."), "application/pdf")})
+    made.translations.append(item["id"])
+    assert item["kind"] == "file", item
+    done = poll(c, f"{STUDIO}/api/translate/{item['id']}", finished, TRANSLATE_SEC, pause=3)
+    assert done["state"] == "done", done["detail"]
+    assert done["scan_id"] is None and done["media_id"], done
+    text = exported(c, item["id"])
+    assert cyrillic(text) and letters(code) in letters(text), text[:300]
+
+    # 3. A picture of a sign: blocks with boxes on the same PNG that is shown, translated after the ocr slot is free
+    sign = sign_png(f"The secret code phrase is {code}.")
+    item = submit(c, STUDIO + "/api/translate/files", 202, headers=headers,
+                  files={"file": ("live-sign.png", sign, "image/png")})
+    made.translations.append(item["id"])
+    assert item["kind"] == "photo", item
+    deadline, recognized, body = time.monotonic() + OCR_SEC + TRANSLATE_SEC, None, None
+    while time.monotonic() < deadline:
+        r = c.get(f"{STUDIO}/api/translate/{item['id']}")
+        assert r.status_code == 200, (r.status_code, r.text[:300])
+        body = r.json()
+        if recognized is None and body["parts"]:  # blocks are stored after the recognition and its release
+            recognized = time.monotonic()
+        if finished(body):
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"the photo translation did not finish: {str(body)[:300]}")
+    assert body["state"] == "done", body["detail"]
+    after = time.monotonic() - (recognized or time.monotonic())
+    assert after < GEMMA_AFTER_OCR_SEC, f"gemma-abl translated {after:.0f} s after the photo: the ocr lease held the card"
+    blocks = body["parts"]
+    assert blocks and all(p["state"] == "done" and p["text"] for p in blocks), blocks
+    for p in blocks:
+        x1, y1, x2, y2 = p["box"]
+        assert 0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000, p["box"]
+    source = " ".join(p["source"] for p in blocks)
+    translation = " ".join(p["text"] for p in blocks)
+    assert letters(code) in letters(source), source
+    assert cyrillic(translation), translation
+    shown = c.get(f"{STUDIO}/api/media/{body['media_id']}")
+    assert shown.status_code == 200 and shown.headers["content-type"] == "image/png"
+    with Image.open(io.BytesIO(shown.content)) as image, Image.open(io.BytesIO(sign)) as original:
+        assert image.size == original.size
+    token = os.environ.get("GATEWAY_KEY_OWNER_IMAGES")
+    if token:                              # the studio's own key may free the ocr slot, and nothing holds it now
+        r = httpx.post(GATEWAY_ROOT + "/pages/ocr-release", json={},
+                       headers={"Authorization": "Bearer " + token}, timeout=60, trust_env=False)
+        assert r.status_code == 200, (r.status_code, r.text[:300])
 
 
 @pytest.mark.timeout(1500)
