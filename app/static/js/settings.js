@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления, ключ Exa «Интернета» чата, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
+ * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления и push, компьютеры Claude Code, ключ Exa «Интернета» чата, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -460,7 +460,109 @@ function exaBlock() {
     field('Ключ Exa', key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
 }
 
-/* «Уведомления» (jobs.js): флаг этого устройства; включение спрашивает разрешение браузера. */
+/* Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): подписка этого устройства —
+ * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push` — только
+ * '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет. Разрешение спрашивается первым
+ * в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
+const PUSH_KEY = 'studio-push';
+const DENIED = 'Браузер запретил уведомления — разрешите их в настройках сайта';
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+function pushFlag(on) {
+  try {
+    if (on === undefined) return localStorage.getItem(PUSH_KEY) === '1';
+    if (on) localStorage.setItem(PUSH_KEY, '1');
+    else localStorage.removeItem(PUSH_KEY);
+  } catch {
+    // хранилище недоступно: флажок покажет состояние сервера при следующем открытии
+  }
+  return false;
+}
+
+function permission() {
+  if (Notification.permission === 'granted') return Promise.resolve('granted');
+  return new Promise((resolve) => {              // старый Safari отвечает в обратный вызов, а не обещанием
+    const pending = Notification.requestPermission(resolve);
+    if (pending) pending.then(resolve, () => resolve('denied'));
+  });
+}
+
+/** Публичный ключ VAPID (base64url) — байтами для applicationServerKey. */
+function keyBytes(text) {
+  const b64 = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function subscribePush() {
+  const registration = await navigator.serviceWorker.ready;
+  const { key } = await api('GET', '/api/me/push');
+  const options = { userVisibleOnly: true, applicationServerKey: keyBytes(key) };
+  let sub;
+  try {
+    sub = await registration.pushManager.subscribe(options);
+  } catch (err) {
+    // подписка прежним ключом VAPID (сменился STUDIO_DATA_KEY): снять её и подписаться заново
+    const old = err && err.name === 'InvalidStateError' ? await registration.pushManager.getSubscription() : null;
+    if (!old) throw err;
+    await old.unsubscribe();
+    sub = await registration.pushManager.subscribe(options);
+  }
+  await api('POST', '/api/me/push', sub.toJSON());
+}
+
+async function unsubscribePush() {
+  await api('DELETE', '/api/me/push');
+  const registration = await navigator.serviceWorker.ready;
+  const sub = await registration.pushManager.getSubscription();
+  if (sub) await sub.unsubscribe().catch(() => false);
+}
+
+function pushBox() {
+  const note = status('push-status');
+  const box = el('input', { type: 'checkbox', id: 'push-enabled', disabled: true });
+  box.addEventListener('change', async () => {
+    say(note, '');
+    const on = box.checked;
+    box.disabled = true;
+    try {
+      if (on) {
+        if (await permission() !== 'granted') {
+          box.checked = false;
+          say(note, DENIED, 'error');
+          return;
+        }
+        await subscribePush();
+        pushFlag(true);
+        say(note, 'Push включён на этом устройстве', 'ok');
+      } else {
+        await unsubscribePush();
+        pushFlag(false);
+        say(note, 'Push выключен на этом устройстве');
+      }
+    } catch (err) {
+      box.checked = !on;
+      say(note, err && err.name === 'NotAllowedError' ? DENIED : words(err), 'error');
+    } finally {
+      box.disabled = false;
+    }
+  });
+  if (pushSupported()) {
+    api('GET', '/api/me/push').then(({ subscribed }) => {
+      box.checked = pushFlag() && subscribed;
+      box.disabled = false;
+    }, (err) => say(note, words(err), 'error'));
+  }
+  return [el('label', { class: 'check push-check' }, box, 'Push от Claude Code на этом устройстве'),
+    el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '
+      + 'разрешения, вопрос, конец хода. Идут через серверы Apple или Google — содержимое зашифровано, но факт и время '
+      + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
+}
+
+/* «Уведомления» (jobs.js): флаг этого устройства; включение спрашивает разрешение браузера. Ниже — push
+ * «Claude Code» (pushBox). */
 function notifyBlock() {
   const note = status('notify-status');
   const supported = notifySupported();
@@ -483,7 +585,84 @@ function notifyBlock() {
   return el('section', { class: 'block notify-block' }, el('h2', {}, 'Уведомления'),
     el('label', { class: 'check' }, box, 'Сообщать о готовности, когда студия открыта в фоне'), note,
     el('p', { class: 'muted small' }, 'Только на этом устройстве и пока студия открыта — свёрнутая вкладка или окно. '
-      + 'Закрытая студия и запертый телефон уведомлений не получают. Промптов, текстов и имён файлов в уведомлении нет.'));
+      + 'Закрытая студия и запертый телефон уведомлений не получают. Промптов, текстов и имён файлов в уведомлении нет.'),
+    ...pushBox());
+}
+
+/* «Компьютеры (Claude Code)»: мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
+ * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
+ * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
+const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
+  open: 'открыт', pin_ok: 'открыт PIN', pin_fail: 'неверный PIN', session_start: 'новый чат' };
+
+function agentsBlock(host) {
+  const list = el('ul', { class: 'agents', id: 'agents' });
+  const events = el('ul', { class: 'agent-events', id: 'agent-events' });
+  const note = status('agents-status');
+  let next = null;
+  const more = button('Показать ещё', { class: 'btn btn-sm', id: 'agent-events-more', hidden: true },
+    () => loadEvents(next));
+
+  function revoke(agent) {
+    const yes = button('Отозвать', { class: 'btn btn-danger', id: 'agent-revoke-confirm' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'agent-revoke-dialog', title: 'Отозвать компьютер?', actions: [yes], body: [
+      el('p', {}, 'Мост на нём отключится и не войдёт снова без нового входа. История подключений останется.'),
+      el('p', { class: 'muted' }, `«${agent.name}»`), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/agents/${agent.id}`);
+        dialog.close();
+        reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  async function loadAgents() {
+    try {
+      const { items } = await api('GET', '/api/agents');
+      list.replaceChildren(...(items.length ? items.map((a) => el('li', { class: 'agent', 'data-id': String(a.id) },
+        el('b', { class: 'agent-name' }, a.name),
+        el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? 'на связи' : 'не на связи'),
+        a.has_pin ? el('span', { class: 'tag agent-pin' }, 'PIN') : null,
+        button('Отозвать', { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
+        : [el('li', { class: 'muted small' }, 'Компьютеров пока нет. Поставьте мост Claude Code на компьютер и войдите '
+          + 'в нём логином студии.')]));
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+  }
+
+  async function loadEvents(before) {
+    more.disabled = true;
+    try {
+      const page = await api('GET', before ? `/api/agents/events?before=${before}` : '/api/agents/events');
+      const rows = page.items.map((e) => el('li', {}, [momentText(e.created), e.agent_name, AGENT_EVENTS[e.kind] || e.kind,
+        e.device, e.ip].filter(Boolean).join(' · ')));
+      if (before) events.append(...rows);
+      else events.replaceChildren(...rows);
+      next = page.next;
+      more.hidden = next === null;
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      more.disabled = false;
+    }
+  }
+
+  function reload() {
+    say(note, '');
+    loadAgents();
+    loadEvents(null);
+  }
+
+  reload();
+  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code)'), list, note,
+    el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
 
 function wipeBlock(host, onWiped) {
@@ -865,7 +1044,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     if (shown === 'other') {
       const storage = storageBlock(host);
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
+        lockBlock(), notifyBlock(), agentsBlock(host), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;
     }
     const s = sectionOf(shown);

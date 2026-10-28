@@ -440,6 +440,16 @@ label { font-size: 13px; color: var(--muted); }
 .voice b, .passkey b { font-weight: 600; }
 .voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
 .lock-block > .check { margin-bottom: 12px; }
+/* push и компьютеры Claude Code («Прочее») */
+.notify-block > .push-check { margin-top: 14px; }
+.notify-block > #push-hint { margin: 6px 0 0; }
+.agents { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.agent { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.agent b { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.agent .agent-revoke { margin-left: auto; }
+.agents-block h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 600; }
+.agent-events { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px;
+  font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .lock-block > .pin-row, .lock-block > .pin-form { margin-bottom: 12px; }
 .pin-form > p { margin: 0 0 8px; }
 @media (max-width: 760px) {

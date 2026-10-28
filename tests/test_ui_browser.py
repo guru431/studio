@@ -6613,6 +6613,8 @@ def test_translate_photo_save_gives_a_png(browser, live, spotted, width):
     assert not problems(r), problems(r)
 
 
+# ---- Claude Code ----
+
 def wait_for(cond, sec=5.0):
     deadline = time.monotonic() + sec
     while not cond():
@@ -6637,3 +6639,179 @@ def test_socket_bridge_comes_online(live):
     finally:
         sb.stop()
     wait_for(lambda: aid not in bridge.LINKS)
+
+
+def enroll_live(live, login, name):
+    """Привязка моста к учётке `login` живой студии: (agent_id, device_key)."""
+    r = httpx.post(f"{live.url}/api/agent/enroll", json={"login": login, "password": "password-123", "name": name},
+                   timeout=10)
+    assert r.status_code == 201, r.text
+    return r.json()["agent_id"], r.json()["device_key"]
+
+
+AGENT_ROWS = """[...document.querySelectorAll('#agents li[data-id]')].map((li) => [Number(li.dataset.id),
+  li.querySelector('.agent-name').textContent, li.querySelector('.agent-state').textContent,
+  li.querySelector('.agent-pin') ? li.querySelector('.agent-pin').textContent : null,
+  li.querySelector('.agent-revoke').textContent])"""
+#: строки истории подключений без времени (оно — первым через « · »)
+AGENT_EVENTS = "[...document.querySelectorAll('#agent-events li')].map((li) => li.textContent.split(' · ').slice(1))"
+
+
+def test_settings_lists_computers_and_revokes_one(browser, live):
+    """«Прочее» → «Компьютеры (Claude Code)»: два компьютера, один на связи с PIN; история подключений по 50
+    и «Показать ещё»; «Отозвать» → окно → подтверждение: строка ушла, мост получил 4401, в истории «отозван»."""
+    import bridge
+    from fake_bridge import FakeMachine, SocketBridge
+    login = "computers"
+    uid = live.add_user(login)
+    for i in range(55):                         # старые события: больше страницы EVENTS_PAGE
+        live_sql(live, "INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind, device, ip)"
+                       " VALUES (?, 999, 'Старый ПК', ?, 'pin_fail', 'телефон', '10.0.0.9')",
+                 (uid, time.time() - 86400 + i))
+    home, _ = enroll_live(live, login, "Домашний ПК")
+    work, key = enroll_live(live, login, "Рабочий ПК")
+    sb = SocketBridge(live.url, key, FakeMachine(pin="1234")).start()
+    try:
+        wait_for(lambda: work in bridge.LINKS)
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+            ("wait", "document.querySelectorAll('#agents li[data-id]').length === 2"),
+            ("wait", "document.querySelectorAll('#agent-events li').length === 50"),
+            ("eval", "title", "document.querySelector('.agents-block h2').textContent"),
+            ("eval", "rows", AGENT_ROWS),
+            ("eval", "first", AGENT_EVENTS),
+            ("eval", "moreText", "document.querySelector('#agent-events-more').textContent"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", "#agent-events-more"),
+            ("wait", "document.querySelectorAll('#agent-events li').length === 58"),
+            ("eval", "moreHidden", "document.querySelector('#agent-events-more').hidden"),
+            ("click", f"#agents li[data-id='{work}'] .agent-revoke"), ("wait", is_open("#agent-revoke-dialog")),
+            ("eval", "dialogTitle", "document.querySelector('#agent-revoke-dialog h2').textContent"),
+            ("eval", "dialogText", "document.querySelector('#agent-revoke-dialog p').textContent"),
+            ("eval", "confirmText", "document.querySelector('#agent-revoke-confirm').textContent"),
+            ("eval", "dialogFits", NO_OVERFLOW),
+            ("click", "#agent-revoke-confirm"),
+            ("wait", "document.querySelectorAll('#agents li[data-id]').length === 1"),
+            ("wait", "document.querySelector('#agent-events li')?.textContent.includes('Рабочий ПК · отозван')"
+                     " || document.querySelectorAll('#agent-events li')[1]?.textContent.includes('Рабочий ПК · отозван')"),
+            ("eval", "closed", "!" + is_open("#agent-revoke-dialog")),
+            ("eval", "after", AGENT_ROWS),
+            ("eval", "events", AGENT_EVENTS)], width=320, mobile=True)
+        wait_for(lambda: sb.close_code is not None)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"] == "Компьютеры (Claude Code)"
+    assert v["rows"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"],
+                         [work, "Рабочий ПК", "на связи", "PIN", "Отозвать"]]
+    assert v["first"][:3] == [["Рабочий ПК", "на связи", "127.0.0.1"], ["Рабочий ПК", "привязан", "127.0.0.1"],
+                              ["Домашний ПК", "привязан", "127.0.0.1"]]
+    assert v["first"][3] == ["Старый ПК", "неверный PIN", "телефон", "10.0.0.9"]
+    assert v["moreText"] == "Показать ещё" and v["moreHidden"] is True and v["fits"] is True
+    assert v["dialogTitle"] == "Отозвать компьютер?" and v["confirmText"] == "Отозвать"
+    assert v["dialogText"] == ("Мост на нём отключится и не войдёт снова без нового входа. История подключений"
+                               " останется.") and v["dialogFits"] is True
+    assert v["closed"] is True and v["after"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"]]
+    revoked = [e for e in v["events"] if e[:2] == ["Рабочий ПК", "отозван"]]
+    assert len(revoked) == 1 and re.fullmatch(r"(телефон|браузер) [0-9a-f]{6}", revoked[0][2]), v["events"][:3]
+    assert revoked[0][3] == "127.0.0.1"
+    assert ["Рабочий ПК", "связь потеряна", "127.0.0.1"] in v["events"][:3]
+    assert sb.close_code == 4401 and work not in bridge.LINKS
+    assert not problems(r), problems(r)
+
+
+def push_keys():
+    """Ключи подписки верного вида: точка P-256 и 16 байт auth — base64url без «=»."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    point = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    b64 = lambda data: base64.urlsafe_b64encode(data).rstrip(b"=").decode()     # noqa: E731
+    return {"p256dh": b64(point), "auth": b64(os.urandom(16))}
+
+
+PUSH_ENDPOINT = "https://fcm.googleapis.com/fcm/send/test"
+
+
+def push_init(keys):
+    """Подписка без служб push: subscribe и getSubscription — заглушки (подписка — отметкой в localStorage,
+    чтобы её видела и следующая вкладка), вызовы — в window.pushCalls; уведомления — NOTIFY_INIT."""
+    return NOTIFY_INIT + f"""(() => {{
+  const KEYS = {json.dumps(keys)};
+  const ENDPOINT = {PUSH_ENDPOINT!r};
+  window.pushCalls = [];
+  const sub = () => ({{ endpoint: ENDPOINT, expirationTime: null,
+    toJSON: () => ({{ endpoint: ENDPOINT, expirationTime: null, keys: KEYS }}),
+    unsubscribe: async () => {{ window.pushCalls.push(['unsubscribe']); localStorage.removeItem('test-push-sub');
+      return true; }} }});
+  if (window.PushManager) {{
+    PushManager.prototype.subscribe = async function (options) {{
+      const bytes = new Uint8Array(options.applicationServerKey);
+      window.pushCalls.push(['subscribe', options.userVisibleOnly,
+        btoa(String.fromCharCode(...bytes)).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')]);
+      localStorage.setItem('test-push-sub', '1');
+      return sub(); }};
+    PushManager.prototype.getSubscription = async function () {{
+      return localStorage.getItem('test-push-sub') ? sub() : null; }};
+  }}
+}})();"""
+
+
+def push_rows(live, uid):
+    import db
+    conn = db.connect(live.db_path)
+    try:
+        return [tuple(r) for r in conn.execute(
+            "SELECT endpoint, p256dh, auth, digest IN (SELECT digest FROM sessions WHERE user_id = ?) FROM push_subs"
+            " WHERE user_id = ?", (uid, uid))]
+    finally:
+        conn.close()
+
+
+PUSH_READY = "document.querySelector('#push-enabled') && !document.querySelector('#push-enabled').disabled"
+
+
+def test_settings_push_toggle_subscribes_this_device(browser, live):
+    """«Уведомления» → «Push от Claude Code на этом устройстве»: включение — подписка с ключом VAPID сервера и
+    строка push_subs у сессии, флаг устройства studio-push; новая вкладка видит флажок отмеченным; выключение —
+    unsubscribe, строки нет, флага нет."""
+    login = "pusher"
+    uid = live.add_user(login)
+    keys = push_keys()
+    init = push_init(keys)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", PUSH_READY),
+        ("eval", "label", "document.querySelector('#push-enabled').closest('label').textContent"),
+        ("eval", "hint", "document.querySelector('#push-hint').textContent"),
+        ("eval", "before", "document.querySelector('#push-enabled').checked"),
+        ("click", "#push-enabled"),
+        ("wait", "localStorage.getItem('studio-push') === '1'"),
+        ("eval", "status", "document.querySelector('#push-status').textContent"),
+        ("eval", "calls", "window.pushCalls"),
+        ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')))()"),
+        ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["label"] == "Push от Claude Code на этом устройстве"
+    assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос, конец хода."
+                         " Идут через серверы Apple или Google — содержимое зашифровано, но факт и время им видны."
+                         " На iPhone — только у студии, добавленной на экран «Домой».")
+    assert v["before"] is False and v["status"] == "Push включён на этом устройстве" and v["fits"] is True
+    assert v["calls"] == [["subscribe", True, v["server"]["key"]]] and v["server"]["subscribed"] is True
+    assert push_rows(live, uid) == [(PUSH_ENDPOINT, keys["p256dh"], keys["auth"], 1)]
+    assert not problems(r), problems(r)
+
+    r = browser.drive(live.url + "/#/settings/other", [("wait", READY), ("wait", PUSH_READY),
+        ("eval", "checked", "document.querySelector('#push-enabled').checked"),
+        ("click", "#push-enabled"),
+        ("wait", "localStorage.getItem('studio-push') === null"),
+        ("wait", "document.querySelector('#push-status').textContent !== ''"),
+        ("eval", "status", "document.querySelector('#push-status').textContent"),
+        ("eval", "calls", "window.pushCalls"),
+        ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')).subscribed)()")],
+        width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["checked"] is True and v["status"] == "Push выключен на этом устройстве"
+    assert v["calls"] == [["unsubscribe"]] and v["server"] is False
+    assert push_rows(live, uid) == []
+    assert not problems(r), problems(r)
