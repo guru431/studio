@@ -122,6 +122,7 @@ def studio(env, schema_db, monkeypatch):
     ocr.RUNNERS.clear()
     ocr.LEASED.clear()
     ocr.SETTLING.clear()
+    ocr.EXTERNAL.clear()
     translate.JOBS.clear()
     translate.RUNNERS.clear()
     speeches.JOBS.clear()
