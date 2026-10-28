@@ -7,7 +7,9 @@
  * - #/code/<aid> — проекты (GET …/projects); #/code/<aid>/<pid> — проект: «Новый чат», вкладки «Чаты»,
  *   «Файлы», «Git» (две последние рисует code-files.js), чаты (GET …/chats) с пометками и «Закрыть» /
  *   «Открыть снова» (PATCH).
- * - #/code/<aid>/<pid>/<chat> — чат (code-chat.js); пока — страница-заглушка #code-chat.
+ * - #/code/<aid>/<pid>/<chat> — чат: section#code-chat сразу, затем компьютер, проект и откуда чат (GET агентов,
+ *   проектов и чатов проекта — и при переходе по адресу из push) и chatView (code-chat.js). «Открыть файл»
+ *   шага — вкладка «Файлы» проекта (#/code/<aid>/<pid>?tab=files; сам файл откроет code-files.js).
  *
  * PIN проверяет мост: набранный PIN живёт только в поле и переменной обработчика, после ответа поле
  * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed (сессию закрыли:
@@ -15,6 +17,7 @@
  * сразу панель, без PIN — тот же POST open, что и нажатие; ?pin из адреса уходит.
  * Хвост не того вида — на #/code. Текст сервера и машины — только textContent. */
 import { api } from './api.js';
+import { chatView } from './code-chat.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 
@@ -31,6 +34,7 @@ const TABS = [['chats', 'Чаты'], ['files', 'Файлы'], ['git', 'Git']];
 let host = null;
 let ctx = null;
 let gen = 0;            // номер отрисовки: ответ прежнего уровня новый не перерисует
+let view = null;        // чат (chatView) — снимается со сменой уровня
 
 function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -40,17 +44,22 @@ function base(aid, pid) {
   return `/api/code/agents/${aid}${pid ? `/projects/${pid}` : ''}`;
 }
 
-/** Шапка, строка пути (ссылки на уровни выше) и строка отказов; тело уровня — в возвращённом main. */
-function frame(crumbs) {
-  const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
-  const nav = crumbs.length ? el('nav', { class: 'code-crumbs', 'aria-label': 'Путь' }) : null;
+function crumbsNav(crumbs) {
+  const nav = el('nav', { class: 'code-crumbs', 'aria-label': 'Путь' });
   crumbs.forEach(([text, href], i) => {
     if (i) nav.append(el('span', { class: 'muted', 'aria-hidden': 'true' }, '›'));
     nav.append(href ? el('a', { href }, text) : el('span', { class: 'code-crumb-here' }, text));
   });
+  return nav;
+}
+
+/** Шапка, строка пути (ссылки на уровни выше) и строка отказов; тело уровня — в возвращённом main. */
+function frame(crumbs) {
+  const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
+  const nav = crumbs.length ? crumbsNav(crumbs) : null;
   const main = el('div', { class: 'page code' }, nav, status);
   host.replaceChildren(el('header', { class: 'head' }, el('h1', {}, 'Claude Code')), main);
-  return { main, status };
+  return { main, status, nav };
 }
 
 /** Отказ запроса: closed — к панели PIN этого компьютера, offline — словами из «Текстов», прочее — словами. */
@@ -213,7 +222,7 @@ function chatRow(mine, aid, pid, chat, reload, status) {
     el('span', { class: 'code-marks' }, ...marks), toggle);
 }
 
-async function project(mine, aid, pid) {
+async function project(mine, aid, pid, tab) {
   const [name, found] = await Promise.all([agentName(aid),
     api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid), () => null)]);
   if (mine !== gen) return;
@@ -233,11 +242,12 @@ async function project(mine, aid, pid) {
   });
   const tabs = el('div', { class: 'code-tabs', role: 'tablist' });
   const panes = {};
+  const first = TABS.some(([key]) => key === tab) ? tab : 'chats';
   for (const [key, text] of TABS) {
     const tab = el('button', { type: 'button', role: 'tab', id: `code-tab-${key}`, class: 'chip',
-      'aria-selected': String(key === 'chats'), 'aria-controls': `code-pane-${key}` }, text);
+      'aria-selected': String(key === first), 'aria-controls': `code-pane-${key}` }, text);
     panes[key] = el('div', { id: `code-pane-${key}`, role: 'tabpanel', 'aria-labelledby': `code-tab-${key}`,
-      hidden: key !== 'chats' });
+      hidden: key !== first });
     tab.addEventListener('click', () => {
       for (const t of tabs.children) t.setAttribute('aria-selected', String(t === tab));
       for (const [k, pane] of Object.entries(panes)) pane.hidden = k !== key;
@@ -261,17 +271,44 @@ async function project(mine, aid, pid) {
   await reload();
 }
 
-/* ---- чат (Task 12: code-chat.js) ----------------------------------------------------- */
+/* ---- чат (code-chat.js) ------------------------------------------------------------- */
 
-function chat(aid, pid, id) {
-  const { main } = frame([['Компьютеры', '#/code'], ['Проекты', `#/code/${aid}`], ['Чаты', `#/code/${aid}/${pid}`]]);
-  main.append(el('section', { id: 'code-chat', 'data-chat': id }));
+async function chat(mine, aid, pid, id) {
+  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Проекты', `#/code/${aid}`],
+    ['Чаты', `#/code/${aid}/${pid}`]]);
+  const section = el('section', { id: 'code-chat', class: 'code-chat', 'data-chat': id });
+  main.append(section);
+  let agents;
+  let found;
+  let row;
+  try {
+    [agents, found, row] = await Promise.all([agentsList(),
+      api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid) || null),
+      api('GET', `${base(aid, pid)}/chats`).then((o) => o.items.find((c) => c.chat === id) || null)]);
+  } catch (err) {
+    if (mine === gen) failed(err, aid, status);
+    return;
+  }
+  if (mine !== gen) return;
+  const agent = agents.find((a) => String(a.id) === aid);
+  if (!agent) {
+    ctx.navigate('code');
+    return;
+  }
+  nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [agent.name, `#/code/${aid}`],
+    [found ? found.name : 'Проект', `#/code/${aid}/${pid}`], [(row && row.title) || UNTITLED, null]]));
+  status.remove();                           // у чата своя строка #code-status
+  view = chatView(section, { aid, pid, chat: id, agent, project: found ? { pid, name: found.name } : null,
+    origin: row ? row.origin : 'studio', navigate: ctx.navigate,
+    openFile: () => ctx.navigate(`code/${aid}/${pid}?tab=files`) });
 }
 
 /* ---- маршрут ---------------------------------------------------------------------- */
 
 function render() {
   const mine = ++gen;
+  if (view) view.unmount();
+  view = null;
   const parts = ctx.id ? ctx.id.split('/') : [];
   const [aid, pid, id] = parts;
   const ok = parts.length <= 3 && (!aid || AID_RE.test(aid)) && (!pid || PID_RE.test(pid)) && (!id || CHAT_RE.test(id));
@@ -279,8 +316,8 @@ function render() {
     ctx.navigate('code');
     return;
   }
-  if (id) chat(aid, pid, id);
-  else if (pid) project(mine, aid, pid);
+  if (id) chat(mine, aid, pid, id);
+  else if (pid) project(mine, aid, pid, ctx.query && ctx.query.get('tab'));
   else if (aid) projects(mine, aid);
   else computers(mine);
 }
@@ -298,6 +335,8 @@ export function update(context) {
 
 export function unmount() {
   gen += 1;
+  if (view) view.unmount();
+  view = null;
   host = null;
   ctx = null;
 }

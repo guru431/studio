@@ -1082,6 +1082,49 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-marks { display: flex; flex-wrap: wrap; gap: 4px; }
 .code-chats .btn-sm { margin-left: auto; }
 
+/* чат (code-chat.js): лента, шаги, карточки, поле */
+.code-chat { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.code-chat-bar { display: flex; justify-content: flex-end; }
+.code-shared-note { margin: 0; padding: 10px 12px; border-radius: 12px; overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.code-more { align-self: center; }
+.code-feed { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.code-msg { min-width: 0; overflow-wrap: anywhere; }
+.code-msg.user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px; background: var(--panel-2);
+  white-space: pre-wrap; }
+.code-msg.assistant { display: flex; flex-direction: column; gap: 8px; }
+.code-steps { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.code-step { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); font-size: 14px; }
+.code-step.error { border-color: var(--danger); }
+.code-step summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 10px; cursor: pointer;
+  min-width: 0; }
+.code-step-head { flex: 1 1 120px; min-width: 0; color: var(--muted); font-family: var(--mono); font-size: 13px;
+  overflow-wrap: anywhere; }
+.code-step pre, .code-ask pre { margin: 0; padding: 8px 10px; max-height: 40dvh; overflow: auto; font-family: var(--mono);
+  font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.code-step-result { border-top: 1px solid var(--border); }
+.code-step.error .code-step-result { color: var(--danger); }
+.code-turn-end { margin: 0; }
+.code-asks { display: flex; flex-direction: column; gap: 8px; }
+.code-asks:empty { display: none; }
+.code-ask { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--accent);
+  border-radius: 12px; background: var(--panel); }
+.code-ask-title { margin: 0; font-weight: 600; }
+.code-ask-tool { overflow-wrap: anywhere; }
+.code-ask pre { padding: 0; background: none; }
+.code-ask-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.code-ask-instead { resize: vertical; background: var(--bg); }
+.code-ask-error { margin: 0; }
+.code-ask-error:empty { display: none; }
+.code-ask-question { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.code-ask-question legend { padding: 0; font-weight: 600; }
+.code-ask-question p { margin: 0; overflow-wrap: anywhere; }
+.code-ask-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text); font-size: 14px;
+  overflow-wrap: anywhere; }
+.code-composer { position: sticky; bottom: 0; z-index: 1; margin: 0; }
+.code-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.code-pick select { min-width: 0; max-width: 140px; }
+
 /* заперто или под шторкой: содержимое скрыто и в миг, когда окно закрыли силой, а lock.js ещё не открыл его снова */
 html.shrouded #view, html.shrouded #rail, html.shrouded #menu,
 html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }

@@ -7059,7 +7059,7 @@ def test_code_push_click_opens_the_chat_in_an_open_studio(browser, live):
         ("eval", "page", "document.querySelector('#code-chat').dataset.chat")])
     assert not r.get("failed"), r
     assert r["values"]["badHash"] == "#/chat" and r["values"]["page"] == chat
-    assert not problems(r), problems(r)
+    assert not known_refusals(problems(r), 404), problems(r)       # компьютера 7 у учётки нет — чат его не нашёл
 
 
 def test_code_lock_and_unlock_asks_for_the_pin_again(browser, live):
@@ -7089,3 +7089,405 @@ def test_code_lock_and_unlock_asks_for_the_pin_again(browser, live):
     assert len(chats) == 1                                   # отказ closed — ни одного chats от открытой сессии
     assert [q.get("pin") for q in machine.requests if q["op"] == "open"] == [None, CODE_PIN, CODE_PIN]
     assert not known_refusals(problems(r), 409, 423), problems(r)
+
+
+# чат Claude Code (code-chat.js): лента, ход потоком, карточки, остановка, обрыв связи
+
+CODE_CHAT_A = "a1111111-1111-4111-8111-111111111111"
+CODE_CHAT_B = "b2222222-2222-4222-8222-222222222222"
+CODE_WAITING = "Компьютер пропал со связи — жду его"
+#: сообщения ленты: вид и текст (у ответа — текст разметки)
+CODE_MSGS = """[...document.querySelectorAll('#code-feed .code-msg')].map((m) => [m.classList.contains('user') ? 'user'
+  : 'assistant', m.classList.contains('user') ? m.textContent : m.querySelector('.md').textContent.trim()])"""
+#: шаги ленты: инструмент, начало ввода, итог, ошибка, ссылка «Открыть файл»
+CODE_STEPS = """[...document.querySelectorAll('#code-feed details.code-step')].map((d) => [
+  d.querySelector('.code-step-tool').textContent, d.querySelector('.code-step-head').textContent,
+  d.querySelector('.code-step-result').textContent, d.classList.contains('error'),
+  d.querySelector('.code-step-file') ? d.querySelector('.code-step-file').textContent : null])"""
+CODE_IDLE_AFTER = ("document.querySelector('#code-chat').dataset.running === '0'"
+                   " && document.querySelectorAll('#code-feed .code-msg.assistant').length === {n}"
+                   " && !document.querySelector('.code-ask')")
+
+
+def code_free_machine(chats=None):
+    """Компьютер без PIN с одним проектом alpha: открывается нажатием."""
+    from fake_bridge import FakeMachine
+    return FakeMachine(projects={"alpha": {"chats": chats or {}}})
+
+
+def code_session(title, tag="studio", messages=None):
+    from fake_bridge import T0
+    return {"title": title, "created": T0, "modified": T0, "tag": tag, "messages": messages or []}
+
+
+def code_chat(aid, chat):
+    """«Код» → компьютер (без PIN) → проекты, затем адрес чата: история показана."""
+    from fake_bridge import pid
+    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
+            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"),
+            *go(f"code/{aid}/{pid('alpha')}/{chat}"), code_loaded(chat)]
+
+
+def code_loaded(chat):
+    return ("wait", f"document.querySelector('#code-chat')?.dataset.chat === '{chat}'"
+                    " && document.querySelector('#code-chat').dataset.loaded === '1'")
+
+
+def code_send(text):
+    return [("type", "#code-text", text), ("click", "#code-send")]
+
+
+def code_requests(machine, op):
+    return [q for q in machine.requests if q["op"] == op]
+
+
+def test_code_turn_streams_text_and_steps(browser, live):
+    """«Отправить» — ход потоком: текст по кускам в одном ответе (разметка), шаги с итогом (ошибка — классом),
+    «Открыть файл» — только у шага Read/Edit/Write с путём внутри проекта; после done «Остановить» не видно.
+    Модель и усилие — первые из списка компьютера; ссылка файла ведёт на вкладку «Файлы»."""
+    from fake_bridge import pid
+    login = "code-turn"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Сейчас "}, {"k": "text", "text": "**проверю**."},
+                      {"k": "step", "id": "s1", "tool": "Bash", "input": {"command": "pytest -q", "timeout": 60}},
+                      {"k": "result", "id": "s1", "text": "3 passed", "error": False},
+                      {"k": "step", "id": "s2", "tool": "Read", "input": {"file_path": "C:\\work\\Projects\\ALPHA\\src\\app.py"}},
+                      {"k": "result", "id": "s2", "text": "нет файла", "error": True},
+                      {"k": "step", "id": "s3", "tool": "Edit", "input": {"file_path": "C:\\work\\projects\\beta\\x.py"}},
+                      {"k": "text", "text": " Готово."}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "labels", "[...document.querySelectorAll('.code-pick')].map((l) => l.firstChild.textContent)"),
+            ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
+                                ".map((o) => [o.value, o.textContent]))"),
+            ("eval", "words", "['#code-send', '#code-stop', '#code-close-chat'].map((s) => document.querySelector(s).textContent)"),
+            ("eval", "note", "!!document.querySelector('#code-shared-note')"),
+            *code_send("Запусти тесты"),
+            ("wait", CODE_IDLE_AFTER.format(n=1) + " && document.querySelector('.code-msg.assistant .md').textContent.includes('Готово')"),
+            ("eval", "msgs", CODE_MSGS), ("eval", "steps", CODE_STEPS),
+            ("eval", "stop", "document.querySelector('#code-stop').hidden"),
+            ("eval", "field", "document.querySelector('#code-text').value"),
+            ("eval", "stored", "JSON.stringify({ ...localStorage, ...sessionStorage }).includes('Запусти')"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", ".code-step-file"),
+            ("wait", "document.querySelector('#code-tab-files')?.getAttribute('aria-selected') === 'true'"),
+            ("eval", "hash", "location.hash")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["labels"] == ["Модель", "Усилие"]
+    assert v["options"] == [[["opus", "Opus"], ["sonnet", "Sonnet"]], [["low", "low"], ["high", "high"]]]
+    assert v["words"] == ["Отправить", "Остановить", "Закрыть чат"] and v["note"] is False
+    assert v["msgs"] == [["user", "Запусти тесты"], ["assistant", "Сейчас проверю. Готово."]]
+    assert v["steps"] == [["Bash", "pytest -q", "3 passed", False, None],
+                          ["Read", "C:\\work\\Projects\\ALPHA\\src\\app.py", "нет файла", True, "Открыть файл"],
+                          ["Edit", "C:\\work\\projects\\beta\\x.py", "", False, None]]
+    assert v["stop"] is True and v["field"] == "" and v["stored"] is False and v["fits"] is True
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}?tab=files"
+    turn, = code_requests(machine, "turn")
+    assert (turn["chat"], turn["text"], turn["model"], turn["effort"]) == (CODE_CHAT_A, "Запусти тесты", "opus", "low")
+    assert not problems(r), problems(r)
+
+
+def code_permission(request_id, always, tool="Bash", input=None):
+    return {"k": "ask", "request_id": request_id, "kind": "permission", "tool": tool,
+            "input": input or {"command": "rm -rf build"}, "always": always}
+
+
+def test_code_permission_card_yes_and_always(browser, live):
+    """Карточка разрешения: слова, инструмент и ввод, «Да» / «Да, больше не спрашивать» / «Нет» и поле; на 320 px
+    без прокрутки вбок. «Да» — allow, ход дошёл до done, карточка ушла; второй ход — «Да, больше не спрашивать»
+    — always."""
+    from fake_bridge import pid
+    login = "code-allow"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Нужно удалить сборку."}, code_permission("r1", True),
+                      {"k": "text", "text": " Удалил."}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    card = ".code-ask[data-request='r1']"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Почисти сборку"), ("wait", f"document.querySelector(\"{card}\")"),
+            ("eval", "card", f"""(() => {{ const c = document.querySelector("{card}");
+              return [c.querySelector('.code-ask-title').textContent, c.querySelector('.code-ask-tool').textContent,
+                JSON.parse(c.querySelector('.code-ask-input').textContent),
+                [...c.querySelectorAll('.code-ask-actions button')].map((b) => b.textContent),
+                c.querySelector('textarea.code-ask-instead').placeholder]; }})()"""),
+            ("eval", "stop", "!document.querySelector('#code-stop').hidden"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", f"{card} .code-ask-yes"),
+            ("wait", CODE_IDLE_AFTER.format(n=1) + " && document.querySelector('.code-msg.assistant .md').textContent.includes('Удалил')"),
+            ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
+        assert not r.get("failed"), r
+        v = r["values"]
+        assert v["card"] == ["Claude Code просит разрешения", "Bash", {"command": "rm -rf build"},
+                             ["Да", "Да, больше не спрашивать", "Нет"], "Что сделать вместо этого (необязательно)"]
+        assert v["stop"] is True and v["fits"] is True
+        assert v["msgs"] == [["user", "Почисти сборку"], ["assistant", "Нужно удалить сборку. Удалил."]]
+        answer, = code_requests(machine, "answer")
+        assert (answer["request_id"], answer["decision"], answer["message"], answer["answers"]) == ("r1", "allow", None, None)
+        assert not known_refusals(problems(r), 409), problems(r)
+
+        machine.script = [code_permission("r2", True), {"k": "done", "status": "done"}]
+        r = browser.drive(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}", [("wait", READY),
+            code_loaded(CODE_CHAT_A), *code_send("Ещё раз"),
+            ("wait", "document.querySelector(\".code-ask[data-request='r2']\")"),
+            ("click", ".code-ask[data-request='r2'] .code-ask-always"),
+            ("wait", CODE_IDLE_AFTER.format(n=2))], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert [(q["request_id"], q["decision"]) for q in code_requests(machine, "answer")] == [("r1", "allow"),
+                                                                                         ("r2", "always")]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_permission_no_with_words(browser, live):
+    """«Нет» со словами в поле — deny и message; без предложенного правила кнопки «Да, больше не спрашивать» нет."""
+    login = "code-deny"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [code_permission("r1", False, "Write", {"file_path": "C:\\work\\projects\\alpha\\a.txt", "content": "x"}),
+                      {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Запиши файл"), ("wait", "document.querySelector('.code-ask')"),
+            ("eval", "always", "!!document.querySelector('.code-ask-always')"),
+            ("type", ".code-ask-instead", "Сначала покажи план"), ("click", ".code-ask-no"),
+            ("wait", CODE_IDLE_AFTER.format(n=1))], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["always"] is False
+    answer, = code_requests(machine, "answer")
+    assert (answer["decision"], answer["message"], answer["answers"]) == ("deny", "Сначала покажи план", None)
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_question_card_sends_answers(browser, live):
+    """Вопрос агента: переключатели у вопроса с одним ответом, флажки у multi; «Ответить» — allow и answers
+    «вопрос → ответ» (несколько — через запятую)."""
+    login = "code-question"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "ask", "request_id": "q1", "kind": "question", "questions": [
+        {"question": "Какую базу взять?", "header": "База", "multi": False,
+         "options": [{"label": "SQLite", "description": "файл"}, {"label": "Postgres", "description": "сервер"}]},
+        {"question": "Что проверить?", "header": "Проверки", "multi": True,
+         "options": [{"label": "Тесты", "description": ""}, {"label": "Линтер", "description": ""},
+                     {"label": "Типы", "description": ""}]}]},
+        {"k": "text", "text": "Беру Postgres."}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Настрой базу"), ("wait", "document.querySelector(\".code-ask[data-request='q1']\")"),
+            ("eval", "kinds", """[...document.querySelectorAll('.code-ask-question')].map((f) =>
+              [f.querySelector('legend').textContent, [...f.querySelectorAll('input')].map((i) => i.type)])"""),
+            ("eval", "button", "document.querySelector('.code-ask-answer').textContent"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", ".code-ask input[value='Postgres']"), ("click", ".code-ask input[value='Тесты']"),
+            ("click", ".code-ask input[value='Типы']"), ("click", ".code-ask-answer"),
+            ("wait", CODE_IDLE_AFTER.format(n=1)), ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kinds"] == [["База", ["radio", "radio"]], ["Проверки", ["checkbox", "checkbox", "checkbox"]]]
+    assert v["button"] == "Ответить" and v["fits"] is True
+    assert v["msgs"] == [["user", "Настрой базу"], ["assistant", "Беру Postgres."]]
+    answer, = code_requests(machine, "answer")
+    assert (answer["request_id"], answer["decision"], answer["message"]) == ("q1", "allow", None)
+    assert answer["answers"] == {"Какую базу взять?": "Postgres", "Что проверить?": "Тесты, Типы"}
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_stop_and_offline(browser, live):
+    """«Остановить» — stop мосту, карточка ушла, «Ход прерван». Затем ход идёт и мост пропал — «Компьютер пропал
+    со связи — жду его»; мост снова на связи — надпись ушла (новый канал закрыл сессии — к панели PIN, у
+    компьютера без PIN — сразу проекты)."""
+    import bridge
+    from fake_bridge import SocketBridge, pid
+    login = "code-stop"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Думаю"}, code_permission("r1", False)]
+    aid, sb = code_online(live, login, machine)
+    state = {}
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Долгая задача"), ("wait", "document.querySelector('.code-ask')"),
+            ("click", "#code-stop"),
+            ("wait", "document.querySelector('.code-turn-end') && " + CODE_IDLE_AFTER.format(n=1)),
+            ("eval", "end", "document.querySelector('.code-turn-end').textContent"),
+            ("eval", "stop", "document.querySelector('#code-stop').hidden")], width=320, mobile=True)
+        assert not r.get("failed"), r
+        assert r["values"]["end"] == "Ход прерван" and r["values"]["stop"] is True
+        assert len(code_requests(machine, "stop")) == 1 and not machine.running
+        assert not known_refusals(problems(r), 409), problems(r)
+
+        machine.script = [{"k": "text", "text": "Ещё думаю"}]
+
+        def drop_and_return():
+            wait_for(lambda: CODE_CHAT_A in machine.running and bridge.watching(aid, CODE_CHAT_A), 60)
+            sb.stop()
+            wait_for(lambda: aid not in bridge.LINKS)
+            time.sleep(1.5)
+            state["sb"] = SocketBridge(live.url, sb.key, machine).start()
+
+        mover = threading.Thread(target=drop_and_return, daemon=True)
+        mover.start()
+        r = browser.drive(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}", [("wait", READY),
+            code_loaded(CODE_CHAT_A), *code_send("Снова"),
+            ("wait", f"document.querySelector('#code-status')?.textContent === '{CODE_WAITING}'"),
+            ("eval", "stop", "document.querySelector('#code-stop').hidden"),
+            ("wait", f"document.querySelector('#code-status')?.textContent !== '{CODE_WAITING}'"),
+            ("wait", f"location.hash === '#/code/{aid}'"
+                     " && document.querySelectorAll('#code-projects li[data-pid]').length === 1")],
+            width=320, mobile=True)
+        mover.join(10)
+    finally:
+        sb.stop()
+        if "sb" in state:
+            state["sb"].stop()
+    assert not r.get("failed"), r
+    assert r["values"]["stop"] is True
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_reopened_chat_shows_history_and_more(browser, live):
+    """250 сообщений: открыт — 100 последних; «Показать раньше» — ещё 100 выше, затем остаток, и кнопка уходит.
+    Поле — над вкладками телефона."""
+    from fake_bridge import T0
+    login = "code-history"
+    live.add_user(login)
+    messages = [{"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant", "text": f"сообщение {i}",
+                 "steps": [], "time": T0 + i} for i in range(250)]
+    machine = code_free_machine({CODE_CHAT_A: code_session("Длинный", messages=messages)})
+    aid, sb = code_online(live, login, machine)
+    first = "document.querySelector('#code-feed .code-msg').textContent.trim()"
+    count = "document.querySelectorAll('#code-feed .code-msg').length"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "n1", count), ("eval", "first1", first), ("eval", "more1", "document.querySelector('#code-more').textContent"),
+            ("eval", "composer", """(() => { const c = document.querySelector('#code-composer').getBoundingClientRect();
+              const rail = document.querySelector('#rail').getBoundingClientRect();
+              return c.bottom <= rail.top + 1 && c.top >= 0; })()"""),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", "#code-more"), ("wait", f"{count} === 200"), ("eval", "first2", first),
+            ("eval", "shown2", "!document.querySelector('#code-more').hidden"),
+            ("click", "#code-more"), ("wait", f"{count} === 250"), ("eval", "first3", first),
+            ("eval", "shown3", "!document.querySelector('#code-more').hidden")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert (v["n1"], v["first1"], v["more1"]) == (100, "сообщение 150", "Показать раньше")
+    assert v["composer"] is True and v["fits"] is True
+    assert (v["first2"], v["shown2"], v["first3"], v["shown3"]) == ("сообщение 50", True, "сообщение 0", False)
+    assert [q["before"] for q in code_requests(machine, "history")] == [None, 150, 50]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
+    """Выбор модели и усилия — на устройстве (studio-code-choice:<aid>) и уходит с ходом; «Новый чат» берёт его."""
+    from fake_bridge import pid
+    login = "code-choice"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "ок"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            set_value("#code-model", "sonnet"), set_value("#code-effort", "high"),
+            *code_send("привет"), ("wait", CODE_IDLE_AFTER.format(n=1)),
+            ("eval", "stored", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))"),
+            *go(f"code/{aid}/{pid('alpha')}"), ("wait", "document.querySelector('#code-new-chat')"),
+            ("click", "#code-new-chat"),
+            ("wait", "/^#\\/code\\/\\d+\\/[0-9a-f]{16}\\/[0-9a-f-]{36}$/.test(location.hash)"
+                     f" && location.hash.split('/').pop() !== '{CODE_CHAT_A}'"
+                     " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
+            *code_send("и тут"),
+            ("wait", "document.querySelector('#code-chat').dataset.running === '1'")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["stored"] == {"model": "sonnet", "effort": "high"} and v["picked"] == ["sonnet", "high"]
+    turns = code_requests(machine, "turn")
+    assert [(q["text"], q["model"], q["effort"]) for q in turns] == [("привет", "sonnet", "high"), ("и тут", "sonnet", "high")]
+    assert turns[0]["chat"] == CODE_CHAT_A and turns[1]["chat"] != CODE_CHAT_A
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_foreign_session_warns_about_two_writers(browser, live):
+    """Чат из VS Code или терминала — предупреждение над лентой; чат студии — без него."""
+    from fake_bridge import pid
+    login = "code-shared"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A"), CODE_CHAT_B: code_session("Чат B", tag=None)})
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_B),
+            ("eval", "noteB", "document.querySelector('#code-shared-note')?.textContent ?? null"),
+            ("eval", "here", "document.querySelector('.code-crumb-here').textContent"),
+            ("eval", "fits", NO_OVERFLOW),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
+            ("eval", "noteA", "!!document.querySelector('#code-shared-note')")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["noteB"] == ("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах"
+                          " сразу — ответы перемешаются.")
+    assert v["here"] == "Чат B" and v["fits"] is True and v["noteA"] is False
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_hidden_page_drops_its_stream_and_returns_to_live(browser, live):
+    """Страница ушла с экрана — свой поток она снимает (у службы нет наблюдателей чата: push уходит), вернулась —
+    снова live, снимок догоняет ход; ход на машине идёт."""
+    import bridge
+    login = "code-hidden"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Работаю"}]
+    aid, sb = code_online(live, login, machine)
+    seen, done = [], threading.Event()
+
+    def record():
+        while not done.is_set():
+            if CODE_CHAT_A in machine.running:
+                now = bridge.watching(aid, CODE_CHAT_A)
+                if not seen or seen[-1] != now:
+                    seen.append(now)
+            time.sleep(0.01)
+
+    spy = threading.Thread(target=record, daemon=True)
+    spy.start()
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Работай"), ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
+            ("eval", "before", settled("true", 500)), hide(), ("eval", "away", settled("true", 800)),
+            ("eval", "md", "document.querySelector('.code-msg.assistant .md').textContent.trim()"),
+            show(), ("eval", "back", settled("document.querySelector('#code-chat').dataset.running", 800)),
+            ("eval", "md2", "document.querySelector('.code-msg.assistant .md').textContent.trim()"),
+            ("eval", "assistants", "document.querySelectorAll('#code-feed .code-msg.assistant').length")])
+    finally:
+        done.set()
+        spy.join(5)
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert seen[:3] == [True, False, True], seen
+    assert v["md"] == v["md2"] == "Работаю" and v["back"] == "1" and v["assistants"] == 1
+    ops = [q["op"] for q in machine.requests]
+    assert "watch" in ops[ops.index("turn"):], ops                  # по возвращении — снова live
+    assert CODE_CHAT_A in machine.running
+    assert not known_refusals(problems(r), 409), problems(r)
