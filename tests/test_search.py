@@ -25,6 +25,8 @@ SPEECH = ("INSERT INTO speeches(id, user_id, model, voice, text, state, detail, 
           " VALUES (?, ?, 'qwen3-tts', 'v', ?, 'done', 'готово', ?)")
 SCAN = ("INSERT INTO scans(id, user_id, model, name, origin, pages, state, detail, created, text)"
         " VALUES (?, ?, 'hunyuan-ocr', ?, 'section', 1, 'done', 'готово', ?, ?)")
+TRANSLATION = ("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source, state,"
+               " detail, created) VALUES (?, ?, 'text', 'local-gemma-abl', 'auto', 'ru', ?, ?, 'queued', 'в очереди', ?)")
 CHAT = "INSERT INTO chats(id, user_id, title, model, created, updated) VALUES (?, ?, ?, ?, ?, ?)"
 MESSAGE = ("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
            " VALUES (?, ?, ?, ?, 'done', 'server', ?, ?)")
@@ -128,6 +130,25 @@ def test_scan_text_is_found_and_removed_with_the_scan(studio):
     assert found("начал") == [("ocr", "o2", "")] and found("хвост") == []
     assert studio.c.delete("/api/history").status_code == 200
     assert found("скан") == [] and state.DB.execute("SELECT COUNT(*) FROM search_docs").fetchone()[0] == 0
+
+
+def test_search_finds_a_translation_by_source_and_result(studio):
+    """Перевод (шаг 18): запись — имя, исходник и перевод (пишется в конце задания одним обновлением);
+    фильтр раздела, модели, удаление записи уносит её из выдачи."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(TRANSLATION, ("p1", uid, "Письмо партнёру", "Dear partner, the contract", T0))
+    r = search(studio, q="contract")
+    assert hits(r) == [("translate", "p1")]
+    item = r.json()["items"][0]
+    assert (item["title"], item["href"], item["model"], item["part"]) == (
+        "Письмо партнёру", "translate?id=p1", "local-gemma-abl", "")
+    assert hits(search(studio, q="партнер")) == hits(search(studio, section="translate")) == [("translate", "p1")]
+    assert studio.c.get("/api/search/models").json() == {"models": {"translate": ["local-gemma-abl"]}}
+    assert hits(search(studio, q="договор")) == []
+    state.DB.execute("UPDATE translations SET text = 'Уважаемый партнёр, договор' WHERE id = 'p1'")
+    assert hits(search(studio, q="договор")) == [("translate", "p1")]
+    state.DB.execute("DELETE FROM translations WHERE id = 'p1'")
+    assert hits(search(studio, q="contract")) == [] and found("договор") == []
 
 
 def test_search_survives_a_section_this_code_does_not_know(studio):

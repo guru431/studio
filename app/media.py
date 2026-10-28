@@ -439,8 +439,8 @@ def alive(user_id: int, media_id: str) -> bool:
 
 def referenced(user_id: int, media_id: str) -> bool:
     """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик, вложение чата,
-    расшифровка (запись, итог), голос, озвучка, документ распознавания (исходник) или его страница:
-    удаление другой записи его не трогает."""
+    расшифровка (запись, итог), голос, озвучка, документ распознавания (исходник) или его страница,
+    перевод (исходный файл или снимок): удаление другой записи его не трогает."""
     return state.DB.execute(
         "SELECT 1 FROM images WHERE user_id = ? AND ? IN (media_id, source_media_id, mask_media_id)"
         " UNION ALL SELECT 1 FROM videos WHERE user_id = ? AND ? IN (media_id, source_media_id)"
@@ -449,8 +449,9 @@ def referenced(user_id: int, media_id: str) -> bool:
         " UNION ALL SELECT 1 FROM voices WHERE user_id = ? AND media_id = ?"
         " UNION ALL SELECT 1 FROM speeches WHERE user_id = ? AND media_id = ?"
         " UNION ALL SELECT 1 FROM scans WHERE user_id = ? AND source_media_id = ?"
-        " UNION ALL SELECT 1 FROM scan_pages WHERE user_id = ? AND media_id = ? LIMIT 1",
-        (user_id, media_id) * 8).fetchone() is not None
+        " UNION ALL SELECT 1 FROM scan_pages WHERE user_id = ? AND media_id = ?"
+        " UNION ALL SELECT 1 FROM translations WHERE user_id = ? AND source_media_id = ? LIMIT 1",
+        (user_id, media_id) * 9).fetchone() is not None
 
 
 async def delete_async(user_id: int, media_id: str) -> None:

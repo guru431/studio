@@ -40,7 +40,8 @@ YEARS = (2000, 2100)
 DAYS_WORDS = f"дни — с {YEARS[0]} по {YEARS[1]} год"
 #: раздел → заголовок записи (таблица и столбец — из кода)
 TITLES = {"chat": ("chats", "title"), "photo": ("images", "prompt"), "video": ("videos", "prompt"),
-          "transcribe": ("transcripts", "name"), "ocr": ("scans", "name"), "speech": ("speeches", "text")}
+          "transcribe": ("transcripts", "name"), "ocr": ("scans", "name"), "translate": ("translations", "name"),
+          "speech": ("speeches", "text")}
 EMPTY = {"code": "input", "message": "введите слова или выберите фильтр"}
 #: строки разделов новее этого кода (откат install.sh после следующего шага схемы) — мимо выдачи, курсоров и
 #: моделей: заголовка у них нет (_title), а ссылка вела бы в никуда. «+» — без индекса по section: план
@@ -59,7 +60,7 @@ class Cursor(BaseModel):
 
 class SearchIn(BaseModel):
     q: str = Field("", max_length=Q_MAX)
-    section: "Literal['chat', 'photo', 'video', 'transcribe', 'ocr', 'speech'] | None" = None
+    section: "Literal['chat', 'photo', 'video', 'transcribe', 'ocr', 'translate', 'speech'] | None" = None
     model: "str | None" = Field(None, max_length=200)
     since: "str | None" = Field(None, pattern=DAY)
     until: "str | None" = Field(None, pattern=DAY)

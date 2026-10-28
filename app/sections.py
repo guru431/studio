@@ -28,10 +28,10 @@ import clock
 import connections
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "dictation")   # порядок вкладок студии
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation")   # порядок вкладок
 NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Расшифровка", "ocr": "Распознавание",
-         "speech": "Озвучка", "dictation": "Голосовой ввод"}
-SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "speech", "dictation"}
+         "translate": "Перевод", "speech": "Озвучка", "dictation": "Голосовой ввод"}
+SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections
 CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
            "speech": ["qwen3-tts"], "dictation": ["gigaam", "whisperx"]}
@@ -257,6 +257,40 @@ def settle_all(user_id: int) -> None:
         for section in SECTIONS:
             _settle(user_id, section)
         _sync_legacy(user_id)
+
+
+def adopt(section: str, source: str) -> None:
+    """Один раз на базу (флаг `settings` `adopted:<section>`, при старте службы): каждому пользователю — связи
+    раздела `source`, чьё подключение идёт через сервер и вид которого допускает `section`, с теми же
+    отмеченными моделями и порядком; умолчание `section` — умолчание `source`, если его подключение перенесено,
+    иначе — `_settle`. Дальше разделы живут порознь: связь, которую пользователь убрал, второй вызов не вернёт.
+    Новая база получает флаг тем же первым запуском — подключений у неё нет."""
+    flag = f"adopted:{section}"
+    moved = 0
+    with transaction():
+        if state.DB.execute("SELECT 1 FROM settings WHERE key = ?", (flag,)).fetchone() is not None:
+            return
+        users = [r[0] for r in state.DB.execute(
+            "SELECT DISTINCT user_id FROM section_links WHERE section = ?", (source,)).fetchall()]
+        for user_id in users:
+            by_id = {c.id: c for c in connections.list_for(user_id)}
+            for row in state.DB.execute("SELECT connection_id, models, created FROM section_links"
+                                        " WHERE user_id = ? AND section = ? ORDER BY created, rowid",
+                                        (user_id, source)).fetchall():
+                conn = by_id.get(row["connection_id"])
+                if conn is None or not conn.proxied or section not in connections.KINDS[conn.kind]:
+                    continue
+                moved += state.DB.execute(
+                    "INSERT OR IGNORE INTO section_links(user_id, section, connection_id, models, created)"
+                    " VALUES (?, ?, ?, ?, ?)", (user_id, section, conn.id, row["models"], row["created"])).rowcount
+            chosen = _default_row(user_id, source)
+            if chosen is not None and _link_row(user_id, section, chosen["connection_id"]) is not None:
+                state.DB.execute("INSERT INTO section_defaults(user_id, section, connection_id, model) VALUES (?, ?, ?, ?)"
+                                 " ON CONFLICT(user_id, section) DO UPDATE SET connection_id = excluded.connection_id,"
+                                 " model = excluded.model", (user_id, section, chosen["connection_id"], chosen["model"]))
+            _settle(user_id, section)
+        state.DB.execute("INSERT INTO settings(key, value) VALUES (?, '1')", (flag,))
+    log.info("раздел %s: из %s перенесено связей %d", section, source, moved)
 
 
 def _settle(user_id: int, section: str) -> None:
