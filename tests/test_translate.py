@@ -108,7 +108,7 @@ def test_text_is_translated_in_chunks_and_lands_in_history(studio, monkeypatch, 
     assert row["source"] == "First one.\n\nSecond one." and row["detail"] == translate.DONE
     assert streamed(studio) == ["First one.", "Second one."]
     item = studio.c.get("/api/translate").json()["items"][0]
-    assert item["text_head"] == "Первый.\n\nВторой." and item["source_head"] == "First one.\n\nSecond one."
+    assert item["text_head"] == "Первый." and item["source_head"] == "First one."       # начала — первого куска
     assert item["can_continue"] is False and "text" not in item and "source" not in item
     assert "First" not in caplog.text and "Первый" not in caplog.text and "Second" not in caplog.text
     assert translate.JOBS == {}
@@ -819,13 +819,114 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
     wait_row(studio, running)
 
 
-def test_deleting_a_translation_keeps_a_file_the_scan_still_uses(studio, small_pages):
+def test_delete_translation_removes_its_scan(studio, small_pages):
+    """Находка «удаление записи оставляет её скан»: документ «Сканов», что завёл перевод PDF, удаляется с записью —
+    строка, страницы, исходный PDF и картинки страниц; скан ещё останавливается — 409, запись на месте."""
     add_gateway(studio)
     tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
     row = wait_row(studio, tid)
-    uid, mid = on_loop(studio, owner_of_tr, tid), row["source_media_id"]
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert studio.c.get("/api/translate").json()["items"][0]["scan_id"] == row["scan_id"]   # окну подтверждения
+    assert count(studio, "media") == 2                                  # PDF и картинка страницы
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert scan_row(studio, row["scan_id"]) is None and count(studio, "scan_pages") == 0
+    assert count(studio, "media") == 0 and studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 404
+
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    sid = row_of(studio, tid)["scan_id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 2)
+    assert studio.c.post(f"/api/translate/{tid}/cancel").json() == {"state": "cancelling"}
+    assert wait_row(studio, tid)["state"] == "cancelled" and scan_row(studio, sid)["state"] == "cancelling"
+    r = studio.c.delete(f"/api/translate/{tid}")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "running" and row_of(studio, tid) is not None
+    studio.gw.ocr_hold = False
     wait_until(studio, lambda: not ocr.RUNNERS)
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
-    assert on_loop(studio, media.alive, uid, mid)
-    assert studio.c.delete(f"/api/ocr/{row['scan_id']}").status_code == 204
-    assert not on_loop(studio, media.alive, uid, mid)
+    assert scan_row(studio, sid) is None and count(studio, "media") == 0
+
+
+def test_delete_translation_keeps_scan_shared_by_repeat(studio, small_pages):
+    """Повтор ссылается на тот же скан: удаление одной записи его не трогает, последней — уносит."""
+    add_gateway(studio)
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    first = wait_row(studio, tid)
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "de"})
+    again = wait_row(studio, r.json()["id"])
+    assert again["scan_id"] == first["scan_id"]
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    uid, mid = on_loop(studio, owner_of_tr, tid), first["source_media_id"]
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert scan_row(studio, first["scan_id"]) is not None and on_loop(studio, media.alive, uid, mid)
+    assert studio.c.delete(f"/api/translate/{again['id']}").status_code == 204
+    assert scan_row(studio, first["scan_id"]) is None and not on_loop(studio, media.alive, uid, mid)
+
+
+def test_poll_from_k_omits_source_of_waiting_parts(studio, monkeypatch):
+    """Опрос (`from` > 0) не несёт исходник ждущих кусков — он у страницы с первого ответа; готовые — с ним; у
+    снимка — всегда: рамки и исходник блоков нужны слою."""
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    uid, conn = gateway_conn(studio)
+    held = hold_chat(studio, when=lambda text: text == "Second one is here.")
+    tid = start(studio, THREE)
+    wait_until(studio, lambda: state.DB.execute("SELECT done_parts FROM translations WHERE id = ?",
+                                                (tid,)).fetchone()[0] == 1)
+    full = studio.c.get(f"/api/translate/{tid}").json()
+    assert [p["source"] for p in full["parts"]] == ["First one is here.", "Second one is here.", "Third one is here."]
+    polled = studio.c.get(f"/api/translate/{tid}?from=1").json()
+    assert [(p["n"], p["state"], "source" in p) for p in polled["parts"]] == [(2, "waiting", False), (3, "waiting", False)]
+    assert polled["parts"][0]["sep"] == "\n\n" and "source" not in polled
+    held[0] = False
+    wait_row(studio, tid)
+    done = studio.c.get(f"/api/translate/{tid}?from=1").json()["parts"]
+    assert [p["source"] for p in done] == ["Second one is here.", "Third one is here."]
+
+    blocks = [{"source": "Exit", "box": [93, 146, 491, 214]}, {"source": "Staff only", "box": [193, 640, 379, 706]}]
+    pid = on_loop(studio, lambda: translate.create(uid, conn, MODEL, kind="photo", name="Снимок.png", source_lang="en",
+                                                   target_lang="ru", source="Exit\nStaff only", blocks=blocks))
+    parts = studio.c.get(f"/api/translate/{pid}?from=1").json()["parts"]
+    assert [(p["source"], p["box"], p["state"]) for p in parts] == [("Staff only", [193, 640, 379, 706], "waiting")]
+
+
+def test_feed_reads_heads_from_first_part(studio):
+    """Начала исходника и перевода в ленте и ответах — из первого куска (до HEAD_CHARS), а не `substr` записи:
+    SQLite читал бы её текст целиком."""
+    uid, conn = gateway_conn(studio)
+    tid = file_job(studio, uid, conn, text="x" * 300, kick=False)
+
+    def rewrite():
+        state.DB.execute("UPDATE translations SET source = 'запись', text = 'перевод записи' WHERE id = ?", (tid,))
+        state.DB.execute("UPDATE translation_parts SET text = 'кусок' WHERE translation_id = ? AND n = 1", (tid,))
+    on_loop(studio, rewrite)
+    item = studio.c.get("/api/translate").json()["items"][0]
+    assert (item["source_head"], item["text_head"]) == ("x" * translate.HEAD_CHARS, "кусок")
+    out = studio.c.get(f"/api/translate/{tid}?from=1").json()
+    assert (out["source_head"], out["text_head"]) == ("x" * translate.HEAD_CHARS, "кусок")
+    on_loop(studio, lambda: state.DB.execute("DELETE FROM translation_parts WHERE translation_id = ?", (tid,)))
+    item = studio.c.get("/api/translate").json()["items"][0]
+    assert (item["source_head"], item["text_head"]) == (None, None)    # скан ещё не распознан — кусков нет
+
+
+def test_translate_scan_waits_without_deadline_while_own_ocr_holds_card(studio, small_pages, monkeypatch):
+    """Ревью M1: карту держит следующий скан того же пользователя — перевод ждёт её без срока WAIT_MAX_SEC (её
+    освободит конец скана), а не падает «карта занята»."""
+    monkeypatch.setattr(translate, "WAIT_MAX_SEC", 60)
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    r = studio.c.post("/api/ocr", files=[("file", ("Скан.pdf", scan_pdf("ink"), "application/pdf"))])
+    assert r.status_code == 202, r.text
+    sid = r.json()["id"]
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+    async def chat(request):
+        if state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0] in ocr.RUNNING:
+            return httpx.Response(503, json={"error": {"message": "карта занята"}})
+        return await studio.gw.builtin(request)
+    studio.gw.on["/v1/chat/completions"] = chat
+    tid = start(studio, "Hello.")
+    wait_until(studio, lambda: studio.sleeps.count(translate.RETRY_SEC) >= 8       # 120 с — вдвое дольше срока
+               or state.DB.execute("SELECT state FROM translations WHERE id = ?", (tid,)).fetchone()[0] == "error")
+    assert row_of(studio, tid)["state"] == "working"
+    studio.gw.ocr_hold = False
+    row = wait_row(studio, tid)
+    assert (row["state"], row["text"]) == ("done", "Здравствуйте!")

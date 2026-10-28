@@ -6384,6 +6384,59 @@ def test_translate_running_record_grows_in_place_and_stops(browser, live, transl
     assert not problems(r), problems(r)
 
 
+def test_translate_waiting_row_keeps_its_node_and_open_clears_poll_error(browser, live, translator, monkeypatch):
+    """Запись ждёт карту: «жду карту · м:сс» меняется каждую секунду, а строка истории — тот же узел через два
+    обновления ленты (слова — на месте, фокус на строке остаётся). Опрос открытой записи не удался — слова под
+    окнами; нажатие на её строку (свежая копия той же записи) их снимает, хоть опрос и не наладился."""
+    import translate
+    monkeypatch.setattr(translate, "RETRY_SEC", 1)                     # «Остановить» — после паузы
+    live.add_user("tl-wait")
+    gw = translator
+    gw.chat_error = (503, {"error": {"message": "карта занята"}})
+    spy = r"""(() => { window.lists = 0; window.failPolls = 0; const real = window.fetch;
+      window.fetch = (url, opts) => {
+        if (/\/api\/translate\/[^/?]+\?from=/.test(url) && window.failPolls > 0) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        if (/\/api\/translate\?limit=/.test(url)) window.lists += 1;
+        return real(url, opts); };
+      return true; })()"""
+    meta = "document.querySelector('.tl-row[aria-current=true] .tl-meta').textContent"
+    reopen = """(async () => { document.querySelector('.tl-row[aria-current=true] .tl-open').click();
+      for (let i = 0; i < 100; i++) {
+        if (document.querySelector('.tl-error').textContent === '') return window.failPolls > 0;
+        await new Promise((ok) => setTimeout(ok, 20));
+      }
+      return false; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*translating("tl-wait"),
+            ("eval", "spy", spy),
+            set_value("#tl-source", "en"),
+            ("type", "#tl-input", "Hello"), ("click", "#tl-go"),
+            ("wait", f"document.querySelector('.tl-row[aria-current=true][data-state=working]')"
+                     f" && {meta}.includes('жду карту')"),
+            ("eval", "mark", f"""(() => {{ const row = document.querySelector('.tl-row[aria-current=true]');
+              window.keep = [row, {meta}, window.lists]; row.querySelector('.tl-open').focus(); return true; }})()"""),
+            ("wait", f"window.lists - window.keep[2] >= 2 && {meta} !== window.keep[1]"),
+            ("eval", "kept", f"""[window.keep[0] === document.querySelector('.tl-row[aria-current=true]'),
+              window.keep[0].isConnected, document.activeElement === window.keep[0].querySelector('.tl-open'),
+              {meta}.includes('жду карту')]"""),
+            ("eval", "fail", "window.failPolls = 1"),
+            ("wait", "document.querySelector('.tl-error').textContent === 'Нет связи с сервером'"),
+            ("eval", "reopened", reopen),
+            ("eval", "heal", "window.failPolls = 0"),
+            ("click", "#tl-stop"),
+            ("wait", "document.querySelector('.tl-row[data-state=cancelled]')"
+                     " && document.querySelector('#tl-status').textContent === 'остановлено'")])
+    finally:
+        gw.chat_error = None
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kept"] == [True, True, True, True]
+    assert v["reopened"] is True
+    assert not problems(r), problems(r)
+
+
 def finished_record(text="Привет", target="fr"):
     """Запись «Привет» → fr готова (через API, без экрана): window.tid — её id."""
     return ("eval", "tid", f"""(async () => {{ const m = {API};

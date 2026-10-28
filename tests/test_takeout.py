@@ -509,6 +509,25 @@ def test_export_holds_translations_with_parts_and_files(studio):
     assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
 
 
+def test_takeout_text_translation_without_parts_texts(studio):
+    """Ревью M16: у текста и файла исходник и перевод — только в записи (кусками их не дублировать), куски — номер,
+    состояние и слова отказа; тексты кусков с рамками — только у снимка (предыдущий тест)."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    put("INSERT INTO translations(id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang,"
+        " result_lang, name, source_media_id, scan_id, source, text, parts, done_parts, state, detail, created,"
+        " finished) VALUES ('tx', ?, 'text', 1, 'm', 'en', 'ru', NULL, 'ru', 'First.', NULL, NULL,"
+        " 'First.\n\nSecond.', 'Первый.', 2, 1, 'error', 'кусок 2 из 2: отказ', ?, ?)", uid, T0, T0 + 3)
+    put("INSERT INTO translation_parts(translation_id, n, source, sep, box, text, state, detail)"
+        " VALUES ('tx', 1, 'First.', '\n\n', NULL, 'Первый.', 'done', NULL)")
+    put("INSERT INTO translation_parts(translation_id, n, source, sep, box, text, state, detail)"
+        " VALUES ('tx', 2, 'Second.', '', NULL, NULL, 'failed', 'отказ')")
+    _, z = download(studio, ["translate"])
+    [item] = json.loads(unzip(z).read("translations/0001.json"))
+    assert (item["kind"], item["source"], item["text"]) == ("text", "First.\n\nSecond.", "Первый.")
+    assert item["parts"] == [{"n": 1, "state": "done", "detail": None}, {"n": 2, "state": "failed", "detail": "отказ"}]
+
+
 def test_export_has_code_chats_and_agent_events(studio):
     """Claude Code: отметки чатов студии и история подключений (с именем компьютера) — страницами; файлов у них
     нет; ключа устройства, подписки push и чужого — нет (спека claude-code 6.1)."""
