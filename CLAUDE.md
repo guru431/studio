@@ -47,6 +47,13 @@ Windows-мост к студии `https://studio.example.com`: держит ис
   2000, шаги с начала прочь «… первые шаги не показаны», затем хвост текста «… начало ответа не показано»), `history`
   (нет записей — `not_found` «нет такого чата»), `exists`, `last_model` (без `<synthetic>`), `mark_studio` (метка
   `studio`, сбой — в журнал).
+- `agent` — `Agent` (просьбы студии): `hello`, `handle` (кадр `req` → `[res, *после]`; поля — по `OPS` до
+  исполнения, иначе `invalid`; `id` не вернуть — без ответа; `open` под замком — порядок Ruling 4: без PIN — открыть,
+  `null` открытой — `{}`, блок — `pin_locked`, `null` — `pin_needed`, иначе `pins.check` в потоке; прочие — `touch`
+  или `closed`; `watch` без хода — `{"running": false}` без проверки чата; не `Refused` — `error`, в журнал `op` и
+  тип; ответ больше `FRAME_MAX` — `too_large`, не кодируется — `error`), `close_session`, `new_link` (все сессии
+  прочь), `emit` (в `send`, его ставит `Link`; нет — событие пропадает). `Runner` создаётся раньше и получает `emit`
+  поздним связыванием (`lambda f: agent.emit(f)`).
 
 ## Правила
 

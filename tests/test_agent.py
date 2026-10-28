@@ -1,0 +1,263 @@
+import asyncio
+import logging
+import secrets
+
+import pytest
+
+from fake_sdk import HOLD, FakeFactory, delta, result_ok
+from studio_agent import files, projects, sessions, store
+from studio_agent.agent import Agent
+from studio_agent.pin import PinStore
+from studio_agent.turns import Runner
+
+SESSION = "3b1e" * 8
+CHAT = "0b1e2c3d-4f50-4617-8899-aabbccddeeff"
+MODELS = [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}]
+
+
+def req(op, session=SESSION, **kw):
+    return {"t": "req", "id": secrets.token_hex(8), "op": op, "session": session, **kw}
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def make(home, root, factory=None, clock=None) -> Agent:
+    """Runner раньше Agent, `emit` — поздним связыванием (Ruling 5)."""
+    agent = None
+    runner = Runner(lambda f: agent.emit(f), choices=store.Choices(home), cli_path=None,
+                    factory=factory or FakeFactory([result_ok()]))
+    agent = Agent(store.Config(projects_root=str(root)), PinStore(home), runner, now=clock or Clock(),
+                  cc_version="2.3.1", models=MODELS, efforts=["low", "high"])
+    agent.sent = []
+    agent.send = agent.sent.append
+    return agent
+
+
+@pytest.fixture
+def root(tmp_path, monkeypatch):
+    """Папка проектов с проектом `demo`; сессий SDK нет."""
+    monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
+    monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: None)
+    r = tmp_path / "projects"
+    (r / "demo").mkdir(parents=True)
+    return r
+
+
+@pytest.fixture
+def agent(home, root):
+    return make(home, root)
+
+
+@pytest.fixture
+def agent_with_pin(home, root):
+    PinStore(home).set_pin("2468")
+    return make(home, root)
+
+
+async def settle(a: Agent) -> None:
+    while a.runner._turns:
+        await asyncio.wait({t.task for t in a.runner._turns.values()})
+
+
+async def opened(a: Agent, session=SESSION, pin=None) -> None:
+    assert (await a.handle(req("open", session=session, pin=pin)))[0]["ok"] is True
+
+
+def test_hello(agent):
+    assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
+                             "has_pin": False, "models": MODELS, "efforts": ["low", "high"]}
+    agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
+    assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
+
+
+async def test_everything_but_open_is_closed_until_opened(agent):
+    assert (await agent.handle(req("projects")))[0]["code"] == "closed"
+    assert (await agent.handle(req("open", pin=None)))[0]["ok"] is True
+    assert (await agent.handle(req("projects")))[0]["data"]["items"] == [{"pid": projects.pid("demo"), "name": "demo"}]
+
+
+async def test_answer_keeps_the_request_id(agent):
+    r = req("projects")
+    [res] = await agent.handle(r)
+    assert res == {"t": "res", "id": r["id"], "ok": False, "code": "closed", "message": "компьютер закрыт"}
+
+
+async def test_pin_flow_and_open_null_for_an_open_session(agent_with_pin):
+    a = agent_with_pin
+    assert a.hello()["has_pin"] is True
+    assert (await a.handle(req("open", pin=None)))[0]["code"] == "pin_needed"
+    assert (await a.handle(req("open", pin="1111")))[0] | {"id": None} == {"t": "res", "id": None, "ok": False,
+        "code": "pin", "message": "неверный PIN", "left": 4}
+    assert (await a.handle(req("open", pin="2468")))[0]["ok"]
+    assert (await a.handle(req("open", pin=None)))[0]["ok"]           # уже открыта — без PIN
+
+
+async def test_locked_pin_is_pin_locked_even_for_open_null(agent_with_pin):
+    a = agent_with_pin
+    codes = [(await a.handle(req("open", pin="1111")))[0]["code"] for _ in range(5)]
+    assert codes == ["pin", "pin", "pin", "pin", "pin_locked"]
+    assert (await a.handle(req("open", pin=None)))[0]["code"] == "pin_locked"
+    res = (await a.handle(req("open", pin="2468")))[0]
+    assert res["code"] == "pin_locked" and res["message"] == "PIN заблокирован — снимите блок на самом компьютере"
+
+
+async def test_an_idle_session_closes(home, root):
+    clock = Clock()
+    a = make(home, root, clock=clock)
+    await opened(a)
+    clock.t += 1800
+    assert (await a.handle(req("projects")))[0]["ok"]                  # продлена
+    clock.t += 1801
+    assert (await a.handle(req("projects")))[0]["code"] == "closed"
+
+
+async def test_close_and_new_link_close_sessions(agent):
+    other = "ab" * 16
+    await opened(agent)
+    await opened(agent, other)
+    agent.close_session(SESSION)
+    assert (await agent.handle(req("projects")))[0]["code"] == "closed"
+    assert (await agent.handle(req("projects", session=other)))[0]["ok"]
+    await opened(agent)
+    agent.new_link()
+    assert (await agent.handle(req("projects")))[0]["code"] == "closed"
+    assert (await agent.handle(req("projects", session=other)))[0]["code"] == "closed"
+
+
+async def test_turn_events_go_to_send_and_only_when_it_is_set(home, root):
+    a = make(home, root, FakeFactory([delta("При"), result_ok()]))
+    await opened(a)
+    res = (await a.handle(req("turn", project=projects.pid("demo"), chat=CHAT, text="Привет", model="opus",
+                              effort=None)))[0]
+    assert res["ok"] and isinstance(res["data"]["turn"], str)
+    await settle(a)
+    assert [f["e"]["k"] for f in a.sent] == ["text", "done"] and a.sent[0]["turn"] == res["data"]["turn"]
+    a.send = None
+    a.emit({"t": "ev"})                                                 # канала нет — событие пропадает
+
+
+async def test_watch_sends_res_then_snapshot(home, root):
+    a = make(home, root, FakeFactory([delta("При"), HOLD]))
+    await opened(a)
+    pid = projects.pid("demo")
+    assert (await a.handle(req("watch", project=pid, chat=CHAT)))[0]["data"] == {"running": False}
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None))
+    for _ in range(2000):
+        if a.sent:
+            break
+        await asyncio.sleep(0.001)
+    out = await a.handle(req("watch", project=pid, chat=CHAT))
+    assert [f["t"] for f in out] == ["res", "ev"]
+    assert out[0]["data"] == {"running": True}
+    assert out[1]["e"] == {"k": "snapshot", "text": "При", "steps": [], "asks": []}
+    assert (await a.handle(req("stop", project=pid, chat=CHAT)))[0]["ok"]
+    await settle(a)
+    assert (await a.handle(req("stop", project=pid, chat=CHAT)))[0]["code"] == "idle"
+
+
+async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):
+    await opened(agent)
+    out = await agent.handle(req("watch", project="0" * 16, chat=CHAT))
+    assert len(out) == 1 and out[0]["data"] == {"running": False}
+
+
+async def test_bad_fields_are_invalid(agent):
+    await opened(agent)
+    pid = projects.pid("demo")
+    bad = [
+        req("projects", session="a" * 31),
+        req("chats", project="XYZ"),
+        req("history", project=pid, chat=CHAT.upper(), before=None, limit=10),
+        req("history", project=pid, chat=CHAT, before=None, limit=0),
+        req("history", project=pid, chat=CHAT, before=None, limit=101),
+        req("history", project=pid, chat=CHAT, before=None, limit=True),
+        req("history", project=pid, chat=CHAT, before=-1, limit=10),
+        req("files", project=pid, path="CON"),
+        req("read", project=pid, path=None),
+        req("turn", project=pid, chat=CHAT, text="x", model="gpt", effort=None),
+        req("turn", project=pid, chat=CHAT, text="x", model=None, effort="max"),
+        req("turn", project=pid, chat=CHAT, text="x" * 100_001, model=None, effort=None),
+        req("save", project=pid, path="a.txt", text="x", version="0" * 63),
+        req("answer", project=pid, chat=CHAT, request_id="a b", decision="allow", message=None, answers=None),
+        req("open", pin=1234),
+        req("nonsense"),
+    ]
+    for r in bad:
+        res = (await agent.handle(r))[0]
+        assert (res["id"], res["code"], res["message"]) == (r["id"], "invalid", "неверные поля"), r
+
+
+async def test_bad_id_is_answered_with_it_or_not_at_all(agent):
+    res = (await agent.handle(req("open", pin=None) | {"id": "zz"}))[0]
+    assert res["id"] == "zz" and res["code"] == "invalid"
+    assert await agent.handle(req("open", pin=None) | {"id": "z" * 65}) == []
+    assert await agent.handle(req("open", pin=None) | {"id": 7}) == []
+
+
+async def test_files_read_and_unknown_project(agent, root):
+    (root / "demo" / "a.txt").write_bytes(b"hello")
+    await opened(agent)
+    pid = projects.pid("demo")
+    assert (await agent.handle(req("read", project=pid, path="a.txt")))[0]["data"]["text"] == "hello"
+    assert [i["name"] for i in (await agent.handle(req("files", project=pid, path="")))[0]["data"]["items"]] == ["a.txt"]
+    res = (await agent.handle(req("chats", project="0" * 16)))[0]
+    assert (res["code"], res["message"]) == ("not_found", "нет такого проекта")
+
+
+async def test_a_crash_in_an_op_is_error_and_the_next_request_works(agent, monkeypatch, caplog):
+    monkeypatch.setattr(sessions, "history", lambda *a: (_ for _ in ()).throw(ValueError("битый JSONL")))
+    await opened(agent)
+    r = req("history", project=projects.pid("demo"), chat=CHAT, before=None, limit=10)
+    with caplog.at_level(logging.INFO, logger="studio_agent"):
+        res = (await agent.handle(r))[0]
+    assert res == {"t": "res", "id": r["id"], "ok": False, "code": "error", "message": "ошибка моста"}
+    assert "history" in caplog.text and "ValueError" in caplog.text and "битый" not in caplog.text
+    assert (await agent.handle(req("projects")))[0]["ok"]
+
+
+async def test_oversized_answer_is_refused_too_large(agent, monkeypatch):
+    monkeypatch.setattr(projects, "list_projects", lambda root: [{"pid": "0" * 16, "name": "x" * (17 * 2**20)}])
+    await opened(agent)
+    r = req("projects")
+    res = (await agent.handle(r))[0]
+    assert res == {"t": "res", "id": r["id"], "ok": False, "code": "too_large",
+                   "message": "ответ больше предела канала"}
+
+
+async def test_unencodable_answer_is_error(agent, monkeypatch):
+    monkeypatch.setattr(files, "read_text", lambda project, path: {"text": float("nan"), "version": "0" * 64})
+    await opened(agent)
+    res = (await agent.handle(req("read", project=projects.pid("demo"), path="a.txt")))[0]
+    assert res["code"] == "error"
+
+
+async def test_journal_has_no_secrets(home, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
+    monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: None)
+    root = tmp_path / "projects"
+    (root / "секретный-проект").mkdir(parents=True)
+    (root / "секретный-проект" / "пароли.txt").write_text("тайна", encoding="utf-8")
+    PinStore(home).set_pin("2468")
+    a = make(home, root, FakeFactory([delta("тайный ответ"), result_ok()]))
+    pid = projects.pid("секретный-проект")
+    with caplog.at_level(logging.DEBUG):
+        await a.handle(req("open", pin="1111"))
+        await opened(a, pin="2468")
+        await a.handle(req("projects"))
+        await a.handle(req("files", project=pid, path=""))
+        await a.handle(req("read", project=pid, path="пароли.txt"))
+        await a.handle(req("read", project=pid, path="нет/пароли.txt"))
+        await a.handle(req("turn", project=pid, chat=CHAT, text="тайное задание", model=None, effort=None))
+        await settle(a)
+        await a.handle(req("тайное задание"))
+    assert caplog.text
+    for secret in ("2468", "1111", "секретный-проект", "пароли.txt", "тайное задание", "тайна", "тайный"):
+        assert secret not in caplog.text
