@@ -2,7 +2,8 @@
 
 Windows-мост к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей
 локальный Claude Code владельца — проекты, чаты, ход с карточками разрешений, файлы, git — строго по
-протоколу версии 1. Сервер (студия) уже сделан, мост строится по плану.
+протоколу версии 1. Мост собран по плану (задачи 1–13) и проверен сквозным тестом с живой студией и настоящим
+Claude Code (`tests/test_live_studio.py`). Как ставить и пользоваться — [README.md](README.md).
 
 - Спека: `C:/work/projects/studio/docs/superpowers/specs/2026-10-28-studio-claude-code-design.md` (§2, §4, §6.3,
   §6.6, §6.10, §7, §8).
@@ -15,7 +16,7 @@ Windows-мост к студии `https://studio.example.com`: держит ис
 
 ## Устройство
 
-Пакет `studio_agent` (дальше дополняется по плану):
+Пакет `studio_agent`:
 
 - `limits` — все числа протокола и моста (`FRAME_MAX`, `PIN_TRIES`, `OPEN_IDLE_SEC`, `TEXT_MAX`, `HISTORY_BUDGET`, …).
 - `errors` — `Refused(code, message="", **extra)`: отказ просьбы; без слов — `WORDS[code]` («Тексты» плана); у
@@ -106,6 +107,36 @@ Windows-мост к студии `https://studio.example.com`: держит ис
 - `install.ps1` (UTF-8 с BOM, CRLF) — `.venv` рядом (`-Python`, иначе `py -3.14`, нет `py` — `python`), `pip install -r
   requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; повтор безопасен; автозапуск ставит окно.
 
+## Решения
+
+Плана (`Решения плана`) и контролёра (`progress.md` плана, «Rulings»), где они задают поведение:
+
+- **Клиент SDK — на ход** (спека §6.6): поднимается в `Runner._run` и гаснет в `_finish`; новая сессия —
+  `session_id=chat`, существующая — `resume=chat`; модель и усилие — опции запуска (`set_model` и перезапуска при смене
+  усилия нет). «Новая» — `sessions.exists`: `get_session_info(...) is not None` **или** есть хоть одна запись
+  `get_session_messages(limit=1)` — SDK отдаёт `None` и сессии без извлекаемого названия (Ruling 9), а `session_id`
+  существующей сессии CLI не примет.
+- `null` модели — `choices.json` чата, иначе модель последнего ответа сессии (без `<synthetic>`: продолжение сессии VS
+  Code не меняет её модель), иначе умолчание Claude Code; `null` усилия — запомненное или умолчание.
+- **`setting_sources=["user", "project", "local"]`** явно, `permission_mode` не задаётся: правила разрешений, CLAUDE.md
+  и `env` проекта действуют, как в VS Code. Окружение `claude.exe` не вычищается; добавляется только
+  `CLAUDE_AGENT_SDK_CLIENT_APP=studio-agent/<версия>` — и в ходе, и в `cli.probe` (Ruling 10).
+- CLI — новейший `claude.exe` расширения VS Code, нет — встроенный в SDK. Модели — `get_server_info()["models"]`
+  короткого клиента до первого канала и раз в час; новые студия видит только в следующем `hello` (обновить знакомство
+  протокол v1 не умеет).
+- Текст хода — по `text_delta` (`include_partial_messages=True`), без дельт — блоками `AssistantMessage`; шаги и итоги —
+  только главного агента, карточки подагентов — показываются. Метка `studio` — новой сессии после `disconnect` (файл
+  сессии не пишут двое) и только если запрос ушёл к CLI. Время сообщений истории — `null`.
+- `open` — порядок Ruling 4 (как `FakeMachine`): PIN не задан — открыть; `null` открытой сессии — `{}` и продление;
+  блок — `pin_locked` (раньше `pin_needed`: иначе страница покажет панель PIN вместо «заблокирован»); `null` —
+  `pin_needed`; иначе проверка.
+- `Runner` получает `emit` поздним связыванием `lambda f: agent.emit(f)` (Ruling 5) — сборка в `app.Controller` и в
+  фикстурах тестов; `stop` без хода — `Refused("idle")` (Ruling 6).
+- `sessions.fit`: одиночный элемент больше бюджета и после отбрасывания шагов — `text` урезается до хвоста с первой
+  строкой «… начало не показано» (Ruling 7, 10; элемент бывает и вопросом).
+- `run --console` собирает ядро тем же `app.Controller`, что и трей (Ruling 11): сборка Agent/Runner/Link одна.
+- Логгер `websockets` — не ниже INFO и в консоли (Ruling 13, `journal.setup`).
+
 ## Правила
 
 - Только Windows. Ключ устройства и PIN — DPAPI области пользователя; пароль студии на машине не остаётся и в argv не
@@ -140,5 +171,35 @@ Windows-мост к студии `https://studio.example.com`: держит ис
     .venv/Scripts/python -m pytest -q -m integration        # настоящий git, реестр, PowerShell
     .venv/Scripts/python -m pytest -q -m manual             # настоящий Claude Code, тратит квоту
 
-`timeout = 30`, `asyncio_mode = auto`. Реального времени в тестах нет: часы — параметр `now`, паузы — параметр
-`sleep`. Каталог моста в тестах — фикстура `home` (`tests/conftest.py`, `STUDIO_AGENT_HOME` во временной папке).
+`timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом (~7 с). Реального времени в
+тестах нет: часы — параметр `now`, паузы — параметр `sleep`. Каталог моста в тестах — фикстура `home`
+(`tests/conftest.py`, `STUDIO_AGENT_HOME` во временной папке). Студия в быстрых тестах — подставная
+(`tests/fake_studio.py`, `websockets` на `127.0.0.1:0`), SDK — `tests/fake_sdk.py`.
+
+Сквозная проверка — `tests/test_live_studio.py` (`manual`, **два коротких хода квоты** — не гонять по
+кругу): `tests/live_studio_server.py` поднимает живую студию её средой (`<STUDIO_REPO>/.venv`, по умолчанию
+`C:/work/projects/studio`; `start_live_app`, `READY <адрес>`, гаснет по закрытию stdin), мост — настоящие `Agent`,
+`Runner` (SDK и `claude.exe`) и `Link` в цикле теста, браузер — `urllib` в потоке. Сценарий: привязка, «на связи»,
+`open`, проекты, новый чат, ход «Ответь одним словом: готово», ход с Bash — карточка `permission`, `allow`, итог шага;
+чаты (`origin: "studio"`), история из 4 сообщений, файлы, чтение, git; PIN на машине и новый канал — `pin_needed`, с
+PIN — 204. Файл сессии пробы тест убирает из `~/.claude/projects`. Перед ним — отладить всё без хода.
+
+## Ловушки
+
+- **Ключ устройства — только заголовком** `Authorization: Bearer` (рукопожатие WebSocket и привязка — телом POST):
+  строку запроса пишет журнал Apache. Логгер `websockets` на DEBUG пишет заголовки — с ключом; `journal.setup` держит
+  его не ниже INFO.
+- **PIN проверяет мост, не студия**: хеш и счёт — в `pin.bin` машины; студия знает только `has_pin` из `hello`. Значит,
+  `set-pin`/`clear-pin` из консоли при работающем мосте действуют на новые `open` сразу, а `has_pin` студии и уже
+  открытые сессии — до нового канала (окно «Сохранить» делает `restart_link` само).
+- **Кадры — ASCII-JSON** (`ensure_ascii=True, allow_nan=False`): имя файла Windows с одиноким суррогатом в UTF-8 не
+  кодируется — канал упал бы на первом таком списке.
+- **`setting_sources` задавать явно**: без него SDK не грузит настройки — ни правил разрешений проекта, ни CLAUDE.md,
+  ни `env` `claude-switch`. Режим разрешений — из настроек: у владельца в `~/.claude/settings.json` `defaultMode:
+  "auto"` и `allow: ["Bash", …]`, поэтому карточка приходит только на то, что Claude Code спросил бы и в VS Code
+  (живой тест кладёт проекту `defaultMode: "default"` и `ask` — проектная настройка сильнее пользовательской).
+- **Клиент на ход, не на чат**: держать клиентов открытыми — процесс `claude.exe` на каждый открытый чат. `can_use_tool`
+  требует потокового ввода и холостого хука `PreToolUse` (`turns._keep_alive`) — без него SDK закрывает ввод, пока
+  карточка ждёт ответа.
+- stderr `claude.exe` отбрасывается (`cli._drop`): в нём пути и тексты.
+- Сессии Claude Code пишутся в настоящий `~/.claude/projects` (по пути проекта) — у тестов с настоящим CLI тоже.
