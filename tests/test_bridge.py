@@ -512,3 +512,13 @@ def test_fake_machine_follows_the_protocol():
     assert ok("git", project=pid("alpha"))[0]["branch"] == "main"
     assert refused("nope")["code"] == "invalid"
     assert all(r["op"] for r in m.requests) and len(m.requests) == next(n)
+
+
+def test_fake_machine_opens_an_open_session_without_the_pin_again():
+    m = FakeMachine(pin="2468")
+    res, _ = m.handle({"t": "req", "id": "a" * 16, "op": "open", "session": "s" * 32, "pin": "2468"})
+    assert res["ok"] is True
+    res, _ = m.handle({"t": "req", "id": "b" * 16, "op": "open", "session": "s" * 32, "pin": None})
+    assert res == {"t": "res", "id": "b" * 16, "ok": True, "data": {}}
+    res, _ = m.handle({"t": "req", "id": "c" * 16, "op": "open", "session": "t" * 32, "pin": None})
+    assert res["code"] == "pin_needed"

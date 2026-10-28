@@ -94,6 +94,8 @@ class FakeMachine:
         if self.pin is None:
             self.open_sessions.add(req["session"])
             return {}
+        if req.get("pin") is None and req.get("session") in self.open_sessions:
+            return {}                            # уже открыта — продление без PIN (протокол §3)
         if self.pin_fails >= PIN_TRIES:
             raise Refused("pin_locked", "PIN заблокирован")
         if req.get("pin") is None:
