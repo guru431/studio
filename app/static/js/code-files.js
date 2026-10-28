@@ -1,7 +1,7 @@
 /* Вкладки «Файлы» и «Git» проекта Claude Code (#/code/<aid>/<pid>) — спека 2026-10-28-studio-claude-code-design
  * 6.7, протокол канала §4 (files, read, raw, save, git) и §6 (пути).
  *
- * filesView(host, { aid, pid, name, failed, path }) → { open(path), unmount() } (path — открыть сразу, иначе корень):
+ * filesView(host, { aid, pid, name, failed, path }) → { open(path), leave(go), unmount() } (path — открыть сразу, иначе корень):
  * - путь #code-path (корень — имя проекта, части — к своей папке), папка #code-files — li[data-name] в порядке
  *   моста (папки сначала); нажатие на папку — её список, на файл — сам файл; на узком экране, пока открыт
  *   файл, список папки скрыт (назад ведёт путь), на широком — рядом;
@@ -11,7 +11,9 @@
  *   .md — «Текст» / «Вид» (#code-md-view, markdown.js); binary и too_large — слова, файл не открывается;
  * - .pdf — страница картинкой (#code-pdf img из POST …/pdf, число страниц — X-Studio-Pages), «‹» «›» и
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
- * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата).
+ * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата);
+ * - текст правлен и не сохранён, а уходят на другой файл, папку (путь, список) или вкладку (leave(go) из
+ *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться».
  * gitView(host, { aid, pid, failed }) → { unmount() }: #code-git — «Ветка», «впереди на N» / «позади на N»
  * (если есть upstream), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
@@ -21,7 +23,7 @@
 import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
 import { sizeText } from './settings.js';
-import { el, words } from './ui.js';
+import { button, el, openDialog, words } from './ui.js';
 
 const SAVED = 'Сохранено';
 const CONFLICT = 'Файл изменился на компьютере — откройте его заново, чтобы не затереть правки';
@@ -58,6 +60,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
   let listGen = 0;        // ответ прежней папки новый список не перерисует
   let fileGen = 0;        // так же — прежнего файла
   let blobUrl = null;
+  let editing = null;     // открытый текст: { editor, base — текст как прочитан или сохранён, reset() }
 
   const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
   const list = el('ul', { id: 'code-files', class: 'code-files' });
@@ -75,6 +78,23 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     blobUrl = null;
   }
 
+  /** Уйти с открытого текста: правка не сохранена — сначала спросить; «Уйти без сохранения» её отбрасывает. */
+  function leave(go) {
+    if (!editing || editing.editor.value === editing.base) {
+      go();
+      return;
+    }
+    const yes = button('Уйти без сохранения', { class: 'btn btn-danger', id: 'code-unsaved-leave' });
+    const dialog = openDialog(host, { id: 'code-unsaved', title: 'Изменения не сохранены', actions: [yes],
+      cancelText: 'Остаться' });
+    yes.addEventListener('click', () => {
+      dialog.close();
+      if (!alive) return;
+      if (editing) editing.reset();
+      go();
+    });
+  }
+
   function showPath(path, isFile) {
     const parts = path ? path.split('/') : [];
     const items = [[name || 'Проект', '']];
@@ -86,10 +106,10 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
       if (last && (isFile || target === dir)) crumbs.append(el('span', { class: 'code-crumb-here' }, text));
       else {
         const go = el('button', { type: 'button', class: 'code-path-link' }, text);
-        go.addEventListener('click', () => {
+        go.addEventListener('click', () => leave(() => {
           closeFile();
           listDir(target);
-        });
+        }));
         crumbs.append(go);
       }
     });
@@ -108,12 +128,12 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
         const row = el('button', { type: 'button', class: `code-file-item${item.dir ? ' dir' : ''}` },
           icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name),
           item.dir || typeof item.size !== 'number' ? null : el('span', { class: 'muted small code-file-size' }, sizeText(item.size)));
-        row.addEventListener('click', () => {
+        row.addEventListener('click', () => leave(() => {
           if (item.dir) {
             closeFile();
             listDir(join(dir, item.name));
           } else openFile(join(dir, item.name));
-        });
+        }));
         return el('li', { 'data-name': item.name, class: item.dir ? 'dir' : null }, row);
       }));
     } catch (err) {
@@ -127,6 +147,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
 
   function closeFile() {
     fileGen += 1;
+    editing = null;
     dropBlob();
     file.hidden = true;
     file.replaceChildren();
@@ -170,15 +191,23 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     const editor = el('textarea', { id: 'code-editor', class: 'input code-editor', spellcheck: 'false',
       autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': nameOf(path) });
     editor.value = got.text;
+    let shown = null;                                   // разметка .md («Вид»)
+    const mark = { editor, base: editor.value, reset() {
+      editor.value = mark.base;
+      if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
+    } };
+    editing = mark;
     const save = el('button', { type: 'button', id: 'code-save', class: 'btn btn-accent btn-sm' }, 'Сохранить');
     editor.addEventListener('input', () => say(status, '', false));
     save.addEventListener('click', async () => {
       if (save.disabled) return;
       save.disabled = true;
       say(status, '', false);
-      const text = crlf ? editor.value.replace(/\n/g, '\r\n') : editor.value;
+      const sent = editor.value;
+      const text = crlf ? sent.replace(/\n/g, '\r\n') : sent;
       try {
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
+        mark.base = sent;
         if (alive && mine === fileGen) say(status, SAVED, false);
       } catch (err) {
         if (!alive || mine !== fileGen) return;
@@ -193,7 +222,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     });
     file.append(editor);
     if (/\.md$/i.test(path)) {
-      const shown = el('div', { id: 'code-md', class: 'md code-md', hidden: true });
+      shown = el('div', { id: 'code-md', class: 'md code-md', hidden: true });
       const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': 'Показ' });
       for (const [mode, text] of [['text', 'Текст'], ['view', 'Вид']]) {
         const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'text') }, text);
@@ -268,6 +297,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
   else listDir('');
   return {
     open,
+    leave,
     unmount() {
       alive = false;
       closeFile();

@@ -1,19 +1,23 @@
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
- * chatView(host, { aid, pid, chat, agent, project, origin, navigate, openFile }) → { unmount() }:
+ * chatView(host, { aid, pid, chat, agent, project, origin, fresh, navigate, closed, openFile }) → { unmount() }:
  * - лента #code-feed — страница истории (GET …/chats/<chat>, по 100), «Показать раньше» (#code-more) —
  *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
  *   details.code-step, затем текст — markdown.js);
  * - сразу за историей — поток live: idle — ничего, snapshot — всё состояние идущего хода вместо прежнего
  *   хвоста; «Отправить» — поток turn; события text, step, result, ask (карточка .code-ask), asked (карточка
  *   уходит), done (stopped — «Ход прерван», error — «Ошибка: …»);
- * - offline (событие или 409) — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS, пока страница
- *   видна; closed (событие или 409) — к панели PIN этого компьютера (#/code?pin=<aid>), как в code.js;
+ * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
+ *   пока страница видна; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
+ *   PIN — снова сюда; ответ, пришедший после ухода с чата, никуда не уводит;
  * - страница ушла с экрана — свой поток она снимает (push от сервера уходит, только если чат никто не
  *   смотрит), вернулась — снова live: снимок догонит ход, ход на машине от этого не прерывается.
- * В хранилище браузера — только выбор модели и усилия (studio-code-choice:<aid>), ни ленты, ни поля.
- * Текст машины — только textContent и markdown.js. */
+ * Модель и усилие: первый пункт — «по умолчанию» (null — прежние модель и усилие чата, протокол §4). Выбор
+ * пользователя — на устройстве (studio-code-choice:<aid>), но подставляется только в новый чат (fresh — заведён
+ * «Новым чатом» в этом окне, или история пуста), пока выбор не трогали; существующий начинает с «по умолчанию».
+ * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет. В хранилище браузера —
+ * только выбор, ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api } from './api.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
@@ -27,12 +31,16 @@ const STOPPED = 'Ход прерван';
 const ASK_TITLE = 'Claude Code просит разрешения';
 const INSTEAD = 'Что сделать вместо этого (необязательно)';
 const CHOICE = 'studio-code-choice:';
+const DEFAULT = 'по умолчанию';
 const RETRY_MS = 5000;           // повтор live, пока компьютера нет
 const AGAIN_MS = 1000;           // поток кончился без конца хода (предел прокси, сеть) — снова live
 const PAINT_MS = 80;             // текст хода перерисовывается не чаще
 const STICK_PX = 80;             // лента у низа — новое её прокручивает
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
+
+/** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
+const drafts = new Map();
 
 function loadChoice(aid) {
   try {
@@ -73,10 +81,13 @@ function tailOf(filePath, agent, project) {
   return parts.some((p) => p === '' || p === '.' || p === '..') ? null : parts.join('/');
 }
 
-export function chatView(host, { aid, pid, chat, agent, project, origin, navigate, openFile }) {
+export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, navigate, closed: toPin,
+  openFile }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
+  const draftKey = `${aid}/${chat}`;
   const scroller = document.getElementById('view');
   let alive = true;
+  let touched = false;           // выбор модели или усилия меняли в этом чате
   let controller = null;         // поток (turn или live), который читает страница
   let retry = null;              // таймер следующего live
   let running = false;
@@ -92,13 +103,20 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание', maxlength: '100000' });
   const models = Array.isArray(agent && agent.models) ? agent.models : [];
   const efforts = Array.isArray(agent && agent.efforts) ? agent.efforts : [];
-  const model = el('select', { id: 'code-model', class: 'chip' },
+  const model = el('select', { id: 'code-model', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...models.map((m) => el('option', { value: String(m.id) }, String(m.label || m.id))));
-  const effort = el('select', { id: 'code-effort', class: 'chip' },
+  const effort = el('select', { id: 'code-effort', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...efforts.map((e) => el('option', { value: String(e) }, String(e))));
-  const saved = loadChoice(aid);
-  if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
-  if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
+
+  /** Выбор устройства — в новый чат, пока свой не тронут. */
+  function applySaved() {
+    if (touched) return;
+    const saved = loadChoice(aid);
+    if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
+    if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
+  }
+
+  if (fresh) applySaved();
   const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go' }, 'Отправить');
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true }, 'Остановить');
   const closeChat = el('button', { type: 'button', id: 'code-close-chat', class: 'btn btn-sm' }, 'Закрыть чат');
@@ -111,6 +129,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
   host.append(el('div', { class: 'code-chat-bar' }, closeChat),
     origin === 'other' ? el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED) : null,
     more, feed, status, form);
+  if (drafts.has(draftKey)) {
+    text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
+    autosize();
+  }
 
   /* ---- лента -------------------------------------------------------------------- */
 
@@ -182,8 +204,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
     host.dataset.running = value ? '1' : '0';
   }
 
+  /** Компьютер закрыт для сессии — к PIN (code.js запомнит этот чат); с чата уже ушли — никуда. */
   function closed() {
-    navigate(`code?pin=${aid}`);
+    if (alive) toPin();
   }
 
   /* ---- карточки ----------------------------------------------------------------- */
@@ -420,6 +443,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
       return;
     }
     if (!alive) return;
+    if (thenLive && !(Array.isArray(page.items) && page.items.length)) applySaved();    // чат без истории — новый
     feed.replaceChildren(...messages(page.items));
     turn = null;
     start = Number.isInteger(page.start) ? page.start : 0;
@@ -436,8 +460,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
     if (text.value) text.style.height = `${text.scrollHeight}px`;
   }
 
-  function remember() {
-    saveChoice(aid, { model: model.value || null, effort: effort.value || null });
+  /** Сменили модель или усилие — на устройстве для новых чатов (другое из пары остаётся прежним). */
+  function remember(key, select) {
+    touched = true;
+    saveChoice(aid, { ...loadChoice(aid), [key]: select.value || null });
   }
 
   async function submit() {
@@ -448,9 +474,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
     status.textContent = '';
     const mine = messageNode({ role: 'user', text: value });
     grow(() => feed.append(mine));
-    text.value = '';
+    text.value = '';             // черновик (drafts) остаётся до ответа: отказ и уход к PIN его не теряют
     autosize();
-    remember();
     const own = take();
     let response;
     try {
@@ -465,12 +490,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
         autosize();
       }
       if (err.code === 'closed') closed();
+      else if (err.code === 'offline') waitForComputer();
       else status.textContent = words(err);
       return;
     } finally {
       sending = false;
       send.disabled = running;
     }
+    if (drafts.get(draftKey) === value) drafts.delete(draftKey);   // ход принят; набранное после — остаётся
     await follow(response, own);
   }
 
@@ -516,9 +543,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, navigat
     }
   });
 
-  model.addEventListener('change', remember);
-  effort.addEventListener('change', remember);
-  text.addEventListener('input', autosize);
+  model.addEventListener('change', () => remember('model', model));
+  effort.addEventListener('change', () => remember('effort', effort));
+  text.addEventListener('input', () => {
+    autosize();
+    if (text.value) drafts.set(draftKey, text.value);
+    else drafts.delete(draftKey);
+  });
   text.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();

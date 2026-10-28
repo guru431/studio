@@ -44,7 +44,9 @@ self.addEventListener('notificationclick', (event) => {
 
 /* Push «Claude Code» (push.py, спека 2026-10-28-studio-claude-code-design, 6.8): заголовок, тело, tag и адрес —
  * из расшифрованной браузером полезной нагрузки; кривая — уведомление «Студия» без текста (userVisibleOnly:
- * показать нужно всегда). Нажатие — notificationclick выше. */
+ * показать нужно всегда). Нажатие — notificationclick выше. Тот же tag (один чат) заменяет прежнее уведомление —
+ * renotify: снова звук и вибрация, иначе «ход окончен» молча заменил бы непрочитанное «ждёт подтверждения»;
+ * без tag renotify бросает TypeError, поэтому только с ним. */
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -54,8 +56,10 @@ self.addEventListener('push', (event) => {
   }
   if (!data || typeof data !== 'object') data = {};
   const text = (value) => (typeof value === 'string' ? value : '');
+  const tag = text(data.tag);
   event.waitUntil(self.registration.showNotification(text(data.title) || 'Студия', {
-    body: text(data.body), tag: text(data.tag), icon: '/static/icons/icon-192.png', data: { href: text(data.href) } }));
+    body: text(data.body), tag, ...(tag ? { renotify: true } : {}), icon: '/static/icons/icon-192.png',
+    data: { href: text(data.href) } }));
 });
 
 self.addEventListener('fetch', (event) => {

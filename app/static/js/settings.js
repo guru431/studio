@@ -1073,7 +1073,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     } catch (err) {
       say(note, words(err), 'error');
     }
-    render();
+    // «Прочее» разделов не читает: перерисовка заменила бы его блоки новыми, пустыми до своих ответов
+    if ((current || ids[0]) !== 'other') render();
   }
 
   render();
