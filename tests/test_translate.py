@@ -629,6 +629,18 @@ def test_partly_scanned_pdf_without_ocr_is_refused_too(studio):
         " — подключите «Распознавание» в настройках")}
     assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
     assert studio.gw.chat_requests == []
+    r = send_file(studio, "Договор.pdf", scan_pdf("empty", "ink", "This page has a text layer long enough to be read."))
+    assert r.status_code == 422 and r.json()["detail"]["message"].startswith("страниц-сканов в PDF — 1 из 3")
+
+
+def test_text_pdf_with_an_empty_page_without_ocr_is_translated_from_its_layer(studio):
+    """Пустая страница без картинки (выгрузка из Word) — не скан: без «Распознавания» её пропускают молча."""
+    gw = add_gateway(studio)
+    assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
+    row = wait_row(studio, start_file(studio, "Договор.pdf", scan_pdf("Payment is due in 30 days", "empty",
+                                                                      "Second page")))
+    assert (row["state"], row["source"], row["scan_id"]) == ("done", "Payment is due in 30 days\n\nSecond page", None)
+    assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
 
 
 def test_too_long_document_is_refused_before_a_job(studio, monkeypatch):

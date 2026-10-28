@@ -50,10 +50,13 @@ def _text_over_ink(text: str) -> bytes:
 
 
 def scan_pdf(*pages: str) -> bytes:
-    """PDF: "blank" — белая картинка, "ink" — картинка с тёмными полосами, "ink+текст" — она же с текстом слоя
-    поверх, иначе — страница с текстом."""
+    """PDF: "blank" — белая картинка, "empty" — страница без текста и картинки, "ink" — картинка с тёмными
+    полосами, "ink+текст" — она же с текстом слоя поверх, иначе — страница с текстом."""
     w = PdfWriter()
     for page in pages:
+        if page == "empty":
+            w.add_blank_page(612, 792)
+            continue
         one = (_image_page(page == "ink") if page in ("blank", "ink") else
                _text_over_ink(page[len("ink+"):]) if page.startswith("ink+") else _text_page(page))
         w.append(PdfReader(io.BytesIO(one)))

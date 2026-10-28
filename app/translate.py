@@ -730,25 +730,28 @@ def _stem(name: str) -> str:
 async def _read_file(user_id: int, name: str, data: bytes) -> "tuple[str | None, list[dict] | None, object]":
     """(текст, None, _) документа или (None, страницы, (подключение, модель) «Сканов») скана — до записи на шару.
     Скан — PDF со страницами без слоя (`ocr.plan_pages`), только при подключении «Сканов» через сервер; без него —
-    отказ `scan` словами, и когда сканы — только часть страниц. Отказы — HTTPException."""
+    отказ `scan` словами, и когда сканы — только часть страниц (`ocr_render.is_scan`: пустая страница без картинки —
+    не скан, перевод — из слоя прочих). Отказы — HTTPException."""
     suffix = PurePosixPath(name.lower()).suffix
     if suffix not in documents.SUFFIXES:
         raise HTTPException(415, {"code": "format", "message": FORMAT})
     reader = sections.default(user_id, "ocr") if suffix == ".pdf" else None
     try:
-        if suffix == ".pdf":
-            scanned = await asyncio.to_thread(ocr_render.pdf_scan_pages, data)
-            wanted = sum(w for _, w in scanned)
-            if wanted and (reader is None or not reader[0].proxied):
+        if suffix == ".pdf" and reader is not None and reader[0].proxied:
+            text, pages = ocr.plan_pages(await asyncio.to_thread(ocr_render.pdf_scan_pages, data))
+        elif suffix == ".pdf":
+            layer = await asyncio.to_thread(ocr_render.pdf_layer_pages, data)
+            wanted = sum(scan for _, scan in layer)
+            if wanted:
                 # и часть страниц-сканов — отказ: иначе перевод молча вышел бы без них
-                if wanted == len(scanned):
+                if wanted == len(layer):
                     words = chat.NO_OCR if reader is None else sections.unlisted(reader[0])
                 else:
-                    words = SOME_SCANS.format(wanted, len(scanned)) + (
+                    words = SOME_SCANS.format(wanted, len(layer)) + (
                         " — подключите «Распознавание» в настройках" if reader is None
                         else f"; {sections.unlisted(reader[0])}")
                 raise HTTPException(422, {"code": "scan", "message": words})
-            text, pages = ocr.plan_pages(scanned)
+            text, pages = "\n\n".join(t for t, _ in layer if t), None
         else:
             text, pages = await asyncio.to_thread(documents.extract, name, data), None
     except documents.DocumentError as e:

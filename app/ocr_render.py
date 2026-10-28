@@ -65,17 +65,29 @@ def _has_image(resources, depth: int = 0) -> bool:
         return True
 
 
+def is_scan(page, text: str) -> bool:
+    """Страница PDF похожа на скан: слоя меньше LAYER_MIN_CHARS знаков без пробелов и на странице есть картинка
+    (битые ресурсы — картинка). Без текста и без картинки — пустая страница, не скан."""
+    return not has_layer(text) and _has_image(page.get("/Resources"))
+
+
 def needs_ocr(page, text: str) -> bool:
     """Страница PDF в чате требует распознавания: текста слоя нет, или его меньше LAYER_MIN_CHARS знаков без
     пробелов и на странице есть картинка (скан с водяным знаком «Scanned with CamScanner»). Короткая страница
     без картинки (одна строка, подписи) берётся из слоя как есть."""
-    return not text or (not has_layer(text) and _has_image(page.get("/Resources")))
+    return not text or is_scan(page, text)
 
 
 def pdf_scan_pages(data: bytes) -> list[tuple[str, bool]]:
     """(текст слоя, нужно ли распознавание) каждой страницы PDF для чата; отказы — DocumentError
     documents.pdf_page_texts (битый файл, текст длиннее предела). Раздел «Распознавание» слой не читает."""
     return documents.pdf_pages(data, lambda page, text: (text, needs_ocr(page, text)))
+
+
+def pdf_layer_pages(data: bytes) -> list[tuple[str, bool]]:
+    """(текст слоя, похожа ли на скан — `is_scan`) каждой страницы PDF — без распознавания: пустую страницу
+    рендером не отличить, она не скан. Отказы — как у pdf_scan_pages."""
+    return documents.pdf_pages(data, lambda page, text: (text, is_scan(page, text)))
 
 
 # ---- PDF ---------------------------------------------------------------------
