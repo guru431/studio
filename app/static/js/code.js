@@ -17,7 +17,7 @@
  * (сессию закрыли: блокировка, выход, 30 минут простоя, перезапуск моста) — toPin: адрес уровня, где это
  * случилось, — в памяти модуля (returnTo), переход на #/code?pin=<aid>: у компьютера с PIN сразу панель, без
  * PIN — тот же POST open, что и нажатие; ?pin из адреса уходит. Открылся — назад на запомненный адрес
- * (чат, проект), а не к проектам. Перенаправления (к PIN и назад, хвост не того вида — на #/code, компьютера
+ * (чат, проект; отказ «Сохранить» — вкладка «Файлы» с этим файлом и правкой), а не к проектам. Перенаправления (к PIN и назад, хвост не того вида — на #/code, компьютера
  * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent. */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
@@ -40,26 +40,31 @@ let ctx = null;
 let gen = 0;            // номер отрисовки: ответ прежнего уровня новый не перерисует
 let view = null;        // чат (chatView) или вкладки проекта — снимается со сменой уровня
 let wantFile = null;    // путь файла из шага чата до перехода на вкладку «Файлы» — только в памяти
-let returnTo = null;    // { aid, hash } — где компьютер оказался закрыт: после PIN — туда
-let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне: ему — выбор модели устройства
+let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
+let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
 
 /** Перенаправление без записи в истории браузера. */
 function redirect(path) {
   location.replace(`#/${path}`);
 }
 
-/** Компьютер закрыт для сессии — к его панели PIN, запомнив, откуда. */
-function toPin(aid) {
-  returnTo = { aid: String(aid), hash: location.hash };
+/** Компьютер закрыт для сессии — к его панели PIN, запомнив, откуда (`back` и `file` — вкладка «Файлы» и файл,
+ * чьё сохранение застал отказ: после PIN он откроется с правкой). */
+function toPin(aid, back = location.hash, file = null) {
+  returnTo = { aid: String(aid), hash: back, file };
   redirect(`code?pin=${aid}`);
 }
 
 /** Компьютер открыт: назад, где его закрытость застала, иначе — его проекты. */
 function opened(aid) {
-  const back = returnTo && returnTo.aid === String(aid) ? returnTo.hash : null;
+  const back = returnTo && returnTo.aid === String(aid) ? returnTo : null;
   returnTo = null;
-  if (back) location.replace(back);
-  else ctx.navigate(`code/${aid}`);
+  if (!back) {
+    ctx.navigate(`code/${aid}`);
+    return;
+  }
+  wantFile = back.file;                 // render возьмёт его для вкладки «Файлы»
+  location.replace(back.hash);
 }
 
 function when(ts) {
@@ -88,10 +93,12 @@ function frame(crumbs) {
   return { main, status, nav };
 }
 
-/** Отказ запроса: closed — к панели PIN этого компьютера, offline — словами из «Текстов», прочее — словами. */
-function failed(err, aid, status) {
+/** Отказ запроса: closed — к панели PIN этого компьютера (с `file` — после PIN к этому файлу проекта `pid`),
+ * offline — словами из «Текстов», прочее — словами. */
+function failed(err, aid, status, pid = null, file = null) {
   if (err && err.code === 'closed') {
-    toPin(aid);
+    if (file && pid) toPin(aid, `#/code/${aid}/${pid}?tab=files`, file);
+    else toPin(aid);
     return;
   }
   status.textContent = err && err.code === 'offline' ? OFFLINE : words(err);
@@ -277,8 +284,8 @@ async function project(mine, aid, pid, tab, path) {
   const tabs = el('div', { class: 'code-tabs', role: 'tablist' });
   const panes = {};
   const first = TABS.some(([key]) => key === tab) ? tab : 'chats';
-  const refuse = (err, box) => {
-    if (mine === gen) failed(err, aid, box);
+  const refuse = (err, box, file = null) => {
+    if (mine === gen) failed(err, aid, box, pid, file);
   };
   let shown = null;
   function show(key) {
@@ -355,8 +362,10 @@ async function chat(mine, aid, pid, id) {
   nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [agent.name, `#/code/${aid}`],
     [found ? found.name : 'Проект', `#/code/${aid}/${pid}`], [(row && row.title) || UNTITLED, null]]));
   status.remove();                           // у чата своя строка #code-status
+  const fresh = freshChat === id;
+  freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid, pid, chat: id, agent, project: found ? { pid, name: found.name } : null,
-    origin: row ? row.origin : 'studio', fresh: freshChat === id, navigate: ctx.navigate,
+    origin: row ? row.origin : 'studio', fresh, navigate: ctx.navigate,
     closed: () => toPin(aid),
     openFile: (path) => {
       wantFile = path;

@@ -7442,20 +7442,27 @@ def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
                      f" && location.hash.split('/').pop() !== '{CODE_CHAT_A}'"
                      " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
+            ("eval", "newChat", "window.newChat = location.hash"),
             *code_send("и тут"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
             *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
             ("eval", "again", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
             *code_send("снова"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
-            ("eval", "stored2", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))")],
+            ("eval", "stored2", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))"),
+            # новый выбор устройства — уже начатому «новому» чату он не подставляется
+            set_value("#code-model", "opus"), set_value("#code-effort", "low"),
+            ("eval", "back", "location.hash = window.newChat"),
+            ("wait", "location.hash === window.newChat && document.querySelector('#code-chat')?.dataset.loaded === '1'"
+                     " && document.querySelector('#code-chat').dataset.chat === location.hash.split('/').pop()"),
+            ("eval", "newAgain", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]")],
             width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["stored"] == {"model": "sonnet", "effort": "high"} and v["picked"] == ["sonnet", "high"]
-    assert v["again"] == ["", ""] and v["stored2"] == v["stored"]
+    assert v["again"] == ["", ""] and v["stored2"] == v["stored"] and v["newAgain"] == ["", ""]
     turns = code_requests(machine, "turn")
     assert [(q["text"], q["model"], q["effort"]) for q in turns] == [
         ("привет", "sonnet", "high"), ("и тут", "sonnet", "high"), ("снова", None, None)]
@@ -7566,6 +7573,8 @@ def test_code_closed_event_leads_to_the_pin_and_back_to_the_chat(browser, live):
     assert v["pin"] == ["#/code", str(aid)] and v["len1"] == v["len0"]
     assert [q.get("pin") for q in code_requests(machine, "open")] == [None, CODE_PIN, CODE_PIN]
     assert len(code_requests(machine, "turn")) == 1 and CODE_CHAT_A in machine.running
+    # событие, а не запасной путь (поток без конца → live → 409 closed): watch — до хода и после PIN, не третий
+    assert len(code_requests(machine, "watch")) == 2
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
 
@@ -7666,6 +7675,33 @@ def test_code_late_closed_answer_does_not_pull_the_owner_back(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     assert r["values"]["hash"] == "#/chat"
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_draft_goes_once_the_turn_is_accepted_even_after_leaving(browser, live):
+    """«Отправить», и сразу уход из чата, пока ответ ещё не пришёл: запрос не обрывается, ход принят — черновика
+    больше нет, и вернувшись в чат, задание в поле снова не появится (второй раз его не отправить по ошибке)."""
+    from fake_bridge import pid
+    login = "code-sent"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Работаю"}]
+    aid, sb = code_online(live, login, machine)
+    # ответ на ход приходит странице на 800 мс позже; оборванный за это время запрос — AbortError, как у fetch
+    slow = """(() => { const real = window.fetch; window.fetch = (u, o) => !String(u).endsWith('/turn') ? real(u, o)
+      : real(u, o).then((r) => new Promise((ok, fail) => setTimeout(() => (o && o.signal && o.signal.aborted
+        ? fail(new DOMException('aborted', 'AbortError')) : ok(r)), 800))); return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "slow", slow), *code_send("Один раз"), *go(f"code/{aid}/{pid('alpha')}"),
+            ("wait", "document.querySelector('#code-new-chat')"), ("eval", "pause", settled("true", 1200)),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
+            ("eval", "field", "document.querySelector('#code-text').value")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["field"] == ""
+    assert len(code_requests(machine, "turn")) == 1 and CODE_CHAT_A in machine.running
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -7837,6 +7873,63 @@ def test_code_unsaved_edit_asks_before_leaving(browser, live):
     assert v["reverted"] == "print(1)\nprint(2)\n" and v["noDialog"] is True
     assert [q["text"] for q in code_requests(machine, "save")] == ["print('ещё')\r\n"]
     assert not known_refusals(problems(r), 409), problems(r)             # git: у проекта нет репозитория
+
+
+@pytest.mark.parametrize("claude_edits", [False, True])
+def test_code_save_on_a_closed_computer_keeps_the_edit_through_the_pin(browser, live, claude_edits):
+    """Студия заперлась с правленым файлом: «Сохранить» — отпирание, 409 closed, панель PIN; верный PIN — снова
+    «Файлы» с этим файлом и правкой, version — прежний; «Сохранить» — у машины новые байты. Поправил файл за это
+    время Claude — 409 conflict, его правка цела. Правки нет ни в хранилищах, ни в адресе."""
+    from fake_bridge import _version, pid
+    login = f"code-save-pin-{int(claude_edits)}"
+    live.add_user(login)
+    machine = code_files_machine()
+    machine.pin = CODE_PIN
+    handle = machine.handle
+
+    def claude_then(req):                    # отказ closed «Сохранить» — и Claude правит файл, пока вводят PIN
+        out = handle(req)
+        if claude_edits and req.get("op") == "save" and not out[0]["ok"]:
+            machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
+        return out
+
+    machine.handle = claude_then
+    aid, sb = code_online(live, login, machine)
+    editor = "document.querySelector('#code-editor')?.value"
+    try:
+        r = browser.drive(live.url + "/", [*phone_with_key(login), *code_open(aid)[:-1],   # проект у машины один
+            ("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid('alpha')}']\")"),
+            ("click", f"#code-projects li[data-pid='{pid('alpha')}'] a"),
+            ("wait", "!!document.querySelector('#code-tab-files')"), ("click", "#code-tab-files"),
+            code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('моё')\n"),
+            ("eval", "lock", CODE_LOCK_NOW), ("click", "#code-save"),
+            ("wait", LOCK_OPEN), ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
+            ("wait", CODE_PIN_SHOWN),
+            ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
+            ("wait", f"{editor} === \"print('моё')\\n\""),
+            ("eval", "where", f"[location.hash, {CODE_PATH}]"),
+            ("eval", "stored", f"{CODE_STORED}.includes('моё')"),
+            ("click", "#code-save"), ("wait", f"{CODE_FILE_STATUS} !== ''"),
+            ("eval", "status", CODE_FILE_STATUS)], **PHONE)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["where"] == [f"#/code/{aid}/{pid('alpha')}?tab=files", ["alpha", "src", "app.py"]]
+    assert v["stored"] is False
+    saves = code_requests(machine, "save")              # первый — отказ closed, второй — после PIN
+    if claude_edits:
+        assert v["status"] == CODE_CONFLICT
+        assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
+        assert [q["version"] for q in saves] == [_version(CODE_APP)] * 2     # не version перечитанного файла
+    else:
+        assert v["status"] == "Сохранено"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == "print('моё')\r\n".encode()
+        assert [(q["text"], q["version"]) for q in saves] == [("print('моё')\r\n", _version(CODE_APP))] * 2
+    assert not known_refusals(problems(r), 409, 423), problems(r)
 
 
 def test_code_markdown_and_pdf_view(browser, live):

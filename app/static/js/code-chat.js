@@ -16,7 +16,8 @@
  * Модель и усилие: первый пункт — «по умолчанию» (null — прежние модель и усилие чата, протокол §4). Выбор
  * пользователя — на устройстве (studio-code-choice:<aid>), но подставляется только в новый чат (fresh — заведён
  * «Новым чатом» в этом окне, или история пуста), пока выбор не трогали; существующий начинает с «по умолчанию».
- * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет. В хранилище браузера —
+ * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
+ * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * только выбор, ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api } from './api.js';
 import { fieldBox } from './field.js';
@@ -476,13 +477,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     grow(() => feed.append(mine));
     text.value = '';             // черновик (drafts) остаётся до ответа: отказ и уход к PIN его не теряют
     autosize();
-    const own = take();
+    const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
     try {
       response = await api('POST', `${url}/turn`, { text: value, model: model.value || null,
         effort: effort.value || null }, { signal: own.signal });
     } catch (err) {
-      if (!alive || own.signal.aborted) return;    // ушли с экрана: ход, может, и начат — live догонит
+      if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
       mine.remove();
       if (!text.value) {
@@ -497,7 +498,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       sending = false;
       send.disabled = running;
     }
-    if (drafts.get(draftKey) === value) drafts.delete(draftKey);   // ход принят; набранное после — остаётся
+    // ход принят (ответ — поток, первое его событие — turn); набранное после — остаётся
+    if (drafts.get(draftKey) === value) drafts.delete(draftKey);
+    if (!alive || document.visibilityState === 'hidden') {     // ушли, пока ход принимали: поток не читать
+      own.abort();
+      if (controller === own) controller = null;
+      return;                    // вернулись на экран — live (onVisibility), в чат — его новая страница
+    }
     await follow(response, own);
   }
 
@@ -566,7 +573,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (document.visibilityState === 'hidden') {
       clearTimeout(retry);
       retry = null;
-      drop();
+      if (!sending) drop();      // идущий «Отправить» обрывает сам, узнав, принят ли ход
     } else if (!sending) {
       openLive();
     }
@@ -580,7 +587,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     unmount() {
       alive = false;
       document.removeEventListener('visibilitychange', onVisibility);
-      drop();
+      if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);
       clearTimeout(paintTimer);
     },

@@ -264,7 +264,7 @@ CREATE TRIGGER search_translations_ad AFTER DELETE ON translations BEGIN
   DELETE FROM search_docs WHERE section = 'translate' AND item = old.id; END;
 """
 
-#: Claude Code (agents.py, bridge.py, code.py, push.py; спека 2026-10-28-studio-claude-code-design, 6.1 и 6.8):
+#: Claude Code (agents.py, bridge.py, claude_code.py, push.py; спека 2026-10-28-studio-claude-code-design, 6.1 и 6.8):
 #: агент — компьютер с мостом (key_hash — security.digest ключа устройства, сам ключ не хранится; has_pin,
 #: projects_root, cc_version — что сказал мост при входе). События подключений — только добавляются (agent_id и
 #: agent_name без ссылки: компьютер отзывают, история остаётся), «Удалить всю историю» их не трогает. code_chats —
