@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 16
+VERSION = 17
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -229,6 +229,12 @@ INSERT INTO section_defaults(user_id, section, connection_id, model)
 SELECT user_id, 'ocr', MIN(connection_id), 'hunyuan-ocr' FROM section_links WHERE section = 'ocr' GROUP BY user_id;
 """
 
+#: PIN блокировки на телефоне (screenlock.py, спека 2026-10-28-studio-lock-pin, 6.1): хеш PIN учётки
+#: (security.hash_password; NULL — не задан) и неверные PIN подряд во всех её сессиях
+PIN_17 = """ALTER TABLE users ADD COLUMN pin_hash TEXT;
+ALTER TABLE users ADD COLUMN pin_fails INTEGER NOT NULL DEFAULT 0;
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -271,7 +277,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -334,6 +340,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     15: THINKING_15,
     # распознавание: документы и страницы, поиск по ним; srvllm — в разделе ocr
     16: OCR_16,
+    # PIN блокировки на телефоне: хеш PIN учётки и счёт неверных
+    17: PIN_17,
 }
 
 

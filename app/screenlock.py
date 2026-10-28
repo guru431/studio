@@ -1,13 +1,17 @@
 """Блокировка на телефоне (спека 2026-10-21-studio-screen-lock): отметки «на экране», «заперто»,
-отпирание паролем учётки и passkey, ключи учётки, включение и выключение.
+отпирание паролем учётки, passkey и PIN, ключи учётки, PIN учётки, включение и выключение.
 
 Признак «заперто» считает auth.guard (auth.screen_locked); запертая сессия делает только запросы
 auth.SCREEN_LOCK_PATHS. Сессия запроса — request.state.digest. Passkey: RP ID — хост STUDIO_ORIGIN,
-проверка ответов — библиотекой webauthn (origin, RP ID, вызов, UV, подпись, счётчик). Журнал — только
-события с id: credential id, открытый ключ, вызов, ответы устройства и пароль туда не пишутся."""
+проверка ответов — библиотекой webauthn (origin, RP ID, вызов, UV, подпись, счётчик). PIN (спека
+2026-10-28-studio-lock-pin): 4–8 цифр ASCII, хеш users.pin_hash (scrypt, как пароль); задать и сменить —
+с паролем учётки, убрать — без. Журнал — только события с id: credential id, открытый ключ, вызов, ответы
+устройства, пароль, PIN и его хеш туда не пишутся."""
+import asyncio
 import hashlib
 import json
 import logging
+import re
 import secrets
 import sqlite3
 from urllib.parse import urlparse
@@ -24,9 +28,13 @@ from webauthn.helpers.structs import (AttestationConveyancePreference, Authentic
 
 import auth
 import clock
+import security
 import state
 
 PASSWORD_MAX = 1024
+PIN_FAILS = 10                   # неверные PIN подряд на учётку — дальше только пароль
+PIN_RE = re.compile(r"[0-9]{4,8}")   # только ASCII: \d и isdigit() берут «１２３４» и «١٢٣٤»
+PIN_MAX = 64                     # предел строки PIN в теле
 CHALLENGE_SEC = 120
 #: (digest сессии, "register" | "open") → (вызов, когда выдан); в памяти службы — перезапуск его забудет
 CHALLENGES: dict[tuple[str, str], tuple[bytes, float]] = {}
@@ -54,6 +62,11 @@ class ScreenLock(BaseModel):
 
 class KeyPassword(BaseModel):
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
+
+
+class NewPin(BaseModel):
+    password: str | None = Field(None, max_length=PASSWORD_MAX)
+    pin: str = Field(max_length=PIN_MAX)
 
 
 class NewKey(BaseModel):
@@ -163,6 +176,32 @@ async def set_screen_lock(body: ScreenLock, request: Request):
     state.DB.execute("UPDATE users SET screen_lock = ? WHERE id = ?", (int(body.enabled), uid))
     log.info("пользователь %d: блокировка %s", uid, "включена" if body.enabled else "выключена")
     return {"screen_lock": body.enabled}
+
+
+# ---- PIN учётки --------------------------------------------------------------
+
+@router.put("/me/pin")
+async def set_pin(body: NewPin, request: Request):
+    """Задать или сменить — только с паролем учётки (сначала формат: он паузу пароля не тратит). Счёт
+    неверных PIN не трогается: новый PIN не возвращает истраченные попытки. Запертой сессии путь не
+    открыт (guard)."""
+    uid = request.state.user.id
+    if not PIN_RE.fullmatch(body.pin):
+        raise HTTPException(422, {"code": "pin_format", "message": "PIN — от 4 до 8 цифр"})
+    await auth.confirm_password(uid, body.password or "", "PIN")
+    pin_hash = await asyncio.to_thread(security.hash_password, body.pin)
+    state.DB.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (pin_hash, uid))
+    log.info("пользователь %d: PIN задан", uid)
+    return {"pin": True}
+
+
+@router.delete("/me/pin", status_code=204)
+async def delete_pin(request: Request):
+    """Без пароля: доступа удаление не даёт, отпирать тогда — паролем или passkey."""
+    uid = request.state.user.id
+    state.DB.execute("UPDATE users SET pin_hash = NULL WHERE id = ?", (uid,))
+    log.info("пользователь %d: PIN убран", uid)
+    return Response(status_code=204)
 
 
 # ---- ключи passkey -----------------------------------------------------------

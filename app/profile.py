@@ -51,14 +51,15 @@ def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
-                           " exa_key IS NOT NULL AS exa_key FROM users WHERE id = ?", (uid,)).fetchone()
+                           " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin FROM users WHERE id = ?",
+                           (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "theme": row["theme"], "views": json.loads(row["views"]),
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
-            "exa_key": bool(row["exa_key"])}
+            "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"])}
 
 
 @router.get("/me")

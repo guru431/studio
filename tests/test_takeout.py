@@ -18,6 +18,7 @@ from fastapi import HTTPException
 import auth
 import db
 import media
+import security
 import state
 import takeout
 from conftest import T0, add_connection, make_user, signin
@@ -181,6 +182,8 @@ def test_export_holds_no_secrets(studio):
     add_connection(studio, token="cloud-key-very-secret")
     put("INSERT INTO passkeys(id, user_id, public_key, sign_count, transports, name, created)"
         " VALUES ('pk-credential-id', ?, x'0102', 0, '[]', 'phone', ?)", uid, T0)
+    pin_hash = security.hash_password("0007")
+    put("UPDATE users SET pin_hash = ? WHERE id = ?", pin_hash, uid)
     history(uid, "mine")
     _, z = download(studio)
     settings = json.loads(unzip(z).read("settings.json"))
@@ -191,7 +194,8 @@ def test_export_holds_no_secrets(studio):
     token_enc = state.DB.execute("SELECT token_enc FROM connections").fetchone()[0]
     session = state.DB.execute("SELECT digest, csrf FROM sessions WHERE user_id = ?", (uid,)).fetchone()
     for secret in (pw_hash.split("$")[-1].encode(), token_enc, b"cloud-key-very-secret", session["digest"].encode(),
-                   session["csrf"].encode(), b"pk-credential-id", b"token", b"pw_hash", b"csrf"):
+                   session["csrf"].encode(), b"pk-credential-id", b"token", b"pw_hash", b"csrf",
+                   pin_hash.split("$")[-1].encode(), pin_hash.split("$")[-2].encode(), b"pin_hash"):
         assert secret not in z.content, secret
 
 

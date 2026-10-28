@@ -453,3 +453,58 @@ def test_passkey_events_log_no_key_material(studio, caplog):
     for secret in (key.id, options["challenge"], answer["response"]["signature"],
                    answer["response"]["clientDataJSON"], base64.urlsafe_b64encode(key.public_key).decode().rstrip("=")):
         assert secret not in caplog.text
+
+
+# ---- PIN ---------------------------------------------------------------------
+
+def pin_hash(uid):
+    return state.DB.execute("SELECT pin_hash FROM users WHERE id = ?", (uid,)).fetchone()[0]
+
+
+def test_pin_is_set_only_with_the_password_and_removed_without(studio):
+    uid = owner(studio)
+    for body in ({"pin": "0007"}, {"password": "wrong-pw", "pin": "0007"}):
+        r = studio.c.put("/api/me/pin", json=body)
+        assert r.status_code == 403 and code(r) == "password", body
+    assert studio.c.get("/api/me").json()["pin"] is False
+    r = studio.c.put("/api/me/pin", json={"password": "password-123", "pin": "0007"})
+    assert r.status_code == 200 and r.json() == {"pin": True}
+    assert studio.c.get("/api/me").json()["pin"] is True
+    h = pin_hash(uid)
+    assert security.verify_password("0007", h) and not security.verify_password("7", h)
+    assert studio.c.delete("/api/me/pin").status_code == 204
+    assert studio.c.get("/api/me").json()["pin"] is False
+    assert pin_hash(uid) is None
+
+
+def test_pin_format_is_four_to_eight_ascii_digits(studio):
+    uid = owner(studio)
+    for pin in ("123", "123456789", "12a4", "１２３４", "١٢٣٤", " 1234", "", "12 34"):
+        r = studio.c.put("/api/me/pin", json={"password": "password-123", "pin": pin})
+        assert r.status_code == 422 and code(r) == "pin_format", pin
+        assert ("pw", uid) not in auth.FAILS
+    assert pin_hash(uid) is None
+    for pin in ("1234", "12345678"):
+        assert studio.c.put("/api/me/pin", json={"password": "password-123", "pin": pin}).status_code == 200, pin
+
+
+def test_locked_studio_cannot_set_or_remove_the_pin(studio):
+    uid = owner(studio)
+    assert studio.c.put("/api/me/pin", json={"password": "password-123", "pin": "0007"}).status_code == 200
+    before = pin_hash(uid)
+    lock_on(uid); phone(studio)
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert studio.c.put("/api/me/pin", json={"password": "password-123", "pin": "1111"}).status_code == 423
+    assert studio.c.delete("/api/me/pin").status_code == 423
+    assert pin_hash(uid) == before
+
+
+def test_pin_events_log_only_ids(studio, caplog):
+    caplog.set_level(logging.INFO)
+    uid = owner(studio)
+    studio.c.put("/api/me/pin", json={"password": "password-123", "pin": "0007"})
+    h = pin_hash(uid)
+    studio.c.delete("/api/me/pin")
+    assert f"пользователь {uid}: PIN задан" in caplog.text
+    assert f"пользователь {uid}: PIN убран" in caplog.text
+    assert "0007" not in caplog.text and h.split("$")[-1] not in caplog.text
