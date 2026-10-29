@@ -4986,15 +4986,32 @@ def test_lock_settings_set_change_and_remove_the_pin(browser, live):
 
     phone = browser.drive(live.url + "/", [("wait", READY), *go("settings/other"),     # вход — из первой вкладки
         ("wait", "document.querySelector('#pin-set')"), ("click", "#pin-set"),
-        ("eval", "keys", "['#pin-new', '#pin-repeat'].map(s => (e => [e.type, e.inputMode, e.autocomplete,"
-                         " e.maxLength])(document.querySelector(s)))"),
         ("eval", "hint", "document.querySelector('#pin-form').textContent"),
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=320, mobile=True, touch=True)
     assert not phone.get("failed"), phone
-    assert phone["values"]["keys"] == [["password", "numeric", "off", 8]] * 2
     assert "От 4 до 8 цифр. Не совпадающий с кодом телефона" in phone["values"]["hint"]
     assert not phone["values"]["overflow"]
     assert not problems(phone), problems(phone)
+
+
+def test_settings_pin_fields_are_not_passwords(browser, live):
+    """«Блокировка» → PIN: пароль учётки — прежний password с current-password, а поля PIN — не password (два поля
+    password рядом с паролем менеджер паролей принял бы за его смену и предложил сохранить PIN): text с точками
+    (-webkit-text-security), one-time-code, цифровая клавиатура, до 8 знаков; вне <form>. PIN задаётся."""
+    login = "pin-text"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login), ("click", "#pin-set"),
+        ("eval", "password", "(e => [e.type, e.autocomplete])(document.querySelector('#pin-password'))"),
+        ("eval", "keys", "['#pin-new', '#pin-repeat'].map(s => (e => [e.type, getComputedStyle(e).webkitTextSecurity,"
+                         " e.getAttribute('autocomplete'), e.inputMode, e.maxLength, !!e.closest('form')])"
+                         "(document.querySelector(s)))"),
+        ("type", "#pin-password", "password-123"), ("type", "#pin-new", "2468"), ("type", "#pin-repeat", "2468"),
+        ("click", "#pin-save"), server_pin_is(True)], width=320, mobile=True, touch=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["password"] == ["password", "current-password"]
+    assert v["keys"] == [["text", "disc", "one-time-code", "numeric", 8, False]] * 2
+    assert not problems(r), problems(r)
 
 
 LOCK_OPEN = "!!document.querySelector('#lock')?.open"
@@ -6782,6 +6799,35 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     assert not problems(r), problems(r)
 
 
+AGENTS_DOWNLOAD = """(() => { const h = document.querySelector('.agents-block h2'); const a = document.querySelector('#agent-download');
+  return [h.nextElementSibling.classList.contains('agent-download') && h.nextElementSibling.contains(a),
+    a.getAttribute('href'), a.hasAttribute('download'), a.textContent]; })()"""
+
+
+def test_settings_agents_block_has_download(browser, live):
+    """«Компьютеры (Claude Code)»: «Скачать мост для Windows» сразу под заголовком — и без компьютеров (строка списка —
+    «Компьютеров пока нет.», без прежней подсказки), и с ними (второй ставят тем же архивом); спека
+    2026-10-28-studio-agent-download-and-window-design, 4.2."""
+    login = "agents-download"
+    live.add_user(login)
+    agents_loaded = "document.querySelector('#agents li')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", agents_loaded),
+        ("eval", "link", AGENTS_DOWNLOAD), ("eval", "empty", "document.querySelector('#agents li').textContent"),
+        ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["link"] == [True, "/api/agent/download", True, "Скачать мост для Windows"]
+    assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
+    assert not problems(r), problems(r)
+
+    enroll_live(live, login, "Рабочий ПК")
+    r = browser.drive(live.url + "/#/settings/other", [("wait", READY), ("wait", "document.querySelector('#agents li[data-id]')"),
+        ("eval", "link", AGENTS_DOWNLOAD)], width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["link"] == [True, "/api/agent/download", True, "Скачать мост для Windows"]
+    assert not problems(r), problems(r)
+
+
 def push_keys():
     """Ключи подписки верного вида: точка P-256 и 16 байт auth — base64url без «=»."""
     from cryptography.hazmat.primitives import serialization
@@ -6875,6 +6921,34 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     v = r["values"]
     assert v["checked"] is True and v["status"] == "Push выключен на этом устройстве"
     assert v["calls"] == [["unsubscribe"]] and v["server"] is False
+    assert push_rows(live, uid) == []
+    assert not problems(r), problems(r)
+
+
+#: служебный работник не зарегистрирован (частный режим Firefox): ready не разрешается никогда; срок PUSH_READY_SEC
+#: (10 с) — 200 мс
+PUSH_NO_WORKER = NOTIFY_INIT + """(() => {
+  Object.defineProperty(ServiceWorkerContainer.prototype, 'ready', { configurable: true, get: () => new Promise(() => {}) });
+  const real = window.setTimeout.bind(window);
+  window.setTimeout = (f, ms, ...a) => real(f, ms === 10000 ? 200 : ms, ...a);
+})();"""
+
+
+def test_push_checkbox_gives_up_without_service_worker(browser, live):
+    """Служебного работника нет — включение push не висит: через PUSH_READY_SEC слова, флажок снят и снова
+    нажимается, подписки нет ни у сервера, ни во флаге устройства."""
+    login = "push-no-worker"
+    uid = live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", PUSH_READY),
+        ("click", "#push-enabled"),
+        ("wait", "document.querySelector('#push-status').textContent !== ''"),
+        ("eval", "status", "document.querySelector('#push-status').textContent"),
+        ("eval", "box", "(b => [b.checked, b.disabled])(document.querySelector('#push-enabled'))"),
+        ("eval", "flag", "localStorage.getItem('studio-push')")], width=320, mobile=True, init=PUSH_NO_WORKER)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["status"] == "Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен"
+    assert v["box"] == [False, False] and v["flag"] is None
     assert push_rows(live, uid) == []
     assert not problems(r), problems(r)
 
@@ -7494,7 +7568,7 @@ def test_code_question_card_sends_answers(browser, live):
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             *code_send("Настрой базу"), ("wait", "document.querySelector(\".code-ask[data-request='q1']\")"),
             ("eval", "kinds", """[...document.querySelectorAll('.code-ask-question')].map((f) =>
-              [f.querySelector('legend').textContent, [...f.querySelectorAll('input')].map((i) => i.type)])"""),
+              [f.querySelector('legend').textContent, [...f.querySelectorAll('input:not(.code-ask-own)')].map((i) => i.type)])"""),
             ("eval", "button", "document.querySelector('.code-ask-answer').textContent"),
             ("eval", "fits", NO_OVERFLOW),
             ("click", ".code-ask input[value='Postgres']"), ("click", ".code-ask input[value='Тесты']"),
@@ -7511,6 +7585,226 @@ def test_code_question_card_sends_answers(browser, live):
     assert (answer["request_id"], answer["decision"], answer["message"]) == ("q1", "allow", None)
     assert answer["answers"] == {"Какую базу взять?": "Postgres", "Что проверить?": "Тесты, Типы"}
     assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_question_own_answer(browser, live):
+    """«Свой ответ» у каждого вопроса (в Claude Code — «Other»): написан — уходит строкой вместо отмеченного; у
+    соседнего вопроса без своего ответа — отмеченное. Ни своего, ни отмеченного — запроса нет."""
+    login = "code-own"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "ask", "request_id": "q1", "kind": "question", "questions": [
+        {"question": "Какую базу взять?", "header": "База", "multi": False,
+         "options": [{"label": "SQLite", "description": ""}, {"label": "Postgres", "description": ""}]},
+        {"question": "Что проверить?", "header": "Проверки", "multi": True,
+         "options": [{"label": "Тесты", "description": ""}, {"label": "Линтер", "description": ""}]}]},
+        {"k": "text", "text": "Беру DuckDB."}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Настрой базу"), ("wait", "document.querySelector(\".code-ask[data-request='q1']\")"),
+            ("eval", "own", "[...document.querySelectorAll('.code-ask-question')].map((f) =>"
+                            " (i => [i.type, i.placeholder, i.maxLength])(f.querySelector('.code-ask-own')))"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", ".code-ask-answer"), ("eval", "nothing", settled("true", 300)),
+            ("type", ".code-ask-question:first-of-type .code-ask-own", "  DuckDB  "),
+            ("click", ".code-ask input[value='Тесты']"), ("click", ".code-ask-answer"),
+            ("wait", CODE_IDLE_AFTER.format(n=1))], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["own"] == [["text", "Свой ответ", 2000]] * 2 and v["fits"] is True
+    answer, = code_requests(machine, "answer")
+    assert (answer["decision"], answer["answers"]) == ("allow", {"Какую базу взять?": "DuckDB", "Что проверить?": "Тесты"})
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_turn_error_without_message_says_error(browser, live):
+    """Конец хода с ошибкой без слов — «Ошибка», без висящего двоеточия; со словами — «Ошибка: <слова>»."""
+    from fake_bridge import pid
+    login = "code-error"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Начал"}, {"k": "done", "status": "error"}]
+    aid, sb = code_online(live, login, machine)
+    end = "[...document.querySelectorAll('.code-turn-end')].map((e) => [e.textContent, e.classList.contains('error')])"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Сделай"), ("wait", "document.querySelector('.code-turn-end')"), ("eval", "end", end)],
+            width=320, mobile=True)
+        assert not r.get("failed"), r
+        assert r["values"]["end"] == [["Ошибка", True]]
+        machine.script = [{"k": "done", "status": "error", "message": "сбой модели"}]
+        r = browser.drive(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}", [("wait", READY),
+            code_loaded(CODE_CHAT_A), *code_send("Ещё"), ("wait", "document.querySelector('.code-turn-end')"),
+            ("eval", "end", end)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["end"] == [["Ошибка: сбой модели", True]]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+#: опрос live на простое — IDLE_POLL_SEC (20 с) — 300 мс
+CODE_FAST_IDLE = """(() => { const real = window.setTimeout.bind(window);
+  window.setTimeout = (f, ms, ...a) => real(f, ms === 20000 ? 300 : ms, ...a); })();"""
+
+
+def code_start_elsewhere(machine, chat, text, script):
+    """Ход, начатый не этой страницей (другая вкладка, VS Code): машина ведёт его сама, событий студии не шлёт."""
+    from fake_bridge import pid
+    machine.script = script
+    machine._op_turn({"op": "turn", "project": pid("alpha"), "chat": chat, "text": text}, [])
+
+
+def test_code_idle_tab_polls_live(browser, live):
+    """Чат на простое: live ответил idle — через IDLE_POLL_SEC снова live, пока страница видна; ход, начатый в другом
+    месте, страница показывает снимком без перезагрузки."""
+    login = "code-idle-poll"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    aid, sb = code_online(live, login, machine)
+
+    def start():
+        wait_for(lambda: len(code_requests(machine, "watch")) >= 2, 60)      # страница уже опрашивает
+        code_start_elsewhere(machine, CODE_CHAT_A, "С другого устройства", [{"k": "text", "text": "Из другой вкладки"}])
+
+    mover = threading.Thread(target=start, daemon=True)
+    mover.start()
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", "document.querySelector('#code-chat').dataset.running === '1'"
+                     " && document.querySelector('.code-msg.assistant .md')?.textContent.trim() === 'Из другой вкладки'")],
+            width=320, mobile=True, init=CODE_FAST_IDLE)
+        mover.join(10)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert len(code_requests(machine, "watch")) >= 3 and code_requests(machine, "turn") == []
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_done_before_snapshot_reloads_history(browser, live):
+    """Ход кончился между ответом на watch и снимком: поток live приносит только done — страница перечитывает
+    историю, и ответ хода виден без перезагрузки."""
+    from fake_bridge import FakeMachine
+
+    class DoneFirst(FakeMachine):
+        def _op_watch(self, req, events):
+            self._chat(req)
+            if req.get("chat") not in self.running:
+                return {"running": False}
+            self._finish(req["chat"], events, {"k": "done", "status": "done"})     # вместо снимка
+            return {"running": True}
+
+    login = "code-done-first"
+    live.add_user(login)
+    machine = DoneFirst(projects={"alpha": {"chats": {CODE_CHAT_A: code_session("Чат A")}}})
+    code_start_elsewhere(machine, CODE_CHAT_A, "Задача", [{"k": "text", "text": "Итог"}])
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", CODE_IDLE_AFTER.format(n=1)), ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["msgs"] == [["user", "Задача"], ["assistant", "Итог"]]
+    assert len(code_requests(machine, "history")) >= 2
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+#: ответ на «Отправить» — 504 timeout, а ход на машине при этом начат (запрос к службе настоящий)
+CODE_TURN_TIMEOUT = """(() => { const real = window.fetch; window.fetch = (u, o) => !String(u).endsWith('/turn')
+  ? real(u, o) : real(u, o).then((r) => { r.body && r.body.cancel(); return new Response(JSON.stringify({ detail: {
+    code: 'timeout', message: 'компьютер не ответил' } }), { status: 504, headers: { 'content-type': 'application/json' } }); });
+  return true; })()"""
+
+
+def test_code_turn_running_and_timeout_open_live(browser, live):
+    """«Отправить» отвергнут: 409 running (ход уже начат в другом месте) и 504 timeout (ход, может быть, начат) —
+    слова и live: страница показывает идущий ход снимком; задание остаётся в поле."""
+    from fake_bridge import pid
+    login = "code-busy"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    aid, sb = code_online(live, login, machine)
+    here = f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    shown = ("document.querySelector('#code-chat').dataset.running === '1'"
+             " && document.querySelector('.code-msg.assistant .md')?.textContent.trim() === '{text}'")
+    running = (f"fetch('/api/code/agents/{aid}/projects/{pid('alpha')}/chats').then((r) => r.json())"
+               ".then((j) => j.items.some((c) => c.running))")
+
+    def start():
+        wait_for(lambda: code_requests(machine, "watch"), 60)
+        code_start_elsewhere(machine, CODE_CHAT_A, "Где-то ещё", [{"k": "text", "text": "Идёт"}])
+
+    mover = threading.Thread(target=start, daemon=True)
+    mover.start()
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", running), *code_send("Моё"), ("wait", shown.format(text="Идёт")),
+            ("eval", "status", "document.querySelector('#code-status').textContent"),
+            ("eval", "field", "document.querySelector('#code-text').value")], width=320, mobile=True)
+        mover.join(10)
+        assert not r.get("failed"), r
+        assert r["values"]["status"] == "В чате уже идёт ход" and r["values"]["field"] == "Моё"
+        assert not known_refusals(problems(r), 409), problems(r)
+
+        machine.running.clear()
+        machine.script = [{"k": "text", "text": "Начал"}]
+        r = browser.drive(live.url + f"/#/{here}", [("wait", READY), code_loaded(CODE_CHAT_A),
+            ("eval", "timeout", CODE_TURN_TIMEOUT), *code_send("Долгое"), ("wait", shown.format(text="Начал")),
+            ("eval", "status", "document.querySelector('#code-status').textContent")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["status"] == "Компьютер не ответил"
+    assert [q["text"] for q in code_requests(machine, "turn")] == ["Моё", "Долгое"]     # «Где-то ещё» — мимо студии
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+#: вкладка всегда видна: соседняя вкладка того же браузера не снимает её поток
+ALWAYS_VISIBLE = """(() => { Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true,
+  get: () => 'visible' }); Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => false });
+})();"""
+
+
+def test_code_answer_in_one_tab_removes_card_in_other(browser, live):
+    """Две вкладки одного чата (Review Focus 2): ответ на карточку в одной — событие asked, и карточка уходит и во
+    второй, хотя ход идёт дальше (следующая карточка видна в обеих)."""
+    login = "code-two-tabs"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [code_permission("r1", False), {"k": "text", "text": "Дальше"}, code_permission("r2", False)]
+    aid, sb = code_online(live, login, machine)
+    card = "document.querySelector(\".code-ask[data-request='{id}']\")"
+    first = {}
+
+    def tab_one():
+        first["r"] = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Почисти"), ("wait", card.format(id="r1")),
+            ("wait", f"!{card.format(id='r1')} && {card.format(id='r2')}"
+                     " && document.querySelector('.code-msg.assistant .md').textContent.trim() === 'Дальше'"),
+            ("eval", "msgs", CODE_MSGS)],
+            width=320, mobile=True, init=ALWAYS_VISIBLE, timeout=60000)
+
+    one = threading.Thread(target=tab_one, daemon=True)
+    one.start()
+    try:
+        wait_for(lambda: "r1" in machine.running.get(CODE_CHAT_A, {}).get("asks", {}), 90)
+        r = browser.drive(live.url + "/", [("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", card.format(id="r1")), ("click", ".code-ask[data-request='r1'] .code-ask-yes"),
+            ("wait", f"!{card.format(id='r1')} && {card.format(id='r2')}")], width=320, mobile=True, init=ALWAYS_VISIBLE)
+        one.join(90)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert not first["r"].get("failed"), first["r"]
+    assert first["r"]["values"]["msgs"] == [["user", "Почисти"], ["assistant", "Дальше"]]
+    assert [(q["request_id"], q["decision"]) for q in code_requests(machine, "answer")] == [("r1", "allow")]
+    assert not known_refusals(problems(r), 409), problems(r)
+    assert not known_refusals(problems(first["r"]), 409), problems(first["r"])
 
 
 def test_code_stop_and_offline(browser, live):
@@ -7683,33 +7977,42 @@ def test_code_hidden_page_drops_its_stream_and_returns_to_live(browser, live):
     machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
     machine.script = [{"k": "text", "text": "Работаю"}]
     aid, sb = code_online(live, login, machine)
-    seen, done = [], threading.Event()
+    seen = []
+
+    def signal(name):
+        """Знак странице, что служба уже увидела нужное: имя компьютера в GET /api/agents."""
+        live_sql(live, "UPDATE agents SET name = ? WHERE id = ?", (name, aid))
 
     def record():
-        while not done.is_set():
-            if CODE_CHAT_A in machine.running:
-                now = bridge.watching(aid, CODE_CHAT_A)
-                if not seen or seen[-1] != now:
-                    seen.append(now)
-            time.sleep(0.01)
+        # условия — в Python, без пауз: наблюдатель есть (ход), снят (страница ушла), снова есть (вернулась)
+        wait_for(lambda: CODE_CHAT_A in machine.running and bridge.watching(aid, CODE_CHAT_A), 60)
+        seen.append(True)
+        wait_for(lambda: not bridge.watching(aid, CODE_CHAT_A), 60)
+        seen.append(False)
+        signal("снят")
+        wait_for(lambda: bridge.watching(aid, CODE_CHAT_A), 60)
+        seen.append(True)
+        signal("снова")
 
+    named = "fetch('/api/agents').then((r) => r.json()).then((j) => j.items.some((a) => a.name === '{}'))"
     spy = threading.Thread(target=record, daemon=True)
     spy.start()
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             *code_send("Работай"), ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
-            ("eval", "before", settled("true", 500)), hide(), ("eval", "away", settled("true", 800)),
+            hide(), ("wait", named.format("снят")),
             ("eval", "md", "document.querySelector('.code-msg.assistant .md').textContent.trim()"),
-            show(), ("eval", "back", settled("document.querySelector('#code-chat').dataset.running", 800)),
+            show(), ("wait", named.format("снова")),
+            ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
+            ("eval", "back", "document.querySelector('#code-chat').dataset.running"),
             ("eval", "md2", "document.querySelector('.code-msg.assistant .md').textContent.trim()"),
             ("eval", "assistants", "document.querySelectorAll('#code-feed .code-msg.assistant').length")])
     finally:
-        done.set()
         spy.join(5)
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert seen[:3] == [True, False, True], seen
+    assert seen == [True, False, True], seen
     assert v["md"] == v["md2"] == "Работаю" and v["back"] == "1" and v["assistants"] == 1
     ops = [q["op"] for q in machine.requests]
     assert "watch" in ops[ops.index("turn"):], ops                  # по возвращении — снова live
