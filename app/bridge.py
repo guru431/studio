@@ -126,6 +126,9 @@ WATCHERS: dict[tuple[int, str], set[Watch]] = {}
 #: фоновые отправки (`forget`) и закрытия каналов (`_close_later`): ссылка держит задачу до конца, `stop` ждёт
 #: их не дольше `STOP_SEC` и отменяет остаток
 TASKS: set[asyncio.Task] = set()
+#: что ещё забыть, когда сессия заперлась или отперлась: (user_id, tag сессии) → None. Ставят разделы выше
+#: (`claude_code` — память PDF), импорт отсюда к ним был бы кольцом
+FORGET_HOOKS: list = []
 
 
 def _background(coro) -> None:
@@ -370,8 +373,11 @@ def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:
 
 def forget(user_id: int, digest: str) -> None:
     """Сессия заперлась или отперлась: каждому компьютеру учётки — `close` её признака (протокол §2.3), её
-    потокам — `("closed", None)`. Кадры — фоном: ответа нет, а запрос владельца не ждёт чужой сокет."""
+    потокам — `("closed", None)`, разделам — `FORGET_HOOKS`. Кадры — фоном: ответа нет, а запрос владельца не
+    ждёт чужой сокет."""
     session = tag(digest)
+    for hook in FORGET_HOOKS:
+        hook(user_id, session)
     for queues in WATCHERS.values():
         for q in queues:
             if q.session == session:

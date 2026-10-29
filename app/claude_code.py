@@ -17,8 +17,9 @@
   отперлась) кладёт в его очередь `closed`, а сам поток на тике пинга и на событиях (не чаще `CHECK_SEC`)
   сверяет строку сессии: вышли, погасили, истекла или заперта по сроку отметки — `event: closed` и конец.
 - Данные моста браузеру — только ASCII-JSON без NaN (`_BridgeJSON`): одинокий суррогат или `NaN` из JSON
-  моста дали бы 500; не закодировать — 502 `bridge`. Отказы идут обычным ответом FastAPI: суррогаты из их
-  слов убирает `bridge._refusal`.
+  моста дали бы 500; не закодировать — 502 `bridge`. Ответ моста как есть (`history`, `files`, `git`) —
+  готовым `Response` (`_relay`): `jsonable_encoder` FastAPI падал бы 500 на глубокой вложенности. Отказы идут
+  обычным ответом FastAPI: суррогаты из их слов убирает `bridge._refusal`.
 - Имя модуля — не `code.py`: каталог службы стоит в `sys.path` первым, и такой файл заслонил бы стандартный
   `code`, а его берёт `pdb` (pytest импортирует `pdb` при старте и падал бы).
 """
@@ -31,6 +32,7 @@ import re
 import sqlite3
 import unicodedata
 import uuid
+from collections import deque
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -47,14 +49,25 @@ log = logging.getLogger("studio")
 ODD = "мост ответил непонятно"
 
 
+def _encode(content: Any) -> bytes:
+    """JSON только ASCII и без NaN/Infinity (Python их читает, в JSON их нет); не закодировать — 502 `bridge`."""
+    try:
+        return json.dumps(content, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
+    except (ValueError, RecursionError):
+        raise _refuse(502, "bridge", ODD) from None
+
+
 class _BridgeJSON(JSONResponse):
-    """Ответ раздела: JSON только ASCII и без NaN/Infinity (Python их читает, в JSON их нет)."""
+    """Ответ раздела — `_encode`."""
 
     def render(self, content: Any) -> bytes:
-        try:
-            return json.dumps(content, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
-        except (ValueError, RecursionError):
-            raise _refuse(502, "bridge", ODD) from None
+        return _encode(content)
+
+
+def _relay(data: dict) -> Response:
+    """Ответ моста браузеру как есть — готовым `Response`, мимо `jsonable_encoder` FastAPI: его рекурсия (предел
+    ~1000) падала 500 на вложенности, которую пропускает разбор кадра моста."""
+    return Response(_encode(data), media_type="application/json")
 
 
 router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
@@ -62,7 +75,7 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422}
+          "not_git": 409, "invalid": 422, "read_only": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 FILE_MAX = 2 * 1024 * 1024
@@ -73,9 +86,14 @@ HISTORY_PAGE = 100
 PING_SEC = 15
 CHECK_SEC = 1                    # поток сверяет свою сессию на событиях не чаще
 PDF_TTL_SEC = 300
+PDF_RENDERS = 2                  # страниц PDF раздела в потоках сразу: остальные ждут на цикле, а не в пуле
+NEW_CHATS_PER_MIN = 10           # «Новых чатов» на компьютер за минуту (строки code_chats и события session_start)
 ANSWER_MAX = 2000                # знаков в словах отказа и в каждом вопросе и ответе
 ANSWERS_MAX = 20                 # пар «вопрос → ответ»
 NO_TEXT = "задание пустое или длиннее 100 000 знаков"
+TOO_MANY = "слишком много новых чатов — подождите минуту"
+#: компьютер → отметки времени его «Новых чатов» за последнюю минуту (память процесса)
+NEW_CHATS: dict[int, deque] = {}
 NO_MODEL = "такой модели нет на компьютере"
 NO_EFFORT = "такого усилия нет на компьютере"
 
@@ -120,6 +138,8 @@ def _refuse(status: int, code: str, message: str, **extra) -> HTTPException:
 
 
 def own_agent(request: Request, aid: int) -> sqlite3.Row:
+    """Компьютер учётки запроса, иначе 404. Его зовёт каждый маршрут раздела — заодно уходит память PDF по сроку."""
+    _expire_pdfs()
     row = state.DB.execute("SELECT id, name, has_pin FROM agents WHERE id = ? AND user_id = ?",
                            (aid, request.state.user.id)).fetchone()
     if row is None:
@@ -205,8 +225,9 @@ def _time(value) -> float | None:
 
 @router.get("/agents/{aid}/projects/{pid}/chats")
 async def chats(aid: int, pid: str, request: Request):
-    """Сессии машины с отметками студии; строки `code_chats` проекта без сессии на машине (новый чат без
-    хода) — тоже. Открытые, затем закрытые, внутри — новые сверху."""
+    """Сессии машины с отметками студии; открытые строки `code_chats` проекта без сессии на машине (новый чат
+    без хода) — тоже, закрытые — нет: сессию, что Claude Code вычистил по сроку, список не воскрешает «Новым
+    чатом». Открытые, затем закрытые, внутри — новые сверху."""
     own_agent(request, aid)
     check_pid(pid)
     found = (await ask(request, aid, "chats", project=pid)).get("items")
@@ -228,7 +249,7 @@ async def chats(aid: int, pid: str, request: Request):
                       "state": mark["state"] if mark is not None else "open", "running": bool(i.get("running")),
                       "asking": bool(i.get("asking"))})
     for chat, mark in marks.items():
-        if chat not in seen and mark["project"] == pid:
+        if chat not in seen and mark["project"] == pid and mark["state"] == "open":
             items.append({"chat": chat, "title": None, "created": mark["created"], "modified": mark["updated"],
                           "origin": "studio", "state": mark["state"], "running": False, "asking": False})
     items.sort(key=lambda i: (i["state"] == "closed", -(i["modified"] or 0)))
@@ -238,10 +259,17 @@ async def chats(aid: int, pid: str, request: Request):
 @router.post("/agents/{aid}/projects/{pid}/chats")
 async def new_chat(aid: int, pid: str, request: Request):
     """Номер сессии заводит студия (SDK примет заданный `session_id`); мост не зовётся — строка без хода
-    безвредна, даже если компьютер уже закрыт."""
+    безвредна, даже если компьютер уже закрыт. Поэтому открытость их и не сдерживает: строк и событий
+    `session_start` (история подключений неудаляема) — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""
     agent = own_agent(request, aid)
     check_pid(pid)
     chat, now = str(uuid.uuid4()), clock.NOW()
+    recent = NEW_CHATS.setdefault(aid, deque())
+    while recent and now - recent[0] >= 60:
+        recent.popleft()
+    if len(recent) >= NEW_CHATS_PER_MIN:
+        raise _refuse(429, "too_many", TOO_MANY)
+    recent.append(now)
     state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
                      " VALUES (?, ?, ?, ?, 'open', ?, ?)", (request.state.user.id, aid, pid, chat, now, now))
     _event(request, agent, "session_start")
@@ -250,14 +278,21 @@ async def new_chat(aid: int, pid: str, request: Request):
 
 @router.patch("/agents/{aid}/projects/{pid}/chats/{chat}")
 async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request: Request):
+    """Своя строка есть — только она, без моста. Нет — строка заводится, лишь если сессия есть на машине
+    (`history` с `limit` 1: нет — 404 `not_found`, закрыт компьютер — `closed`): иначе любая сессия без PIN
+    писала бы отметки без предела, а закрытая чужая сессия, вычищенная на машине, стала бы «призраком»."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
-    now = clock.NOW()
-    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?)"
-                     " ON CONFLICT(agent_id, session_id) DO UPDATE SET state = excluded.state, updated = excluded.updated",
-                     (request.state.user.id, aid, pid, chat, body.state, now, now))
+    uid = request.state.user.id
+    if state.DB.execute("UPDATE code_chats SET state = ?, updated = ? WHERE user_id = ? AND agent_id = ?"
+                        " AND session_id = ?", (body.state, clock.NOW(), uid, aid, chat)).rowcount == 0:
+        await ask(request, aid, "history", project=pid, chat=chat, before=None, limit=1)
+        now = clock.NOW()
+        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, session_id)"
+                         " DO UPDATE SET state = excluded.state, updated = excluded.updated",
+                         (uid, aid, pid, chat, body.state, now, now))
     return {"state": body.state}
 
 
@@ -275,8 +310,8 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
     check_pid(pid)
     check_chat(chat)
     try:
-        return await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
-                         limit=HISTORY_PAGE)
+        return _relay(await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
+                                limit=HISTORY_PAGE))
     except HTTPException as e:
         if _new_chat(request, aid, pid, chat, e):
             return {"items": [], "start": 0, "total": 0}
@@ -450,8 +485,28 @@ TOO_LARGE_RAW = "файл больше 10 МиБ"
 NOT_PDF = "это не PDF"
 NO_PAGE = "нет такой страницы"
 #: последний открытый PDF пользователя: (ключ (aid, pid, path, сессия), байты, страниц, время) — листание
-#: не тянет файл с машины на каждую страницу; срок — PDF_TTL_SEC от загрузки
+#: не тянет файл с машины на каждую страницу; срок — PDF_TTL_SEC от загрузки (чистит каждый маршрут раздела,
+#: `own_agent`), сессия заперлась или отперлась — сразу (`bridge.forget` → `_forget_pdf`)
 PDFS: dict[int, tuple[tuple, bytes, int, float]] = {}
+#: PDFium раздела — не больше PDF_RENDERS потоков: очередь за замком `ocr_render.PDFIUM` ждёт на цикле событий
+#: и не занимает потоки общего пула `to_thread` (шара, выгрузка, распознавание)
+RENDERS = asyncio.Semaphore(PDF_RENDERS)
+
+
+def _expire_pdfs() -> None:
+    now = clock.NOW()
+    for user, kept in list(PDFS.items()):
+        if now - kept[3] >= PDF_TTL_SEC:
+            del PDFS[user]
+
+
+def _forget_pdf(user_id: int, session: str) -> None:
+    kept = PDFS.get(user_id)
+    if kept is not None and kept[0][3] == session:
+        del PDFS[user_id]
+
+
+bridge.FORGET_HOOKS.append(_forget_pdf)
 
 
 class PathBody(BaseModel):
@@ -483,7 +538,7 @@ def _strings(data: dict, *names: str) -> dict:
 async def files(aid: int, pid: str, body: PathBody, request: Request):
     own_agent(request, aid)
     check_pid(pid)
-    return await ask(request, aid, "files", project=pid, path=check_path(body.path))
+    return _relay(await ask(request, aid, "files", project=pid, path=check_path(body.path)))
 
 
 @router.post("/agents/{aid}/projects/{pid}/read")
@@ -525,7 +580,8 @@ async def save(aid: int, pid: str, request: Request):
 
 
 def _pdf_bytes(data: dict) -> bytes:
-    """Файл из ответа `raw`: не больше RAW_MAX (предел протокола держит и мост) — иначе 413 `too_large`."""
+    """Файл из ответа `raw`: не больше RAW_MAX (предел протокола держит и мост) — иначе 413 `too_large`. Зовётся
+    в потоке (`_pdf_load`): раскодировать до 14 МиБ base64 — десятки миллисекунд."""
     text = data.get("data")
     if isinstance(text, str) and len(text) > (RAW_MAX + 2) // 3 * 4:          # не раскодировать заведомо лишнее
         raise _refuse(413, "too_large", TOO_LARGE_RAW)
@@ -540,10 +596,17 @@ def _pdf_bytes(data: dict) -> bytes:
     return raw
 
 
+def _pdf_load(data: dict) -> tuple[bytes, int]:
+    raw = _pdf_bytes(data)
+    return raw, ocr_render.pdf_page_count(raw)
+
+
 async def _pdfium(fn, *args):
-    """PDFium — в потоке (замок `ocr_render.PDFIUM` держит он сам): страница 300 DPI — десятые доли секунды."""
+    """PDFium — в потоке (замок `ocr_render.PDFIUM` держит он сам), не больше PDF_RENDERS сразу: страница
+    300 DPI — десятые доли секунды."""
     try:
-        return await asyncio.to_thread(fn, *args)
+        async with RENDERS:
+            return await asyncio.to_thread(fn, *args)
     except ocr_render.ScanError as e:
         raise _refuse(422, "pdf", str(e)) from None
 
@@ -558,17 +621,13 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
     check_pid(pid)
     path = check_path(body.path)
     uid, now = request.state.user.id, clock.NOW()
-    for user, kept in list(PDFS.items()):
-        if now - kept[3] >= PDF_TTL_SEC:
-            del PDFS[user]
     key = (aid, pid, path, bridge.tag(request.state.digest))
     kept = PDFS.get(uid)
     if kept is not None and kept[0] == key:
         await ask(request, aid, "projects")
         _, data, pages, _ = kept
     else:
-        data = _pdf_bytes(await ask(request, aid, "raw", project=pid, path=path))
-        pages = await _pdfium(ocr_render.pdf_page_count, data)
+        data, pages = await _pdfium(_pdf_load, await ask(request, aid, "raw", project=pid, path=path))
         PDFS[uid] = (key, data, pages, now)
     if body.page > pages:
         raise _refuse(404, "page", NO_PAGE)
@@ -580,4 +639,4 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
 async def git(aid: int, pid: str, request: Request):
     own_agent(request, aid)
     check_pid(pid)
-    return await ask(request, aid, "git", project=pid)
+    return _relay(await ask(request, aid, "git", project=pid))

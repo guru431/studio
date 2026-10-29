@@ -553,10 +553,11 @@ def test_export_has_code_chats_and_agent_events(studio):
     assert manifest["sections"] == ["code", "agents"]
     assert manifest["counts"] == {"code_chats": 1, "agent_events": 2, "files": 0}
     readme = zf.read("README.txt").decode("utf-8")
-    assert ("- code_chats/ — чаты Claude Code: компьютер, проект (id), номер сессии, открыт или закрыт; текста нет —"
-            " он на компьютере.") in readme.replace("\n  ", " ")
-    assert "- agent_events/ — история подключений компьютеров Claude Code." in readme.replace("\n  ", " ")
-    assert "ключей устройств" in readme.replace("\n", " ")
+    assert ("- code_chats/ — чаты Claude Code: компьютер, проект (id), номер сессии, открыт или закрыт; текста нет —\n"
+            "  он на компьютере.") in readme
+    assert "- agent_events/ — история подключений компьютеров Claude Code." in readme.splitlines()
+    assert "ключей устройств" in readme
+    assert max(len(line) for line in readme.splitlines()) <= 110          # строки — как у соседних
     assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))
 
 

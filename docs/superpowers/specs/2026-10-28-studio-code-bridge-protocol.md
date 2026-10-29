@@ -121,7 +121,7 @@
 | `files` | `project`, `path` | `{"items": [{"name", "dir", "size", "modified"}]}` — папки сначала, затем файлы, по имени | `outside` |
 | `read` | `project`, `path` | `{"text", "version"}` | `outside`, `too_large` (больше 2 МиБ), `binary` |
 | `raw` | `project`, `path` | `{"data": base64, "size", "version"}` | `outside`, `too_large` (больше 10 МиБ) |
-| `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary` |
+| `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
 | `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git` |
 
 - `chats`: `title` — `custom_title`, иначе `summary`, иначе начало `first_prompt` (до 120 знаков);

@@ -135,6 +135,7 @@ def studio(env, schema_db, monkeypatch):
     takeout.EXPORTS.clear()
     takeout.RUNNING.clear()
     claude_code.PDFS.clear()
+    claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()
     if not env.db_path.exists():
@@ -146,6 +147,7 @@ def studio(env, schema_db, monkeypatch):
     images.JOBS.clear()
     chat.STREAMS.clear()
     claude_code.PDFS.clear()
+    claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()
 
