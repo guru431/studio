@@ -41,6 +41,13 @@ def add_rows(conn, users=1, tokens=3, files=(("a.png", True), ("b.png", True), (
             full.write_bytes(b"x")
 
 
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """Свободное место — подменой: ночью диск workstation бывал почти полон, и проверка честно отвечала «мало
+    места» (13 красных 2026-10-29); тест нехватки места ставит свою подмену поверх."""
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(10 ** 12, 0, 10 ** 12))
+
+
 @pytest.fixture
 def base(env, monkeypatch):
     """Рабочая база с учёткой, тремя токенами и тремя файлами (одного на шаре нет)."""
