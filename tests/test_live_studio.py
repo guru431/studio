@@ -148,7 +148,7 @@ async def test_bridge_works_with_the_live_studio_and_claude_code(studio, probe, 
     for name in set(os.environ) - set(clean):
         monkeypatch.delenv(name)
     url = studio
-    agent_id, key = await asyncio.to_thread(enroll.enroll, url, "owner", PASSWORD, "Проба")
+    agent_id, key, _ = await asyncio.to_thread(enroll.enroll, url, "owner", PASSWORD, "Проба")
     cli_path = await asyncio.to_thread(cli.find_cli)
     version = await asyncio.to_thread(cli.cli_version, cli_path)
     pins = PinStore(home)

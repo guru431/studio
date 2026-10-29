@@ -1,5 +1,7 @@
 import json
 import threading
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -19,6 +21,14 @@ class Studio:
             def do_POST(self):
                 size = int(self.headers.get("Content-Length", 0))
                 studio.requests.append((self.path, dict(self.headers), self.rfile.read(size)))
+                self._answer()
+
+            def do_DELETE(self):
+                size = int(self.headers.get("Content-Length", 0))
+                studio.requests.append(("DELETE " + self.path, dict(self.headers), self.rfile.read(size)))
+                self._answer()
+
+            def _answer(self):
                 data = json.dumps(studio.body).encode() if studio.body is not None else b""
                 self.send_response(studio.status)
                 for k, v in studio.headers.items():
@@ -53,12 +63,12 @@ def studio():
         s.close()
 
 
-def test_created_gives_id_and_key(studio):
-    s = studio(201, {"agent_id": 7, "device_key": "k"})
-    assert enroll.enroll(s.url + "/", "owner", "пароль-123", "Рабочий") == (7, "k")
+def test_created_gives_id_key_and_login(studio):
+    s = studio(201, {"agent_id": 7, "device_key": "k", "login": "owner"})
+    assert enroll.enroll(s.url + "/", " Owner ", "пароль-123", "Рабочий") == (7, "k", "owner")
     path, headers, body = s.requests[0]
     assert path == "/api/agent/enroll"
-    assert json.loads(body) == {"login": "owner", "password": "пароль-123", "name": "Рабочий"}
+    assert json.loads(body) == {"login": " Owner ", "password": "пароль-123", "name": "Рабочий"}
     assert "origin" not in {k.lower() for k in headers}
     assert headers["Content-Type"] == "application/json"
 
@@ -106,3 +116,28 @@ def test_bad_address_is_refused_before_network(url):
     with pytest.raises(enroll.EnrollError) as e:
         enroll.enroll(url, "owner", "x", "Рабочий")
     assert (e.value.code, e.value.words) == ("url", "Адрес студии — https://…")
+
+
+def test_older_studio_without_login_gives_the_typed_one(studio):
+    s = studio(201, {"agent_id": 7, "device_key": "k"})
+    assert enroll.enroll(s.url, "  example-user ", "x", "Рабочий") == (7, "k", "example-user")
+
+
+@pytest.mark.parametrize("status", [204, 401, 403, 405, 307])
+def test_unenroll_sends_the_key_in_a_header_and_gives_the_status(studio, status):
+    s = studio(status, {"detail": {"code": "key"}} if status == 401 else None)
+    assert enroll.unenroll(s.url + "/", "секрет-не-в-адресе".encode().hex()) == status
+    path, headers, body = s.requests[0]
+    assert path == "DELETE /api/agent/enroll" and body == b""
+    assert headers["Authorization"] == "Bearer " + "секрет-не-в-адресе".encode().hex()
+    assert "origin" not in {k.lower() for k in headers}
+
+
+def test_unenroll_without_studio_is_unavailable(monkeypatch):
+    def refused(self, request, *a, **kw):  # отказ соединения на Windows ждёт ~2 с повторов — без сети
+        raise urllib.error.URLError(ConnectionRefusedError())
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refused)
+    with pytest.raises(enroll.EnrollError) as e:
+        enroll.unenroll("https://studio.example", "k")
+    assert (e.value.code, e.value.words) == ("unavailable", "Студия недоступна (ConnectionRefusedError)")

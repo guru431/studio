@@ -7,17 +7,22 @@ import pytest
 from claude_agent_sdk import PermissionResultDeny
 
 from fake_sdk import FakeFactory, result_ok
-from studio_agent import app, autostart, projects, sessions, store, tray, turns
+from studio_agent import app, autostart, enroll, projects, sessions, store, turns
 from studio_agent.pin import PinStore
 
 MODELS = [{"id": "opus", "label": "Opus"}]
 
 
-class FakeLink:
-    """Канал без сети: `online` до `stop()`; `result` — чем кончится `run()` сам (`revoked`, `replaced`)."""
+WELCOME = {"t": "welcome", "agent_id": 3, "name": "Рабочий"}
 
-    def __init__(self, url, key, agent, on_state, result=None):
+
+class FakeLink:
+    """Канал без сети: `welcome` и `online` до `stop()`; `result` — чем кончится `run()` сам (`revoked`,
+    `replaced`); `order` — список, куда пишется `stop`."""
+
+    def __init__(self, url, key, agent, on_state, result=None, on_welcome=None, welcome=WELCOME, order=None):
         self.url, self.key, self.on_state, self.result = url, key, on_state, result
+        self.on_welcome, self.welcome, self.order = on_welcome, welcome, order
         self.hello = agent.hello()
         self.stopped = False
         self.ending = None
@@ -28,6 +33,8 @@ class FakeLink:
             self.on_state(self.result)
             return self.result
         self.on_state("connecting")
+        if self.on_welcome is not None:
+            self.on_welcome(self.welcome)
         self.on_state("online")
         await self._stop.wait()
         state = self.ending or "stopped"
@@ -35,6 +42,8 @@ class FakeLink:
         return state
 
     async def stop(self):
+        if self.order is not None:
+            self.order.append("stop")
         self.stopped = True
         self._stop.set()
 
@@ -85,12 +94,19 @@ def make(home):
     made = []
 
     def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
-              cli_version=lambda p: "2.3.1", sdk=None):
-        links, probes, probe_paths = [], [], []
+              cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: 204, welcomes=None, order=None):
+        links, probes, probe_paths, unenrolls = [], [], [], []
 
-        def link_factory(url, key, agent, on_state):
-            links.append(FakeLink(url, key, agent, on_state, result))
+        def link_factory(url, key, agent, on_state, on_welcome=None):
+            welcome = welcomes[min(len(links), len(welcomes) - 1)] if welcomes else WELCOME
+            links.append(FakeLink(url, key, agent, on_state, result, on_welcome, welcome, order))
             return links[-1]
+
+        def fake_unenroll(url, key):
+            unenrolls.append((url, key))
+            if order is not None:
+                order.append("studio")
+            return unenroll(url, key)
 
         async def fake_probe(root, cli_path, factory=None):
             probes.append((root, len(links)))
@@ -99,12 +115,13 @@ def make(home):
 
         def fake_enroll(url, login, password, name):
             enroll_calls.append((url, login, name)) if enroll_calls is not None else None
-            return 7, "k"
+            return 7, "k", login.strip().lower()
 
         extra = {"sdk_factory": sdk} if sdk is not None else {}
         ctrl = app.Controller(home, link_factory=link_factory, find_cli=find_cli, cli_version=cli_version,
-                              probe=fake_probe, enroll_fn=fake_enroll, autostart=FakeAutostart(), sleep=sleep, **extra)
-        ctrl.links, ctrl.probes, ctrl.probe_paths = links, probes, probe_paths
+                              probe=fake_probe, enroll_fn=fake_enroll, unenroll_fn=fake_unenroll,
+                              autostart=FakeAutostart(), sleep=sleep, **extra)
+        ctrl.links, ctrl.probes, ctrl.probe_paths, ctrl.unenrolls = links, probes, probe_paths, unenrolls
         made.append(ctrl)
         return ctrl
 
@@ -325,12 +342,178 @@ def test_autostart_command_runs_the_pyw_of_this_repo():
     assert (repo / "studio_agent.pyw").is_file()
 
 
-def test_tray_icon_colour_and_title_follow_the_state():
-    green, grey, red = tray.COLORS["online"], tray.COLORS["offline"], tray.COLORS["revoked"]
-    assert len({green, grey, red}) == 3
-    for state in ("connecting", "offline", "setup"):
-        assert tray.COLORS[state] == grey
-    assert tray.COLORS["replaced"] == red
-    image = tray.image("online")
-    assert image.size == (64, 64) and image.getpixel((32, 32))[:3] == green
-    assert tray.title("replaced") == "Studio Agent — ключ используется другим мостом"
+
+@pytest.fixture
+def enrolled(home, configured):
+    """Привязан: ключ, PIN, логин в config.json, автозапуск выключен."""
+    PinStore(home).set_pin("2468")
+    cfg = store.load_config(home)
+    cfg.login, cfg.autostart = "owner", False
+    store.save_config(home, cfg)
+
+
+def forgotten(home, root):
+    """Ключ, PIN, id и логин стёрты; адрес, имя, папка и автозапуск — прежние."""
+    assert not (home / "key.bin").exists() and not (home / "pin.bin").exists()
+    assert store.load_config(home) == store.Config(agent_id=None, name="Рабочий", projects_root=str(root),
+                                                   autostart=False, login="")
+
+
+def test_unenroll_asks_studio_and_forgets(make, home, root, enrolled):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.unenroll() == (True, "")
+    assert ctrl.unenrolls == [("https://studio.example.com", "k0")]
+    forgotten(home, root)
+    assert ctrl.state == "setup" and ctrl.links[0].stopped and not ctrl.enrolled
+    ctrl.restart_link().result(5)                               # канал без ключа не поднимается
+    assert len(ctrl.links) == 1 and ctrl.state == "setup"
+    assert ctrl.links[0].hello["has_pin"] is True and ctrl.agent.has_pin is False
+
+
+@pytest.mark.parametrize("answer", [405, 403, 500, "unavailable"])
+def test_unenroll_without_studio_still_forgets(make, home, root, enrolled, answer):
+    def unenroll(url, key):
+        if answer == "unavailable":
+            raise enroll.EnrollError("unavailable", "Студия недоступна (URLError)")
+        return answer
+
+    ctrl = make(unenroll=unenroll)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    ok, words = ctrl.unenroll()
+    assert not ok and words == ("Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → "
+                                "«Компьютеры»")
+    forgotten(home, root)
+    assert ctrl.state == "setup"
+
+
+def test_unenroll_401_counts_as_done(make, home, root, enrolled):
+    ctrl = make(unenroll=lambda url, key: 401)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.unenroll() == (True, "")
+    forgotten(home, root)
+
+
+def test_unenroll_stops_turns_and_link_first(make, home, root, enrolled, monkeypatch):
+    monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
+    monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: None)
+    (root / "demo").mkdir()
+    chat = "0b1e2c3d-4f50-4617-8899-aabbccddeeff"
+    order = []
+    sdk = FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()])
+    ctrl = make(sdk=sdk, order=order)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    sent = []
+
+    def send(frame):
+        sent.append(frame)
+        if frame.get("e", {}).get("k") == "done":
+            order.append("done")
+
+    ctrl.agent.send = send
+    ctrl._loop.call_soon_threadsafe(ctrl.runner.start, root / "demo", projects.pid("demo"), chat, "x", None, None)
+    until(lambda: dict(ctrl.runner.live()).get(chat))           # карточка открыта
+    real_close = ctrl.runner.close
+
+    async def close(**kw):
+        order.append("close")
+        await real_close(**kw)
+
+    ctrl.runner.close = close
+    assert ctrl.unenroll() == (True, "")
+    assert order == ["close", "done", "stop", "studio"]         # ход прерван до закрытия канала, запрос — после
+    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    assert sdk.clients[0].disconnected
+    time.sleep(0.05)
+    assert len(ctrl.links) == 1 and ctrl.state == "setup"
+
+
+def test_reenroll_after_revoked_skips_studio(make, home, root, enrolled):
+    ctrl = make(result="revoked")
+    ctrl.start()
+    until(lambda: ctrl.state == "revoked")
+    assert ctrl.unenroll(ask_studio=False) == (True, "")
+    assert ctrl.unenrolls == []
+    forgotten(home, root)
+    assert ctrl.state == "setup"
+
+
+def test_unenroll_before_start_forgets_too(make, home, root, enrolled):
+    ctrl = make()
+    assert ctrl.unenroll() == (True, "")
+    forgotten(home, root)
+    assert ctrl.state == "setup"
+
+
+def test_login_from_enroll_and_welcome(make, home, root):
+    welcomes = [{"t": "welcome", "agent_id": 7, "name": "Рабочий ПК", "login": "example-user"},
+                {"t": "welcome", "agent_id": 7, "name": "Рабочий ПК"}]
+    ctrl = make(welcomes=welcomes)
+    ctrl.start()
+    assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
+    assert ctrl.fresh                                           # первый online — уведомление трея
+    until(lambda: ctrl.login == "example-user")                      # welcome сильнее ответа привязки
+    assert store.load_config(home).name == "Рабочий ПК"
+    ctrl.restart_link().result(5)
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    time.sleep(0.05)
+    assert ctrl.login == "example-user"                              # без login в welcome — прежний
+
+
+def test_login_comes_from_the_enroll_answer(make, home, root):
+    ctrl = make(welcomes=[{"t": "welcome", "agent_id": 7, "name": "Рабочий"}])
+    assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
+    assert ctrl.login == "owner"
+
+
+def test_set_pin_restarts_link(make, home, configured):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.pin_status() == "none" and not ctrl.has_pin
+    ctrl.set_pin("2468")
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    assert ctrl.links[0].stopped and ctrl.links[1].hello["has_pin"] is True
+    assert ctrl.has_pin and ctrl.pin_status() == "set"
+    for _ in range(5):
+        PinStore(home).check("0000")
+    assert ctrl.pin_status() == "locked"
+    ctrl.set_pin(None)
+    until(lambda: len(ctrl.links) == 3 and ctrl.state == "online")
+    assert ctrl.links[2].hello["has_pin"] is False and ctrl.pin_status() == "none"
+
+
+def test_set_pin_while_revoked_keeps_the_link_down(make, home, configured):
+    ctrl = make(result="replaced")
+    ctrl.start()
+    until(lambda: ctrl.state == "replaced")
+    ctrl.set_pin("2468")
+    time.sleep(0.05)
+    assert len(ctrl.links) == 1 and ctrl.state == "replaced" and ctrl.has_pin
+
+
+def test_set_folder_validates_and_restarts(make, home, configured, tmp_path):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.set_folder(str(tmp_path / "нет")) == ["Папки нет"]
+    assert ctrl.set_folder("  ") == ["Папки нет"]
+    other = tmp_path / "other"
+    other.mkdir()
+    assert ctrl.set_folder(f" {other} ") == []
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    assert ctrl.links[1].hello["projects_root"] == str(other)
+    assert store.load_config(home).projects_root == str(other)
+
+
+def test_set_autostart_writes_registry_and_config(make, home, configured):
+    ctrl = make()
+    ctrl.set_autostart(False)
+    assert ctrl._autostart.calls == [False] and store.load_config(home).autostart is False
+    ctrl.set_autostart(True)
+    assert ctrl._autostart.calls == [False, True] and store.load_config(home).autostart is True

@@ -56,14 +56,14 @@ def pin_errors(pin: str, pin2: str) -> list[str]:
 
 
 def apply(h: Path, form: dict, *, enroll_fn=enroll.enroll) -> store.Config:
-    """Форма прошла `validate`: с логином — привязка (сбой — `EnrollError`, ничего не записано), ключ, id и имя;
-    всегда — адрес, папка, автозапуск; PIN — убрать, задать или (пусто) не трогать."""
+    """Форма прошла `validate`: с логином — привязка (сбой — `EnrollError`, ничего не записано), ключ, id, имя и
+    логин учётки; всегда — адрес, папка, автозапуск; PIN — убрать, задать или (пусто) не трогать."""
     cfg = store.load_config(h)
     url = enroll.base_url(_text(form, "url"))
     login = _text(form, "login").strip()
     if login:
         name = _text(form, "name").strip()
-        agent_id, key = enroll_fn(url, login, _text(form, "password"), name)
+        agent_id, key, cfg.login = enroll_fn(url, login, _text(form, "password"), name)
         store.save_key(h, key)
         cfg.agent_id, cfg.name = agent_id, name
     cfg.url = url

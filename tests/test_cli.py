@@ -98,7 +98,7 @@ async def test_probe_reads_models_and_disconnects(tmp_path):
     opts = made[0].options
     assert opts.cwd == str(tmp_path) and opts.cli_path == tmp_path / "claude.exe"
     assert opts.setting_sources == ["user", "project", "local"] and opts.stderr is not None
-    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.1.0"}
+    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.2.0"}
     assert made[0].disconnected
 
 

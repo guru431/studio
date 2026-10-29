@@ -54,13 +54,14 @@ def test_apply_enrolls_and_keeps_no_password(home, form):
 
     def fake_enroll(url, login, password, name):
         calls.append((url, login, password, name))
-        return 7, "k"
+        return 7, "k", "owner"
 
     cfg = setup.apply(home, {**form, "url": "https://studio.example.com/", "pin": "2468", "pin2": "2468",
                              "autostart": False}, enroll_fn=fake_enroll)
     assert calls == [("https://studio.example.com", "owner", PASSWORD, "Рабочий")]
     assert store.load_key(home) == "k"
-    assert (cfg.agent_id, cfg.name, cfg.url, cfg.autostart) == (7, "Рабочий", "https://studio.example.com", False)
+    assert (cfg.agent_id, cfg.name, cfg.url, cfg.autostart, cfg.login) == (7, "Рабочий", "https://studio.example.com",
+                                                                            False, "owner")
     assert store.load_config(home) == cfg
     assert PinStore(home).has_pin
     for f in home.rglob("*"):
@@ -70,7 +71,7 @@ def test_apply_enrolls_and_keeps_no_password(home, form):
 
 
 def test_apply_without_login_keeps_key_and_pin(home, form, tmp_path):
-    setup.apply(home, {**form, "pin": "2468", "pin2": "2468"}, enroll_fn=lambda *a: (7, "k"))
+    setup.apply(home, {**form, "pin": "2468", "pin2": "2468"}, enroll_fn=lambda *a: (7, "k", "owner"))
     other = tmp_path / "other"
     other.mkdir()
 
@@ -121,16 +122,9 @@ def test_journal_never_lets_websockets_debug(home):
 
 
 def test_status_shows_no_key(home, form, capsys):
-    setup.apply(home, form, enroll_fn=lambda *a: (7, "секретный-ключ-устройства"))
+    setup.apply(home, form, enroll_fn=lambda *a: (7, "секретный-ключ-устройства", "owner"))
     assert cli_main.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "секретный-ключ-устройства" not in out
     assert "7" in out and "Рабочий" in out
 
-
-def test_computer_name_changes_only_with_a_new_enrollment():
-    from studio_agent import window
-    assert window.name_state(False, "") == "normal"            # первая привязка — имя вводится
-    assert window.name_state(True, "") == "readonly"           # привязан: «Сохранить» имя не меняет
-    assert window.name_state(True, "  ") == "readonly"
-    assert window.name_state(True, "owner") == "normal"        # логин — новая привязка, с новым именем

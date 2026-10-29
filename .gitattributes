@@ -1,2 +1,15 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# Архив моста (`git archive` выкладки студии) — только то, что нужно для установки.
+tests/** export-ignore
+.claude/** export-ignore
+CLAUDE.md export-ignore
+AGENTS.md export-ignore
+FINDINGS*.md export-ignore
+IDEAS*.md export-ignore
+pytest.ini export-ignore
+requirements-dev.txt export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+# последним: выигрывает последнее совпадение
+*.cmd text eol=crlf

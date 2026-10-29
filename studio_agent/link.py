@@ -66,11 +66,12 @@ class Link:
     """Канал моста: подключается, знакомится, отвечает на просьбы и переподключается до отзыва, замены или `stop()`."""
 
     def __init__(self, url: str, key: str, agent: Agent, on_state: Callable[[str], None] = lambda s: None, *,
-                 connect=ws_connect, sleep=asyncio.sleep):
+                 on_welcome: Callable[[dict], None] | None = None, connect=ws_connect, sleep=asyncio.sleep):
         self.uri = ws_url(url)
         self.key = key
         self.agent = agent
         self.on_state = on_state
+        self.on_welcome = on_welcome  # кадр `welcome` наружу (логин и имя компьютера — ядру); зовётся в цикле
         self._connect = connect
         self._sleep = sleep
         self._queue: asyncio.Queue | None = None  # очередь отправки текущего канала
@@ -157,6 +158,11 @@ class Link:
                 while (frame := _parse(await ws.recv())) is None or frame.get("t") != "welcome":
                     pass
             welcomed = True
+            if self.on_welcome is not None:
+                try:
+                    self.on_welcome(frame)
+                except Exception as e:
+                    log.warning("канал: welcome: %s", type(e).__name__)
             self.agent.new_link()
             self._queue = queue
             self.agent.send = self.send

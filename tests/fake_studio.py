@@ -13,7 +13,9 @@ WAIT_SEC = 5  # ждать события подставной студии; д�
 
 class FakeStudio:
     """`hellos` — кадры знакомства, `frames` — (номер канала, кадр) после `welcome`, `events` — кадры `ev`,
-    `attempts` — принятые рукопожатия; `reject_handshake` — код HTTP отказа рукопожатия, `silent` — без `welcome`."""
+    `attempts` — принятые рукопожатия; `reject_handshake` — код HTTP отказа рукопожатия, `silent` — без `welcome`,
+    `login` — логин учётки в `welcome` (`None` — прежняя студия, поля нет). Отвязку (`DELETE /api/agent/enroll`)
+    подставляют тесты `test_enroll.py` и `test_app.py`: сервер `websockets` принимает только рукопожатия."""
 
     def __init__(self, key: str):
         self.key = key
@@ -23,6 +25,7 @@ class FakeStudio:
         self.attempts = 0
         self.reject_handshake: int | None = None
         self.silent = False
+        self.login: str | None = "owner"
         self.links = []
         self._pending: dict[str, asyncio.Future] = {}
         self._changed = asyncio.Condition()
@@ -53,7 +56,10 @@ class FakeStudio:
             if self.silent:
                 await ws.wait_closed()
                 return
-            await ws.send(json.dumps({"t": "welcome", "agent_id": 7, "name": "Рабочий ПК"}))
+            welcome = {"t": "welcome", "agent_id": 7, "name": "Рабочий ПК"}
+            if self.login is not None:
+                welcome["login"] = self.login
+            await ws.send(json.dumps(welcome))
             async with self._changed:
                 n = len(self.links)
                 self.links.append(ws)

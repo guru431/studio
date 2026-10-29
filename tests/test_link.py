@@ -6,7 +6,7 @@ from websockets.asyncio.client import connect as real_connect
 
 from fake_sdk import FakeFactory, delta, result_ok
 from fake_studio import FakeStudio
-from studio_agent import link, limits, projects, sessions, store
+from studio_agent import VERSION, link, limits, projects, sessions, store
 from studio_agent.agent import Agent
 from studio_agent.link import Link
 from studio_agent.pin import PinStore
@@ -102,9 +102,30 @@ async def test_hello_first_then_requests_are_answered(fake_studio, agent, caplog
     assert uri == link.ws_url(fake_studio.url)
     assert kw == {"additional_headers": {"Authorization": f"Bearer {KEY}"}, "max_size": limits.FRAME_MAX,
                   "ping_interval": 20, "ping_timeout": 20, "open_timeout": 15,
-                  "user_agent_header": "studio-agent/0.1.0"}
+                  "user_agent_header": f"studio-agent/{VERSION}"}
     ours = "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("studio_agent"))  # журнал моста
     assert "канал: на связи" in ours and KEY not in ours and "demo" not in ours
+
+
+async def test_welcome_goes_to_on_welcome_before_online(fake_studio, agent):
+    seen = []
+    lk, states, task = start(fake_studio, agent, on_welcome=lambda f: seen.append((dict(f), list(states))))
+    await fake_studio.connected()
+    await until(lambda: states[-1:] == ["online"])
+    assert seen == [({"t": "welcome", "agent_id": 7, "name": "Рабочий ПК", "login": "owner"}, ["connecting"])]
+    await lk.stop()
+    await task
+
+
+async def test_a_failing_on_welcome_does_not_break_the_link(fake_studio, agent):
+    def broken(frame):
+        raise KeyError("x")
+
+    lk, states, task = start(fake_studio, agent, on_welcome=broken)
+    await fake_studio.connected()
+    assert (await fake_studio.request("open", pin=None))["ok"] is True
+    await lk.stop()
+    assert await task == "stopped"
 
 
 async def test_revoked_stops_and_replaced_stops(fake_studio, agent):
