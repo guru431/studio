@@ -137,7 +137,9 @@ def test_service_worker_opens_the_job_from_a_notification():
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
     assert "addEventListener('notificationclick'" in sw and "event.notification.close()" in sw
     assert "clients.matchAll" in sw and ".focus()" in sw and "postMessage({ jobs: href })" in sw
-    assert "openWindow(`/#/${href}`)" in sw and ".put(" not in sw and "pushManager" not in sw
+    assert "openWindow(`/#/${href}`)" in sw and ".put(" not in sw
+    # pushManager — только у переподписки (pushsubscriptionchange), не у уведомлений «В работе»
+    assert sw.count("pushManager") == 1 and sw.index("pushManager") > sw.index("'pushsubscriptionchange'")
     jobs = (STATIC / "js" / "jobs.js").read_text(encoding="utf-8")
     # только showNotification регистрации: конструктор на Android — «Illegal constructor»
     code = "\n".join(line for line in jobs.splitlines() if not line.lstrip().startswith(("*", "/*", "//")))
@@ -154,10 +156,26 @@ def test_service_worker_shows_a_push_and_opens_it_like_a_job():
     assert "push здесь нет" not in sw
     # тот же tag (чат) — снова звук; без tag renotify бросил бы TypeError — только условно
     assert "...(tag ? { renotify: true } : {})" in sw and sw.count("renotify: true") == 1
-    settings =(STATIC / "js" / "settings.js").read_text(encoding="utf-8")
+    settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
     # в localStorage — только флаг устройства, ни ключей, ни адреса подписки
     assert re.findall(r"localStorage\.setItem\(([^,]+),", settings) == ["PUSH_KEY"]
     assert "const PUSH_KEY = 'studio-push';" in settings and "userVisibleOnly: true" in settings
+
+
+def test_service_worker_resubscribes_when_the_browser_changes_the_push_subscription():
+    """Браузер сменил подписку сам — `pushsubscriptionchange`: новая (из события или заново ключом VAPID сервера)
+    уходит `POST /api/me/push` с CSRF сессии из GET /api/me; не дошла — снимается (флажок «Настроек» сверяется с
+    подпиской браузера: settings.js pushBox)."""
+    sw = (STATIC / "sw.js").read_text(encoding="utf-8")
+    start = sw.index("addEventListener('pushsubscriptionchange'")
+    handler = sw[start:sw.index("\n});", start)]
+    assert "event.waitUntil(" in handler and "event.newSubscription" in handler
+    assert "fetch('/api/me/push')" in handler and "pushManager.subscribe({ userVisibleOnly: true" in handler
+    assert "fetch('/api/me')" in handler and "'x-studio-csrf': csrf" in handler
+    assert re.search(r"fetch\('/api/me/push', \{ method: 'POST'", handler) and "sub.toJSON()" in handler
+    assert "sub.unsubscribe()" in handler
+    settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
+    assert "r.pushManager.getSubscription()" in settings and "PUSH_READY_SEC = 10" in settings
 
 
 def test_pages_send_csp_and_nosniff(studio):

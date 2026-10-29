@@ -6,8 +6,13 @@
  *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
  *   details.code-step, затем текст — markdown.js);
  * - сразу за историей — поток live: idle — ничего, snapshot — всё состояние идущего хода вместо прежнего
- *   хвоста; «Отправить» — поток turn; события text, step, result, ask (карточка .code-ask), asked (карточка
- *   уходит), done (stopped — «Ход прерван», error — «Ошибка: …»);
+ *   хвоста; «Отправить» — поток turn; события text, step, result, ask (карточка .code-ask; у вопроса — ещё
+ *   «Свой ответ»), asked (карточка уходит), done (stopped — «Ход прерван», error — «Ошибка: …» или «Ошибка»;
+ *   done раньше снимка — ход кончился между watch и снимком: история заново);
+ * - хода нет и страница видна — live раз в IDLE_POLL_SEC: ход, начатый в другой вкладке, на другом устройстве
+ *   или в VS Code, страница увидит; не дольше IDLE_POLL_FOR_SEC после действия владельца в чате — опрос
+ *   продлевает открытость компьютера (протокол §3), и забытая вкладка держала бы его открытым вечно;
+ * - отказ «Отправить» 409 running (ход уже идёт) и 504 timeout (ход, может быть, начат) — слова и live;
  * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
  *   пока страница видна; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
  *   PIN — снова сюда; ответ, пришедший после ухода с чата, никуда не уводит;
@@ -31,10 +36,14 @@ const SHARED = 'Эту сессию начали в VS Code или термин�
 const STOPPED = 'Ход прерван';
 const ASK_TITLE = 'Claude Code просит разрешения';
 const INSTEAD = 'Что сделать вместо этого (необязательно)';
+const OWN = 'Свой ответ';
+const OWN_MAX = 2000;            // claude_code.ANSWER_MAX
 const CHOICE = 'studio-code-choice:';
 const DEFAULT = 'по умолчанию';
 const RETRY_MS = 5000;           // повтор live, пока компьютера нет
 const AGAIN_MS = 1000;           // поток кончился без конца хода (предел прокси, сеть) — снова live
+const IDLE_POLL_SEC = 20;        // опрос live на простое (тесты подменяют паузу setTimeout)
+const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в чате
 const PAINT_MS = 80;             // текст хода перерисовывается не чаще
 const STICK_PX = 80;             // лента у низа — новое её прокручивает
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
@@ -96,6 +105,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let turn = null;               // ответ идущего хода: { node, steps, md, asks, text }
   let start = 0;                 // номер первого показанного сообщения истории
   let paintTimer = null;
+  let acted = Date.now();        // последнее действие владельца в чате (открыл, вернулся, ввёл, ответил)
 
   const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
@@ -218,6 +228,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const buttons = [];
 
     async function reply(body) {
+      acted = Date.now();
       for (const b of buttons) b.disabled = true;
       error.textContent = '';
       try {
@@ -246,20 +257,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const options = (Array.isArray(q.options) ? q.options : []).map((o) => el('label', { class: 'code-ask-option' },
           el('input', { type, name, value: String(o.label ?? '') }), el('span', {}, String(o.label ?? '')),
           o.description ? el('span', { class: 'muted small' }, String(o.description)) : null));
-        return { q, box: el('fieldset', { class: 'code-ask-question' },
-          q.header ? el('legend', {}, String(q.header)) : null, el('p', {}, String(q.question ?? '')), ...options) };
+        // «Свой ответ» (в Claude Code — «Other»): написан — уходит вместо отмеченного
+        const own = el('input', { type: 'text', class: 'input code-ask-own', maxlength: String(OWN_MAX),
+          placeholder: OWN, 'aria-label': OWN, autocomplete: 'off' });
+        return { q, own, box: el('fieldset', { class: 'code-ask-question' },
+          q.header ? el('legend', {}, String(q.header)) : null, el('p', {}, String(q.question ?? '')), ...options,
+          own) };
       });
       const go = el('button', { type: 'button', class: 'btn btn-accent code-ask-answer' }, 'Ответить');
       go.addEventListener('click', () => {
         const answers = {};
-        for (const { q, box } of groups) {
-          const inputs = [...box.querySelectorAll('input')];
+        for (const { q, own, box } of groups) {
+          const typed = own.value.trim();
+          const inputs = [...box.querySelectorAll('input:not(.code-ask-own)')];
           const picked = inputs.filter((i) => i.checked).map((i) => i.value);
-          if (inputs.length && !picked.length) {
-            inputs[0].focus();
+          if (!typed && !picked.length) {
+            (inputs[0] || own).focus();
             return;
           }
-          answers[String(q.question ?? '')] = picked.join(', ');
+          answers[String(q.question ?? '')] = typed || picked.join(', ');
         }
         reply({ decision: 'allow', answers });
       });
@@ -295,14 +311,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
-      else if (data.status === 'error') end = `Ошибка: ${typeof data.message === 'string' ? data.message : ''}`;
+      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? `Ошибка: ${data.message}` : 'Ошибка';
       if (end) {
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
       }
+    } else {
+      loadHistory(false);        // ход кончился раньше снимка: его ответ — уже в истории
     }
     turn = null;
     setRunning(false);
+    idlePoll();
   }
 
   /** Событие потока; true — поток кончился. */
@@ -318,6 +337,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           turn = null;
           loadHistory(false);
         }
+        idlePoll();
         return true;
       case 'snapshot': {
         setRunning(true);
@@ -389,6 +409,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function later(ms) {
     clearTimeout(retry);
     retry = alive && document.visibilityState !== 'hidden' ? setTimeout(openLive, ms) : null;
+  }
+
+  /** Хода нет: live снова через IDLE_POLL_SEC — пока владелец недавно что-то делал в чате. */
+  function idlePoll() {
+    if (Date.now() - acted < IDLE_POLL_FOR_SEC * 1000) later(IDLE_POLL_SEC * 1000);
   }
 
   function waitForComputer() {
@@ -470,6 +495,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function submit() {
     const value = text.value;
     if (!value.trim() || running || sending) return;
+    acted = Date.now();
     sending = true;
     send.disabled = true;
     status.textContent = '';
@@ -492,7 +518,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       }
       if (err.code === 'closed') closed();
       else if (err.code === 'offline') waitForComputer();
-      else status.textContent = words(err);
+      else {
+        status.textContent = words(err);
+        // ход уже идёт (другая вкладка, VS Code) или, может быть, начат (компьютер не ответил вовремя) — смотреть его
+        if (err.code === 'running' || err.code === 'timeout') openLive();
+      }
       return;
     } finally {
       sending = false;
@@ -553,6 +583,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   model.addEventListener('change', () => remember('model', model));
   effort.addEventListener('change', () => remember('effort', effort));
   text.addEventListener('input', () => {
+    acted = Date.now();
     autosize();
     if (text.value) drafts.set(draftKey, text.value);
     else drafts.delete(draftKey);
@@ -575,6 +606,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       retry = null;
       if (!sending) drop();      // идущий «Отправить» обрывает сам, узнав, принят ли ход
     } else if (!sending) {
+      acted = Date.now();
       openLive();
     }
   }

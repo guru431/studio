@@ -27,7 +27,7 @@ import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
-import { button, el, field, openDialog, plural, showError, words } from './ui.js';
+import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
@@ -169,14 +169,16 @@ function lockBlock() {
   });
 
   // PIN учётки (спека 2026-10-28-studio-lock-pin): задать и сменить — с паролем учётки, убрать — без;
-  // повтор не совпал — запроса нет. На любом устройстве. Поля PIN — без автозаполнения.
+  // повтор не совпал — запроса нет. На любом устройстве. Поля PIN — не password (пароль учётки рядом и два поля
+  // password менеджер паролей принял бы за смену пароля и предложил бы сохранить PIN): text с точками
+  // (-webkit-text-security, app.css), one-time-code — без автозаполнения.
   const pinState = el('span', { id: 'pin-state' });
   const pinSet = button('', { class: 'btn', id: 'pin-set' });
   const pinRemove = button('Убрать PIN', { class: 'btn', id: 'pin-remove' });
   const pinPassword = el('input', { class: 'input', id: 'pin-password', type: 'password',
     autocomplete: 'current-password', maxlength: '1024' });
-  const pinInput = (id) => el('input', { class: 'input', id, type: 'password', inputmode: 'numeric',
-    autocomplete: 'off', maxlength: '8' });
+  const pinInput = (id) => el('input', { class: 'input', id, type: 'text', inputmode: 'numeric',
+    autocomplete: 'one-time-code', maxlength: '8' });
   const pinNew = pinInput('pin-new');
   const pinRepeat = pinInput('pin-repeat');
   const pinSave = button('Сохранить', { class: 'btn', id: 'pin-save' });
@@ -466,6 +468,19 @@ function exaBlock() {
  * в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
 const PUSH_KEY = 'studio-push';
 const DENIED = 'Браузер запретил уведомления — разрешите их в настройках сайта';
+const NO_WORKER = 'Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен';
+const PUSH_READY_SEC = 10;       // служебный работник не зарегистрирован — ready не разрешится никогда
+
+/** Регистрация служебного работника — не дольше PUSH_READY_SEC, иначе отказ словами NO_WORKER. */
+function ready() {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(NO_WORKER)), PUSH_READY_SEC * 1000);
+    navigator.serviceWorker.ready.then((registration) => {
+      clearTimeout(timer);
+      resolve(registration);
+    }, reject);
+  });
+}
 
 function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -497,7 +512,7 @@ function keyBytes(text) {
 }
 
 async function subscribePush() {
-  const registration = await navigator.serviceWorker.ready;
+  const registration = await ready();
   const { key } = await api('GET', '/api/me/push');
   const options = { userVisibleOnly: true, applicationServerKey: keyBytes(key) };
   let sub;
@@ -515,7 +530,7 @@ async function subscribePush() {
 
 async function unsubscribePush() {
   await api('DELETE', '/api/me/push');
-  const registration = await navigator.serviceWorker.ready;
+  const registration = await ready();
   const sub = await registration.pushManager.getSubscription();
   if (sub) await sub.unsubscribe().catch(() => false);
 }
@@ -550,8 +565,18 @@ function pushBox() {
     }
   });
   if (pushSupported()) {
-    api('GET', '/api/me/push').then(({ subscribed }) => {
-      box.checked = pushFlag() && subscribed;
+    api('GET', '/api/me/push').then(async ({ subscribed }) => {
+      let on = pushFlag() && subscribed;
+      if (on) {
+        // браузер мог снять подписку сам, а переподписка служебного работника (pushsubscriptionchange, sw.js) — не
+        // дойти до сервера: тогда она снята и там — флажок по подписке браузера, флаг устройства прочь
+        const sub = await ready().then((r) => r.pushManager.getSubscription(), () => null);
+        if (!sub) {
+          on = false;
+          pushFlag(false);
+        }
+      }
+      box.checked = on;
       box.disabled = false;
     }, (err) => say(note, words(err), 'error'));
   }
@@ -589,7 +614,8 @@ function notifyBlock() {
     ...pushBox());
 }
 
-/* «Компьютеры (Claude Code)»: мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
+/* «Компьютеры (Claude Code)»: под заголовком всегда «Скачать мост» (ui.js agentDownload — второй компьютер ставят
+ * тем же архивом); мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
  * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
 const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
@@ -630,8 +656,7 @@ function agentsBlock(host) {
         el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? 'на связи' : 'не на связи'),
         a.has_pin ? el('span', { class: 'tag agent-pin' }, 'PIN') : null,
         button('Отозвать', { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
-        : [el('li', { class: 'muted small' }, 'Компьютеров пока нет. Поставьте мост Claude Code на компьютер и войдите '
-          + 'в нём логином студии.')]));
+        : [el('li', { class: 'muted small' }, 'Компьютеров пока нет.')]));
     } catch (err) {
       say(note, words(err), 'error');
     }
@@ -661,7 +686,8 @@ function agentsBlock(host) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code)'), list, note,
+  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code)'), agentDownload(),
+    list, note,
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
 

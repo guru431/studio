@@ -7,7 +7,7 @@
  * остаются на диске устройства до суток — и после «Удалить всю историю» и выхода. Навигация — из
  * сети, без связи — /offline.html. Новая версия удаляет кэш прежних. Ещё — уведомления: «В работе»
  * показывает открытая студия (jobs.js), push «Claude Code» (push.py) — обработчик `push` здесь; нажатие на
- * любое — notificationclick. */
+ * любое — notificationclick; смена подписки браузером — pushsubscriptionchange. */
 const CACHE = `studio-shell-${VERSION}`;
 const SHELL = [
   '/offline.html',
@@ -60,6 +60,32 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(text(data.title) || 'Студия', {
     body: text(data.body), tag, ...(tag ? { renotify: true } : {}), icon: '/static/icons/icon-192.png',
     data: { href: text(data.href) } }));
+});
+
+/* Браузер сменил подписку push сам (служба push её обновила или отозвала): новую — серверу той же сессии, иначе
+ * push тихо кончится. Cookie сессии запрос работника несёт сам; CSRF — из GET /api/me, как у страницы. Нет новой
+ * подписки в событии — подписаться заново ключом VAPID сервера. Не дошла (сессия кончилась или заперта, сети нет) —
+ * новую снять: флажок «Настроек» сверяется с подпиской браузера (settings.js pushBox) и покажет, что push выключен. */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const json = (r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  };
+  event.waitUntil((async () => {
+    let sub = event.newSubscription || null;
+    try {
+      if (!sub) {
+        const { key } = await fetch('/api/me/push').then(json);
+        sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      }
+      const { csrf } = await fetch('/api/me').then(json);
+      const r = await fetch('/api/me/push', { method: 'POST', body: JSON.stringify(sub.toJSON()),
+        headers: { 'content-type': 'application/json', 'x-studio-csrf': csrf } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch {
+      if (sub) await sub.unsubscribe().catch(() => false);
+    }
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
