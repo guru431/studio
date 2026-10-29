@@ -7,8 +7,10 @@ import asyncio
 import pytest
 
 import chat
+import connections
 import ocr
 import ocr_render
+import sections
 import state
 from conftest import add_connection, add_gateway
 from scans import scan_pdf
@@ -148,14 +150,37 @@ def test_only_blank_scanned_pages_do_not_touch_the_card(studio):
 def test_without_an_ocr_connection_the_chat_works_as_before(studio):
     gw = add_gateway(studio); cid = new_chat(studio)
     assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
-    att = upload(studio, scan_pdf(LAYER, "blank"))
+    att = upload(studio, scan_pdf(LAYER, "empty"))
     assert "ocr" not in att and att["chars"] == len(LAYER)
     sse(ask(studio, cid, ids=[att["id"]]))
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == doc("скан.pdf", LAYER)
     r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf("ink"), "application/pdf")})
     assert r.status_code == 422
-    assert r.json()["detail"] == {"code": "document", "message": "это скан — подключите «Распознавание» в настройках"}
+    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Распознавание» в настройках"}
     assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM scans").fetchone()[0]) == 0
+    assert studio.gw.ocr_requests == []
+
+
+def test_mixed_scan_pdf_without_ocr_is_refused(studio):
+    """Сканы — только часть страниц, а «Распознавания» через сервер нет: отказ словами, как у переводчика, —
+    иначе модель молча получила бы документ без страниц-сканов. Белая картинка без слоя — тоже скан: пустую
+    страницу отличит лишь рендер."""
+    gw = add_gateway(studio)
+    owner = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (gw,)).fetchone()[0]
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")     # адрес убран из списка
+    for pages in [(LAYER, "ink"), (LAYER, "blank", LAYER)]:
+        r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf(*pages), "application/pdf")})
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "scan", pages
+        assert r.json()["detail"]["message"] == (
+            f"страниц-сканов в PDF — 1 из {len(pages)}, без распознавания модель получила бы документ без них; "
+            + sections.unlisted(connections.get(owner, gw))), pages
+    state.DB.execute("""UPDATE settings SET value = '["10.77.1.15:4000"]' WHERE key = 'allowlist'""")
+    assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
+    r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf(LAYER, "ink"), "application/pdf")})
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "scan", "message": (
+        "страниц-сканов в PDF — 1 из 2, без распознавания модель получила бы документ без них"
+        " — подключите «Распознавание» в настройках")}
+    assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM attachments").fetchone()[0]) == 0
     assert studio.gw.ocr_requests == []
 
 

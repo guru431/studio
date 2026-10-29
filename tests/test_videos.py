@@ -12,6 +12,7 @@ import httpx
 import pytest
 from PIL import Image
 
+import clock
 import forms
 import media
 import state
@@ -506,28 +507,42 @@ def test_stopping_the_watcher_stops_its_polls(studio):
 
 def test_slow_download_gives_up_by_the_whole_clip_deadline(studio, env, monkeypatch):
     """Срок на кусок медленную передачу не ограничивает: весь mp4 — за FETCH_SEC, иначе скачанное
-    выброшено и строка ждёт следующего прохода (аудит 2026-10-21, P2)."""
-    monkeypatch.setattr(videos, "FETCH_SEC", 0.05)
+    выброшено и строка ждёт следующего прохода (аудит 2026-10-21, P2). Срок без настоящего времени: подменённый
+    `clock.TIMEOUT` истекает ровно тогда, когда первый кусок записан, а передача встала."""
+    deadlines = []
+
+    def deadline(seconds):
+        assert seconds == videos.FETCH_SEC
+        deadlines.append(asyncio.timeout(None))
+        return deadlines[-1]
+
+    monkeypatch.setattr(clock, "TIMEOUT", deadline)
     add_gateway(studio)
     v = create_video(studio).json()
     before = share_files(env)
 
     async def trickle():
         yield MP4[:10]
+        deadlines[-1].reschedule(asyncio.get_running_loop().time())   # срок истёк посреди ролика
         await asyncio.sleep(30)
         yield MP4[10:]
 
     async def slow(request):
         return httpx.Response(200, content=trickle(), headers={"content-type": "video/mp4"})
 
+    async def saved():                       # уборка недописанного — в потоке, после отмены записи
+        while media.SAVING:
+            await asyncio.sleep(0.01)
+
     path = f"/slot/videos/{v_gateway_id(studio)}/content"
     studio.gw.on[path] = slow
     studio.gw.video_status = "completed"
     poll(studio)
+    studio.c.portal.call(saved)
+    assert len(deadlines) == 1
     assert item(studio, v["id"])["state"] == "queued" and share_files(env) == before and media_rows() == 1
     assert studio.gw.video_deleted == []
     del studio.gw.on[path]
-    monkeypatch.setattr(videos, "FETCH_SEC", 30)     # срок — настоящее время: 50 мс под нагрузкой не хватало и обычной передаче
     poll(studio)
     assert item(studio, v["id"])["state"] == "done"
 

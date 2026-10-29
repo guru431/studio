@@ -467,6 +467,19 @@ def test_dropped_connection_models_say_so(studio):
     assert code(studio.c.get(f"/api/connections/{direct}/models")) == "direct"
 
 
+def test_connection_with_all_sections_saves(studio, monkeypatch):
+    """Предел числа разделов в теле — число разделов этого кода, а не зашитое число: девятый раздел не упрётся
+    в 422 `invalid` (раздел, которого вид не знает, отказывает словами `sections`, а не пределом тела)."""
+    every = list(sections.SECTIONS)
+    cid = add_connection(studio, kind="srvllm", base_url=GW, sections=every)
+    assert conn_of(cid).sections == set(every)
+    monkeypatch.setattr(sections, "SECTIONS", (*sections.SECTIONS, "ninth"))
+    r = post(studio, kind="srvllm", base_url=GW, sections=[*every, "ninth"])
+    assert r.status_code == 422 and code(r) == "sections"
+    r = post(studio, kind="srvllm", base_url=GW, sections=[*every, "ninth", "tenth"])
+    assert r.status_code == 422 and code(r) == "invalid"
+
+
 def test_dropped_connection_can_be_renamed_and_taken_out_of_sections(studio):
     """Адрес убран из списка: правка без смены вида и адреса проходит (страница шлёт имя, вид и адрес сразу) —
     переименовать, убрать раздел; новый раздел, кроме чата, — 422 `server`; другой адрес вне списка — 422."""

@@ -52,6 +52,33 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.xdist_group("serial"))
 
 
+def pytest_xdist_make_scheduler(config, log):
+    """`--dist loadgroup` без повтора упавшего процесса. Срок pytest-timeout на Windows — только `thread`: по
+    сроку он печатает стеки и делает `os._exit` процесса (xdist — «node down: Not properly terminated», тест —
+    «crashed while running»). Штатный LoadScopeScheduling.remove_node возвращает в очередь и сам упавший тест: он
+    валит процесс снова и снова до предела перезапусков (4 × число процессов), по 30 с каждый, — так быстрый набор
+    шёл дольше 15 минут и «не прерывался» сроком (опыт 2026-10-29: четыре зависших теста — 18 падений и 46 с
+    против четырёх и 5 с). Здесь упавший — один раз, прочие недоделанные — снова в очередь, как у xdist."""
+    if config.getoption("dist") != "loadgroup":
+        return None
+    from xdist.scheduler import LoadGroupScheduling
+
+    class Once(LoadGroupScheduling):
+        def remove_node(self, node):
+            workload = self.assigned_work.pop(node)
+            pending = [(scope, nid) for scope, unit in workload.items() for nid, done in unit.items() if not done]
+            if not pending:
+                return None
+            scope, crashed = pending[0]                 # первый недоделанный — тот, на котором процесс упал
+            del workload[scope][crashed]
+            self.workqueue.update((s, unit) for s, unit in workload.items() if not all(unit.values()))
+            for other in self.assigned_work:
+                self._reschedule(other)
+            return crashed
+
+    return Once(config, log)
+
+
 T0 = 1_800_000_000.0
 
 

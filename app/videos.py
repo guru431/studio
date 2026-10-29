@@ -421,7 +421,7 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
     uid, gateway_id = row["user_id"], row["gateway_id"]
     name = f"studio-video-{seed if seed is not None else gateway_id}.mp4"
     try:
-        async with asyncio.timeout(FETCH_SEC), upstream.stream(conn, "GET", _url(conn, gateway_id, "/content"),
+        async with clock.TIMEOUT(FETCH_SEC), upstream.stream(conn, "GET", _url(conn, gateway_id, "/content"),
                                                                timeout=VIDEO_TIMEOUT_SEC) as r:
             if r.status_code != 200:
                 await r.aread()

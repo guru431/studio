@@ -87,7 +87,8 @@ def test_reasoning_field_named_reasoning_is_read_too(studio):
 
 
 def test_seconds_run_from_the_first_thought_to_the_first_word(studio, no_pings):
-    """Длительность — от первого куска рассуждения до первого куска ответа, по часам студии."""
+    """Длительность — от первого куска рассуждения до первого куска ответа, по часам студии; конец потока несёт
+    те же секунды, что записаны: страница пишет их, а не свои часы."""
     cid = thinking_chat(studio)
     studio.gw.chat_script = [{"reasoning": ["Считаю"], "text": ["410"]}]
     studio.gw.think_hold = True
@@ -97,7 +98,7 @@ def test_seconds_run_from_the_first_thought_to_the_first_word(studio, no_pings):
             assert next(d for e, d in events if e == "think") == {"text": "Считаю"}
             studio.clock[0] += 7
             studio.gw.think_hold = False
-            assert [e for e, _ in events][-1] == "done"
+            assert [(e, d) for e, d in events if e != "ping"][-1] == ("done", {"status": "done", "reasoning_sec": 7.0})
     finally:
         studio.gw.think_hold = False
     assert answer_of(studio, cid)["reasoning_sec"] == 7.0
@@ -196,9 +197,9 @@ def test_model_without_switch_reasoning_over_the_limit_is_cut_and_the_answer_goe
                               "text": ["Ищу."], "tool_calls": [call("web_search", query="q")]},
                              {"reasoning": ["Второй круг."], "text": [" Готово."]}]
     events = sse(turn(studio, cid))
-    assert events[-1] == ("done", {"status": "done"})
-    assert thinks(events)[-1] == {"text": chat.REASONING_CUT}
     answer = answer_of(studio, cid)
+    assert events[-1] == ("done", {"status": "done", "reasoning_sec": answer["reasoning_sec"]})
+    assert thinks(events)[-1] == {"text": chat.REASONING_CUT}
     assert (answer["status"], answer["content"]) == ("done", "Ищу.\n\n Готово.")
     assert answer["reasoning"] == "x" * chat.REASONING_MAX + chat.REASONING_CUT
     assert "рассуждение обрезано" in caplog.text
@@ -268,8 +269,8 @@ def test_stop_while_thinking_keeps_the_reasoning(studio):
             rest = [(e, d) for e, d in events if e != "ping"]
     finally:
         studio.gw.think_hold = False
-    assert rest == [("done", {"status": "stopped"})]
     answer = answer_of(studio, cid)
+    assert rest == [("done", {"status": "stopped", "reasoning_sec": answer["reasoning_sec"]})]
     assert (answer["status"], answer["content"], answer["reasoning"]) == ("stopped", "", "Думаю долго")
     assert isinstance(answer["reasoning_sec"], float)
     assert not chat.STREAMS

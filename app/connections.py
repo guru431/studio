@@ -31,7 +31,7 @@ from dataclasses import dataclass
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import clock
 import sections
@@ -63,12 +63,21 @@ class Connection:
     server_only: bool = False
 
 
+def _few_sections(wanted: list[str] | None) -> list[str] | None:
+    # предел тела — число разделов этого кода; читается при запросе, а не при импорте: sections импортирует
+    # этот модуль, и при обратном порядке импорта sections.SECTIONS ещё не было бы
+    if wanted is not None and len(wanted) > len(sections.SECTIONS):
+        raise ValueError("разделов больше, чем их есть")
+    return wanted
+
+
 class ConnIn(BaseModel):
     name: str = Field(max_length=NAME_MAX)
     kind: str = Field(max_length=16)
     base_url: str = Field(max_length=URL_MAX)
     token: str = Field(max_length=4096)
-    sections: list[str] = Field(default_factory=list, max_length=8)
+    sections: list[str] = Field(default_factory=list)
+    _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
 
 class ConnPatch(BaseModel):
@@ -76,7 +85,8 @@ class ConnPatch(BaseModel):
     kind: str | None = Field(None, max_length=16)
     base_url: str | None = Field(None, max_length=URL_MAX)
     token: str | None = Field(None, max_length=4096)
-    sections: list[str] | None = Field(None, max_length=8)
+    sections: list[str] | None = None
+    _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
 
 def _gone() -> HTTPException:
