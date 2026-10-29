@@ -655,7 +655,10 @@ _HEAD = ("(SELECT substr({0}, 1, %d) FROM translation_parts WHERE translation_id
 COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang, result_lang, name,"
            " source_media_id, scan_id, parts, done_parts, state, detail, created, finished,"
            f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
-           f" {_HEAD.format('text')} AS text_head")
+           f" {_HEAD.format('text')} AS text_head,"
+           # скан записи нужен и другой (повтор берёт тот же скан): удаление этой его не уносит (`delete`)
+           " scan_id IS NOT NULL AND EXISTS (SELECT 1 FROM translations AS o WHERE o.user_id = translations.user_id"
+           " AND o.scan_id = translations.scan_id AND o.id != translations.id) AS scan_shared")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
 FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
@@ -689,15 +692,29 @@ def _row(user_id: int, tid: str):
     return row
 
 
+def _photo_heads(tid: str) -> "tuple[str | None, str | None]":
+    """Начала снимка: кусок — один блок вывески, начало первого куска — лишь первая надпись. Блоков мало и они
+    короткие — читаются целиком: исходник — все блоки, перевод — готовые до первого неготового (как `joined`)."""
+    src, txt, ready = [], [], True
+    for p in state.DB.execute("SELECT state, source, text, sep FROM translation_parts WHERE translation_id = ?"
+                              " ORDER BY n", (tid,)):
+        src += [p["source"] or "", p["sep"]]
+        ready = ready and p["state"] == "done"
+        if ready:
+            txt += [p["text"], p["sep"]]
+    return "".join(src[:-1])[:HEAD_CHARS] or None, "".join(txt[:-1])[:HEAD_CHARS] or None
+
+
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
+    heads = (_photo_heads(row["id"]) if row["kind"] == "photo" else (row["source_head"], row["text_head"]))
     return {"id": row["id"], "kind": row["kind"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
             "model": row["model"], "source_lang": row["source_lang"], "target_lang": row["target_lang"],
             "detected_lang": row["detected_lang"], "result_lang": row["result_lang"], "parts": row["parts"],
             "done_parts": row["done_parts"], "created": row["created"], "finished": row["finished"],
-            "source_head": row["source_head"], "text_head": row["text_head"], "can_continue": _can_continue(row),
-            "scan_id": row["scan_id"]}
+            "source_head": heads[0], "text_head": heads[1], "can_continue": _can_continue(row),
+            "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"])}
 
 
 def _name(text: str) -> str:

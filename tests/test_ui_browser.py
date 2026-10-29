@@ -6506,6 +6506,45 @@ def test_translate_delete_from_history(browser, live, translator):
     assert not [p for p in problems(r) if not p.endswith(own)], problems(r)
 
 
+def test_translate_delete_window_says_whether_the_scan_stays(browser, live, translator):
+    """Ревью: перевод скана и его повтор держат один документ «Сканов» — окно удаления первой записи говорит, что
+    скан останется; удалили её — окно оставшейся говорит, что скан удалится вместе с переводом."""
+    from scans import scan_pdf
+    live.add_user("tl-delscan")
+    translator.chat_script = [["Страница."], ["Seite."]]
+    repeat = f"""(async () => {{ const m = {API}; window.first = {TL_DONE}.dataset.id;
+      const job = await m.api('POST', '/api/translate/' + window.first + '/repeat', {{ source_lang: 'en', target_lang: 'de' }});
+      for (let t = 0; t < 200; t++) {{
+        if ((await m.api('GET', '/api/translate/' + job.id)).state === 'done') return job.id;
+        await new Promise((ok) => setTimeout(ok, 50));
+      }}
+      return null; }})()"""
+    row = "document.querySelector(`.tl-row[data-id='${window.first}']`)"
+    notes = "[...document.querySelectorAll('#tl-delete-dialog p:not(.error)')].map(p => p.textContent)"
+    r = browser.drive(live.url + "/", [*translating("tl-delscan"),
+        put_files("#tl-file-input", [("Скан.pdf", scan_pdf("ink"))], "application/pdf"),
+        ("wait", "!document.querySelector('#tl-chip').hidden"),
+        ("click", "#tl-go"),
+        ("wait", TL_DONE),
+        ("eval", "again", repeat),
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+        *go("translate"), ("wait", "document.querySelectorAll('.tl-row[data-state=done]').length === 2"),
+        ("eval", "open", f"{row}.querySelector('.tl-delete').click()"),
+        ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "shared", notes),
+        ("click", "#tl-delete-confirm"),
+        ("wait", "document.querySelectorAll('.tl-row').length === 1 && !document.querySelector('#tl-delete-dialog')"),
+        ("click", ".tl-row .tl-delete"),
+        ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "alone", notes)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["again"] is not None
+    assert v["shared"][-1] == "Распознанный документ останется в «Сканах»: его использует повтор этого перевода."
+    assert v["alone"][-1] == "Распознанный документ в «Сканах» удалится вместе с переводом."
+    assert not problems(r), problems(r)
+
+
 def test_translate_without_model_reads_history(browser, live, translator):
     """Раздел без модели: вместо «Перевести», «Файл» и «Фото» — подсказка со ссылкой на настройки; история
     открывается в окнах и скачивается."""
@@ -8415,6 +8454,42 @@ def test_code_unsaved_edit_survives_crumb_navigation(browser, live):
     assert v["asked"] == here and v["stayed"] == [here, "print('правка')\n", "alpha"]
     assert v["kept"] == [here, "code"] and v["left"] is False
     assert code_requests(machine, "save") == []
+    assert not problems(r), problems(r)
+
+
+def test_code_unsaved_edit_back_and_stay_keeps_the_history(browser, live):
+    """Ревью: «Назад» с несохранённой правкой и «Остаться» писали адрес файла в прежнюю запись истории — уровень,
+    с которого пришли к файлу, пропадал. Теперь «Остаться» — файл, правка и адрес на месте, записей столько же;
+    «Сохранить» и снова «Назад» — проекты компьютера, откуда пришли."""
+    from fake_bridge import pid
+    login = "code-unsaved-back"
+    live.add_user(login)
+    machine = code_files_machine()
+    aid, sb = code_online(live, login, machine)
+    here = f"#/code/{aid}/{pid('alpha')}"
+    editor = "document.querySelector('#code-editor')?.value"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('правка')\n"),
+            ("eval", "length", "window.length0 = history.length"),
+            ("eval", "back", "history.back()"), ("wait", CODE_UNSAVED),
+            ("click", "#code-unsaved .dialog-close"), ("wait", f"!{CODE_UNSAVED}"),
+            ("eval", "stayed", f"[location.hash, {editor}, history.length === window.length0]"),
+            ("click", "#code-save"), ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'"),
+            ("eval", "again", "history.back()"),
+            ("wait", f"location.hash === '#/code/{aid}'"
+                     f" && document.querySelector(\"#code-projects li[data-pid='{pid('alpha')}']\")"),
+            ("eval", "landed", f"[location.hash, !{CODE_UNSAVED}]")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["stayed"] == [here, "print('правка')\n", True]
+    assert v["landed"] == [f"#/code/{aid}", True]
+    assert [q["text"] for q in code_requests(machine, "save")] == ["print('правка')\r\n"]
     assert not problems(r), problems(r)
 
 

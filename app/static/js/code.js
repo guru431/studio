@@ -25,8 +25,9 @@
  * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent.
  *
  * Правка файла не сохранена, а адрес уходит (строка пути, «Назад», другой раздел студии) — адрес возвращается
- * (history.replaceState) и спрашивает окно «Изменения не сохранены» вкладки «Файлы»; «Уйти без сохранения» —
- * снова туда (hold — его зовёт роутер app.js до смены уровня или раздела). */
+ * (history.replaceState новой записи; «Назад» и «Вперёд» на запись с меткой codeEntry — pushState после неё) и
+ * спрашивает окно «Изменения не сохранены» вкладки «Файлы»; «Уйти без сохранения» — снова туда (hold — его зовёт
+ * роутер app.js до смены уровня или раздела). */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
@@ -51,6 +52,8 @@ let wantFile = null;    // путь файла из шага чата до пе�
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
 let shownHash = null;   // адрес отрисованного уровня: сюда возвращает несохранённая правка
+let entries = 0;        // номера меток записей истории, что показывал раздел ({ codeEntry: n } в history.state)
+let shownEntry = null;  // метка записи отрисованного уровня
 
 /** Перенаправление без записи в истории браузера; своё — без вопроса о несохранённой правке. */
 function redirect(path) {
@@ -59,12 +62,20 @@ function redirect(path) {
 }
 
 /** Роутер app.js перед любой сменой адреса (уровень, раздел, «Назад»): правка файла не сохранена — адрес назад,
- * вопрос окном вкладки «Файлы»; «Уйти без сохранения» — снова на новый адрес. true — переход задержан. */
+ * вопрос окном вкладки «Файлы»; «Уйти без сохранения» — снова на новый адрес. true — переход задержан.
+ * Новая запись (ссылка, location.hash =) метки не несёт — она и становится адресом файла. С меткой — переход по
+ * истории («Назад», «Вперёд») на запись, что раздел уже показывал: её не трогать (иначе уровень, куда ушли,
+ * пропал бы из истории), адрес файла — новой записью после неё; «Уйти» — назад на неё. */
 export function hold() {
   if (!view || !view.dirty || !view.dirty() || !shownHash || location.hash === shownHash) return false;
   const target = location.hash;
-  history.replaceState(null, '', shownHash);
-  view.leave(() => location.replace(target));
+  if (history.state && history.state.codeEntry) {
+    history.pushState({ codeEntry: shownEntry }, '', shownHash);
+    view.leave(() => history.back());
+  } else {
+    history.replaceState(null, '', shownHash);
+    view.leave(() => location.replace(target));
+  }
   return true;
 }
 
@@ -135,7 +146,7 @@ async function agentsList() {
 function computers(mine) {
   const { main, status } = frame([]);
   const wanted = ctx.query && ctx.query.get('pin');
-  if (wanted) history.replaceState(null, '', '#/code');
+  if (wanted) history.replaceState(history.state, '', '#/code');   // метка записи (hold) — та же
   let pinBox = null;
 
   function showPin(agent) {
@@ -416,6 +427,11 @@ function render() {
   if (view) view.unmount();
   view = null;
   shownHash = location.hash;
+  shownEntry = history.state && history.state.codeEntry;
+  if (!shownEntry) {                    // запись впервые показана разделом — метка для hold
+    shownEntry = ++entries;
+    history.replaceState({ ...history.state, codeEntry: shownEntry }, '');
+  }
   const path = wantFile;
   wantFile = null;
   const parts = ctx.id ? ctx.id.split('/') : [];

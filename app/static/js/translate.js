@@ -542,7 +542,9 @@ function build(view, ctx) {
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, 'Удалить');
     const dialog = openDialog(body, { id: 'tl-delete-dialog', title: 'Удалить перевод?', actions: [yes],
       body: [el('p', {}, 'Удалятся исходник, перевод и исходный файл.'),
-        item.scan_id ? el('p', {}, 'Распознанный документ в «Сканах» удалится вместе с переводом.') : null, fail] });
+        item.scan_id ? el('p', {}, item.scan_shared
+          ? 'Распознанный документ останется в «Сканах»: его использует повтор этого перевода.'
+          : 'Распознанный документ в «Сканах» удалится вместе с переводом.') : null, fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
