@@ -7,6 +7,7 @@ import asyncio
 import base64
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -43,9 +44,21 @@ def signin(login="owner", password="password-123"):
     return [("idle",), ("type", "#login", login), ("type", "#password", password), ("click", "#submit")]
 
 
+#: сбои среды, а не страницы: WSAENOBUFS Windows (кончились буферы сокетов или эфемерные порты под нагрузкой
+#: полного набора) — Chrome пишет его отказом загрузки любого файла
+ENV_FAULTS = ("net::ERR_NO_BUFFER_SPACE",)
+
+
 def problems(r):
-    """Ошибки журнала браузера: исключения, console.error, нарушения CSP, отказы загрузки."""
-    return r.get("log", [])
+    """Ошибки журнала браузера: исключения, console.error, нарушения CSP, отказы загрузки — без сбоев среды."""
+    return [line for line in r.get("log", []) if not any(fault in str(line) for fault in ENV_FAULTS)]
+
+
+def test_problems_skip_environment_faults():
+    buffer = "network: Failed to load resource: net::ERR_NO_BUFFER_SPACE (http://127.0.0.1/static/icons/icon.svg)"
+    real = "network: Failed to load resource: the server responded with a status of 404 (/static/x.js)"
+    assert problems({"log": [buffer, real]}) == [real]
+    assert problems({}) == []
 
 
 @pytest.mark.parametrize("width", [390, 1280])
@@ -1198,7 +1211,7 @@ def test_chat_reasoning_switch_and_thinking_line(browser, live):
             ("eval", "done", done),
             ("eval", "saved", f"""(async () => {{ const m = {API};
               const c = await m.api('GET', '/api/chats/' + location.hash.split('/')[2]);
-              return [c.chat.thinking, c.messages.at(-1).reasoning]; }})()"""),
+              return [c.chat.thinking, c.messages.at(-1).reasoning, c.messages.at(-1).reasoning_sec]; }})()"""),
             ("eval", "reload", "location.reload()"),
             ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
             ("wait", f"document.querySelectorAll('#messages .msg').length === 2 && {THINK_TOGGLE} && !{THINK_TOGGLE}.hidden"),
@@ -1218,8 +1231,10 @@ def test_chat_reasoning_switch_and_thinking_line(browser, live):
     assert v["note"] == "С рассуждением модель реже ищет в интернете"
     assert v["busy"].startswith("Думает… ") and v["busy"].endswith(" сСчитаю "), v["busy"]
     img = "Считаю <img src=x onerror=alert(1)>"
-    assert v["done"][:2] == ["410", False] and v["done"][2].startswith("💭 Рассуждала ") and v["done"][3:] == [img, 0]
-    assert v["saved"] == [True, img]
+    # секунды сразу после ответа — те, что записал сервер (событие `done`), а не часы страницы
+    sec = max(1, math.floor(v["saved"][2] + 0.5))
+    assert v["done"] == ["410", False, f"💭 Рассуждала {sec} с", img, 0]
+    assert v["saved"][:2] == [True, img]
     assert v["kept"] == [[False, "true", "Рассуждение"], v["done"]]
     assert v["cloud"] == ""
     assert live.gw.chat_requests[-1]["chat_template_kwargs"] == {"enable_thinking": True}

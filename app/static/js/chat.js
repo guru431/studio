@@ -226,6 +226,7 @@ async function readServer(job, response) {
       } else if (event === 'done' || event === 'error') {
         job.message.status = event === 'done' ? data.status : 'error';
         if (event === 'error') job.message.error = data.message;
+        if (event === 'done' && Number.isFinite(data.reasoning_sec)) job.doneSec = data.reasoning_sec;
         cut = false;
         break;
       }
@@ -235,6 +236,8 @@ async function readServer(job, response) {
   }
   if (cut) job.lost = true;
   thinkEnd(job);
+  // секунды, что записал сервер, — а не часы страницы: иначе «1 с» до перечитывания и «2 с» после
+  if (job.doneSec !== undefined) job.thinkSum = job.message.reasoning_sec = job.doneSec;
   finish(job);
 }
 

@@ -133,6 +133,7 @@ WEB_NOTE = ("У тебя есть доступ к интернету через 
 STORAGE = "хранилище недоступно"
 SCAN_POLL_SEC = 1                # ход ждёт скан: состояние документов — из базы раз в столько
 NO_OCR = "это скан — подключите «Распознавание» в настройках"
+SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания модель получила бы документ без них"
 #: начало слов ответа-ошибки «скан не распознан: …» — они хранятся в content ответа, страница получает их `error`
 SCAN_FAILED = "скан не распознан"
 NOT_READY = "скан ещё распознаётся"
@@ -913,12 +914,12 @@ class StreamTask:
             status, error = "error", f"сбой службы: {type(e).__name__}"
         finally:
             pings.cancel()
-        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
-                *self.thought_out())
+        thought = self.thought_out()
+        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status, *thought)
         if STREAMS.get(self.message_id) is self:
             del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
-        self.put(*(("error", error) if error is not None else ("done", status)))
+        self.put(*(("error", error) if error is not None else ("done", _ended_with(status, thought[1]))))
 
 
 STREAMS: dict[str, StreamTask] = {}
@@ -935,9 +936,9 @@ async def _cancel(streams: list[StreamTask]) -> None:
     await asyncio.gather(*(st.task for st in streams), return_exceptions=True)
     for st in streams:
         status = "error" if st.shutdown else "stopped"
-        if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status,
-                   *st.thought_out()):
-            st.put("done", status)
+        thought = st.thought_out()
+        if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status, *thought):
+            st.put("done", _ended_with(status, thought[1]))
         if STREAMS.get(st.message_id) is st:
             del STREAMS[st.message_id]
 
@@ -969,6 +970,12 @@ async def stop_all() -> None:
     await _cancel(streams)
 
 
+def _ended_with(status: str, reasoning_sec: "float | None") -> dict:
+    """Данные события `done`: статус и секунды рассуждения, что записаны в `messages.reasoning_sec`, — страница
+    пишет их, а не свои часы (иначе «1 с» до перечитывания и «2 с» после)."""
+    return {"status": status} | ({"reasoning_sec": reasoning_sec} if reasoning_sec is not None else {})
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -989,7 +996,7 @@ async def _events(st: StreamTask, user_message_id: str):
         elif kind == "ocr":
             yield _sse("ocr", data)
         elif kind == "done":
-            yield _sse("done", {"status": data})
+            yield _sse("done", data)
             return
         else:
             yield _sse("error", {"message": data})
@@ -1096,6 +1103,27 @@ async def delete_chat(chat_id: str, request: Request):
 
 # ---- API: вложения -------------------------------------------------------------
 
+def _layer_text(layer: list[tuple[str, bool]], reader) -> str:
+    """Текст слоя PDF без «Распознавания» через сервер; страницы-сканы (`ocr_render.is_scan`), и когда это
+    только часть страниц, — отказ 422 `scan`, как у переводчика: иначе модель молча получила бы документ без
+    них. Пустая страница без картинки — не скан."""
+    wanted = sum(scan for _, scan in layer)
+    if wanted:
+        if wanted == len(layer):
+            words = NO_OCR if reader is None else sections.unlisted(reader[0])
+        else:
+            words = SOME_SCANS.format(wanted, len(layer)) + (
+                " — подключите «Распознавание» в настройках" if reader is None
+                else f"; {sections.unlisted(reader[0])}")
+        raise HTTPException(422, {"code": "scan", "message": words})
+    text = "\n\n".join(t for t, _ in layer if t)     # как documents.extract
+    if not text:
+        raise documents.DocumentError(documents.SCAN)
+    if len(text) > documents.TEXT_MAX_CHARS:
+        raise documents.DocumentError(documents.TOO_LONG)
+    return text
+
+
 @router.post("/attachments", status_code=201)
 async def upload_attachment(request: Request):
     """Картинка (PNG, JPEG, WebP — нормализуется до PNG) или документ (текст — сразу); файл — в media.
@@ -1115,6 +1143,8 @@ async def upload_attachment(request: Request):
             reader = sections.default(uid, "ocr") if suffix == ".pdf" else None
             if reader is not None and reader[0].proxied:
                 text, scan = ocr.plan_pages(await asyncio.to_thread(ocr_render.pdf_scan_pages, data))
+            elif suffix == ".pdf":
+                text = _layer_text(await asyncio.to_thread(ocr_render.pdf_layer_pages, data), reader)
             else:
                 text = await asyncio.to_thread(documents.extract, name, data)
             kind, mime, body, download = "document", DOC_MIME[suffix], data, name
