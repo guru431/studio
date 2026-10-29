@@ -55,6 +55,7 @@ class FakeMachine:
         self.projects = projects if projects is not None else {}
         self.pin = pin
         self.pin_fails = 0
+        self.read_only: set[str] = set()         # пути файлов «только для чтения»: `save` — отказ read_only
         self.open_sessions: set[str] = set()
         self.requests: list[dict] = []
         self.script: list[dict] = []
@@ -261,6 +262,8 @@ class FakeMachine:
         new = text.encode()
         if len(new) > OPEN_MAX:
             raise Refused("too_large", "файл больше 2 МиБ")
+        if req["path"] in self.read_only:
+            raise Refused("read_only", "файл только для чтения")
         self._files(req)[req["path"]] = new
         return {"version": _version(new)}
 

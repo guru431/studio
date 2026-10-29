@@ -213,6 +213,55 @@ def test_new_chat_writes_a_row_and_an_event_but_not_the_bridge(studio):
     assert len(m.requests) == before
 
 
+def test_new_chats_per_computer_are_limited(studio):
+    """«Новый чат» моста не зовёт — открытость компьютера его не сдерживает; поэтому строк `code_chats` и
+    событий `session_start` в неудаляемой истории — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""
+    aid, _, _ = setup(studio)
+    limit = claude_code.NEW_CHATS_PER_MIN
+    assert limit == 10
+    for _ in range(limit):
+        assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+        studio.clock[0] += 1
+    r = studio.c.post(url(aid, "projects", BETA, "chats"))
+    assert (r.status_code, detail(r)) == (429, {"code": "too_many", "message": claude_code.TOO_MANY})
+    count = lambda: state.DB.execute("SELECT count(*) FROM code_chats").fetchone()[0]       # noqa: E731
+    assert count() == limit and [e["kind"] for e in events()].count("session_start") == limit
+    studio.clock[0] += 50                            # первая отметка — минуту назад: место освободилось
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 429
+    assert count() == limit + 1
+
+
+def test_closed_foreign_session_does_not_come_back_as_ghost(studio):
+    """Отметку о чате, которого студия не заводила, PATCH пишет, только если сессия есть на машине (иначе 404
+    и строки нет; закрыт компьютер — `closed`); строка без сессии на машине в списке — только открытая: закрытая
+    сессия терминала, которую Claude Code вычистил по сроку, не возвращается «Новым чатом» студии."""
+    aid, m, _ = setup(studio)
+    other = "33333333-3333-4333-8333-333333333333"
+    count = lambda: state.DB.execute("SELECT count(*) FROM code_chats").fetchone()[0]       # noqa: E731
+    r = studio.c.patch(url(aid, "projects", ALPHA, "chats", other), json={"state": "closed"})
+    assert (r.status_code, detail(r)["code"]) == (404, "not_found")
+    assert count() == 0
+    assert studio.c.patch(url(aid, "projects", ALPHA, "chats", B), json={"state": "closed"}).status_code == 200
+    new = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    before = len(m.requests)
+    for value in ("closed", "open"):                 # своя строка есть — мост не спрашивают
+        assert studio.c.patch(url(aid, "projects", ALPHA, "chats", new), json={"state": value}).json() == {
+            "state": value}
+    assert len(m.requests) == before
+    del m.projects["alpha"]["chats"][B]              # Claude Code вычистил старую сессию
+    items = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
+    assert [i["chat"] for i in items] == [new, A]
+    assert studio.c.patch(url(aid, "projects", ALPHA, "chats", new), json={"state": "closed"}).status_code == 200
+    assert [i["chat"] for i in studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]] == [A]
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+    settle(studio)
+    r = studio.c.patch(url(aid, "projects", ALPHA, "chats", other), json={"state": "open"})
+    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+    assert count() == 2
+
+
 def test_history_pages_from_the_end(studio):
     aid, m, _ = setup(studio)
     data = studio.c.get(url(aid, "projects", ALPHA, "chats", A)).json()
@@ -294,6 +343,25 @@ def test_odd_bridge_answers_are_502_and_long_words_are_cut(studio, monkeypatch):
     answer.update(ok=False, code="zz\ud83d", message="x")
     r = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a"})
     assert (r.status_code, detail(r)["code"]) == (502, "bridge")
+
+
+def test_deeply_nested_bridge_answer_is_relayed_not_500(studio, monkeypatch):
+    """Ответ моста идёт браузеру мимо `jsonable_encoder` FastAPI: его рекурсия (предел ~1000) на вложенности,
+    которую пропускает разбор кадра, давала 500. Теперь — как есть или 502 `bridge`."""
+    aid, m, _ = setup(studio)
+    deep: list = []
+    for _ in range(2000):
+        deep = [deep]
+    monkeypatch.setattr(m, "handle", lambda req: (
+        {"t": "res", "id": req["id"], "ok": True, "data": {"items": deep}}, []))
+    for r in (studio.c.get(url(aid, "projects", ALPHA, "chats", A)),
+              studio.c.get(url(aid, "projects", ALPHA, "git")),
+              studio.c.post(url(aid, "projects", ALPHA, "files"), json={"path": ""})):
+        assert r.status_code in (200, 502), (r.url, r.status_code)
+        if r.status_code == 502:
+            assert detail(r) == {"code": "bridge", "message": "мост ответил непонятно"}
+        else:
+            assert r.headers["content-type"] == "application/json" and r.content.startswith(b'{"items":[[[[')
 
 
 def test_odd_events_neither_break_nor_stall_the_stream(studio):
@@ -780,6 +848,15 @@ def test_bridge_refusals_map_to_statuses(studio, monkeypatch):
     assert (r.status_code, detail(r)) == (403, {"code": "outside", "message": "путь вне проекта"})
 
 
+def test_read_only_file_save_is_409_with_the_bridge_words(studio):
+    """Файл «только для чтения» мост не пишет — отказ `read_only` его словами, а не «мост ответил непонятно»."""
+    aid, m, _ = with_files(studio)
+    m.read_only.add("src/app.py")
+    r = studio.c.put(project_url(aid, "file"), json={"path": "src/app.py", "text": "x", "version": sha(APP)})
+    assert (r.status_code, detail(r)) == (409, {"code": "read_only", "message": "файл только для чтения"})
+    assert m.projects["alpha"]["files"]["src/app.py"] == APP
+
+
 def test_file_body_over_the_limit_is_413_before_the_bridge(studio):
     aid, m, _ = with_files(studio)
     before = len(m.requests)
@@ -859,8 +936,8 @@ def test_pdf_memory_is_per_session(studio, monkeypatch):
 
 
 def test_pdf_memory_still_asks_the_bridge(studio, monkeypatch):
-    """Страница из памяти — только после просьбы `projects` той же сессии: заперлась и отперлась — `closed`,
-    компьютер не на связи — `offline`; файл с машины заново не тянется."""
+    """Страница из памяти — только после просьбы `projects` той же сессии: компьютер не на связи — `offline`.
+    Заперлась и отперлась — `closed`, а память уходит (`bridge.forget`): после PIN файл тянется заново."""
     monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
     aid, m, link = with_files(studio)
 
@@ -875,10 +952,35 @@ def test_pdf_memory_still_asks_the_bridge(studio, monkeypatch):
     r = page(2)
     assert (r.status_code, detail(r)["code"]) == (409, "closed")
     assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
-    assert page(2).status_code == 200 and len(sent(m, "raw")) == 1
+    assert len(sent(m, "raw")) == 2                                   # памяти нет — отказ на самой `raw`
+    assert page(2).status_code == 200 and len(sent(m, "raw")) == 3
+    assert page(1).status_code == 200 and len(sent(m, "raw")) == 3
     fake_bridge.drop(studio, link)
     r = page(2)
     assert (r.status_code, detail(r)["code"]) == (409, "offline")
+
+
+def test_pdf_cache_expires_by_ttl_in_background(studio, monkeypatch):
+    """Память PDF уходит по сроку при любом обращении к разделу, а не только при следующем `pdf`."""
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
+    aid, m, _ = with_files(studio)
+    assert studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 1}).status_code == 200
+    assert len(claude_code.PDFS) == 1
+    studio.clock[0] += claude_code.PDF_TTL_SEC - 1
+    assert studio.c.get(url(aid, "projects")).status_code == 200 and len(claude_code.PDFS) == 1
+    studio.clock[0] += 1
+    assert studio.c.get(url(aid, "projects")).status_code == 200
+    assert claude_code.PDFS == {}
+
+
+def test_pdf_cache_dropped_on_forget(studio, monkeypatch):
+    """Сессия заперлась — память её PDF уходит сразу (`bridge.forget`), не дожидаясь срока."""
+    monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
+    aid, m, _ = with_files(studio)
+    assert studio.c.post(project_url(aid, "pdf"), json={"path": "docs/a.pdf", "page": 1}).status_code == 200
+    assert len(claude_code.PDFS) == 1
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert claude_code.PDFS == {}
 
 
 def test_pdf_over_the_raw_limit_is_413(studio, monkeypatch):
