@@ -258,7 +258,7 @@ function build(view, ctx) {
   function follow(wanted) {
     records.load();
     if (!wanted) return;
-    history.replaceState(null, '', '#/speech');
+    history.replaceState(history.state, '', '#/speech');
     select(wanted);
   }
   follow(ctx.query.get('id'));

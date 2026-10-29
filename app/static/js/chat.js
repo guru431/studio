@@ -779,7 +779,7 @@ function build(view, ctx) {
   }
 
   async function fromTranscript(tid, ask) {
-    history.replaceState(null, '', '#/chat');      // перезагрузка не сделает второе вложение
+    history.replaceState(history.state, '', '#/chat');      // перезагрузка не сделает второе вложение
     open(null);
     if (ctx.hint) return;                           // без модели чата новый диалог не начать
     notice.textContent = '';
@@ -807,7 +807,7 @@ function build(view, ctx) {
   /* из «Распознавания» (#/chat?ocr=<id>&ask=…): как из расшифровки, но модель — умолчание раздела и без окна
      внешней модели (спека OCR 6.4: документ свой) */
   async function fromScan(sid, ask) {
-    history.replaceState(null, '', '#/chat');      // перезагрузка не сделает второе вложение
+    history.replaceState(history.state, '', '#/chat');      // перезагрузка не сделает второе вложение
     open(null);
     if (ctx.hint) return;
     notice.textContent = '';
@@ -1282,7 +1282,7 @@ function build(view, ctx) {
       chatId = created.id;
       chat = { chat: created, messages: [] };
       draft = null;
-      history.replaceState(null, '', `#/chat/${created.id}`);
+      history.replaceState(history.state, '', `#/chat/${created.id}`);
       loadList();
       const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
       draftThink = false;

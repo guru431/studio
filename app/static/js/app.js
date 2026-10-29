@@ -77,6 +77,7 @@ const darkMedia = matchMedia('(prefers-color-scheme: dark)');
 const menu = document.getElementById('menu');
 let current = null;      // { section, module }
 let renders = 0;         // номер последнего перехода: медленная загрузка раздела не перебьёт новый
+let entries = 0;         // номера меток записей истории ({ entry: n } в history.state) — для hold() раздела
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -189,12 +190,15 @@ async function render() {
   let route = parse(location.hash);
   if (route.section === 'profile') {            // прежний адрес профиля — настройки
     route = { section: 'settings', id: null, query: new URLSearchParams() };
-    history.replaceState(null, '', '#/settings');
+    history.replaceState(history.state, '', '#/settings');
   }
   if (!allowed(route)) {
     route = { section: 'chat', id: null, query: new URLSearchParams() };
-    history.replaceState(null, '', '#/chat');
+    history.replaceState(history.state, '', '#/chat');
   }
+  // метка записи: hold() раздела отличает «Назад»/«Вперёд» (запись с меткой) от новой записи; разделы, меняя адрес
+  // своей записи, держат history.state
+  if (!(history.state && history.state.entry)) history.replaceState({ ...history.state, entry: ++entries }, '');
   for (const tab of document.querySelectorAll('#rail .tab, #search-open')) {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');

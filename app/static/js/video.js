@@ -148,7 +148,7 @@ function build(view, ctx) {
   /** ?id адреса — при сборке и при переходе внутри раздела (update): прочее состояние не трогает. */
   function follow(wanted) {
     if (!wanted) return;
-    history.replaceState(null, '', '#/video');
+    history.replaceState(history.state, '', '#/video');
     api('GET', `/api/videos/${encodeURIComponent(wanted)}`).then((item) => {
       if (!alive) return;
       if (item.state === 'done' && item.media_id) {

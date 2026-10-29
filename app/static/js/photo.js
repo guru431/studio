@@ -202,7 +202,7 @@ function build(view, ctx) {
   /** ?id адреса — при сборке и при переходе внутри раздела (update): прочее состояние не трогает. */
   function follow(wanted) {
     if (!wanted) return;
-    history.replaceState(null, '', '#/photo');
+    history.replaceState(history.state, '', '#/photo');
     api('GET', `/api/images/${encodeURIComponent(wanted)}`).then((item) => {
       if (!alive) return;
       if (item.state === 'done' && item.media_id) {

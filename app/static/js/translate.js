@@ -541,7 +541,8 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, 'Удалить');
     const dialog = openDialog(body, { id: 'tl-delete-dialog', title: 'Удалить перевод?', actions: [yes],
-      body: [el('p', {}, 'Удалятся исходник, перевод и исходный файл.'),
+      body: [el('p', {}, item.kind === 'text' || item.scan_id ? 'Удалятся исходник и перевод.'
+          : 'Удалятся исходник и перевод, а исходный файл — если его не использует повтор этого перевода.'),
         item.scan_id ? el('p', {}, item.scan_shared
           ? 'Распознанный документ останется в «Сканах»: его использует повтор этого перевода.'
           : 'Распознанный документ в «Сканах» удалится вместе с переводом.') : null, fail] });
@@ -730,7 +731,7 @@ function build(view, ctx) {
   /** ?id адреса («В работе», уведомление, «Поиск») — при сборке и при переходе внутри раздела (update). */
   function follow(wanted) {
     if (wanted) {
-      history.replaceState(null, '', '#/translate');
+      history.replaceState(history.state, '', '#/translate');
       picked = false;
     }
     return Promise.all([docs.load(), langsReady]).then(() => { if (wanted && !picked) docs.select(wanted, true); });

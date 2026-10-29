@@ -467,7 +467,7 @@ function build(view, ctx) {
    * (update): черновик правки той же записи цел (show его не трогает). */
   function follow(wanted) {
     if (wanted) {
-      history.replaceState(null, '', '#/transcribe');
+      history.replaceState(history.state, '', '#/transcribe');
       picked = false;
     }
     // пока шёл список, запись могли выбрать сами (загрузка, список другого чтения) — её не перебивать
