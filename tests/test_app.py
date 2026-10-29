@@ -543,8 +543,10 @@ def test_unenroll_that_erased_the_key_but_not_the_pin_is_not_linked(make, home, 
     ctrl = make(sleep=sleep)
     ctrl.start()
     until(lambda: ctrl.state == "online")
-    ok, _ = ctrl.unenroll()
+    ok, words = ctrl.unenroll()
     assert not ok and not (home / "key.bin").exists() and PinStore(home).has_pin   # PIN остался — сторона безопасная
+    assert words == ("Компьютер отключён, но прежний PIN стереть не удалось — после новой привязки смените или "
+                     "уберите его в окне моста")                     # вид «Вход»: кнопки «Отключиться» там нет
     until(lambda: ctrl.state == "setup")
     assert len(ctrl.links) == 1
 

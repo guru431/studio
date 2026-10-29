@@ -29,6 +29,8 @@ QUIT_SEC = 60  # выход: ходы (turns.CLOSE_SEC × 2) и канал
 UNENROLL_SEC = 120  # «Отключиться»: ходы, канал и запрос к студии (15 с) — не дольше
 ERASE_TRIES, ERASE_PAUSE_SEC = 10, 0.05  # стирание ключа: файл читает другой поток (окно, трей) — WinError 5/32
 ERASE_FAILED = "Не удалось стереть ключ компьютера — закройте окно моста и нажмите «Отключиться» снова"
+PIN_LEFT = ("Компьютер отключён, но прежний PIN стереть не удалось — после новой привязки смените или уберите его в "
+            "окне моста")
 
 
 def _configured(cfg: store.Config, key: str | None) -> bool:
@@ -261,8 +263,9 @@ class Controller:
                 break
             except OSError as e:  # файл держит другой поток (WinError 5/32): пауза и снова
                 if attempt + 1 == ERASE_TRIES:
-                    log.error("отвязка: ключ не стёрт: %s", type(e).__name__)
-                    return False, ERASE_FAILED
+                    gone = not (self.h / store.KEY).exists()  # ключ ушёл, остался PIN — окно уже «Вход»
+                    log.error("отвязка: %s не стёрт: %s", "PIN" if gone else "ключ", type(e).__name__)
+                    return False, PIN_LEFT if gone else ERASE_FAILED
                 await self._sleep(ERASE_PAUSE_SEC)
         self.fresh = False
         log.info("отвязка: ключ и PIN стёрты")
