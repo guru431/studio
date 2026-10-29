@@ -96,7 +96,8 @@ class Runner:
         self.max_turns = max_turns
         self.find_cli = find_cli
         self._turns: dict[str, _Turn] = {}
-        self._closing = False  # close() идёт (или прошёл с `final`): новых ходов нет
+        self._closing = False  # close() идёт (или прошёл с `final` или `hold`): новых ходов нет
+        self._final = False  # close(final=True): выход моста — `reopen` ходы не возвращает
 
     # --- просьбы студии ---
 
@@ -193,11 +194,13 @@ class Runner:
             log.info("ход %s: interrupt не прошёл — отмена", t.turn)
             t.task.cancel()
 
-    async def close(self, final: bool = False) -> None:
+    async def close(self, final: bool = False, hold: bool = False) -> None:
         """Мост выходит (или отозван): остановить все ходы и дождаться их задач (дальше `CLOSE_SEC` — отмена);
         пока идёт — новые ходы `busy` «мост выходит». `final` (выход моста) — и после: канал ещё досылает очередь,
-        а ход, начатый в этот миг, погиб бы с циклом без `done`."""
+        а ход, начатый в этот миг, погиб бы с циклом без `done`. `hold` (отвязка, отзыв, замена) — и после, до
+        `reopen()`: просьба `turn`, что уже в пути (её `find_project` ещё идёт), ход не начнёт."""
         self._closing = True
+        self._final = self._final or final
         try:
             turns = list(self._turns.values())
             for t in turns:
@@ -212,8 +215,12 @@ class Runner:
             if pending:
                 await asyncio.wait(pending, timeout=CLOSE_SEC)
         finally:
-            if not final:
+            if not (final or hold):
                 self._closing = False
+
+    def reopen(self) -> None:
+        """После `close(hold=True)` — ходы снова можно (ядро зовёт перед новым каналом); после выхода — нет."""
+        self._closing = self._final
 
     def live(self) -> dict[str, bool]:
         """Идущие ходы: чат → ждёт ли ход ответа на карточку."""

@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import winreg
 
 import pytest
 
@@ -16,6 +17,8 @@ from studio_agent import autostart
 pytestmark = pytest.mark.integration
 
 REPO = autostart.REPO
+TEST_ROOT = r"Software\studio-agent-test"
+RUN_KEY = TEST_ROOT + r"\Run"  # настоящий Run установка в тестах не трогает
 IGNORED = ["tests/test_app.py", ".claude/claude-switch.ps1", "CLAUDE.md", "AGENTS.md", "FINDINGS.md",
            "FINDINGS-archive.md", "IDEAS.md", "pytest.ini", "requirements-dev.txt", ".gitignore", ".gitattributes"]
 SHIPPED = ["install.cmd", "install.ps1", "requirements.txt", "studio_agent.pyw", "README.md", "studio_agent/app.py",
@@ -57,10 +60,21 @@ def has_mark(path) -> bool:
         return False
 
 
+@pytest.fixture(autouse=True)
+def run_key():
+    yield RUN_KEY
+    for k in (RUN_KEY, TEST_ROOT):
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, k)
+        except FileNotFoundError:
+            pass
+
+
 def install(src, local):
     env = {**os.environ, "LOCALAPPDATA": str(local)}
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-                        str(src / "install.ps1"), "-NoVenv", "-NoStart"], env=env, capture_output=True, timeout=120)
+                        str(src / "install.ps1"), "-NoVenv", "-NoStart", "-RunKey", "HKCU:\\" + RUN_KEY], env=env,
+                       capture_output=True, timeout=120)
     assert r.returncode == 0, (r.stdout + r.stderr).decode("cp866", "replace")
 
 
@@ -115,6 +129,23 @@ def test_install_ps1_installs_into_programs_from_archive(tmp_path):
                         "from studio_agent import autostart; print(autostart.command())", str(target)],
                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert r.stdout.strip() == f'"{target}\\.venv\\Scripts\\pythonw.exe" "{target}\\studio_agent.pyw"'
+    with pytest.raises(FileNotFoundError):                              # автозапуска не было — и не заведён
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY)
+
+
+def test_install_moves_an_enabled_autostart_to_the_installed_copy(tmp_path):
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, autostart.VALUE, 0, winreg.REG_SZ, autostart.command())   # включён git-копией
+    src = archive(tmp_path / "Downloads" / "studio-agent")
+    local = tmp_path / "Local"
+    target = local / "Programs" / "studio-agent"
+    install(src, local)
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+        value, kind = winreg.QueryValueEx(k, autostart.VALUE)
+    r = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); "
+                        "from studio_agent import autostart; print(autostart.command())", str(target)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert (value, kind) == (r.stdout.strip(), winreg.REG_SZ)          # окно этой копии увидит галочку
 
 
 def test_install_from_the_installed_copy_stays_in_place(tmp_path):

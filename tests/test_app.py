@@ -1,6 +1,9 @@
 """Controller без Tk и трея: канал, привязка, настройка, PIN, выход — с подставными Link, привязкой и автозапуском."""
 
 import asyncio
+import http.client
+import pathlib
+import threading
 import time
 
 import pytest
@@ -94,7 +97,8 @@ def make(home):
     made = []
 
     def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
-              cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: 204, welcomes=None, order=None):
+              cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: (204, True), welcomes=None,
+              order=None):
         links, probes, probe_paths, unenrolls = [], [], [], []
 
         def link_factory(url, key, agent, on_state, on_welcome=None):
@@ -372,25 +376,27 @@ def test_unenroll_asks_studio_and_forgets(make, home, root, enrolled):
     assert ctrl.links[0].hello["has_pin"] is True and ctrl.agent.has_pin is False
 
 
-@pytest.mark.parametrize("answer", [405, 403, 500, "unavailable"])
+@pytest.mark.parametrize("answer", [405, 403, 401, 500, "unavailable", "broken"])
 def test_unenroll_without_studio_still_forgets(make, home, root, enrolled, answer):
     def unenroll(url, key):
         if answer == "unavailable":
             raise enroll.EnrollError("unavailable", "Студия недоступна (URLError)")
-        return answer
+        if answer == "broken":  # не обёрнутое urllib — и такое не роняет отвязку
+            raise http.client.IncompleteRead(b"")
+        return answer, False
 
     ctrl = make(unenroll=unenroll)
     ctrl.start()
     until(lambda: ctrl.state == "online")
     ok, words = ctrl.unenroll()
-    assert not ok and words == ("Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → "
-                                "«Компьютеры»")
+    assert ok and words == ("Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → "
+                            "«Компьютеры»")
     forgotten(home, root)
     assert ctrl.state == "setup"
 
 
 def test_unenroll_401_counts_as_done(make, home, root, enrolled):
-    ctrl = make(unenroll=lambda url, key: 401)
+    ctrl = make(unenroll=lambda url, key: (401, True))
     ctrl.start()
     until(lambda: ctrl.state == "online")
     assert ctrl.unenroll() == (True, "")
@@ -433,6 +439,116 @@ def test_unenroll_stops_turns_and_link_first(make, home, root, enrolled, monkeyp
     assert len(ctrl.links) == 1 and ctrl.state == "setup"
 
 
+def test_a_turn_already_on_its_way_does_not_start_after_unenroll(make, home, root, enrolled, monkeypatch):
+    """Просьба `turn`, чей `find_project` ещё идёт, пока идёт отвязка: ход не начат, `claude.exe` не поднят."""
+    (root / "demo").mkdir()
+    entered, release = threading.Event(), threading.Event()
+    real = projects.find_project
+
+    def slow(projects_root, pid):
+        entered.set()
+        release.wait(5)
+        return real(projects_root, pid)
+
+    monkeypatch.setattr(projects, "find_project", slow)
+    sdk = FakeFactory([result_ok()])
+    ctrl = make(sdk=sdk)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    session = "3b1e" * 8
+    ctrl._loop.call_soon_threadsafe(ctrl.agent.open.open, session)
+    frame = {"t": "req", "id": "0123456789abcdef", "op": "turn", "session": session, "project": projects.pid("demo"),
+             "chat": "0b1e2c3d-4f50-4617-8899-aabbccddeeff", "text": "x", "model": None, "effort": None}
+    answer = asyncio.run_coroutine_threadsafe(ctrl.agent.handle(frame), ctrl._loop)
+    assert entered.wait(5)
+    ctrl.unenroll()
+    release.set()
+    res = answer.result(5)[0]
+    assert (res["ok"], res["code"], res["message"]) == (False, "busy", turns.CLOSING)
+    assert sdk.clients == [] and ctrl.runner.live() == {} and ctrl.state == "setup"
+
+
+@pytest.mark.parametrize("result", ["revoked", "replaced"])
+def test_turns_stay_refused_after_revoked_until_a_new_link(make, configured, root, result):
+    ctrl = make(result=result)
+    ctrl.start()
+    until(lambda: ctrl.state == result and ctrl.runner._closing)
+    with pytest.raises(Exception) as e:
+        asyncio.run_coroutine_threadsafe(_start(ctrl, root), ctrl._loop).result(5)
+    assert getattr(e.value, "code", None) == "busy"
+
+
+async def _start(ctrl, root):
+    (root / "demo").mkdir(exist_ok=True)
+    ctrl.runner.start(root / "demo", projects.pid("demo"), "0b1e2c3d-4f50-4617-8899-aabbccddeeff", "x", None, None)
+
+
+def erase_pauses():
+    """Паузы повторов стирания — без настоящего времени; часовая проба — навсегда."""
+    pauses = []
+
+    async def sleep(sec):
+        if sec == app.PROBE_EVERY_SEC:
+            await forever(sec)
+        pauses.append(sec)
+
+    return pauses, sleep
+
+
+def busy(monkeypatch, name, times):
+    """Файл `name` первые `times` раз не удаляется: WinError 32, его читает другой поток."""
+    left, real = [times], pathlib.Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self.name == name and left[0]:
+            left[0] -= 1
+            raise PermissionError(13, "файл занят другим процессом")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+
+
+def test_unenroll_retries_a_busy_file(make, home, root, enrolled, monkeypatch):
+    pauses, sleep = erase_pauses()
+    busy(monkeypatch, "pin.bin", 3)
+    ctrl = make(sleep=sleep)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.unenroll() == (True, "")
+    assert pauses == [app.ERASE_PAUSE_SEC] * 3
+    forgotten(home, root)
+    assert ctrl.state == "setup"
+
+
+def test_unenroll_that_cannot_erase_the_key_brings_the_link_back(make, home, root, enrolled, monkeypatch, caplog):
+    pauses, sleep = erase_pauses()
+    busy(monkeypatch, "key.bin", 99)
+    ctrl = make(sleep=sleep)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.unenroll() == (False, "Не удалось стереть ключ компьютера — закройте окно моста и нажмите "
+                                      "«Отключиться» снова")
+    assert pauses == [app.ERASE_PAUSE_SEC] * 9
+    assert "отвязка: ключ не стёрт: PermissionError" in caplog.text
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")   # не «на связи» без канала — канал заново
+    assert ctrl.links[1].key == "k0" and PinStore(home).has_pin
+    monkeypatch.undo()
+    assert ctrl.unenroll() == (True, "")                              # «Отключиться» снова
+    forgotten(home, root)
+
+
+def test_unenroll_that_erased_the_key_but_not_the_pin_is_not_linked(make, home, root, enrolled, monkeypatch):
+    pauses, sleep = erase_pauses()
+    busy(monkeypatch, "pin.bin", 99)
+    ctrl = make(sleep=sleep)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    ok, _ = ctrl.unenroll()
+    assert not ok and not (home / "key.bin").exists() and PinStore(home).has_pin   # PIN остался — сторона безопасная
+    until(lambda: ctrl.state == "setup")
+    assert len(ctrl.links) == 1
+
+
 def test_reenroll_after_revoked_skips_studio(make, home, root, enrolled):
     ctrl = make(result="revoked")
     ctrl.start()
@@ -448,6 +564,22 @@ def test_unenroll_before_start_forgets_too(make, home, root, enrolled):
     assert ctrl.unenroll() == (True, "")
     forgotten(home, root)
     assert ctrl.state == "setup"
+
+
+def test_a_new_login_from_welcome_reaches_subscribers_after_it_is_saved(make, home, root):
+    welcomes = [{"t": "welcome", "agent_id": 7, "name": "Рабочий", "login": "ivanov"},
+                {"t": "welcome", "agent_id": 7, "name": "Рабочий"}]
+    ctrl = make(welcomes=welcomes)
+    logins = []
+    ctrl.on_login(lambda login: logins.append((login, ctrl.login)))
+    ctrl.start()
+    assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
+    until(lambda: logins)
+    assert logins == [("ivanov", "ivanov")]                    # окно и трей прочтут уже записанный
+    ctrl.restart_link().result(5)
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    time.sleep(0.05)
+    assert logins == [("ivanov", "ivanov")]                    # логин тот же — события нет
 
 
 def test_login_from_enroll_and_welcome(make, home, root):
@@ -497,6 +629,18 @@ def test_set_pin_while_revoked_keeps_the_link_down(make, home, configured):
     assert len(ctrl.links) == 1 and ctrl.state == "replaced" and ctrl.has_pin
 
 
+def test_pin_changes_from_the_window_reach_the_tray(make, home, configured):
+    ctrl = make()
+    hits = []
+    ctrl.on_pin_changed = lambda: hits.append(ctrl.pin_status())
+    ctrl.set_pin("2468")
+    for _ in range(5):
+        PinStore(home).check("0000")
+    ctrl.reset_pin()                                           # «Снять блок» окна — меню трея заново
+    ctrl.set_pin(None)
+    assert hits == ["set", "set", "none"]
+
+
 def test_set_folder_validates_and_restarts(make, home, configured, tmp_path):
     ctrl = make()
     ctrl.start()
@@ -509,6 +653,16 @@ def test_set_folder_validates_and_restarts(make, home, configured, tmp_path):
     until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
     assert ctrl.links[1].hello["projects_root"] == str(other)
     assert store.load_config(home).projects_root == str(other)
+
+
+def test_autostart_box_follows_the_registry_not_the_config(make, home, configured):
+    ctrl = make()
+    cfg = store.load_config(home)
+    cfg.autostart = True
+    store.save_config(home, cfg)
+    assert not ctrl.autostart_enabled()                        # в реестре нет — снята
+    ctrl._autostart.set_enabled(True)
+    assert ctrl.autostart_enabled()
 
 
 def test_set_autostart_writes_registry_and_config(make, home, configured):

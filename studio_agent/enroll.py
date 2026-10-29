@@ -4,6 +4,7 @@
 Пароль уходит только в тело запроса и нигде не остаётся; перенаправлениям не следуем (тело с паролем и ключ —
 только тому адресу, что ввёл владелец)."""
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -17,7 +18,6 @@ NAME = "Имя компьютера — от 1 до 64 знаков"
 URL = "Адрес студии — https://…"
 UNAVAILABLE = "Студия недоступна ({})"
 KEPT = "Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → «Компьютеры»"
-FORGOTTEN = (204, 401)  # отвязка: студия забыла компьютер (401 — ключа у неё уже нет)
 
 
 class EnrollError(Exception):
@@ -57,7 +57,7 @@ def _send(request: urllib.request.Request, timeout: float) -> tuple[int, bytes]:
         reason = e.reason
         raise EnrollError("unavailable", UNAVAILABLE.format(
             type(reason).__name__ if isinstance(reason, BaseException) else type(e).__name__)) from None
-    except (OSError, ValueError) as e:  # срок, обрыв, неверный ответ HTTP
+    except (OSError, ValueError, http.client.HTTPException) as e:  # срок, обрыв, неверный или усечённый ответ HTTP
         raise EnrollError("unavailable", UNAVAILABLE.format(type(e).__name__)) from None
 
 
@@ -81,25 +81,32 @@ def enroll(url: str, login: str, password: str, name: str, *, timeout: float = 3
     return agent_id, key, answered if isinstance(answered, str) and answered else login.strip().lower()
 
 
-def unenroll(url: str, key: str, *, timeout: float = 15) -> int:
-    """Отвязка мостом: `DELETE` с ключом заголовком, без тела и `Origin` → код HTTP (204 — отвязан, 401 — ключа у
-    студии нет, прочее — студия компьютер не забыла); сеть и неверный адрес — `EnrollError`."""
+def unenroll(url: str, key: str, *, timeout: float = 15) -> tuple[int, bool]:
+    """Отвязка мостом: `DELETE` с ключом заголовком, без тела и `Origin` → (код HTTP, забыла ли студия компьютер).
+
+    Забыла — 204 и 401 с `detail.code == "key"` (ключа у студии уже нет); прочий 401 (`login` от `guard` прежней
+    студии, где пути нет) и всё остальное — не забыла. Сеть, неверный ответ HTTP и неверный адрес — `EnrollError`."""
     request = urllib.request.Request(base_url(url) + PATH, method="DELETE", headers={
         "Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": f"studio-agent/{VERSION}"})
     try:
         status, _ = _send(request, timeout)
     except urllib.error.HTTPError as e:
-        e.close()
-        return e.code
-    return status
+        with e:
+            return e.code, e.code == 401 and _code(e) == "key"
+    return status, status == 204
+
+
+def _code(e: urllib.error.HTTPError) -> str | None:
+    """`detail.code` отказа студии `{"detail": {"code", "message"}}`; тела нет или оно другое — `None`."""
+    try:
+        return json.loads(e.read())["detail"]["code"]
+    except Exception:
+        return None
 
 
 def _refusal(e: urllib.error.HTTPError) -> EnrollError:
     """Отказ студии `{"detail": {"code", "message"}}` → слова окна."""
-    try:
-        code = json.loads(e.read())["detail"]["code"]
-    except Exception:
-        code = None
+    code = _code(e)
     if e.code == 401:
         return EnrollError("login", LOGIN)
     if e.code == 429:

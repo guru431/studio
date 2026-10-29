@@ -65,8 +65,9 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   и `interrupt()`
   (`idle` без хода; interrupt упал или не успел, или `stop` повторный — отмена задачи хода: `_run` доводит `done`
   `stopped`, `disconnect` гасит процесс), `close` — мост выходит или отозван (`done` «ход прерван: мост остановлен»;
-  пока идёт — `start` отвечает `busy` «мост выходит»; `final` — выход моста — и после; `stop` во время `_finish`
-  задачу не отменяет — `finishing`); путь `claude.exe` — `cli.current` в начале каждого хода (в потоке `_choose`);
+  пока идёт — `start` отвечает `busy` «мост выходит»; `final` — выход моста — и после; `hold` — отвязка, отзыв,
+  замена — и после, до `reopen()` (ядро зовёт его в `_relink` перед новым каналом): просьба `turn`, чей `find_project`
+  ещё шёл, хода не начнёт; `stop` во время `_finish` задачу не отменяет — `finishing`); путь `claude.exe` — `cli.current` в начале каждого хода (в потоке `_choose`);
   метка `studio` новой сессии — после `disconnect`.
 - `link` — `ws_url` (`https://h` → `wss://h/api/agent/link`; `http` — только `localhost`, `127.0.0.1`, `[::1]`) и `Link`
   (канал к студии): `connect` с `Authorization: Bearer <ключ>`, `max_size=FRAME_MAX`, пинги 20/20 с; первым — `hello`,
@@ -92,42 +93,53 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   через `urllib`, без `Origin`, перенаправлениям не следует; адрес — по правилу `link.ws_url` (`base_url`); логин — из
   ответа, у прежней студии (поля нет) — введённый `strip().lower()`; отказы — `EnrollError(code, words)`: 401 `login`,
   429 `locked`, 422 с `detail.code == "name"` — `name`, прочее — `unavailable` «Студия недоступна (HTTP n | тип
-  ошибки)». `unenroll(url, key, timeout=15)` → код HTTP: `DELETE` того же пути, ключ — `Authorization: Bearer`, без
-  тела и `Origin`, без перенаправлений; сеть и адрес — `EnrollError`. `FORGOTTEN` (204, 401) — студия компьютер
-  забыла; прочее (403, 405 прежней студии, 5xx, сеть) — слова `KEPT`.
+  ошибки)»; неверный или усечённый ответ HTTP (`http.client.HTTPException`: `BadStatusLine`, `IncompleteRead`,
+  `LineTooLong` — urllib их не оборачивает) — тоже `unavailable`. `unenroll(url, key, timeout=15)` → `(код HTTP,
+  забыта)`: `DELETE` того же пути, ключ — `Authorization: Bearer`, без тела и `Origin`, без перенаправлений; забыта —
+  204 и 401 с `detail.code == "key"`; прочий 401 (`login` от `guard` прежней студии), 403, 405, 5xx — нет (слова
+  `KEPT`); сеть и адрес — `EnrollError`.
 - `setup` — `validate(form, enrolled=)` (слова окна; не привязан — логин и пароль обязательны, привязан — оба или ни
   одного; имя как у студии — 1–64 без управляющих; папка есть; PIN — `pin_errors`) и `apply(h, form)`: с логином —
   привязка, `save_key`, `agent_id`, `name`, `login`; всегда — `url`, `projects_root`, `autostart`; PIN — `no_pin` убирает,
   заполненный задаёт, пустой не трогает. Пароль не сохраняется нигде.
 - `single` — `acquire()`: мьютекс `Local\StudioAgent`, уже есть — `None` (второй мост выходит).
 - `autostart` — `HKCU\…\Run` значение `StudioAgent` = `command()` (`.venv\Scripts\pythonw.exe` + `studio_agent.pyw`
-  репозитория), `enabled`, `set_enabled`; `key` — параметр (тесты пишут в `Software\studio-agent-test\Run`).
+  репозитория), `enabled` (значение есть и равно `command()` этой копии без учёта регистра; другая копия — `False`),
+  `set_enabled`; `key` — параметр (тесты пишут в `Software\studio-agent-test\Run`).
 - `app.Controller` — ядро без Tk и трея (его же берёт `run --console`): поток с циклом `asyncio` — `find_cli`,
   `cli_version`, `Runner` и `Agent` (поздний `emit`), `cli.probe` до первого канала и раз в `PROBE_EVERY_SEC` (пустой
   итог прежние модели не стирает; набор сменился — канал заново, новый `hello`, кроме `setup`/`revoked`/`replaced`), `Link`. Публичные методы — из любого потока:
   `restart_link()` (канал заново с перечитанными ключом, настройками и `has_pin`; состояния прежнего канала отсекает
   поколение `_gen`), `apply_setup(form)` (блокирует — не из потока Tk; «привязан» — есть ключ **для этого адреса**:
   другой адрес требует новой привязки, ключ чужой студии туда не уходит; с логином — `fresh`: первый `online` —
-  уведомление трея), `unenroll(*, ask_studio=True) -> (ok, words)` («Отключиться», блокирует: под замком `_relink`
-  — `runner.close()` (не `final`: `done` уходит в канал), `_drop_link()`, затем `enroll.unenroll` и всегда стирание
-  `key.bin`, `pin.bin`, `agent_id`, `login` — адрес, имя, папка, автозапуск остаются; состояние `setup`; «Войти
-  заново» после отзыва — `ask_studio=False`), `set_pin(pin | None)`, `set_folder(path) -> [слова]`,
+  уведомление трея), `unenroll(*, ask_studio=True) -> (стёрто, words)` («Отключиться», блокирует: под замком
+  `_relink` — `runner.close(hold=True)` (не `final`: `done` уходит в канал; новых ходов нет до `reopen`),
+  `_drop_link()`, затем `enroll.unenroll` (любой сбой — «не забыта») и всегда стирание: `key.bin` первым, затем
+  `pin.bin`, `agent_id`, `login` — адрес, имя, папка, автозапуск остаются; `PermissionError` (файл читает другой поток:
+  окно, трей) — повтор `ERASE_TRIES` (10) раз через `ERASE_PAUSE_SEC` (50 мс, пауза — параметр `sleep`); стёрто —
+  `setup` и слова `""` или `KEPT`; не стёрто — `(False, ERASE_FAILED)`, строка журнала с типом и канал заново
+  (`_relink`: ключ остался — `connecting`, ключа уже нет — `setup`; сбой отвязки не оставляет «на связи» без канала);
+  «Войти заново» после отзыва — `ask_studio=False`), `set_pin(pin | None)`, `set_folder(path) -> [слова]`,
   `set_autostart(on)` (блокируют; папка и PIN — канал заново, кроме `revoked`/`replaced`: заменённый отнял бы ключ),
-  `has_pin`, `pin_status()` (`none`/`set`/`locked`), `login`, `reset_pin()`, `quit()` (`runner.close()`, затем
-  `link.stop()`); правки `config.json` — под `_cfg_lock` (`welcome` пишет `login` и `name` в потоке, только своего
-  поколения: отвязка не вернёт стёртый логин), `state` + `on_state`: `setup` (нет ключа или папки — канал не поднимается), `connecting`,
+  `has_pin`, `pin_status()` (`none`/`set`/`locked`), `login`, `autostart_enabled()` (реестр через `autostart.enabled`,
+  не `config.autostart`), `reset_pin()`, `quit()` (`runner.close(final=True)`, затем `link.stop()`); `on_pin_changed`
+  — `set_pin`, `reset_pin` и блок PIN из студии (`Agent.on_pin_locked`); правки `config.json` — под `_cfg_lock`
+  (`welcome` пишет `login` и `name` в потоке, только своего поколения: отвязка не вернёт стёртый логин; логин
+  сменился — после записи подписчикам `on_login(callback)`), `state` + `on_state`: `setup` (нет ключа или папки — канал не поднимается), `connecting`,
   `online`, `offline`, `revoked`, `replaced` (оба — до новой настройки), слова — `WORDS`. Зависимости (Link, SDK, CLI,
   probe, привязка, автозапуск, `sleep`) — параметры: тесты `tests/test_app.py` без сети и реального времени.
   `_refresh_cli` (перед каждым каналом `_relink` и перед часовой пробой) — `cli.current` и, если путь сменился, версия
   заново в `agent.cc_version` (студия видит её в следующем `hello`). Канал кончился `revoked`/`replaced` текущего
-  поколения — `runner.close()` (ходы прерваны, карточкам отказ, `claude.exe` гаснет) и `agent.open.clear()`.
+  поколения — `runner.close(hold=True)` (ходы прерваны, карточкам отказ, `claude.exe` гаснет; новые — `busy` до
+  нового канала) и `agent.open.clear()`.
   `prepare_env()` — `cli.drop_session_env` до `Controller` (зовут `app.main` и `run --console`).
 - `__main__` — `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status`: пароль
   и PIN — `getpass`; `run --console` — мьютекс, журнал ещё и в stderr, выход на `setup`/`revoked`/`replaced` и Ctrl+C.
 - `journal.setup` ставит логгеру `websockets` уровень не ниже INFO: на DEBUG он пишет заголовок `Authorization`.
 - `app.main` — мост с треем: `single.acquire` (занят — окно «Мост уже запущен», выход), `journal.setup`; главный поток —
   скрытый корень Tk (`window.prepare`: тема и значок окон) и опрос очереди команд `root.after(100, …)` (меню трея и
-  состояния ядра — только через очередь: `("state", s)` — трею, окну `window.update` и уведомлению `tray.notice`);
+  состояния ядра — только через очередь: `("state", s)` — трею, окну `window.update` и уведомлению `tray.notice`;
+  `("login", l)` — подсказке трея и строке «Вход» окна `window.login_changed`; `pin` — меню трея и строке PIN окна);
   не подключён — окно сразу; «Снять блок PIN» трея — в своём потоке (DPAPI); «Выход» — трей прочь,
   `Controller.quit()`, конец `mainloop`. Tk и pystray импортируются только здесь — `Controller` и консоль без них.
 - `theme` — палитры студии `PAPER` / `GRAPHITE` (токены спеки §5.3 дословно, плюс свои `warn`, `field`, `edge`),
@@ -140,22 +152,29 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
   связи · ivanov», ≤ 127), `status_line` («● На связи — ivanov» — первая неактивная строка меню), `notice(state,
   fresh)`; `Tray` (pystray в своём потоке): «Открыть Studio Agent» (по умолчанию), «Снять блок PIN», «Открыть
   журнал», «Выход»; `refresh` — `update_menu` в своём потоке (pystray на Windows строит меню заранее), `notify`.
-  Блок PIN проверкой из студии трей узнаёт от `Agent.on_pin_locked` → `Controller.on_pin_locked` → команда `pin`
-  очереди Tk (меню и окно заново): смены состояния канала при этом нет.
+  Блок PIN проверкой из студии трей узнаёт от `Agent.on_pin_locked` → `Controller.on_pin_changed` → команда `pin`
+  очереди Tk (меню и окно заново): смены состояния канала при этом нет; так же — «Снять блок» и PIN из окна.
 - `window` — `open_main(root, controller)` (`open_setup` — синоним): одно окно «Studio Agent», вид по `view_of(enrolled)`
-  — «Вход» (форма, «Подключить» → `apply_setup`) или «Подключение» (карточка `STATUS`/`status_of`: точка, слова,
-  «Студия», «Вход», «Компьютер»; «Отключиться» с подтверждением или «Войти заново» при `revoked`/`replaced`; карточка
-  «Настройки» — папка, автозапуск, строка PIN `pin_row`); «привязан» — состояние ядра не `setup` (DPAPI окно не читает);
-  `PinDialog` и `confirm` — модальные `Toplevel` той же темы. Блокирующее — `MainWindow.work` (свой поток, итог —
-  `root.after`); пароль и PIN стираются из полей сразу после нажатия; слова отказа студии при отвязке — над формой
-  входа.
+  — «Вход» (форма, «Подключить» → `apply_setup`) или «Подключение» (карточка `card_of(state)` → слова, токен цвета
+  точки, приглушённая строка, кнопка `MAIN_BUTTONS`: «Отключиться» с подтверждением, «Войти заново» только при
+  `revoked`, при `replaced` — «Подключить снова» = `restart_link()` и строка «Подключить снова — этот компьютер заберёт
+  канал у другого моста»: ничего не стирается — второй мост той же учётки Windows в другом сеансе живёт с тем же
+  `key.bin` и `pin.bin`; затем «Студия», «Вход», «Компьютер»; карточка «Настройки» — папка, автозапуск — галочка по
+  `autostart_enabled()`, строка PIN `pin_row`); «привязан» — состояние ядра не `setup` (DPAPI окно не читает). Смена
+  состояния — `state_action(вид, state, busy)`: вид сменился — окно заново, тот же — карточка на месте (`show_card`),
+  окно занято (`busy`: операция `work` или открытый диалог; кнопки вида гаснут) — ждёт и применяет последнее после;
+  строка PIN и папка тоже меняются на месте — ошибки «Настроек» остаются видны. `PinDialog` и `confirm` — модальные
+  `Toplevel` той же темы. Блокирующее — `MainWindow.work` (свой поток, итог — `root.after`); пароль и PIN стираются из
+  полей сразу после нажатия; слова отказа студии при отвязке — над формой входа, «не стёрто» — в карточке.
 - `studio_agent.pyw` (корень репозитория) — запуск без консоли: `.venv\Scripts\pythonw.exe studio_agent.pyw`.
 - `install.ps1` (UTF-8 с BOM, CRLF) — рядом нет `.git` (архив студии) — копия в `%LOCALAPPDATA%\Programs\studio-agent`:
   мост этой копии (`python.exe`/`pythonw.exe` с её `studio_agent.pyw` в командной строке — и лаунчер `.venv`, и базовый
   Python) останавливается, файлы архива — поверх, кроме `.venv`, `Unblock-File` («Mark of the Web»); из git-копии — на
   месте. Затем `.venv` (`-Python`, иначе `py -3`, нет `py` — `python`; проверка ≥ 3.11 до `venv` с понятной ошибкой),
-  `pip install -r requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; `-NoVenv`, `-NoStart` — для
-  тестов; повтор безопасен; автозапуск ставит окно (`autostart.REPO` — та копия, что запущена).
+  `pip install -r requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; `-NoVenv`, `-NoStart`,
+  `-RunKey` (ключ автозапуска, тесты — `HKCU:\Software\studio-agent-test\Run`) — для тестов; повтор безопасен;
+  автозапуск ставит окно (`autostart.REPO` — та копия, что запущена), а установка в `Programs` значение `StudioAgent`,
+  если оно есть, переписывает на эту копию (как `autostart.command()`), нет — не заводит.
 - `install.cmd` (ASCII, CRLF) — двойной щелчок: `install.ps1` с `-ExecutionPolicy Bypass`, код не 0 — `pause`.
 - Архив моста собирает выкладка студии (`git archive` HEAD): `.gitattributes` `export-ignore` — тесты, `.claude/`,
   `CLAUDE.md`, `AGENTS.md`, `FINDINGS*`, `IDEAS*`, `pytest.ini`, `requirements-dev.txt`, `.gitignore`, `.gitattributes`;
@@ -236,7 +255,8 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 (`tests/fake_studio.py`, `websockets` на `127.0.0.1:0`), SDK — `tests/fake_sdk.py`. Окно и трей — без Tk: чистые
 функции `window`, `tray`, `theme` (`test_window_logic.py`, `test_tray.py`, `test_theme.py`); снимки вида — вручную.
 Установка — `tests/test_install.py` (`integration`): «архив» — рабочее дерево без `export-ignore` в папке без `.git`,
-`LOCALAPPDATA` временная, `-NoVenv -NoStart` (сети нет); работающий мост подменяет `python.exe` с путём копии.
+`LOCALAPPDATA` временная, `-NoVenv -NoStart` (сети нет), `-RunKey` — тестовый ключ (настоящий `Run` тесты не трогают);
+работающий мост подменяет `python.exe` с путём копии.
 
 Сквозная проверка — `tests/test_live_studio.py` (`manual`, **четыре коротких хода квоты** — не гонять по
 кругу): `tests/live_studio_server.py` поднимает живую студию её средой (`<STUDIO_REPO>/.venv`, по умолчанию

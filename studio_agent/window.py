@@ -2,9 +2,11 @@
 подтверждений — `Toplevel` той же темы (`theme`).
 
 Окно одно: повторный `open_main` поднимает открытое, состояние ядра приходит `update(state)` из очереди Tk
-(`app.main`). Всё блокирующее (сеть, DPAPI, scrypt, реестр) — `Controller` в своём потоке, окно ждёт итог
-`root.after`. Пароль и PIN стираются из полей сразу после нажатия. Вид — чистые функции (`view_of`, `STATUS`,
-`status_of`, `pin_row`, `pin_dialog_errors`, `host_of`): их проверяют тесты без Tk."""
+(`app.main`): окно перестраивает только смена вида, карточка состояния меняется на месте, а пока идёт операция или
+открыт диалог — ничего (`state_action`). Всё блокирующее (сеть, DPAPI, scrypt, реестр) — `Controller` в своём
+потоке, окно ждёт итог `root.after`. Пароль и PIN стираются из полей сразу после нажатия. Вид — чистые функции
+(`view_of`, `STATUS`, `status_of`, `card_of`, `state_action`, `pin_row`, `pin_dialog_errors`, `host_of`): их
+проверяют тесты без Tk."""
 
 import logging
 import os
@@ -30,7 +32,11 @@ STATUS = {"online": ("На связи", "ok"), "connecting": ("Подключа�
 PIN_WORDS = {"none": "PIN не задан", "set": "PIN задан", "locked": "PIN заблокирован после 5 ошибок"}
 PIN_BUTTONS = {"none": ("set",), "set": ("change", "clear"), "locked": ("unlock", "change")}
 BUTTONS = {"set": "Задать PIN", "change": "Изменить PIN", "clear": "Убрать PIN", "unlock": "Снять блок"}
-DOWN = ("revoked", "replaced")  # канал погашен студией — «Войти заново» вместо «Отключиться»
+REPLACED_HINT = "Подключить снова — этот компьютер заберёт канал у другого моста"
+# Кнопка карточки «Подключение» → (слова, стиль): `off` — отвязка с подтверждением, `relogin` — после отзыва стереть
+# ключ без запроса к студии, `reconnect` — заменённый забирает канал (`restart_link`; ничего не стирается).
+MAIN_BUTTONS = {"off": ("Отключиться", "Danger.TButton"), "relogin": ("Войти заново", "Accent.TButton"),
+                "reconnect": ("Подключить снова", "Accent.TButton")}
 
 _window = None
 
@@ -43,6 +49,27 @@ def view_of(enrolled: bool) -> str:
 def status_of(state: str) -> tuple[str, str]:
     """Слова и цвет карточки «Подключение»; `setup` здесь — только что привязан, канал ещё не поднят."""
     return STATUS["connecting"] if state == "setup" else STATUS.get(state, STATUS["connecting"])
+
+
+def card_of(state: str) -> tuple[str, str, str, str]:
+    """Карточка состояния: слова, токен цвета точки, приглушённая строка под словами (или пусто), кнопка
+    (`MAIN_BUTTONS`). Заменённый (`replaced`) ключ не стирает: второй мост той же учётки Windows в другом сеансе
+    живёт с тем же `key.bin` и `pin.bin` — стёртый PIN открыл бы ему любую сессию без PIN."""
+    words, token = status_of(state)
+    if state == "replaced":
+        return words, token, REPLACED_HINT, "reconnect"
+    return words, token, "", "relogin" if state == "revoked" else "off"
+
+
+def state_action(view: str, state: str, busy: bool) -> str:
+    """Что окну делать со сменой состояния ядра: `wait` — идёт операция или открыто подтверждение (применить после:
+    её обработчики держат виджеты окна), `render` — сменился вид (Вход ↔ Подключение), `card` — карточку
+    состояния на месте, `none` — форму входа с введённым не трогать."""
+    if busy:
+        return "wait"
+    if view_of(state != "setup") != view:
+        return "render"
+    return "card" if view == "link" else "none"
 
 
 def pin_row(status: str | None) -> tuple[str, tuple[str, ...]]:
@@ -78,9 +105,15 @@ open_setup = open_main  # прежнее имя
 
 
 def update(state: str) -> None:
-    """Состояние ядра (из очереди Tk): открытое окно перерисовывается."""
+    """Состояние ядра (из очереди Tk): открытое окно — по `state_action`."""
     if _window is not None and _window.alive():
         _window.on_state(state)
+
+
+def login_changed(login: str) -> None:
+    """Логин из `welcome` записан (событие ядра `login`): строка «Вход» открытого окна."""
+    if _window is not None and _window.alive():
+        _window.show_login(login)
 
 
 def pin_changed() -> None:
@@ -116,6 +149,9 @@ class MainWindow:
         self.enrolled = controller.state != "setup"
         self.notice = ""  # над формой входа: студия не забыла компьютер при отвязке
         self.pin: str | None = None
+        self.busy = 0  # идут операции окна и открыты его диалоги: окно не перестраивается, кнопки неактивны
+        self.pending = False  # состояние пришло, пока окно занято, — применить после
+        self.buttons: list = []  # кнопки вида «Подключение», что гаснут на время операции
         self.win = tk.Toplevel(root, background=self.c["bg"])
         self.win.title(TITLE)
         self.win.resizable(False, False)
@@ -151,9 +187,30 @@ class MainWindow:
         self.root.after(300, lambda: self.alive() and self.win.attributes("-topmost", False))
         self.win.focus_force()
 
-    def work(self, fn, done) -> None:
-        """`fn` — в своём потоке (сеть, DPAPI, scrypt); `done(итог, сбой)` — в потоке Tk, если окно открыто."""
+    def hold(self) -> None:
+        """Операция или диалог начались: перестроения ждут, кнопки гаснут."""
+        self.busy += 1
+        self.sync_buttons()
+
+    def release(self) -> None:
+        """Операция или диалог кончились; последнее — пришедшее тем временем состояние применяется."""
+        self.busy = max(self.busy - 1, 0)
+        self.sync_buttons()
+        if not self.busy and self.pending and self.alive():
+            self.pending = False
+            self.on_state(self.state)
+
+    def sync_buttons(self) -> None:
+        self.buttons = [b for b in self.buttons if b.winfo_exists()]
+        for b in self.buttons:
+            b.state(["disabled"] if self.busy else ["!disabled"])
+
+    def work(self, fn, done, *, hold: bool = True) -> None:
+        """`fn` — в своём потоке (сеть, DPAPI, scrypt); `done(итог, сбой)` — в потоке Tk, если окно открыто. `hold` —
+        на это время окно занято (`hold`/`release`)."""
         result: dict = {}
+        if hold:
+            self.hold()
 
         def run() -> None:
             try:
@@ -170,32 +227,42 @@ class MainWindow:
             if not result:
                 self.root.after(50, check)
                 return
-            done(result.get("value"), bool(result.get("failed")))
+            try:
+                done(result.get("value"), bool(result.get("failed")))
+            finally:
+                if hold:
+                    self.release()
 
         self.root.after(50, check)
 
     def on_state(self, state: str) -> None:
         self.state = state
-        enrolled = state != "setup"
-        changed = enrolled != self.enrolled
-        self.enrolled = enrolled
-        if changed and enrolled:
-            self.notice = ""
-            self.pin = None
-            self.refresh_pin()
-        if changed or enrolled:  # форму входа с введённым не трогать
+        action = state_action(view_of(self.enrolled), state, self.busy > 0)
+        if action == "wait":
+            self.pending = True
+        elif action == "render":
+            self.enrolled = state != "setup"
+            if self.enrolled:
+                self.notice = ""
+                self.pin = None
             self.render()
+            if self.enrolled:
+                self.refresh_pin()
+        elif action == "card":
+            self.show_card()
 
     def refresh_pin(self) -> None:
+        """Строка PIN заново (DPAPI — в потоке); прочее окна не трогает: ошибки под ней остаются."""
         def done(status, failed):
             self.pin = None if failed else status
-            if self.enrolled:
-                self.render()
+            self.show_pin()
 
-        self.work(self.ctrl.pin_status, done)
+        self.work(self.ctrl.pin_status, done, hold=False)
 
     def render(self) -> None:
         ttk = self.ttk
+        self.buttons = []
+        self.card_widgets = self.pin_line = self.login_value = None
         if self.body is not None:
             self.body.destroy()
         self.body = ttk.Frame(self.win, padding=self.px(20))
@@ -337,7 +404,6 @@ class MainWindow:
     def link_view(self) -> None:
         ttk = self.ttk
         cfg = self.ctrl.config()
-        words, token = status_of(self.state)
         box = self.card(1)
         box.columnconfigure(0, weight=0)
         box.columnconfigure(1, weight=1)
@@ -345,41 +411,77 @@ class MainWindow:
         head.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
         d = self.px(14)
         dot = self.tk.Canvas(head, width=d, height=d, highlightthickness=0, background=self.c["panel"])
-        dot.create_oval(1, 1, d - 1, d - 1, fill=self.c[token], outline=self.c[token])
+        oval = dot.create_oval(1, 1, d - 1, d - 1)
         dot.grid(row=0, column=0, padx=(0, self.px(10)))
-        ttk.Label(head, text=words, style="Card.Status.TLabel").grid(row=0, column=1, sticky="w")
+        words = ttk.Label(head, style="Card.Status.TLabel")
+        words.grid(row=0, column=1, sticky="w")
+        hint = ttk.Label(box, style="Card.Muted.TLabel", wraplength=self.px(380), justify="left")
+        hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
         login = self.ctrl.login
         for i, (label, value) in enumerate((("Студия", host_of(cfg.url)), ("Вход", login or DASH),
-                                            ("Компьютер", cfg.name or DASH)), start=1):
+                                            ("Компьютер", cfg.name or DASH)), start=2):
             ttk.Label(box, text=label, style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
                                                                        padx=(0, self.px(16)), pady=self.px(2))
-            ttk.Label(box, text=value, style="Card.TLabel").grid(row=i, column=1, sticky="w", pady=self.px(2))
+            shown = ttk.Label(box, text=value, style="Card.TLabel")
+            shown.grid(row=i, column=1, sticky="w", pady=self.px(2))
+            if label == "Вход":
+                self.login_value = shown
         bar = ttk.Frame(box, style="Card.TFrame")
-        bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(self.px(14), 0))
+        bar.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(self.px(14), 0))
         bar.columnconfigure(0, weight=1)
-        problem = self.tk.StringVar()
-        ttk.Label(bar, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(240)).grid(
+        self.card_problem = self.tk.StringVar()
+        ttk.Label(bar, textvariable=self.card_problem, style="Card.Error.TLabel", wraplength=self.px(240)).grid(
             row=0, column=0, sticky="w")
-        if self.state in DOWN:
-            off = ttk.Button(bar, text="Войти заново", style="Accent.TButton")
-            off.configure(command=lambda: self.unenroll(off, problem, ask_studio=False))
-        else:
-            off = ttk.Button(bar, text="Отключиться", style="Danger.TButton")
-            off.configure(command=lambda: confirm(self, CONFIRM_OFF, "Отключить",
-                                                  lambda: self.unenroll(off, problem, ask_studio=True)))
-        off.grid(row=0, column=1, sticky="e")
+        main = ttk.Button(bar)
+        main.grid(row=0, column=1, sticky="e")
+        self.buttons.append(main)
+        self.card_widgets = (dot, oval, words, hint, main)
+        self.show_card()
         self.settings_card(cfg)
+        self.sync_buttons()
         self.win.bind("<Return>", lambda e: None)
 
-    def unenroll(self, button, problem, *, ask_studio: bool) -> None:
-        button.state(["disabled"])
+    def show_card(self) -> None:
+        """Карточка состояния на месте (`card_of`): точка, слова, строка под ними, кнопка; прочее окна не трогается."""
+        if self.card_widgets is None:
+            return
+        dot, oval, words, hint, main = self.card_widgets
+        text, token, under, kind = card_of(self.state)
+        dot.itemconfigure(oval, fill=self.c[token], outline=self.c[token])
+        words.configure(text=text)
+        hint.configure(text=under)
+        if under:
+            hint.grid()
+        else:
+            hint.grid_remove()
+        label, style = MAIN_BUTTONS[kind]
+        main.configure(text=label, style=style, command=lambda: self.main_action(kind))
 
+    def show_login(self, login: str) -> None:
+        if self.login_value is not None and self.login_value.winfo_exists():
+            self.login_value.configure(text=login or DASH)
+
+    def main_action(self, kind: str) -> None:
+        if self.busy:
+            return
+        self.card_problem.set("")
+        if kind == "reconnect":  # канал заберёт этот мост, другой получит 4409; ключ и PIN не трогаются
+            self.ctrl.restart_link()
+        elif kind == "relogin":
+            self.unenroll(ask_studio=False)
+        else:
+            confirm(self, CONFIRM_OFF, "Отключить", lambda: self.unenroll(ask_studio=True))
+
+    def unenroll(self, *, ask_studio: bool) -> None:
         def done(result, failed) -> None:
             if failed:
-                button.state(["!disabled"])
-                problem.set(FAILED)
+                self.card_problem.set(FAILED)
                 return
-            self.notice = result[1]
+            erased, words = result
+            self.notice = words  # не стёрто, а ключа уже нет — ядро даст `setup`: слова над формой входа
+            if not erased:
+                self.card_problem.set(words)
+                return
             self.enrolled = False
             self.pin = None
             self.render()
@@ -394,30 +496,34 @@ class MainWindow:
                                                                        pady=(0, self.px(10)))
         problem = tk.StringVar()
         ttk.Label(box, text="Папка проектов", style="Card.Muted.TLabel").grid(row=1, column=0, sticky="w")
-        ttk.Label(box, text=cfg.projects_root or DASH, style="Card.TLabel", wraplength=self.px(300)).grid(
-            row=2, column=0, sticky="w")
+        folder = ttk.Label(box, text=cfg.projects_root or DASH, style="Card.TLabel", wraplength=self.px(300))
+        folder.grid(row=2, column=0, sticky="w")
 
         def change() -> None:
             from tkinter import filedialog
 
-            chosen = filedialog.askdirectory(parent=self.win, initialdir=cfg.projects_root or None, mustexist=True)
+            problem.set("")
+            current = self.ctrl.config().projects_root
+            chosen = filedialog.askdirectory(parent=self.win, initialdir=current or None, mustexist=True)
             if not chosen:
                 return
+            path = os.path.normpath(chosen)
 
             def done(found, failed) -> None:
                 if failed or found:
                     problem.set("\n".join(found) if found else FAILED)
                     return
-                self.render()
+                folder.configure(text=path)
 
-            self.work(lambda: self.ctrl.set_folder(os.path.normpath(chosen)), done)
+            self.work(lambda: self.ctrl.set_folder(path), done)
 
-        ttk.Button(box, text="Изменить…", command=change).grid(row=1, column=1, rowspan=2, sticky="e",
-                                                              padx=(self.px(12), 0))
-        auto = tk.BooleanVar(value=cfg.autostart)
+        pick = ttk.Button(box, text="Изменить…", command=change)
+        pick.grid(row=1, column=1, rowspan=2, sticky="e", padx=(self.px(12), 0))
+        auto = tk.BooleanVar(value=self.ctrl.autostart_enabled())  # реестр, а не config.json
 
         def toggle() -> None:
             on = auto.get()
+            problem.set("")
 
             def done(_, failed) -> None:
                 if failed:
@@ -426,34 +532,48 @@ class MainWindow:
 
             self.work(lambda: self.ctrl.set_autostart(on), done)
 
-        ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
-                        style="Card.TCheckbutton").grid(row=3, column=0, columnspan=2, sticky="w",
-                                                        pady=(self.px(12), self.px(12)))
+        box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
+                                   style="Card.TCheckbutton")
+        box_auto.grid(row=3, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
+        self.buttons += [pick, box_auto]
+        self.pin_line = ttk.Frame(box, style="Card.TFrame")
+        self.pin_line.grid(row=4, column=0, columnspan=2, sticky="ew")
+        self.pin_line.columnconfigure(0, weight=1)
+        ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
+            row=5, column=0, columnspan=2, sticky="w")
+        self.settings_problem = problem
+        self.show_pin()
+
+    def show_pin(self) -> None:
+        """Строка PIN (`pin_row`) на месте: слова и кнопки."""
+        line, ttk = self.pin_line, self.ttk
+        if line is None or not line.winfo_exists():
+            return
+        for child in line.winfo_children():
+            child.destroy()
         words, buttons = pin_row(self.pin)
-        line = ttk.Frame(box, style="Card.TFrame")
-        line.grid(row=4, column=0, columnspan=2, sticky="ew")
-        line.columnconfigure(0, weight=1)
         ttk.Label(line, text=words or "PIN…", style="Card.TLabel").grid(row=0, column=0, sticky="w")
         actions = {"set": lambda: PinDialog(self, BUTTONS["set"]), "change": lambda: PinDialog(self, BUTTONS["change"]),
                    "clear": lambda: confirm(self, CONFIRM_PIN_OFF, "Убрать", self.clear_pin),
                    "unlock": self.unlock_pin}
         for i, key in enumerate(buttons):
-            ttk.Button(line, text=BUTTONS[key], command=actions[key]).grid(row=0, column=1 + i,
-                                                                           padx=(self.px(8), 0))
-        ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
-            row=5, column=0, columnspan=2, sticky="w")
-        self.settings_problem = problem
+            b = ttk.Button(line, text=BUTTONS[key], command=actions[key])
+            b.grid(row=0, column=1 + i, padx=(self.px(8), 0))
+            self.buttons.append(b)
+        self.sync_buttons()
 
     def clear_pin(self) -> None:
+        self.settings_problem.set("")
         self.work(lambda: self.ctrl.set_pin(None), lambda _, failed: self.after_pin(failed))
 
     def unlock_pin(self) -> None:
-        self.work(self.ctrl.reset_pin, lambda _, failed: self.after_pin(failed))
+        self.settings_problem.set("")
+        self.work(self.ctrl.reset_pin, lambda _, failed: self.after_pin(failed))  # меню трея — `on_pin_changed` ядра
 
     def after_pin(self, failed: bool) -> None:
+        self.refresh_pin()  # строку PIN — заново, ошибку под ней — после: перечитывание её не стирает
         if failed:
             self.settings_problem.set(FAILED)
-        self.refresh_pin()
 
 
 class _Dialog:
@@ -472,6 +592,7 @@ class _Dialog:
         self.body = ttk.Frame(self.win, padding=main.px(20))
         self.body.grid(row=0, column=0, sticky="nsew")
         self.body.columnconfigure(0, weight=1)
+        main.hold()  # пока открыт — главное окно не перестраивается: `on_ok` держит его виджеты
 
     def buttons(self, row: int, ok: str, style: str, command):
         ttk = self.main.ttk
@@ -496,6 +617,7 @@ class _Dialog:
         if self.win.winfo_exists():
             self.win.grab_release()
             self.win.destroy()
+            self.main.release()
 
 
 def confirm(main: MainWindow, text: str, ok: str, on_ok) -> None:
@@ -504,8 +626,8 @@ def confirm(main: MainWindow, text: str, ok: str, on_ok) -> None:
     main.ttk.Label(dialog.body, text=text, wraplength=main.px(340), justify="left").grid(row=0, column=0, sticky="w")
 
     def go() -> None:
+        on_ok()  # операция занимает окно раньше, чем диалог его отпустит: между ними перестроения нет
         dialog.close()
-        on_ok()
 
     dialog.buttons(1, ok, "Danger.TButton", go).focus_set()
     dialog.show()

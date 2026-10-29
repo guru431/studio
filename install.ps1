@@ -2,11 +2,13 @@
 # Из архива студии (рядом нет .git) — в %LOCALAPPDATA%\Programs\studio-agent: работающий оттуда мост
 # останавливается, файлы архива копируются поверх (среда .venv остаётся), «Mark of the Web» снимается.
 # Из git-копии — на месте (разработка). Повторный запуск безопасен: среда остаётся, пакеты догоняют
-# requirements.txt. Автозапуск ставит окно моста и указывает на ту копию, из которой мост запущен.
+# requirements.txt. Автозапуск ставит окно моста и указывает на ту копию, из которой мост запущен; установка в
+# Programs уже включённый автозапуск (значение StudioAgent в Run) переписывает на себя, не включённый — не заводит.
 #   install.cmd  (двойной щелчок)  или  powershell -ExecutionPolicy Bypass -File install.ps1 [-Python <python.exe>]
-#   -NoVenv — без среды и пакетов, -NoStart — без запуска (тесты установки).
+#   -NoVenv — без среды и пакетов, -NoStart — без запуска, -RunKey — ключ автозапуска (тесты установки).
 param(
     [string]$Python = '',
+    [string]$RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
     [switch]$NoVenv,
     [switch]$NoStart
 )
@@ -49,6 +51,12 @@ if (Test-Path -LiteralPath (Join-Path $source '.git')) {
     }
     Get-ChildItem -LiteralPath $to -Recurse -File -Force |
         Where-Object { $_.FullName -notlike (Join-Path $to '.venv\*') } | Unblock-File
+    # Автозапуск включён (git-копией или прежней установкой) — теперь он запускает эту копию, как autostart.command().
+    if ($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -ErrorAction SilentlyContinue)) {
+        $command = '"{0}" "{1}"' -f (Join-Path $to '.venv\Scripts\pythonw.exe'), (Join-Path $to 'studio_agent.pyw')
+        Set-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -Value $command
+        Write-Host 'Автозапуск теперь запускает установленную копию.'
+    }
 }
 
 $venv = Join-Path $repo '.venv'

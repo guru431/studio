@@ -1,5 +1,6 @@
 """Автозапуск при входе в Windows: значение `StudioAgent` в `HKCU\\...\\Run` (Task Scheduler не трогаем)."""
 
+import os
 import winreg
 from pathlib import Path
 
@@ -14,12 +15,13 @@ def command() -> str:
 
 
 def enabled(key: str = RUN_KEY) -> bool:
+    """Значение есть и запускает эту копию (`command()`); указывает на другую копию моста — не включён."""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
-            winreg.QueryValueEx(k, VALUE)
-    except FileNotFoundError:
+            value, _ = winreg.QueryValueEx(k, VALUE)
+    except OSError:
         return False
-    return True
+    return isinstance(value, str) and os.path.normcase(value.strip()) == os.path.normcase(command())
 
 
 def set_enabled(on: bool, key: str = RUN_KEY) -> None:

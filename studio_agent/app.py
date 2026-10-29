@@ -27,6 +27,8 @@ WORDS = {"setup": "не настроен", "connecting": "подключаетс
 PROBE_EVERY_SEC = 3600  # модели Claude Code — не чаще раза в час (решение плана 6)
 QUIT_SEC = 60  # выход: ходы (turns.CLOSE_SEC × 2) и канал
 UNENROLL_SEC = 120  # «Отключиться»: ходы, канал и запрос к студии (15 с) — не дольше
+ERASE_TRIES, ERASE_PAUSE_SEC = 10, 0.05  # стирание ключа: файл читает другой поток (окно, трей) — WinError 5/32
+ERASE_FAILED = "Не удалось стереть ключ компьютера — закройте окно моста и нажмите «Отключиться» снова"
 
 
 def _configured(cfg: store.Config, key: str | None) -> bool:
@@ -64,6 +66,7 @@ class Controller:
         self._sleep = sleep
         self.state = "connecting" if _configured(store.load_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
+        self._login_subscribers = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self.agent: Agent | None = None
@@ -77,13 +80,18 @@ class Controller:
         self._background: set[asyncio.Task] = set()
         self._cfg_lock = threading.Lock()  # config.json — прочесть, поправить, записать: welcome, окно, отвязка
         self.fresh = False  # новая привязка: первый `online` — уведомление трея
-        self.on_pin_locked = None  # PIN заблокировала проверка из студии (зовётся из потока ядра)
+        self.on_pin_changed = None  # блок PIN из студии, снятие блока, новый PIN — меню трея и окно (любой поток)
 
     # --- из любого потока ---
 
     def on_state(self, callback) -> None:
         """Подписка на смену состояния; зовётся из потока ядра."""
         self._subscribers.append(callback)
+
+    def on_login(self, callback) -> None:
+        """Подписка на новый логин из `welcome` (`callback(login)`, после записи в config.json); зовётся из потока
+        ядра."""
+        self._login_subscribers.append(callback)
 
     @property
     def enrolled(self) -> bool:
@@ -118,6 +126,10 @@ class Controller:
 
     def config(self) -> store.Config:
         return store.load_config(self.h)
+
+    def autostart_enabled(self) -> bool:
+        """Автозапуск — по реестру (значение указывает на эту копию), а не по `config.json`; чтение быстрое."""
+        return self._autostart.enabled()
 
     def start(self) -> None:
         """Поток ядра: Claude Code, Agent, Runner, модели и канал. Возвращается сразу, когда цикл готов."""
@@ -173,14 +185,17 @@ class Controller:
         return []
 
     def unenroll(self, *, ask_studio: bool = True) -> tuple[bool, str]:
-        """«Отключиться» (блокирует — не из потока Tk) → (студия забыла компьютер, слова для окна).
+        """«Отключиться» (блокирует — не из потока Tk) → (ключ стёрт, слова для окна).
 
-        Порядок: ходы прерываются (`done` уходит в канал), канал гаснет, затем — `DELETE` к студии (`ask_studio`;
-        «Войти заново» после отзыва — без запроса), и ключ, PIN, `agent_id`, `login` стираются в любом случае: адрес,
-        имя, папка и автозапуск остаются. Состояние — `setup`, канал не поднимается."""
+        Порядок: ходы прерываются (`done` уходит в канал) и новые не начинаются до нового канала (`close(hold)`),
+        канал гаснет, затем — `DELETE` к студии (`ask_studio`; «Войти заново» после отзыва — без запроса), и ключ,
+        PIN, `agent_id`, `login` стираются в любом случае: адрес, имя, папка и автозапуск остаются. Стёрто — состояние
+        `setup`, слова — `""` или `enroll.KEPT` (студия компьютер не забыла). Файлы не стёрлись и после повторов —
+        `(False, ERASE_FAILED)` и канал заново (`setup`, если ключа уже нет)."""
         if self._loop is None or self._loop.is_closed():
-            result = self._forget(ask_studio)
-            self._set_state("setup")
+            result = asyncio.run(self._forget(ask_studio))
+            if result[0]:
+                self._set_state("setup")
             return result
         return asyncio.run_coroutine_threadsafe(self._unenroll(ask_studio), self._loop).result(UNENROLL_SEC)
 
@@ -189,6 +204,7 @@ class Controller:
         `has_pin` в новом `hello`, открытые сессии сбрасываются."""
         PinStore(self.h).set_pin(pin)
         log.info("PIN: %s", "задан" if pin is not None else "убран")
+        self._pin_changed()
         self._relink_live()
 
     def set_folder(self, path: str) -> list[str]:
@@ -216,6 +232,11 @@ class Controller:
     def reset_pin(self) -> None:
         PinStore(self.h).reset()
         log.info("PIN: блок снят")
+        self._pin_changed()
+
+    def _pin_changed(self) -> None:
+        if self.on_pin_changed is not None:
+            self.on_pin_changed()
 
     def quit(self, timeout: float = QUIT_SEC) -> None:
         """Ходы — `close()` (студия узнает «ход прерван»), канал — `stop()`, цикл — конец; ждёт поток ядра."""
@@ -231,43 +252,69 @@ class Controller:
         if self.state not in ("revoked", "replaced"):
             self.restart_link()
 
-    def _forget(self, ask_studio: bool) -> tuple[bool, str]:
-        """Отвязка без канала (блокирует): запрос к студии и стирание ключа, PIN, `agent_id`, `login`."""
+    async def _forget(self, ask_studio: bool) -> tuple[bool, str]:
+        """Отвязка без канала: запрос к студии (в потоке) и стирание ключа, PIN, `agent_id`, `login` → как `unenroll`."""
+        kept = ask_studio and not await asyncio.to_thread(self._ask_studio)
+        for attempt in range(ERASE_TRIES):
+            try:
+                await asyncio.to_thread(self._erase)
+                break
+            except OSError as e:  # файл держит другой поток (WinError 5/32): пауза и снова
+                if attempt + 1 == ERASE_TRIES:
+                    log.error("отвязка: ключ не стёрт: %s", type(e).__name__)
+                    return False, ERASE_FAILED
+                await self._sleep(ERASE_PAUSE_SEC)
+        self.fresh = False
+        log.info("отвязка: ключ и PIN стёрты")
+        return True, enroll.KEPT if kept else ""
+
+    def _ask_studio(self) -> bool:
+        """`DELETE` к студии (блокирует) → забыла ли она компьютер; любой сбой — не забыла."""
         cfg, key = store.load_config(self.h), store.load_key(self.h)
-        ok = True
-        if ask_studio:
-            status = None
-            if key is None:
-                log.info("отвязка: ключ не читается")
-            else:
-                try:
-                    status = self._unenroll_fn(cfg.url, key)
-                    log.info("отвязка: %d", status)
-                except enroll.EnrollError as e:
-                    log.info("отвязка: %s", e.words)
-            ok = status in enroll.FORGOTTEN
+        if key is None:
+            log.info("отвязка: ключ не читается")
+            return False
+        try:
+            status, forgotten = self._unenroll_fn(cfg.url, key)
+        except enroll.EnrollError as e:
+            log.info("отвязка: %s", e.words)
+            return False
+        except Exception as e:
+            log.warning("отвязка: %s", type(e).__name__)
+            return False
+        log.info("отвязка: %d", status)
+        return forgotten
+
+    def _erase(self) -> None:
+        """Ключ первым (канал без него не поднимется), затем PIN и `config.json`; повтор безопасен."""
         with self._cfg_lock:
             (self.h / store.KEY).unlink(missing_ok=True)
             PinStore(self.h).set_pin(None)
             cfg = store.load_config(self.h)
             cfg.agent_id, cfg.login = None, ""
             store.save_config(self.h, cfg)
-        self.fresh = False
-        log.info("отвязка: ключ и PIN стёрты")
-        return ok, "" if ok else enroll.KEPT
 
     # --- поток ядра ---
 
     async def _unenroll(self, ask_studio: bool) -> tuple[bool, str]:
         await self._built.wait()
         async with self._relink_lock:  # канал не поднимется, пока ключ не стёрт
-            await self.runner.close()
+            await self.runner.close(hold=True)  # просьба turn в пути хода не начнёт: держится до `_relink`
             await self._drop_link()
             self.agent.open.clear()
-            result = await asyncio.to_thread(self._forget, ask_studio)
-            self.agent.has_pin = False
-            self.agent.cfg = await asyncio.to_thread(store.load_config, self.h)
-            self._set_state("setup")
+            try:
+                result = await self._forget(ask_studio)
+            except Exception as e:
+                log.error("отвязка: %s", type(e).__name__)
+                result = None
+            if result is not None and result[0]:
+                self.agent.has_pin = False
+                self.agent.cfg = await asyncio.to_thread(store.load_config, self.h)
+                self._set_state("setup")
+                return result
+        await self._relink_task()  # сбой: не «на связи» без канала — канал заново или `setup` (ключа уже нет)
+        if result is None:
+            raise RuntimeError("отвязка не удалась")
         return result
 
     def _on_welcome(self, gen: int, frame: dict) -> None:
@@ -282,14 +329,23 @@ class Controller:
         task.add_done_callback(self._background.discard)
 
     def _remember(self, gen: int, login: str | None, name: str | None) -> None:
+        """В потоке: запись в config.json; логин сменился — подписчикам `on_login` (окно и трей читают его из файла,
+        их смена состояния могла прийти раньше записи)."""
         with self._cfg_lock:
             if gen != self._gen:  # канал уже погашен (отвязка стёрла логин) — не возвращать
                 return
             cfg = store.load_config(self.h)
             new = dataclasses.replace(cfg, login=login or cfg.login, name=name or cfg.name)
-            if new != cfg:
-                store.save_config(self.h, new)
-                log.info("вход: логин и имя компьютера — из welcome")
+            if new == cfg:
+                return
+            store.save_config(self.h, new)
+            log.info("вход: логин и имя компьютера — из welcome")
+        if new.login != cfg.login:
+            for callback in list(self._login_subscribers):
+                try:
+                    callback(new.login)
+                except Exception as e:
+                    log.warning("подписчик логина: %s", type(e).__name__)
 
     def _set_state(self, state: str) -> None:
         if state == self.state:
@@ -311,7 +367,7 @@ class Controller:
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
                                    models=[], efforts=[], has_pin=has_pin)
-        agent.on_pin_locked = lambda: self.on_pin_locked and self.on_pin_locked()
+        agent.on_pin_locked = self._pin_changed
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
@@ -349,6 +405,7 @@ class Controller:
             await self._refresh_cli()
             if not self._probed:
                 await self._refresh_models()
+            self.runner.reopen()  # после отвязки, отзыва, замены — новый канал снова принимает ходы
             gen = self._gen
             self._link = self._link_factory(cfg.url, key, self.agent, lambda s: self._on_link(gen, s),
                                             on_welcome=lambda f: self._on_welcome(gen, f))
@@ -369,7 +426,7 @@ class Controller:
                 self._set_state("offline")
             return
         if state in ("revoked", "replaced") and gen == self._gen:
-            await self.runner.close()
+            await self.runner.close(hold=True)  # и после: просьба turn в пути хода не начнёт — до нового канала
             self.agent.open.clear()
 
     async def _drop_link(self) -> None:
@@ -456,7 +513,8 @@ def main(argv: list[str]) -> int:
     window.prepare(root)  # тема Windows и значок окон
     icon = tray.Tray(ctrl.state, commands.put, lambda: ctrl.pin_locked, ctrl.login)
     ctrl.on_state(lambda state: commands.put(("state", state)))
-    ctrl.on_pin_locked = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
+    ctrl.on_login(lambda login: commands.put(("login", login)))
+    ctrl.on_pin_changed = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
 
     def poll() -> None:
         while True:
@@ -464,7 +522,10 @@ def main(argv: list[str]) -> int:
                 cmd = commands.get_nowait()
             except queue.Empty:
                 break
-            if isinstance(cmd, tuple):
+            if isinstance(cmd, tuple) and cmd[0] == "login":
+                icon.show(ctrl.state, cmd[1])
+                window.login_changed(cmd[1])
+            elif isinstance(cmd, tuple):
                 state = cmd[1]
                 icon.show(state, ctrl.login)
                 window.update(state)
@@ -476,7 +537,7 @@ def main(argv: list[str]) -> int:
             elif cmd == "open":
                 window.open_main(root, ctrl)
             elif cmd == "reset_pin":  # DPAPI — не в потоке Tk
-                threading.Thread(target=lambda: (ctrl.reset_pin(), commands.put("pin")), daemon=True).start()
+                threading.Thread(target=ctrl.reset_pin, daemon=True).start()  # сам шлёт `pin` (on_pin_changed)
             elif cmd == "pin":
                 icon.refresh()
                 window.pin_changed()

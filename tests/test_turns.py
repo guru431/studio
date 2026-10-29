@@ -420,6 +420,22 @@ async def test_after_the_final_close_turns_stay_refused(home, project):
     with pytest.raises(errors.Refused) as e:
         r.start(project, PID, OTHER, "2", None, None)
     assert (e.value.code, e.value.message) == ("busy", "мост выходит") and len(f.clients) == 1
+    r.reopen()                                                 # выход моста reopen не отменяет
+    with pytest.raises(errors.Refused):
+        r.start(project, PID, OTHER, "3", None, None)
+
+
+async def test_a_held_close_refuses_turns_until_reopen(home, project):
+    sent, f = [], FakeFactory([result_ok()])
+    r = runner(home, f, sent)
+    await r.close(hold=True)                                   # отвязка: просьба turn в пути хода не начнёт
+    with pytest.raises(errors.Refused) as e:
+        r.start(project, PID, CHAT, "1", None, None)
+    assert (e.value.code, e.value.message) == ("busy", "мост выходит") and f.clients == []
+    r.reopen()                                                 # новый канал — ходы снова можно
+    r.start(project, PID, CHAT, "2", None, None)
+    await settle(r)
+    assert sent[-1]["e"] == {"k": "done", "status": "done"}
 
 
 async def test_stop_while_the_turn_finishes_does_not_cancel_it(home, project, marked):

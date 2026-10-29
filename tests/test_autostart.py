@@ -37,6 +37,17 @@ def test_set_enabled_writes_and_removes_the_value(key):
     autostart.set_enabled(False, key=key)
 
 
+def test_a_value_of_another_copy_is_not_enabled(key):
+    """Галочка окна — по реестру: значение указывает на другую копию моста (git-копия, прежняя установка) — снята."""
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, autostart.VALUE, 0, winreg.REG_SZ,
+                          r'"C:\other\studio-agent\.venv\Scripts\pythonw.exe" "C:\other\studio-agent\studio_agent.pyw"')
+    assert not autostart.enabled(key=key)
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, autostart.VALUE, 0, winreg.REG_SZ, autostart.command().upper())
+    assert autostart.enabled(key=key)                                   # регистр букв пути Windows не важен
+
+
 def test_install_ps1_has_bom_crlf_and_parses():
     path = autostart.REPO / "install.ps1"
     data = path.read_bytes()
