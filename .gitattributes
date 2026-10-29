@@ -1,7 +1,10 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
-# Архив моста (`git archive` выкладки студии) — только то, что нужно для установки.
+# Архив моста (`git archive` выкладки студии) — только то, что нужно для установки; папки — и сами (без пустых
+# папок в ZIP), и содержимым (`check-attr` файлов).
+tests export-ignore
 tests/** export-ignore
+.claude export-ignore
 .claude/** export-ignore
 CLAUDE.md export-ignore
 AGENTS.md export-ignore
