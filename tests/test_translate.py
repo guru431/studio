@@ -907,6 +907,46 @@ def test_feed_reads_heads_from_first_part(studio):
     assert (item["source_head"], item["text_head"]) == (None, None)    # скан ещё не распознан — кусков нет
 
 
+def test_feed_heads_of_a_photo_are_all_its_blocks(studio):
+    """Ревью: кусок снимка — один блок вывески, и начало первого куска показывало лишь «EXIT». Начала снимка —
+    блоки по порядку (до HEAD_CHARS); перевод — готовые до первого неготового."""
+    uid, conn = gateway_conn(studio)
+    words = ["EXIT", "Выход", "Открыто 9–18"]
+    blocks = [{"source": w, "box": [10, 10 + 100 * i, 500, 80 + 100 * i]} for i, w in enumerate(words)]
+    pid = on_loop(studio, lambda: translate.create(uid, conn, MODEL, kind="photo", name="Снимок.png", source_lang="en",
+                                                   target_lang="ru", source="\n".join(words), blocks=blocks))
+
+    def translated(*ns):
+        for n in ns:
+            state.DB.execute("UPDATE translation_parts SET state = 'done', text = ? WHERE translation_id = ? AND n = ?",
+                             (f"п{n}", pid, n))
+    on_loop(studio, translated, 1, 3)
+    item = studio.c.get("/api/translate").json()["items"][0]
+    assert (item["source_head"], item["text_head"]) == ("EXIT\nВыход\nОткрыто 9–18", "п1")
+    on_loop(studio, translated, 2)
+    out = studio.c.get(f"/api/translate/{pid}").json()
+    assert (out["source_head"], out["text_head"]) == ("EXIT\nВыход\nОткрыто 9–18", "п1\nп2\nп3")
+
+
+def test_scan_shared_tells_the_delete_window_whether_the_scan_stays(studio, small_pages):
+    """Ревью: окно удаления обещало унести скан, который остаётся у повтора. `scan_shared` — есть ли другая запись
+    с тем же сканом: после повтора — у обеих, после удаления одной — у другой уже нет."""
+    add_gateway(studio)
+    tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
+    first = wait_row(studio, tid)
+    assert studio.c.get(f"/api/translate/{tid}").json()["scan_shared"] is False
+    again = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "de"}).json()
+    wait_row(studio, again["id"])
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    feed = {i["id"]: i for i in studio.c.get("/api/translate").json()["items"]}
+    assert feed[tid]["scan_shared"] is True and feed[again["id"]]["scan_shared"] is True
+    assert studio.c.get(f"/api/translate/{again['id']}").json()["scan_shared"] is True
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert studio.c.get(f"/api/translate/{again['id']}").json()["scan_shared"] is False
+    assert studio.c.get("/api/translate").json()["items"][0]["scan_shared"] is False
+    assert first["scan_id"] is not None
+
+
 def test_translate_scan_waits_without_deadline_while_own_ocr_holds_card(studio, small_pages, monkeypatch):
     """Ревью M1: карту держит следующий скан того же пользователя — перевод ждёт её без срока WAIT_MAX_SEC (её
     освободит конец скана), а не падает «карта занята»."""
