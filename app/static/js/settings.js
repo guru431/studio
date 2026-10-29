@@ -530,8 +530,9 @@ async function subscribePush() {
 
 async function unsubscribePush() {
   await api('DELETE', '/api/me/push');
-  const registration = await ready();
-  const sub = await registration.pushManager.getSubscription();
+  // сервер уже не шлёт: подписку браузера — как выйдет, флажок «вкл» её сбой не вернёт
+  const registration = await ready().catch(() => null);
+  const sub = registration ? await registration.pushManager.getSubscription().catch(() => null) : null;
   if (sub) await sub.unsubscribe().catch(() => false);
 }
 
