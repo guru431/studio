@@ -451,18 +451,18 @@ def test_unenroll_before_start_forgets_too(make, home, root, enrolled):
 
 
 def test_login_from_enroll_and_welcome(make, home, root):
-    welcomes = [{"t": "welcome", "agent_id": 7, "name": "Рабочий ПК", "login": "example-user"},
+    welcomes = [{"t": "welcome", "agent_id": 7, "name": "Рабочий ПК", "login": "ivanov"},
                 {"t": "welcome", "agent_id": 7, "name": "Рабочий ПК"}]
     ctrl = make(welcomes=welcomes)
     ctrl.start()
     assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
     assert ctrl.fresh                                           # первый online — уведомление трея
-    until(lambda: ctrl.login == "example-user")                      # welcome сильнее ответа привязки
+    until(lambda: ctrl.login == "ivanov")                      # welcome сильнее ответа привязки
     assert store.load_config(home).name == "Рабочий ПК"
     ctrl.restart_link().result(5)
     until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
     time.sleep(0.05)
-    assert ctrl.login == "example-user"                              # без login в welcome — прежний
+    assert ctrl.login == "ivanov"                              # без login в welcome — прежний
 
 
 def test_login_comes_from_the_enroll_answer(make, home, root):

@@ -93,13 +93,13 @@ def image(state: str) -> Image.Image:
 
 
 def title(state: str, login: str = "") -> str:
-    """«Studio Agent — на связи · example-user»; без логина — без хвоста; не длиннее `TITLE_MAX`."""
+    """«Studio Agent — на связи · ivanov»; без логина — без хвоста; не длиннее `TITLE_MAX`."""
     text = f"{TITLE} — {WORDS.get(state, state)}" + (f" · {login}" if login else "")
     return text if len(text) <= TITLE_MAX else text[:TITLE_MAX - 1] + "…"
 
 
 def status_line(state: str, login: str = "") -> str:
-    """Первая строка меню: «● На связи — example-user»."""
+    """Первая строка меню: «● На связи — ivanov»."""
     words = WORDS.get(state, state)
     words = words[:1].upper() + words[1:]
     return f"● {words} — {login}" if login else f"● {words}"

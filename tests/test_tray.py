@@ -4,7 +4,7 @@ from studio_agent import tray
 
 
 def test_tray_title_with_and_without_login():
-    assert tray.title("online", "example-user") == "Studio Agent — на связи · example-user"
+    assert tray.title("online", "ivanov") == "Studio Agent — на связи · ivanov"
     assert tray.title("online", "") == "Studio Agent — на связи"
     assert tray.title("replaced") == "Studio Agent — ключ используется другим мостом"
     long = tray.title("replaced", "л" * 200)
@@ -12,7 +12,7 @@ def test_tray_title_with_and_without_login():
 
 
 def test_status_line():
-    assert tray.status_line("online", "example-user") == "● На связи — example-user"
+    assert tray.status_line("online", "ivanov") == "● На связи — ivanov"
     assert tray.status_line("offline", "") == "● Нет связи"
     assert tray.status_line("connecting", "owner") == "● Подключается… — owner"
 

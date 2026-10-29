@@ -120,7 +120,7 @@ def test_bad_address_is_refused_before_network(url):
 
 def test_older_studio_without_login_gives_the_typed_one(studio):
     s = studio(201, {"agent_id": 7, "device_key": "k"})
-    assert enroll.enroll(s.url, "  example-user ", "x", "Рабочий") == (7, "k", "example-user")
+    assert enroll.enroll(s.url, "  Ivanov ", "x", "Рабочий") == (7, "k", "ivanov")
 
 
 @pytest.mark.parametrize("status", [204, 401, 403, 405, 307])

@@ -137,7 +137,7 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 - `tray` — рисунок `icons/icon.svg` студии Pillow-ом в 512 px (дуги и кривые — многоугольником) → `icon(size)` (окно) и
   `image(state)` (64 px, точка `COLORS` в правом нижнем углу с белой обводкой: зелёная `online`, серая
   `connecting`/`setup`, жёлтая `offline`, красная `revoked`/`replaced`), `title(state, login)` («Studio Agent — на
-  связи · example-user», ≤ 127), `status_line` («● На связи — example-user» — первая неактивная строка меню), `notice(state,
+  связи · ivanov», ≤ 127), `status_line` («● На связи — ivanov» — первая неактивная строка меню), `notice(state,
   fresh)`; `Tray` (pystray в своём потоке): «Открыть Studio Agent» (по умолчанию), «Снять блок PIN», «Открыть
   журнал», «Выход»; `refresh` — `update_menu` в своём потоке (pystray на Windows строит меню заранее), `notify`.
   Блок PIN проверкой из студии трей узнаёт от `Agent.on_pin_locked` → `Controller.on_pin_locked` → команда `pin`
