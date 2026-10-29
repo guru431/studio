@@ -66,6 +66,7 @@ class Agent:
         self.has_pin = read_has_pin(pins) if has_pin is None else has_pin
         self.open = OpenSessions(now)
         self.send: Callable[[dict], None] | None = None
+        self.on_pin_locked: Callable[[], None] | None = None  # PIN заблокировала эта проверка (трей — «Снять блок»)
         self._open_lock = asyncio.Lock()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
@@ -194,6 +195,8 @@ class Agent:
             if code == "pin":
                 raise Refused("pin", left=left)
             if code == "pin_locked":
+                if self.on_pin_locked is not None:
+                    self.on_pin_locked()
                 raise Refused("pin_locked")
             self._open_now(session, link)
             return {}

@@ -77,6 +77,7 @@ class Controller:
         self._background: set[asyncio.Task] = set()
         self._cfg_lock = threading.Lock()  # config.json — прочесть, поправить, записать: welcome, окно, отвязка
         self.fresh = False  # новая привязка: первый `online` — уведомление трея
+        self.on_pin_locked = None  # PIN заблокировала проверка из студии (зовётся из потока ядра)
 
     # --- из любого потока ---
 
@@ -310,6 +311,7 @@ class Controller:
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
                                    models=[], efforts=[], has_pin=has_pin)
+        agent.on_pin_locked = lambda: self.on_pin_locked and self.on_pin_locked()
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
@@ -454,6 +456,7 @@ def main(argv: list[str]) -> int:
     window.prepare(root)  # тема Windows и значок окон
     icon = tray.Tray(ctrl.state, commands.put, lambda: ctrl.pin_locked, ctrl.login)
     ctrl.on_state(lambda state: commands.put(("state", state)))
+    ctrl.on_pin_locked = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
 
     def poll() -> None:
         while True:

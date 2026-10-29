@@ -126,6 +126,19 @@ async def test_locked_pin_is_pin_locked_even_for_open_null(agent_with_pin):
     assert res["code"] == "pin_locked" and res["message"] == "PIN заблокирован — снимите блок на самом компьютере"
 
 
+async def test_the_pin_lock_from_the_studio_is_reported_once(agent_with_pin):
+    """Трей строит меню заранее: «Снять блок PIN» он узнаёт от `on_pin_locked`, а не от смены состояния канала."""
+    a = agent_with_pin
+    locks = []
+    a.on_pin_locked = lambda: locks.append(1)
+    for _ in range(4):
+        await a.handle(req("open", pin="1111"))
+    assert locks == []
+    await a.handle(req("open", pin="1111"))                           # пятый неверный — блок
+    await a.handle(req("open", pin="2468"))                           # блок уже стоит — не новость
+    assert locks == [1]
+
+
 async def test_an_idle_session_closes(home, root):
     clock = Clock()
     a = make(home, root, clock=clock)
