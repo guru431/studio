@@ -362,7 +362,7 @@ function build(view, ctx) {
   /** ?id адреса («Открыть» в «В работе», «Поиск») — при сборке и при переходе внутри раздела (update). */
   function follow(wanted) {
     if (wanted) {
-      history.replaceState(null, '', '#/ocr');
+      history.replaceState(history.state, '', '#/ocr');
       picked = false;
     }
     // пока шёл список, документ могли выбрать сами (загрузка) — его не перебивать

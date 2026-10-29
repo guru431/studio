@@ -8493,6 +8493,38 @@ def test_code_unsaved_edit_back_and_stay_keeps_the_history(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_code_unsaved_edit_back_to_another_section_keeps_the_history(browser, live):
+    """«Назад» с несохранённой правкой ведёт на запись другого раздела (чат): метку записи ставит роутер app.js
+    всем разделам, и «Остаться» не затирает запись чата; «Сохранить» и снова «Назад» — чат."""
+    from fake_bridge import pid
+    login = "code-unsaved-back-chat"
+    live.add_user(login)
+    machine = code_files_machine()
+    aid, sb = code_online(live, login, machine)
+    files = f"#/code/{aid}/{pid('alpha')}?tab=files"
+    editor = "document.querySelector('#code-editor')?.value"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), *go("chat"), ("wait", "location.hash === '#/chat'"),
+            ("eval", "go", f"location.hash = '{files}'"), code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('правка')\n"),
+            ("eval", "back", "history.back()"), ("wait", CODE_UNSAVED),
+            ("click", "#code-unsaved .dialog-close"), ("wait", f"!{CODE_UNSAVED}"),
+            ("eval", "stayed", f"[location.hash, {editor}]"),
+            ("click", "#code-save"), ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'"),
+            ("eval", "again", "history.back()"), ("wait", "location.hash === '#/chat'"),
+            ("eval", "landed", f"[location.hash, !{CODE_UNSAVED}]")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["stayed"] == [files, "print('правка')\n"]
+    assert v["landed"] == ["#/chat", True]
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("claude_edits", [False, True])
 def test_code_save_on_a_closed_computer_keeps_the_edit_through_the_pin(browser, live, claude_edits):
     """Студия заперлась с правленым файлом: «Сохранить» — отпирание, 409 closed, панель PIN; верный PIN — снова
