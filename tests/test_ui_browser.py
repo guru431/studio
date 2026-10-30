@@ -8518,6 +8518,9 @@ def test_code_compact_header_and_git_file_tree(browser, live, width):
             ("eval", "oneLine", "(() => { const a = document.querySelector('#code-place').getBoundingClientRect();"
                                   " const b = document.querySelector('#code-start-claude').getBoundingClientRect();"
                                   " return Math.abs(a.top + a.height / 2 - b.top - b.height / 2) < 2; })()"),
+            ("eval", "gitBeforeChat", "(() => { const g = document.querySelector('#code-repo-status').getBoundingClientRect();"
+                                         " const c = document.querySelector('#code-tab-chat').getBoundingClientRect();"
+                                         " return g.right <= c.left && Math.abs(g.top + g.height / 2 - c.top - c.height / 2) < 2; })()"),
             ("click", code_item("src")), ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
             ("eval", "rootStays", "!!document.querySelector(\"#code-files > li[data-name='README.md']\")"),
             ("eval", "expanded", "document.querySelector(\"#code-files li[data-name='src']\").getAttribute('aria-expanded')"),
@@ -8537,6 +8540,7 @@ def test_code_compact_header_and_git_file_tree(browser, live, width):
     v = r["values"]
     assert "stage-5g*" in v["header"] and "↑2" in v["header"] and "↓1" in v["header"]
     assert v["duplicates"] == 0 and (width == 320 or v["oneLine"])
+    assert v["gitBeforeChat"]
     assert v["rootStays"] and v["expanded"] == "true" and v["modified"] == "M"
     assert v["parentMark"] == "•" and v["untracked"] == "U" and v["fits"]
     assert v["collapsed"] and v["nestedKept"] == "true"
@@ -9461,7 +9465,8 @@ def test_code_long_tab_titles_fit(browser, live, width):
       const a = bar.querySelector('.code-tab[aria-selected=true]').getBoundingClientRect(); const b = bar.getBoundingClientRect();
       const title = tabs[0].querySelector('.code-tab-title');
       return [tops.size, bar.scrollWidth > bar.clientWidth, a.left >= b.left - 1 && a.right <= b.right + 1,
-        title.scrollWidth > title.clientWidth, title.title.length > 100]; })()"""
+        title.scrollWidth > title.clientWidth, title.title.length > 100,
+        b.top >= document.querySelector('.code-head').getBoundingClientRect().bottom]; })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
             code_tab_ready(chats[4]), ("eval", "shape", settled(shape, 400)), ("eval", "fits", NO_OVERFLOW)],
@@ -9470,7 +9475,7 @@ def test_code_long_tab_titles_fit(browser, live, width):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["shape"][0] == 1 and v["shape"][2:] == [True, True, True] and v["fits"] is True
+    assert v["shape"][0] == 1 and v["shape"][2:] == [True, True, True, True] and v["fits"] is True
     if width < 760:
         assert v["shape"][1] is True
     assert not problems(r), problems(r)

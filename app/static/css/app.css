@@ -1106,7 +1106,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-place-agent { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .code-place-sep { flex: none; color: var(--muted); white-space: pre; }
 .code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.code-views { flex: none; display: flex; gap: 6px; margin-left: auto; }
+.code-project-tools { display: flex; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
+.code-views { flex: none; display: flex; gap: 6px; }
 .code-starts { display: flex; flex: none; align-items: center; gap: 6px; }
 .code-repo-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; padding: 4px 6px;
   border: 0; border-radius: 5px; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
@@ -1129,12 +1130,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; min-width: 0; }
 .code-crumbs > * { overflow-wrap: anywhere; min-width: 0; }
 .code-crumb-here { font-weight: 600; }
-/* вкладки сессий (code-tabs.js): ряд одной строкой над строкой пути, листается вбок, «+» прилипает справа; меню — под
- * рядом. Телефон — ряд под строкой пути */
+/* вкладки сессий (code-tabs.js): ряд под строкой пути, листается вбок, «+» прилипает справа; меню — под рядом */
 .code-top { display: flex; flex-direction: column; }
 .code-tabs-row { position: relative; }
 .code-tabbar { position: relative; display: flex; align-items: flex-end; gap: 2px; min-width: 0; padding: 6px 12px 0;
-  overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border); }
+  overflow-x: auto; scrollbar-width: thin; border-top: 1px solid var(--border); }
 .code-tab { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; max-width: 220px; min-width: 0;
   padding: 5px 4px 5px 12px; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0;
   color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; }
@@ -1159,7 +1159,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   border-radius: 12px; box-shadow: var(--shadow); }
 .code-tab-menu .code-chat-link { padding: 8px 10px; }
 @media (max-width: 760px) {
-  .code-tabs-host { order: 2; }
   .code-tabbar { padding: 6px 8px 0; border-bottom: 0; border-top: 1px solid var(--border); }
   .code-tab { max-width: 180px; }
   .code-tab-menu { left: 8px; width: calc(100% - 16px); }
@@ -1189,10 +1188,10 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-head { flex-wrap: wrap; row-gap: 6px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 16px; }
   .code-location { display: flex; flex-basis: 100%; align-items: center; gap: 10px; min-width: 0; padding-right: 126px; }
   .code-place { flex: 0 1 auto; max-width: 100%; }
-  .code-views { order: 3; margin-left: 0; }
+  .code-project-tools { order: 3; flex-basis: 100%; justify-content: flex-end; gap: 8px; margin-left: 0; }
   .code-starts { order: 2; flex-basis: 100%; flex-wrap: wrap; }
   .code-starts > .small { display: none; }
-  .code-repo-status { order: 4; margin-left: auto; max-width: calc(100% - 190px); }
+  .code-repo-status { max-width: calc(100% - 176px); }
   #code-status { margin: 12px 12px 0; }
   .code-body { padding: 12px; }
 }
