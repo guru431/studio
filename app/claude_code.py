@@ -99,6 +99,8 @@ TOO_MANY = "слишком много новых чатов — подождит
 NEW_CHATS: dict[int, deque] = {}
 NO_MODEL = "такой модели нет на компьютере"
 NO_EFFORT = "такого усилия нет на компьютере"
+ACCESS = {"codex": ("read-only", "workspace-write", "danger-full-access"),
+          "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")}
 
 
 class Open(BaseModel):
@@ -114,10 +116,15 @@ class TurnImage(BaseModel):
     data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
 
 
-class Turn(BaseModel):
+class ChatSettings(BaseModel):
+    model: str | None = Field(None, max_length=100)
+    effort: str | None = Field(None, max_length=12)
+    access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
+                    "read-only", "workspace-write", "danger-full-access"] | None = None
+
+
+class Turn(ChatSettings):
     text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
-    model: str | None = None
-    effort: str | None = None
     images: list[TurnImage] = Field(default_factory=list, max_length=4)
 
 
@@ -377,6 +384,21 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
 
 # ---- ход: поток, наблюдение, карточки, остановка ------------------------------------------
 
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/state")
+async def chat_state(aid: int, pid: str, chat: str, body: ChatSettings, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    engine = chat_engine(request, aid, chat)
+    if body.access is not None and body.access not in ACCESS[engine]:
+        raise _refuse(422, "access", "такого режима доступа нет у помощника")
+    link = bridge.LINKS.get(aid)
+    if link is not None and not link.hello.get("chat_state"):
+        raise _refuse(409, "unsupported", "обновите мост для чтения настроек и контекста")
+    # Мост проверяет помощника, открытость компьютера и значения по собственному каталогу.
+    return _relay(await ask(request, aid, "state", project=pid, chat=chat, model=body.model,
+                            effort=body.effort, access=body.access))
+
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
@@ -486,7 +508,11 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
     images = await asyncio.to_thread(_turn_images, body.images)
     link = bridge.LINKS.get(aid)
     engine = chat_engine(request, aid, chat)
+    if body.access is not None and body.access not in ACCESS[engine]:
+        raise _refuse(422, "access", "такого режима доступа нет у помощника")
     if link is not None:
+        if body.access is not None and not link.hello.get("chat_state"):
+            raise _refuse(409, "unsupported", "обновите мост для выбора прав доступа")
         if images and link.hello.get("images") is not True:
             raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки изображений")
         catalog = link.hello.get("codex", {}) if engine == "codex" else link.hello
@@ -495,7 +521,8 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
         if body.effort is not None and body.effort not in catalog.get("efforts", ()):
             raise _refuse(422, "effort", NO_EFFORT)
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
-                             effort=body.effort, **({"images": images} if images else {}))
+                             effort=body.effort, **({"access": body.access} if body.access is not None else {}),
+                             **({"images": images} if images else {}))
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,

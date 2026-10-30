@@ -27,6 +27,7 @@
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api, me } from './api.js';
+import { ACCESS, accessLabel, effortLabel } from './code-options.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -40,7 +41,7 @@ const ASK_TITLE = 'Claude Code просит разрешения';
 const INSTEAD = 'Что сделать вместо этого (необязательно)';
 const OWN = 'Свой ответ';
 const OWN_MAX = 2000;            // claude_code.ANSWER_MAX
-const DEFAULT = 'по умолчанию';
+const DEFAULT = 'Загрузка…';
 const RETRY_MS = 5000;           // повтор live, пока компьютера нет
 const AGAIN_MS = 1000;           // поток кончился без конца хода (предел прокси, сеть) — снова live
 const IDLE_POLL_SEC = 20;        // опрос live на простое (тесты подменяют паузу setTimeout)
@@ -93,6 +94,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let retry = null;              // таймер следующего live
   let running = false;
   let sending = false;
+  let resolving = true;
+  let stateRequest = null;
   let adding = false;
   let images = imageDrafts.get(draftKey) || [];
   let turn = null;               // ответ идущего хода: { node, steps, md, asks, text }
@@ -112,6 +115,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     ...models.map((m) => el('option', { value: String(m.id) }, String(m.label || m.id))));
   const effort = el('select', { id: 'code-effort', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...efforts.map((e) => el('option', { value: String(e) }, String(e))));
+  const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': 'Права доступа' },
+    el('option', { value: '' }, DEFAULT), ...Object.entries(ACCESS[engine]).map(([value, label]) =>
+      el('option', { value }, label)));
+  const contextMeter = el('meter', { id: 'code-context-meter', min: '0', max: '100', value: '0', hidden: true });
+  const contextText = el('span', { id: 'code-context-text' }, 'Контекст —');
+  const contextBox = el('span', { id: 'code-context', class: 'code-context', title: 'Статистика контекста ещё не получена' },
+    contextMeter, contextText);
 
   /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
   function applyDefaults() {
@@ -119,6 +129,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const saved = me?.code_defaults?.[engine] || {};
     if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
     if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
+    if (ACCESS[engine][saved.access]) access.value = saved.access;
     if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
       status.textContent = 'Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате';
     }
@@ -138,16 +149,61 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        attach, el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort)),
+        attach, el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort),
+        el('label', { class: 'code-pick' }, 'Права', access), contextBox),
       stop, send));
   host.append(el('div', { class: 'code-chat-bar' }, el('span', { class: 'tag code-engine' }, assistant), closeChat),
-    origin === 'other' ? el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED) : null,
+    ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
     more, feed, status, form);
   if (drafts.has(draftKey)) {
     text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
     autosize();
   }
   paintImages();
+
+  function paintSettings(data) {
+    model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : 'Не получено';
+    model.title = typeof data.model === 'string' ? data.model : '';
+    effort.options[0].textContent = effortLabel(data.effort);
+    access.options[0].textContent = accessLabel(engine, data.access);
+    if (model.value && typeof data.model === 'string' && data.model) model.selectedOptions[0].textContent = data.model;
+  }
+
+  function paintContext(data) {
+    if (!data || !Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) return;
+    const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);
+    contextMeter.value = percent;
+    contextMeter.hidden = false;
+    contextText.textContent = `Контекст ${percent}%`;
+    contextBox.title = `${data.used.toLocaleString('ru-RU')} / ${data.limit.toLocaleString('ru-RU')} токенов`;
+    contextBox.dataset.used = String(data.used);
+    contextBox.dataset.limit = String(data.limit);
+  }
+
+  async function loadState() {
+    const own = new AbortController();
+    stateRequest = own;
+    resolving = true;
+    model.disabled = effort.disabled = access.disabled = true;
+    send.disabled = true;
+    try {
+      const data = await api('POST', endpoint('/state'), { model: model.value || null, effort: effort.value || null,
+        access: access.value || null }, { signal: own.signal });
+      if (!alive || own.signal.aborted) return;
+      paintSettings(data.settings || {});
+      paintContext(data.context);
+    } catch (err) {
+      if (!alive || own.signal.aborted) return;
+      paintSettings({});
+      if (err.code === 'closed') closed();
+      else status.textContent = words(err);
+    } finally {
+      resolving = false;
+      stateRequest = null;
+      model.disabled = effort.disabled = access.disabled = false;
+      send.disabled = running || sending || adding;
+    }
+  }
 
   function paintImages() {
     attachments.replaceChildren(...images.map((image) => {
@@ -200,7 +256,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (alive) status.textContent = words(err);
     } finally {
       adding = false;
-      send.disabled = running || sending;
+      send.disabled = running || sending || resolving;
       attach.disabled = sending || !agent?.images;
     }
   }
@@ -294,7 +350,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function setRunning(value) {
     running = value;
     stop.hidden = !value;
-    send.disabled = value || sending || adding;
+    send.disabled = value || sending || adding || resolving;
     host.dataset.running = value ? '1' : '0';
   }
 
@@ -425,6 +481,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       case 'snapshot': {
         setRunning(true);
         const t = current();
+        if (data.settings) paintSettings(data.settings);
+        paintContext(data.context);
         t.text = typeof data.text === 'string' ? data.text : '';
         paintText();
         grow(() => {
@@ -433,6 +491,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         });
         return false;
       }
+      case 'settings':
+        paintSettings(data);
+        return false;
+      case 'context':
+        paintContext(data);
+        return false;
       case 'text':
         current().text += typeof data.text === 'string' ? data.text : '';
         if (!paintTimer) paintTimer = setTimeout(paintText, PAINT_MS);
@@ -558,6 +622,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     turn = null;
     start = Number.isInteger(page.start) ? page.start : 0;
     more.hidden = start <= 0;
+    if (thenLive) await loadState();
+    if (!alive) return;
     host.dataset.loaded = '1';
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
     if (thenLive) openLive();
@@ -577,7 +643,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function submit() {
     const value = text.value;
-    if ((!value.trim() && !images.length) || running || sending || adding) return;
+    if ((!value.trim() && !images.length) || running || sending || adding || resolving) return;
     const sentImages = images;
     acted = Date.now();
     sending = true;
@@ -594,6 +660,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     try {
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null,
+        ...(access.value ? { access: access.value } : {}),
         ...(sentImages.length ? { images: sentImages.map(({ mime, data }) => ({ mime, data })) } : {}) }, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
@@ -613,7 +680,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     } finally {
       sending = false;
-      send.disabled = running || adding;
+      send.disabled = running || adding || resolving;
       attach.disabled = adding || !agent?.images;
       paintImages();
     }
@@ -674,6 +741,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   model.addEventListener('change', remember);
   effort.addEventListener('change', remember);
+  access.addEventListener('change', remember);
   text.addEventListener('input', () => {
     acted = Date.now();
     autosize();
@@ -710,6 +778,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   return {
     unmount() {
       alive = false;
+      stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);

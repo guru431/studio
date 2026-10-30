@@ -16,7 +16,7 @@ from pathlib import Path
 from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage)
 
-from . import cli, events, image_input, limits, sessions, store
+from . import cli, events, image_input, limits, permissions, sessions, store
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -42,11 +42,11 @@ async def _keep_alive(_input, _tool_use_id, _context) -> dict:
 
 
 def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, model: str | None,
-                effort: str | None, can_use_tool) -> ClaudeAgentOptions:
+                effort: str | None, can_use_tool, access: str | None = None) -> ClaudeAgentOptions:
     """Опции клиента хода: новая сессия — `session_id=chat`, существующая — `resume=chat`."""
     return ClaudeAgentOptions(
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
-        model=model, effort=effort, include_partial_messages=True, can_use_tool=can_use_tool,
+        model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]},
         setting_sources=list(cli.SETTINGS), env=dict(cli.ENV), stderr=cli._drop, extra_args={"chrome": None})
 
@@ -71,6 +71,9 @@ class _Turn:
     pid: str
     chat: str
     turn: str
+    access: str | None = None
+    context: dict | None = None
+    settings: dict | None = None
     feed: events.Feed = field(default_factory=events.Feed)
     asks: dict[str, _Ask] = field(default_factory=dict)
     task: asyncio.Task | None = None
@@ -102,7 +105,7 @@ class Runner:
     # --- просьбы студии ---
 
     def start(self, project: Path, pid: str, chat: str, text: str, model: str | None, effort: str | None,
-              *, images: list[dict] | None = None) -> str:
+              *, images: list[dict] | None = None, access: str | None = None) -> str:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
@@ -110,11 +113,37 @@ class Runner:
             raise Refused("busy", CLOSING)
         if len(self._turns) >= self.max_turns:
             raise Refused("busy")
-        t = _Turn(project, pid, chat, secrets.token_hex(8))
+        t = _Turn(project, pid, chat, secrets.token_hex(8), access=access)
         self._turns[chat] = t
         t.task = asyncio.create_task(self._run(t, text, model, effort, images or []))
         log.info("ход %s: начат", t.turn)
         return t.turn
+
+    async def state(self, project, chat, model=None, effort=None, access=None):
+        """Настройки и контекст без генерации: SDK продолжает сессию только для чтения состояния."""
+        saved = await asyncio.to_thread(self.choices.details, chat)
+        new = not await asyncio.to_thread(sessions.exists, project, chat)
+        model, effort = model or saved.get("model"), effort or saved.get("effort")
+        access = access or saved.get("access")
+        if not new and not model:
+            model = await asyncio.to_thread(sessions.last_model, project, chat)
+        path = await asyncio.to_thread(cli.current, self.cli_path, self.find_cli)
+
+        async def deny(*_):
+            return PermissionResultDeny(message="Чтение состояния")
+
+        client = self.factory(options=options_for(project, path, chat, new,
+            model, effort, deny, access))
+        try:
+            await asyncio.wait_for(client.connect(), cli.PROBE_SEC)
+            info = await client.get_server_info() or {}
+            raw = await client.get_context_usage()
+            current = await asyncio.to_thread(cli.settings_from, info, project, raw, model=model, effort=effort, access=access)
+            return {"settings": current,
+                    "context": permissions.context(raw.get("totalTokens"), raw.get("maxTokens"))}
+        finally:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), DISCONNECT_SEC)
 
     def _turn(self, pid: str, chat: str) -> _Turn | None:
         """Ход чата — только того же проекта: `pid` просьбы не совпал — хода как будто нет."""
@@ -149,7 +178,8 @@ class Runner:
         room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True))
         body = sessions.fit([{"text": text, "steps": steps}], room)[0]
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
-                                           "asks": asks}))
+                                           "asks": asks, **({"context": t.context} if t.context else {}),
+                                           **({"settings": t.settings} if t.settings else {})}))
 
     def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
         """Ответ на карточку; неверные поля — `invalid`, карточки нет (или ход другого проекта) — `gone`."""
@@ -233,10 +263,15 @@ class Runner:
         failure, cancelled, new, sent = None, False, False, False
         try:
             new, model, effort = await asyncio.to_thread(self._choose, t, model, effort)
+            saved = await asyncio.to_thread(self.choices.details, t.chat)
+            t.access = t.access or saved.get("access")
+            if t.access is not None:
+                await asyncio.to_thread(self.choices.update, t.chat, access=t.access)
             if not (t.stopped or t.closing):
                 t.client = self.factory(options=options_for(t.project, self.cli_path, t.chat, new, model, effort,
-                                                            lambda tool, data, ctx: self._ask(t, tool, data, ctx)))
+                                                            lambda tool, data, ctx: self._ask(t, tool, data, ctx), t.access))
                 await t.client.connect()
+                await self._usage(t, model, effort)
             if not (t.stopped or t.closing):
                 sent = True  # дальше файл сессии может появиться
                 await t.client.query(image_input.prompt(text, images) if images else text)
@@ -245,6 +280,8 @@ class Runner:
                         self._send(t, e)
                     if isinstance(message, ResultMessage) and message.is_error:
                         failure = _words(message.errors, message.result, message.subtype)
+                    if isinstance(message, ResultMessage):
+                        await self._usage(t, model, effort)
         except asyncio.CancelledError:
             cancelled = True
         except CLINotFoundError:
@@ -257,6 +294,22 @@ class Runner:
         await self._finish(t, new and sent, failure)
         if cancelled:
             raise asyncio.CancelledError
+
+    async def _usage(self, t, model, effort):
+        """Числа самого CLI; без подмены приблизительным подсчётом длины текста."""
+        if not hasattr(t.client, "get_context_usage"):
+            return
+        try:
+            raw = await asyncio.wait_for(t.client.get_context_usage(), 10)
+            info = await t.client.get_server_info() or {}
+            t.settings = await asyncio.to_thread(cli.settings_from, info, t.project, raw, model=model, effort=effort, access=t.access)
+            self._send(t, {"k": "settings", **t.settings})
+            current = permissions.context(raw.get("totalTokens"), raw.get("maxTokens"))
+            if current:
+                t.context = current
+                self._send(t, {"k": "context", **t.context})
+        except Exception as e:
+            log.info("ход %s: контекст: %s", t.turn, type(e).__name__)
 
     def _choose(self, t: _Turn, model: str | None, effort: str | None) -> tuple[bool, str | None, str | None]:
         """В потоке: путь `claude.exe`, новая ли сессия, модель и усилие хода (явные запоминаются; `None` —
@@ -284,6 +337,9 @@ class Runner:
             if mark:  # клиент погашен: файл сессии не пишут двое
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(sessions.mark_studio, t.project, t.chat)
+            if t.context:
+                with contextlib.suppress(OSError):
+                    await asyncio.to_thread(self.choices.update, t.chat, context=t.context)
         finally:  # и при отмене посреди конца: чат не остаётся занятым
             if self._turns.get(t.chat) is t:
                 del self._turns[t.chat]

@@ -35,6 +35,7 @@ BODIES = {
     ("PATCH", "/api/code/agents/1/projects/1/chats/1"): {"state": "closed"},
     ("GET", "/api/code/agents/1/projects/1/chats/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/turn"): {"text": "x"},
+    ("POST", "/api/code/agents/1/projects/1/chats/1/state"): {},
     ("GET", "/api/code/agents/1/projects/1/chats/1/live"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/answer"): {"request_id": "r1", "decision": "allow"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/stop"): None,

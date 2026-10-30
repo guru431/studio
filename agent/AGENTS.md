@@ -20,7 +20,7 @@ Windows-мост: отдаёт студии `studio.example.com` локальн�
 - PIN проверяет мост; счёт неверных пишется на диск **до** scrypt. Открытые сессии — в памяти, новый канал их сбрасывает.
 - Журнал `agent.log` — только id, коды, числа, имена типов исключений. Ни ключа, ни PIN, ни путей, ни текстов.
 - Кадры — `json.dumps(..., ensure_ascii=True, allow_nan=False)`: имена файлов Windows бывают с одинокими суррогатами.
-- Ход: клиент SDK на ход, `setting_sources=["user", "project", "local"]`, `permission_mode` не задаётся.
+- Ход: клиент SDK на ход, `setting_sources=["user", "project", "local"]`; `permission_mode` и sandbox меняются только явным выбором прав в студии.
 - Блокирующее — `asyncio.to_thread`, иначе встают пинги канала.
 - Тесты без реального времени: часы и паузы — параметрами (`now`, `sleep`).
 - `.ps1` — UTF-8 с BOM и CRLF; `.py` — UTF-8 без BOM и LF.

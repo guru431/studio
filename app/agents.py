@@ -119,6 +119,7 @@ async def list_agents(request: Request):
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
                       "efforts": hello.get("efforts", []), "images": hello.get("images", False),
+                      "chat_state": hello.get("chat_state", False), "defaults": hello.get("defaults", {}),
                       **({"codex": hello["codex"]} if "codex" in hello else {})})
     return {"items": items}
 

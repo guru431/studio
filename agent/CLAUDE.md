@@ -19,6 +19,18 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.4.0 `hello.chat_state: true`, `state` читает конкретные модель/усилие/права и контекст без
+генерации. `permissions.py` задаёт режимы Claude и пресеты Codex; переданный `access` применяется
+к ходу и запоминается локально в choices.json. Без явного выбора режимы CLI сохраняются.
+Claude: `get_server_info`/`get_context_usage`; Codex: метаданные thread и события
+`thread/tokenUsage/updated` (`last.totalTokens`, не накопленное total). Счётчик у старых сессий
+Codex читается из хвоста локального rollout только внутри CODEX_HOME. В снимке — settings/context;
+последний счётчик сохраняется в choices.json без текстов. Эфемерные метаданные отписываются.
+`chrome.py` добавляет в дочерний Codex `studio_chrome`: `chrome-devtools-mcp@1.12.0 --autoConnect`,
+Node/npm из PATH, без отдельных профилей, статистики MCP и CrUX. Нужны Remote Debugging и
+разрешение Chrome. `cua_repl` выключается только для этого процесса, поскольку его host принадлежит
+приложению Codex; Computer Use через node_repl/@oai/sky сохраняется.
+
 С 0.3.4 `options_for` и проверка каталога запускают Claude Code с `extra_args={"chrome": None}`;
 остальные инструменты не ограничиваются (`tools=None`, без `disallowed_tools`), `setting_sources`
 по-прежнему user/project/local, правила разрешений не переопределяются. Установленные плагины и MCP
@@ -36,7 +48,7 @@ base64, Codex — image с data URL в `turn/start.input`; текст может
 из PATH, npm или расширения VS Code, обменивается JSONL и отбрасывает stderr. `codex.py` — каталог моделей
 `model/list`, сессии `thread/list` и `thread/read`, запуск/продолжение, поток, разрешения и вопросы, остановка.
 `CodexRunner` использует общие снимки, ограничение ходов и жизненный цикл `turns.Runner`; при отзыве/выходе
-Controller закрывает обоих помощников. Режим разрешений и sandbox не переопределяются, настройки Codex действуют.
+Controller закрывает обоих помощников. Режим разрешений и sandbox меняются только явным выбором access в студии.
 В `hello` — необязательный `codex {version, models, efforts}`; в просьбах чата `engine: codex`, без поля — Claude.
 UUID нового чата задаёт студия, настоящий thread — Codex: соответствие и проект сохраняются атомарно в
 `codex-chats.json` (без текстов), его нельзя терять при обновлении. Выбор модели и усилия — прежний `choices.json`.
@@ -226,7 +238,7 @@ UUID нового чата задаёт студия, настоящий thread 
   существующей сессии CLI не примет.
 - `null` модели — `choices.json` чата, иначе модель последнего ответа сессии (без `<synthetic>`: продолжение сессии VS
   Code не меняет её модель), иначе умолчание Claude Code; `null` усилия — запомненное или умолчание.
-- **`setting_sources=["user", "project", "local"]`** явно, `permission_mode` не задаётся: правила разрешений, CLAUDE.md
+- **`setting_sources=["user", "project", "local"]`** явно; `permission_mode` задаётся только явным выбором access: правила разрешений, CLAUDE.md
   и `env` проекта действуют, как в VS Code. Окружение `claude.exe` — окружение моста: при старте из него убраны только
   переменные сессии того, кто запустил мост (`cli.SESSION_ENV`, `CLAUDE_CODE_MESSAGING_*`, `VSCODE_*`,
   `CODEX_COMPANION_*`, `TERM_PROGRAM=vscode`, `GIT_ASKPASS`/`GIT_EDITOR` из папки VS Code; `install.ps1` запускают и из

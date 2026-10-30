@@ -34,11 +34,21 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 ## Устройство
 
 Умолчания «Кода» — `users.code_defaults` (JSON, шаг 22), `GET/PATCH /api/me.code_defaults`:
-`claude` и `codex` → `{model, effort}`; PATCH дополняет присланные поля и помощников, `null` —
+`claude` и `codex` → `{model, effort, access}`; PATCH дополняет присланные поля и помощников, `null` —
 настройки CLI. В «Настройках» → «Прочее» — `codeDefaultsBlock`, каталоги подключённых машин из
 `/api/agents`. `code-chat.js` берёт их только для нового/пустого чата; начатый сохраняет прежние
 настройки моста, выбор в чате больше не переписывает умолчания новых чатов и localStorage не использует.
 Недоступные на машине значения сопровождаются сообщением, не уходят в `turn` как неизвестная модель.
+
+С studio-agent 0.4.0 `hello.chat_state` объявляет `POST …/chats/<id>/state` → просьбу `state`
+мосту с `{project, chat, model, effort, access}`. Ответ — `settings` конкретного CLI и `context`
+`{used, limit, percent}` либо null. `hello.defaults` и `hello.codex.defaults` — текущие настройки
+корня проектов для панели настроек. В чате модель, усилие и права показываются конкретно, без
+пункта «по умолчанию»; `null` на проводе продолжает сохранять настройки сессии. Новый ход может
+нести `access`, отдельно проверяемый по помощнику; старый мост с ним — 409 unsupported.
+События `settings`/`context` и поля снимка обновляют индикатор; число берётся из CLI, не из текста.
+Chrome для Codex — `studio_chrome` (Chrome DevTools MCP, открытый профиль, --autoConnect);
+отдельный browser access host приложения Codex мост не эмулирует.
 
 Скриншоты раздела «Код» (studio-agent ≥ 0.3.3): `hello.images: true` → `/api/agents.images`;
 `Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 5 МиБ на файл / 8 МиБ всего.

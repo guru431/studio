@@ -32,6 +32,8 @@ router = APIRouter(prefix="/api")
 class CodeChoice(BaseModel):
     model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]-]{1,100}$")
     effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] | None = None
+    access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
+                    "read-only", "workspace-write", "danger-full-access"] | None = None
 
 
 class MePatch(BaseModel):
@@ -45,6 +47,11 @@ class MePatch(BaseModel):
         if value is None or any(engine == "claude" and choice.effort not in
                                (None, "low", "medium", "high", "xhigh", "max") for engine, choice in value.items()):
             raise ValueError("code_defaults")
+        for engine, choice in value.items():
+            allowed = ("read-only", "workspace-write", "danger-full-access") if engine == "codex" else (
+                "default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")
+            if choice.access is not None and choice.access not in allowed:
+                raise ValueError("access")
         return value
 
 

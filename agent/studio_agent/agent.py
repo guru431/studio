@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import events, files, gitinfo, image_input, limits, projects, sessions, store
+from . import cli, events, files, gitinfo, image_input, limits, permissions, projects, sessions, store
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -27,7 +27,8 @@ OPS = {
     "projects": (),
     "chats": ("project",),
     "history": ("project", "chat", "before", "limit"),
-    "turn": ("project", "chat", "text", "model", "effort"),
+    "state": ("project", "chat", "model", "effort", "access"),
+    "turn": ("project", "chat", "text", "model", "effort", "access"),
     "watch": ("project", "chat"),
     "answer": ("project", "chat", "request_id"),
     "stop": ("project", "chat"),
@@ -74,7 +75,9 @@ class Agent:
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True}
+                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True, "chat_state": True}
+        if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
+            hello["defaults"] = defaults
         if self.codex is not None and self.codex.catalog is not None:
             hello["codex"] = self.codex.catalog
         return hello
@@ -149,6 +152,8 @@ class Agent:
         if engine == "codex" and (self.codex is None or self.codex.catalog is None):
             raise Refused("unsupported", "Codex не найден на компьютере")
         for name in OPS[op]:
+            if name == "access" and not permissions.valid(engine, frame.get(name)):
+                raise Refused("invalid")
             if name in ("model", "effort") and engine == "codex":
                 value = frame.get(name)
                 allowed = {m["id"] for m in self.codex.models} if name == "model" else self.codex.efforts
@@ -174,6 +179,8 @@ class Agent:
             return value is None or value in {m["id"] for m in self.models}
         if name == "effort":
             return value is None or value in self.efforts
+        if name == "access":
+            return value is None or isinstance(value, str) and value in (*permissions.CLAUDE, *permissions.CODEX)
         if name == "version":
             return isinstance(value, str) and VERSION.fullmatch(value) is not None
         if name == "request_id":
@@ -248,6 +255,11 @@ class Agent:
     def _runner(self, frame):
         return self.codex if frame.get("engine") == "codex" else self.runner
 
+    async def _op_state(self, frame, after):
+        project = await self._project(frame)
+        return await self._runner(frame).state(project, frame["chat"], frame.get("model"), frame.get("effort"),
+                                               frame.get("access"))
+
     async def _op_turn(self, frame, after):
         images = frame.get("images", [])
         await asyncio.to_thread(image_input.validate, images)
@@ -259,7 +271,8 @@ class Agent:
         if frame["chat"] not in runner.live() and total >= limits.MAX_TURNS:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
-                                     frame.get("model"), frame.get("effort"), images=images)}
+                                     frame.get("model"), frame.get("effort"), images=images,
+                                     access=frame.get("access"))}
 
     async def _op_watch(self, frame, after):
         """Хода нет (или он другого проекта) — `{"running": false}` без проверки чата (протокол §4); идёт — снимок
