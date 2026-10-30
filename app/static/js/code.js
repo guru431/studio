@@ -231,6 +231,7 @@ function chatsOf(p, fresh = false) {
     const promise = api('GET', `${base(p.aid, p.pid)}/chats`).then((out) => {
       if (p.listing === promise) {
         p.items = out.items;
+        p.loaded = true;
         p.info = new Map(out.items.map((c) => [c.chat, c]));
         if (proj === p) paintTabs();
       }
@@ -250,8 +251,8 @@ function paintTabs() {
   if (!p || !p.bar) return;
   const { tabs } = tabsOf(p.aid, p.pid);
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
-  ui.tabsHost.hidden = !tabs.length && shownKey === 'chat';
-  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, items: p.items });
+  ui.tabsHost.hidden = blocked === String(p.aid) || (!tabs.length && shownKey === 'chat');
+  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded });
   ensurePoll();
 }
 
@@ -326,10 +327,11 @@ function enter(aid, pid) {
   }
   closeProject();
   const pane = (hidden) => el('div', { class: 'code-pane', hidden });
-  const p = { key, aid, pid, naming: null, listing: null, items: [], info: new Map(), bar: null, files: null, git: null,
+  const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true) };
   proj = p;
   p.bar = tabBar(ui.tabsHost, { aid, pid,
+    read: () => chatsOf(p, true),
     pick: (chat) => toChat(p, chat),
     close: (chat) => closeTab(p, chat),
     created: (chat) => created(p, chat),
@@ -384,7 +386,7 @@ function failed(err, aid, status, file = null) {
   if (err && err.code === 'closed') {
     const key = String(aid);
     if (!returnTo || returnTo.aid !== key || returnTo.hash !== location.hash) returnTo = { aid: key, hash: location.hash, file };
-    else if (file) returnTo.file = file;
+    else if (file !== null) returnTo.file = file;
     panelOpen(true);
     panel.pin(aid);
     return;
@@ -498,7 +500,7 @@ async function files(mine, p, path, status) {
     if (proj === p) failed(err, p.aid, box, file);
   };
   if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path });
-  else if (path) p.files.open(path);
+  else if (path !== null) p.files.open(path);
 }
 
 function git(p) {
@@ -524,6 +526,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   } else if (agent) remember(aid, pid, key);
   if (!usable(agent, status)) {
     blocked = String(aid);
+    paintTabs();
     return;
   }
   const open = await panel.ready(aid);      // панель открывает этот компьютер — запросы моста после неё

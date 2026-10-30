@@ -3,7 +3,7 @@
  * («студия» / «VS Code или терминал»), «закрыт», «идёт ход», «ждёт ответа».
  *
  * sessionList(host, { aid, pid, items, exclude, picked, created, failed }) → { unmount() }:
- * - items — ответ GET …/chats, exclude — чаты, которых в списке не надо (открытые вкладки);
+ * - items — ответ GET …/chats или обещание ответа (меню «+»), exclude — чаты, которых в списке не надо;
  * - нажатие на сессию — picked(chat); закрытая сначала открывается снова (PATCH {state: "open"});
  * - «Новый чат» (#code-new-chat) — POST …/chats, затем created(chat);
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
@@ -55,8 +55,18 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
     return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
   }
 
-  const list = el('ul', { id: 'code-chats', class: 'code-chats' }, el('li', { class: 'code-chats-new' }, add),
-    ...items.filter((c) => !exclude.has(c.chat)).map(row));
+  const list = el('ul', { id: 'code-chats', class: 'code-chats' }, el('li', { class: 'code-chats-new' }, add));
+  const rows = (found) => found.filter((c) => !exclude.has(c.chat)).map(row);
+  if (Array.isArray(items)) list.append(...rows(items));
+  else {
+    const wait = el('li', { class: 'code-chats-wait muted' }, 'Загружаю…');
+    list.append(wait);
+    items.then((found) => {
+      if (alive) list.append(...rows(found));
+    }, (err) => {
+      if (alive) failed(err);
+    }).finally(() => wait.remove());
+  }
   host.append(list);
   return {
     unmount() {

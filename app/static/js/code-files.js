@@ -11,7 +11,7 @@
  *   .md — «Текст» / «Вид» (#code-md-view, markdown.js); binary и too_large — слова, файл не открывается;
  * - .pdf — страница картинкой (#code-pdf img из POST …/pdf, число страниц — X-Studio-Pages), «‹» «›» и
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
- * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата);
+ * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата); { dir } — только папка после PIN;
  * - текст правлен и не сохранён, а уходят на другой файл, папку (путь, список) или вкладку (leave(go) из
  *   code.js) — окно «Изменения не сохранены»: «Уйти без сохранения» (правка отброшена) или «Остаться»; уход с
  *   уровня проекта и из раздела ловит code.js (dirty, тот же leave), закрытие вкладки — beforeunload;
@@ -23,7 +23,7 @@
  * (если есть upstream; нулевые не показываются), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
  * failed(err, box, path) — общие отказы раздела из code.js (closed — к PIN этого компьютера, с path — назад к
- * этому файлу; offline — слова).
+ * этому файлу, с { dir } — к папке; offline — слова).
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
@@ -160,7 +160,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     } catch (err) {
       if (!alive || mine !== listGen) return;
       list.replaceChildren();
-      refuse(err, listError);
+      refuse(err, listError, file.hidden ? { dir: path } : null);
     } finally {
       if (mine === listGen) list.removeAttribute('aria-busy');
     }
@@ -202,7 +202,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
       else if (err.code === 'too_large') say(status, TOO_LARGE, true);
       else {
         say(status, '', true);
-        refuse(err, status);
+        refuse(err, status, path);
       }
       return;
     }
@@ -222,6 +222,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     }
     let shown = null;                                   // разметка .md («Вид»)
     const mark = { editor, base, reset() {
+      edits.delete(key);
       editor.value = mark.base;
       if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
     } };
@@ -301,7 +302,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
       } catch (err) {
         if (!alive || mine !== fileGen) return;
         say(status, '', true);
-        refuse(err, status);
+        refuse(err, status, path);
       }
       if (alive && mine === fileGen) {
         prev.disabled = !pages || page <= 1;
@@ -321,8 +322,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
 
   function open(path) {
     closeFile();
-    listDir(parentOf(path));
-    openFile(path);
+    if (typeof path === 'object') listDir(path.dir);
+    else {
+      listDir(parentOf(path));
+      openFile(path);
+    }
   }
 
   window.addEventListener('beforeunload', unload);

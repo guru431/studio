@@ -5,11 +5,11 @@
  * - компьютеры — GET /api/agents (без моста): точка «на связи» (слова — для чтения с экрана), имя, «PIN»; версия Claude
  *   Code — подсказкой; agents() — последний список (обещание, пока показан раздел; не прочитался — null);
  * - показ компьютера (вход в раздел — selected, иначе первый; нажатие на имя): не на связи — p#code-offline, запросов
- *   нет; на связи — POST …/open {pin: null} (как строка компьютера прежде): 204 — его проекты (list(aid) из code.js —
- *   GET …/projects), 409 pin_needed — поле PIN (#code-pin: не <form> и не password — менеджеры паролей не предложат
+ *   нет; на связи — GET …/projects, только closed ведёт к POST …/open {pin: null}: 204 — его проекты,
+ *   409 pin_needed — поле PIN (#code-pin: не <form> и не password — менеджеры паролей не предложат
  *   сохранить PIN; Enter и «Открыть»);
  * - select(aid) — нажатие на имя: показ и act('panel'); уже выбранный и показанный (проекты, поле PIN, ждёт ответа) —
- *   ничего, поле PIN — в фокус. Адрес и правую часть не трогает;
+ *   проекты — перечитать, поле PIN — в фокус, идущий запрос — не повторять. Адрес и правую часть не трогает;
  * - pin(aid) — отказ closed справа и ?pin=: компьютер с PIN — сразу поле, без PIN — POST …/open; идущий POST …/open
  *   этого компьютера не повторяется — его итог и так придёт в opened или в поле PIN;
  * - opened(aid) — компьютер открыт (204 или верный PIN): code.js вернёт правую часть туда, где застал отказ;
@@ -118,7 +118,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     mode = 'loading';
     body.replaceChildren();               // прежний список или поле PIN до ответа не остаётся
     if (kind === 'pin' && agent.has_pin) showPin(mine, agent);
-    else openIt(mine, agent);
+    else openIt(mine, agent, kind === 'open');
   }
 
   function offline() {
@@ -132,13 +132,22 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     else status.textContent = words(err);
   }
 
-  async function openIt(mine, agent) {
+  async function openIt(mine, agent, resume = false) {
     let finish;
     const own = { aid: agent.id, done: new Promise((ok) => { finish = ok; }) };
     opening = own;
     let ok = true;                // false — только «нужен PIN»: прочие отказы правая часть получит от моста сама
+    let found = null;
     try {
-      await api('POST', `/api/code/agents/${agent.id}/open`, { pin: null });
+      if (resume) {
+        try {
+          found = await list(agent.id, true);
+        } catch (err) {
+          if (err.code !== 'closed') throw err;
+        }
+      }
+      if (!alive || mine !== gen) return;
+      if (found === null) await api('POST', `/api/code/agents/${agent.id}/open`, { pin: null });
     } catch (err) {
       ok = err.code !== 'pin_needed' && err.code !== 'pin_locked';
       if (!alive || mine !== gen) return;
@@ -154,14 +163,17 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     }
     if (!alive || mine !== gen) return;
     opened(agent.id);
-    projects(mine, agent);
+    projects(mine, agent, found);
   }
 
-  async function projects(mine, agent) {
-    let found;
+  async function projects(mine, agent, found = null) {
     try {
-      found = await list(agent.id, true);
+      if (found === null) found = await list(agent.id, true);
     } catch (err) {
+      if (err.code === 'closed' && alive && mine === gen) {
+        await openIt(mine, agent);
+        return;
+      }
       if (alive && mine === gen) refused(err);
       return;
     }
@@ -170,7 +182,11 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project', href: `#/code/${agent.id}/${p.pid}` },
         el('span', { class: 'code-project-name' }, p.name), el('span', { class: 'code-project-count' }));
-      link.addEventListener('click', () => chose());
+      link.addEventListener('click', (event) => {
+        if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
+          && !event.shiftKey && !event.altKey) event.preventDefault();
+        chose();
+      });
       return el('li', { 'data-pid': p.pid }, link);
     });
     body.replaceChildren(el('ul', { id: 'code-projects', class: 'code-projects' }, ...rows));
@@ -245,7 +261,12 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   async function select(aid) {
     if (!(await settled())) return;
     aid = Number(aid);
-    if (aid === selected && (mode === 'projects' || mode === 'pin' || mode === 'loading')) {
+    if (aid === selected && mode === 'projects') {
+      mode = 'loading';
+      projects(++gen, items.find((a) => a.id === aid));
+      return;
+    }
+    if (aid === selected && (mode === 'pin' || mode === 'loading')) {
       focusPin();
       return;
     }

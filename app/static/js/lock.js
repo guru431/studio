@@ -123,6 +123,7 @@ let curtain;
 let screen;
 let openButton;
 let usePassword;
+let usePin;
 let passwordForm;
 let passwordInput;
 let note;
@@ -250,6 +251,7 @@ function offerPin() {
   pinPad.hidden = false;
   usePassword.hidden = false;
   passwordForm.hidden = true;
+  usePin.hidden = true;
 }
 
 function offerPassword() {
@@ -258,6 +260,7 @@ function offerPassword() {
   openButton.hidden = !keys;
   usePassword.hidden = true;
   passwordForm.hidden = false;
+  usePin.hidden = !pinOn;
   passwordInput.focus();
 }
 
@@ -282,6 +285,7 @@ async function showLock(lockNow) {
   openButton.hidden = false;
   usePassword.hidden = false;
   passwordForm.hidden = true;
+  usePin.hidden = true;
   stale = false;
   if (!screen.open) screen.showModal();
   const trusted = lockNow ? await lockNow : true;
@@ -307,8 +311,10 @@ function applyState(state) {
   stale = false;
   keys = state.keys;
   pinOn = !!state.pin && state.pin_left > 0;
-  if (!passwordForm.hidden) openButton.hidden = !keys;
-  else if (pinOn) offerPin();
+  if (!passwordForm.hidden) {
+    openButton.hidden = !keys;
+    usePin.hidden = !pinOn;
+  } else if (pinOn) offerPin();
   else if (state.pin) pinGone(EXHAUSTED);
   else if (!keys) offerPassword();
   if (keys) prepare();
@@ -514,6 +520,7 @@ export function installLock() {
   screen = document.getElementById('lock');
   openButton = document.getElementById('lock-open');
   usePassword = document.getElementById('lock-use-password');
+  usePin = document.getElementById('lock-use-pin');
   passwordForm = document.getElementById('lock-password-form');
   passwordInput = document.getElementById('lock-password');
   note = document.getElementById('lock-status');
@@ -526,6 +533,12 @@ export function installLock() {
   curtain.addEventListener('close', () => { if (covering) curtain.showModal(); });
   openButton.addEventListener('click', openWithPasskey);
   usePassword.addEventListener('click', offerPassword);
+  usePin.addEventListener('click', () => {
+    if (!pinOn) return;
+    passwordInput.value = '';
+    say('');
+    offerPin();
+  });
   passwordForm.addEventListener('submit', openWithPassword);
   for (const key of pinPad.querySelectorAll('[data-digit]')) key.addEventListener('click', () => typeDigit(key.dataset.digit));
   document.getElementById('lock-pin-back').addEventListener('click', eraseDigit);
