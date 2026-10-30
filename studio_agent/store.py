@@ -26,6 +26,7 @@ class Config:
     projects_root: str = ""
     autostart: bool = True
     login: str = ""  # логин учётки студии: из ответа привязки и `welcome`; только для окна и трея
+    theme: str = "auto"  # прежние настройки следуют Windows, явный выбор окна — light или dark
 
 
 def home() -> Path:
@@ -67,6 +68,7 @@ def load_config(h: Path) -> Config:
 _KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, str),
           "projects_root": lambda v: isinstance(v, str), "autostart": lambda v: isinstance(v, bool),
           "login": lambda v: isinstance(v, str),
+          "theme": lambda v: isinstance(v, str) and v in ("auto", "light", "dark"),
           "agent_id": lambda v: v is None or (type(v) is int)}
 
 

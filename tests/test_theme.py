@@ -26,6 +26,13 @@ def test_palette_matches_studio_tokens():
     assert theme.palette(False) is not theme.palette(False)       # копия: окно не портит общую
 
 
+def test_explicit_choice_overrides_windows_and_legacy_config_follows_it(monkeypatch):
+    monkeypatch.setattr(theme, "is_dark", lambda: True)
+    assert theme.dark_for("auto") is True and theme.dark_for("light") is False
+    monkeypatch.setattr(theme, "is_dark", lambda: False)
+    assert theme.dark_for("auto") is False and theme.dark_for("dark") is True
+
+
 @pytest.mark.parametrize("dark", [False, True])
 def test_palette_pairs_are_readable(dark):
     c = theme.palette(dark)

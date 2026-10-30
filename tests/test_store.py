@@ -35,6 +35,16 @@ def test_config_round_trip_and_defaults(home):
     assert store.load_config(home).name == "Рабочий ПК"
 
 
+def test_theme_roundtrip_and_legacy_config(home):
+    (home / store.CONFIG).write_text('{"agent_id": 7, "name": "PC"}', encoding="utf-8")
+    cfg = store.load_config(home)
+    assert cfg.theme == "auto"
+    cfg.theme = "light"
+    store.save_config(home, cfg)
+    restored = store.load_config(home)
+    assert (restored.theme, restored.agent_id, restored.name) == ("light", 7, "PC")
+
+
 def test_home_comes_from_the_environment_and_is_created(tmp_path, monkeypatch):
     monkeypatch.setenv("STUDIO_AGENT_HOME", str(tmp_path / "a" / "b"))
     assert store.home() == tmp_path / "a" / "b" and (tmp_path / "a" / "b").is_dir()

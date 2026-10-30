@@ -83,6 +83,14 @@ def test_host_of():
     assert window.host_of("") == "—"
 
 
+def test_backend_rows_show_their_own_probe_result():
+    assert window.backend_row(None) == ("Проверка…", "muted")
+    assert window.backend_row({"status": "checking", "models": 0}) == ("Проверка…", "muted")
+    assert window.backend_row({"status": "ready", "models": 12}) == ("Доступен · моделей: 12", "ok")
+    # Сохранённый каталог не делает последнюю неудачную проверку успешной.
+    assert window.backend_row({"status": "unavailable", "models": 12}) == ("Недоступен", "warn")
+
+
 def test_texts_are_the_spec_words():
     assert window.TITLE == "Studio Agent" and window.NOT_LINKED == "Не подключён"
     assert window.NOTE_PASSWORD == "Пароль нужен один раз и на компьютере не хранится"

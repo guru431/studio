@@ -202,6 +202,7 @@ def test_codex_catalog_is_in_hello_and_revocation_stops_both_runners(make, confi
 
         async def probe(self, root):
             self.catalog = {"version": "test", "models": [{"id": "codex-test", "label": "Codex"}], "efforts": ["ultra"]}
+            return True
 
         async def close(self, **kwargs):
             self.closes.append(kwargs)
@@ -220,6 +221,55 @@ def test_codex_catalog_is_in_hello_and_revocation_stops_both_runners(make, confi
     assert ctrl.codex.closes == [{"hold": True}] and ctrl.runner._closing
     ctrl.quit()
     assert ctrl.codex.closes[-1] == {"final": True}
+
+
+def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make, configured):
+    class Backend:
+        def __init__(self, *args, **kwargs):
+            self.catalog = None
+            self.ready = True
+
+        async def probe(self, root):
+            if self.ready:
+                self.catalog = {"models": [{"id": "codex-test"}], "efforts": []}
+            return self.ready
+
+        async def close(self, **kwargs):
+            pass
+
+        def reopen(self):
+            pass
+
+    ctrl = make(probe=lambda n: ([], []) if n == 1 else (MODELS, ["high"]), codex_factory=Backend)
+    changes = []
+    ctrl.on_backends(changes.append)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.backend_status() == {"claude": {"status": "unavailable", "models": 0},
+                                     "codex": {"status": "ready", "models": 1}}
+    ctrl.codex.ready = False
+    asyncio.run_coroutine_threadsafe(ctrl._refresh_models(), ctrl._loop).result(5)
+    assert ctrl.codex.catalog is not None
+    assert ctrl.backend_status() == {"claude": {"status": "ready", "models": 1},
+                                     "codex": {"status": "unavailable", "models": 0}}
+    assert changes[-1] == ctrl.backend_status()
+    changes[-1]["codex"]["status"] = "ready"
+    assert ctrl.backend_status()["codex"]["status"] == "unavailable"
+
+
+def test_theme_is_saved_without_restarting_the_link(make, configured, home, root):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    link = ctrl.links[0]
+    ctrl.set_theme("dark")
+    ctrl.set_theme("light")
+    cfg = store.load_config(home)
+    assert cfg.theme == "light" and cfg.projects_root == str(root) and cfg.agent_id == 3
+    assert ctrl.links == [link] and not link.stopped and store.load_key(home) == "k0"
+    with pytest.raises(ValueError, match="theme"):
+        ctrl.set_theme("invalid")
+    assert store.load_config(home).theme == "light"
 
 
 def test_models_changed_while_revoked_do_not_bring_the_link_back(make, configured):

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeSDKClient
 
-from . import autostart, cli, enroll, setup, store
+from . import autostart, cli, enroll, setup, store, theme
 from .codex import CodexRunner
 from .agent import Agent, read_has_pin
 from .link import Link
@@ -72,6 +72,8 @@ class Controller:
         self.state = "connecting" if _configured(store.load_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
         self._login_subscribers = []
+        self._backend_subscribers = []
+        self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex")}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self.agent: Agent | None = None
@@ -97,6 +99,25 @@ class Controller:
         """Подписка на новый логин из `welcome` (`callback(login)`, после записи в config.json); зовётся из потока
         ядра."""
         self._login_subscribers.append(callback)
+
+    def on_backends(self, callback) -> None:
+        """Статусы помощников после проверки каталога; callback вызывается из потока ядра."""
+        self._backend_subscribers.append(callback)
+
+    def backend_status(self) -> dict:
+        """Снимок последних проверок, без диска и сети: окно читает его из потока Tk."""
+        return {name: dict(value) for name, value in self._backends.items()}
+
+    def _set_backend(self, name: str, status: str, models: int = 0) -> None:
+        value = {"status": status, "models": models}
+        if self._backends[name] == value:
+            return
+        self._backends = {**self._backends, name: value}
+        for callback in list(self._backend_subscribers):
+            try:
+                callback(self.backend_status())
+            except Exception as e:
+                log.warning("подписчик помощников: %s", type(e).__name__)
 
     @property
     def enrolled(self) -> bool:
@@ -127,10 +148,11 @@ class Controller:
     @property
     def login(self) -> str:
         """Логин учётки студии (ответ привязки, `welcome`); нет — пусто."""
-        return store.load_config(self.h).login
+        return self.config().login
 
     def config(self) -> store.Config:
-        return store.load_config(self.h)
+        with self._cfg_lock:
+            return store.load_config(self.h)
 
     def autostart_enabled(self) -> bool:
         """Автозапуск — по реестру (значение указывает на эту копию), а не по `config.json`; чтение быстрое."""
@@ -233,6 +255,15 @@ class Controller:
             cfg.autostart = bool(on)
             store.save_config(self.h, cfg)
         log.info("автозапуск: %s", "включён" if on else "выключен")
+
+    def set_theme(self, choice: str) -> None:
+        """Тема окна — настройка этой копии моста; канал и открытые сессии не меняются."""
+        if choice not in ("light", "dark"):
+            raise ValueError("theme")
+        with self._cfg_lock:
+            cfg = store.load_config(self.h)
+            cfg.theme = choice
+            store.save_config(self.h, cfg)
 
     def reset_pin(self) -> None:
         PinStore(self.h).reset()
@@ -465,16 +496,23 @@ class Controller:
     async def _refresh_models(self) -> bool:
         """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает. Итог — сменился ли
         набор."""
+        self._set_backend("claude", "checking")
         models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
                                             factory=self._sdk_factory)
+        self._set_backend("claude", "ready" if models else "unavailable", len(models))
         changed = bool(models) and (models, efforts) != (self.agent.models, self.agent.efforts)
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
         if self.codex is not None:
+            self._set_backend("codex", "checking")
             previous = self.codex.catalog
-            await self.codex.probe(self.agent.cfg.projects_root)
+            ready = await self.codex.probe(self.agent.cfg.projects_root)
+            self._set_backend("codex", "ready" if ready else "unavailable",
+                              len(self.codex.catalog["models"]) if ready else 0)
             changed = changed or previous != self.codex.catalog
+        else:
+            self._set_backend("codex", "unavailable")
         log.info("модели Claude Code: %d", len(models))
         return changed
 
@@ -528,10 +566,11 @@ def main(argv: list[str]) -> int:
     root = tk.Tk()
     root.withdraw()
     root.report_callback_exception = lambda exc, value, tb: log.error("окно: %s", exc.__name__)
-    window.prepare(root)  # тема Windows и значок окон
+    window.prepare(root, theme.dark_for(ctrl.config().theme))
     icon = tray.Tray(ctrl.state, commands.put, lambda: ctrl.pin_locked, ctrl.login)
     ctrl.on_state(lambda state: commands.put(("state", state)))
     ctrl.on_login(lambda login: commands.put(("login", login)))
+    ctrl.on_backends(lambda status: commands.put(("backends", status)))
     ctrl.on_pin_changed = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
 
     def poll() -> None:
@@ -543,6 +582,8 @@ def main(argv: list[str]) -> int:
             if isinstance(cmd, tuple) and cmd[0] == "login":
                 icon.show(ctrl.state, cmd[1])
                 window.login_changed(cmd[1])
+            elif isinstance(cmd, tuple) and cmd[0] == "backends":
+                window.backends_changed()
             elif isinstance(cmd, tuple):
                 state = cmd[1]
                 icon.show(state, ctrl.login)

@@ -47,6 +47,10 @@ class FakeRpc:
         if method == "thread/list":
             return {"data": [{"id": THREAD, "cwd": str(self.factory.project), "preview": "Тест", "createdAt": 1,
                               "updatedAt": 2}, {"id": CHAT, "cwd": str(self.cwd / "other")}], "nextCursor": None}
+        if method == "model/list":
+            if self.factory.read_error is not None:
+                raise self.factory.read_error
+            return {"data": [{"model": "codex-test", "displayName": "Codex", "supportedReasoningEfforts": []}]}
         raise AssertionError(method)
 
     def done(self, status="completed"):
@@ -197,6 +201,16 @@ async def test_read_error_does_not_silently_start_a_new_conversation(runner):
     assert not any(m in ("thread/start", "turn/start") for m, _ in runner.fake.calls)
     with pytest.raises(codex_rpc.RpcError):
         await runner.history(runner.project, CHAT, None, 10)
+
+
+async def test_probe_reports_a_failure_even_with_a_saved_catalog(runner, monkeypatch):
+    monkeypatch.setattr(codex_rpc, "version", lambda path: "test")
+    assert await runner.probe(str(runner.project)) is True
+    assert runner.catalog["models"] == [{"id": "codex-test", "label": "Codex"}]
+    runner.fake.read_error = codex_rpc.RpcError()
+    assert await runner.probe(str(runner.project)) is False
+    assert runner.catalog["models"] == [{"id": "codex-test", "label": "Codex"}]
+    await runner.close(final=True)
 
 
 async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, monkeypatch):

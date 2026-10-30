@@ -79,6 +79,15 @@ def pin_row(status: str | None) -> tuple[str, tuple[str, ...]]:
     return PIN_WORDS[status], PIN_BUTTONS[status]
 
 
+def backend_row(status: dict | None) -> tuple[str, str]:
+    """Результат собственной проверки помощника; связь со студией этого статуса не определяет."""
+    if not status or status.get("status") == "checking":
+        return "Проверка…", "muted"
+    if status.get("status") == "ready":
+        return f"Доступен · моделей: {status['models']}", "ok"
+    return "Недоступен", "warn"
+
+
 def pin_dialog_errors(pin: str, pin2: str) -> list[str]:
     """Окно «Задать / Изменить PIN»: пустой — не PIN."""
     return [setup.PIN_WORDS] if not pin else setup.pin_errors(pin, pin2)
@@ -122,6 +131,12 @@ def pin_changed() -> None:
         _window.refresh_pin()
 
 
+def backends_changed() -> None:
+    """Проверка Claude Code или Codex закончилась: обновить только их строки."""
+    if _window is not None and _window.alive():
+        _window.show_backends()
+
+
 def prepare(root, dark: bool | None = None) -> dict:
     """Тема корня и значок окон — один раз; итог — палитра."""
     c = getattr(root, "_studio_palette", None)
@@ -143,7 +158,7 @@ class MainWindow:
 
         self.tk, self.ttk = tk, ttk
         self.root, self.ctrl = root, controller
-        self.c = prepare(root)
+        self.c = prepare(root, theme.dark_for(controller.config().theme))
         self.scale = root.winfo_fpixels("1i") / 96
         self.state = controller.state
         self.enrolled = controller.state != "setup"
@@ -263,6 +278,7 @@ class MainWindow:
         ttk = self.ttk
         self.buttons = []
         self.card_widgets = self.pin_line = self.login_value = None
+        self.backend_widgets = {}
         if self.body is not None:
             self.body.destroy()
         self.body = ttk.Frame(self.win, padding=self.px(20))
@@ -288,6 +304,63 @@ class MainWindow:
         ttk.Label(top, text=TITLE, style="Title.TLabel").grid(row=0, column=1, sticky="w")
         if view_of(self.enrolled) == "login":
             ttk.Label(top, text=NOT_LINKED, style="Badge.TLabel").grid(row=0, column=2, sticky="e")
+            self.theme_controls(top, row=1, card=False, span=3)
+
+    def theme_controls(self, host, *, row: int, card: bool, span: int = 2) -> None:
+        """Два явных варианта темы; старый config до выбора следует Windows."""
+        ttk = self.ttk
+        prefix = "Card." if card else ""
+        box = ttk.Frame(host, style=prefix + "TFrame")
+        box.grid(row=row, column=0, columnspan=span, sticky="ew", pady=(self.px(8), self.px(10)))
+        box.columnconfigure(0, weight=1)
+        ttk.Label(box, text="Тема", style=prefix + "Muted.TLabel").grid(row=0, column=0, sticky="w")
+        selected = self.tk.StringVar(value="dark" if self.c["dark"] else "light")
+        problem = self.tk.StringVar()
+
+        def change() -> None:
+            previous = "dark" if self.c["dark"] else "light"
+            choice = selected.get()
+            if self.busy:
+                selected.set(previous)
+                return
+            problem.set("")
+
+            def done(_, failed):
+                if failed:
+                    selected.set(previous)
+                    problem.set(FAILED)
+                else:
+                    self.apply_theme(choice)
+
+            self.work(lambda: self.ctrl.set_theme(choice), done)
+
+        for column, (value, label) in enumerate((("light", "Светлая"), ("dark", "Тёмная")), start=1):
+            button = ttk.Radiobutton(box, text=label, value=value, variable=selected, command=change,
+                                    style=prefix + "TRadiobutton")
+            button.grid(row=0, column=column, sticky="e", padx=(self.px(12), 0))
+            self.buttons.append(button)
+        ttk.Label(box, textvariable=problem, style=prefix + "Error.TLabel").grid(
+            row=1, column=0, columnspan=3, sticky="w")
+
+    def apply_theme(self, choice: str) -> None:
+        """Перекрасить на месте: введённые поля, сообщения об ошибках и PIN не теряются."""
+        previous = self.c
+        self.c = prepare(self.root, theme.dark_for(choice))
+
+        def recolour(widget):
+            if isinstance(widget, (self.tk.Frame, self.tk.Canvas, self.tk.Toplevel)):
+                old = widget.cget("background")
+                token = "panel" if old == previous["panel"] else "bg"
+                widget.configure(background=self.c[token])
+                if isinstance(widget, self.tk.Frame) and int(widget.cget("highlightthickness")):
+                    widget.configure(highlightbackground=self.c["border"], highlightcolor=self.c["border"])
+            for child in widget.winfo_children():
+                recolour(child)
+
+        recolour(self.win)
+        theme.dark_title(self.win, self.c["dark"])
+        self.show_card()
+        self.show_backends()
 
     def card(self, row: int):
         """Карточка: панель с границей."""
@@ -417,9 +490,24 @@ class MainWindow:
         words.grid(row=0, column=1, sticky="w")
         hint = ttk.Label(box, style="Card.Muted.TLabel", wraplength=self.px(380), justify="left")
         hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
+        helpers = ttk.Frame(box, style="Card.TFrame")
+        helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(12)))
+        helpers.columnconfigure(1, weight=1)
+        for row, (key, label) in enumerate((("claude", "Claude Code"), ("codex", "Codex"))):
+            ttk.Label(helpers, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=self.px(4))
+            line = ttk.Frame(helpers, style="Card.TFrame")
+            line.grid(row=row, column=1, sticky="e", padx=(self.px(20), 0))
+            size = self.px(8)
+            light = self.tk.Canvas(line, width=size, height=size, highlightthickness=0, background=self.c["panel"])
+            point = light.create_oval(0, 0, size - 1, size - 1)
+            light.grid(row=0, column=0, padx=(0, self.px(8)))
+            value = ttk.Label(line, style="Card.TLabel")
+            value.grid(row=0, column=1, sticky="e")
+            self.backend_widgets[key] = (light, point, value)
+        self.show_backends()
         login = self.ctrl.login
         for i, (label, value) in enumerate((("Студия", host_of(cfg.url)), ("Вход", login or DASH),
-                                            ("Компьютер", cfg.name or DASH)), start=2):
+                                            ("Компьютер", cfg.name or DASH)), start=3):
             ttk.Label(box, text=label, style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
                                                                        padx=(0, self.px(16)), pady=self.px(2))
             shown = ttk.Label(box, text=value, style="Card.TLabel")
@@ -427,7 +515,7 @@ class MainWindow:
             if label == "Вход":
                 self.login_value = shown
         bar = ttk.Frame(box, style="Card.TFrame")
-        bar.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(self.px(14), 0))
+        bar.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(self.px(14), 0))
         bar.columnconfigure(0, weight=1)
         self.card_problem = self.tk.StringVar()
         ttk.Label(bar, textvariable=self.card_problem, style="Card.Error.TLabel", wraplength=self.px(240)).grid(
@@ -460,6 +548,13 @@ class MainWindow:
     def show_login(self, login: str) -> None:
         if self.login_value is not None and self.login_value.winfo_exists():
             self.login_value.configure(text=login or DASH)
+
+    def show_backends(self) -> None:
+        status = self.ctrl.backend_status()
+        for key, (dot, oval, label) in self.backend_widgets.items():
+            words, token = backend_row(status.get(key))
+            dot.itemconfigure(oval, fill=self.c[token], outline=self.c[token])
+            label.configure(text=words, foreground=self.c[token])
 
     def main_action(self, kind: str) -> None:
         if self.busy:
@@ -494,10 +589,11 @@ class MainWindow:
         box.columnconfigure(0, weight=1)
         ttk.Label(box, text="Настройки", style="Card.Head.TLabel").grid(row=0, column=0, columnspan=2, sticky="w",
                                                                        pady=(0, self.px(10)))
+        self.theme_controls(box, row=1, card=True)
         problem = tk.StringVar()
-        ttk.Label(box, text="Папка проектов", style="Card.Muted.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(box, text="Папка проектов", style="Card.Muted.TLabel").grid(row=2, column=0, sticky="w")
         folder = ttk.Label(box, text=cfg.projects_root or DASH, style="Card.TLabel", wraplength=self.px(300))
-        folder.grid(row=2, column=0, sticky="w")
+        folder.grid(row=3, column=0, sticky="w")
 
         def change() -> None:
             from tkinter import filedialog
@@ -518,7 +614,7 @@ class MainWindow:
             self.work(lambda: self.ctrl.set_folder(path), done)
 
         pick = ttk.Button(box, text="Изменить…", command=change)
-        pick.grid(row=1, column=1, rowspan=2, sticky="e", padx=(self.px(12), 0))
+        pick.grid(row=2, column=1, rowspan=2, sticky="e", padx=(self.px(12), 0))
         auto = tk.BooleanVar(value=self.ctrl.autostart_enabled())  # реестр, а не config.json
 
         def toggle() -> None:
@@ -534,13 +630,13 @@ class MainWindow:
 
         box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
-        box_auto.grid(row=3, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
+        box_auto.grid(row=4, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
         self.buttons += [pick, box_auto]
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
-        self.pin_line.grid(row=4, column=0, columnspan=2, sticky="ew")
+        self.pin_line.grid(row=5, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
         ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
-            row=5, column=0, columnspan=2, sticky="w")
+            row=6, column=0, columnspan=2, sticky="w")
         self.settings_problem = problem
         self.show_pin()
 

@@ -137,12 +137,12 @@ class CodexRunner(Runner):
                     self._meta = None
                 raise
 
-    async def probe(self, root):
+    async def probe(self, root) -> bool:
         try:
             path = await asyncio.to_thread(self.find_codex)
             if path is None:
                 self.catalog = None
-                return
+                return False
             self.version = await asyncio.to_thread(codex_rpc.version, path)
             data = await self._metadata(root, "model/list", {"limit": 50})
             models, efforts = [], set()
@@ -155,8 +155,10 @@ class CodexRunner(Runner):
             self.models = models[:50]
             self.efforts = [e for e in EFFORTS if e in efforts]
             self.catalog = {"version": self.version, "models": self.models, "efforts": self.efforts}
+            return bool(self.models)
         except Exception as e:
             log.warning("Codex: каталог: %s", type(e).__name__)
+            return False
 
     async def chats(self, project):
         if self.catalog is None:

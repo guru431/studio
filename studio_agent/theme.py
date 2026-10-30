@@ -35,6 +35,11 @@ def is_dark() -> bool:
         return False
 
 
+def dark_for(choice: str) -> bool:
+    """Явный выбор окна; у прежних настроек (`auto`) — тема приложений Windows."""
+    return is_dark() if choice == "auto" else choice == "dark"
+
+
 def dark_title(win, dark: bool) -> None:
     """Тёмный заголовок окна (Windows 10 20H1+, 11); не вышло — светлый, как есть."""
     with contextlib.suppress(Exception):
@@ -78,6 +83,10 @@ def apply(root, dark: bool | None = None) -> dict:
                     indicatorforeground=c["text"], indicatorrelief="flat", bordercolor=c["edge"])
         s.map(f"{area}TCheckbutton", background=[("active", bg)],
               indicatorbackground=[("pressed", c["border"]), ("selected", c["field"])])
+        s.configure(f"{area}TRadiobutton", background=bg, foreground=c["text"], indicatorbackground=c["field"],
+                    indicatorforeground=c["text"], bordercolor=c["edge"], focuscolor=c["accent"])
+        s.map(f"{area}TRadiobutton", background=[("active", bg)], foreground=[("disabled", c["muted"])],
+              indicatorbackground=[("selected", c["accent"])])
     s.configure("Badge.TLabel", background=c["border"], foreground=c["muted"], padding=(8, 2))
     s.configure("TEntry", fieldbackground=c["field"], foreground=c["text"], bordercolor=c["edge"],
                 lightcolor=c["field"], darkcolor=c["field"], insertcolor=c["text"], padding=(6, 4))
