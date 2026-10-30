@@ -318,7 +318,16 @@ release моделей картинок заново перед переводо
   `ask` и `done`, только если чат никто не смотрит (`bridge.watching`); страница снимает поток на
   `visibilitychange: hidden` и открывает `live` на `visible`; текст — «<имя компьютера>: <повод>», `href`
   `code/<aid>/<pid>/<chat>`, `tag` `code-<chat>`; 404 и 410 службы — подписка снята; `sw.js` — `push` с
-  `renotify`. Стирание истории — только `code_chats`; выгрузка — `code_chats/` и `agent_events/`, без `key_hash`.
+  `renotify`. Рабочее место (спека 2026-10-29-studio-code-workspace, шаг схемы 20 `db.CODE_20`) — `workspace`:
+  `GET /api/code/workspace` — документ `{panel, place {aid, pid, view}, projects [{aid, pid, tabs, active}]}`
+  (проекты по убыванию `touched`), `PATCH` — одно действие `{op: open|close|place|panel, aid, pid?, chat?, view?}`
+  одной транзакцией к тому, что в базе (не документ целиком: устаревшее устройство не затирает чужие вкладки и не
+  возвращает стёртое), ответ — новый документ; таблицы `code_tabs` (вкладки проекта JSON-списком UUID, активная,
+  `touched`; каскад от `agents`) и `code_place` (компьютер панели, открытый проект и вид; отзыв компьютера — `NULL`,
+  `place` — `null`); пределы `TABS_MAX` (20: лишняя — самая левая) и `PROJECTS_MAX` (100: лишний — открытый раньше
+  всех); только id, к мосту не ходит, журнала нет; чужой компьютер — 404, `pid`/`chat` не того вида — 422.
+  Стирание истории — `code_chats`, `code_tabs`, `code_place`; выгрузка — `code_chats/` (с `workspace.json`) и
+  `agent_events/`, без `key_hash`.
   Журнал — «агент N: …», «пользователь N: компьютер M — <op>: <код>», адрес неизвестного ключа: ни ключа, ни PIN,
   ни имён компьютеров, проектов и файлов, ни текстов. Тесты — подставной мост `tests/fake_bridge.py` (`enroll`,
   `FakeMachine` по протоколу, `InProcessBridge` — быстрые, `SocketBridge` — настоящий WebSocket к `live_app`).
@@ -520,6 +529,11 @@ release моделей картинок заново перед переводо
 недописанное помечают `chat.recover()` / `images.recover()` / `ocr.recover()` / `translate.recover()` при старте. Каналы мостов Claude Code остановка закрывает 1012 (`bridge.stop`): мосты
 переподключаются сами, ходы на машинах идут дальше, а открытость компьютеров пропадает — PIN вводят снова. Смоук —
 `https://studio.example.com/health`; живая приёмка — `tests/test_studio_upload_live.py` (ниже).
+
+**Откат на код до шага схемы 20** (`.previous`): прежний код таблиц `code_tabs` и `code_place` не читает — раздел
+«Claude Code» прежний (лестница уровней), рабочее место не видно и не мешает. Его «Удалить всю историю» их не стирает:
+вернувшись вперёд, тем, кто стирал историю, — стереть её снова, или `DELETE FROM code_tabs WHERE user_id IN (…);
+DELETE FROM code_place WHERE user_id IN (…);`. Отзыв компьютера прежним кодом уносит его вкладки каскадом (FK в схеме).
 
 **Откат на код до шага схемы 19** (`.previous`): прежний код таблиц `agents`, `agent_events`, `code_chats`,
 `push_subs` и `settings` `vapid` не читает — вкладки «Claude Code», компьютеров в «Настройках» и push нет; SQL-обхода
