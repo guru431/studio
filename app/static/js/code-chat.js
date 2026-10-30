@@ -1,7 +1,9 @@
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
- * chatView(host, { aid, pid, chat, agent, project, origin, fresh, navigate, closed, openFile }) → { unmount() }:
+ * chatView(host, { aid, pid, chat, agent, project, origin, fresh, closed, closedChat, gone, openFile }) → { unmount() }:
+ * - «Закрыть чат» — PATCH {state: "closed"}, затем closedChat() (code.js убирает вкладку); история отвечает 404
+ *   not_found (сессии на машине нет, студия её не заводила) — gone() вместо слов (вкладка уходит сама);
  * - лента #code-feed — страница истории (GET …/chats/<chat>, по 100), «Показать раньше» (#code-more) —
  *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
  *   details.code-step, затем текст — markdown.js);
@@ -91,7 +93,7 @@ function tailOf(filePath, agent, project) {
   return parts.some((p) => p === '' || p === '.' || p === '..') ? null : parts.join('/');
 }
 
-export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, navigate, closed: toPin,
+export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, closed: toPin, closedChat, gone,
   openFile }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const draftKey = `${aid}/${chat}`;
@@ -465,6 +467,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } catch (err) {
       if (!alive) return;
       if (err.code === 'closed') closed();
+      else if (err.status === 404 && err.code === 'not_found') gone();
       else status.textContent = words(err);
       return;
     }
@@ -572,7 +575,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     closeChat.disabled = true;
     try {
       await api('PATCH', url, { state: 'closed' });
-      if (alive) navigate(`code/${aid}/${pid}`);
+      if (alive) closedChat();
     } catch (err) {
       closeChat.disabled = false;
       if (err.code === 'closed') closed();

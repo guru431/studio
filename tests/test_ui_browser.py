@@ -7507,9 +7507,9 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
             ("click", f'#code-chats li[data-chat="{mine}"] .code-chat-link'),
             ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}/{mine}'"
                      f" && document.querySelector('#code-chat')?.dataset.chat === '{mine}'"),
-            *go(f"code/{aid}/{pid('alpha')}"),
-            ("wait", f"document.querySelector('#code-chats li[data-chat]')?.dataset.chat === '{mine}'"),
-            ("eval", "reopened", CODE_CHATS)], width=320, mobile=True)
+            ("eval", "tab", "document.querySelector('#code-tabbar .code-tab[aria-selected=true]')?.dataset.chat"),
+            ("eval", "reopened", f"fetch('/api/code/agents/{aid}/projects/{pid('alpha')}/chats').then((r) => r.json())"
+                                 f".then((j) => j.items.find((c) => c.chat === '{mine}').state)")], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
@@ -7520,39 +7520,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
                          [busy, "Сборка", True, ["студия", "идёт ход"]],
                          [asking, "Тесты", True, ["VS Code или терминал", "ждёт ответа"]],
                          [mine, "Починить вход", True, ["студия", "закрыт"]]]
-    assert v["reopened"][0] == [mine, "Починить вход", True, ["студия"]]
-    assert not known_refusals(problems(r), 409), problems(r)
-
-
-def test_code_new_chat_opens_its_page(browser, live):
-    """«Новый чат» — POST …/chats, строка code_chats, адрес #/code/<aid>/<pid>/<chat> и страница этого чата."""
-    import db
-    from fake_bridge import pid
-    login = "code-new"
-    uid = live.add_user(login)
-    aid, sb = code_online(live, login, code_machine())
-    try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "beta"),
-            ("wait", "document.querySelector('#code-new-chat')"),
-            ("click", "#code-new-chat"),
-            ("wait", "/^#\\/code\\/\\d+\\/[0-9a-f]{16}\\/[0-9a-f-]{36}$/.test(location.hash)"
-                     " && !!document.querySelector('#code-chat')"),
-            ("eval", "hash", "location.hash"),
-            ("eval", "page", "document.querySelector('#code-chat').dataset.chat"),
-            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
-    finally:
-        sb.stop()
-    assert not r.get("failed"), r
-    v = r["values"]
-    chat = v["hash"].rsplit("/", 1)[1]
-    assert v["hash"] == f"#/code/{aid}/{pid('beta')}/{chat}" and v["page"] == chat and v["fits"] is True
-    conn = db.connect(live.db_path)
-    try:
-        rows = [tuple(x) for x in conn.execute("SELECT user_id, agent_id, project, state FROM code_chats"
-                                               " WHERE session_id = ?", (chat,))]
-    finally:
-        conn.close()
-    assert rows == [(uid, aid, pid("beta"), "open")]
+    assert v["tab"] == mine and v["reopened"] == "open"
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -7569,9 +7537,13 @@ def test_code_push_click_opens_the_chat_in_an_open_studio(browser, live):
         ("eval", "bad", post.format("code/7/../x")), ("eval", "badHash", settled("location.hash")),
         ("eval", "sent", post.format(href)),
         ("wait", f"location.hash === '#/{href}' && !!document.querySelector('#code-chat')"),
-        ("eval", "page", "document.querySelector('#code-chat').dataset.chat")])
+        ("eval", "page", "document.querySelector('#code-chat').dataset.chat"),
+        ("wait", f"document.querySelector('#code-tabbar .code-tab[aria-selected=true]')?.dataset.chat === '{chat}'"),
+        ("eval", "tabs", "[...document.querySelectorAll('#code-tabbar .code-tab')].map((t) => [t.dataset.chat,"
+                         " t.querySelector('.code-tab-title').textContent])")])
     assert not r.get("failed"), r
     assert r["values"]["badHash"] == "#/chat" and r["values"]["page"] == chat
+    assert r["values"]["tabs"] == [[chat, "Сессия"]]
     assert not problems(r), problems(r)
 
 
@@ -8126,8 +8098,8 @@ def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
             set_value("#code-model", "sonnet"), set_value("#code-effort", "high"),
             *code_send("привет"), ("wait", CODE_IDLE_AFTER.format(n=1)),
             ("eval", "stored", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))"),
-            *go(f"code/{aid}/{pid('alpha')}"), ("wait", "document.querySelector('#code-new-chat')"),
-            ("click", "#code-new-chat"),
+            ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu #code-new-chat')"),
+            ("click", "#code-tab-menu #code-new-chat"),
             ("wait", "/^#\\/code\\/\\d+\\/[0-9a-f]{16}\\/[0-9a-f-]{36}$/.test(location.hash)"
                      f" && location.hash.split('/').pop() !== '{CODE_CHAT_A}'"
                      " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
@@ -8215,7 +8187,8 @@ def test_code_hidden_page_drops_its_stream_and_returns_to_live(browser, live):
     spy.start()
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            *code_send("Работай"), ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
+            *code_send("Работай"), ("wait", "document.querySelector('#code-chat').dataset.running === '1'"
+                                            " && document.querySelector('.code-msg.assistant .md')?.textContent.trim() === 'Работаю'"),
             hide(), ("wait", named.format("снят")),
             ("eval", "md", "document.querySelector('.code-msg.assistant .md').textContent.trim()"),
             show(), ("wait", named.format("снова")),
@@ -8395,8 +8368,8 @@ def test_code_draft_goes_once_the_turn_is_accepted_even_after_leaving(browser, l
         ? fail(new DOMException('aborted', 'AbortError')) : ok(r)), 800))); return true; })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("eval", "slow", slow), *code_send("Один раз"), *go(f"code/{aid}/{pid('alpha')}"),
-            ("wait", "document.querySelector('#code-new-chat')"), ("eval", "pause", settled("true", 1200)),
+            ("eval", "slow", slow), *code_send("Один раз"), *go("chat"),
+            ("wait", "location.hash === '#/chat'"), ("eval", "pause", settled("true", 1200)),
             *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
             ("eval", "field", "document.querySelector('#code-text').value")], width=320, mobile=True)
     finally:
@@ -8910,4 +8883,376 @@ def test_code_step_file_link_opens_the_file(browser, live):
     assert "app.py" not in v["stored"]
     assert [q["path"] for q in code_requests(machine, "files")] == ["src"]          # сразу папка файла
     assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
+    assert not problems(r), problems(r)
+
+
+# вкладки сессий проекта (code-tabs.js): «+», «×», соседняя активная, предел 20, восстановление
+
+CODE_CHAT_C = "c3333333-3333-4333-8333-333333333333"
+#: вкладки ряда: id, название, выбрана
+CODE_TABS = """[...document.querySelectorAll('#code-tabbar .code-tab')].map((t) => [t.dataset.chat,
+  t.querySelector('.code-tab-title').textContent, t.getAttribute('aria-selected')])"""
+CODE_ACTIVE_TAB = "document.querySelector('#code-tabbar .code-tab[aria-selected=true]')?.dataset.chat"
+
+
+def code_tab_ready(chat):
+    """Вкладка активна, её чат показан."""
+    return ("wait", f"{CODE_ACTIVE_TAB} === '{chat}' && document.querySelector('#code-chat')?.dataset.chat === '{chat}'"
+                    " && document.querySelector('#code-chat').dataset.loaded === '1'")
+
+
+def code_from_list(chat):
+    """Проект без вкладок: сессия из списка во всю ширину — первая вкладка."""
+    return [("wait", f"document.querySelector(\"#code-chats li[data-chat='{chat}']\")"),
+            ("click", f"#code-chats li[data-chat='{chat}'] .code-chat-link"), code_tab_ready(chat)]
+
+
+def code_from_menu(chat):
+    """«+» — меню сессий проекта, выбор — новой вкладкой."""
+    return [("click", "#code-tab-add"), ("wait", f"document.querySelector(\"#code-tab-menu li[data-chat='{chat}']\")"),
+            ("click", f"#code-tab-menu li[data-chat='{chat}'] .code-chat-link"), code_tab_ready(chat)]
+
+
+def code_tab_click(chat):
+    return [("click", f"#code-tabbar .code-tab[data-chat='{chat}'] .code-tab-title"), code_tab_ready(chat)]
+
+
+def code_three(title="Чат"):
+    """Компьютер без PIN: alpha с тремя сессиями A, B, C (у каждой — своё сообщение), beta — пустой."""
+    from fake_bridge import T0
+
+    def session(name, minute):
+        return {**code_session(f"{title} {name}", messages=[{"id": "m-0", "role": "user", "text": f"про {name}",
+                                                             "steps": [], "time": T0}]), "modified": T0 + minute}
+    machine = code_free_machine({CODE_CHAT_A: session("A", 3), CODE_CHAT_B: session("B", 2), CODE_CHAT_C: session("C", 1)})
+    machine.projects["beta"] = {"chats": {}}
+    return machine
+
+
+def code_workspace_rows(live, uid):
+    import db
+    conn = db.connect(live.db_path)
+    try:
+        return [(r["project"], json.loads(r["tabs"]), r["active"])
+                for r in conn.execute("SELECT project, tabs, active FROM code_tabs WHERE user_id = ? ORDER BY touched",
+                                      (uid,))]
+    finally:
+        conn.close()
+
+
+def test_code_tabs_open_from_the_menu_and_switch(browser, live):
+    """Сессия из списка — первая вкладка; «+» — меню остальных сессий проекта, выбранная — новой вкладкой в конце и
+    активной; нажатие на вкладку — её чат с историей. Смена вкладки заменяет запись истории: «Назад» — к прежнему
+    проекту, а не к прежней вкладке."""
+    from fake_bridge import pid
+    login = "code-tabs"
+    live.add_user(login)
+    machine = code_three()
+    aid, sb = code_online(live, login, machine)
+    alpha = pid("alpha")
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
+            ("wait", "!!document.querySelector('#code-chats')"), *code_project(aid, "alpha"),
+            ("eval", "len0", "history.length"),
+            *code_from_list(CODE_CHAT_A), ("eval", "hashA", "location.hash"),
+            ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu li[data-chat]')"),
+            ("eval", "menu", "[document.querySelector('#code-tab-menu li #code-new-chat')?.textContent,"
+                             " [...document.querySelectorAll('#code-tab-menu li[data-chat]')].map((li) => li.dataset.chat)]"),
+            ("click", f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] .code-chat-link"), code_tab_ready(CODE_CHAT_B),
+            ("eval", "menuGone", "!document.querySelector('#code-tab-menu li')"),
+            ("eval", "tabs", CODE_TABS),
+            *code_tab_click(CODE_CHAT_A), ("eval", "msgs", CODE_MSGS),
+            ("eval", "hash", "location.hash"), ("eval", "len1", "history.length"),
+            ("eval", "back", "history.back()"),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('beta')}' && !!document.querySelector('#code-chats')"),
+            ("eval", "fits", NO_OVERFLOW)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["hashA"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
+    assert v["menu"] == ["Новый чат", [CODE_CHAT_B, CODE_CHAT_C]] and v["menuGone"] is True
+    assert v["tabs"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_B, "Чат B", "true"]]
+    assert v["msgs"] == [["user", "про A"]] and v["hash"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
+    assert v["len1"] == v["len0"] and v["fits"] is True
+    assert not problems(r), problems(r)
+
+
+def test_code_new_chat_is_a_tab(browser, live):
+    """«Новый чат» из списка и из «+» — новая вкладка «Новый чат», активна; строка code_chats у каждого."""
+    import db
+    from fake_bridge import pid
+    login = "code-new-tab"
+    uid = live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    new_tab = ("wait", f"{CODE_ACTIVE_TAB}?.length === 36 && {CODE_ACTIVE_TAB} === location.hash.split('/').pop()"
+                       " && document.querySelector('#code-chat')?.dataset.chat === location.hash.split('/').pop()")
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
+            ("wait", "document.querySelector('#code-new-chat')"), ("click", "#code-new-chat"), new_tab,
+            ("eval", "first", "window.firstTab = location.hash.split('/').pop()"),
+            ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu #code-new-chat')"),
+            ("click", "#code-tab-menu #code-new-chat"),
+            ("wait", f"{CODE_ACTIVE_TAB} !== window.firstTab && document.querySelectorAll('#code-tabbar .code-tab').length === 2"),
+            new_tab, ("eval", "tabs", CODE_TABS), ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    first, second = v["tabs"][0][0], v["tabs"][1][0]
+    assert first == v["first"] and v["tabs"] == [[first, "Новый чат", "false"], [second, "Новый чат", "true"]]
+    conn = db.connect(live.db_path)
+    try:
+        rows = {tuple(x) for x in conn.execute("SELECT session_id, project, state FROM code_chats WHERE user_id = ?", (uid,))}
+    finally:
+        conn.close()
+    assert rows == {(first, pid("beta"), "open"), (second, pid("beta"), "open")} and v["fits"] is True
+    assert not known_refusals(problems(r), 404), problems(r)          # история нового чата без хода — норма
+
+
+def test_code_tab_close_picks_the_right_neighbour(browser, live):
+    """[A, B, C], активна B: «×» B — активна C (справа); «×» C — A (слева); «×» A — сессии проекта во всю ширину.
+    «×» сессию не закрывает: мосту ничего, в отметках студии «закрыт» нет, у машины все три."""
+    import db
+    from fake_bridge import pid
+    login = "code-tab-close"
+    uid = live.add_user(login)
+    machine = code_three()
+    aid, sb = code_online(live, login, machine)
+    close = "#code-tabbar .code-tab[data-chat='{}'] .code-tab-close"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B), *code_from_menu(CODE_CHAT_C),
+            *code_tab_click(CODE_CHAT_B),
+            ("click", close.format(CODE_CHAT_B)), code_tab_ready(CODE_CHAT_C), ("eval", "afterB", CODE_TABS),
+            ("click", close.format(CODE_CHAT_C)), code_tab_ready(CODE_CHAT_A), ("eval", "afterC", CODE_TABS),
+            ("click", close.format(CODE_CHAT_A)),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}'"
+                     " && document.querySelectorAll('#code-chats li[data-chat]').length === 3"),
+            ("eval", "bar", "!document.querySelector('#code-tabbar .code-tab')")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["afterB"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_C, "Чат C", "true"]]
+    assert v["afterC"] == [[CODE_CHAT_A, "Чат A", "true"]] and v["bar"] is True
+    wait_for(lambda: code_workspace_rows(live, uid) == [])
+    conn = db.connect(live.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM code_chats WHERE state = 'closed'").fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert set(machine.projects["alpha"]["chats"]) == {CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C}
+    assert not problems(r), problems(r)
+
+
+def test_code_close_chat_removes_its_tab(browser, live):
+    """«Закрыть чат» в B — PATCH closed, вкладки B нет, активна соседняя (A)."""
+    import db
+    login = "code-close-chat-tab"
+    uid = live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B),
+            ("click", "#code-close-chat"), code_tab_ready(CODE_CHAT_A), ("eval", "tabs", CODE_TABS)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["tabs"] == [[CODE_CHAT_A, "Чат A", "true"]]
+    conn = db.connect(live.db_path)
+    try:
+        state = conn.execute("SELECT state FROM code_chats WHERE user_id = ? AND session_id = ?",
+                             (uid, CODE_CHAT_B)).fetchone()[0]
+    finally:
+        conn.close()
+    assert state == "closed"
+    assert not problems(r), problems(r)
+
+
+def test_code_tabs_are_restored_per_project(browser, live):
+    """alpha — [A, B], beta — [C]: у каждого проекта свой ряд, переход между проектами его не трогает; страница
+    заново — тот же проект, тот же ряд и активная вкладка."""
+    from fake_bridge import pid
+    login = "code-tabs-restore"
+    uid = live.add_user(login)
+    machine = code_three()
+    machine.projects["beta"]["chats"] = {"d4444444-4444-4444-8444-444444444444": code_session("Чат D")}
+    chat_d = "d4444444-4444-4444-8444-444444444444"
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B),
+            *code_project(aid, "beta"), *code_from_list(chat_d), ("eval", "beta", CODE_TABS),
+            *code_project(aid, "alpha"), code_tab_ready(CODE_CHAT_B), ("eval", "alpha", CODE_TABS),
+            *code_project(aid, "beta"), code_tab_ready(chat_d), ("eval", "beta2", CODE_TABS)], width=1280)
+        assert not r.get("failed"), r
+        wait_for(lambda: len(code_workspace_rows(live, uid)) == 2)
+        again = browser.drive(live.url + "/#/code", [("wait", READY), code_tab_ready(chat_d),
+            ("eval", "beta", CODE_TABS), ("eval", "hash", "location.hash"),
+            *code_project(aid, "alpha"), code_tab_ready(CODE_CHAT_B), ("eval", "alpha", CODE_TABS)], width=1280)
+    finally:
+        sb.stop()
+    assert not again.get("failed"), again
+    v, w = r["values"], again["values"]
+    assert v["beta"] == v["beta2"] == w["beta"] == [[chat_d, "Чат D", "true"]]
+    assert v["alpha"] == w["alpha"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_B, "Чат B", "true"]]
+    assert w["hash"] == f"#/code/{aid}/{pid('beta')}/{chat_d}"
+    assert not problems(again), problems(again)
+
+
+def test_code_twenty_first_tab_pushes_out_the_leftmost(browser, live):
+    """20 вкладок открыто; 21-я из «+» — в конце и активна, самая левая ушла."""
+    from fake_bridge import pid
+    login = "code-tabs-21"
+    live.add_user(login)
+    chats = [f"{i:08x}-1111-4111-8111-111111111111" for i in range(1, 22)]
+    machine = code_free_machine({c: {**code_session(f"Сессия {i}"), "modified": 100 - i} for i, c in enumerate(chats)})
+    aid, sb = code_online(live, login, machine)
+    opens = "(async () => { for (const chat of %s) await %s.api('PATCH', '/api/code/workspace'," \
+            " { op: 'open', aid: %d, pid: '%s', chat }); return true; })()" % (json.dumps(chats[:20]), API, aid, pid("alpha"))
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
+            code_tab_ready(chats[19]), ("eval", "before", "document.querySelectorAll('#code-tabbar .code-tab').length"),
+            *code_from_menu(chats[20]), ("eval", "tabs", CODE_TABS)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == 20 and [t[0] for t in v["tabs"]] == chats[1:]
+    assert v["tabs"][-1] == [chats[20], "Сессия 20", "true"]
+    assert not problems(r), problems(r)
+
+
+def test_code_missing_session_tab_goes_away(browser, live):
+    """Вкладка сессии, которой нет на машине (история — 404 not_found), уходит сама, активна соседняя. Сессия вне
+    списка машины (старше 200 новейших) — вкладка «Сессия» остаётся, её история показана."""
+    from fake_bridge import T0, pid
+    login = "code-tab-gone"
+    live.add_user(login)
+    old = "0ff00000-0000-4000-8000-000000000000"
+    gone = "9a900000-0000-4000-8000-000000000000"
+    machine = code_three()
+    machine.projects["alpha"]["chats"][old] = {**code_session("Старая", messages=[{"id": "m-0", "role": "user",
+                                                                                  "text": "давно", "steps": [], "time": T0}]),
+                                              "listed": False}
+    aid, sb = code_online(live, login, machine)
+    opens = "(async () => { for (const chat of %s) await %s.api('PATCH', '/api/code/workspace'," \
+            " { op: 'open', aid: %d, pid: '%s', chat }); return true; })()" % (json.dumps([CODE_CHAT_A, gone]), API, aid,
+                                                                              pid("alpha"))
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
+            code_tab_ready(CODE_CHAT_A), ("eval", "tabs", CODE_TABS), ("eval", "hash", "location.hash"),
+            *go(f"code/{aid}/{pid('alpha')}/{old}"), code_tab_ready(old), ("eval", "old", CODE_TABS),
+            ("eval", "msgs", CODE_MSGS)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tabs"] == [[CODE_CHAT_A, "Чат A", "true"]]
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    assert v["old"] == [[CODE_CHAT_A, "Чат A", "false"], [old, "Сессия", "true"]] and v["msgs"] == [["user", "давно"]]
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
+def test_code_fast_tab_clicks_end_on_the_last(browser, live):
+    """История A отвечает медленно: нажали A, затем сразу B — на экране B, ответ A её не перерисовывает."""
+    login = "code-tab-race"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u).endsWith('/chats/%s')
+      ? real(u, o).then((r) => new Promise((ok) => setTimeout(() => ok(r), 1500))) : real(u, o); return true; })()""" % CODE_CHAT_A
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B), ("eval", "slow", slow),
+            ("click", f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title"),
+            ("click", f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_B}'] .code-tab-title"),
+            code_tab_ready(CODE_CHAT_B),
+            ("eval", "after", settled(f"[{CODE_ACTIVE_TAB}, document.querySelector('#code-chat').dataset.chat,"
+                                      f" {CODE_MSGS}, location.hash.split('/').pop()]", 2500))], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["after"] == [CODE_CHAT_B, CODE_CHAT_B, [["user", "про B"]], CODE_CHAT_B]
+    assert not problems(r), problems(r)
+
+
+def test_code_tab_opens_when_the_workspace_write_fails(browser, live):
+    """Запись рабочего места отвечает 500: вкладка всё равно открылась и показывает чат; необработанных отказов нет."""
+    login = "code-tab-ws-500"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    broken = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u) === '/api/code/workspace'
+      && o && o.method === 'PATCH' ? Promise.resolve(new Response('{}', { status: 500,
+        headers: { 'content-type': 'application/json' } })) : real(u, o); return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "broken", broken), *go("code"),
+            *code_project(aid, "alpha"), *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B),
+            ("eval", "tabs", settled(CODE_TABS, 500))], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["tabs"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_B, "Чат B", "true"]]
+    assert not [p for p in problems(r) if "status of 500" not in p], problems(r)
+
+
+def test_code_unsaved_edit_asks_before_a_tab_switch(browser, live):
+    """Правка во «Файлах» не сохранена, а нажата вкладка — окно «Изменения не сохранены»: «Остаться» — правка цела;
+    «Уйти без сохранения» — чат вкладки."""
+    login = "code-tab-unsaved"
+    live.add_user(login)
+    machine = code_files_machine({CODE_CHAT_A: code_session("Чат A")})
+    aid, sb = code_online(live, login, machine)
+    editor = "document.querySelector('#code-editor')?.value"
+    tab = f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), ("click", "#code-tab-files"), code_root_names(5),
+            ("eval", "selected", "[...document.querySelectorAll('#code-tabbar .code-tab')].map((t) => t.getAttribute('aria-selected'))"),
+            ("click", code_item("src")), ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('правка')\n"),
+            ("click", tab), ("wait", CODE_UNSAVED), ("click", "#code-unsaved .dialog-close"), ("wait", f"!{CODE_UNSAVED}"),
+            ("eval", "stayed", f"[{editor}, location.hash.endsWith('?tab=files')]"),
+            ("click", tab), ("wait", CODE_UNSAVED), ("click", "#code-unsaved-leave"), code_tab_ready(CODE_CHAT_A),
+            ("eval", "left", "location.hash.split('/').pop()")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["selected"] == ["false"] and v["stayed"] == ["print('правка')\n", True] and v["left"] == CODE_CHAT_A
+    assert code_requests(machine, "save") == []
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_long_tab_titles_fit(browser, live, width):
+    """Пять вкладок с названиями по 120 знаков: ряд — одна строка, страница не шире экрана; на телефоне ряд
+    листается вбок, активная — в видимой части."""
+    from fake_bridge import pid
+    login = f"code-tab-long-{width}"
+    live.add_user(login)
+    chats = [f"{i:08x}-2222-4222-8222-222222222222" for i in range(1, 6)]
+    machine = code_free_machine({c: {**code_session(f"{i}-" + "длинное-название-сессии-" * 5), "modified": 100 - i}
+                                 for i, c in enumerate(chats)})
+    aid, sb = code_online(live, login, machine)
+    opens = "(async () => { for (const chat of %s) await %s.api('PATCH', '/api/code/workspace'," \
+            " { op: 'open', aid: %d, pid: '%s', chat }); return true; })()" % (json.dumps(chats), API, aid, pid("alpha"))
+    shape = """(() => { const bar = document.querySelector('#code-tabbar'); const tabs = [...bar.querySelectorAll('.code-tab')];
+      const tops = new Set(tabs.map((t) => Math.round(t.getBoundingClientRect().top)));
+      const a = bar.querySelector('.code-tab[aria-selected=true]').getBoundingClientRect(); const b = bar.getBoundingClientRect();
+      const title = tabs[0].querySelector('.code-tab-title');
+      return [tops.size, bar.scrollWidth > bar.clientWidth, a.left >= b.left - 1 && a.right <= b.right + 1,
+        title.scrollWidth > title.clientWidth, title.title.length > 100]; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
+            code_tab_ready(chats[4]), ("eval", "shape", settled(shape, 400)), ("eval", "fits", NO_OVERFLOW)],
+            width=width, mobile=width < 760)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["shape"][0] == 1 and v["shape"][2:] == [True, True, True] and v["fits"] is True
+    if width < 760:
+        assert v["shape"][1] is True
     assert not problems(r), problems(r)

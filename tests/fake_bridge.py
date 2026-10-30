@@ -127,11 +127,13 @@ class FakeMachine:
         return {"items": [{"pid": pid(name), "name": name} for name in sorted(self.projects)]}
 
     def _op_chats(self, req, events):
+        """Сессия с `"listed": False` в список не попадает (как старше 200 новейших на настоящем мосте), а история и
+        ход у неё работают."""
         _, project = self._project(req)
         items = [{"chat": chat, "title": c.get("title"), "created": c.get("created"), "modified": c.get("modified"),
                   "tag": c.get("tag"), "running": chat in self.running,
                   "asking": chat in self.running and bool(self.running[chat]["asks"])}
-                 for chat, c in project.get("chats", {}).items()]
+                 for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
 
     def _op_history(self, req, events):
