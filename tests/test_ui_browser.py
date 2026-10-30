@@ -9256,3 +9256,176 @@ def test_code_long_tab_titles_fit(browser, live, width):
     if width < 760:
         assert v["shape"][1] is True
     assert not problems(r), problems(r)
+
+
+# метки вкладок, числа вкладок в панели, возвращение на экран
+
+#: класс метки вкладки чата (нет метки — null)
+CODE_MARK = "document.querySelector(\"#code-tabbar .code-tab[data-chat='{}'] .code-tab-mark\")?.className ?? null"
+#: GET …/chats страницы — счётчиком window.chatsCalls (для init вместе с CODE_FAST_IDLE)
+CODE_CHATS_SPY = """(() => { window.chatsCalls = 0; const real = window.fetch; window.fetch = (u, o) => {
+  if (/\\/chats$/.test(String(u)) && !(o && o.method && o.method !== 'GET')) window.chatsCalls += 1; return real(u, o); };
+  return true; })();"""
+CODE_COUNTS = """Object.fromEntries([...document.querySelectorAll('#code-projects li[data-pid]')].map((li) => [li.dataset.pid,
+  li.querySelector('.code-project-count').textContent]))"""
+
+
+def test_code_tab_marks_follow_the_machine(browser, live):
+    """Вкладки A и B, на экране A: на машине в B начался ход — у вкладки B метка «идёт ход» в пределах опроса
+    (GET …/chats проекта раз в IDLE_POLL_SEC); агент спросил — «ждёт ответа»; ход кончился — меток нет."""
+    login = "code-marks"
+    live.add_user(login)
+    machine = code_three()
+    aid, sb = code_online(live, login, machine)
+    mark = CODE_MARK.format(CODE_CHAT_B)
+
+    def after_polls(n=2):
+        start = len(code_requests(machine, "chats"))
+        wait_for(lambda: len(code_requests(machine, "chats")) >= start + n, 60)
+
+    def a_after_b():
+        chats = [q.get("chat") for q in code_requests(machine, "watch")]
+        return CODE_CHAT_B in chats and CODE_CHAT_A in chats[chats.index(CODE_CHAT_B):]
+
+    def play():
+        wait_for(a_after_b, 60)                 # на экране снова A, B — фоновая вкладка
+        code_start_elsewhere(machine, CODE_CHAT_B, "Где-то ещё", [{"k": "text", "text": "работаю"}])
+        after_polls()
+        machine.running[CODE_CHAT_B]["asks"]["r1"] = code_permission("r1", False)
+        after_polls()
+        machine._finish(CODE_CHAT_B, [], {"k": "done", "status": "done"})
+
+    player = threading.Thread(target=play, daemon=True)
+    player.start()
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B), *code_tab_click(CODE_CHAT_A),
+            ("wait", f"{mark} === 'code-tab-mark running'"), ("eval", "label", f"document.querySelector(\"#code-tabbar"
+                     f" .code-tab[data-chat='{CODE_CHAT_B}'] .code-tab-mark\").textContent"),
+            ("wait", f"{mark} === 'code-tab-mark asking'"),
+            ("wait", f"{mark} === null"),
+            ("eval", "a", CODE_MARK.format(CODE_CHAT_A))], width=1280, init=CODE_FAST_IDLE)
+        player.join(10)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["label"] == "идёт ход" and r["values"]["a"] is None
+    assert not problems(r), problems(r)
+
+
+def test_code_tab_marks_stop_polling_after_half_an_hour(browser, live):
+    """Опрос меток — не дольше IDLE_POLL_FOR_SEC после действия владельца в разделе: дальше GET …/chats нет (забытая
+    вкладка не держит компьютер открытым); нажатие в разделе — опрос снова."""
+    login = "code-marks-idle"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), ("wait", "window.chatsCalls >= 3"),
+            later(1801000), ("eval", "c1", settled("window.chatsCalls", 700)),
+            ("eval", "c2", settled("window.c2 = window.chatsCalls", 1200)),
+            ("click", "#code-place"), ("wait", "window.chatsCalls > window.c2 + 1")],
+            width=1280, init=CODE_FAST_IDLE + CODE_CHATS_SPY)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["c1"] == r["values"]["c2"]
+    assert not problems(r), problems(r)
+
+
+def test_code_hidden_page_does_not_poll_marks(browser, live):
+    """Страница ушла с экрана — меток не опрашивает; вернулась — опрос снова."""
+    login = "code-marks-hidden"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), ("wait", "window.chatsCalls >= 3"),
+            hide(), ("eval", "c1", settled("window.chatsCalls", 400)),
+            ("eval", "c2", settled("window.c2 = window.chatsCalls", 1200)),
+            show(), ("wait", "window.chatsCalls > window.c2")], width=1280, init=CODE_FAST_IDLE + CODE_CHATS_SPY)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["c1"] == r["values"]["c2"]
+    assert not problems(r), problems(r)
+
+
+def test_code_panel_counts_open_tabs(browser, live):
+    """Число у проекта в панели — сколько у него открытых вкладок (из рабочего места): alpha — 2, beta — пусто;
+    открыли третью — «3», сразу."""
+    from fake_bridge import pid
+    login = "code-counts"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B), ("eval", "two", CODE_COUNTS),
+            *code_from_menu(CODE_CHAT_C), ("eval", "three", CODE_COUNTS)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["two"] == {pid("alpha"): "2", pid("beta"): ""} and v["three"] == {pid("alpha"): "3", pid("beta"): ""}
+    assert not problems(r), problems(r)
+
+
+def test_code_return_to_the_screen_refreshes_without_jumping(browser, live):
+    """Другое устройство открыло вкладку C в alpha и проект beta; эта страница (alpha, вкладка A) вернулась на экран —
+    ряд alpha с C и число у alpha «2», а на экране по-прежнему alpha/A, адрес прежний."""
+    from fake_bridge import pid
+    login = "code-return"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    other = ("(async () => { const { api } = %s; await api('PATCH', '/api/code/workspace', { op: 'open', aid: %d,"
+             " pid: '%s', chat: '%s' }); await api('PATCH', '/api/code/workspace', { op: 'place', aid: %d, pid: '%s',"
+             " view: 'chat' }); return true; })()") % (API, aid, pid("alpha"), CODE_CHAT_C, aid, pid("beta"))
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), ("eval", "hash0", "location.hash"),
+            hide(), ("eval", "other", other), show(),
+            ("wait", f"!!document.querySelector(\"#code-tabbar .code-tab[data-chat='{CODE_CHAT_C}']\")"),
+            ("eval", "tabs", CODE_TABS), ("eval", "counts", CODE_COUNTS),
+            ("eval", "here", f"[location.hash, document.querySelector('#code-chat').dataset.chat, {CODE_PLACE}]")],
+            width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tabs"] == [[CODE_CHAT_A, "Чат A", "true"], [CODE_CHAT_C, "Чат C", "false"]]
+    assert v["counts"][pid("alpha")] == "2"
+    assert v["here"] == [v["hash0"], CODE_CHAT_A, "Рабочий ПК / alpha"]
+    assert not problems(r), problems(r)
+
+
+def test_code_background_tab_keeps_no_stream(browser, live):
+    """Вкладки A и B, на экране B; на машине ход и в A, и в B: у службы нет наблюдателя A (push о нём уйдёт), а B
+    смотрят (поток держит только показанная вкладка)."""
+    import bridge
+    login = "code-background"
+    live.add_user(login)
+    machine = code_three()
+    aid, sb = code_online(live, login, machine)
+    seen = []
+
+    def look():
+        wait_for(lambda: any(q.get("chat") == CODE_CHAT_B for q in code_requests(machine, "watch")), 60)
+        code_start_elsewhere(machine, CODE_CHAT_A, "Где-то ещё", [{"k": "text", "text": "работаю"}])
+        code_start_elsewhere(machine, CODE_CHAT_B, "И тут", [{"k": "text", "text": "тоже"}])
+        wait_for(lambda: bridge.watching(aid, CODE_CHAT_B), 10)        # опрос live показанной увидел ход
+        time.sleep(1)
+        seen.extend([bridge.watching(aid, CODE_CHAT_A), bridge.watching(aid, CODE_CHAT_B)])
+
+    looker = threading.Thread(target=look, daemon=True)
+    looker.start()
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B),
+            ("wait", "document.querySelector('#code-chat').dataset.running === '1'"), ("eval", "pause", settled("true", 1500))],
+            width=1280, init=CODE_FAST_IDLE)
+        looker.join(15)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert seen == [False, True], seen
+    assert not problems(r), problems(r)
