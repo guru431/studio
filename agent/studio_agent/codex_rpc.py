@@ -38,9 +38,12 @@ def version(path: Path) -> str:
 class RpcError(Exception):
     """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал."""
 
-    def __init__(self, *, not_found=False):
+    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None):
         super().__init__()
         self.not_found = not_found
+        self.writer_active = writer_active
+        self.method = method
+        self.code = code if type(code) is int else None
 
 
 class Client:
@@ -49,6 +52,7 @@ class Client:
         self.process = None
         self.reader = None
         self.pending = {}
+        self.methods = {}
         self.inbox = asyncio.Queue()
         self.seq = 0
 
@@ -78,11 +82,13 @@ class Client:
         rid = self.seq
         future = asyncio.get_running_loop().create_future()
         self.pending[rid] = future
+        self.methods[rid] = method
         try:
             await self.send({"id": rid, "method": method, "params": params})
             return await asyncio.wait_for(future, RPC_SEC)
         finally:
             self.pending.pop(rid, None)
+            self.methods.pop(rid, None)
 
     async def _read(self):
         try:
@@ -97,15 +103,17 @@ class Client:
                         message = str((frame.get("error") or {}).get("message", "")).lower()
                         future.set_exception(RpcError(not_found="thread not found" in message
                                                        or "thread not loaded" in message
-                                                       or "no rollout found" in message))
+                                                       or "no rollout found" in message,
+                            writer_active="already has an active writer" in message,
+                            method=self.methods.get(frame.get("id")), code=(frame.get("error") or {}).get("code")))
                     else:
                         future.set_result(frame.get("result", {}))
         except (ValueError, OSError, RpcError):
             pass
         finally:
-            for future in list(self.pending.values()):
+            for rid, future in list(self.pending.items()):
                 if not future.done():
-                    future.set_exception(RpcError())
+                    future.set_exception(RpcError(method=self.methods.get(rid)))
             self.inbox.put_nowait(None)
 
     async def disconnect(self):
