@@ -285,6 +285,7 @@ class CodexRunner(Runner):
                 await self._metadata(project, "thread/unsubscribe", {"threadId": tid})
 
     async def _run(self, t, text, model, effort, images):
+        self._activity(t, "thinking")
         failure, cancelled, requests = None, False, set()
         try:
             path = await asyncio.to_thread(self.find_codex)
@@ -397,11 +398,19 @@ class CodexRunner(Runner):
                 self._send(t, {"k": "context", **t.context})
         elif method == "item/agentMessage/delta":
             delta = p.get("delta", "")
+            self._activity(t, "responding")
             t.feed.text += delta
             self._send(t, {"k": "text", "text": delta})
+        elif method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
+            self._activity(t, "thinking")
         elif method in ("item/started", "item/completed"):
             item = p.get("item", {})
+            if item.get("type") == "reasoning":
+                self._activity(t, "thinking")
+                return
             if item.get("type") == "agentMessage":
+                if method == "item/started":
+                    self._activity(t, "responding")
                 if method == "item/started" and t.feed.text and not t.feed.text.endswith("\n"):
                     t.feed.text += "\n\n"
                     self._send(t, {"k": "text", "text": "\n\n"})
@@ -417,6 +426,9 @@ class CodexRunner(Runner):
                 old.update(step)
             if method == "item/completed":
                 self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"]})
+                self._activity(t, "thinking")
+            else:
+                self._activity(t, "tool", step["tool"])
         elif method == "serverRequest/resolved":
             for rid, ask in list(t.asks.items()):
                 if ask.data["frame"]["id"] == p.get("requestId"):
@@ -460,6 +472,7 @@ class CodexRunner(Runner):
             return
         ask = _Ask(event, asyncio.get_running_loop().create_future(), {"frame": frame}, [])
         t.asks[rid] = ask
+        self._activity(t, "waiting")
         self._send(t, event)
         try:
             result = await ask.future
@@ -469,6 +482,8 @@ class CodexRunner(Runner):
             if t.asks.get(rid) is ask:
                 del t.asks[rid]
                 self._send(t, {"k": "asked", "request_id": rid})
+                if not (t.stopped or t.closing or t.finishing):
+                    self._activity(t, "thinking")
 
     def answer(self, pid, chat, request_id, decision, message, answers):
         if decision not in ("allow", "always", "deny"):

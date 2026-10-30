@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import secrets
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -241,6 +243,56 @@ async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):
     await opened(agent)
     out = await agent.handle(req("watch", project="0" * 16, chat=CHAT))
     assert len(out) == 1 and out[0]["data"] == {"running": False}
+
+
+async def test_opencode_is_optional_and_never_falls_back_to_claude(agent):
+    await opened(agent)
+    res = (await agent.handle(req("state", engine="opencode", project=projects.pid("demo"), chat=CHAT)))[0]
+    assert res["code"] == "unsupported" and res["message"] == "OpenCode не найден на компьютере"
+    assert "opencode" not in agent.hello() and not agent.runner.live()
+
+
+async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, root, monkeypatch):
+    model = "gateway/" + "model-" * 20
+    backend = SimpleNamespace(models=[{"id": model, "label": "OpenCode"}], efforts=["default", "high"],
+                              catalog={"version": "2.2.4", "models": [{"id": model, "label": "OpenCode"}],
+                                       "efforts": ["default", "high"]},
+                              chats=AsyncMock(return_value=[{"chat": CHAT, "engine": "opencode"}]),
+                              history=AsyncMock(return_value={"messages": []}),
+                              state=AsyncMock(return_value={"settings": {"model": model}}),
+                              live=Mock(return_value={}), start=Mock(return_value="turn-id"),
+                              watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock())
+    agent.opencode = backend
+    await opened(agent)
+    assert agent.hello()["opencode"] == backend.catalog
+    pid, project = projects.pid("demo"), root / "demo"
+    frame = {"engine": "opencode", "project": pid, "chat": CHAT}
+    res = (await agent.handle(req("chats", project=pid)))[0]
+    assert res["data"]["items"][-1]["engine"] == "opencode"
+    res = (await agent.handle(req("history", **frame, before=123, limit=20)))[0]
+    assert res["ok"]
+    backend.history.assert_awaited_once_with(project, CHAT, 123, 20)
+    res = (await agent.handle(req("state", **frame, model=model, effort="high", access="auto")))[0]
+    assert res["data"] == {"settings": {"model": model}}
+    backend.state.assert_awaited_once_with(project, CHAT, model, "high", "auto")
+    for invalid in ({"model": "opus"}, {"effort": "ultra"}, {"access": "danger-full-access"}):
+        res = (await agent.handle(req("turn", **frame, text="тест", **invalid)))[0]
+        assert res["code"] == "invalid"
+    assert not backend.start.called
+    monkeypatch.setattr(agent.runner, "live", lambda: {"claude-turn": False})
+    agent.codex = SimpleNamespace(live=lambda: {"codex-turn": False})
+    res = (await agent.handle(req("turn", **frame, text="тест", model=model, effort="high", access="default")))[0]
+    assert res["code"] == "busy" and not backend.start.called
+    agent.codex = None
+    res = (await agent.handle(req("turn", **frame, text="тест", model=model, effort="high", access="default")))[0]
+    assert res["ok"]
+    backend.start.assert_called_once_with(project, pid, CHAT, "тест", model, "high", images=[], access="default")
+    assert (await agent.handle(req("watch", **frame)))[0]["data"] == {"running": False}
+    backend.watch.assert_awaited_once_with(pid, CHAT)
+    assert (await agent.handle(req("answer", **frame, request_id="1" * 16, decision="allow")))[0]["ok"]
+    backend.answer.assert_called_once_with(pid, CHAT, "1" * 16, "allow", None, None)
+    assert (await agent.handle(req("stop", **frame)))[0]["ok"]
+    backend.stop.assert_awaited_once_with(pid, CHAT)
 
 
 async def test_bad_fields_are_invalid(agent):

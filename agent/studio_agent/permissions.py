@@ -2,10 +2,12 @@
 
 CLAUDE = ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")
 CODEX = ("read-only", "workspace-write", "danger-full-access")
+OPENCODE = ("default", "auto")
 
 
 def valid(engine, value):
-    return value is None or isinstance(value, str) and value in (CODEX if engine == "codex" else CLAUDE)
+    allowed = {"claude": CLAUDE, "codex": CODEX, "opencode": OPENCODE}.get(engine, ())
+    return value is None or isinstance(value, str) and value in allowed
 
 
 def codex_start(value):

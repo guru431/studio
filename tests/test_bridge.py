@@ -244,6 +244,7 @@ def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
     with online(studio, key) as ws:
         q = studio.c.portal.call(bridge.watch, aid, CHAT)
         good = {"k": "text", "text": "При"}
+        activity = {"k": "activity", "state": "tool", "tool": "Shell"}
         for frame in ({"t": "res", "id": "0" * 16, "ok": True, "data": {}}, {"t": "res", "id": ["x"]},
                       {"t": "ev", "project": pid("p"), "chat": CHAT, "e": {"text": "x"}},
                       {"t": "ev", "project": pid("p"), "chat": CHAT, "e": {"k": "huge"}},
@@ -251,12 +252,14 @@ def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
                       {"t": "ev", "project": pid("p"), "chat": CHAT.upper(), "e": good},
                       {"t": "ev", "project": "xyz", "chat": CHAT, "e": good},
                       {"t": "ev", "project": pid("p"), "chat": CHAT, "e": "text"},
-                      {"t": "ev", "project": pid("p"), "chat": CHAT, "turn": "t-1", "e": good}):
+                      {"t": "ev", "project": pid("p"), "chat": CHAT, "turn": "t-1", "e": good},
+                      {"t": "ev", "project": pid("p"), "chat": CHAT, "turn": "t-1", "e": activity}):
             ws.send_json(frame)
         fut = start_call(studio, aid)
         answer(ws, ok=True, data={})
         assert fut.result(1) == {}
         assert studio.c.portal.call(q.get_nowait) == ("ev", good)
+        assert studio.c.portal.call(q.get_nowait) == ("ev", activity)
         assert studio.c.portal.call(q.empty)
         assert bridge.watching(aid, CHAT)
         ws.send_json({"t": "xyz"})

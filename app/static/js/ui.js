@@ -58,7 +58,7 @@ export function agentDownload() {
   return el('div', { class: 'agent-download' },
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: true },
       'Скачать мост для Windows'),
-    el('p', { class: 'muted small agent-download-needs' }, 'ZIP, нужны Python 3.11+ и Claude Code или Codex'),
+    el('p', { class: 'muted small agent-download-needs' }, 'ZIP, нужны Python 3.11+ и Claude Code, Codex или OpenCode'),
     el('p', { class: 'agent-download-steps' }, 'Распакуйте архив и запустите install.cmd. В окне моста войдите логином'
       + ' и паролем студии — компьютер появится здесь.'));
 }

@@ -27,7 +27,7 @@
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api, me } from './api.js';
-import { ACCESS, accessLabel, effortLabel } from './code-options.js';
+import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -37,7 +37,6 @@ const WAITING = 'Компьютер пропал со связи — жду ег
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
   + ' — ответы перемешаются.';
 const STOPPED = 'Ход прерван';
-const ASK_TITLE = 'Claude Code просит разрешения';
 const INSTEAD = 'Что сделать вместо этого (необязательно)';
 const OWN = 'Свой ответ';
 const OWN_MAX = 2000;            // claude_code.ANSWER_MAX
@@ -84,8 +83,8 @@ function tailOf(filePath, agent, project) {
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, closedChat, gone,
   openFile }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
-  const endpoint = (tail = '') => `${url}${tail}${engine === 'codex' ? '?engine=codex' : ''}`;
-  const assistant = engine === 'codex' ? 'Codex' : 'Claude Code';
+  const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
+  const assistant = ENGINE_NAMES[engine];
   const draftKey = `${aid}/${chat}`;
   const scroller = document.getElementById('view');
   let alive = true;
@@ -108,7 +107,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание', maxlength: '100000' });
-  const catalog = engine === 'codex' ? agent?.codex : agent;
+  const catalog = engine === 'claude' ? agent : agent?.[engine];
   const models = Array.isArray(catalog?.models) ? catalog.models : [];
   const efforts = Array.isArray(catalog?.efforts) ? catalog.efforts : [];
   const model = el('select', { id: 'code-model', class: 'chip' }, el('option', { value: '' }, DEFAULT),
@@ -136,21 +135,35 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   if (fresh) applyDefaults();
-  const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go' }, 'Отправить');
-  const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true }, 'Остановить');
+  const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go',
+    'aria-label': 'Отправить', title: 'Отправить' }, el('span', { class: 'code-go-label' }, 'Отправить'));
+  const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true,
+    'aria-label': 'Остановить', title: 'Остановить' }, el('span', { class: 'code-go-label' }, 'Остановить'));
+  send.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>');
+  stop.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>');
   const closeChat = el('button', { type: 'button', id: 'code-close-chat', class: 'btn btn-sm' }, 'Закрыть чат');
+  const activityText = el('span', {}, 'Нет активной задачи');
+  const activity = el('div', { id: 'code-activity', class: 'code-activity', role: 'status',
+    'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
+    el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
+  const activeTools = new Map();
   const field = fieldBox(text);
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input', accept: [...IMAGE_TYPES].join(','),
     multiple: true, hidden: true, 'aria-label': 'Скриншоты' });
-  const attach = el('button', { type: 'button', id: 'code-attach', class: 'btn btn-sm',
+  const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': 'Добавить скриншот',
     title: agent?.images ? 'Выберите скриншот, вставьте Ctrl+V или перетащите в поле'
-      : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images }, 'Скриншот');
-  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
+      : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images });
+  attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 16 5-4 4 4 4-6 5 6"/></svg>';
+  field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
+  const pick = (label, select) => {
+    select.setAttribute('aria-label', label);
+    return el('label', { class: 'code-pick' }, el('span', { class: 'code-pick-name' }, label), select);
+  };
+  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, activity, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        attach, el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort),
-        el('label', { class: 'code-pick' }, 'Права', access), contextBox),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox),
       stop, send));
   host.append(el('div', { class: 'code-chat-bar' }, el('span', { class: 'tag code-engine' }, assistant), closeChat),
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
@@ -354,6 +367,23 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     host.dataset.running = value ? '1' : '0';
   }
 
+  function paintActivity(state, tool) {
+    const labels = { idle: 'Нет активной задачи', thinking: 'Думает…', responding: 'Пишет ответ…',
+      waiting: 'Ждёт вашего ответа', done: 'Задача завершена', stopped: 'Ход остановлен',
+      error: 'Ошибка выполнения', offline: 'Нет связи с компьютером' };
+    const text = state === 'tool' ? `Выполняет: ${String(tool || 'действие')}` : labels[state];
+    if (!text) return;
+    activity.dataset.state = state;
+    activityText.textContent = text;
+    activity.title = text;
+  }
+
+  function continueActivity() {
+    if (turn?.asks.querySelector('.code-ask')) paintActivity('waiting');
+    else if (activeTools.size) paintActivity('tool', [...activeTools.values()].at(-1));
+    else paintActivity('thinking');
+  }
+
   /** Компьютер закрыт для сессии — к PIN (code.js запомнит этот чат); с чата уже ушли — никуда. */
   function closed() {
     if (alive) toPin();
@@ -425,7 +455,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
     const instead = el('textarea', { class: 'input code-ask-instead', rows: '2', maxlength: '2000',
       placeholder: INSTEAD, 'aria-label': INSTEAD });
-    card.append(el('p', { class: 'code-ask-title' }, engine === 'codex' ? 'Codex просит разрешения' : ASK_TITLE),
+    card.append(el('p', { class: 'code-ask-title' }, `${assistant} просит разрешения`),
       el('b', { class: 'code-ask-tool' }, String(a.tool ?? '')),
       el('pre', { class: 'code-ask-input' }, JSON.stringify(a.input && typeof a.input === 'object' ? a.input : {}, null, 2)),
       el('div', { class: 'code-ask-actions' },
@@ -459,6 +489,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       loadHistory(false);        // ход кончился раньше снимка: его ответ — уже в истории
     }
     turn = null;
+    activeTools.clear();
+    paintActivity(data.status === 'error' ? 'error' : data.status === 'stopped' ? 'stopped' : 'done');
     setRunning(false);
     idlePoll();
   }
@@ -468,10 +500,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     switch (event) {
       case 'turn':
         setRunning(true);
+        activeTools.clear();
+        paintActivity('thinking');
         current();
         return false;
       case 'idle':
         setRunning(false);
+        if (!['done', 'stopped', 'error'].includes(activity.dataset.state)) paintActivity('idle');
         if (turn) {                // ход кончился, пока страница не смотрела: история его уже знает
           turn = null;
           loadHistory(false);
@@ -480,6 +515,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         return true;
       case 'snapshot': {
         setRunning(true);
+        activeTools.clear();
         const t = current();
         if (data.settings) paintSettings(data.settings);
         paintContext(data.context);
@@ -489,8 +525,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           t.steps.replaceChildren(...(Array.isArray(data.steps) ? data.steps : []).map(stepNode));
           t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map(askNode));
         });
+        if (data.activity) paintActivity(data.activity.state, data.activity.tool);
+        else continueActivity();
         return false;
       }
+      case 'activity':
+        if (turn?.asks.querySelector('.code-ask')) paintActivity('waiting');
+        else paintActivity(data.state, data.tool);
+        return false;
       case 'settings':
         paintSettings(data);
         return false;
@@ -498,15 +540,19 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         paintContext(data);
         return false;
       case 'text':
+        paintActivity(turn?.asks.querySelector('.code-ask') ? 'waiting' : 'responding');
         current().text += typeof data.text === 'string' ? data.text : '';
         if (!paintTimer) paintTimer = setTimeout(paintText, PAINT_MS);
         return false;
       case 'step': {
         const t = current();
+        activeTools.set(String(data.id), data.tool);
+        continueActivity();
         grow(() => t.steps.append(stepNode({ id: data.id, tool: data.tool, input: data.input, text: '', error: false })));
         return false;
       }
       case 'result':
+        activeTools.delete(String(data.id));
         for (const step of (turn ? turn.steps : feed).querySelectorAll('details.code-step')) {
           if (step.dataset.id !== String(data.id)) continue;
           const result = step.querySelector('.code-step-result');
@@ -514,15 +560,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           result.hidden = !result.textContent;
           step.classList.toggle('error', !!data.error);
         }
+        continueActivity();
         return false;
       case 'ask': {
         const t = current();
         dropAsk(data.request_id);
         grow(() => t.asks.append(askNode(data)));
+        paintActivity('waiting');
         return false;
       }
       case 'asked':
         dropAsk(data.request_id);
+        continueActivity();
         return false;
       case 'done':
         finish(data);
@@ -565,6 +614,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function waitForComputer() {
     setRunning(false);
+    paintActivity('offline');
     status.textContent = WAITING;
     later(RETRY_MS);
   }
@@ -700,7 +750,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   more.addEventListener('click', async () => {
     more.disabled = true;
     try {
-      const page = await api('GET', `${endpoint()}${engine === 'codex' ? '&' : '?'}before=${start}`);
+      const page = await api('GET', `${endpoint()}${engine !== 'claude' ? '&' : '?'}before=${start}`);
       if (!alive) return;
       const height = scroller ? scroller.scrollHeight : 0;
       feed.prepend(...messages(page.items));

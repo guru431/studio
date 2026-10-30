@@ -95,4 +95,4 @@ def test_texts_are_the_spec_words():
     assert window.TITLE == "Studio Agent" and window.NOT_LINKED == "Не подключён"
     assert window.NOTE_PASSWORD == "Пароль нужен один раз и на компьютере не хранится"
     assert window.CONFIRM_OFF == ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы "
-                                  "прервутся. Чаты Claude Code останутся на компьютере.")
+                                  "прервутся. Чаты останутся на компьютере.")

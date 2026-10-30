@@ -74,6 +74,7 @@ class _Turn:
     access: str | None = None
     context: dict | None = None
     settings: dict | None = None
+    activity: dict | None = None
     feed: events.Feed = field(default_factory=events.Feed)
     asks: dict[str, _Ask] = field(default_factory=dict)
     task: asyncio.Task | None = None
@@ -179,7 +180,8 @@ class Runner:
         body = sessions.fit([{"text": text, "steps": steps}], room)[0]
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
                                            "asks": asks, **({"context": t.context} if t.context else {}),
-                                           **({"settings": t.settings} if t.settings else {})}))
+                                           **({"settings": t.settings} if t.settings else {}),
+                                           **({"activity": t.activity} if t.activity else {})}))
 
     def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
         """Ответ на карточку; неверные поля — `invalid`, карточки нет (или ход другого проекта) — `gone`."""
@@ -395,12 +397,23 @@ class Runner:
         if not ask.future.done():
             ask.future.set_result(result)
         self._send(t, {"k": "asked", "request_id": rid})
+        if t.activity is not None and not (t.stopped or t.closing or t.finishing):
+            self._activity(t, "thinking")
 
     def _deny_all(self, t: _Turn) -> None:
         for rid in list(t.asks):
             self._settle(t, rid, PermissionResultDeny(message=STOPPED, interrupt=True))
 
     # --- кадры ---
+
+    def _activity(self, t: _Turn, state: str, tool: str | None = None) -> None:
+        """Только стадия из событий CLI; повторные дельты не создают одинаковые события."""
+        current = {"state": "waiting" if t.asks else state}
+        if current["state"] == "tool" and tool:
+            current["tool"] = events.clip(tool, 200)
+        if current != t.activity:
+            t.activity = current
+            self._send(t, {"k": "activity", **current})
 
     @staticmethod
     def _frame(t: _Turn, e: dict) -> dict:

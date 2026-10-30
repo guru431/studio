@@ -1,6 +1,6 @@
 # AGENTS.md — компонент agent проекта studio
 
-Windows-мост: отдаёт студии `studio.example.com` локальные Claude Code и Codex по протоколу v1. Часть репозитория studio.
+Windows-мост: отдаёт студии `studio.example.com` локальные Claude Code, Codex и OpenCode по протоколу v1. Часть репозитория studio.
 Общие правила — [../CLAUDE.md](../CLAUDE.md), устройство моста — [CLAUDE.md](CLAUDE.md), установка — [README.md](README.md).
 
 ## Ключевые файлы
@@ -10,6 +10,7 @@ Windows-мост: отдаёт студии `studio.example.com` локальн�
 - Эталон машины для сервера: `../tests/fake_bridge.py` (`FakeMachine`)
 - Ядро: `studio_agent/link.py` (канал), `agent.py` (просьбы, PIN), `turns.py` (ход через Agent SDK), `app.py` (`Controller`)
 - Codex: `codex.py` (каталог, чаты, ходы), `codex_rpc.py` (локальный app-server по stdio); соответствие UUID — `codex-chats.json`.
+- OpenCode: `opencode.py`, `opencode_rpc.py` (ACP по stdio); соответствие UUID — `opencode-chats.json`, настройки — `opencode/choices.json`.
 - Пределы — `studio_agent/limits.py`, слова отказов — `studio_agent/errors.py`
 - Сквозная проверка с живой студией — `tests/test_live_studio.py` (`manual`, тратит квоту)
 

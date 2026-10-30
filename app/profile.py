@@ -6,6 +6,7 @@ sections.py), тема и вид ленты разделов (общие для 
 import asyncio
 import json
 import logging
+import re
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -30,8 +31,8 @@ router = APIRouter(prefix="/api")
 
 
 class CodeChoice(BaseModel):
-    model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]-]{1,100}$")
-    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] | None = None
+    model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]/@+-]{1,300}$")
+    effort: str | None = Field(None, pattern=r"^[A-Za-z0-9._-]{1,64}$")
     access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
                     "read-only", "workspace-write", "danger-full-access"] | None = None
 
@@ -39,7 +40,7 @@ class CodeChoice(BaseModel):
 class MePatch(BaseModel):
     theme: str | None = None
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
-    code_defaults: dict[Literal["claude", "codex"], CodeChoice] | None = None
+    code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
 
     @field_validator("code_defaults")
     @classmethod
@@ -48,8 +49,13 @@ class MePatch(BaseModel):
                                (None, "low", "medium", "high", "xhigh", "max") for engine, choice in value.items()):
             raise ValueError("code_defaults")
         for engine, choice in value.items():
-            allowed = ("read-only", "workspace-write", "danger-full-access") if engine == "codex" else (
-                "default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")
+            if engine != "opencode" and choice.model is not None and not re.fullmatch(r"[A-Za-z0-9._:\[\]-]{1,100}", choice.model):
+                raise ValueError("model")
+            if engine == "codex" and choice.effort not in (None, "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
+                raise ValueError("effort")
+            allowed = {"codex": ("read-only", "workspace-write", "danger-full-access"),
+                       "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk"),
+                       "opencode": ("default", "auto")}[engine]
             if choice.access is not None and choice.access not in allowed:
                 raise ValueError("access")
         return value

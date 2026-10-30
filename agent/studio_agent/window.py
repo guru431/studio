@@ -20,8 +20,8 @@ log = logging.getLogger(__name__)
 TITLE = "Studio Agent"
 NOT_LINKED = "Не подключён"
 NOTE_PASSWORD = "Пароль нужен один раз и на компьютере не хранится"
-CONFIRM_OFF = ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы прервутся. Чаты Claude Code "
-               "останутся на компьютере.")
+CONFIRM_OFF = ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы прервутся. "
+               "Чаты останутся на компьютере.")
 CONFIRM_PIN_OFF = "Убрать PIN? Компьютер откроется в студии без PIN."
 FAILED = "ошибка моста"
 DASH = "—"
@@ -493,7 +493,7 @@ class MainWindow:
         helpers = ttk.Frame(box, style="Card.TFrame")
         helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(12)))
         helpers.columnconfigure(1, weight=1)
-        for row, (key, label) in enumerate((("claude", "Claude Code"), ("codex", "Codex"))):
+        for row, (key, label) in enumerate((("claude", "Claude Code"), ("codex", "Codex"), ("opencode", "OpenCode"))):
             ttk.Label(helpers, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=self.px(4))
             line = ttk.Frame(helpers, style="Card.TFrame")
             line.grid(row=row, column=1, sticky="e", padx=(self.px(20), 0))

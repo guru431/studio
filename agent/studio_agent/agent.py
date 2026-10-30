@@ -57,11 +57,13 @@ class Agent:
     `has_pin` — сразу, ядро читает в потоке и передаёт) и `refresh_pin` — перед каждым новым каналом ядра."""
 
     def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = time.monotonic,
-                 cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None):
+                 cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None,
+                 opencode=None):
         self.cfg = cfg
         self.pins = pins
         self.runner = runner
         self.codex = codex
+        self.opencode = opencode
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
@@ -78,8 +80,10 @@ class Agent:
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True, "chat_state": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
-        if self.codex is not None and self.codex.catalog is not None:
-            hello["codex"] = self.codex.catalog
+        for name in ("codex", "opencode"):
+            backend = getattr(self, name)
+            if backend is not None and backend.catalog is not None:
+                hello[name] = backend.catalog
         return hello
 
     async def refresh_pin(self) -> None:
@@ -147,17 +151,19 @@ class Agent:
         if op not in OPS:
             raise Refused("invalid")
         engine = frame.get("engine", "claude")
-        if engine not in ("claude", "codex"):
+        if engine not in ("claude", "codex", "opencode"):
             raise Refused("invalid")
-        if engine == "codex" and (self.codex is None or self.codex.catalog is None):
-            raise Refused("unsupported", "Codex не найден на компьютере")
+        backend = self._runner(frame)
+        if engine != "claude" and (backend is None or backend.catalog is None):
+            label = "Codex" if engine == "codex" else "OpenCode"
+            raise Refused("unsupported", f"{label} не найден на компьютере")
         for name in OPS[op]:
             if name == "access" and not permissions.valid(engine, frame.get(name)):
                 raise Refused("invalid")
-            if name in ("model", "effort") and engine == "codex":
+            if name in ("model", "effort") and engine != "claude":
                 value = frame.get(name)
-                allowed = {m["id"] for m in self.codex.models} if name == "model" else self.codex.efforts
-                if value is not None and value not in allowed:
+                allowed = {m["id"] for m in backend.models} if name == "model" else backend.efforts
+                if value is not None and (not isinstance(value, str) or value not in allowed):
                     raise Refused("invalid")
             elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
@@ -180,7 +186,8 @@ class Agent:
         if name == "effort":
             return value is None or value in self.efforts
         if name == "access":
-            return value is None or isinstance(value, str) and value in (*permissions.CLAUDE, *permissions.CODEX)
+            return value is None or isinstance(value, str) and value in (
+                *permissions.CLAUDE, *permissions.CODEX, *permissions.OPENCODE)
         if name == "version":
             return isinstance(value, str) and VERSION.fullmatch(value) is not None
         if name == "request_id":
@@ -239,21 +246,24 @@ class Agent:
     async def _op_chats(self, frame, after):
         project = await self._project(frame)
         items = await asyncio.to_thread(sessions.chats, project, self.runner.live())
-        if self.codex is not None:
+        for name in ("codex", "opencode"):
+            backend = getattr(self, name)
+            if backend is None:
+                continue
             try:
-                items += await self.codex.chats(project)
+                items += await backend.chats(project)
             except Exception as e:
-                log.warning("Codex: сессии: %s", type(e).__name__)
+                log.warning("%s: сессии: %s", "Codex" if name == "codex" else "OpenCode", type(e).__name__)
         return {"items": items}
 
     async def _op_history(self, frame, after):
         project = await self._project(frame)
-        if frame.get("engine") == "codex":
-            return await self.codex.history(project, frame["chat"], frame.get("before"), frame["limit"])
+        if frame.get("engine", "claude") != "claude":
+            return await self._runner(frame).history(project, frame["chat"], frame.get("before"), frame["limit"])
         return await asyncio.to_thread(sessions.history, project, frame["chat"], frame.get("before"), frame["limit"])
 
     def _runner(self, frame):
-        return self.codex if frame.get("engine") == "codex" else self.runner
+        return {"codex": self.codex, "opencode": self.opencode}.get(frame.get("engine"), self.runner)
 
     async def _op_state(self, frame, after):
         project = await self._project(frame)
@@ -267,7 +277,7 @@ class Agent:
             raise Refused("invalid", "задание пустое")
         project = await self._project(frame)
         runner = self._runner(frame)
-        total = len(self.runner.live()) + (len(self.codex.live()) if self.codex else 0)
+        total = sum(len(backend.live()) for backend in (self.runner, self.codex, self.opencode) if backend is not None)
         if frame["chat"] not in runner.live() and total >= limits.MAX_TURNS:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],

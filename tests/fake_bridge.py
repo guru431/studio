@@ -63,6 +63,7 @@ class FakeMachine:
         self.now = T0
         self.turns = 0
         self.codex = None
+        self.opencode = None
         self.images = True
         self.chat_state = True
         self.context = None
@@ -74,7 +75,8 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
-                **({"codex": self.codex} if self.codex is not None else {})}
+                **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
+                   if catalog is not None}}
 
     # ---- просьбы ----------------------------------------------------------------
 
@@ -144,13 +146,13 @@ class FakeMachine:
 
     def _op_state(self, req, events):
         _, project = self._project(req)
-        codex = req.get("engine") == "codex"
-        catalog = self.codex or {} if codex else self.hello
+        engine = req.get("engine", "claude")
+        catalog = self.hello if engine == "claude" else getattr(self, engine) or {}
         saved = project.get("chats", {}).get(req["chat"], {}).get("settings", {})
         model = req.get("model") or (catalog.get("models") or [{"id": "codex-test"}])[0]["id"]
         return {"settings": {"model": req.get("model") or saved.get("model") or model,
                 "effort": req.get("effort") or saved.get("effort") or "high",
-                "access": req.get("access") or saved.get("access") or ("workspace-write" if codex else "auto")},
+                "access": req.get("access") or saved.get("access") or ("workspace-write" if engine == "codex" else "auto")},
                 "context": self.context}
 
     def _op_history(self, req, events):
@@ -191,7 +193,8 @@ class FakeMachine:
         if run is not None:
             asks = [{k: v for k, v in a.items() if k != "k"} for a in run["asks"].values()]
             events.append(self._ev(chat_id, {"k": "snapshot", "text": run["text"],
-                                             "steps": [dict(s) for s in run["steps"]], "asks": asks}))
+                                             "steps": [dict(s) for s in run["steps"]], "asks": asks,
+                                             **({"activity": run["activity"]} if run.get("activity") else {})}))
         return {"running": run is not None}
 
     def _op_answer(self, req, events):
@@ -311,6 +314,8 @@ class FakeMachine:
                 run["text"] += e["text"]
             elif e["k"] == "context":
                 self.context = {k: v for k, v in e.items() if k != "k"}
+            elif e["k"] == "activity":
+                run["activity"] = {k: v for k, v in e.items() if k != "k"}
             elif e["k"] == "settings":
                 for project in self.projects.values():
                     if chat_id in project.get("chats", {}):

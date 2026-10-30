@@ -799,7 +799,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     v = r["values"]
     assert v["made"] is True and v["before"] == [1, 1]
     assert v["confirmHidden"] is True and v["closed"] is True
-    assert v["warning"].endswith(" Чаты Claude Code и Codex хранятся на компьютерах — студия забудет только свои отметки,"
+    assert v["warning"].endswith(" Чаты Claude Code, Codex и OpenCode хранятся на компьютерах — студия забудет только свои отметки,"
                                  " сами сессии останутся.")
     assert v["after"] == [0, 0] and v["conns"] == 1
     assert not problems(r), problems(r)
@@ -6880,7 +6880,7 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["title"] == "Компьютеры (Claude Code и Codex)"
+    assert v["title"] == "Компьютеры (Claude Code, Codex и OpenCode)"
     assert v["rows"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"],
                          [work, "Рабочий ПК", "на связи", "PIN", "Отозвать"]]
     assert v["first"][:3] == [["Рабочий ПК", "на связи", "127.0.0.1"], ["Рабочий ПК", "привязан", "127.0.0.1"],
@@ -7001,7 +7001,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     v = r["values"]
     assert v["label"] == "Push на этом устройстве"
     assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода"
-                         " Claude Code или Codex, готовность и ошибки фоновых заданий."
+                         " Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий."
                          " Идут через серверы Apple или Google — содержимое зашифровано, но факт и время им видны."
                          " На iPhone — только у студии, добавленной на экран «Домой».")
     assert v["before"] is False and v["status"] == "Push включён на этом устройстве" and v["fits"] is True
@@ -7173,7 +7173,7 @@ def test_code_empty_offers_agent_download(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows", 1]
-    assert v["texts"] == ["ZIP, нужны Python 3.11+ и Claude Code или Codex",
+    assert v["texts"] == ["ZIP, нужны Python 3.11+ и Claude Code, Codex или OpenCode",
                           "Распакуйте архив и запустите install.cmd. В окне моста войдите логином и паролем студии —"
                           " компьютер появится здесь."]
     assert v["badge"] is True and v["fits"] is True
@@ -7567,7 +7567,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     v = r["values"]
     assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
     assert v["nullText"] is False
-    assert v["starters"] == ['+ Claude Code', '+ Codex'] and v["engines"] == ['Codex', 'Claude Code']
+    assert v["starters"] == ['+ Claude Code', '+ Codex', '+ OpenCode'] and v["engines"] == ['Codex', 'Claude Code']
     assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
     assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
     [turn] = code_requests(machine, "turn")

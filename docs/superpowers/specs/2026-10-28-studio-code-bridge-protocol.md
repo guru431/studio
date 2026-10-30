@@ -61,6 +61,22 @@
 
 ### 2.2 Просьбы студии и ответы моста
 
+Добавка v1 от 2026-10-30 (studio-agent 0.5.0): необязательный `hello.opencode` —
+`{version, models, efforts, defaults?}` третьего помощника. До 500 моделей, id —
+`[A-Za-z0-9._:\[\]/@+-]{1,300}`, label до 100 знаков; версия до 64 знаков. До 100 вариантов
+effort — `[A-Za-z0-9._-]{1,64}`, включая `default`. Каталог приходит из локального OpenCode ACP,
+без генерации. `defaults` содержит модель/усилие/доступ корня проектов.
+`engine: opencode` выбирает его в `chats.items` и просьбах чата (включая `state`); без поля — Claude.
+Сессии OpenCode `ses_*` связаны на машине с UUID студии, наружу идут только UUID.
+`access: default` сохраняет правила OpenCode, `auto` отвечает `allow_once` на запрашиваемые
+разрешения, сохраняя запреты CLI; null сохраняет прежний выбор. Старому мосту без каталога сервер
+не шлёт такие просьбы: HTTP 409 `unsupported`.
+
+Добавка той же версии: событие `activity {state, tool?}` и необязательное `snapshot.activity`
+хранят стадию `thinking|tool|responding|waiting`. `tool` — только имя текущего инструмента,
+без текста рассуждений. Открытые карточки имеют приоритет `waiting`; итог хода — прежний `done`.
+Студия показывает текущую стадию и явный итог; старые мосты по-прежнему дают `text/step/result/ask/done`.
+
 Добавка v1 от 2026-10-30 (studio-agent 0.4.0): `hello.chat_state: true` объявляет `state`
 с полями `project, chat, model, effort, access` (три последних могут быть null). Ответ —
 `{settings: {model, effort, access, approval?}, context: {used, limit, percent} | null}` без генерации.
@@ -199,6 +215,7 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `k` | поля | смысл |
 |---|---|---|
 | `text` | `text` | кусок текста ответа |
+| `activity` | `state: thinking|tool|responding|waiting`, `tool?` | текущая стадия; в snapshot — `activity` без k |
 | `step` | `id`, `tool`, `input` (объект) | вызов инструмента начат |
 | `result` | `id`, `text`, `error` (bool) | итог инструмента |
 | `ask` | `request_id`, `kind: "permission"`, `tool`, `input`, `always` (bool: есть ли что запомнить) | запрос разрешения |

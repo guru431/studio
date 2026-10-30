@@ -43,7 +43,7 @@ CLOSE_PROTOCOL = 4400
 CLOSE_AUTH = 4401
 CLOSE_REPLACED = 4409
 CLOSE_RESTART = 1012
-EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done", "settings", "context"})
+EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done", "settings", "context", "activity"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10
@@ -54,6 +54,9 @@ MESSAGE_MAX = 300
 CODE_MAX = 40
 MODELS_MAX = 50
 MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]-]{1,100}")
+OPENCODE_MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]/@+-]{1,300}")
+OPENCODE_EFFORT = re.compile(r"[A-Za-z0-9._-]{1,64}")
+OPENCODE_MODELS_MAX = 500
 PID = re.compile(r"[0-9a-f]{16}")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -214,6 +217,25 @@ def parse_hello(frame: dict) -> dict:
         if isinstance(codex.get("defaults"), dict):
             result["codex"]["defaults"] = {k: v for k, v in codex["defaults"].items()
                 if k in ("model", "effort", "access") and (v is None or isinstance(v, str) and len(v) <= 100)}
+    if "opencode" in frame:
+        catalog = frame["opencode"]
+        if not isinstance(catalog, dict):
+            raise ProtocolError("hello")
+        models, efforts = catalog.get("models"), catalog.get("efforts")
+        if (not isinstance(models, list) or len(models) > OPENCODE_MODELS_MAX or not isinstance(efforts, list)
+                or len(efforts) > 100 or not all(isinstance(e, str) and OPENCODE_EFFORT.fullmatch(e) for e in efforts)):
+            raise ProtocolError("hello")
+        out_models = []
+        for model in models:
+            if (not isinstance(model, dict) or not isinstance(model.get("id"), str)
+                    or not OPENCODE_MODEL_ID.fullmatch(model["id"])):
+                raise ProtocolError("hello")
+            out_models.append({"id": model["id"], "label": _string(model.get("label"), 100)})
+        result["opencode"] = {"version": _string(catalog.get("version"), 64), "models": out_models,
+                              "efforts": list(dict.fromkeys(efforts))}
+        if isinstance(catalog.get("defaults"), dict):
+            result["opencode"]["defaults"] = {k: v for k, v in catalog["defaults"].items()
+                if k in ("model", "effort", "access") and (v is None or isinstance(v, str) and len(v) <= 300)}
     return result
 
 

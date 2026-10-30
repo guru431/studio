@@ -98,7 +98,7 @@ def make(home):
 
     def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
               cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: (204, True), welcomes=None,
-              order=None, codex_factory=None):
+              order=None, codex_factory=None, opencode_factory=None):
         links, probes, probe_paths, unenrolls = [], [], [], []
 
         def link_factory(url, key, agent, on_state, on_welcome=None):
@@ -124,7 +124,8 @@ def make(home):
         extra = {"sdk_factory": sdk} if sdk is not None else {}
         ctrl = app.Controller(home, link_factory=link_factory, find_cli=find_cli, cli_version=cli_version,
                               probe=fake_probe, enroll_fn=fake_enroll, unenroll_fn=fake_unenroll,
-                              autostart=FakeAutostart(), sleep=sleep, codex_factory=codex_factory, **extra)
+                              autostart=FakeAutostart(), sleep=sleep, codex_factory=codex_factory,
+                              opencode_factory=opencode_factory, **extra)
         ctrl.links, ctrl.probes, ctrl.probe_paths, ctrl.unenrolls = links, probes, probe_paths, unenrolls
         made.append(ctrl)
         return ctrl
@@ -192,7 +193,7 @@ def test_models_are_probed_again_every_hour(make, configured):
     assert len(ctrl.links) == 2 and [m["id"] for m in ctrl.agent.models] == ["m1", "m3"]  # сбой пробы — без канала
 
 
-def test_codex_catalog_is_in_hello_and_revocation_stops_both_runners(make, configured):
+def test_catalogs_are_in_hello_and_revocation_stops_all_runners(make, configured, home):
     class Backend:
         def __init__(self, emit, home, choices):
             self.catalog = None
@@ -210,20 +211,26 @@ def test_codex_catalog_is_in_hello_and_revocation_stops_both_runners(make, confi
         def reopen(self):
             self.reopened += 1
 
-    ctrl = make(codex_factory=Backend)
+    ctrl = make(codex_factory=Backend, opencode_factory=Backend)
     ctrl.start()
     until(lambda: ctrl.state == "online")
     assert ctrl.links[0].hello["codex"]["efforts"] == ["ultra"]
+    assert ctrl.links[0].hello["opencode"]["efforts"] == ["ultra"]
     assert ctrl.codex.choices is ctrl.runner.choices
-    assert ctrl.codex.reopened == 1
+    assert ctrl.opencode.choices.path == home / "opencode" / store.CHOICES
+    ctrl.opencode.choices.update("test-chat", access="default")
+    assert ctrl.opencode.choices.details("test-chat")["access"] == "default"
+    assert ctrl.runner.choices.details("test-chat") == {}
+    assert ctrl.codex.reopened == ctrl.opencode.reopened == 1
     ctrl._loop.call_soon_threadsafe(ctrl.links[0].end, "revoked")
-    until(lambda: ctrl.codex.closes)
-    assert ctrl.codex.closes == [{"hold": True}] and ctrl.runner._closing
+    until(lambda: ctrl.codex.closes and ctrl.opencode.closes)
+    assert ctrl.codex.closes == ctrl.opencode.closes == [{"hold": True}] and ctrl.runner._closing
     ctrl.quit()
-    assert ctrl.codex.closes[-1] == {"final": True}
+    assert ctrl.codex.closes[-1] == ctrl.opencode.closes[-1] == {"final": True}
 
 
-def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make, configured):
+@pytest.mark.parametrize("engine", ("codex", "opencode"))
+def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make, configured, engine):
     class Backend:
         def __init__(self, *args, **kwargs):
             self.catalog = None
@@ -240,21 +247,25 @@ def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make,
         def reopen(self):
             pass
 
-    ctrl = make(probe=lambda n: ([], []) if n == 1 else (MODELS, ["high"]), codex_factory=Backend)
+    ctrl = make(probe=lambda n: ([], []) if n == 1 else (MODELS, ["high"]), **{engine + "_factory": Backend})
     changes = []
     ctrl.on_backends(changes.append)
     ctrl.start()
     until(lambda: ctrl.state == "online")
+    other = "opencode" if engine == "codex" else "codex"
     assert ctrl.backend_status() == {"claude": {"status": "unavailable", "models": 0},
-                                     "codex": {"status": "ready", "models": 1}}
-    ctrl.codex.ready = False
+                                     engine: {"status": "ready", "models": 1},
+                                     other: {"status": "unavailable", "models": 0}}
+    backend = getattr(ctrl, engine)
+    backend.ready = False
     asyncio.run_coroutine_threadsafe(ctrl._refresh_models(), ctrl._loop).result(5)
-    assert ctrl.codex.catalog is not None
+    assert backend.catalog is not None
     assert ctrl.backend_status() == {"claude": {"status": "ready", "models": 1},
-                                     "codex": {"status": "unavailable", "models": 0}}
+                                     engine: {"status": "unavailable", "models": 0},
+                                     other: {"status": "unavailable", "models": 0}}
     assert changes[-1] == ctrl.backend_status()
-    changes[-1]["codex"]["status"] = "ready"
-    assert ctrl.backend_status()["codex"]["status"] == "unavailable"
+    changes[-1][engine]["status"] = "ready"
+    assert ctrl.backend_status()[engine]["status"] == "unavailable"
 
 
 def test_theme_is_saved_without_restarting_the_link(make, configured, home, root):

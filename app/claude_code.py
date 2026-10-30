@@ -100,7 +100,8 @@ NEW_CHATS: dict[int, deque] = {}
 NO_MODEL = "такой модели нет на компьютере"
 NO_EFFORT = "такого усилия нет на компьютере"
 ACCESS = {"codex": ("read-only", "workspace-write", "danger-full-access"),
-          "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")}
+          "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk"),
+          "opencode": ("default", "auto")}
 
 
 class Open(BaseModel):
@@ -117,8 +118,8 @@ class TurnImage(BaseModel):
 
 
 class ChatSettings(BaseModel):
-    model: str | None = Field(None, max_length=100)
-    effort: str | None = Field(None, max_length=12)
+    model: str | None = Field(None, max_length=300)
+    effort: str | None = Field(None, max_length=64)
     access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
                     "read-only", "workspace-write", "danger-full-access"] | None = None
 
@@ -204,8 +205,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
     if "chat" in args:
         selected = chat_engine(request, aid, args["chat"])
-        if selected == "codex":
-            require_codex(aid)
+        if selected != "claude":
+            require_engine(aid, selected)
             args["engine"] = selected
     try:
         json.dumps(args, ensure_ascii=False).encode()
@@ -228,7 +229,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
 
 def chat_engine(request: Request, aid: int, chat: str | None = None) -> str:
     selected = request.query_params.get("engine")
-    if selected is not None and selected not in ("claude", "codex"):
+    if selected is not None and selected not in ACCESS:
         raise _refuse(422, "engine", "неверный помощник")
     row = state.DB.execute("SELECT engine FROM code_chats WHERE user_id = ? AND agent_id = ? AND session_id = ?",
                            (request.state.user.id, aid, chat)).fetchone() if chat is not None else None
@@ -239,10 +240,11 @@ def chat_engine(request: Request, aid: int, chat: str | None = None) -> str:
     return selected or "claude"
 
 
-def require_codex(aid: int) -> None:
+def require_engine(aid: int, engine: str) -> None:
     link = bridge.LINKS.get(aid)
-    if link is not None and "codex" not in link.hello:
-        raise _refuse(409, "unsupported", "обновите мост и установите Codex на компьютере")
+    if link is not None and engine not in link.hello:
+        name = {"codex": "Codex", "opencode": "OpenCode"}[engine]
+        raise _refuse(409, "unsupported", f"обновите мост и установите {name} на компьютере")
 
 
 def _event(request: Request, agent: sqlite3.Row, kind: str) -> None:
@@ -299,7 +301,7 @@ async def chats(aid: int, pid: str, request: Request):
         mark = marks.get(i["chat"])
         title = i.get("title")
         engine = i.get("engine", "claude")
-        if engine not in ("claude", "codex"):
+        if engine not in ACCESS:
             continue
         items.append({"chat": i["chat"], "engine": mark["engine"] if mark is not None else engine,
                       "title": title if isinstance(title, str) else None,
@@ -323,8 +325,8 @@ async def new_chat(aid: int, pid: str, request: Request):
     agent = own_agent(request, aid)
     check_pid(pid)
     engine = chat_engine(request, aid)
-    if engine == "codex":
-        require_codex(aid)
+    if engine != "claude":
+        require_engine(aid, engine)
     chat, now = str(uuid.uuid4()), clock.NOW()
     recent = NEW_CHATS.setdefault(aid, deque())
     while recent and now - recent[0] >= 60:
@@ -508,6 +510,8 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
     images = await asyncio.to_thread(_turn_images, body.images)
     link = bridge.LINKS.get(aid)
     engine = chat_engine(request, aid, chat)
+    if engine != "claude":
+        require_engine(aid, engine)
     if body.access is not None and body.access not in ACCESS[engine]:
         raise _refuse(422, "access", "такого режима доступа нет у помощника")
     if link is not None:
@@ -515,7 +519,7 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
             raise _refuse(409, "unsupported", "обновите мост для выбора прав доступа")
         if images and link.hello.get("images") is not True:
             raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки изображений")
-        catalog = link.hello.get("codex", {}) if engine == "codex" else link.hello
+        catalog = link.hello if engine == "claude" else link.hello.get(engine, {})
         if body.model is not None and body.model not in {m["id"] for m in catalog.get("models", ())}:
             raise _refuse(422, "model", NO_MODEL)
         if body.effort is not None and body.effort not in catalog.get("efforts", ()):

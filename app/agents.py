@@ -120,7 +120,7 @@ async def list_agents(request: Request):
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
                       "efforts": hello.get("efforts", []), "images": hello.get("images", False),
                       "chat_state": hello.get("chat_state", False), "defaults": hello.get("defaults", {}),
-                      **({"codex": hello["codex"]} if "codex" in hello else {})})
+                      **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
     return {"items": items}
 
 

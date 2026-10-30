@@ -42,6 +42,7 @@
  * app.js до смены адреса или раздела). */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
+import { ENGINE_NAMES } from './code-options.js';
 import { filesView, gitView } from './code-files.js';
 import { projectGit } from './code-git.js';
 import { panelView } from './code-panel.js';
@@ -176,10 +177,13 @@ function layout() {
     title: 'Новый чат Claude Code' }, '+ Claude Code');
   const newCodex = el('button', { type: 'button', id: 'code-start-codex', class: 'chip', disabled: true,
     title: 'Новый чат Codex' }, '+ Codex');
+  const newOpenCode = el('button', { type: 'button', id: 'code-start-opencode', class: 'chip', disabled: true,
+    title: 'Новый чат OpenCode' }, '+ OpenCode');
   const starts = el('div', { class: 'code-starts', hidden: true }, el('span', { class: 'muted small' }, 'Новый чат'),
-    newClaude, newCodex);
+    newClaude, newCodex, newOpenCode);
   newClaude.addEventListener('click', () => startChat('claude'));
   newCodex.addEventListener('click', () => startChat('codex'));
+  newOpenCode.addEventListener('click', () => startChat('opencode'));
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
   repoStatus.addEventListener('click', () => switchTo('git'));
@@ -197,7 +201,7 @@ function layout() {
   document.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
-  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, starts, newClaude, newCodex,
+  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, starts, newClaude, newCodex, newOpenCode,
     repoStatus, statusBox, body, backdrop };
 }
 
@@ -220,7 +224,7 @@ function frame(key) {
   ui.views.hidden = key === null;
   ui.starts.hidden = key === null;
   ui.repoStatus.hidden = key === null || !ui.repoStatus.textContent;
-  ui.newClaude.disabled = ui.newCodex.disabled = true;
+  ui.newClaude.disabled = ui.newCodex.disabled = ui.newOpenCode.disabled = true;
   if (key === null) ui.tabsHost.hidden = true;
   for (const button of ui.switches) button.setAttribute('aria-selected', String(button.id === `code-tab-${key}`));
   if (!proj) return;
@@ -347,15 +351,17 @@ function showStarts(p) {
   ui.newClaude.disabled = !p.canStart || !!p.creating;
   ui.newCodex.disabled = !p.canStart || !p.codex || !!p.creating;
   ui.newCodex.title = p.codex ? 'Новый чат Codex' : 'Обновите мост и установите Codex на компьютере';
+  ui.newOpenCode.disabled = !p.canStart || !p.opencode || !!p.creating;
+  ui.newOpenCode.title = p.opencode ? 'Новый чат OpenCode' : 'Обновите мост и установите OpenCode на компьютере';
 }
 
 async function startChat(engine) {
   const p = proj;
-  if (!p || !p.canStart || p.creating || (engine === 'codex' && !p.codex)) return;
+  if (!p || !p.canStart || p.creating || !ENGINE_NAMES[engine] || (engine !== 'claude' && !p[engine])) return;
   p.creating = true;
   showStarts(p);
   try {
-    const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine === 'codex' ? '?engine=codex' : ''}`);
+    const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine !== 'claude' ? `?engine=${engine}` : ''}`);
     if (proj === p) created(p, chat, engine);
   } catch (err) {
     if (proj === p) failed(err, p.aid, shownStatus);
@@ -410,6 +416,7 @@ function enter(aid, pid) {
     close: (chat) => closeTab(p, chat),
     created: (chat, engine) => created(p, chat, engine),
     codex: () => !!p.codex,
+    opencode: () => !!p.opencode,
     failed: (err) => {
       if (proj === p) failed(err, aid, shownStatus);
     } });
@@ -537,7 +544,7 @@ async function sessions(mine, p, status) {
   }
   if (mine !== gen) return;
   view = sessionList(p.chatBox, { aid: p.aid, pid: p.pid, items, picked: (chat) => toChat(p, chat),
-    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, starts: false,
+    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode, starts: false,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
@@ -599,6 +606,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   const agent = await agentOf(aid);
   if (mine !== gen) return;
   p.codex = agent?.codex || null;
+  p.opencode = agent?.opencode || null;
   p.canStart = false;
   showStarts(p);
   if (agent && id) {
