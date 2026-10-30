@@ -13,12 +13,10 @@
 # argv. Откат — выложить прежний коммит. Vhost (deploy/apache-vhost.conf) подключён в
 # /opt/services/apache/apache2.conf строкой IncludeOptional: install.sh проверяет его apache2ctl -t
 # (отказ — прежний код на место) и после ответа службы всегда сам делает reload Apache.
-# Архив моста Claude Code (GET /api/agent/download) — закоммиченный HEAD репозитория studio-agent
-# (STUDIO_AGENT_REPO, по умолчанию рядом со студией) → agent/studio-agent.zip рядом с кодом; нет
-# репозитория или он грязный — отказ до копирования кода.
+# Архив моста Claude Code (GET /api/agent/download) — agent/ того же HEAD студии
+# → agent/studio-agent.zip рядом с кодом; нет компонента или он грязный — отказ до копирования кода.
 set -euo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
-AGENT=${STUDIO_AGENT_REPO:-$D/../studio-agent}
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
@@ -38,19 +36,17 @@ for arg in "$@"; do
         *) die "неизвестный аргумент: $arg (есть --new-secret и --create-admin)" ;;
     esac
 done
-{ [ -d "$AGENT" ] && git -C "$AGENT" rev-parse --verify -q HEAD >/dev/null 2>&1; } \
-    || die "нет репозитория моста $AGENT (STUDIO_AGENT_REPO) — архив моста едет вместе со студией"
-[ -z "$(git -C "$AGENT" status --porcelain)" ] \
-    || die "незакоммиченные изменения в репозитории моста $AGENT — архив собирается из закоммиченного HEAD"
-[ -z "$(git -C "$D" status --porcelain -- "${PARTS[@]}")" ] \
-    || die "незакоммиченные изменения в ${PARTS[*]} — выкладывается только закоммиченный HEAD"
+git -C "$D" cat-file -e HEAD:agent/install.cmd 2>/dev/null \
+    || die "нет agent/install.cmd в HEAD студии — архив моста едет вместе со студией"
+[ -z "$(git -C "$D" status --porcelain -- "${PARTS[@]}" agent)" ] \
+    || die "незакоммиченные изменения в ${PARTS[*]} agent — выкладывается только закоммиченный HEAD"
 
 echo "==> код $(git -C "$D" rev-parse --short HEAD) → $HOST:$R"
 "${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming && sudo install -d -o root -g root -m 0700 $R/.incoming"
 git -C "$D" -c core.autocrlf=false archive --format=tar HEAD "${PARTS[@]}" \
     | "${SSH[@]}" "sudo tar -xf - -C $R/.incoming"
-echo "==> мост $(git -C "$AGENT" rev-parse --short HEAD) → agent/studio-agent.zip"
-git -C "$AGENT" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD \
+echo "==> мост $(git -C "$D" rev-parse --short HEAD) → agent/studio-agent.zip"
+git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent \
     | "${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent && sudo sh -c 'cat > $R/.incoming/agent/studio-agent.zip'"
 
 if [ "$NEW_SECRET" = 0 ] && ! "${SSH[@]}" "sudo grep -qs '^STUDIO_DATA_KEY=' /etc/studio/studio.env"; then

@@ -281,7 +281,7 @@ release моделей картинок заново перед переводо
   `?from=k` — только новые куски.
 - Claude Code (спека 2026-10-28-studio-claude-code-design; канал — протокол
   [docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md),
-  версия 1 — контракт с мостом, отдельным приватным проектом `C:/work/projects/studio-agent`; шаг схемы 19
+  версия 1 — контракт с мостом из `agent/` этого репозитория ([правила](agent/CLAUDE.md)); шаг схемы 19
   `db.CODE_19`): вкладка рельса «Claude Code» после «Перевода»; не раздел `section_links` — модели и усилия
   сообщает мост. Страница (спека 2026-10-29-studio-code-workspace): `code.js` — роутер раздела и раскладка, которая
   строится раз на показ раздела (`update` перерисовывает только правую часть): слева панель `code-panel.js` —
@@ -562,9 +562,9 @@ release моделей картинок заново перед переводо
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
 
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt`); грязное
-дерево — отказ. С ним едет архив моста Claude Code: `git archive --format=zip --prefix=studio-agent/ HEAD`
-репозитория `STUDIO_AGENT_REPO` (по умолчанию `../studio-agent`) → `.incoming/agent/studio-agent.zip`, строка
-`==> мост <хеш>`; нет репозитория моста или он грязный — отказ до копирования кода. `install.sh` без архива —
+дерево выкладываемых частей и `agent/` — отказ. С ним едет архив моста Claude Code и Codex:
+`git archive --format=zip --prefix=studio-agent/ HEAD:agent` → `.incoming/agent/studio-agent.zip`, строка
+`==> мост <хеш>` того же коммита студии; нет моста в HEAD или он грязный — отказ до копирования кода. `install.sh` без архива —
 отказ до подмены; `agent` переезжает в `SWAP` с кодом, и откат `.previous` возвращает прежний архив.
 Ключ данных при первой установке (в `studio.env` нет `STUDIO_DATA_KEY=`) едет сам.
 `--create-admin` берёт из vault `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`,
@@ -648,6 +648,10 @@ SQL — как у шага 16 ниже.
 подключения и 500 поиска); стирание истории и вложения без текста зависят от устройства того раздела.
 
 ## Тесты
+
+Контракт — `local-config/cron/project-registry.json::studio.tests`: `main` (корень, среда `.venv`) и `agent`
+(`agent/`, своя `.venv`, [подробности](agent/CLAUDE.md#тесты)). Быстрый и полный уровни запускают оба набора;
+нижеследующие команды относятся к `main`. Windows-зависимости моста не ставятся в среду сервера.
 
     .venv/Scripts/python -m pytest -q                                   # быстрый набор (~25–30 с, 4 процесса)
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell

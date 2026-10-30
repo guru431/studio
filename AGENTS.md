@@ -27,6 +27,8 @@
 
 ## Команды
 
+- Windows-мост Claude Code и Codex — компонент [agent/](agent/README.md), его правила — [agent/CLAUDE.md](agent/CLAUDE.md).
+  Наборы тестов `main` и `agent` объявлены вместе в `local-config/cron/project-registry.json::studio.tests`.
 - Тесты: `.venv/Scripts/python -m pytest -q` (быстрый набор, четыре процесса pytest-xdist; один
   тест без параллели — `-n0`), `-m integration` (браузер, PowerShell — одним процессом по очереди),
   `-m manual` (живая приёмка `tests/test_studio_upload_live.py` после выкладки:

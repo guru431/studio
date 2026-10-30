@@ -1,5 +1,9 @@
 # Мост `studio-agent` — план реализации
 
+Уточнение владельца 2026-10-30: выполненный мост перенесён в `studio/agent/`, Git-история объединена.
+Упоминания отдельного проекта, его регистрации и старых путей ниже описывают исходный план 2026-10-28.
+Текущие устройство, команды и установка — [agent/CLAUDE.md](../../../agent/CLAUDE.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Windows-мост, который держит канал к студии `studio.example.com` и отдаёт ей локальный Claude Code владельца: проекты, чаты, ход с карточками разрешений, файлы, git — строго по протоколу версии 1.
