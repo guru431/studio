@@ -170,8 +170,16 @@ function layout() {
     return button;
   });
   const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': 'Вид проекта', hidden: true }, ...switches);
+  const newClaude = el('button', { type: 'button', id: 'code-start-claude', class: 'chip', disabled: true,
+    title: 'Новый чат Claude Code' }, '+ Claude Code');
+  const newCodex = el('button', { type: 'button', id: 'code-start-codex', class: 'chip', disabled: true,
+    title: 'Новый чат Codex' }, '+ Codex');
+  const starts = el('div', { class: 'code-starts', hidden: true }, el('span', { class: 'muted small' }, 'Новый чат'),
+    newClaude, newCodex);
+  newClaude.addEventListener('click', () => startChat('claude'));
+  newCodex.addEventListener('click', () => startChat('codex'));
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
-  const top = el('div', { class: 'code-top' }, tabsHost, el('div', { class: 'code-head' }, toggle, place, views));
+  const top = el('div', { class: 'code-top' }, tabsHost, el('div', { class: 'code-head' }, toggle, place, views), starts);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
@@ -183,7 +191,8 @@ function layout() {
   document.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
-  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, statusBox, body, backdrop };
+  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, starts, newClaude, newCodex,
+    statusBox, body, backdrop };
 }
 
 /** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
@@ -203,6 +212,8 @@ function empty() {
 function frame(key) {
   ui.place.hidden = key === null;
   ui.views.hidden = key === null;
+  ui.starts.hidden = key === null;
+  ui.newClaude.disabled = ui.newCodex.disabled = true;
   if (key === null) ui.tabsHost.hidden = true;
   for (const button of ui.switches) button.setAttribute('aria-selected', String(button.id === `code-tab-${key}`));
   if (!proj) return;
@@ -318,6 +329,29 @@ function created(p, chat, engine = 'claude') {
   toChat(p, chat);
 }
 
+function showStarts(p) {
+  if (proj !== p) return;
+  ui.newClaude.disabled = !p.canStart || !!p.creating;
+  ui.newCodex.disabled = !p.canStart || !p.codex || !!p.creating;
+  ui.newCodex.title = p.codex ? 'Новый чат Codex' : 'Обновите мост и установите Codex на компьютере';
+}
+
+async function startChat(engine) {
+  const p = proj;
+  if (!p || !p.canStart || p.creating || (engine === 'codex' && !p.codex)) return;
+  p.creating = true;
+  showStarts(p);
+  try {
+    const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine === 'codex' ? '?engine=codex' : ''}`);
+    if (proj === p) created(p, chat, engine);
+  } catch (err) {
+    if (proj === p) failed(err, p.aid, shownStatus);
+  } finally {
+    p.creating = false;
+    showStarts(p);
+  }
+}
+
 /** Проект справа: «Файлы» и «Git» прежнего проекта уходят, плашка — имя компьютера и проекта. */
 function enter(aid, pid) {
   const key = `${aid}/${pid}`;
@@ -385,6 +419,10 @@ function remember(aid, pid, key) {
  * из «Текстов», прочее — словами. */
 function failed(err, aid, status, file = null) {
   if (err && err.code === 'closed') {
+    if (proj && String(proj.aid) === String(aid)) {
+      proj.canStart = false;
+      showStarts(proj);
+    }
     const key = String(aid);
     if (!returnTo || returnTo.aid !== key || returnTo.hash !== location.hash) returnTo = { aid: key, hash: location.hash, file };
     else if (file !== null) returnTo.file = file;
@@ -519,6 +557,8 @@ async function project(mine, aid, pid, id, key, path, status) {
   const agent = await agentOf(aid);
   if (mine !== gen) return;
   p.codex = agent?.codex || null;
+  p.canStart = false;
+  showStarts(p);
   if (agent && id) {
     // чат на экране — его вкладка активна (нет её — добавляется: push, «В работе», выбор в «+»), проект и вид — его
     const { tabs, active } = tabsOf(aid, pid);
@@ -537,6 +577,8 @@ async function project(mine, aid, pid, id, key, path, status) {
     failed({ code: 'closed' }, aid, status);
     return;
   }
+  p.canStart = true;
+  showStarts(p);
   if (id) chat(mine, p, id, agent, section, status);
   else if (key === 'files') files(mine, p, path, status);
   else if (key === 'git') git(p);
