@@ -4,7 +4,8 @@
  * - act(op, fields) — действие (open, close, place, panel): кэш меняется сразу так же, как его поменяет сервер (apply —
  *   те же пределы и та же соседняя активная), запрос — в фоне; ответ сервера заменяет кэш, а действия, на которые
  *   ответа ещё нет, ложатся поверх. Отказ (сеть, 5xx) проглатывается — на экране всё уже сделано; ответы не по порядку
- *   старый документ поверх нового не кладут. Подписчики зовутся на каждую смену кэша;
+ *   старый документ поверх нового не кладут. GET и PATCH — одной очередью, в порядке действий, даже после reset.
+ *   Подписчики зовутся на каждую смену кэша;
  * - tabs(aid, pid), count(aid, pid) — вкладки проекта из кэша; subscribe(fn) → отписка; reset() — уход из раздела.
  * Только id — имён и названий нет и в документе; в хранилище браузера ничего. */
 import { api } from './api.js';
@@ -17,6 +18,7 @@ let epoch = 0;          // reset(): ответ прежнего показа р�
 let sent = 0;           // номер последнего запроса
 let applied = 0;        // номер запроса, чей ответ лежит в кэше
 let waiting = [];       // действия без ответа: { seq, op, fields }
+let queue = Promise.resolve(); // чтение и записи идут в порядке действий, в том числе при новом входе в раздел
 const listeners = new Set();
 
 /** Действие над документом — как его применит сервер (workspace.py). */
@@ -59,7 +61,9 @@ function take(mine, seq, next) {
 export async function load() {
   const mine = epoch;
   const seq = ++sent;
-  take(mine, seq, await api('GET', '/api/code/workspace'));
+  const request = queue.then(() => api('GET', '/api/code/workspace'));
+  queue = request.catch(() => {});
+  take(mine, seq, await request);
   return doc;
 }
 
@@ -72,8 +76,10 @@ export function act(op, fields) {
   const action = { seq: ++sent, op, fields };
   waiting.push(action);
   publish(apply(doc, action));
-  api('PATCH', '/api/code/workspace', { op, ...fields }).then((next) => take(mine, action.seq, next), () => {
-    waiting = waiting.filter((a) => a !== action);
+  const request = queue.then(() => api('PATCH', '/api/code/workspace', { op, ...fields }));
+  queue = request.catch(() => {});
+  request.then((next) => take(mine, action.seq, next), () => {
+    if (mine === epoch) waiting = waiting.filter((a) => a !== action);
   });
 }
 

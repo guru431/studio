@@ -18,7 +18,8 @@
  *   ["eval", имя, выражение] — значение выражения в ответ под именем;
  *   ["click", селектор]    — нажатие мышью в середину элемента;
  *   ["type", селектор, текст] — нажатие на поле и ввод текста;
- *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab, Backspace, цифры 0–9);
+ *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab, Backspace, Delete, Home, End, стрелки влево и
+ *                            вправо, цифры 0–9);
  *   ["screenshot", путь]   — снимок окна в PNG по пути (глазами проверить вёрстку).
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
@@ -35,7 +36,7 @@ import process from 'node:process';
 
 const POLL_MS = 50;
 const IDLE_MS = 300;
-const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8,
+const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8, Delete: 46, Home: 36, End: 35, ArrowLeft: 37, ArrowRight: 39,
   ...Object.fromEntries([...'0123456789'].map((d) => [d, 48 + Number(d)])) };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
