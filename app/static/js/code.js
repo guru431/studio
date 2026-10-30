@@ -59,6 +59,8 @@ const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CODE_ICON = '<path d="M4 6l5 5-5 5M11 18h9"/>';
 const MENU_ICON = '<path d="M4 6h16M4 12h16M4 18h16"/>';
 const VIEWS = [['chat', 'Чат'], ['files', 'Файлы'], ['git', 'Git']];
+const IDLE_POLL_SEC = 20;        // метки вкладок: GET …/chats открытого проекта (тесты подменяют паузу setTimeout)
+const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в разделе (как опрос live чата)
 
 let host = null;
 let ctx = null;
@@ -72,6 +74,8 @@ let proj = null;
 let shownChat = null;   // чат на экране (вкладка, что подсвечена)
 let shownKey = null;    // вид на экране: chat, files, git
 let shownStatus = null; // строка отказов показанного адреса
+let acted = 0;          // последнее действие владельца в разделе (нажатие, клавиша)
+let pollTimer = null;   // следующий опрос меток
 let wantFile = null;    // путь файла из шага чата до перехода на «Файлы» — только в памяти
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
@@ -173,7 +177,10 @@ function layout() {
   const root = el('div', { class: 'code-ws' }, el('section', { class: 'code-main' }, top, statusBox, body), backdrop);
   toggle.addEventListener('click', () => panelOpen(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panelOpen(false));
+  root.addEventListener('pointerdown', onAct);
+  root.addEventListener('keydown', onAct);
   document.addEventListener('keydown', onKey);
+  document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
   ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, statusBox, body, backdrop };
 }
@@ -244,6 +251,52 @@ function paintTabs() {
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
   ui.tabsHost.hidden = !tabs.length && shownKey === 'chat';
   p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, items: p.items });
+  ensurePoll();
+}
+
+/* ---- метки вкладок: опрос, пока страница видна и владелец недавно что-то делал в разделе ---------------------- */
+
+/** Опрос продлевает открытость компьютера (каждая просьба мосту, протокол §3): забытая вкладка браузера не должна
+ * держать его открытым вечно — только видимая страница, не дольше IDLE_POLL_FOR_SEC после действия, и только у
+ * проекта с вкладками (меткам больше негде быть). */
+function polling(p) {
+  return !!p && proj === p && document.visibilityState !== 'hidden' && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000
+    && tabsOf(p.aid, p.pid).tabs.length > 0;
+}
+
+function stopPoll() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+}
+
+function ensurePoll() {
+  const p = proj;
+  if (pollTimer || !polling(p)) return;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    if (!polling(p)) return;
+    try {
+      await chatsOf(p, true);             // ответ перерисует ряд (paintTabs) и поставит следующий опрос
+    } catch {
+      // закрыт, не на связи — опрос до следующего действия; скажет о нём показанный чат
+    }
+  }, IDLE_POLL_SEC * 1000);
+}
+
+function onAct() {
+  acted = Date.now();
+  ensurePoll();
+}
+
+/** Вернулись на экран — рабочее место заново (другое устройство могло его поменять): панель и ряд — по нему, а проект,
+ * вкладка и адрес на экране — прежние; ушли — опроса нет. */
+function onVisibility() {
+  if (document.visibilityState === 'hidden') {
+    stopPoll();
+    return;
+  }
+  load().catch(() => {});
+  ensurePoll();
 }
 
 /** Вкладка уходит (сессия на машине остаётся); показанная — на соседнюю справа, иначе слева, последняя — к сессиям. */
@@ -291,6 +344,7 @@ function enter(aid, pid) {
 
 function closeProject() {
   if (!proj) return;
+  stopPoll();
   if (proj.bar) proj.bar.unmount();
   if (proj.files) proj.files.unmount();
   if (proj.git) proj.git.unmount();
@@ -528,6 +582,7 @@ export function mount(node, context) {
   host = node;
   ctx = context;
   none = false;
+  acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
   load().catch(() => null).then(() => {
@@ -561,7 +616,9 @@ export function unmount() {
   closeProject();
   if (panel) panel.unmount();
   panel = null;
+  stopPoll();
   document.removeEventListener('keydown', onKey);
+  document.removeEventListener('visibilitychange', onVisibility);
   reset();
   lists.clear();
   shownChat = null;

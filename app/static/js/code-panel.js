@@ -15,11 +15,12 @@
  * - opened(aid) — компьютер открыт (204 или верный PIN): code.js вернёт правую часть туда, где застал отказ;
  * - ready(aid) — правая часть ждёт идущего POST …/open этого компьютера (вход в раздел сразу в проект: иначе её
  *   запросы обгоняли бы открытие и получали closed); false — компьютер ждёт PIN;
- * - here(aid, pid) — открытый справа проект (aria-current); refresh() — числа вкладок проектов (code-workspace.js);
+ * - here(aid, pid) — открытый справа проект (aria-current); числа вкладок проектов (code-workspace.js, без запросов к
+ *   мосту) — на каждую смену рабочего места (subscribe), refresh() — то же вручную;
  *   chose() — нажат проект (телефон прячет панель).
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api } from './api.js';
-import { act, count, get } from './code-workspace.js';
+import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 
@@ -55,6 +56,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     return items;
   }
 
+  const unsubscribe = subscribe(() => paintCounts());   // числа вкладок — после каждого действия и ответа сервера
   let loaded = readAgents();
   loaded.then((got) => {
     if (!alive || pending || !got || !got.length) return;
@@ -296,6 +298,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     unmount() {
       alive = false;
       gen += 1;
+      unsubscribe();
       root.remove();
     },
   };

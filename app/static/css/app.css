@@ -1130,6 +1130,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-tab:hover { background: var(--panel-2); color: var(--text); }
 .code-tab[aria-selected="true"] { background: var(--panel); border-color: var(--border); color: var(--text); font-weight: 600; }
 .code-tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* метки: «идёт ход» — точка, «ждёт ответа» — акцентом и крупнее (ждут владельца) */
+.code-tab-mark { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.code-tab-mark.running { background: var(--ok); }
+.code-tab-mark.asking { width: 9px; height: 9px; background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
 .code-tab-close { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0;
   border-radius: 6px; background: none; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
 .code-tab-close:hover { background: var(--panel-2); color: var(--text); }
