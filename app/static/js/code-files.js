@@ -1,9 +1,9 @@
 /* Вкладки «Файлы» и «Git» проекта Claude Code (#/code/<aid>/<pid>) — спека 2026-10-28-studio-claude-code-design
  * 6.7, протокол канала §4 (files, read, raw, save, git) и §6 (пути).
  *
- * filesView(host, { aid, pid, name, failed, path }) → { open(path), leave(go), dirty(), unmount() } (path — открыть сразу, иначе корень):
- * - путь #code-path (корень — имя проекта, части — к своей папке), папка #code-files — li[data-name] в порядке
- *   моста (папки сначала); нажатие на папку — её список, на файл — сам файл; на узком экране, пока открыт
+ * filesView(host, { aid, pid, name, failed, path, git }) → { open(path), leave(go), dirty(), unmount() }:
+ * - путь #code-path (корень — имя проекта, части — к своей папке), дерево #code-files — li[data-path] в порядке
+ *   моста (папки сначала); папки раскрываются на месте, Git помечает файлы и их родителей; на узком экране, пока открыт
  *   файл, список папки скрыт (назад ведёт путь), на широком — рядом;
  * - текстовый — #code-editor и «Сохранить» (#code-save): PUT …/file с version открытого — файл изменился на
  *   машине (его мог поправить Claude) — 409 conflict и слова в #code-file-status, на машине ничего не
@@ -19,7 +19,7 @@
  *   failed(err, box, path) уводит к PIN; файл, открытый снова (code.js возвращает к нему после PIN), берёт
  *   правку поверх прочитанного с прежним version: изменил его за это время Claude — «Сохранить» скажет
  *   conflict. В хранилище браузера правка не попадает.
- * gitView(host, { aid, pid, failed }) → { unmount() }: #code-git — «Ветка», «впереди на N» / «позади на N»
+ * gitView(host, { git, failed }) → { unmount() }: общий снимок проекта, #code-git — «Ветка», «впереди на N» / «позади на N»
  * (если есть upstream; нулевые не показываются), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
  * failed(err, box, path) — общие отказы раздела из code.js (closed — к PIN этого компьютера, с path — назад к
@@ -27,8 +27,8 @@
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
+import { fileMark } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
-import { sizeText } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 
 const SAVED = 'Сохранено';
@@ -62,24 +62,42 @@ function join(dir, name) {
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
 const edits = new Map();
 
-export function filesView(host, { aid, pid, name, failed, path: start = null }) {
+export function filesView(host, { aid, pid, name, failed, path: start = null, git }) {
   const url = `/api/code/agents/${aid}/projects/${pid}`;
   let alive = true;
   let dir = '';
-  let listGen = 0;        // ответ прежней папки новый список не перерисует
+  let listGen = 0;        // старый переход по пути не раскрывает папки после нового
   let fileGen = 0;        // так же — прежнего файла
   let blobUrl = null;
   let editing = null;     // открытый текст: { editor, base — текст как прочитан или сохранён, reset() }
+  let selected = null;
+  let gitFiles = [];
+  let gitPaths = null;
+  let treeGen = 0;
+  const nodes = new Map();
+  const directories = new Map();
 
   const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
-  const list = el('ul', { id: 'code-files', class: 'code-files' });
+  const list = el('ul', { id: 'code-files', class: 'code-files', role: 'tree', 'aria-label': 'Файлы проекта' });
+  directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', hidden: true });
   const view = el('div', { class: 'code-files-view' }, crumbs, listError, list, file);
   host.replaceChildren(view);
 
   function refuse(err, box, path) {
-    if (alive) failed(err, box, path);
+    if (!alive) return;
+    if (err.code === 'closed') {
+      if (dirty()) editing.keep();
+      if (path == null && selected) path = selected;
+      treeGen += 1;
+      listGen += 1;
+      nodes.clear();
+      directories.clear();
+      list.replaceChildren();
+      directories.set('', { group: list, loaded: false, pending: null });
+    }
+    failed(err, box, path);
   }
 
   function dropBlob() {
@@ -136,39 +154,166 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     });
   }
 
+  function decorate(node) {
+    const { path, item, row, badge, li } = node;
+    const changes = gitFiles.filter((f) => f.path === path || (item.dir && f.path.startsWith(`${path}/`)));
+    const mark = changes.length ? fileMark(changes.find((f) => fileMark(f.status).kind === 'conflict')?.status || changes[0].status) : null;
+    row.dataset.git = mark?.kind || '';
+    badge.textContent = mark ? item.dir ? '•' : mark.label : '';
+    badge.title = mark ? item.dir ? `Изменений в папке: ${changes.length}` : mark.title : '';
+    row.title = `${path}${badge.title ? ` — ${badge.title}` : ''}`;
+    li.setAttribute('aria-selected', String(path === selected));
+  }
+
+  const unsubscribeGit = git.subscribe(({ data }) => {
+    if (!data) {
+      gitPaths = null;
+    }
+    gitFiles = (Array.isArray(data?.files) ? data.files : []).filter((f) => typeof f.path === 'string');
+    for (const node of nodes.values()) decorate(node);
+    const paths = JSON.stringify(gitFiles.map((f) => f.path).sort());
+    if (data && gitPaths !== null && gitPaths !== paths) {
+      for (const [path] of directories) {
+        if (!path || nodes.get(path)?.li.getAttribute('aria-expanded') === 'true') loadDir(path, true);
+      }
+    }
+    if (data) gitPaths = paths;
+  });
+
+  function expand(node, open) {
+    node.li.setAttribute('aria-expanded', String(open));
+    const directory = directories.get(node.path);
+    directory.group.hidden = !open;
+    if (!open) return;
+    if (file.hidden) {
+      dir = node.path;
+      showPath(dir, false);
+    }
+    loadDir(node.path);
+  }
+
+  function treeRow(item, parent) {
+    const path = join(parent, item.name);
+    const chevron = el('span', { class: 'code-file-chevron', 'aria-hidden': 'true' }, item.dir ? '›' : '');
+    const badge = el('span', { class: 'code-file-git', 'aria-hidden': 'true' });
+    const row = el('button', { type: 'button', class: `code-file-item${item.dir ? ' dir' : ''}`,
+      style: `--tree-depth: ${path.split('/').length - 1}` }, chevron,
+    icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name), badge);
+    const li = el('li', { 'data-name': item.name, 'data-path': path, role: 'treeitem',
+      'aria-label': item.name, class: item.dir ? 'dir' : null }, row);
+    const node = { path, item, row, badge, li };
+    nodes.set(path, node);
+    if (item.dir) {
+      const group = el('ul', { role: 'group', hidden: true });
+      li.append(group);
+      li.setAttribute('aria-expanded', 'false');
+      directories.set(path, { group, loaded: false, pending: null });
+    }
+    row.addEventListener('click', () => {
+      if (item.dir) expand(node, li.getAttribute('aria-expanded') !== 'true');
+      else leave(() => openFile(path));
+    });
+    row.addEventListener('keydown', async (event) => {
+      const keys = ['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      const visible = [...list.querySelectorAll('.code-file-item')].filter((b) => b.getClientRects().length);
+      const index = visible.indexOf(row);
+      if (event.key === 'ArrowDown') visible[index + 1]?.focus();
+      else if (event.key === 'ArrowUp') visible[index - 1]?.focus();
+      else if (event.key === 'Home') visible[0]?.focus();
+      else if (event.key === 'End') visible.at(-1)?.focus();
+      else if (event.key === 'ArrowRight' && item.dir) {
+        if (li.getAttribute('aria-expanded') !== 'true') expand(node, true);
+        else {
+          await loadDir(path);
+          if (alive) directories.get(path)?.group.querySelector('.code-file-item')?.focus();
+        }
+      } else if (event.key === 'ArrowLeft') {
+        if (item.dir && li.getAttribute('aria-expanded') === 'true') expand(node, false);
+        else nodes.get(parent)?.row.focus();
+      }
+    });
+    decorate(node);
+    return li;
+  }
+
+  async function loadDir(path, fresh = false) {
+    const directory = directories.get(path);
+    if (!directory || (directory.loaded && !fresh)) return true;
+    if (directory.pending) return directory.pending;
+    const { group } = directory;
+    const tree = treeGen;
+    group.setAttribute('aria-busy', 'true');
+    listError.textContent = '';
+    directory.pending = (async () => {
+      try {
+        const { items, truncated } = await api('POST', `${url}/files`, { path });
+        if (!alive || tree !== treeGen || directories.get(path) !== directory) return false;
+        const active = group.contains(document.activeElement) ? document.activeElement : null;
+        const children = items.map((item) => {
+          const old = nodes.get(join(path, item.name));
+          if (old && old.item.dir !== item.dir) dropNode(old.path);
+          return old && old.item.dir === item.dir ? old.li : treeRow(item, path);
+        });
+        const kept = new Set(items.map((item) => join(path, item.name)));
+        for (const child of group.children) {
+          const removed = child.dataset.path;
+          if (!removed || kept.has(removed)) continue;
+          dropNode(removed);
+        }
+        group.replaceChildren(...children);
+        if (active?.isConnected) active.focus({ preventScroll: true });
+        if (truncated) group.append(el('li', { class: 'muted code-tree-note' }, 'Показаны первые 5000 записей'));
+        if (!items.length) group.append(el('li', { class: 'muted code-tree-note' }, 'Папка пуста'));
+        directory.loaded = true;
+        return true;
+      } catch (err) {
+        if (alive && tree === treeGen && directories.get(path) === directory) refuse(err, listError, file.hidden ? { dir: path } : null);
+        return false;
+      } finally {
+        group.removeAttribute('aria-busy');
+        directory.pending = null;
+      }
+    })();
+    return directory.pending;
+  }
+
+  function dropNode(path) {
+    for (const key of nodes.keys()) {
+      if (key === path || key.startsWith(`${path}/`)) {
+        nodes.delete(key);
+        directories.delete(key);
+      }
+    }
+  }
+
   async function listDir(path) {
     const mine = ++listGen;
-    dir = path;
-    if (file.hidden) showPath(path, false);
-    listError.textContent = '';
-    list.setAttribute('aria-busy', 'true');
-    try {
-      const { items } = await api('POST', `${url}/files`, { path });
-      if (!alive || mine !== listGen) return;
-      list.replaceChildren(...items.map((item) => {
-        const row = el('button', { type: 'button', class: `code-file-item${item.dir ? ' dir' : ''}` },
-          icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name),
-          item.dir || typeof item.size !== 'number' ? null : el('span', { class: 'muted small code-file-size' }, sizeText(item.size)));
-        row.addEventListener('click', () => leave(() => {
-          if (item.dir) {
-            closeFile();
-            listDir(join(dir, item.name));
-          } else openFile(join(dir, item.name));
-        }));
-        return el('li', { 'data-name': item.name, class: item.dir ? 'dir' : null }, row);
-      }));
-    } catch (err) {
-      if (!alive || mine !== listGen) return;
-      list.replaceChildren();
-      refuse(err, listError, file.hidden ? { dir: path } : null);
-    } finally {
-      if (mine === listGen) list.removeAttribute('aria-busy');
+    if (!(await loadDir('')) || !alive || mine !== listGen) return;
+    const parts = path ? path.split('/') : [];
+    for (let i = 0; i < parts.length; i += 1) {
+      const target = parts.slice(0, i + 1).join('/');
+      const node = nodes.get(target);
+      if (!node?.item.dir) return;
+      expand(node, true);
+      if (!(await loadDir(target)) || !alive || mine !== listGen) return;
     }
+    dir = path;
+    for (const [target, node] of nodes) {
+      if (node.item.dir && target !== path && !path.startsWith(`${target}/`)) {
+        node.li.setAttribute('aria-expanded', 'false');
+        directories.get(target).group.hidden = true;
+      }
+    }
+    if (file.hidden) showPath(path, false);
   }
 
   function closeFile() {
     fileGen += 1;
     editing = null;
+    selected = null;
+    for (const node of nodes.values()) node.li.setAttribute('aria-selected', 'false');
     dropBlob();
     file.hidden = true;
     file.replaceChildren();
@@ -177,6 +322,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
 
   function fileFrame(path) {
     closeFile();
+    selected = path;
+    for (const node of nodes.values()) node.li.setAttribute('aria-selected', String(node.path === path));
     showPath(path, true);
     const status = el('p', { id: 'code-file-status', class: 'code-file-status', 'aria-live': 'polite' });
     const bar = el('div', { class: 'code-file-bar' });
@@ -221,7 +368,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
       version = kept.version;                           // правка Claude за это время — conflict, а не затирание
     }
     let shown = null;                                   // разметка .md («Вид»)
-    const mark = { editor, base, reset() {
+    const mark = { editor, base, keep() { edits.set(key, { text: editor.value, version }); }, reset() {
       edits.delete(key);
       editor.value = mark.base;
       if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
@@ -239,6 +386,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
         mark.base = sent;
         if (alive && mine === fileGen) say(status, SAVED, false);
+        if (alive) git.refresh(true);
       } catch (err) {
         if (!alive || mine !== fileGen) return;
         if (err.code === 'conflict') say(status, CONFLICT, true);
@@ -338,19 +486,30 @@ export function filesView(host, { aid, pid, name, failed, path: start = null }) 
     dirty,
     unmount() {
       alive = false;
+      unsubscribeGit();
       window.removeEventListener('beforeunload', unload);
       closeFile();
     },
   };
 }
 
-export function gitView(host, { aid, pid, failed }) {
-  let alive = true;
+export function gitView(host, { git, failed }) {
   const box = el('div', { id: 'code-git', class: 'code-git', 'aria-busy': 'true' });
   const status = el('p', { id: 'code-git-error', class: 'error', 'aria-live': 'polite' });
   host.replaceChildren(box, status);
-  api('GET', `/api/code/agents/${aid}/projects/${pid}/git`).then((git) => {
-    if (!alive) return;
+  const unsubscribe = git.subscribe(({ data: git, error, loading }) => {
+    if (loading) box.setAttribute('aria-busy', 'true');
+    else box.removeAttribute('aria-busy');
+    status.textContent = '';
+    if (!git) {
+      if (loading) return;
+      if (error?.code === 'not_git') box.replaceChildren(el('p', { class: 'muted code-git-none' }, NOT_GIT));
+      else if (error) {
+        box.replaceChildren();
+        failed(error, status);
+      }
+      return;
+    }
     const head = el('p', { class: 'code-git-head' }, 'Ветка ',
       el('b', { class: 'code-git-branch' }, typeof git.branch === 'string' && git.branch ? git.branch : '—'));
     if (typeof git.upstream === 'string' && git.upstream) {
@@ -365,14 +524,10 @@ export function gitView(host, { aid, pid, failed }) {
       ? el('ul', { class: 'code-git-files' }, ...files.map((f) => el('li', {},
         el('span', { class: 'tag code-git-status' }, String(f.status)), el('span', { class: 'code-git-path' }, String(f.path)))))
       : el('p', { class: 'muted code-git-empty' }, NO_CHANGES));
-  }, (err) => {
-    if (!alive) return;
-    if (err.code === 'not_git') box.replaceChildren(el('p', { class: 'muted code-git-none' }, NOT_GIT));
-    else failed(err, status);
-  }).finally(() => box.removeAttribute('aria-busy'));
+  });
   return {
     unmount() {
-      alive = false;
+      unsubscribe();
     },
   };
 }
