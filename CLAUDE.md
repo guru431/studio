@@ -49,6 +49,8 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 События `settings`/`context` и поля снимка обновляют индикатор; число берётся из CLI, не из текста.
 Chrome для Codex — `studio_chrome` (Chrome DevTools MCP, открытый профиль, --autoConnect);
 отдельный browser access host приложения Codex мост не эмулирует.
+В мосте 0.4.1 `state` существующего Codex-чата читает эфемерную копию через `thread/fork`,
+не захватывая writer исходной сессии; временная копия отписывается в finally.
 
 Скриншоты раздела «Код» (studio-agent ≥ 0.3.3): `hello.images: true` → `/api/agents.images`;
 `Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 5 МиБ на файл / 8 МиБ всего.

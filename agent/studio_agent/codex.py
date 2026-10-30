@@ -261,20 +261,28 @@ class CodexRunner(Runner):
         if thread is not None:
             if not same_project(thread.get("cwd"), project):
                 raise Refused("not_found")
-            data = await self._metadata(project, "thread/resume", {"threadId": target, **params})
+            # resume захватывает writer исходной сессии. Для чтения настроек нужен только
+            # временный снимок; он работает и пока настоящий ход пишет исходную сессию.
+            data = await self._metadata(project, "thread/fork", {
+                "threadId": target, "ephemeral": True, "excludeTurns": True, **params})
         else:
             data = await self._metadata(project, "thread/start", {"ephemeral": True, **params})
-        default_effort = next((m.get("defaultReasoningEffort") for m in
-            (await self._metadata(project, "model/list", {"limit": 50})).get("data", [])
-            if m.get("model") == data.get("model")), None)
-        context = await asyncio.to_thread(last_context, (thread or {}).get("path"))
-        if thread is None and (tid := data.get("thread", {}).get("id")):
+        temporary = data.get("thread", {})
+        tid = temporary.get("id")
+        if temporary.get("ephemeral") is not True or not isinstance(tid, str) or tid == target:
+            raise Refused("unsupported", "обновите Codex: недоступно безопасное чтение состояния чата")
+        try:
+            default_effort = next((m.get("defaultReasoningEffort") for m in
+                (await self._metadata(project, "model/list", {"limit": 50})).get("data", [])
+                if m.get("model") == data.get("model")), None)
+            context = await asyncio.to_thread(last_context, (thread or {}).get("path"))
+            return {"settings": {"model": data.get("model") or model,
+                        "effort": effort or data.get("reasoningEffort") or default_effort,
+                        "access": permissions.codex_value(data.get("sandbox")) or access,
+                        "approval": data.get("approvalPolicy")}, "context": context or saved.get("context")}
+        finally:
             with contextlib.suppress(codex_rpc.RpcError):
                 await self._metadata(project, "thread/unsubscribe", {"threadId": tid})
-        return {"settings": {"model": data.get("model") or model,
-                    "effort": effort or data.get("reasoningEffort") or default_effort,
-                    "access": permissions.codex_value(data.get("sandbox")) or access,
-                    "approval": data.get("approvalPolicy")}, "context": context or saved.get("context")}
 
     async def _run(self, t, text, model, effort, images):
         failure, cancelled, requests = None, False, set()
@@ -365,6 +373,10 @@ class CodexRunner(Runner):
             cancelled = True
         except Refused as e:
             failure = e.message
+        except codex_rpc.RpcError as e:
+            log.warning("ход %s: Codex RPC %s: %s", t.turn, e.method or "?", e.code)
+            failure = ("Этот чат занят другим процессом Codex — завершите его работу с чатом и повторите отправку"
+                       if e.writer_active else "Codex не ответил — проверьте вход и журнал Codex на компьютере")
         except Exception as e:
             log.warning("ход %s: Codex: %s", t.turn, type(e).__name__)
             failure = "Codex не ответил — проверьте вход и журнал Codex на компьютере"

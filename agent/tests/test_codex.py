@@ -10,6 +10,7 @@ from studio_agent.errors import Refused
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 THREAD = "01999999-2222-7333-8444-555555555555"
+EPHEMERAL = "01999999-2222-7333-8444-666666666666"
 
 
 class FakeRpc:
@@ -23,6 +24,8 @@ class FakeRpc:
 
     async def disconnect(self):
         self.closed = True
+        for thread in [key for key, writer in self.factory.writers.items() if writer is self]:
+            del self.factory.writers[thread]
 
     async def request(self, method, params):
         self.factory.calls.append((method, params))
@@ -32,9 +35,16 @@ class FakeRpc:
             if params["threadId"] != THREAD or not self.factory.exists:
                 raise codex_rpc.RpcError(not_found=True)
             return {"thread": {"id": THREAD, "cwd": str(self.factory.project), "turns": self.factory.turns}}
-        if method in ("thread/start", "thread/resume"):
-            self.factory.exists = True
-            return {"thread": {"id": THREAD, "cwd": str(self.factory.project)}, "model": params.get("model", "codex-test"),
+        if method in ("thread/start", "thread/resume", "thread/fork"):
+            ephemeral = params.get("ephemeral", False)
+            target = EPHEMERAL if ephemeral else THREAD
+            if (writer := self.factory.writers.get(target)) is not None and writer is not self:
+                raise codex_rpc.RpcError(writer_active=True, method=method, code=-32600)
+            self.factory.writers[target] = self
+            if not ephemeral:
+                self.factory.exists = True
+            return {"thread": {"id": target, "cwd": str(self.factory.project), "ephemeral": ephemeral},
+                    "model": params.get("model", "codex-test"),
                     "reasoningEffort": "high", "sandbox": {"type": {"read-only": "readOnly",
                         "danger-full-access": "dangerFullAccess"}.get(params.get("sandbox"), "workspaceWrite")},
                     "approvalPolicy": params.get("approvalPolicy", "on-request")}
@@ -58,6 +68,8 @@ class FakeRpc:
         if method == "config/read":
             return {"config": {"model": "codex-test", "model_reasoning_effort": "high"}}
         if method == "thread/unsubscribe":
+            if self.factory.writers.get(params["threadId"]) is self:
+                del self.factory.writers[params["threadId"]]
             return {}
         raise AssertionError(method)
 
@@ -78,6 +90,7 @@ class Factory:
         self.read_error = None
         self.ask = "item/commandExecution/requestApproval"
         self.ask_params = {}
+        self.writers = {}
 
     def __call__(self, path, cwd):
         client = FakeRpc(self, path, cwd)
@@ -158,6 +171,61 @@ async def test_access_and_context_use_native_policy_and_last_request(runner):
     runner.answer(pid, CHAT, rid, "deny", None, None)
     await task
     assert runner.choices.details(CHAT)["context"]["used"] == 32000
+
+
+async def test_reading_existing_chat_state_does_not_hold_its_writer(runner):
+    runner.fake.exists = True
+    await asyncio.to_thread(runner.aliases.put, runner.project, CHAT, THREAD)
+    try:
+        state = await runner.state(runner.project, CHAT)
+        assert state["settings"]["model"] == "codex-test"
+        assert THREAD not in runner.fake.writers
+        assert EPHEMERAL not in runner.fake.writers
+        assert not any(method == "turn/start" for method, _ in runner.fake.calls)
+        pid = projects.pid(runner.project.name)
+        runner.start(runner.project, pid, CHAT, "Продолжить", None, None)
+        task = runner._turns[CHAT].task
+        rid = await asking(runner)
+        runner.answer(pid, CHAT, rid, "deny", None, None)
+        await task
+        assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+        assert any(method == "thread/resume" for method, _ in runner.fake.calls)
+    finally:
+        await runner.close(final=True)
+
+
+async def test_state_uses_a_temporary_copy_even_when_another_client_owns_the_chat(runner):
+    runner.fake.exists = True
+    external = runner.fake(Path("codex.exe"), runner.project)
+    await external.request("thread/resume", {"threadId": THREAD})
+    await asyncio.to_thread(runner.aliases.put, runner.project, CHAT, THREAD)
+    try:
+        state = await runner.state(runner.project, CHAT)
+        assert state["settings"]["model"] == "codex-test"
+        assert runner.fake.writers.get(THREAD) is external and EPHEMERAL not in runner.fake.writers
+        runner.start(runner.project, "a" * 16, CHAT, "Задание", None, None)
+        await runner._turns[CHAT].task
+        assert "занят другим процессом Codex" in runner.sent[-1]["e"]["message"]
+    finally:
+        await runner.close(final=True)
+        await external.disconnect()
+
+
+async def test_temporary_state_writer_is_released_after_catalog_failure(runner, monkeypatch):
+    runner.fake.exists = True
+    await asyncio.to_thread(runner.aliases.put, runner.project, CHAT, THREAD)
+    previous = runner._metadata
+    async def failing(project, method, params):
+        if method == "model/list":
+            raise codex_rpc.RpcError()
+        return await previous(project, method, params)
+    monkeypatch.setattr(runner, "_metadata", failing)
+    try:
+        with pytest.raises(codex_rpc.RpcError):
+            await runner.state(runner.project, CHAT)
+        assert not runner.fake.writers
+    finally:
+        await runner.close(final=True)
 
 
 async def test_images_are_codex_input_items_without_local_files(runner):

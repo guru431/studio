@@ -104,6 +104,16 @@ async def test_eof_and_rpc_error_fail_pending_requests_without_exposing_body():
     with pytest.raises(RpcError) as error:
         await task
     assert error.value.not_found
+    assert error.value.method == "thread/read" and error.value.code == -32600
+    task = asyncio.create_task(client.request("thread/resume", {}))
+    await asyncio.sleep(0)
+    rid = process.sent[-1]["id"]
+    process.stdout.feed_data(json.dumps({"id": rid, "error": {"code": -32600,
+        "message": "thread private-path-and-text already has an active writer"}}).encode() + b"\n")
+    with pytest.raises(RpcError) as error:
+        await task
+    assert error.value.writer_active and error.value.method == "thread/resume" and str(error.value) == ""
+    assert "private" not in repr(error.value)
     task = asyncio.create_task(client.request("turn/start", {}))
     await asyncio.sleep(0)
     process.stdout.feed_eof()
@@ -111,3 +121,4 @@ async def test_eof_and_rpc_error_fail_pending_requests_without_exposing_body():
         await task
     assert await client.inbox.get() is None
     await client.disconnect()
+    assert not client.methods
