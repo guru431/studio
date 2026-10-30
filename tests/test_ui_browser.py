@@ -9429,3 +9429,94 @@ def test_code_background_tab_keeps_no_stream(browser, live):
     assert not r.get("failed"), r
     assert seen == [False, True], seen
     assert not problems(r), problems(r)
+
+
+# находки финального ревью: компьютер вернулся на связь, ?pin при запомненном месте, меню «+» под опросом
+
+
+def test_code_computer_back_online_redraws_the_right_side(browser, live):
+    """Ревью: раздел открыт на проекте спящего компьютера — справа «не на связи»; мост вернулся, владелец нажал компьютер
+    в панели — справа сам проект, без ухода из раздела."""
+    import bridge
+    from fake_bridge import SocketBridge, pid
+    login = "code-back-online"
+    live.add_user(login)
+    machine = code_free_machine()
+    aid, sb = code_online(live, login, machine)
+    state = {}
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            ("wait", "!!document.querySelector('#code-chats')")], width=1280)
+        assert not r.get("failed"), r
+        sb.stop()
+        wait_for(lambda: aid not in bridge.LINKS)
+
+        def wake():
+            time.sleep(3)                                  # страница уже показала «не на связи»
+            state["sb"] = SocketBridge(live.url, sb.key, machine).start()
+            wait_for(lambda: aid in bridge.LINKS)
+            live_sql(live, "UPDATE agents SET name = ? WHERE id = ?", ("Проснулся", aid))
+
+        waker = threading.Thread(target=wake, daemon=True)
+        waker.start()
+        offline = "Компьютер не на связи — включите его и запустите мост"
+        r = browser.drive(live.url + "/#/code", [("wait", READY),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}'"
+                     f" && document.querySelector('#code-status')?.textContent === '{offline}'"),
+            ("wait", "fetch('/api/agents').then((r) => r.json()).then((j) => j.items.some((a) => a.name === 'Проснулся'))"),
+            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
+            ("wait", "document.querySelectorAll('#code-chats li').length >= 1"
+                     " && !document.querySelector('#code-status')?.textContent"),
+            ("eval", "hash", "location.hash")], width=1280)
+        waker.join(10)
+    finally:
+        sb.stop()
+        if "sb" in state:
+            state["sb"].stop()
+    assert not r.get("failed"), r
+    assert r["values"]["hash"] == f"#/code/{aid}/{pid('alpha')}"
+    assert not problems(r), problems(r)
+
+
+def test_code_pin_query_keeps_the_pin_with_a_remembered_place(browser, live):
+    """Ревью: ссылка #/code?pin=<aid> при запомненном месте — поле PIN в панели (телефон — панель открыта), к месту
+    не уводит: «Выберите проект слева»."""
+    from fake_bridge import pid
+    login = "code-pin-place"
+    live.add_user(login)
+    machine = code_machine()
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
+            ("wait", "!!document.querySelector('#code-chats')"), *go(f"code?pin={aid}"),
+            ("wait", f"{CODE_PIN_SHOWN} && location.hash === '#/code'"),
+            ("eval", "open", settled(CODE_PANEL_OPEN, 400)),
+            ("eval", "rest", "[location.hash, document.querySelector('#code-pick')?.textContent]")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["open"] is True and r["values"]["rest"] == ["#/code", "Выберите проект слева"]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_open_menu_survives_a_poll(browser, live):
+    """Ревью: опрос меток (раз в IDLE_POLL_SEC) не пересобирает открытое меню «+»: пункт под рукой тот же, выбор
+    после опросов — вкладкой."""
+    login = "code-menu-poll"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_three())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            *code_from_list(CODE_CHAT_A), ("click", "#code-tab-add"),
+            ("wait", f"document.querySelector(\"#code-tab-menu li[data-chat='{CODE_CHAT_B}']\")"),
+            ("eval", "keep", f"!!(window.menuRow = document.querySelector(\"#code-tab-menu li[data-chat='{CODE_CHAT_B}']\"))"
+                             " && (window.polls0 = window.chatsCalls) >= 0"),
+            ("wait", "window.chatsCalls >= window.polls0 + 2"),
+            ("eval", "same", f"document.querySelector(\"#code-tab-menu li[data-chat='{CODE_CHAT_B}']\") === window.menuRow"),
+            ("click", f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] .code-chat-link"), code_tab_ready(CODE_CHAT_B)],
+            width=1280, init=CODE_FAST_IDLE + CODE_CHATS_SPY)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["same"] is True
+    assert not problems(r), problems(r)

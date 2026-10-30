@@ -74,6 +74,7 @@ let proj = null;
 let shownChat = null;   // чат на экране (вкладка, что подсвечена)
 let shownKey = null;    // вид на экране: chat, files, git
 let shownStatus = null; // строка отказов показанного адреса
+let blocked = null;     // aid компьютера, о котором правая часть сказала «не на связи» / «нет такого» (без запросов)
 let acted = 0;          // последнее действие владельца в разделе (нажатие, клавиша)
 let pollTimer = null;   // следующий опрос меток
 let wantFile = null;    // путь файла из шага чата до перехода на «Файлы» — только в памяти
@@ -391,10 +392,14 @@ function failed(err, aid, status, file = null) {
   if (status) status.textContent = err && err.code === 'offline' ? OFFLINE : words(err);
 }
 
-/** Компьютер открыт (панель): назад, где его закрытость застала; иначе правая часть не меняется. */
+/** Компьютер открыт (панель): назад, где его закрытость застала; справа о нём было «не на связи» (мост вернулся, его
+ * нажали в панели) — правая часть заново; иначе она не меняется. */
 function opened(aid) {
   const back = returnTo && returnTo.aid === String(aid) ? returnTo : null;
-  if (!back) return;
+  if (!back) {
+    if (blocked === String(aid)) render();
+    return;
+  }
   returnTo = null;
   panelOpen(false);
   wantFile = back.file;                 // render возьмёт его для «Файлов»
@@ -412,13 +417,13 @@ function usable(agent, status) {
 
 async function lobby(mine, aid) {
   const pinFor = ctx.query && ctx.query.get('pin');
-  if (!aid && pinFor && AID_RE.test(pinFor)) {
+  const pinning = !aid && !!pinFor && AID_RE.test(pinFor);
+  if (pinning) {
     history.replaceState(history.state, '', '#/code');     // метка записи (hold) — та же
     shownHash = location.hash;
-    panelOpen(true);
     panel.pin(pinFor);
   } else if (aid) panel.select(aid);
-  const place = get().place;
+  const place = !pinning && get().place;           // ссылка ради PIN — к месту не уводит: поле осталось бы скрытым
   if (place) {
     const { active } = tabsOf(place.aid, place.pid);
     const tail = place.view !== 'chat' ? `?tab=${place.view}` : active ? `/${active}` : '';
@@ -517,7 +522,10 @@ async function project(mine, aid, pid, id, key, path, status) {
     if (!tabs.includes(id) || active !== id || !place || place.aid !== Number(aid) || place.pid !== pid
       || place.view !== 'chat') act('open', { aid: Number(aid), pid, chat: id });
   } else if (agent) remember(aid, pid, key);
-  if (!usable(agent, status)) return;
+  if (!usable(agent, status)) {
+    blocked = String(aid);
+    return;
+  }
   const open = await panel.ready(aid);      // панель открывает этот компьютер — запросы моста после неё
   if (mine !== gen) return;
   if (!open) {
@@ -554,6 +562,7 @@ function render() {
   shownStatus = status;
   shownChat = null;
   shownKey = null;
+  blocked = null;
   if (!pid) {
     lobby(mine, aid);
     return;
