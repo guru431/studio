@@ -13,6 +13,8 @@
  * - pin(aid) — отказ closed справа и ?pin=: компьютер с PIN — сразу поле, без PIN — POST …/open; идущий POST …/open
  *   этого компьютера не повторяется — его итог и так придёт в opened или в поле PIN;
  * - opened(aid) — компьютер открыт (204 или верный PIN): code.js вернёт правую часть туда, где застал отказ;
+ * - ready(aid) — правая часть ждёт идущего POST …/open этого компьютера (вход в раздел сразу в проект: иначе её
+ *   запросы обгоняли бы открытие и получали closed); false — компьютер ждёт PIN;
  * - here(aid, pid) — открытый справа проект (aria-current); refresh() — числа вкладок проектов (code-workspace.js);
  *   chose() — нажат проект (телефон прячет панель).
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
@@ -39,6 +41,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   let mode = 'idle';       // idle | loading | projects | pin | offline | error
   let shown = null;        // { aid, pid } — проект справа
   let pending = 0;         // select/pin ждут списка: выбор при входе их не перебивает
+  let opening = null;      // идущий POST …/open: { aid, done } — done: открылся ли (ready ждёт его)
 
   /** Список компьютеров; не прочитался — null (прежний список остаётся, «компьютеров нет» не сказать). */
   async function readAgents() {
@@ -128,9 +131,14 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   }
 
   async function openIt(mine, agent) {
+    let finish;
+    const own = { aid: agent.id, done: new Promise((ok) => { finish = ok; }) };
+    opening = own;
+    let ok = true;                // false — только «нужен PIN»: прочие отказы правая часть получит от моста сама
     try {
       await api('POST', `/api/code/agents/${agent.id}/open`, { pin: null });
     } catch (err) {
+      ok = err.code !== 'pin_needed' && err.code !== 'pin_locked';
       if (!alive || mine !== gen) return;
       if (err.code === 'pin_needed') showPin(mine, agent);
       else if (err.code === 'pin_locked') {
@@ -138,6 +146,9 @@ export function panelView(host, { selected: first = null, opened, chose, list })
         status.textContent = PIN_LOCKED;
       } else refused(err);
       return;
+    } finally {
+      if (opening === own) opening = null;
+      finish(ok);
     }
     if (!alive || mine !== gen) return;
     opened(agent.id);
@@ -262,9 +273,20 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     show(aid, 'pin');
   }
 
+  /** Можно ли правой части идти к мосту за этим компьютером: панель его открывает — дождаться итога; он ждёт PIN — нет
+   * (правая часть сразу ведёт к полю, без запроса и отказа closed); прочее — да, отказ скажет сам мост. */
+  async function ready(aid) {
+    await loaded;
+    aid = Number(aid);
+    if (!alive || selected !== aid) return true;
+    if (opening && opening.aid === aid) return opening.done;
+    return mode !== 'pin';
+  }
+
   return {
     select,
     pin,
+    ready,
     here(aid, pid) {
       shown = aid === null ? null : { aid: Number(aid), pid };
       paintHere();
