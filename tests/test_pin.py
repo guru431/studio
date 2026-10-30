@@ -39,10 +39,11 @@ def test_pin_file_holds_no_plain_hash(home):
     assert b"scrypt" not in (home / "pin.bin").read_bytes()
 
 
-def test_open_session_expires_after_idle():
+def test_open_session_expires_after_three_hours_of_idle():
     t = [0.0]; s = pin.OpenSessions(now=lambda: t[0]); s.open("a" * 32)
-    t[0] = 1799; assert s.touch("a" * 32)
-    t[0] = 1799 + 1801; assert not s.touch("a" * 32) and not s.touch("a" * 32)
+    t[0] = 1801; assert s.touch("a" * 32)  # прежние полчаса больше не закрывают сессию
+    t[0] += 10800; assert s.touch("a" * 32)  # просьба на границе трёх часов продлевает срок
+    t[0] += 10801; assert not s.touch("a" * 32) and not s.touch("a" * 32)
 
 
 def test_open_sessions_close_and_clear():

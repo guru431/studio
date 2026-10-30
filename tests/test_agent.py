@@ -141,12 +141,17 @@ async def test_the_pin_lock_from_the_studio_is_reported_once(agent_with_pin):
 
 async def test_an_idle_session_closes(home, root):
     clock = Clock()
+    PinStore(home).set_pin("2468")
     a = make(home, root, clock=clock)
-    await opened(a)
-    clock.t += 1800
-    assert (await a.handle(req("projects")))[0]["ok"]                  # продлена
+    await opened(a, pin="2468")
     clock.t += 1801
+    assert (await a.handle(req("projects")))[0]["ok"]                  # полчаса больше не закрывают
+    clock.t += 10800
+    assert (await a.handle(req("projects")))[0]["ok"]                  # продлена
+    clock.t += 10801
     assert (await a.handle(req("projects")))[0]["code"] == "closed"
+    assert (await a.handle(req("open", pin=None)))[0]["code"] == "pin_needed"
+    await opened(a, pin="2468")
 
 
 async def test_close_and_new_link_close_sessions(agent):
