@@ -50,9 +50,14 @@ const PAINT_MS = 80;             // текст хода перерисовыва
 const STICK_PX = 80;             // лента у низа — новое её прокручивает
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const IMAGE_MAX = 5 * 1024 * 1024;
+const IMAGES_MAX = 8 * 1024 * 1024;
+const IMAGE_COUNT = 4;
 
 /** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
 const drafts = new Map();
+const imageDrafts = new Map();  // картинки черновика — только память, как текст
 
 function loadChoice(aid) {
   try {
@@ -107,6 +112,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let retry = null;              // таймер следующего live
   let running = false;
   let sending = false;
+  let adding = false;
+  let images = imageDrafts.get(draftKey) || [];
   let turn = null;               // ответ идущего хода: { node, steps, md, asks, text }
   let start = 0;                 // номер первого показанного сообщения истории
   let paintTimer = null;
@@ -138,10 +145,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true }, 'Остановить');
   const closeChat = el('button', { type: 'button', id: 'code-close-chat', class: 'btn btn-sm' }, 'Закрыть чат');
   const field = fieldBox(text);
-  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, field.box, field.error,
+  const attachments = el('div', { id: 'code-images', class: 'code-images' });
+  const picker = el('input', { type: 'file', id: 'code-image-input', accept: [...IMAGE_TYPES].join(','),
+    multiple: true, hidden: true, 'aria-label': 'Скриншоты' });
+  const attach = el('button', { type: 'button', id: 'code-attach', class: 'btn btn-sm',
+    title: agent?.images ? 'Выберите скриншот, вставьте Ctrl+V или перетащите в поле'
+      : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images }, 'Скриншот');
+  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort)),
+        attach, el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort)),
       stop, send));
   host.append(el('div', { class: 'code-chat-bar' }, el('span', { class: 'tag code-engine' }, assistant), closeChat),
     origin === 'other' ? el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED) : null,
@@ -150,6 +163,84 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
     autosize();
   }
+  paintImages();
+
+  function paintImages() {
+    attachments.replaceChildren(...images.map((image) => {
+      const remove = el('button', { type: 'button', class: 'icon-btn code-image-remove',
+        'aria-label': `Убрать ${image.name}`, disabled: sending }, '×');
+      remove.addEventListener('click', () => {
+        images = images.filter((i) => i !== image);
+        keepImages();
+      });
+      return el('div', { class: 'code-image' },
+        el('img', { src: `data:${image.mime};base64,${image.data}`, alt: image.name }), remove);
+    }));
+  }
+
+  function keepImages() {
+    if (images.length) imageDrafts.set(draftKey, images);
+    else imageDrafts.delete(draftKey);
+    paintImages();
+    acted = Date.now();
+  }
+
+  async function addImages(files) {
+    if (!files.length || sending || adding) return;
+    if (!agent?.images) {
+      status.textContent = 'Обновите мост на компьютере для отправки изображений';
+      return;
+    }
+    adding = true;
+    send.disabled = true;
+    attach.disabled = true;
+    status.textContent = '';
+    try {
+      if (images.length + files.length > IMAGE_COUNT) throw new Error('Можно прикрепить до 4 изображений');
+      if (files.some((f) => !IMAGE_TYPES.has(f.type))) throw new Error('Нужен PNG, JPEG, WebP или GIF');
+      if (files.some((f) => !f.size || f.size > IMAGE_MAX)) throw new Error('Размер изображения — от 1 байта до 5 МиБ');
+      if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
+        throw new Error('Общий размер изображений — до 8 МиБ');
+      }
+      const selected = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ mime: file.type, data: String(reader.result).split(',')[1],
+          name: file.name || 'Скриншот', size: file.size });
+        reader.onerror = () => reject(new Error('Не получилось прочитать изображение'));
+        reader.readAsDataURL(file);
+      })));
+      // Даже после ухода к PIN черновик остаётся у своего чата.
+      images = [...images, ...selected];
+      keepImages();
+    } catch (err) {
+      if (alive) status.textContent = words(err);
+    } finally {
+      adding = false;
+      send.disabled = running || sending;
+      attach.disabled = sending || !agent?.images;
+    }
+  }
+
+  attach.addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => {
+    addImages([...picker.files]);
+    picker.value = '';
+  });
+  form.addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    addImages(files);
+  });
+  form.addEventListener('dragover', (event) => {
+    if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault();
+  });
+  form.addEventListener('drop', (event) => {
+    const files = [...(event.dataTransfer?.files || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    addImages(files);
+  });
 
   /* ---- лента -------------------------------------------------------------------- */
 
@@ -184,7 +275,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function messageNode(m) {
-    if (m.role === 'user') return el('div', { class: 'code-msg user' }, typeof m.text === 'string' ? m.text : '');
+    if (m.role === 'user') return el('div', { class: 'code-msg user' },
+      ...(Array.isArray(m.images) ? m.images : []).map((i) => el('img', { class: 'code-sent-image',
+        src: `data:${i.mime};base64,${i.data}`, alt: i.name })), typeof m.text === 'string' ? m.text : '');
     const md = el('div', { class: 'md' });
     if (typeof m.text === 'string' && m.text) md.append(renderMarkdown(m.text));
     return el('div', { class: 'code-msg assistant' },
@@ -217,7 +310,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function setRunning(value) {
     running = value;
     stop.hidden = !value;
-    send.disabled = value || sending;
+    send.disabled = value || sending || adding;
     host.dataset.running = value ? '1' : '0';
   }
 
@@ -501,12 +594,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function submit() {
     const value = text.value;
-    if (!value.trim() || running || sending) return;
+    if ((!value.trim() && !images.length) || running || sending || adding) return;
+    const sentImages = images;
     acted = Date.now();
     sending = true;
+    attach.disabled = true;
+    paintImages();
     send.disabled = true;
     status.textContent = '';
-    const mine = messageNode({ role: 'user', text: value });
+    const mine = messageNode({ role: 'user', text: value, images: sentImages });
     grow(() => feed.append(mine));
     text.value = '';             // черновик (drafts) остаётся до ответа: отказ и уход к PIN его не теряют
     autosize();
@@ -514,7 +610,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     let response;
     try {
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
-        effort: effort.value || null }, { signal: own.signal });
+        effort: effort.value || null,
+        ...(sentImages.length ? { images: sentImages.map(({ mime, data }) => ({ mime, data })) } : {}) }, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
@@ -533,10 +630,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     } finally {
       sending = false;
-      send.disabled = running;
+      send.disabled = running || adding;
+      attach.disabled = adding || !agent?.images;
+      paintImages();
     }
     // ход принят (ответ — поток, первое его событие — turn); набранное после — остаётся
     if (drafts.get(draftKey) === value) drafts.delete(draftKey);
+    if (imageDrafts.get(draftKey) === sentImages) imageDrafts.delete(draftKey);
+    images = images.filter((i) => !sentImages.includes(i));
+    paintImages();
     if (!alive || document.visibilityState === 'hidden') {     // ушли, пока ход принимали: поток не читать
       own.abort();
       if (controller === own) controller = null;

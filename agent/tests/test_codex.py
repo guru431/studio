@@ -134,6 +134,21 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     assert [p for m, p in runner.fake.calls if m == "turn/start"][-1]["effort"] == "high"
 
 
+async def test_images_are_codex_input_items_without_local_files(runner):
+    from test_image_input import PNG
+    pid = projects.pid(runner.project.name)
+    for text in ("", "Что на скрине?"):
+        runner.start(runner.project, pid, CHAT, text, None, None, images=[PNG])
+        task = runner._turns[CHAT].task
+        rid = await asking(runner)
+        runner.answer(pid, CHAT, rid, "deny", None, None)
+        await task
+        content = [p for m, p in runner.fake.calls if m == "turn/start"][-1]["input"]
+        assert content == [{"type": "image", "url": "data:image/png;base64," + PNG["data"]}] + (
+            [{"type": "text", "text": text}] if text else [])
+    assert list(runner.project.iterdir()) == []
+
+
 async def test_stop_pending_question_and_close_prevent_new_turns(runner):
     runner.fake.ask = "item/tool/requestUserInput"
     runner.fake.ask_params = {"questions": [{"id": "q1", "question": "Как?", "header": "Выбор", "options": []}]}

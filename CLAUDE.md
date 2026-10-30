@@ -33,6 +33,15 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+Скриншоты раздела «Код» (studio-agent ≥ 0.3.3): `hello.images: true` → `/api/agents.images`;
+`Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 5 МиБ на файл / 8 МиБ всего.
+Тело хода читается через `auth.small_body` до 13 МиБ; base64 проверяется в потоке, на машине
+`image_input.validate` повторяет пределы и сверяет сигнатуру. Старый мост с картинками — 409
+`unsupported`, без картинок контракт прежний. `code-chat.js` — выбор, paste, drop, превью и черновик
+в памяти по чату; пустой текст допустим при картинке. В Agent SDK — поток user-сообщения с image/source
+base64, в Codex `turn/start.input` — image с data URL. В базе, журнале и временных файлах картинок нет;
+история машины показывает прежний маркер `[изображение]`.
+
 Codex (2026-10-30, мост studio-agent ≥ 0.3.0): общий раздел «Код» (`#/code`), «Новый чат Codex» в списке и «+»;
 история и модели разделены полем `engine` (`claude` по умолчанию, `codex`). Шаг схемы 21 добавляет
 `code_chats.engine` без изменения прежних строк. API чатов принимает `?engine=codex` для сессий машины без

@@ -198,7 +198,7 @@ class CodexRunner(Runner):
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end])
         return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
 
-    async def _run(self, t, text, model, effort):
+    async def _run(self, t, text, model, effort, images):
         failure, cancelled, requests = None, False, set()
         try:
             path = await asyncio.to_thread(self.find_codex)
@@ -242,7 +242,10 @@ class CodexRunner(Runner):
             if t.stopped or t.closing:
                 return
             await asyncio.to_thread(self.choices.put, t.chat, model, effort)
-            params = {"threadId": target, "input": [{"type": "text", "text": text}]}
+            content = [{"type": "image", "url": f"data:{i['mime']};base64,{i['data']}"} for i in images]
+            if text.strip():
+                content.append({"type": "text", "text": text})
+            params = {"threadId": target, "input": content}
             if model is not None:
                 params["model"] = model
             if effort is not None:

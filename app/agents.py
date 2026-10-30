@@ -118,7 +118,8 @@ async def list_agents(request: Request):
         items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
-                      "efforts": hello.get("efforts", []), **({"codex": hello["codex"]} if "codex" in hello else {})})
+                      "efforts": hello.get("efforts", []), "images": hello.get("images", False),
+                      **({"codex": hello["codex"]} if "codex" in hello else {})})
     return {"items": items}
 
 

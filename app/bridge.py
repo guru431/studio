@@ -188,6 +188,10 @@ def parse_hello(frame: dict) -> dict:
     result = {"cc_version": _string(frame.get("cc_version"), 64),
               "projects_root": _string(frame.get("projects_root"), 1024),
               "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
+    if "images" in frame:
+        if type(frame["images"]) is not bool:
+            raise ProtocolError("hello")
+        result["images"] = frame["images"]
     if "codex" in frame:
         codex = frame["codex"]
         if not isinstance(codex, dict):

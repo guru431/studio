@@ -112,7 +112,8 @@ def test_bad_hello_or_silence_closes_4400(studio, monkeypatch):
 def test_parse_hello_keeps_only_the_protocol_fields():
     assert bridge.parse_hello({**HELLO, "extra": 1, "efforts": ["max", "low", "max"]}) == {
         "cc_version": "2.3.1", "projects_root": "C:\\work\\projects", "has_pin": True,
-        "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}], "efforts": ["max", "low"]}
+        "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}], "efforts": ["max", "low"],
+        "images": True}
     for bad in ({**HELLO, "cc_version": "x" * 65}, {**HELLO, "projects_root": "x" * 1025},
                 {**HELLO, "models": [{"id": "m", "label": "x"}] * 51}, {**HELLO, "models": [{"id": "m"}]},
                 {**HELLO, "v": True}, {**HELLO, "efforts": "low"}):

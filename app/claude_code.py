@@ -78,6 +78,9 @@ STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_
           "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
+IMAGE_MAX = 5 * 1024 * 1024
+IMAGES_MAX = 8 * 1024 * 1024
+TURN_BODY_MAX = 13 * 1024 * 1024  # base64 8 МиБ + текст, в пределах кадра 16 МиБ
 FILE_MAX = 2 * 1024 * 1024
 FILE_BODY_MAX = 3 * 1024 * 1024
 RAW_MAX = 10 * 1024 * 1024
@@ -106,10 +109,31 @@ class ChatState(BaseModel):
     state: Literal["open", "closed"]
 
 
+class TurnImage(BaseModel):
+    mime: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
+    data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
+
+
 class Turn(BaseModel):
     text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
     model: str | None = None
     effort: str | None = None
+    images: list[TurnImage] = Field(default_factory=list, max_length=4)
+
+
+def _turn_images(images: list[TurnImage]) -> list[dict]:
+    total = 0
+    for image in images:
+        try:
+            raw = base64.b64decode(image.data, validate=True)
+        except ValueError:
+            raise _refuse(422, "invalid", "изображение не читается") from None
+        total += len(raw)
+        if not raw:
+            raise _refuse(422, "invalid", "изображение пустое")
+        if len(raw) > IMAGE_MAX or total > IMAGES_MAX:
+            raise _refuse(413, "too_large", "изображения больше предела: 5 МиБ на файл, 8 МиБ всего")
+    return [image.model_dump() for image in images]
 
 
 class Answer(BaseModel):
@@ -444,24 +468,34 @@ async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: boo
 
 
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/turn")
-async def turn(aid: int, pid: str, chat: str, body: Turn, request: Request):
+async def turn(aid: int, pid: str, chat: str, request: Request):
     """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
     сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
-    if not body.text.strip() or len(body.text) > TEXT_MAX:
+    raw = await auth.small_body(request, TURN_BODY_MAX)
+    if raw is None:
+        raise _refuse(413, "too_large", "задание больше предела")
+    try:
+        body = Turn.model_validate(json.loads(raw))
+    except (ValueError, RecursionError):
+        raise _refuse(422, "invalid", "нужны текст и до 4 изображений PNG, JPEG, WebP или GIF") from None
+    if (not body.text.strip() and not body.images) or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
+    images = await asyncio.to_thread(_turn_images, body.images)
     link = bridge.LINKS.get(aid)
     engine = chat_engine(request, aid, chat)
     if link is not None:
+        if images and link.hello.get("images") is not True:
+            raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки изображений")
         catalog = link.hello.get("codex", {}) if engine == "codex" else link.hello
         if body.model is not None and body.model not in {m["id"] for m in catalog.get("models", ())}:
             raise _refuse(422, "model", NO_MODEL)
         if body.effort is not None and body.effort not in catalog.get("efforts", ()):
             raise _refuse(422, "effort", NO_EFFORT)
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
-                             effort=body.effort)
+                             effort=body.effort, **({"images": images} if images else {}))
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,
