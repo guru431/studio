@@ -98,7 +98,7 @@ async def test_probe_reads_models_and_disconnects(tmp_path):
     opts = made[0].options
     assert opts.cwd == str(tmp_path) and opts.cli_path == tmp_path / "claude.exe"
     assert opts.setting_sources == ["user", "project", "local"] and opts.stderr is not None
-    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.2.0"}
+    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.3.0"}
     assert made[0].disconnected
 
 
@@ -135,11 +135,12 @@ def test_drop_session_env_removes_only_the_launching_session():
            "ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
            "CLAUDE_EFFORT": "high", "TRACEPARENT": "00-x-y-01", "CLAUDE_CODE_INVOKED_SKILLS": "x",
            "CODEX_COMPANION_SESSION_ID": "s", "CODEX_COMPANION_TRANSCRIPT_PATH": "x", "ELECTRON_RUN_AS_NODE": "1",
+           "CODEX_THREAD_ID": "parent", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_desktop",
            "GIT_ASKPASS": r"c:\Users\u\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions\git\dist"
                           r"\askpass.sh",
            "GIT_EDITOR": r'"C:/Program Files/Microsoft VS Code/resources/app/extensions/git/dist/git-editor.sh"',
            "CLAUDE_CODE_EFFORT_LEVEL": "high", "PATH": "x"}
-    assert cli.drop_session_env(env) == 22
+    assert cli.drop_session_env(env) == 24
     assert env == {"ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1", "CLAUDE_CONFIG_DIR": "x",
                    "CLAUDE_CODE_EFFORT_LEVEL": "high", "PATH": "x"}   # настройка усилия владельца — остаётся
     other = {"TERM_PROGRAM": "WezTerm", "GIT_ASKPASS": r"C:\Tools\askpass.exe", "GIT_EDITOR": "notepad"}

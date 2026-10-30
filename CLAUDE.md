@@ -17,6 +17,16 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.3.0 мост поддерживает и Codex: `codex_rpc.py` запускает настоящий `codex.exe app-server --listen stdio://`
+из PATH, npm или расширения VS Code, обменивается JSONL и отбрасывает stderr. `codex.py` — каталог моделей
+`model/list`, сессии `thread/list` и `thread/read`, запуск/продолжение, поток, разрешения и вопросы, остановка.
+`CodexRunner` использует общие снимки, ограничение ходов и жизненный цикл `turns.Runner`; при отзыве/выходе
+Controller закрывает обоих помощников. Режим разрешений и sandbox не переопределяются, настройки Codex действуют.
+В `hello` — необязательный `codex {version, models, efforts}`; в просьбах чата `engine: codex`, без поля — Claude.
+UUID нового чата задаёт студия, настоящий thread — Codex: соответствие и проект сохраняются атомарно в
+`codex-chats.json` (без текстов), его нельзя терять при обновлении. Выбор модели и усилия — прежний `choices.json`.
+Каталог app-server читается без генерации; тесты `test_codex.py` работают с подставным RPC, без квоты.
+
 Пакет `studio_agent`:
 
 - `limits` — все числа протокола и моста (`FRAME_MAX`, `PIN_TRIES`, `OPEN_IDLE_SEC`, `TEXT_MAX`, `HISTORY_BUDGET`, …).

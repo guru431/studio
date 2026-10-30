@@ -56,10 +56,11 @@ class Agent:
     `has_pin` — сразу, ядро читает в потоке и передаёт) и `refresh_pin` — перед каждым новым каналом ядра."""
 
     def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = time.monotonic,
-                 cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None):
+                 cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None):
         self.cfg = cfg
         self.pins = pins
         self.runner = runner
+        self.codex = codex
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
@@ -72,8 +73,11 @@ class Agent:
 
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
-        return {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts}
+        hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
+                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts}
+        if self.codex is not None and self.codex.catalog is not None:
+            hello["codex"] = self.codex.catalog
+        return hello
 
     async def refresh_pin(self) -> None:
         """`has_pin` заново из `pin.bin` (в потоке): PIN сменили на машине — студия узнает в следующем `hello`."""
@@ -139,8 +143,18 @@ class Agent:
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
+        engine = frame.get("engine", "claude")
+        if engine not in ("claude", "codex"):
+            raise Refused("invalid")
+        if engine == "codex" and (self.codex is None or self.codex.catalog is None):
+            raise Refused("unsupported", "Codex не найден на компьютере")
         for name in OPS[op]:
-            if not self._field(op, name, frame.get(name)):
+            if name in ("model", "effort") and engine == "codex":
+                value = frame.get(name)
+                allowed = {m["id"] for m in self.codex.models} if name == "model" else self.codex.efforts
+                if value is not None and value not in allowed:
+                    raise Refused("invalid")
+            elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
         return await getattr(self, "_op_" + op)(frame, after)
 
@@ -217,31 +231,46 @@ class Agent:
 
     async def _op_chats(self, frame, after):
         project = await self._project(frame)
-        return {"items": await asyncio.to_thread(sessions.chats, project, self.runner.live())}
+        items = await asyncio.to_thread(sessions.chats, project, self.runner.live())
+        if self.codex is not None:
+            try:
+                items += await self.codex.chats(project)
+            except Exception as e:
+                log.warning("Codex: сессии: %s", type(e).__name__)
+        return {"items": items}
 
     async def _op_history(self, frame, after):
         project = await self._project(frame)
+        if frame.get("engine") == "codex":
+            return await self.codex.history(project, frame["chat"], frame.get("before"), frame["limit"])
         return await asyncio.to_thread(sessions.history, project, frame["chat"], frame.get("before"), frame["limit"])
+
+    def _runner(self, frame):
+        return self.codex if frame.get("engine") == "codex" else self.runner
 
     async def _op_turn(self, frame, after):
         project = await self._project(frame)
-        return {"turn": self.runner.start(project, frame["project"], frame["chat"], frame["text"],
-                                          frame.get("model"), frame.get("effort"))}
+        runner = self._runner(frame)
+        total = len(self.runner.live()) + (len(self.codex.live()) if self.codex else 0)
+        if frame["chat"] not in runner.live() and total >= limits.MAX_TURNS:
+            raise Refused("busy")
+        return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
+                                     frame.get("model"), frame.get("effort"))}
 
     async def _op_watch(self, frame, after):
         """Хода нет (или он другого проекта) — `{"running": false}` без проверки чата (протокол §4); идёт — снимок
         за ответом."""
-        running, frames = await self.runner.watch(frame["project"], frame["chat"])
+        running, frames = await self._runner(frame).watch(frame["project"], frame["chat"])
         after.extend(frames)
         return {"running": running}
 
     async def _op_answer(self, frame, after):
-        self.runner.answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
-                           frame.get("message"), frame.get("answers"))
+        self._runner(frame).answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
+                                   frame.get("message"), frame.get("answers"))
         return {}
 
     async def _op_stop(self, frame, after):
-        await self.runner.stop(frame["project"], frame["chat"])
+        await self._runner(frame).stop(frame["project"], frame["chat"])
         return {}
 
     async def _op_files(self, frame, after):

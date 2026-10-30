@@ -13,6 +13,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient
 
 from . import autostart, cli, enroll, setup, store
+from .codex import CodexRunner
 from .agent import Agent, read_has_pin
 from .link import Link
 from .pin import PinStore
@@ -55,7 +56,7 @@ class Controller:
 
     def __init__(self, h: Path, *, link_factory=Link, sdk_factory=ClaudeSDKClient, find_cli=cli.find_cli,
                  cli_version=cli.cli_version, probe=cli.probe, enroll_fn=enroll.enroll, unenroll_fn=enroll.unenroll,
-                 autostart=autostart, sleep=asyncio.sleep):
+                 autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner):
         self.h = h
         self._link_factory = link_factory
         self._sdk_factory = sdk_factory
@@ -66,6 +67,8 @@ class Controller:
         self._unenroll_fn = unenroll_fn
         self._autostart = autostart
         self._sleep = sleep
+        self._codex_factory = codex_factory
+        self.codex = None
         self.state = "connecting" if _configured(store.load_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
         self._login_subscribers = []
@@ -302,7 +305,7 @@ class Controller:
     async def _unenroll(self, ask_studio: bool) -> tuple[bool, str]:
         await self._built.wait()
         async with self._relink_lock:  # канал не поднимется, пока ключ не стёрт
-            await self.runner.close(hold=True)  # просьба turn в пути хода не начнёт: держится до `_relink`
+            await self._close_runners(hold=True)  # просьба turn в пути хода не начнёт: держится до `_relink`
             await self._drop_link()
             self.agent.open.clear()
             try:
@@ -366,10 +369,12 @@ class Controller:
         agent = None
         self.runner = Runner(lambda f: agent.emit(f), choices=store.Choices(self.h), cli_path=path,
                              factory=self._sdk_factory, find_cli=self._find_cli)
+        if self._codex_factory is not None:
+            self.codex = self._codex_factory(lambda f: agent.emit(f), home=self.h, choices=self.runner.choices)
         pins = PinStore(self.h)
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
-                                   models=[], efforts=[], has_pin=has_pin)
+                                   models=[], efforts=[], has_pin=has_pin, codex=self.codex)
         agent.on_pin_locked = self._pin_changed
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
@@ -380,7 +385,7 @@ class Controller:
         for task in [first, *self._relinks]:
             task.cancel()
         await asyncio.gather(prober, first, *self._relinks, return_exceptions=True)
-        await self.runner.close(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
+        await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
         log.info("мост: выход")
 
@@ -409,6 +414,8 @@ class Controller:
             if not self._probed:
                 await self._refresh_models()
             self.runner.reopen()  # после отвязки, отзыва, замены — новый канал снова принимает ходы
+            if self.codex is not None:
+                self.codex.reopen()
             gen = self._gen
             self._link = self._link_factory(cfg.url, key, self.agent, lambda s: self._on_link(gen, s),
                                             on_welcome=lambda f: self._on_welcome(gen, f))
@@ -429,8 +436,12 @@ class Controller:
                 self._set_state("offline")
             return
         if state in ("revoked", "replaced") and gen == self._gen:
-            await self.runner.close(hold=True)  # и после: просьба turn в пути хода не начнёт — до нового канала
+            await self._close_runners(hold=True)  # и после: просьба turn в пути хода не начнёт — до нового канала
             self.agent.open.clear()
+
+    async def _close_runners(self, **kwargs):
+        await asyncio.gather(self.runner.close(**kwargs),
+                             *([self.codex.close(**kwargs)] if self.codex is not None else []))
 
     async def _drop_link(self) -> None:
         lk, task = self._link, self._link_task
@@ -460,6 +471,10 @@ class Controller:
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
+        if self.codex is not None:
+            previous = self.codex.catalog
+            await self.codex.probe(self.agent.cfg.projects_root)
+            changed = changed or previous != self.codex.catalog
         log.info("модели Claude Code: %d", len(models))
         return changed
 

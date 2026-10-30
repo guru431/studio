@@ -98,7 +98,7 @@ def make(home):
 
     def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
               cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: (204, True), welcomes=None,
-              order=None):
+              order=None, codex_factory=None):
         links, probes, probe_paths, unenrolls = [], [], [], []
 
         def link_factory(url, key, agent, on_state, on_welcome=None):
@@ -124,7 +124,7 @@ def make(home):
         extra = {"sdk_factory": sdk} if sdk is not None else {}
         ctrl = app.Controller(home, link_factory=link_factory, find_cli=find_cli, cli_version=cli_version,
                               probe=fake_probe, enroll_fn=fake_enroll, unenroll_fn=fake_unenroll,
-                              autostart=FakeAutostart(), sleep=sleep, **extra)
+                              autostart=FakeAutostart(), sleep=sleep, codex_factory=codex_factory, **extra)
         ctrl.links, ctrl.probes, ctrl.probe_paths, ctrl.unenrolls = links, probes, probe_paths, unenrolls
         made.append(ctrl)
         return ctrl
@@ -190,6 +190,36 @@ def test_models_are_probed_again_every_hour(make, configured):
     ctrl._loop.call_soon_threadsafe(gate.set)
     until(lambda: len(ctrl.probes) == 4 and len(pauses) == 4)
     assert len(ctrl.links) == 2 and [m["id"] for m in ctrl.agent.models] == ["m1", "m3"]  # сбой пробы — без канала
+
+
+def test_codex_catalog_is_in_hello_and_revocation_stops_both_runners(make, configured):
+    class Backend:
+        def __init__(self, emit, home, choices):
+            self.catalog = None
+            self.choices = choices
+            self.closes = []
+            self.reopened = 0
+
+        async def probe(self, root):
+            self.catalog = {"version": "test", "models": [{"id": "codex-test", "label": "Codex"}], "efforts": ["ultra"]}
+
+        async def close(self, **kwargs):
+            self.closes.append(kwargs)
+
+        def reopen(self):
+            self.reopened += 1
+
+    ctrl = make(codex_factory=Backend)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.links[0].hello["codex"]["efforts"] == ["ultra"]
+    assert ctrl.codex.choices is ctrl.runner.choices
+    assert ctrl.codex.reopened == 1
+    ctrl._loop.call_soon_threadsafe(ctrl.links[0].end, "revoked")
+    until(lambda: ctrl.codex.closes)
+    assert ctrl.codex.closes == [{"hold": True}] and ctrl.runner._closing
+    ctrl.quit()
+    assert ctrl.codex.closes[-1] == {"final": True}
 
 
 def test_models_changed_while_revoked_do_not_bring_the_link_back(make, configured):
