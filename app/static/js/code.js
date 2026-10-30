@@ -30,7 +30,7 @@
  * перерисовывается на каждую смену рабочего места; показанная здесь вкладка, которой там уже нет (убрали на другом
  * устройстве), остаётся, пока с неё не уйдут.
  *
- * PIN — в панели. Любой 409 closed или событие closed потока (сессию закрыли: блокировка, выход, 30 минут простоя,
+ * PIN — в панели. Любой 409 closed или событие closed потока (сессию закрыли: блокировка, выход, 3 часа простоя,
  * перезапуск моста) — returnTo (адрес, где застал отказ, и файл отказа «Сохранить») и поле PIN этого компьютера в
  * панели; адрес не меняется. Второй отказ того же адреса returnTo не трогает. Компьютер открылся (opened) — правая
  * часть заново по этому адресу, у «Файлов» — с файлом и правкой. ?pin=<aid> (прежние ссылки) — то же поле, ?pin уходит
@@ -183,8 +183,9 @@ function layout() {
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
   repoStatus.addEventListener('click', () => switchTo('git'));
-  const top = el('div', { class: 'code-top' }, tabsHost,
-    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place), repoStatus, starts, views));
+  const top = el('div', { class: 'code-top' },
+    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place), starts,
+      el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
