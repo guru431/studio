@@ -1,6 +1,7 @@
 # Мост Claude Code: скачивание из студии, окно и трей в стиле студии, отвязка — спека
 
-Дата: 2026-10-28. Проекты: студия (`C:/work/projects/studio`) и мост (`C:/work/projects/studio-agent`).
+Дата: 2026-10-28. Проект: студия (`C:/work/projects/studio`), мост — компонент `agent/`
+(уточнение владельца 2026-10-30, общий репозиторий).
 Основа — [2026-10-28-studio-claude-code-design.md](2026-10-28-studio-claude-code-design.md) и протокол
 [2026-10-28-studio-code-bridge-protocol.md](2026-10-28-studio-code-bridge-protocol.md) (версия 1).
 
@@ -18,7 +19,7 @@
 - **«Отключиться» — отвязать компьютер**: мост просит студию отозвать себя (компьютер уходит из списка), стирает
   ключ устройства и PIN, окно снова показывает форму входа. Студия недоступна — ключ стирается всё равно, мост
   говорит, что компьютер остался в списке студии и его нужно отозвать там.
-- **Скачивание — архив из студии**: выкладка студии собирает ZIP из закоммиченного HEAD `studio-agent` и кладёт
+- **Скачивание — архив из студии**: выкладка студии собирает ZIP из `agent/` закоммиченного HEAD студии и кладёт
   рядом с кодом; отдаёт его `GET /api/agent/download` только вошедшим (любая учётка студии; секретов в мосте нет).
 - После готовности и зелёных тестов — push обоих репозиториев, выкладка студии, мост этого компьютера —
   перезапуск новой версией.
@@ -50,10 +51,11 @@
   `FileResponse`, `media_type="application/zip"`, имя `studio-agent.zip`, `Cache-Control: private, no-cache`.
   Нет файла — 404 `{"code": "no_agent", "message": "архива моста нет на сервере — его кладёт выкладка студии"}`.
   Журнал — `пользователь N: скачан мост`.
-- `deploy/deploy.sh`: репозиторий моста — `STUDIO_AGENT_REPO` (по умолчанию `$D/../studio-agent`); нет
-  каталога или незакоммиченные изменения — отказ, как у студии. `git -C <мост> -c core.autocrlf=false archive
-  --format=zip --prefix=studio-agent/ HEAD` → `.incoming/agent/studio-agent.zip` на хосте (тем же `ssh`), строка
-  `==> мост <короткий хеш> → agent/studio-agent.zip`.
+- `deploy/deploy.sh`: мост — каталог `agent/` того же репозитория студии (решение владельца 2026-10-30);
+  нет `agent/install.cmd` в HEAD или незакоммиченные изменения компонента — отказ до копирования кода.
+  `git -C <studio> -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent`
+  → `.incoming/agent/studio-agent.zip` на хосте (тем же `ssh`), строка
+  `==> мост <короткий хеш того же HEAD студии> → agent/studio-agent.zip`.
 - `deploy/install.sh`: `agent` — в `SWAP` вместе с кодом (откат `.previous` возвращает прежний архив); права —
   как у кода (`root`, читается всеми). `test_deploy.py` сверяет: deploy собирает архив моста, install переносит
   `agent`.
@@ -93,7 +95,7 @@
   `IDEAS*.md`, `pytest.ini`, `requirements-dev.txt`, `.gitignore`, `.gitattributes`.
 - `install.cmd` (ASCII, CRLF; `.gitattributes` `*.cmd text eol=crlf` последним): `powershell -NoProfile
   -ExecutionPolicy Bypass -File "%~dp0install.ps1" %*`; код не 0 — `pause`, чтобы окно не закрылось молча.
-- `install.ps1`: запущен не из git-копии (нет `.git` рядом) — ставит в `%LOCALAPPDATA%\Programs\studio-agent`:
+- `install.ps1`: запущен не из git-копии (нет `.git` рядом или над `agent/`) — ставит в `%LOCALAPPDATA%\Programs\studio-agent`:
   останавливает работающий оттуда мост (процесс `pythonw.exe` этой `.venv`), копирует файлы архива поверх (среда
   `.venv` остаётся), снимает «Mark of the Web» (`Unblock-File`), дальше — как сейчас (среда, пакеты, запуск).
   Из git-копии — на месте, как сейчас (разработка). Автозапуск указывает на установленную копию.

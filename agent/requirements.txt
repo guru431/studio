@@ -1,0 +1,4 @@
+claude-agent-sdk==0.2.174
+websockets==17.3
+pystray==0.19.5
+pillow==13.0.0

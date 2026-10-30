@@ -5,6 +5,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import zipfile
 
 import pytest
 
@@ -244,16 +245,14 @@ def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
     assert "--ws-ping-interval 20 --ws-ping-timeout 20" in exec_start
 
 
-def test_deploy_builds_the_bridge_archive_from_its_repository():
-    """Архив моста — закоммиченный HEAD studio-agent: нет репозитория или он грязный — отказ до копирования кода."""
+def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
+    """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
-    assert 'AGENT=${STUDIO_AGENT_REPO:-$D/../studio-agent}' in code
-    assert ('git -C "$AGENT" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD' in code)
+    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent' in code
     assert "$R/.incoming/agent/studio-agent.zip" in code
-    assert '"==> мост $(git -C "$AGENT" rev-parse --short HEAD) → agent/studio-agent.zip"' in code
     first_ssh = code.index('"${SSH[@]}"')
-    assert code.index('git -C "$AGENT" status --porcelain') < first_ssh
-    assert code.index('git -C "$AGENT" rev-parse --verify -q HEAD') < first_ssh
+    assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
+    assert code.index('cat-file -e HEAD:agent/install.cmd') < first_ssh
     archive = code.index("archive --format=zip")
     assert code.index('"${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming') < archive
 
@@ -596,30 +595,55 @@ def test_install_failed_pip_leaves_the_running_code_and_environment(tmp_path):
 
 
 @pytest.mark.integration                   # git и bash на Windows — секунды
-def test_deploy_refuses_without_a_clean_bridge_repository(tmp_path):
+def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sources(tmp_path):
     bash = _bash()
     if not bash:
         pytest.skip("нет bash")
-    # хост — заведомо мёртвый: отказ должен случиться раньше любого ssh
-    env = {**os.environ, "STUDIO_SSH": "nobody@127.0.0.1", "STUDIO_SSH_PORT": "1"}
-
-    def deploy(repo):
-        return subprocess.run([bash, (DEPLOY / "deploy.sh").as_posix()], capture_output=True, text=True,
-                              encoding="utf-8", timeout=60, env={**env, "STUDIO_AGENT_REPO": repo.as_posix()})
-
-    r = deploy(tmp_path / "missing")
-    assert r.returncode == 1 and "нет репозитория моста" in r.stderr and "==> код" not in r.stdout, r
-    repo = tmp_path / "studio-agent"
-    repo.mkdir()
+    repo = tmp_path / "studio"
+    (repo / "deploy").mkdir(parents=True)
+    (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
+    (repo / "app").mkdir()
+    (repo / "app" / "main.py").write_text("# server\n")
+    (repo / "requirements.txt").write_text("# requirements\n")
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*git, "init", "-q"], check=True, timeout=20)
-    (repo / "install.cmd").write_text("x", newline="\n")
     subprocess.run([*git, "add", "."], check=True, timeout=20)
     subprocess.run([*git, "commit", "-q", "-m", "x"], check=True, timeout=20)
-    (repo / "install.cmd").write_text("y", newline="\n")
-    r = deploy(repo)
-    assert r.returncode == 1 and "незакоммиченные изменения в репозитории моста" in r.stderr, r
-    assert "==> код" not in r.stdout
+    # Функции сильнее PATH: Git Bash добавляет свои /usr/bin и /mingw64/bin перед Windows PATH.
+    # Даже при ошибке заглушки адрес зарезервирован для документации, ключа SSH нет.
+    env = {**os.environ, "PROBE": tmp_path.as_posix(), "STUDIO_SSH": "nobody@192.0.2.1",
+           "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix()}
+    wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
+               'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
+               '*) cat >/dev/null ;; esac; }; '
+               'curl() { printf 200; }; source "$0"')
+
+    def deploy():
+        return subprocess.run([bash, "-c", wrapper, (repo / "deploy" / "deploy.sh").as_posix()], capture_output=True, text=True,
+                              encoding="utf-8", timeout=60, env=env)
+
+    r = deploy()
+    assert r.returncode == 1 and "нет agent/install.cmd в HEAD" in r.stderr, r
+    assert not (tmp_path / "ssh-calls").exists()
+    agent = repo / "agent"
+    shutil.copytree(ROOT / "agent", agent, ignore=shutil.ignore_patterns(".venv", "__pycache__", ".pytest_cache"))
+    subprocess.run([*git, "add", "."], check=True, timeout=20)
+    subprocess.run([*git, "commit", "-q", "-m", "bridge"], check=True, timeout=20)
+    (agent / "studio_agent" / "limits.py").write_text("# dirty\n")
+    r = deploy()
+    assert r.returncode == 1 and "незакоммиченные изменения" in r.stderr, r
+    assert not (tmp_path / "ssh-calls").exists()
+    subprocess.run([*git, "restore", "agent/studio_agent/limits.py"], check=True, timeout=20)
+    r = deploy()
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "ssh-calls").is_file()
+    with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
+        names = {n for n in archive.namelist() if not n.endswith("/")}
+        assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
+        assert not any(n.startswith("studio-agent/tests/") or n.endswith("CLAUDE.md") for n in names)
+        assert all(n.startswith("studio-agent/") for n in names)
+        cmd = archive.read("studio-agent/install.cmd")
+        assert cmd.count(b"\r\n") == cmd.count(b"\n") > 0
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():

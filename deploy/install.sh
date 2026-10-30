@@ -72,7 +72,7 @@ command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — ч
 # Архив моста Claude Code (GET /api/agent/download) кладёт deploy.sh; без него подмена agent/ оборвалась бы
 # посреди переезда кода — проверка до неё
 [ -s "$NEW/agent/studio-agent.zip" ] || {
-    echo "ОШИБКА: нет $NEW/agent/studio-agent.zip — deploy.sh собирает его из репозитория studio-agent" >&2
+    echo "ОШИБКА: нет $NEW/agent/studio-agent.zip — deploy.sh собирает его из agent/ студии" >&2
     exit 1
 }
 
