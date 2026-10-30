@@ -65,6 +65,7 @@ import connections
 import db
 import forms
 import media
+import push
 import sections
 import state
 import upstream
@@ -271,8 +272,11 @@ def _store(job: Job) -> None:
     """Состояние задания — в его строку истории (описаний и переводов в истории нет)."""
     if job.kind in TEXT_KINDS:
         return
-    state.DB.execute("UPDATE images SET state = ?, detail = ?, seed = ?, media_id = ?, finished = ? WHERE id = ?",
-                     (job.state, job.detail, job.seed, job.media_id, job.finished_at, job.id))
+    changed = state.DB.execute("UPDATE images SET state = ?, detail = ?, seed = ?, media_id = ?, finished = ?"
+                               " WHERE id = ? AND finished IS NULL",
+                               (job.state, job.detail, job.seed, job.media_id, job.finished_at, job.id)).rowcount
+    if changed and job.finished_at is not None:
+        push.job_finished("images", job.id)
 
 
 def _row(user_id: int, image_id: str):

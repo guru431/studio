@@ -420,6 +420,46 @@ def test_quit_closes_runner_and_link(make, configured):
     assert not ctrl._thread.is_alive()
 
 
+async def test_quit_waits_for_welcome_write(make, monkeypatch):
+    """Запись welcome держится до выхода ядра; паузу потока задают события, а не часы."""
+    ctrl = make()
+    ctrl._built, ctrl._quit = asyncio.Event(), asyncio.Event()
+    ctrl._relink_lock = asyncio.Lock()
+    started, release, dropped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    real_thread, real_drop = asyncio.to_thread, ctrl._drop_link
+
+    async def to_thread(fn, *args, **kw):
+        if fn == ctrl._remember:
+            started.set()
+            await release.wait()
+        return await real_thread(fn, *args, **kw)
+
+    async def drop():
+        await real_drop()
+        if ctrl._quit.is_set():
+            dropped.set()
+
+    monkeypatch.setattr(asyncio, "to_thread", to_thread)
+    monkeypatch.setattr(ctrl, "_drop_link", drop)
+    main = asyncio.create_task(ctrl._main())
+    try:
+        await ctrl._built.wait()
+        await ctrl._relink_task()
+        ctrl._on_welcome(ctrl._gen, {"login": "owner"})
+        await started.wait()
+        ctrl._quit.set()
+        await dropped.wait()
+        assert not main.done(), "ядро вышло, пока запись welcome ещё ждёт"
+        release.set()
+        await main
+        assert not ctrl._background
+    finally:
+        ctrl._quit.set()
+        release.set()
+        await main
+        await asyncio.gather(*ctrl._background)
+
+
 def test_autostart_command_runs_the_pyw_of_this_repo():
     repo = autostart.REPO
     assert autostart.command() == rf'"{repo}\.venv\Scripts\pythonw.exe" "{repo}\studio_agent.pyw"'

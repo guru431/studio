@@ -49,6 +49,7 @@ import documents
 import exports
 import media
 import ocr_render
+import push
 import sections
 import speech
 import state
@@ -358,8 +359,12 @@ def _store(job: Job) -> None:
 
 def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) -> None:
     """Итог документа и, у документа из чата, текст вложения."""
-    state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, text = ? WHERE id = ?",
-                     (state_, detail_, clock.NOW(), text, scan_id))
+    changed = state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, text = ?"
+                               " WHERE id = ? AND finished IS NULL",
+                               (state_, detail_, clock.NOW(), text, scan_id)).rowcount
+    if not changed:
+        return
+    push.job_finished("scans", scan_id)
     row = state.DB.execute("SELECT attachment_id FROM scans WHERE id = ?", (scan_id,)).fetchone()
     if row is not None:
         _attachment(row["attachment_id"], attachment_text(scan_id) if state_ == "done" else attachment_marker(detail_))

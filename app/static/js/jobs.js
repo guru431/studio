@@ -16,8 +16,8 @@
  *
  * Уведомления (по желанию, «Настройки» → «Прочее»; флаг устройства localStorage `studio-notify`, как
  * тема): только ServiceWorkerRegistration.showNotification, только пока страница скрыта, только о
- * ставшем готовым за жизнь этой страницы (не о пришедшем первым опросом). Без push: закрытая студия
- * и запертая сессия уведомлений не получают. Нажатие ведёт sw.js: открытое окно получает
+ * ставшем готовым за жизнь этой страницы (не о пришедшем первым опросом). Если у сессии есть подписка
+ * push, уведомляет сервер — локальный опрос не дублирует его. Нажатие ведёт sw.js: открытое окно получает
  * postMessage({ jobs: href }) — адрес проверяет HREF, иначе открывается новое окно на записи. */
 import { api } from './api.js';
 import { el } from './ui.js';
@@ -182,7 +182,7 @@ function paint() {
 function take(out) {
   const known = new Set(finished.map((f) => f.id));
   const fresh = out.finished.filter((f) => !known.has(f.id));
-  if (!first) for (const item of fresh) notify(item);
+  if (!first && !out.push) for (const item of fresh) notify(item);
   first = false;
   finished = [...fresh, ...finished].filter((f) => f.finished >= out.now - RECENT_SEC)
     .sort((a, b) => b.finished - a.finished);

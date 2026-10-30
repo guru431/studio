@@ -8,8 +8,10 @@ import hmac
 import json
 import logging
 import os
+from types import SimpleNamespace
 
 import httpx
+import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -18,9 +20,15 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+import images
+import ocr
 import push
 import security
+import speeches
 import state
+import transcripts
+import translate
+import videos
 from conftest import T0, make_user, signin
 from fake_bridge import FakeMachine, connect, emit, enroll, pid
 from test_chat import events_of
@@ -218,6 +226,59 @@ def test_notify_sends_an_encrypted_payload_and_forgets_gone_subscriptions(studio
     other = make_user(studio, "other")
     studio.c.portal.call(push.notify, other, "x", "code", "t")     # подписок нет — запросов нет
     assert len(studio.gw.push_requests) == 4
+
+
+@pytest.mark.parametrize("table, section, done, error", [
+    ("images", "photo", "картинка готова", "картинка не получилась"),
+    ("videos", "video", "ролик готов", "ролик не получился"),
+    ("transcripts", "transcribe", "расшифровка готова", "расшифровка не получилась"),
+    ("scans", "ocr", "распознавание готово", "распознавание не получилось"),
+    ("translations", "translate", "перевод готов", "перевод не получился"),
+    ("speeches", "speech", "озвучка готова", "озвучка не получилась"),
+])
+def test_finished_jobs_push_once_to_the_owner_without_content(studio, table, section, done, error):
+    """Настоящие точки сохранения итога: успех/ошибка — один push, отмена/чужое — тишина."""
+    from test_jobs import image, scan, speech, transcript, translation, video
+
+    uid = make_user(studio, "owner")
+    other = make_user(studio, "other")
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    assert studio.c.get("/api/jobs").json()["push"] is True
+    prepare = {"images": image, "videos": video, "transcripts": transcript,
+               "scans": scan, "translations": translation, "speeches": speech}[table]
+
+    def finish(item_id, outcome):
+        job = SimpleNamespace(id=item_id, kind="generation", state=outcome, detail="секретный текст",
+                              seed=1, media_id=None, finished_at=T0)
+        if table == "images":
+            images._store(job)
+        elif table == "videos":
+            videos._settle(item_id, outcome, job.detail)
+        elif table == "transcripts":
+            transcripts._finish(job, outcome, job.detail)
+        elif table == "scans":
+            ocr._finish(item_id, outcome, job.detail)
+        elif table == "translations":
+            translate._finish(item_id, outcome, job.detail)
+        else:
+            speeches._finish(job, outcome, job.detail)
+
+    for suffix, owner, outcome in (("done", uid, "done"), ("error", uid, "failed" if table == "videos" else "error"),
+                                    ("cancel", uid, "cancelled"), ("other", other, "done")):
+        item_id = f"{section}-{suffix}"
+        prepare(owner, item_id)
+        studio.c.portal.call(finish, item_id, outcome)
+        studio.c.portal.call(finish, item_id, outcome)  # повторное сохранение — без второго push
+    settle(studio)
+    assert [device.decrypt(r.content) for r in studio.gw.push_requests] == [
+        {"title": "Студия", "body": words, "href": f"{section}?id={section}-{suffix}", "tag": f"{section}-{suffix}"}
+        for suffix, words in (("done", done), ("error", error))]
+    # Подписка другой сессии той же учётки не выключает локальные уведомления этой сессии.
+    studio.c.cookies.clear()
+    signin(studio, "owner")
+    assert studio.c.get("/api/jobs").json()["push"] is False
 
 
 def test_cards_and_ends_push_only_without_watchers(studio):

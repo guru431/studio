@@ -145,7 +145,8 @@ UUID нового чата задаёт студия, настоящий thread 
   `has_pin`, `pin_status()` (`none`/`set`/`locked`), `login`, `autostart_enabled()` (реестр через `autostart.enabled`,
   не `config.autostart`), `reset_pin()`, `quit()` (`runner.close(final=True)`, затем `link.stop()`); `on_pin_changed`
   — `set_pin`, `reset_pin` и блок PIN из студии (`Agent.on_pin_locked`); правки `config.json` — под `_cfg_lock`
-  (`welcome` пишет `login` и `name` в потоке, только своего поколения: отвязка не вернёт стёртый логин; логин
+  (`welcome` пишет `login` и `name` в потоке, только своего поколения; выход ждёт `_background` после остановки
+  канала, до закрытия цикла: отвязка не вернёт стёртый логин; логин
   сменился — после записи подписчикам `on_login(callback)`), `state` + `on_state`: `setup` (нет ключа или папки — канал не поднимается), `connecting`,
   `online`, `offline`, `revoked`, `replaced` (оба — до новой настройки), слова — `WORDS`. Зависимости (Link, SDK, CLI,
   probe, привязка, автозапуск, `sleep`) — параметры: тесты `tests/test_app.py` без сети и реального времени.

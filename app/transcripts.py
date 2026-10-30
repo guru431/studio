@@ -42,6 +42,7 @@ import documents
 import exports
 import forms
 import media
+import push
 import sections
 import speech
 import state
@@ -157,8 +158,11 @@ def _store(job: Job) -> None:
 
 def _finish(job: Job, state_: str, detail_: str, **extra) -> None:
     cols = "".join(f", {k} = ?" for k in extra)                  # имена — из кода, не из запроса
-    state.DB.execute(f"UPDATE transcripts SET state = ?, detail = ?, finished = ?{cols} WHERE id = ?",
-                     (state_, detail_, clock.NOW(), *extra.values(), job.id))
+    changed = state.DB.execute(f"UPDATE transcripts SET state = ?, detail = ?, finished = ?{cols}"
+                               " WHERE id = ? AND finished IS NULL",
+                               (state_, detail_, clock.NOW(), *extra.values(), job.id)).rowcount
+    if changed:
+        push.job_finished("transcripts", job.id)
 
 
 def _active(user_id: int) -> "Job | None":

@@ -418,6 +418,7 @@ class Controller:
         await asyncio.gather(prober, first, *self._relinks, return_exceptions=True)
         await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
+        await asyncio.gather(*self._background, return_exceptions=True)  # welcome: потоки — до закрытия цикла
         log.info("мост: выход")
 
     async def _relink_task(self) -> None:

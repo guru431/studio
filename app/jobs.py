@@ -1,6 +1,6 @@
 """«В работе» (спека 2026-10-21-studio-jobs-panel): свои задания всех разделов одним списком.
 
-`GET /api/jobs?since=<время>` → `{now, running, finished}`. Идущие — картинки `working`,
+`GET /api/jobs?since=<время>` → `{now, running, finished, push}` (`push` — подписка этой сессии). Идущие — картинки `working`,
 `cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`,
 распознавания и переводы `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
@@ -143,4 +143,5 @@ async def list_jobs(request: Request, since: "float | None" = None):
              + _translate(uid, after) + _speech(uid, after))
     running = sorted([i for i in items if i["finished"] is None] + _chat(uid), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
-    return {"now": now, "running": running, "finished": finished[:FINISHED_MAX]}
+    subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ?", (request.state.digest,)).fetchone()
+    return {"now": now, "running": running, "finished": finished[:FINISHED_MAX], "push": subscribed is not None}
