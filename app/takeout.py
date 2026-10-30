@@ -5,7 +5,8 @@
   пользователя; files и bytes — оценка по строкам media выбранных разделов.
 - `GET /api/me/export/<токен>` — ZIP_STORED потоком (писатель — media.ZipWriter): README.txt,
   settings.json, `chats/<id>.json` (диалог — своим файлом), разделы страницами по PAGE записей
-  (`images/0001.json` …; пустой раздел — одна пустая страница), `files/<media id><расширение>`,
+  (`images/0001.json` …; пустой раздел — одна пустая страница; у Claude Code ещё рабочее место —
+  `code_chats/workspace.json`), `files/<media id><расширение>`,
   последним — manifest.json с sha256 всего записанного. Идёт не больше одной выгрузки у пользователя
   (RUNNING): вторая загрузка, пока идёт первая, — 409 `busy` словами.
 - Всё — своё (`user_id` сессии). Нет токенов подключений, хеша пароля, сессий, CSRF, passkey, хешей ключей
@@ -38,6 +39,7 @@ import clock
 import db
 import media
 import state
+import workspace
 
 #: порядок вкладок студии; Claude Code — в конце: отметки чатов (code) и история подключений (agents)
 SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate", "code", "agents")
@@ -86,7 +88,8 @@ README = """Выгрузка истории студии
   определённый, итоговый), исходный текст и перевод, куски по порядку (у снимка — рамка блока в долях
   0…1000) с состоянием; исходный файл или снимок — ссылкой «files/…».
 - code_chats/ — чаты Claude Code: компьютер, проект (id), номер сессии, открыт или закрыт; текста нет —
-  он на компьютере.
+  он на компьютере. code_chats/workspace.json — рабочее место раздела: компьютер панели, открытый проект
+  и вид, вкладки проектов (номера сессий по порядку и активная).
 - agent_events/ — история подключений компьютеров Claude Code.
 - files/<id>.<расширение> — сами файлы (без миниатюр).
 - manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
@@ -331,6 +334,9 @@ async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: obj
                     counts[name] += len(page)
                     async for piece in record(f"{name}/{n:04d}.json", collect(user_id, page, files)):
                         yield piece
+        if "code" in sections:
+            async for piece in record("code_chats/workspace.json", workspace.doc(user_id)):
+                yield piece
         listed, missing = [], []
         try:
             for row in rows:

@@ -49,6 +49,7 @@ import transcripts
 import translate
 import videos
 import voices
+import workspace
 
 log = logging.getLogger("studio")
 
@@ -141,6 +142,7 @@ app.include_router(search.router)
 app.include_router(takeout.router)
 app.include_router(agents.router)
 app.include_router(bridge.router)
+app.include_router(workspace.router)
 app.include_router(claude_code.router)
 app.include_router(push.router)
 

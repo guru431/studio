@@ -85,7 +85,8 @@ def test_someone_elses_agent_is_404_before_the_bridge(studio):
     aid, m, _ = setup(studio, opened=False)
     make_user(studio, "friend")
     signin(studio, "friend")
-    routes = [(method, path) for method, path in guarded_routes() if path.startswith("/api/code/")]
+    # у рабочего места компьютер не в адресе — чужой проверяет test_workspace.py
+    routes = [(method, path) for method, path in guarded_routes() if path.startswith("/api/code/agents/")]
     assert routes
     for method, path in routes:
         assert (method, path) in BODIES, f"нет тела для {method} {path} — допишите в BODIES"

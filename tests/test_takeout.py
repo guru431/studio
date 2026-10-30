@@ -138,7 +138,7 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     assert set(names) == {"README.txt", "settings.json", "chats/minechat1.json", "chats/minechat2.json", "images/0001.json",
                           "videos/0001.json", "transcripts/0001.json", "scans/0001.json", "speeches/0001.json",
                           "voices/0001.json", "translations/0001.json", "code_chats/0001.json",
-                          "agent_events/0001.json", "manifest.json"} | files
+                          "code_chats/workspace.json", "agent_events/0001.json", "manifest.json"} | files
     assert {zipfile.ZIP_STORED} == {i.compress_type for i in zf.infolist()}
     chat = json.loads(zf.read("chats/minechat1.json"))
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
@@ -414,7 +414,8 @@ def test_export_sends_entry_headers_apart_from_their_data(studio):
     history(uid, "mine")
     pieces = drain(uid, prepare(studio).json()["id"])
     headers = [p for p in pieces if p[:4] == b"PK\x03\x04"]
-    assert len(headers) == 23                    # README, settings, 2 диалога, 9 разделов, 9 файлов, манифест
+    # README, settings, 2 диалога, 9 разделов, рабочее место Claude Code, 9 файлов, манифест
+    assert len(headers) == 24
     for p in headers:
         name_len, extra_len = struct.unpack_from("<HH", p, 26)
         assert len(p) == 30 + name_len + extra_len, p[30:30 + name_len]
@@ -538,8 +539,9 @@ def test_export_has_code_chats_and_agent_events(studio):
     est, z = download(studio, ["code", "agents"])
     zf = unzip(z)
     assert est["files"] == 0
-    assert set(zf.namelist()) == {"README.txt", "settings.json", "code_chats/0001.json", "agent_events/0001.json",
-                                  "manifest.json"}
+    assert set(zf.namelist()) == {"README.txt", "settings.json", "code_chats/0001.json", "code_chats/workspace.json",
+                                  "agent_events/0001.json", "manifest.json"}
+    assert json.loads(zf.read("code_chats/workspace.json")) == {"panel": None, "place": None, "projects": []}
     assert json.loads(zf.read("code_chats/0001.json")) == [{
         "agent_id": aid, "project": "0123456789abcdef", "session_id": "mine-session", "state": "closed",
         "created": T0, "updated": T0 + 2}]
