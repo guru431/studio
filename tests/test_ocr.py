@@ -621,7 +621,7 @@ def test_refusals_are_words(studio, monkeypatch):
     signin(studio, "bob")                                         # без подключения раздела
     r = post_files(studio, [("a.jpg", photo())])
     assert r.status_code == 409 and r.json()["detail"]["code"] == "no_model"
-    assert "Распознавание" in r.json()["detail"]["message"]
+    assert "Сканы" in r.json()["detail"]["message"]
 
 
 def test_someone_else_cannot_see_the_scan_or_its_pages(studio):

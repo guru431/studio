@@ -164,7 +164,7 @@ def test_photo_needs_the_ocr_section(studio):
     assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
     r = send_file(studio, "Снимок.jpg", photo())
     assert r.status_code == 409
-    assert r.json()["detail"] == {"code": "no_ocr", "message": "чтобы переводить снимки, подключите «Распознавание» в настройках"}
+    assert r.json()["detail"] == {"code": "no_ocr", "message": "чтобы переводить снимки, подключите «Сканы» в настройках"}
     assert (count(studio, "media"), count(studio, "translations")) == (0, 0)
     r = send_file(studio, "Снимок.jpg", b"\xff\xd8\xff")               # не снимок и не документ
     assert r.status_code == 415 and r.json()["detail"]["code"] == "format"

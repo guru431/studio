@@ -32,7 +32,7 @@ def test_new_srvllm_connection_gets_ocr(studio):
     умолчанием, раздел — только через сервер."""
     cid = add_gateway(studio)
     ocr = next(s for s in studio.c.get("/api/sections").json()["sections"] if s["id"] == "ocr")
-    assert ocr["name"] == "Распознавание" and ocr["links"][0]["catalog"] == ["hunyuan-ocr"]
+    assert ocr["name"] == "Сканы" and ocr["links"][0]["catalog"] == ["hunyuan-ocr"]
     assert ocr["links"][0]["models"] == ["hunyuan-ocr"] and ocr["default"] == {"connection_id": cid, "model": "hunyuan-ocr"}
     assert "ocr" in sections.SERVER_ONLY and sections.capabilities(uid_of_owner())["ocr"] is True
     assert studio.c.get(f"/api/sections/ocr/links/{cid}/found").json()["items"] == ["hunyuan-ocr"]

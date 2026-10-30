@@ -667,7 +667,7 @@ TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков 
 FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
 FILE_GONE = "исходный файл удалён"
-NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Распознавание» в настройках"
+NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Сканы» в настройках"
 #: имя выгрузки текстовой записи: «Перевод.ru.txt»
 TEXT_STEM = "Перевод"
 
@@ -784,7 +784,7 @@ async def _read_file(user_id: int, name: str, data: bytes) -> "tuple[str | None,
                     words = chat.NO_OCR if reader is None else sections.unlisted(reader[0])
                 else:
                     words = SOME_SCANS.format(wanted, len(layer)) + (
-                        " — подключите «Распознавание» в настройках" if reader is None
+                        " — подключите «Сканы» в настройках" if reader is None
                         else f"; {sections.unlisted(reader[0])}")
                 raise HTTPException(422, {"code": "scan", "message": words})
             text, pages = "\n\n".join(t for t, _ in layer if t), None
