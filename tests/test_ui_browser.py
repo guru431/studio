@@ -8232,9 +8232,46 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
-    """Выбор модели и усилия — на устройстве (studio-code-choice:<aid>) и уходит с ходом; «Новый чат» берёт его,
-    а вернувшийся чат с историей — нет: «по умолчанию» (null), и ход его выбор устройства не переписывает."""
+@pytest.mark.parametrize("engine,width", [("claude", 320), ("codex", 1280)])
+def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live, engine, width):
+    from test_codex import CATALOG
+    login = "settings-code-" + engine
+    live.add_user(login)
+    machine = code_free_machine()
+    machine.codex = CATALOG
+    aid, sb = code_online(live, login, machine)
+    chosen_model = "codex-test" if engine == "codex" else "sonnet"
+    chosen_effort = "ultra" if engine == "codex" else "high"
+    prefix = f"#code-defaults-{engine}"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+            ("wait", "!!document.querySelector('#code-defaults-save')"),
+            set_value(prefix + "-model", chosen_model), set_value(prefix + "-effort", chosen_effort),
+            ("click", "#code-defaults-save"),
+            ("wait", "document.querySelector('#code-defaults-status').textContent.includes('Умолчания сохранены')"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("eval", "reload", "location.reload()"), ("wait", READY),
+            ("wait", f"document.querySelector('{prefix}-model')?.value === '{chosen_model}'"),
+            ("eval", "effort", f"document.querySelector('{prefix}-effort').value"),
+            *go("code"), ("wait", "!!document.querySelector('#code-projects li[data-pid]')"),
+            *code_project(aid, "alpha"), ("click", f"#code-start-{engine}"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
+            ("eval", "profile", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults)()")],
+            width=width, mobile=width == 320)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    values = r["values"]
+    assert values["fits"] and values["effort"] == chosen_effort and values["picked"] == [chosen_model, chosen_effort]
+    assert values["profile"][engine] == {"model": chosen_model, "effort": chosen_effort}
+    other = "claude" if engine == "codex" else "codex"
+    assert values["profile"][other] == {"model": None, "effort": None}
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_account_defaults_apply_only_to_new_chats(browser, live):
+    """Новые чаты берут умолчания учётки; выбор в чате их не меняет, начатые сессии продолжаются со своим."""
     from fake_bridge import pid
     login = "code-choice"
     live.add_user(login)
@@ -8242,10 +8279,13 @@ def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
     machine.script = [{"k": "text", "text": "ок"}, {"k": "done", "status": "done"}]
     aid, sb = code_online(live, login, machine)
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            set_value("#code-model", "sonnet"), set_value("#code-effort", "high"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            ("eval", "defaults", "(async () => { await " + API + ".api('PATCH', '/api/me', {code_defaults: {claude:"
+              " {model: 'sonnet', effort: 'high'}}}); await " + API + ".loadMe(); return true; })()"),
+            *code_chat(aid, CODE_CHAT_A),
+            set_value("#code-model", "opus"), set_value("#code-effort", "low"),
             *code_send("привет"), ("wait", CODE_IDLE_AFTER.format(n=1)),
-            ("eval", "stored", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))"),
+            ("eval", "stored", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults.claude)()"),
             ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu #code-new-chat')"),
             ("click", "#code-tab-menu #code-new-chat"),
             ("wait", "/^#\\/code\\/\\d+\\/[0-9a-f]{16}\\/[0-9a-f-]{36}$/.test(location.hash)"
@@ -8259,7 +8299,7 @@ def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
             ("eval", "again", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
             *code_send("снова"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
-            ("eval", "stored2", f"JSON.parse(localStorage.getItem('studio-code-choice:{aid}'))"),
+            ("eval", "stored2", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults.claude)()"),
             # новый выбор устройства — уже начатому «новому» чату он не подставляется
             set_value("#code-model", "opus"), set_value("#code-effort", "low"),
             ("eval", "back", "location.hash = window.newChat"),
@@ -8275,7 +8315,7 @@ def test_code_choice_of_model_is_remembered_for_a_new_chat(browser, live):
     assert v["again"] == ["", ""] and v["stored2"] == v["stored"] and v["newAgain"] == ["", ""]
     turns = code_requests(machine, "turn")
     assert [(q["text"], q["model"], q["effort"]) for q in turns] == [
-        ("привет", "sonnet", "high"), ("и тут", "sonnet", "high"), ("снова", None, None)]
+        ("привет", "opus", "low"), ("и тут", "sonnet", "high"), ("снова", None, None)]
     assert turns[0]["chat"] == CODE_CHAT_A and turns[1]["chat"] != CODE_CHAT_A and turns[2]["chat"] == CODE_CHAT_A
     assert not known_refusals(problems(r), 409), problems(r)
 

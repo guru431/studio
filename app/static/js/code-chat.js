@@ -21,12 +21,12 @@
  * - страница ушла с экрана — свой поток она снимает (push от сервера уходит, только если чат никто не
  *   смотрит), вернулась — снова live: снимок догонит ход, ход на машине от этого не прерывается.
  * Модель и усилие: первый пункт — «по умолчанию» (null — прежние модель и усилие чата, протокол §4). Выбор
- * пользователя — на устройстве (studio-code-choice:<aid>), но подставляется только в новый чат (fresh — заведён
+ * учётки — из me.code_defaults, подставляется только в новый чат (fresh — заведён
  * «Новым чатом» в этом окне, или история пуста), пока выбор не трогали; существующий начинает с «по умолчанию».
  * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
- * только выбор, ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
-import { api } from './api.js';
+ * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
+import { api, me } from './api.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -40,7 +40,6 @@ const ASK_TITLE = 'Claude Code просит разрешения';
 const INSTEAD = 'Что сделать вместо этого (необязательно)';
 const OWN = 'Свой ответ';
 const OWN_MAX = 2000;            // claude_code.ANSWER_MAX
-const CHOICE = 'studio-code-choice:';
 const DEFAULT = 'по умолчанию';
 const RETRY_MS = 5000;           // повтор live, пока компьютера нет
 const AGAIN_MS = 1000;           // поток кончился без конца хода (предел прокси, сеть) — снова live
@@ -58,23 +57,6 @@ const IMAGE_COUNT = 4;
 /** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
 const drafts = new Map();
 const imageDrafts = new Map();  // картинки черновика — только память, как текст
-
-function loadChoice(aid) {
-  try {
-    const value = JSON.parse(localStorage.getItem(CHOICE + aid));
-    return value && typeof value === 'object' ? value : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveChoice(aid, choice) {
-  try {
-    localStorage.setItem(CHOICE + aid, JSON.stringify(choice));
-  } catch {
-    // хранилище закрыто — выбор живёт до ухода со страницы
-  }
-}
 
 /** Начало ввода шага: первая строка-значение (команда, путь, шаблон), иначе JSON. */
 function preview(input) {
@@ -102,7 +84,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   openFile }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const endpoint = (tail = '') => `${url}${tail}${engine === 'codex' ? '?engine=codex' : ''}`;
-  const choiceKey = engine === 'codex' ? `${aid}:codex` : aid;
   const assistant = engine === 'codex' ? 'Codex' : 'Claude Code';
   const draftKey = `${aid}/${chat}`;
   const scroller = document.getElementById('view');
@@ -132,15 +113,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const effort = el('select', { id: 'code-effort', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...efforts.map((e) => el('option', { value: String(e) }, String(e))));
 
-  /** Выбор устройства — в новый чат, пока свой не тронут. */
-  function applySaved() {
+  /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
+  function applyDefaults() {
     if (touched) return;
-    const saved = loadChoice(choiceKey);
+    const saved = me?.code_defaults?.[engine] || {};
     if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
     if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
+    if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
+      status.textContent = 'Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате';
+    }
   }
 
-  if (fresh) applySaved();
+  if (fresh) applyDefaults();
   const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go' }, 'Отправить');
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true }, 'Остановить');
   const closeChat = el('button', { type: 'button', id: 'code-close-chat', class: 'btn btn-sm' }, 'Закрыть чат');
@@ -569,7 +553,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     if (!alive) return;
-    if (thenLive && !(Array.isArray(page.items) && page.items.length)) applySaved();    // чат без истории — новый
+    if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     feed.replaceChildren(...messages(page.items));
     turn = null;
     start = Number.isInteger(page.start) ? page.start : 0;
@@ -586,10 +570,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (text.value) text.style.height = `${text.scrollHeight}px`;
   }
 
-  /** Сменили модель или усилие — на устройстве для новых чатов (другое из пары остаётся прежним). */
-  function remember(key, select) {
+  /** Выбор здесь действует в этом чате; умолчания учётки меняются в настройках. */
+  function remember() {
     touched = true;
-    saveChoice(choiceKey, { ...loadChoice(choiceKey), [key]: select.value || null });
   }
 
   async function submit() {
@@ -689,8 +672,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
   });
 
-  model.addEventListener('change', () => remember('model', model));
-  effort.addEventListener('change', () => remember('effort', effort));
+  model.addEventListener('change', remember);
+  effort.addEventListener('change', remember);
   text.addEventListener('input', () => {
     acted = Date.now();
     autosize();

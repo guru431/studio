@@ -121,7 +121,7 @@ async def probe(root: str, cli_path: Path | None, factory=ClaudeSDKClient) -> tu
 
     try:
         client = factory(options=ClaudeAgentOptions(cwd=root, cli_path=cli_path, setting_sources=SETTINGS,
-                                                    env=dict(ENV), stderr=_drop))
+                                                    env=dict(ENV), stderr=_drop, extra_args={"chrome": None}))
         info = await asyncio.wait_for(ask(), PROBE_SEC)
     except Exception as e:
         log.warning("модели Claude Code: %s", type(e).__name__)

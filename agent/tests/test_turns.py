@@ -74,8 +74,9 @@ async def test_turn_streams_text_steps_and_ends_done(home, project):
     assert opts.session_id == CHAT and opts.resume is None
     assert opts.setting_sources == ["user", "project", "local"]
     assert opts.cwd == project and opts.include_partial_messages is True and opts.model is None
-    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.3.3"} and opts.stderr is not None
+    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": "studio-agent/0.3.4"} and opts.stderr is not None
     assert opts.permission_mode is None and opts.can_use_tool is not None
+    assert opts.extra_args == {"chrome": None} and opts.tools is None and opts.disallowed_tools == []
     hook = opts.hooks["PreToolUse"][0]
     assert hook.matcher is None and await hook.hooks[0]({}, None, {}) == {"continue_": True}
     assert f.clients[0].queries == ["Привет"] and f.clients[0].disconnected

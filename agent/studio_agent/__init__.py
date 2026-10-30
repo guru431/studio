@@ -1,3 +1,3 @@
 """Мост studio-agent: локальные Claude Code и Codex владельца для студии studio.example.com."""
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"

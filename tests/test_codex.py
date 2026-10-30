@@ -67,6 +67,18 @@ def test_external_codex_history_requires_its_engine_and_preserves_it_on_close(st
     assert studio.c.get(endpoint).status_code == 200
 
 
+def test_step_22_keeps_user_settings_and_starts_with_native_defaults(env):
+    import db
+    conn = db.connect(env.db_path)
+    db.migrate(conn)
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created, views) VALUES (1, 'u', 'U', 'h', 0, ?)",
+                 ('{"photo":"table"}',))
+    conn.executescript("ALTER TABLE users DROP COLUMN code_defaults; PRAGMA user_version = 21;")
+    db.migrate(conn)
+    row = conn.execute("SELECT views, code_defaults FROM users WHERE id = 1").fetchone()
+    assert row[:] == ('{"photo":"table"}', '{}')
+
+
 def test_step_21_keeps_existing_claude_chats_and_accepts_only_known_engines(env):
     conn = db.connect(env.db_path)
     db.migrate(conn)
@@ -74,7 +86,8 @@ def test_step_21_keeps_existing_claude_chats_and_accepts_only_known_engines(env)
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'h1', 0)")
     conn.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
                  " VALUES (1, 1, 'project', 'session', 'open', 1, 2)")
-    conn.executescript("ALTER TABLE code_chats DROP COLUMN engine; PRAGMA user_version = 20;")
+    conn.executescript("ALTER TABLE code_chats DROP COLUMN engine; ALTER TABLE users DROP COLUMN code_defaults;"
+                       " PRAGMA user_version = 20;")
     db.migrate(conn)
     db.migrate(conn)
     assert conn.execute("SELECT session_id, engine, state FROM code_chats").fetchone()[:] == ("session", "claude", "open")
