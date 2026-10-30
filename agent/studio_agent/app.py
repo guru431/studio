@@ -14,6 +14,7 @@ from claude_agent_sdk import ClaudeSDKClient
 
 from . import autostart, cli, enroll, setup, store, theme
 from .codex import CodexRunner
+from .opencode import OpenCodeRunner
 from .agent import Agent, read_has_pin
 from .link import Link
 from .pin import PinStore
@@ -56,7 +57,7 @@ class Controller:
 
     def __init__(self, h: Path, *, link_factory=Link, sdk_factory=ClaudeSDKClient, find_cli=cli.find_cli,
                  cli_version=cli.cli_version, probe=cli.probe, enroll_fn=enroll.enroll, unenroll_fn=enroll.unenroll,
-                 autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner):
+                 autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner, opencode_factory=OpenCodeRunner):
         self.h = h
         self._link_factory = link_factory
         self._sdk_factory = sdk_factory
@@ -68,12 +69,14 @@ class Controller:
         self._autostart = autostart
         self._sleep = sleep
         self._codex_factory = codex_factory
+        self._opencode_factory = opencode_factory
         self.codex = None
+        self.opencode = None
         self.state = "connecting" if _configured(store.load_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
         self._login_subscribers = []
         self._backend_subscribers = []
-        self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex")}
+        self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex", "opencode")}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self.agent: Agent | None = None
@@ -402,10 +405,15 @@ class Controller:
                              factory=self._sdk_factory, find_cli=self._find_cli)
         if self._codex_factory is not None:
             self.codex = self._codex_factory(lambda f: agent.emit(f), home=self.h, choices=self.runner.choices)
+        if self._opencode_factory is not None:
+            choices_home = self.h / "opencode"
+            await asyncio.to_thread(choices_home.mkdir, parents=True, exist_ok=True)
+            self.opencode = self._opencode_factory(lambda f: agent.emit(f), home=self.h,
+                                                   choices=store.Choices(choices_home))
         pins = PinStore(self.h)
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
-                                   models=[], efforts=[], has_pin=has_pin, codex=self.codex)
+                                   models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode)
         agent.on_pin_locked = self._pin_changed
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
@@ -446,8 +454,9 @@ class Controller:
             if not self._probed:
                 await self._refresh_models()
             self.runner.reopen()  # после отвязки, отзыва, замены — новый канал снова принимает ходы
-            if self.codex is not None:
-                self.codex.reopen()
+            for backend in (self.codex, self.opencode):
+                if backend is not None:
+                    backend.reopen()
             gen = self._gen
             self._link = self._link_factory(cfg.url, key, self.agent, lambda s: self._on_link(gen, s),
                                             on_welcome=lambda f: self._on_welcome(gen, f))
@@ -472,8 +481,8 @@ class Controller:
             self.agent.open.clear()
 
     async def _close_runners(self, **kwargs):
-        await asyncio.gather(self.runner.close(**kwargs),
-                             *([self.codex.close(**kwargs)] if self.codex is not None else []))
+        await asyncio.gather(*(backend.close(**kwargs) for backend in (self.runner, self.codex, self.opencode)
+                               if backend is not None))
 
     async def _drop_link(self) -> None:
         lk, task = self._link, self._link_task
@@ -505,15 +514,16 @@ class Controller:
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
-        if self.codex is not None:
-            self._set_backend("codex", "checking")
-            previous = self.codex.catalog
-            ready = await self.codex.probe(self.agent.cfg.projects_root)
-            self._set_backend("codex", "ready" if ready else "unavailable",
-                              len(self.codex.catalog["models"]) if ready else 0)
-            changed = changed or previous != self.codex.catalog
-        else:
-            self._set_backend("codex", "unavailable")
+        for name in ("codex", "opencode"):
+            backend = getattr(self, name)
+            if backend is None:
+                self._set_backend(name, "unavailable")
+                continue
+            self._set_backend(name, "checking")
+            previous = backend.catalog
+            ready = await backend.probe(self.agent.cfg.projects_root)
+            self._set_backend(name, "ready" if ready else "unavailable", len(backend.catalog["models"]) if ready else 0)
+            changed = changed or previous != backend.catalog
         log.info("модели Claude Code: %d", len(models))
         return changed
 

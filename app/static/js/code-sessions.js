@@ -9,6 +9,7 @@
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
  * Кнопок «Закрыть» / «Открыть снова» нет: закрывают из самого чата. Текст машины — только textContent. */
 import { api } from './api.js';
+import { ENGINE_NAMES } from './code-options.js';
 import { el } from './ui.js';
 
 const UNTITLED = 'Новый чат';
@@ -17,7 +18,7 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false, starts = true }) {
+export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
 
@@ -43,12 +44,18 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
     const { chat } = await api('POST', `${base}?engine=codex`);
     if (alive) created(chat, 'codex');
   }));
+  const addOpenCode = opencode ? el('button', { type: 'button', id: 'code-new-opencode', class: 'code-chat-link code-new-chat' },
+    'Новый чат OpenCode') : null;
+  if (addOpenCode) addOpenCode.addEventListener('click', () => busy(addOpenCode, async () => {
+    const { chat } = await api('POST', `${base}?engine=opencode`);
+    if (alive) created(chat, 'opencode');
+  }));
 
   function row(chat) {
     const closed = chat.state === 'closed';
     const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
     marks.unshift(el('span', { class: 'tag code-engine' },
-      chat.engine === 'codex' ? 'Codex' : 'Claude Code'));
+      ENGINE_NAMES[chat.engine || 'claude']));
     if (closed) marks.push(el('span', { class: 'tag code-closed' }, 'закрыт'));
     if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));
     else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, 'идёт ход'));
@@ -57,7 +64,7 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
       typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
       el('span', { class: 'code-marks' }, ...marks));
     link.addEventListener('click', () => busy(link, async () => {
-      if (closed) await api('PATCH', `${base}/${chat.chat}${chat.engine === 'codex' ? '?engine=codex' : ''}`, { state: 'open' });
+      if (closed) await api('PATCH', `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`, { state: 'open' });
       if (alive) picked(chat.chat);
     }));
     return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
@@ -67,6 +74,7 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
   if (starts) {
     list.append(el('li', { class: 'code-chats-new' }, add));
     if (addCodex) list.append(el('li', { class: 'code-chats-new' }, addCodex));
+    if (addOpenCode) list.append(el('li', { class: 'code-chats-new' }, addOpenCode));
   }
   const rows = (found) => found.filter((c) => !exclude.has(c.chat)).map(row);
   if (Array.isArray(items)) list.append(...rows(items));

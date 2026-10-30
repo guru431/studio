@@ -22,7 +22,7 @@
  * переключаются на месте, «Прочего», голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
-import { ACCESS, accessLabel, effortLabel } from './code-options.js';
+import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
@@ -91,7 +91,7 @@ function status(id) {
 function codeDefaultsBlock() {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
-  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Codex и Claude Code'),
+  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Claude Code, Codex и OpenCode'),
     el('p', { class: 'muted small' }, 'Модель, усилие и права для новых чатов на всех ваших устройствах. '
       + 'Начатые чаты сохраняют свой выбор. Показаны текущие настройки подключённого компьютера; в проекте они уточняются при открытии чата.'),
     rows, note);
@@ -99,8 +99,8 @@ function codeDefaultsBlock() {
   async function load() {
     try {
       const [{ items }, profile] = await Promise.all([api('GET', '/api/agents'), loadMe()]);
-      const forms = ['codex', 'claude'].map((engine) => {
-        const catalogs = items.filter((a) => a.online).map((a) => engine === 'codex' ? a.codex : a).filter(Boolean);
+      const forms = ['codex', 'claude', 'opencode'].map((engine) => {
+        const catalogs = items.filter((a) => a.online).map((a) => engine === 'claude' ? a : a[engine]).filter(Boolean);
         const models = new Map();
         const efforts = new Set();
         const native = catalogs.find((c) => c.defaults)?.defaults || {};
@@ -117,8 +117,7 @@ function codeDefaultsBlock() {
           ...[...models].map(([id, label]) => el('option', { value: id }, label)));
         const effort = el('select', { class: 'input', id: `${prefix}-effort` },
           el('option', { value: '' }, effortLabel(native.effort)),
-          ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].filter((e) => efforts.has(e))
-            .map((e) => el('option', { value: e }, e)));
+          ...[...efforts].map((e) => el('option', { value: e }, effortLabel(e))));
         model.value = saved.model || '';
         effort.value = saved.effort || '';
         const access = el('select', { class: 'input', id: `${prefix}-access` },
@@ -126,7 +125,7 @@ function codeDefaultsBlock() {
           ...Object.entries(ACCESS[engine]).map(([value, label]) => el('option', { value }, label)));
         access.value = saved.access || '';
         return { engine, model, effort, access, node: el('div', { class: 'block' },
-          el('h3', {}, engine === 'codex' ? 'Codex' : 'Claude Code'), el('div', { class: 'grid3' },
+          el('h3', {}, ENGINE_NAMES[engine]), el('div', { class: 'grid3' },
             field('Модель', model, `${prefix}-model`), field('Усилие', effort, `${prefix}-effort`),
             field('Права доступа', access, `${prefix}-access`))) };
       });
@@ -651,7 +650,7 @@ function pushBox() {
   }
   return [el('label', { class: 'check push-check' }, box, 'Push на этом устройстве'),
     el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '
-      + 'разрешения, вопрос и конец хода Claude Code или Codex, готовность и ошибки фоновых заданий. '
+      + 'разрешения, вопрос и конец хода Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий. '
       + 'Идут через серверы Apple или Google — содержимое зашифровано, но факт и время '
       + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
 }
@@ -756,7 +755,7 @@ function agentsBlock(host) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code и Codex)'), agentDownload(),
+  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code, Codex и OpenCode)'), agentDownload(),
     list, note,
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
@@ -766,7 +765,7 @@ function wipeBlock(host, onWiped) {
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
     const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.'
-      + ' Чаты Claude Code и Codex хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
+      + ' Чаты Claude Code, Codex и OpenCode хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
     const fail = el('p', { class: 'error' });
     const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });

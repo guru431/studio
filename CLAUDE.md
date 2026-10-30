@@ -33,6 +33,19 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+OpenCode (2026-10-30, studio-agent ≥ 0.5.0) — третий помощник раздела «Код»: `engine: opencode`,
+необязательный каталог `hello.opencode` → `/api/agents.opencode`. Модели — `provider/model` до 300
+знаков, варианты усилия — из CLI до 64 знаков; прежние ограничения Claude/Codex сохранены.
+Шаг схемы 23 расширяет CHECK `code_chats.engine`, сохраняя записи, id, индекс и каскады.
+Умолчания учётки также принимают `opencode`; права — `default`/`auto` (правила OpenCode/подтверждение
+его запросов). Старый мост без каталога — 409 `unsupported`. История и тексты остаются на машине;
+ACP по stdio, связи сессий и локальные настройки — [agent/CLAUDE.md](agent/CLAUDE.md).
+Индикатор `#code-activity` в поле задания показывает думает/инструмент/ответ/ожидание/итог;
+событие `activity {state, tool?}` и `snapshot.activity` несут стадию Codex/OpenCode, без текста
+рассуждений. Старые мосты — по `text/step/result/ask/done`. Скриншот — значок рядом с микрофоном;
+строка параметров не переносится, container queries скрывают подписи и заменяют отправку/остановку
+значками в узком поле.
+
 Умолчания «Кода» — `users.code_defaults` (JSON, шаг 22), `GET/PATCH /api/me.code_defaults`:
 `claude` и `codex` → `{model, effort, access}`; PATCH дополняет присланные поля и помощников, `null` —
 настройки CLI. В «Настройках» → «Прочее» — `codeDefaultsBlock`, каталоги подключённых машин из

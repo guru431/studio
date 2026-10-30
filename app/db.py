@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 22
+VERSION = 23
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -311,6 +311,19 @@ CHECK (engine IN ('claude', 'codex'));
 
 CODE_22 = "ALTER TABLE users ADD COLUMN code_defaults TEXT NOT NULL DEFAULT '{}';"
 
+#: Расширение CHECK помощников. На code_chats нет входящих FK; идентификаторы, отметки, индекс и
+#: каскад удаления сохраняются. Старый код продолжает читать прежние столбцы после отката.
+CODE_23 = """CREATE TABLE code_chats_23(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE, project TEXT NOT NULL, session_id TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('open','closed')), created REAL NOT NULL, updated REAL NOT NULL,
+       engine TEXT NOT NULL DEFAULT 'claude' CHECK (engine IN ('claude', 'codex', 'opencode')),
+       UNIQUE (agent_id, session_id));
+INSERT INTO code_chats_23 SELECT id, user_id, agent_id, project, session_id, state, created, updated, engine FROM code_chats;
+DROP TABLE code_chats;
+ALTER TABLE code_chats_23 RENAME TO code_chats;
+CREATE INDEX code_chats_user ON code_chats(user_id, created);
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -353,7 +366,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -426,6 +439,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     20: CODE_20,
     21: CODE_21,
     22: CODE_22,
+    23: CODE_23,
 }
 
 

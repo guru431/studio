@@ -7,6 +7,7 @@ import pytest
 
 from studio_agent import codex, codex_rpc, projects
 from studio_agent.errors import Refused
+from studio_agent.turns import _Turn
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 THREAD = "01999999-2222-7333-8444-555555555555"
@@ -132,13 +133,17 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     runner.start(runner.project, pid, CHAT, "Привет", "model-test", "high")
     task = runner._turns[CHAT].task
     rid = await asking(runner)
+    runner._notification(runner._turns[CHAT], "item/reasoning/textDelta", {"delta": "внутреннее рассуждение"})
     running, snapshot = await runner.watch(pid, CHAT)
     assert running and snapshot[0]["e"]["text"] == "Ответ"
     assert snapshot[0]["e"]["asks"][0]["tool"] == "Shell"
+    assert snapshot[0]["e"]["activity"] == {"state": "waiting"}
     runner.answer(pid, CHAT, rid, "always", None, None)
     await task
     assert runner.fake.replies == [{"id": 91, "result": {"decision": "acceptForSession"}}]
     assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert [f["e"]["state"] for f in runner.sent if f["e"]["k"] == "activity"] == [
+        "thinking", "responding", "waiting", "thinking"]
     assert not runner.live() and runner.fake.clients[0].closed
     assert codex.Aliases(home).target(runner.project, CHAT) == THREAD
     assert "Привет" not in (home / "codex-chats.json").read_text("utf-8")
@@ -153,6 +158,29 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     assert len([m for m, _ in runner.fake.calls if m == "thread/start"]) == 1
     assert ("thread/resume", {"threadId": THREAD, "cwd": str(runner.project), "model": "model-test"}) in runner.fake.calls
     assert [p for m, p in runner.fake.calls if m == "turn/start"][-1]["effort"] == "high"
+
+
+async def test_native_activity_tracks_reasoning_tools_and_response_without_reasoning_text(runner):
+    pid = projects.pid(runner.project.name)
+    t = _Turn(runner.project, pid, CHAT, "turn1")
+    runner._turns[CHAT] = t
+    runner._notification(t, "item/started", {"item": {"id": "r1", "type": "reasoning"}})
+    runner._notification(t, "item/reasoning/textDelta", {"delta": "не показывать рассуждение"})
+    runner._notification(t, "item/agentMessage/delta", {"delta": "Проверяю"})
+    item = {"id": "step1", "type": "commandExecution", "command": "git status", "cwd": str(runner.project)}
+    runner._notification(t, "item/started", {"item": item})
+    running, [snapshot] = await runner.watch(pid, CHAT)
+    assert running and snapshot["e"]["activity"] == {"state": "tool", "tool": "Shell"}
+    runner._notification(t, "item/completed", {"item": {**item, "aggregatedOutput": "ok", "status": "completed"}})
+    runner._notification(t, "item/started", {"item": {"id": "answer", "type": "agentMessage"}})
+    runner._notification(t, "item/agentMessage/delta", {"delta": "Готово"})
+    activities = [f["e"] for f in runner.sent if f["e"]["k"] == "activity"]
+    assert activities == [{"k": "activity", "state": "thinking"}, {"k": "activity", "state": "responding"},
+                          {"k": "activity", "state": "tool", "tool": "Shell"},
+                          {"k": "activity", "state": "thinking"}, {"k": "activity", "state": "responding"}]
+    assert t.feed.text == "Проверяю\n\nГотово" and t.feed.steps[0]["text"] == "ok"
+    assert all("не показывать" not in str(frame) for frame in runner.sent)
+    del runner._turns[CHAT]
 
 
 async def test_access_and_context_use_native_policy_and_last_request(runner):
