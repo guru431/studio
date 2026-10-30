@@ -43,7 +43,8 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
 
   function tabNode(chat) {
     const known = state.info.get(chat);
-    const title = known ? `${known.engine === 'codex' ? 'Codex · ' : ''}${known.title || UNTITLED}` : state.loaded ? SESSION : '';
+    const title = known ? known.title || UNTITLED : state.loaded ? SESSION : '';
+    const engine = known ? el('span', { class: 'tag code-tab-engine' }, known.engine === 'codex' ? 'Codex' : 'Claude Code') : null;
     let mark = null;
     if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: 'ждёт ответа' }, el('span', { class: 'sr' }, 'ждёт ответа'));
     else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: 'идёт ход' }, el('span', { class: 'sr' }, 'идёт ход'));
@@ -51,7 +52,7 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
     const selected = chat === state.active;
     const stop = state.active || state.tabs[0];
     const node = el('div', { class: 'code-tab', role: 'tab', tabindex: chat === stop ? '0' : '-1', 'data-chat': chat,
-      'aria-selected': String(selected) }, el('span', { class: 'code-tab-title', title }, title), mark, shut);
+      'aria-selected': String(selected) }, engine, el('span', { class: 'code-tab-title', title }, title), mark, shut);
     node.addEventListener('click', (event) => {
       if (!event.target.closest('.code-tab-close')) pick(chat);
     });

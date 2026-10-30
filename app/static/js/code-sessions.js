@@ -32,7 +32,7 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
     }
   }
 
-  const add = el('button', { type: 'button', id: 'code-new-chat', class: 'code-chat-link code-new-chat' }, 'Новый чат');
+  const add = el('button', { type: 'button', id: 'code-new-chat', class: 'code-chat-link code-new-chat' }, 'Новый чат Claude Code');
   add.addEventListener('click', () => busy(add, async () => {
     const { chat } = await api('POST', base);
     if (alive) created(chat, 'claude');
@@ -47,7 +47,7 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
   function row(chat) {
     const closed = chat.state === 'closed';
     const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
-    if (codex || chat.engine === 'codex') marks.unshift(el('span', { class: 'tag code-engine' },
+    marks.unshift(el('span', { class: 'tag code-engine' },
       chat.engine === 'codex' ? 'Codex' : 'Claude Code'));
     if (closed) marks.push(el('span', { class: 'tag code-closed' }, 'закрыт'));
     if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));

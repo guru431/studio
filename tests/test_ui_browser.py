@@ -7515,7 +7515,9 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
-            ("wait", "document.querySelector('#code-new-codex')"), ("click", "#code-new-codex"),
+            ("wait", "document.querySelector('#code-start-codex') && !document.querySelector('#code-start-codex').disabled"),
+            ("eval", "starters", "[...document.querySelectorAll('.code-starts button')].map((b) => b.textContent)"),
+            ("click", "#code-start-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "engine", "document.querySelector('.code-chat-bar .code-engine').textContent"),
             ("eval", "models", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
@@ -7527,17 +7529,18 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
             ("eval", "always", "document.querySelector('.code-ask-always').textContent"),
             ("click", ".code-ask-yes"),
             ("wait", "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Готово Codex')"),
-            ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-new-chat')"),
-            ("click", "#code-new-chat"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
+            ("click", "#code-start-claude"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
                                               " && document.querySelector('.code-chat-bar .code-engine').textContent === 'Claude Code'"),
             ("eval", "claude", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
             ("eval", "choice", "document.querySelector('#code-model').value"),
+            ("eval", "engines", "[...document.querySelectorAll('#code-tabbar .code-tab-engine')].map((e) => e.textContent)"),
             ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
+    assert v["starters"] == ['+ Claude Code', '+ Codex'] and v["engines"] == ['Codex', 'Claude Code']
     assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
     assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
     [turn] = code_requests(machine, "turn")
@@ -7584,11 +7587,11 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}" and v["fits"] is True
-    assert v["first"] == "Новый чат" and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
-    assert v["rows"] == [[other, "Новый чат", True, ["VS Code или терминал"]],
-                         [busy, "Сборка", True, ["студия", "идёт ход"]],
-                         [asking, "Тесты", True, ["VS Code или терминал", "ждёт ответа"]],
-                         [mine, "Починить вход", True, ["студия", "закрыт"]]]
+    assert v["first"] == "Новый чат Claude Code" and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
+    assert v["rows"] == [[other, "Новый чат", True, ["Claude Code", "VS Code или терминал"]],
+                         [busy, "Сборка", True, ["Claude Code", "студия", "идёт ход"]],
+                         [asking, "Тесты", True, ["Claude Code", "VS Code или терминал", "ждёт ответа"]],
+                         [mine, "Починить вход", True, ["Claude Code", "студия", "закрыт"]]]
     assert v["tab"] == mine and v["reopened"] == "open"
     assert not known_refusals(problems(r), 409), problems(r)
 
@@ -9041,7 +9044,7 @@ def test_code_tabs_open_from_the_menu_and_switch(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hashA"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
-    assert v["menu"] == ["Новый чат", [CODE_CHAT_B, CODE_CHAT_C]] and v["menuGone"] is True
+    assert v["menu"] == ["Новый чат Claude Code", [CODE_CHAT_B, CODE_CHAT_C]] and v["menuGone"] is True
     assert v["tabs"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_B, "Чат B", "true"]]
     assert v["msgs"] == [["user", "про A"]] and v["hash"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
     assert v["len1"] == v["len0"] and v["fits"] is True
@@ -9824,7 +9827,7 @@ def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["early"] == ["Новый чат", "Загружаю…"] and v["rows"] == [CODE_CHAT_B, CODE_CHAT_C, chat_d] and v["wait"] is True
+    assert v["early"] == ["Новый чат Claude Code", "Загружаю…"] and v["rows"] == [CODE_CHAT_B, CODE_CHAT_C, chat_d] and v["wait"] is True
     assert not problems(r), problems(r)
 
 
