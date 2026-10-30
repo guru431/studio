@@ -65,7 +65,26 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
-                       "csrf", "capabilities", "screen_lock", "exa_key", "pin"}
+                       "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults"}
+
+
+def test_code_defaults_are_separate_per_user_engine_and_partial_patch(studio):
+    make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.get("/api/me").json()["code_defaults"] == {}
+    saved = {"codex": {"model": "gpt-6.1-sol", "effort": "xhigh"}, "claude": {"model": "opus", "effort": "high"}}
+    assert studio.c.patch("/api/me", json={"code_defaults": saved}).json()["code_defaults"] == saved
+    assert studio.c.patch("/api/me", json={"code_defaults": {"codex": {"model": None}}}).json()["code_defaults"] == {
+        **saved, "codex": {"model": None, "effort": "xhigh"}}
+    make_user(studio, "friend"); signin(studio, "friend")
+    assert studio.c.get("/api/me").json()["code_defaults"] == {}
+
+
+@pytest.mark.parametrize("value", [None, {"other": {}}, {"codex": {"model": "bad/path"}},
+                                  {"claude": {"effort": "ultra"}}, {"codex": {"effort": "invalid"}}])
+def test_bad_code_defaults_do_not_change_the_profile(studio, value):
+    make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.patch("/api/me", json={"code_defaults": value}).status_code == 422
+    assert studio.c.get("/api/me").json()["code_defaults"] == {}
 
 
 def test_theme_is_validated(studio):

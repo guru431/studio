@@ -48,7 +48,7 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
         model=model, effort=effort, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]},
-        setting_sources=list(cli.SETTINGS), env=dict(cli.ENV), stderr=cli._drop)
+        setting_sources=list(cli.SETTINGS), env=dict(cli.ENV), stderr=cli._drop, extra_args={"chrome": None})
 
 
 def _words(errors: list | None, result: str | None, subtype: str | None) -> str:

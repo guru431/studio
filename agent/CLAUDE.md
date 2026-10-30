@@ -19,6 +19,13 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.3.4 `options_for` и проверка каталога запускают Claude Code с `extra_args={"chrome": None}`;
+остальные инструменты не ограничиваются (`tools=None`, без `disallowed_tools`), `setting_sources`
+по-прежнему user/project/local, правила разрешений не переопределяются. Установленные плагины и MCP
+подхватывает CLI. Каталог не проверяет право на генерацию: аккаунт может требовать верификацию.
+Управление рабочим столом Claude CLI на Windows не поддерживается; у Codex `@oai/sky` работает через
+node_repl, браузерный плагин зависит от доступности browser access host приложения Codex.
+
 С 0.3.3 `hello.images: true` объявляет вложения для обоих помощников. `image_input.validate` проверяет
 до 4 `{mime, data}` (base64): PNG/JPEG/WebP/GIF, сигнатура, 5 МиБ на файл / 8 МиБ всего, в потоке до
 запуска хода. `Runner.start(images=...)` передаёт их в Agent SDK потоковым user-сообщением с image/source

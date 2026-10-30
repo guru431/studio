@@ -6,10 +6,11 @@ sections.py), тема и вид ленты разделов (общие для 
 import asyncio
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import auth
 import history
@@ -28,9 +29,23 @@ log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
 
 
+class CodeChoice(BaseModel):
+    model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]-]{1,100}$")
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] | None = None
+
+
 class MePatch(BaseModel):
     theme: str | None = None
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
+    code_defaults: dict[Literal["claude", "codex"], CodeChoice] | None = None
+
+    @field_validator("code_defaults")
+    @classmethod
+    def _code_defaults(cls, value):
+        if value is None or any(engine == "claude" and choice.effort not in
+                               (None, "low", "medium", "high", "xhigh", "max") for engine, choice in value.items()):
+            raise ValueError("code_defaults")
+        return value
 
 
 class ExaKey(BaseModel):
@@ -51,7 +66,7 @@ def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
-                           " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin FROM users WHERE id = ?",
+                           " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -59,7 +74,7 @@ def _me(request: Request) -> dict:
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
-            "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"])}
+            "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"])}
 
 
 @router.get("/me")
@@ -81,6 +96,11 @@ async def patch_me(body: MePatch, request: Request):
             raise HTTPException(422, {"code": "views", "message": "вид ленты — preview, tiles или table у photo и video"})
         stored = state.DB.execute("SELECT views FROM users WHERE id = ?", (uid,)).fetchone()["views"]
         changes["views"] = json.dumps({**json.loads(stored), **body.views})
+    if "code_defaults" in sent:
+        stored = json.loads(state.DB.execute("SELECT code_defaults FROM users WHERE id = ?", (uid,)).fetchone()[0])
+        for engine, choice in body.code_defaults.items():
+            stored[engine] = {**stored.get(engine, {}), **choice.model_dump(exclude_unset=True)}
+        changes["code_defaults"] = json.dumps(stored)
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))

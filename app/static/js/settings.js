@@ -87,6 +87,67 @@ function status(id) {
   return el('p', { class: 'status', id, 'aria-live': 'polite' });
 }
 
+function codeDefaultsBlock() {
+  const note = status('code-defaults-status');
+  const rows = el('div', { id: 'code-defaults-rows' });
+  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Codex и Claude Code'),
+    el('p', { class: 'muted small' }, 'Модель и усилие для новых чатов на всех ваших устройствах. '
+      + 'Начатые чаты сохраняют свой выбор. «Настройки помощника» — умолчание самого Codex или Claude Code на компьютере.'),
+    rows, note);
+
+  async function load() {
+    try {
+      const [{ items }, profile] = await Promise.all([api('GET', '/api/agents'), loadMe()]);
+      const forms = ['codex', 'claude'].map((engine) => {
+        const catalogs = items.filter((a) => a.online).map((a) => engine === 'codex' ? a.codex : a).filter(Boolean);
+        const models = new Map();
+        const efforts = new Set();
+        for (const catalog of catalogs) {
+          for (const model of catalog.models || []) models.set(model.id, model.label || model.id);
+          for (const effort of catalog.efforts || []) efforts.add(effort);
+        }
+        const saved = profile.code_defaults?.[engine] || {};
+        if (saved.model && !models.has(saved.model)) models.set(saved.model, `${saved.model} (сейчас недоступна)`);
+        if (saved.effort) efforts.add(saved.effort);
+        const prefix = `code-defaults-${engine}`;
+        const model = el('select', { class: 'input', id: `${prefix}-model` },
+          el('option', { value: '' }, 'Настройки помощника'),
+          ...[...models].map(([id, label]) => el('option', { value: id }, label)));
+        const effort = el('select', { class: 'input', id: `${prefix}-effort` },
+          el('option', { value: '' }, 'Настройки помощника'),
+          ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].filter((e) => efforts.has(e))
+            .map((e) => el('option', { value: e }, e)));
+        model.value = saved.model || '';
+        effort.value = saved.effort || '';
+        return { engine, model, effort, node: el('div', { class: 'block' },
+          el('h3', {}, engine === 'codex' ? 'Codex' : 'Claude Code'), el('div', { class: 'grid3' },
+            field('Модель по умолчанию', model, `${prefix}-model`), field('Усилие по умолчанию', effort, `${prefix}-effort`))) };
+      });
+      const save = button('Сохранить', { class: 'btn', id: 'code-defaults-save' }, async () => {
+        save.disabled = true;
+        try {
+          const code_defaults = Object.fromEntries(forms.map(({ engine, model, effort }) => [engine,
+            { model: model.value || null, effort: effort.value || null }]));
+          const answer = await api('PATCH', '/api/me', { code_defaults });
+          me.code_defaults = answer.code_defaults;
+          say(note, 'Умолчания сохранены — применятся к новым чатам', 'ok');
+        } catch (err) {
+          say(note, words(err), 'error');
+        } finally {
+          save.disabled = false;
+        }
+      });
+      rows.replaceChildren(...forms.map((f) => f.node),
+        ...(!items.some((a) => a.online) ? [el('p', { class: 'muted small' }, 'Подключите компьютер, чтобы выбрать его модели и усилия.')] : []),
+        el('div', { class: 'row' }, save));
+    } catch (err) {
+      say(note, words(err), 'error');
+    }
+  }
+  load();
+  return block;
+}
+
 function passwordBlock() {
   const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
   const current = input('pw-current', 'current-password');
@@ -1072,7 +1133,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     if (shown === 'other') {
       const storage = storageBlock(host);
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), notifyBlock(), agentsBlock(host), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
+        lockBlock(), notifyBlock(), codeDefaultsBlock(), agentsBlock(host), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
       return;
     }
     const s = sectionOf(shown);
