@@ -4,7 +4,7 @@ import pytest
 
 from test_ui_browser import (
     API, NO_OVERFLOW, READY, browser, live, code_machine, code_online, code_open,
-    code_project, code_requests, code_send, go, known_refusals, problems, set_value, signin,
+    code_project, code_requests, code_send, go, known_refusals, live_sql, problems, set_value, signin,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -15,13 +15,15 @@ CATALOG = {"version": "2.2.4", "models": [{"id": MODEL, "label": "OpenCode model
            "defaults": {"model": MODEL, "effort": "default", "access": "default"}}
 
 
-@pytest.mark.parametrize("width", [320, 870, 1280])
+@pytest.mark.parametrize("width", [320, 1160, 1280])
 def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_path, width):
     login = f"ui-composer-{width}"
     live.add_user(login)
+    live_sql(live, "UPDATE users SET theme = 'light', code_defaults = ? WHERE login = ?",
+             ('{"codex":{"model":"gpt-6.1-sol","effort":"xhigh","access":"danger-full-access"}}', login))
     machine = code_machine()
-    machine.opencode = CATALOG
-    machine.context = {"used": 32700, "limit": 100000, "percent": 32.7}
+    machine.codex = {"version": "1", "models": [{"id": "gpt-6.1-sol", "label": "gpt-6.1-sol"}], "efforts": ["xhigh"]}
+    machine.context = {"used": 36700, "limit": 100000, "percent": 36.7}
     machine.script = [{"k": "ask", "kind": "permission", "request_id": "p1", "tool": "Shell",
                        "input": {"command": "git status"}, "always": True}, {"k": "done", "status": "done"}]
     aid, sb = code_online(live, login, machine)
@@ -35,15 +37,21 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
         controls: boxes.every(b => b.width >= 24),
         adjacent: attach.nextElementSibling === mic && Math.abs(rect('#code-attach').top - rect('#code-composer .mic').top) < 1,
         icon: !!attach.querySelector('svg') && !attach.textContent.trim(),
-        always: !attach.hidden && !!attach.getAttribute('aria-label') };
+        always: !attach.hidden && !!attach.getAttribute('aria-label'),
+        emptyInput: document.querySelector('#code-text').scrollHeight <= document.querySelector('#code-text').clientHeight + 1 };
     })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid),
-            *code_project(aid, "alpha"), ("click", "#code-start-opencode"),
+            *code_project(aid, "alpha"), ("click", "#code-start-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("eval", "compact", "(() => { const r = s => document.querySelector(s).getBoundingClientRect(); return "
+                "r('#code-effort').left - r('#code-model').right <= 12 && "
+                "r('#code-access').left - r('#code-effort').right <= 12; })()"),
+            ("eval", "idleHidden", "getComputedStyle(document.querySelector('#code-activity')).display === 'none'"),
+            ("screenshot", str(tmp_path / f"composer-idle-{width}.png"), "#code-composer"),
             *code_send("Проверь проект"), ("wait", "!!document.querySelector('.code-ask-yes')"),
             ("eval", "geometry", geometry), ("eval", "fits", NO_OVERFLOW),
-            ("screenshot", str(tmp_path / f"composer-{width}.png")),
+            ("screenshot", str(tmp_path / f"composer-{width}.png"), "#code-composer"),
             ("click", ".code-ask-yes"), ("wait", "document.querySelector('#code-stop').hidden"),
             ("eval", "emptyAttach", "!document.querySelector('#code-attach').hidden && document.querySelector('#code-text').value === ''")],
             width=width, mobile=width == 320)
@@ -52,6 +60,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     assert not r.get("failed"), r
     assert all(r["values"]["geometry"].values()), r["values"]["geometry"]
     assert r["values"]["fits"] and r["values"]["emptyAttach"]
+    assert r["values"]["compact"] and r["values"]["idleHidden"], r["values"]
     assert not known_refusals(problems(r), 409), problems(r)
 
 

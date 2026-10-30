@@ -106,7 +106,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
-  const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание', maxlength: '100000' });
+  const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание',
+    placeholder: 'Задание…', maxlength: '100000' });
   const catalog = engine === 'claude' ? agent : agent?.[engine];
   const models = Array.isArray(catalog?.models) ? catalog.models : [];
   const efforts = Array.isArray(catalog?.efforts) ? catalog.efforts : [];
@@ -156,11 +157,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images });
   attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 16 5-4 4 4 4-6 5 6"/></svg>';
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
+  field.box.querySelector('.field-tools').insertBefore(activity, attach);
   const pick = (label, select) => {
     select.setAttribute('aria-label', label);
     return el('label', { class: 'code-pick' }, el('span', { class: 'code-pick-name' }, label), select);
   };
-  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, activity, attachments, picker, field.box, field.error,
+  const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
         pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox),
