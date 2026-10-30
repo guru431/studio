@@ -17,7 +17,7 @@ import { el } from './ui.js';
 const UNTITLED = 'Новый чат';
 const SESSION = 'Сессия';
 
-export function tabBar(host, { aid, pid, pick, close, created, failed, read }) {
+export function tabBar(host, { aid, pid, pick, close, created, failed, read, codex = () => false }) {
   const bar = el('div', { id: 'code-tabbar', class: 'code-tabbar', role: 'tablist', 'aria-label': 'Сессии проекта' });
   const add = el('button', { type: 'button', id: 'code-tab-add', class: 'code-tab-add', 'aria-label': 'Сессии проекта',
     title: 'Сессии проекта', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'code-tab-menu' }, '+');
@@ -33,17 +33,17 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read }) {
     menu.hidden = !open;
     add.setAttribute('aria-expanded', String(open));
     if (!open) return;
-    const done = (then) => (chat) => {
+    const done = (then) => (...args) => {
       openMenu(false);
-      then(chat);
+      then(...args);
     };
     list = sessionList(menu, { aid, pid, items: read(), exclude: new Set(state.tabs), picked: done(pick),
-      created: done(created), failed });
+      created: done(created), failed, codex: codex() });
   }
 
   function tabNode(chat) {
     const known = state.info.get(chat);
-    const title = known ? known.title || UNTITLED : state.loaded ? SESSION : '';
+    const title = known ? `${known.engine === 'codex' ? 'Codex · ' : ''}${known.title || UNTITLED}` : state.loaded ? SESSION : '';
     let mark = null;
     if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: 'ждёт ответа' }, el('span', { class: 'sr' }, 'ждёт ответа'));
     else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: 'идёт ход' }, el('span', { class: 'sr' }, 'идёт ход'));

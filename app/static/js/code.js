@@ -312,9 +312,9 @@ function closeTab(p, chat) {
   else location.replace(`#/code/${p.aid}/${p.pid}`);
 }
 
-function created(p, chat) {
+function created(p, chat, engine = 'claude') {
   freshChat = chat;
-  p.info.set(chat, { chat, title: null });
+  p.info.set(chat, { chat, title: null, engine });
   toChat(p, chat);
 }
 
@@ -334,7 +334,8 @@ function enter(aid, pid) {
     read: () => chatsOf(p, true),
     pick: (chat) => toChat(p, chat),
     close: (chat) => closeTab(p, chat),
-    created: (chat) => created(p, chat),
+    created: (chat, engine) => created(p, chat, engine),
+    codex: () => !!p.codex,
     failed: (err) => {
       if (proj === p) failed(err, aid, shownStatus);
     } });
@@ -456,7 +457,7 @@ async function sessions(mine, p, status) {
   }
   if (mine !== gen) return;
   view = sessionList(p.chatBox, { aid: p.aid, pid: p.pid, items, picked: (chat) => toChat(p, chat),
-    created: (chat) => created(p, chat),
+    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
@@ -467,7 +468,7 @@ async function chat(mine, p, id, agent, section, status) {
   let row;
   try {
     [name, row] = await Promise.all([projectName(p),
-      chatsOf(p).then((items) => items.find((c) => c.chat === id) || null)]);
+      chatsOf(p).then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null)]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -477,7 +478,7 @@ async function chat(mine, p, id, agent, section, status) {
   const fresh = freshChat === id;
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
-    origin: row ? row.origin : 'studio', fresh,
+    origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
     closed: () => failed({ code: 'closed' }, p.aid, null),
     closedChat: () => closeTab(p, id),
     gone: () => closeTab(p, id),
@@ -517,6 +518,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   if (key === 'chat') p.chatBox.replaceChildren(...(section ? [section] : []));
   const agent = await agentOf(aid);
   if (mine !== gen) return;
+  p.codex = agent?.codex || null;
   if (agent && id) {
     // чат на экране — его вкладка активна (нет её — добавляется: push, «В работе», выбор в «+»), проект и вид — его
     const { tabs, active } = tabsOf(aid, pid);

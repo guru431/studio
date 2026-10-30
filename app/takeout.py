@@ -267,7 +267,7 @@ def _translations(user_id: int, rows: list, files: dict) -> list:
 
 def _code_chats(user_id: int, rows: list, files: dict) -> list:
     """Отметки студии о чатах Claude Code — без текста: он на компьютере."""
-    return [_pick(r, "agent_id", "project", "session_id", "state", "created", "updated") for r in rows]
+    return [_pick(r, "agent_id", "project", "session_id", "state", "created", "updated", "engine") for r in rows]
 
 
 def _agent_events(user_id: int, rows: list, files: dict) -> list:

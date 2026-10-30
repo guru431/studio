@@ -190,11 +190,11 @@ def test_chats_merge_machine_sessions_with_studio_marks(studio):
     items = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
     now = studio.clock[0]
     assert items == [
-        {"chat": new, "title": None, "created": now, "modified": now, "origin": "studio", "state": "open",
+        {"chat": new, "engine": "claude", "title": None, "created": now, "modified": now, "origin": "studio", "state": "open",
          "running": False, "asking": False},
-        {"chat": A, "title": "Чат студии", "created": 10, "modified": 30, "origin": "studio", "state": "open",
+        {"chat": A, "engine": "claude", "title": "Чат студии", "created": 10, "modified": 30, "origin": "studio", "state": "open",
          "running": True, "asking": True},
-        {"chat": B, "title": "Чат терминала", "created": 20, "modified": 40, "origin": "other", "state": "closed",
+        {"chat": B, "engine": "claude", "title": "Чат терминала", "created": 20, "modified": 40, "origin": "other", "state": "closed",
          "running": False, "asking": False}]
     assert studio.c.patch(url(aid, "projects", ALPHA, "chats", B), json={"state": "open"}).json() == {"state": "open"}
     assert [i["chat"] for i in studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]] == [new, B, A]

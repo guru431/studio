@@ -68,7 +68,7 @@ DROP_V20 = "DROP TABLE code_place; DROP TABLE code_tabs;"
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 21
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -420,7 +420,7 @@ def test_step_18_adds_translations_with_search_and_keeps_rows(env):
     conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18}PRAGMA user_version = 17;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 21
     conn.execute("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source,"
                  " state, detail, created) VALUES ('t1', 1, 'text', 'm', 'auto', 'ru', 'Hello', 'Hello world',"
                  " 'queued', 'в очереди', 1)")
@@ -456,7 +456,7 @@ def test_step_19_adds_code_tables_and_cascades(env):
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d1', 1, 'c', 9, 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 21
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     assert conn.execute("SELECT has_pin, projects_root, cc_version, last_seen FROM agents").fetchone()[:] == (
         0, None, None, None)
@@ -495,11 +495,11 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
     учёткой; вид — только из перечня, у проекта компьютера — одна строка."""
     import sqlite3
     conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} PRAGMA user_version = 19;")
+    conn.executescript(f"ALTER TABLE code_chats DROP COLUMN engine; {DROP_V20} PRAGMA user_version = 19;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 21
     conn.execute("INSERT INTO code_tabs(user_id, agent_id, project, touched) VALUES (1, 5, 'p', 1)")
     assert conn.execute("SELECT tabs, active FROM code_tabs").fetchone()[:] == ("[]", None)
     conn.execute("INSERT INTO code_place(user_id, panel_id, agent_id, project) VALUES (1, 5, 5, 'p')")

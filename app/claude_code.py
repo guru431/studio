@@ -75,7 +75,7 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422, "read_only": 409}
+          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 FILE_MAX = 2 * 1024 * 1024
@@ -171,6 +171,11 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
     """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
+    if "chat" in args:
+        selected = chat_engine(request, aid, args["chat"])
+        if selected == "codex":
+            require_codex(aid)
+            args["engine"] = selected
     try:
         json.dumps(args, ensure_ascii=False).encode()
     except UnicodeEncodeError:
@@ -188,6 +193,25 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
     if not quiet:
         _warn(request, aid, op, error)
     raise error
+
+
+def chat_engine(request: Request, aid: int, chat: str | None = None) -> str:
+    selected = request.query_params.get("engine")
+    if selected is not None and selected not in ("claude", "codex"):
+        raise _refuse(422, "engine", "неверный помощник")
+    row = state.DB.execute("SELECT engine FROM code_chats WHERE user_id = ? AND agent_id = ? AND session_id = ?",
+                           (request.state.user.id, aid, chat)).fetchone() if chat is not None else None
+    if row is not None:
+        if selected is not None and selected != row["engine"]:
+            raise _refuse(409, "engine", "чат принадлежит другому помощнику")
+        return row["engine"]
+    return selected or "claude"
+
+
+def require_codex(aid: int) -> None:
+    link = bridge.LINKS.get(aid)
+    if link is not None and "codex" not in link.hello:
+        raise _refuse(409, "unsupported", "обновите мост и установите Codex на компьютере")
 
 
 def _event(request: Request, agent: sqlite3.Row, kind: str) -> None:
@@ -232,7 +256,7 @@ async def chats(aid: int, pid: str, request: Request):
     check_pid(pid)
     found = (await ask(request, aid, "chats", project=pid)).get("items")
     marks = {r["session_id"]: r for r in state.DB.execute(
-        "SELECT project, session_id, state, created, updated FROM code_chats WHERE agent_id = ? AND user_id = ?",
+        "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ?",
         (aid, request.state.user.id))}
     items, seen = [], set()
     for i in (found if isinstance(found, list) else []):
@@ -243,14 +267,18 @@ async def chats(aid: int, pid: str, request: Request):
         seen.add(i["chat"])
         mark = marks.get(i["chat"])
         title = i.get("title")
-        items.append({"chat": i["chat"], "title": title if isinstance(title, str) else None,
+        engine = i.get("engine", "claude")
+        if engine not in ("claude", "codex"):
+            continue
+        items.append({"chat": i["chat"], "engine": mark["engine"] if mark is not None else engine,
+                      "title": title if isinstance(title, str) else None,
                       "created": _time(i.get("created")), "modified": _time(i.get("modified")),
                       "origin": "studio" if i.get("tag") == "studio" else "other",
                       "state": mark["state"] if mark is not None else "open", "running": bool(i.get("running")),
                       "asking": bool(i.get("asking"))})
     for chat, mark in marks.items():
         if chat not in seen and mark["project"] == pid and mark["state"] == "open":
-            items.append({"chat": chat, "title": None, "created": mark["created"], "modified": mark["updated"],
+            items.append({"chat": chat, "engine": mark["engine"], "title": None, "created": mark["created"], "modified": mark["updated"],
                           "origin": "studio", "state": mark["state"], "running": False, "asking": False})
     items.sort(key=lambda i: (i["state"] == "closed", -(i["modified"] or 0)))
     return {"items": items}
@@ -263,6 +291,9 @@ async def new_chat(aid: int, pid: str, request: Request):
     `session_start` (история подключений неудаляема) — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""
     agent = own_agent(request, aid)
     check_pid(pid)
+    engine = chat_engine(request, aid)
+    if engine == "codex":
+        require_codex(aid)
     chat, now = str(uuid.uuid4()), clock.NOW()
     recent = NEW_CHATS.setdefault(aid, deque())
     while recent and now - recent[0] >= 60:
@@ -270,10 +301,10 @@ async def new_chat(aid: int, pid: str, request: Request):
     if len(recent) >= NEW_CHATS_PER_MIN:
         raise _refuse(429, "too_many", TOO_MANY)
     recent.append(now)
-    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
-                     " VALUES (?, ?, ?, ?, 'open', ?, ?)", (request.state.user.id, aid, pid, chat, now, now))
+    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
+                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, chat, now, now, engine))
     _event(request, agent, "session_start")
-    return JSONResponse({"chat": chat}, status_code=201)
+    return JSONResponse({"chat": chat, "engine": engine}, status_code=201)
 
 
 @router.patch("/agents/{aid}/projects/{pid}/chats/{chat}")
@@ -285,14 +316,15 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
     check_pid(pid)
     check_chat(chat)
     uid = request.state.user.id
+    engine = chat_engine(request, aid, chat)
     if state.DB.execute("UPDATE code_chats SET state = ?, updated = ? WHERE user_id = ? AND agent_id = ?"
                         " AND session_id = ?", (body.state, clock.NOW(), uid, aid, chat)).rowcount == 0:
         await ask(request, aid, "history", project=pid, chat=chat, before=None, limit=1)
         now = clock.NOW()
-        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, session_id)"
+        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, session_id)"
                          " DO UPDATE SET state = excluded.state, updated = excluded.updated",
-                         (uid, aid, pid, chat, body.state, now, now))
+                         (uid, aid, pid, chat, body.state, now, now, engine))
     return {"state": body.state}
 
 
@@ -421,10 +453,12 @@ async def turn(aid: int, pid: str, chat: str, body: Turn, request: Request):
     if not body.text.strip() or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
     link = bridge.LINKS.get(aid)
+    engine = chat_engine(request, aid, chat)
     if link is not None:
-        if body.model is not None and body.model not in {m["id"] for m in link.hello.get("models", ())}:
+        catalog = link.hello.get("codex", {}) if engine == "codex" else link.hello
+        if body.model is not None and body.model not in {m["id"] for m in catalog.get("models", ())}:
             raise _refuse(422, "model", NO_MODEL)
-        if body.effort is not None and body.effort not in link.hello.get("efforts", ()):
+        if body.effort is not None and body.effort not in catalog.get("efforts", ()):
             raise _refuse(422, "effort", NO_EFFORT)
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
                              effort=body.effort)

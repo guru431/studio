@@ -43,7 +43,7 @@ TTL_SEC = 3600
 JWT_SEC = 12 * 3600
 ENDPOINT_MAX = 1024
 RECORD_SIZE = 4096
-TITLE = "Claude Code"
+TITLE = "Код"
 
 #: ключ VAPID процесса (тесты очищают)
 KEY: ec.EllipticCurvePrivateKey | None = None

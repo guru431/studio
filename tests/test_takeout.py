@@ -544,7 +544,7 @@ def test_export_has_code_chats_and_agent_events(studio):
     assert json.loads(zf.read("code_chats/workspace.json")) == {"panel": None, "place": None, "projects": []}
     assert json.loads(zf.read("code_chats/0001.json")) == [{
         "agent_id": aid, "project": "0123456789abcdef", "session_id": "mine-session", "state": "closed",
-        "created": T0, "updated": T0 + 2}]
+        "created": T0, "updated": T0 + 2, "engine": "claude"}]
     events = json.loads(zf.read("agent_events/0001.json"))
     assert [{k: v for k, v in e.items() if k != "id"} for e in events] == [
         {"created": T0, "kind": "enroll", "agent_id": aid, "agent_name": "mine ПК", "device": None, "ip": "10.77.48.5"},

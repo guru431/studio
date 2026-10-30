@@ -185,9 +185,22 @@ def parse_hello(frame: dict) -> dict:
         out_models.append({"id": m["id"], "label": _string(m.get("label"), 100)})
     if not all(isinstance(e, str) and e in EFFORTS for e in efforts):
         raise ProtocolError("hello")
-    return {"cc_version": _string(frame.get("cc_version"), 64),
-            "projects_root": _string(frame.get("projects_root"), 1024),
-            "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
+    result = {"cc_version": _string(frame.get("cc_version"), 64),
+              "projects_root": _string(frame.get("projects_root"), 1024),
+              "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
+    if "codex" in frame:
+        codex = frame["codex"]
+        if not isinstance(codex, dict):
+            raise ProtocolError("hello")
+        levels = codex.get("efforts")
+        if not isinstance(levels, list) or not all(isinstance(e, str) and e in
+                ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra") for e in levels):
+            raise ProtocolError("hello")
+        parsed = parse_hello({"t": "hello", "v": 1, "has_pin": False, "projects_root": "",
+                              "cc_version": codex.get("version"), "models": codex.get("models"), "efforts": []})
+        result["codex"] = {"version": parsed["cc_version"], "models": parsed["models"],
+                           "efforts": list(dict.fromkeys(levels))}
+    return result
 
 
 async def attach(link: Link) -> None:
