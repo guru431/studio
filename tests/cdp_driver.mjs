@@ -20,7 +20,7 @@
  *   ["type", селектор, текст] — нажатие на поле и ввод текста;
  *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab, Backspace, Delete, Home, End, стрелки влево и
  *                            вправо, цифры 0–9);
- *   ["screenshot", путь]   — снимок окна в PNG по пути (глазами проверить вёрстку).
+ *   ["screenshot", путь, селектор?] — снимок окна или элемента в PNG (глазами проверить вёрстку).
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
  *
@@ -214,7 +214,11 @@ async function run(job) {
           await tab.send('Input.insertText', { text: args[1] });
         } else if (kind === 'press') await press(tab, args[0]);
         else if (kind === 'screenshot') {
-          const { data } = await tab.send('Page.captureScreenshot', { format: 'png' });
+          const clip = args[1] ? await tab.evaluate(`(() => {
+            const r = document.querySelector(${JSON.stringify(args[1])}).getBoundingClientRect();
+            return { x: r.x, y: r.y, width: r.width, height: r.height, scale: 1 };
+          })()`) : null;
+          const { data } = await tab.send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip } : {}) });
           await writeFile(args[0], Buffer.from(data, 'base64'));
         }
         else throw new Error(`шаг ${kind} драйверу неизвестен`);
