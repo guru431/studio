@@ -7046,9 +7046,8 @@ def code_online(live, login, machine, name="Рабочий ПК"):
 
 
 def code_open(aid, pin=CODE_PIN):
-    """«Код» → компьютер → PIN в панели → его проекты."""
-    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
-            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("wait", CODE_PIN_SHOWN),
+    """«Код» (панель сама открывает компьютер: у него PIN) → PIN в панели → его проекты."""
+    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"), ("wait", CODE_PIN_SHOWN),
             ("type", "#code-pin-input", pin), ("click", "#code-pin-open"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2")]
 
@@ -7606,11 +7605,10 @@ def code_session(title, tag="studio", messages=None):
 
 
 def code_chat(aid, chat):
-    """«Код» → компьютер (без PIN) → проекты, затем адрес чата: история показана."""
+    """«Код» (панель сама открывает компьютер без PIN) → его проекты, затем адрес чата: история показана."""
     from fake_bridge import pid
-    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
-            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
-            ("wait", "document.querySelector('#code-projects li[data-pid]')"),
+    return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}'] .code-agent[aria-current]\")"
+                                  " && document.querySelector('#code-projects li[data-pid]')"),
             *go(f"code/{aid}/{pid('alpha')}/{chat}"), code_loaded(chat)]
 
 
@@ -8262,8 +8260,10 @@ def test_code_closed_event_leads_to_the_pin_and_back_to_the_chat(browser, live):
             ("wait", LOCK_OPEN), ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
             ("wait", CODE_PIN_SHOWN),
             ("eval", "pin", "[location.hash, document.querySelector('#code-pin').dataset.id]"),
+            ("eval", "old", "!!(window.oldChat = document.querySelector('#code-chat'))"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
-            ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat')?.dataset.loaded === '1'"
+            ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat') !== window.oldChat"
+                     " && document.querySelector('#code-chat')?.dataset.loaded === '1'"
                      " && document.querySelector('#code-chat').dataset.running === '1'"
                      " && document.querySelector('.code-msg.assistant .md')?.textContent.trim() === 'Работаю'"),
             ("eval", "len1", "history.length")], **PHONE)
@@ -8296,9 +8296,10 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
             ("eval", "lock", CODE_LOCK_NOW),         # потока нет (простой): закрытость увидит «Отправить»
             ("click", "#code-send"),
             ("wait", LOCK_OPEN), ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
-            ("wait", CODE_PIN_SHOWN),
+            ("wait", CODE_PIN_SHOWN), ("eval", "old", "!!(window.oldChat = document.querySelector('#code-chat'))"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
-            ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat') !== window.oldChat"
+                     " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "field", "document.querySelector('#code-text').value"),
             ("eval", "stored", "JSON.stringify([{ ...localStorage }, { ...sessionStorage }, location.href])"
                                ".includes('Черновик')")], **PHONE)
@@ -8428,10 +8429,9 @@ def code_files_machine(chats=None):
 
 
 def code_tab(aid, tab, project="alpha"):
-    """«Код» → компьютер (без PIN) → проект → вкладка."""
+    """«Код» (панель сама открывает компьютер без PIN) → проект → вид."""
     from fake_bridge import pid
     return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
-            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
             ("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid(project)}']\")"),
             ("click", f"#code-projects li[data-pid='{pid(project)}'] a"),
             ("wait", f"document.querySelector('#code-place .code-place-project')?.textContent === '{project}'"
