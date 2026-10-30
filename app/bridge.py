@@ -43,7 +43,7 @@ CLOSE_PROTOCOL = 4400
 CLOSE_AUTH = 4401
 CLOSE_REPLACED = 4409
 CLOSE_RESTART = 1012
-EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done"})
+EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done", "settings", "context"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10
@@ -192,6 +192,13 @@ def parse_hello(frame: dict) -> dict:
         if type(frame["images"]) is not bool:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
+    if "chat_state" in frame:
+        if type(frame["chat_state"]) is not bool:
+            raise ProtocolError("hello")
+        result["chat_state"] = frame["chat_state"]
+    if isinstance(frame.get("defaults"), dict):
+        result["defaults"] = {k: v for k, v in frame["defaults"].items() if k in ("model", "effort", "access")
+                              and (v is None or isinstance(v, str) and len(v) <= 100)}
     if "codex" in frame:
         codex = frame["codex"]
         if not isinstance(codex, dict):
@@ -204,6 +211,9 @@ def parse_hello(frame: dict) -> dict:
                               "cc_version": codex.get("version"), "models": codex.get("models"), "efforts": []})
         result["codex"] = {"version": parsed["cc_version"], "models": parsed["models"],
                            "efforts": list(dict.fromkeys(levels))}
+        if isinstance(codex.get("defaults"), dict):
+            result["codex"]["defaults"] = {k: v for k, v in codex["defaults"].items()
+                if k in ("model", "effort", "access") and (v is None or isinstance(v, str) and len(v) <= 100)}
     return result
 
 

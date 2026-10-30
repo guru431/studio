@@ -22,6 +22,7 @@
  * переключаются на месте, «Прочего», голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
+import { ACCESS, accessLabel, effortLabel } from './code-options.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
@@ -91,8 +92,8 @@ function codeDefaultsBlock() {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
   const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Codex и Claude Code'),
-    el('p', { class: 'muted small' }, 'Модель и усилие для новых чатов на всех ваших устройствах. '
-      + 'Начатые чаты сохраняют свой выбор. «Настройки помощника» — умолчание самого Codex или Claude Code на компьютере.'),
+    el('p', { class: 'muted small' }, 'Модель, усилие и права для новых чатов на всех ваших устройствах. '
+      + 'Начатые чаты сохраняют свой выбор. Показаны текущие настройки подключённого компьютера; в проекте они уточняются при открытии чата.'),
     rows, note);
 
   async function load() {
@@ -102,6 +103,7 @@ function codeDefaultsBlock() {
         const catalogs = items.filter((a) => a.online).map((a) => engine === 'codex' ? a.codex : a).filter(Boolean);
         const models = new Map();
         const efforts = new Set();
+        const native = catalogs.find((c) => c.defaults)?.defaults || {};
         for (const catalog of catalogs) {
           for (const model of catalog.models || []) models.set(model.id, model.label || model.id);
           for (const effort of catalog.efforts || []) efforts.add(effort);
@@ -111,23 +113,28 @@ function codeDefaultsBlock() {
         if (saved.effort) efforts.add(saved.effort);
         const prefix = `code-defaults-${engine}`;
         const model = el('select', { class: 'input', id: `${prefix}-model` },
-          el('option', { value: '' }, 'Настройки помощника'),
+          el('option', { value: '' }, native.model || (catalogs.length ? 'Не получено' : 'Компьютер не на связи')),
           ...[...models].map(([id, label]) => el('option', { value: id }, label)));
         const effort = el('select', { class: 'input', id: `${prefix}-effort` },
-          el('option', { value: '' }, 'Настройки помощника'),
+          el('option', { value: '' }, effortLabel(native.effort)),
           ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].filter((e) => efforts.has(e))
             .map((e) => el('option', { value: e }, e)));
         model.value = saved.model || '';
         effort.value = saved.effort || '';
-        return { engine, model, effort, node: el('div', { class: 'block' },
+        const access = el('select', { class: 'input', id: `${prefix}-access` },
+          el('option', { value: '' }, accessLabel(engine, native.access)),
+          ...Object.entries(ACCESS[engine]).map(([value, label]) => el('option', { value }, label)));
+        access.value = saved.access || '';
+        return { engine, model, effort, access, node: el('div', { class: 'block' },
           el('h3', {}, engine === 'codex' ? 'Codex' : 'Claude Code'), el('div', { class: 'grid3' },
-            field('Модель по умолчанию', model, `${prefix}-model`), field('Усилие по умолчанию', effort, `${prefix}-effort`))) };
+            field('Модель', model, `${prefix}-model`), field('Усилие', effort, `${prefix}-effort`),
+            field('Права доступа', access, `${prefix}-access`))) };
       });
       const save = button('Сохранить', { class: 'btn', id: 'code-defaults-save' }, async () => {
         save.disabled = true;
         try {
-          const code_defaults = Object.fromEntries(forms.map(({ engine, model, effort }) => [engine,
-            { model: model.value || null, effort: effort.value || null }]));
+          const code_defaults = Object.fromEntries(forms.map(({ engine, model, effort, access }) => [engine,
+            { model: model.value || null, effort: effort.value || null, access: access.value || null }]));
           const answer = await api('PATCH', '/api/me', { code_defaults });
           me.code_defaults = answer.code_defaults;
           say(note, 'Умолчания сохранены — применятся к новым чатам', 'ok');

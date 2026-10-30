@@ -105,14 +105,22 @@ class Choices:
         model, effort = item.get("model"), item.get("effort")
         return (model if isinstance(model, str) else None), (effort if isinstance(effort, str) else None)
 
-    def put(self, chat: str, model: str | None, effort: str | None) -> None:
+    def details(self, chat: str) -> dict:
+        with self._lock:
+            item = self._load().get(chat)
+        return dict(item) if isinstance(item, dict) else {}
+
+    def update(self, chat: str, **values) -> None:
         with self._lock:
             data = self._load()
-            data.pop(chat, None)  # свежий — в конец
-            data[chat] = {"model": model, "effort": effort}
+            item = data.pop(chat, {})  # свежий — в конец
+            data[chat] = {**(item if isinstance(item, dict) else {}), **values}
             for old in list(data)[:max(0, len(data) - CHOICES_MAX)]:
                 del data[old]
             write_atomic(self.path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+    def put(self, chat: str, model: str | None, effort: str | None) -> None:
+        self.update(chat, model=model, effort=effort)
 
 
 def load_key(h: Path) -> str | None:

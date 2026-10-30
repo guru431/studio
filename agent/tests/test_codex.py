@@ -34,7 +34,10 @@ class FakeRpc:
             return {"thread": {"id": THREAD, "cwd": str(self.factory.project), "turns": self.factory.turns}}
         if method in ("thread/start", "thread/resume"):
             self.factory.exists = True
-            return {"thread": {"id": THREAD, "cwd": str(self.factory.project)}}
+            return {"thread": {"id": THREAD, "cwd": str(self.factory.project)}, "model": params.get("model", "codex-test"),
+                    "reasoningEffort": "high", "sandbox": {"type": {"read-only": "readOnly",
+                        "danger-full-access": "dangerFullAccess"}.get(params.get("sandbox"), "workspaceWrite")},
+                    "approvalPolicy": params.get("approvalPolicy", "on-request")}
         if method == "turn/start":
             self.inbox.put_nowait({"method": "item/agentMessage/delta", "params": {"threadId": THREAD, "delta": "Ответ"}})
             self.inbox.put_nowait({"id": 91, "method": self.factory.ask,
@@ -50,7 +53,12 @@ class FakeRpc:
         if method == "model/list":
             if self.factory.read_error is not None:
                 raise self.factory.read_error
-            return {"data": [{"model": "codex-test", "displayName": "Codex", "supportedReasoningEfforts": []}]}
+            return {"data": [{"model": "codex-test", "displayName": "Codex", "supportedReasoningEfforts": [],
+                              "isDefault": True, "defaultReasoningEffort": "high"}]}
+        if method == "config/read":
+            return {"config": {"model": "codex-test", "model_reasoning_effort": "high"}}
+        if method == "thread/unsubscribe":
+            return {}
         raise AssertionError(method)
 
     def done(self, status="completed"):
@@ -132,6 +140,24 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     assert len([m for m, _ in runner.fake.calls if m == "thread/start"]) == 1
     assert ("thread/resume", {"threadId": THREAD, "cwd": str(runner.project), "model": "model-test"}) in runner.fake.calls
     assert [p for m, p in runner.fake.calls if m == "turn/start"][-1]["effort"] == "high"
+
+
+async def test_access_and_context_use_native_policy_and_last_request(runner):
+    pid = projects.pid(runner.project.name)
+    runner.start(runner.project, pid, CHAT, "Задание", None, None, access="read-only")
+    task = runner._turns[CHAT].task
+    rid = await asking(runner)
+    start = next(p for method, p in runner.fake.calls if method == "thread/start")
+    assert start["sandbox"] == "read-only" and start["approvalPolicy"] == "on-request"
+    t = runner._turns[CHAT]
+    runner._notification(t, "thread/tokenUsage/updated", {"tokenUsage": {
+        "last": {"totalTokens": 32000}, "total": {"totalTokens": 900000}, "modelContextWindow": 128000}})
+    _, snapshot = await runner.watch(pid, CHAT)
+    assert snapshot[0]["e"]["context"] == {"used": 32000, "limit": 128000, "percent": 25}
+    assert snapshot[0]["e"]["settings"]["access"] == "read-only"
+    runner.answer(pid, CHAT, rid, "deny", None, None)
+    await task
+    assert runner.choices.details(CHAT)["context"]["used"] == 32000
 
 
 async def test_images_are_codex_input_items_without_local_files(runner):

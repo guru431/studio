@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import json
 import os
 import re
 import subprocess
@@ -24,6 +25,7 @@ DISCONNECT_SEC = 10
 MODELS_MAX = 50
 LABEL_MAX = 100
 SETTINGS = ["user", "project", "local"]
+DEFAULTS: dict[str, dict] = {}
 ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
 # Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
 SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
@@ -111,13 +113,34 @@ def _drop(_line: str) -> None:
     """stderr Claude Code — прочь: в журнал он не идёт."""
 
 
+def settings_from(info, root, context=None, *, model=None, effort=None, access=None):
+    """Конкретные значения от CLI; auto — штатное автоматическое усилие, если уровень не задан."""
+    context = context or {}
+    rows = info.get("models", []) if isinstance(info, dict) else []
+    selected = next((r for r in rows if r.get("value") == (model or "default")), {})
+    actual_model = context.get("model") or selected.get("resolvedModel") or model
+    level = None
+    for path in [Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "settings.json",
+                 Path(root) / ".claude/settings.json", Path(root) / ".claude/settings.local.json"]:
+        try:
+            value = json.loads(path.read_text("utf-8-sig")).get("effortLevel")
+            if isinstance(value, str):
+                level = value
+        except (OSError, ValueError, AttributeError):
+            pass
+    return {"model": actual_model, "effort": effort or os.environ.get("CLAUDE_CODE_EFFORT_LEVEL") or level or "auto",
+            "access": info.get("current_permission_mode") or access}
+
+
 async def probe(root: str, cli_path: Path | None, factory=ClaudeSDKClient) -> tuple[list[dict], list[str]]:
     """Модели и усилия: короткий клиент в папке проектов (≤ 60 с); сбой — `([], [])`, в журнал — имя типа."""
     client = None
 
     async def ask():
         await client.connect()
-        return await client.get_server_info()
+        info = await client.get_server_info() or {}
+        DEFAULTS[str(root)] = await asyncio.to_thread(settings_from, info, root)
+        return info
 
     try:
         client = factory(options=ClaudeAgentOptions(cwd=root, cli_path=cli_path, setting_sources=SETTINGS,

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, limits
+from . import VERSION, chrome, limits
 
 RPC_SEC = 25
 
@@ -55,7 +55,8 @@ class Client:
     async def connect(self):
         env = {k: v for k, v in os.environ.items() if k not in
                {"CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"}}
-        self.process = await self.spawn(str(self.path), "app-server", "--listen", "stdio://", cwd=str(self.cwd),
+        overrides = await asyncio.to_thread(chrome.overrides, self.cwd)
+        self.process = await self.spawn(str(self.path), "app-server", "--listen", "stdio://", *overrides, cwd=str(self.cwd),
                                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                         stderr=asyncio.subprocess.DEVNULL, limit=limits.FRAME_MAX,
                                         creationflags=subprocess.CREATE_NO_WINDOW)

@@ -90,7 +90,7 @@ def test_agents_belong_to_their_user(studio):
     items = studio.c.get("/api/agents").json()["items"]
     assert items == [{"id": agent_id, "name": "Рабочий ПК", "online": False, "has_pin": False, "cc_version": None,
                       "projects_root": None, "created": items[0]["created"], "last_seen": None,
-                      "models": [], "efforts": [], "images": False}]
+                      "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}}]
 
 
 def test_revoke_removes_the_agent_and_keeps_the_history(studio):

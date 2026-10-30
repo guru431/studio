@@ -61,6 +61,16 @@
 
 ### 2.2 Просьбы студии и ответы моста
 
+Добавка v1 от 2026-10-30 (studio-agent 0.4.0): `hello.chat_state: true` объявляет `state`
+с полями `project, chat, model, effort, access` (три последних могут быть null). Ответ —
+`{settings: {model, effort, access, approval?}, context: {used, limit, percent} | null}` без генерации.
+Необязательные `hello.defaults` и `hello.codex.defaults` несут конкретные настройки корня проектов.
+`turn.access` — необязательный режим: Claude `default|auto|acceptEdits|plan|bypassPermissions|dontAsk`,
+Codex `read-only|workspace-write|danger-full-access`. Null сохраняет прежний выбор сессии/CLI;
+явный выбор действует со следующего хода. Без chat_state студия отказывает в выборе access (409 unsupported).
+События `settings` и `context` несут соответствующие поля, те же поля могут быть в snapshot.
+Токены — последний отчёт CLI, не накопленный расход; статистика и настройки хранятся на машине.
+
 Добавка v1 от 2026-10-30 (studio-agent 0.3.3): необязательный boolean `hello.images` объявляет
 картинки в ходах обоих помощников. Без поля или при `false` студия не отправляет картинки
 (409 `unsupported`), текстовые задания работают как прежде. `turn.images` — необязательный список

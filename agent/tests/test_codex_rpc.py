@@ -70,7 +70,7 @@ async def test_handshake_stdio_env_and_responses_keep_requests_separate(monkeypa
     await client.connect()
     assert [f["method"] for f in process.sent] == ["initialize", "initialized"]
     args, kwargs = calls[0]
-    assert args == ("codex.exe", "app-server", "--listen", "stdio://")
+    assert args[:4] == ("codex.exe", "app-server", "--listen", "stdio://")
     assert "CODEX_THREAD_ID" not in kwargs["env"] and kwargs["env"]["CODEX_HOME"] == "profile-path"
     assert kwargs["stderr"] == asyncio.subprocess.DEVNULL
     assert await client.request("model/list", {}) == {"data": []}

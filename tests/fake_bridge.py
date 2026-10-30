@@ -64,13 +64,16 @@ class FakeMachine:
         self.turns = 0
         self.codex = None
         self.images = True
+        self.chat_state = True
+        self.context = None
 
     @property
     def hello(self) -> dict:
         return {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": "C:\\work\\projects",
                 "has_pin": self.pin is not None,
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
-                "efforts": ["low", "high"], "images": self.images,
+                "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
+                "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **({"codex": self.codex} if self.codex is not None else {})}
 
     # ---- просьбы ----------------------------------------------------------------
@@ -138,6 +141,17 @@ class FakeMachine:
                   "asking": chat in self.running and bool(self.running[chat]["asks"])}
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
+
+    def _op_state(self, req, events):
+        _, project = self._project(req)
+        codex = req.get("engine") == "codex"
+        catalog = self.codex or {} if codex else self.hello
+        saved = project.get("chats", {}).get(req["chat"], {}).get("settings", {})
+        model = req.get("model") or (catalog.get("models") or [{"id": "codex-test"}])[0]["id"]
+        return {"settings": {"model": req.get("model") or saved.get("model") or model,
+                "effort": req.get("effort") or saved.get("effort") or "high",
+                "access": req.get("access") or saved.get("access") or ("workspace-write" if codex else "auto")},
+                "context": self.context}
 
     def _op_history(self, req, events):
         messages = self._chat(req).get("messages", [])
@@ -295,6 +309,12 @@ class FakeMachine:
             events.append(self._ev(chat_id, e))
             if e["k"] == "text":
                 run["text"] += e["text"]
+            elif e["k"] == "context":
+                self.context = {k: v for k, v in e.items() if k != "k"}
+            elif e["k"] == "settings":
+                for project in self.projects.values():
+                    if chat_id in project.get("chats", {}):
+                        project["chats"][chat_id]["settings"] = {k: v for k, v in e.items() if k != "k"}
             elif e["k"] == "step":
                 run["steps"].append({"id": e["id"], "tool": e["tool"], "input": e["input"], "text": "",
                                      "error": False})

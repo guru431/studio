@@ -1,13 +1,15 @@
 """Codex в мосте: каталог app-server, история и ходы с теми же карточками и снимками, что у Claude Code."""
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import secrets
 import threading
 from pathlib import Path
 
-from . import codex_rpc, events, limits, sessions, store
+from . import codex_rpc, events, limits, permissions, sessions, store
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -17,6 +19,36 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 def same_project(left, right) -> bool:
     return isinstance(left, str) and str(Path(left).resolve()).casefold() == str(Path(right).resolve()).casefold()
+
+
+def last_context(path, home=None):
+    """Последний счётчик CLI у сессии, открытой ещё до запуска моста; тексты не возвращаются."""
+    if not isinstance(path, str):
+        return None
+    root = Path(home or os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve()
+    try:
+        target = Path(path).resolve()
+        if not target.is_relative_to(root):
+            return None
+        with target.open("rb") as source:
+            source.seek(0, 2)
+            source.seek(max(0, source.tell() - 512 * 1024))
+            lines = source.read().splitlines()
+        for line in reversed(lines):
+            try:
+                row = json.loads(line)
+                payload = row.get("payload", {})
+                if payload.get("type") == "token_count":
+                    info = payload.get("info") or {}
+                    result = permissions.context((info.get("last_token_usage") or {}).get("total_tokens"),
+                                                 info.get("model_context_window"))
+                    if result:
+                        return result
+            except (ValueError, AttributeError):
+                continue
+    except OSError:
+        pass
+    return None
 
 
 class Aliases:
@@ -118,6 +150,7 @@ class CodexRunner(Runner):
         self.rpc_factory = factory
         self.catalog = None
         self.models, self.efforts, self.version = [], [], ""
+        self.default_efforts = {}
         self._meta = None
         self._meta_lock = asyncio.Lock()
 
@@ -153,8 +186,21 @@ class CodexRunner(Runner):
                 models.append({"id": value, "label": str(m.get("displayName") or value)[:100]})
                 efforts.update(e.get("reasoningEffort") for e in m.get("supportedReasoningEfforts", []))
             self.models = models[:50]
+            self.default_efforts = {m.get("model"): m.get("defaultReasoningEffort") for m in data.get("data", [])}
             self.efforts = [e for e in EFFORTS if e in efforts]
             self.catalog = {"version": self.version, "models": self.models, "efforts": self.efforts}
+            try:
+                cfg = (await self._metadata(root, "config/read", {"cwd": str(root), "includeLayers": False}))["config"]
+                default = next((m for m in data.get("data", []) if m.get("isDefault")), {})
+                native = await self._metadata(root, "thread/start", {"cwd": str(root), "ephemeral": True})
+                self.catalog["defaults"] = {"model": native.get("model") or cfg.get("model") or default.get("model"),
+                    "effort": cfg.get("model_reasoning_effort") or default.get("defaultReasoningEffort"),
+                    "access": permissions.codex_value(native.get("sandbox")) or cfg.get("sandbox_mode")}
+                if tid := native.get("thread", {}).get("id"):
+                    with contextlib.suppress(codex_rpc.RpcError):
+                        await self._metadata(root, "thread/unsubscribe", {"threadId": tid})
+            except (codex_rpc.RpcError, KeyError):
+                pass
             return bool(self.models)
         except Exception as e:
             log.warning("Codex: каталог: %s", type(e).__name__)
@@ -198,6 +244,38 @@ class CodexRunner(Runner):
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end])
         return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
 
+    async def state(self, project, chat, model=None, effort=None, access=None):
+        saved = await asyncio.to_thread(self.choices.details, chat)
+        model, effort, access = model or saved.get("model"), effort or saved.get("effort"), access or saved.get("access")
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        try:
+            thread = (await self._metadata(project, "thread/read", {"threadId": target}))["thread"]
+        except codex_rpc.RpcError as e:
+            if not e.not_found:
+                raise
+            thread = None
+        params = {"cwd": str(project)}
+        if model:
+            params["model"] = model
+        params.update(permissions.codex_start(access))
+        if thread is not None:
+            if not same_project(thread.get("cwd"), project):
+                raise Refused("not_found")
+            data = await self._metadata(project, "thread/resume", {"threadId": target, **params})
+        else:
+            data = await self._metadata(project, "thread/start", {"ephemeral": True, **params})
+        default_effort = next((m.get("defaultReasoningEffort") for m in
+            (await self._metadata(project, "model/list", {"limit": 50})).get("data", [])
+            if m.get("model") == data.get("model")), None)
+        context = await asyncio.to_thread(last_context, (thread or {}).get("path"))
+        if thread is None and (tid := data.get("thread", {}).get("id")):
+            with contextlib.suppress(codex_rpc.RpcError):
+                await self._metadata(project, "thread/unsubscribe", {"threadId": tid})
+        return {"settings": {"model": data.get("model") or model,
+                    "effort": effort or data.get("reasoningEffort") or default_effort,
+                    "access": permissions.codex_value(data.get("sandbox")) or access,
+                    "approval": data.get("approvalPolicy")}, "context": context or saved.get("context")}
+
     async def _run(self, t, text, model, effort, images):
         failure, cancelled, requests = None, False, set()
         try:
@@ -206,13 +284,16 @@ class CodexRunner(Runner):
                 raise Refused("unsupported", "Codex не найден на компьютере")
             target = await asyncio.to_thread(self.aliases.target, t.project, t.chat)
             saved_model, saved_effort = await asyncio.to_thread(self.choices.get, t.chat)
+            saved = await asyncio.to_thread(self.choices.details, t.chat)
+            t.access = t.access or saved.get("access")
+            t.context = saved.get("context")
             model, effort = model or saved_model, effort or saved_effort
             rpc = self.rpc_factory(path, t.project)
             client = t.client = _TurnClient(rpc)
             await rpc.connect()
             if t.stopped or t.closing:
                 return
-            params = {"cwd": str(t.project)}
+            params = {"cwd": str(t.project), **permissions.codex_start(t.access)}
             if model is not None:
                 params["model"] = model
             # Новая сессия студии не существует в Codex. Для внешней сессии ошибка чтения не создаёт новый чат.
@@ -237,15 +318,23 @@ class CodexRunner(Runner):
             if not limits.CHAT_ID.fullmatch(target) or not same_project(thread.get("cwd"), t.project):
                 raise Refused("not_found")
             client.thread = target
+            actual_model = data.get("model") or model
+            t.settings = {"model": actual_model,
+                          "effort": effort or data.get("reasoningEffort") or self.default_efforts.get(actual_model),
+                          "access": permissions.codex_value(data.get("sandbox")) or t.access,
+                          "approval": data.get("approvalPolicy")}
+            self._send(t, {"k": "settings", **t.settings})
             if not known:
                 await asyncio.to_thread(self.aliases.put, t.project, t.chat, target)
             if t.stopped or t.closing:
                 return
             await asyncio.to_thread(self.choices.put, t.chat, model, effort)
+            if t.access is not None:
+                await asyncio.to_thread(self.choices.update, t.chat, access=t.access)
             content = [{"type": "image", "url": f"data:{i['mime']};base64,{i['data']}"} for i in images]
             if text.strip():
                 content.append({"type": "text", "text": text})
-            params = {"threadId": target, "input": content}
+            params = {"threadId": target, "input": content, **permissions.codex_turn(t.access)}
             if model is not None:
                 params["model"] = model
             if effort is not None:
@@ -288,7 +377,13 @@ class CodexRunner(Runner):
             raise asyncio.CancelledError
 
     def _notification(self, t, method, p):
-        if method == "item/agentMessage/delta":
+        if method == "thread/tokenUsage/updated":
+            usage = p.get("tokenUsage") or {}
+            current = permissions.context((usage.get("last") or {}).get("totalTokens"), usage.get("modelContextWindow"))
+            if current:
+                t.context = current
+                self._send(t, {"k": "context", **t.context})
+        elif method == "item/agentMessage/delta":
             delta = p.get("delta", "")
             t.feed.text += delta
             self._send(t, {"k": "text", "text": delta})

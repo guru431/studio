@@ -7545,6 +7545,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
             ("click", "#code-start-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "engine", "document.querySelector('.code-chat-bar .code-engine').textContent"),
+            ("eval", "nullText", "[...document.querySelector('#code-chat').childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === 'null')"),
             ("eval", "models", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
             ("eval", "pick", "(() => { const m = document.querySelector('#code-model'); m.value = 'codex-test';"
                               " m.dispatchEvent(new Event('change')); const e = document.querySelector('#code-effort');"
@@ -7565,6 +7566,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
+    assert v["nullText"] is False
     assert v["starters"] == ['+ Claude Code', '+ Codex'] and v["engines"] == ['Codex', 'Claude Code']
     assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
     assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
@@ -7791,9 +7793,9 @@ def test_code_turn_streams_text_and_steps(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["labels"] == ["Модель", "Усилие"]
-    assert v["options"] == [[["", "по умолчанию"], ["opus", "Opus"], ["sonnet", "Sonnet"]],
-                            [["", "по умолчанию"], ["low", "low"], ["high", "high"]]]
+    assert v["labels"] == ["Модель", "Усилие", "Права"]
+    assert v["options"] == [[["", "opus"], ["opus", "Opus"], ["sonnet", "Sonnet"]],
+                            [["", "high"], ["low", "low"], ["high", "high"]]]
     assert v["picked"] == ["", ""]
     assert v["words"] == ["Отправить", "Остановить", "Закрыть чат"] and v["note"] is False
     assert v["msgs"] == [["user", "Раньше"], ["assistant", "Было"], ["user", "Запусти тесты"],
@@ -8242,11 +8244,13 @@ def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live
     aid, sb = code_online(live, login, machine)
     chosen_model = "codex-test" if engine == "codex" else "sonnet"
     chosen_effort = "ultra" if engine == "codex" else "high"
+    chosen_access = "read-only" if engine == "codex" else "plan"
     prefix = f"#code-defaults-{engine}"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
             ("wait", "!!document.querySelector('#code-defaults-save')"),
             set_value(prefix + "-model", chosen_model), set_value(prefix + "-effort", chosen_effort),
+            set_value(prefix + "-access", chosen_access),
             ("click", "#code-defaults-save"),
             ("wait", "document.querySelector('#code-defaults-status').textContent.includes('Умолчания сохранены')"),
             ("eval", "fits", NO_OVERFLOW),
@@ -8257,6 +8261,7 @@ def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live
             *code_project(aid, "alpha"), ("click", f"#code-start-{engine}"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
+            ("eval", "access", "document.querySelector('#code-access').value"),
             ("eval", "profile", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults)()")],
             width=width, mobile=width == 320)
     finally:
@@ -8264,9 +8269,47 @@ def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live
     assert not r.get("failed"), r
     values = r["values"]
     assert values["fits"] and values["effort"] == chosen_effort and values["picked"] == [chosen_model, chosen_effort]
-    assert values["profile"][engine] == {"model": chosen_model, "effort": chosen_effort}
+    assert values["access"] == chosen_access
+    assert values["profile"][engine] == {"model": chosen_model, "effort": chosen_effort, "access": chosen_access}
     other = "claude" if engine == "codex" else "codex"
-    assert values["profile"][other] == {"model": None, "effort": None}
+    assert values["profile"][other] == {"model": None, "effort": None, "access": None}
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+@pytest.mark.parametrize("engine", ["claude", "codex"])
+def test_code_concrete_settings_context_and_access_are_visible(browser, live, engine):
+    from test_codex import CATALOG
+    login = "code-state-" + engine
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Контекст")})
+    machine.codex = CATALOG
+    machine.context = {"used": 5000, "limit": 100000, "percent": 5}
+    canonical = "gpt-6.1-sol" if engine == "codex" else "claude-opus-5-5"
+    chosen = "read-only" if engine == "codex" else "plan"
+    machine.script = [{"k": "settings", "model": canonical, "effort": "high", "access": chosen},
+        {"k": "context", "used": 70000, "limit": 100000, "percent": 70},
+        {"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *([("click", "#code-start-codex"), ("wait", "document.querySelector('.code-chat-bar .code-engine')?.textContent === 'Codex'"
+                " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
+            ("eval", "before", "['#code-model', '#code-effort', '#code-access'].map((s) => document.querySelector(s).selectedOptions[0].textContent)"),
+            ("eval", "context", "document.querySelector('#code-context-text').textContent"),
+            set_value("#code-access", chosen), *code_send("Проверка"),
+            ("wait", "document.querySelector('#code-context-meter').value === 70 && document.querySelector('#code-stop').hidden"),
+            ("eval", "after", "['#code-model', '#code-effort', '#code-access'].map((s) => document.querySelector(s).selectedOptions[0].textContent)"),
+            ("eval", "contextAfter", "document.querySelector('#code-context').title"), ("eval", "fits", NO_OVERFLOW)],
+            width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    values = r["values"]
+    assert all("умолчанию" not in v and "Загрузка" not in v and "получено" not in v for v in values["before"])
+    assert values["context"] == "Контекст 5%" and values["after"][0] == canonical
+    assert "70" in values["contextAfter"] and values["fits"]
+    [turn] = code_requests(machine, "turn")
+    assert turn["access"] == chosen and turn.get("engine", "claude") == engine
     assert not known_refusals(problems(r), 409), problems(r)
 
 
