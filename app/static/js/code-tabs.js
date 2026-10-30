@@ -6,8 +6,8 @@
  *   «идёт ход» или «ждёт ответа» (span.code-tab-mark.running|.asking) и «×» (button.code-tab-close → close(chat):
  *   вкладка уходит, сессия на машине остаётся); в конце ряда — «+» (#code-tab-add);
  * - «+» — меню #code-tab-menu: «Новый чат» и сессии проекта без открытых вкладок (code-sessions.js; items — последний
- *   ответ GET …/chats у code.js); выбор — pick(chat), «Новый чат» — created(chat), отказ — failed(err); меню
- *   закрывается выбором, нажатием вне и Escape;
+ *   ответ GET …/chats у code.js на момент открытия меню; открытое меню show() не пересобирает); выбор — pick(chat),
+ *   «Новый чат» — created(chat), отказ — failed(err); меню закрывается выбором, нажатием вне и Escape;
  * - нажатие на вкладку — pick(chat); active — показанная (null — ни одна: «Файлы», «Git»); она прокручивается в
  *   видимую часть ряда (телефон листает ряд вбок).
  * Текст машины — только textContent. */
@@ -91,8 +91,9 @@ export function tabBar(host, { aid, pid, pick, close, created, failed }) {
   return {
     show(next) {
       state = next;
+      // открытое меню не пересобирается (опрос меток, ответ рабочего места): пункт под рукой и идущий выбор —
+      // те же; новый список — при следующем открытии
       bar.replaceChildren(...next.tabs.map(tabNode), add);
-      if (!menu.hidden) openMenu(true);          // меню — по новому списку и новым вкладкам
       reveal();
     },
     unmount() {
