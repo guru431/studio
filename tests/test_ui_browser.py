@@ -7007,23 +7007,26 @@ def test_push_checkbox_gives_up_without_service_worker(browser, live):
     assert not problems(r), problems(r)
 
 
-# раздел «Код» (code.js): компьютеры, PIN, проекты, чаты проекта
+# раздел «Код» (code.js, code-panel.js, code-sessions.js): панель компьютеров и проектов, PIN, сессии проекта
 
 CODE_PIN = "2580"
 #: строки компьютеров: id, имя, «на связи» / «не на связи», значок «PIN» или None
 CODE_AGENTS = """[...document.querySelectorAll('#code-agents li[data-id]')].map((li) => [Number(li.dataset.id),
   li.querySelector('.code-agent-name').textContent, li.querySelector('.code-agent-state').textContent,
   li.querySelector('.code-agent-pin') ? li.querySelector('.code-agent-pin').textContent : null])"""
-CODE_PROJECTS = "[...document.querySelectorAll('#code-projects li[data-pid]')].map((li) => [li.dataset.pid, li.textContent])"
-#: строки чатов: id, название, время есть, пометки (.tag по порядку), кнопка
+CODE_PROJECTS = """[...document.querySelectorAll('#code-projects li[data-pid]')].map((li) => [li.dataset.pid,
+  li.querySelector('.code-project-name').textContent])"""
+#: строки сессий проекта: id, название, время есть, пометки (.tag по порядку)
 CODE_CHATS = """[...document.querySelectorAll('#code-chats li[data-chat]')].map((li) => [li.dataset.chat,
   li.querySelector('.code-chat-title').textContent, !!li.querySelector('.code-chat-time')?.textContent,
-  [...li.querySelectorAll('.tag')].map((t) => t.textContent),
-  li.querySelector('.code-chat-close, .code-chat-reopen').textContent])"""
-CODE_PIN_SHOWN = "!!document.querySelector('#code-pin')"
-#: запросы страницы к /api/code/* — в window.codeCalls (метод и путь)
+  [...li.querySelectorAll('.tag')].map((t) => t.textContent)])"""
+CODE_PIN_SHOWN = "!!document.querySelector('#code-panel #code-pin')"
+CODE_PLACE = "document.querySelector('#code-place')?.textContent"
+CODE_PANEL_OPEN = "document.querySelector('.code-ws')?.classList.contains('panel-open')"
+#: запросы страницы к мосту (/api/code/*, кроме рабочего места — оно к мосту не ходит) — в window.codeCalls
 CODE_SPY = """(() => { window.codeCalls = []; const real = window.fetch;
-  window.fetch = (u, o) => { if (String(u).startsWith('/api/code/')) window.codeCalls.push([(o && o.method) || 'GET', String(u)]);
+  window.fetch = (u, o) => { const s = String(u);
+    if (s.startsWith('/api/code/') && !s.startsWith('/api/code/workspace')) window.codeCalls.push([(o && o.method) || 'GET', s]);
     return real(u, o); }; return true; })()"""
 
 
@@ -7043,17 +7046,26 @@ def code_online(live, login, machine, name="Рабочий ПК"):
 
 
 def code_open(aid, pin=CODE_PIN):
-    """«Код» → компьютер → PIN → список проектов."""
+    """«Код» → компьютер → PIN в панели → его проекты."""
     return [*go("code"), ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("wait", CODE_PIN_SHOWN),
             ("type", "#code-pin-input", pin), ("click", "#code-pin-open"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2")]
 
 
+def code_project(aid, project):
+    """Проект из панели (на телефоне панель сама открыта, пока проекта нет): плашка пути — его имя."""
+    from fake_bridge import pid
+    return [("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid(project)}']\")"),
+            ("click", f"#code-projects li[data-pid='{pid(project)}'] a"),
+            ("wait", f"document.querySelector('#code-place .code-place-project')?.textContent === '{project}'")]
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_code_section_lists_computers_and_says_when_there_are_none(browser, live, width):
-    """Вкладка «Код» после «Перевода», заголовок «Claude Code»; без компьютеров — подсказка, как подключить;
-    с ними — строки: имя, «на связи» / «не на связи», значок «PIN» только у компьютера с PIN."""
+    """Вкладка «Код» после «Перевода», шапки раздела нет; без компьютеров — панели нет, справа подсказка, как
+    подключить; с ними — строки в панели: имя, «на связи» / «не на связи», значок «PIN» только у компьютера с PIN;
+    на широком экране панель и правая часть — рядом."""
     login = f"code-list-{width}"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
@@ -7061,30 +7073,38 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "tabs", "[...document.querySelectorAll('#rail .tab')].map((t) => t.dataset.section)"),
         ("eval", "tab", "document.querySelector('#rail .tab[data-section=code]').textContent"),
         ("eval", "current", "document.querySelector('#rail .tab[aria-current=page]').dataset.section"),
-        ("eval", "title", "document.querySelector('#view .head h1').textContent"),
+        ("eval", "head", "!!document.querySelector('#view .head')"),
+        ("eval", "panel", "!!document.querySelector('#code-panel')"),
         ("eval", "empty", "document.querySelector('#code-empty > p').textContent"),
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["tabs"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "code"]
-    assert v["tab"] == "Код" and v["current"] == "code" and v["title"] == "Claude Code"
+    assert v["tab"] == "Код" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
     home, _ = enroll_live(live, login, "Домашний-компьютер-с-очень-длинным-именем-без-единого-пробела")
     work, sb = code_online(live, login, code_machine())
+    side = """(() => { const p = document.querySelector('#code-panel').getBoundingClientRect();
+      const m = document.querySelector('.code-main').getBoundingClientRect();
+      return [p.width > 0 && m.width > 0 && p.right <= m.left + 1, m.width > p.width]; })()"""
     try:
         r = browser.drive(live.url + "/#/code", [("wait", READY),
             ("wait", "document.querySelectorAll('#code-agents li[data-id]').length === 2"),
             ("eval", "rows", CODE_AGENTS), ("eval", "gone", "!document.querySelector('#code-empty')"),
-            ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
+            ("eval", "head", "!!document.querySelector('#view .head')"),
+            ("eval", "fits", NO_OVERFLOW), *([("eval", "side", side)] if width > 760 else [])],
+            width=width, mobile=width < 760)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["rows"] == [[home, "Домашний-компьютер-с-очень-длинным-именем-без-единого-пробела", "не на связи", None],
                          [work, "Рабочий ПК", "на связи", "PIN"]]
-    assert v["gone"] is True and v["fits"] is True
+    assert v["gone"] is True and v["head"] is False and v["fits"] is True
+    if width > 760:
+        assert v["side"] == [True, True]
     assert not problems(r), problems(r)
 
 
@@ -7111,9 +7131,68 @@ def test_code_empty_offers_agent_download(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_code_panel_keeps_computers_while_projects_scroll(browser, live):
+    """60 проектов: прокручивается только список проектов в панели — имена компьютеров на месте, #view не двигается."""
+    from fake_bridge import FakeMachine
+    login = "code-scroll"
+    live.add_user(login)
+    machine = FakeMachine(projects={f"project-{i:02d}": {} for i in range(60)})
+    aid, sb = code_online(live, login, machine)
+    enroll_live(live, login, "Второй ПК")
+    measure = """(() => { const a = document.querySelector('.code-agent').getBoundingClientRect();
+      return [a.top, document.querySelector('#view').scrollTop, document.querySelector('.code-panel-body').scrollTop]; })()"""
+    last = """(() => { const li = [...document.querySelectorAll('#code-projects li')].pop().getBoundingClientRect();
+      const box = document.querySelector('.code-panel-body').getBoundingClientRect();
+      return li.bottom <= box.bottom + 1 && li.top >= box.top; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 60"),
+            ("eval", "before", measure),
+            ("eval", "scroll", "(() => { const b = document.querySelector('.code-panel-body'); b.scrollTop = b.scrollHeight;"
+                               " return true; })()"),
+            ("eval", "after", settled(measure, 100)), ("eval", "last", last),
+            ("eval", "agents", "document.querySelectorAll('#code-agents li').length")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["agents"] == 2 and v["last"] is True
+    assert v["after"][0] == v["before"][0] and v["after"][1] == v["before"][1] == 0
+    assert v["after"][2] > v["before"][2] == 0
+    assert not problems(r), problems(r)
+
+
+def test_code_computer_click_changes_only_the_panel(browser, live):
+    """Открыт проект alpha компьютера 1; нажатие на компьютер 2 — в панели его проекты, а адрес и плашка пути те же:
+    справа по-прежнему alpha."""
+    from fake_bridge import FakeMachine, pid
+    login = "code-two"
+    live.add_user(login)
+    one, sb1 = code_online(live, login, FakeMachine(projects={"alpha": {}, "beta": {}}))
+    two, sb2 = code_online(live, login, FakeMachine(projects={"gamma": {}}), name="Второй ПК")
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(one, "alpha"),
+            ("eval", "here", f"[location.hash, {CODE_PLACE}]"),
+            ("click", f"#code-agents li[data-id='{two}'] .code-agent"),
+            ("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid('gamma')}']\")"),
+            ("eval", "projects", CODE_PROJECTS),
+            ("eval", "still", f"[location.hash, {CODE_PLACE}]"),
+            ("eval", "picked", "document.querySelector('.code-agent[aria-current=true]').closest('li').dataset.id")],
+            width=1280)
+    finally:
+        sb1.stop()
+        sb2.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["here"] == [f"#/code/{one}/{pid('alpha')}", "Рабочий ПК / alpha"]
+    assert v["still"] == v["here"] and v["projects"] == [[pid("gamma"), "gamma"]] and v["picked"] == str(two)
+    assert not problems(r), problems(r)
+
+
 def test_code_pin_pad_counts_down_and_opens(browser, live):
-    """Компьютер с PIN: нажатие — POST open без PIN, 409 pin_needed — панель; неверный PIN — «осталось 4
-    попытки», поле пусто; верный — проекты. PIN нет ни в хранилищах, ни в адресе."""
+    """Компьютер с PIN: при входе в раздел — POST open без PIN, 409 pin_needed — поле PIN в панели (нажатие на имя
+    его не повторяет); неверный PIN — «осталось 4 попытки», поле пусто; верный — проекты в панели, адрес — #/code.
+    PIN нет ни в хранилищах, ни в адресе."""
     from fake_bridge import pid
     login = "code-pin"
     live.add_user(login)
@@ -7145,7 +7224,7 @@ def test_code_pin_pad_counts_down_and_opens(browser, live):
     assert v["pinTitle"] == "PIN компьютера" and v["pinButton"] == "Открыть"
     assert v["input"] == ["numeric", "off"] and v["fits"] is True
     assert v["wrong"] == "Неверный PIN — осталось 4 попытки" and v["cleared"] == ""
-    assert v["hash"] == f"#/code/{aid}"
+    assert v["hash"] == "#/code"
     assert v["projects"] == [[pid("alpha"), "alpha"], [pid("beta"), "beta"]]
     assert v["stored"] is False
     assert [q.get("pin") for q in machine.requests if q["op"] == "open"] == [None, "1111", CODE_PIN]
@@ -7154,16 +7233,16 @@ def test_code_pin_pad_counts_down_and_opens(browser, live):
 
 
 def test_code_offline_computer_shows_only_its_row(browser, live):
-    """Компьютер не на связи: только его строка; нажатие — слова, ни одного запроса к /api/code, ни панели PIN,
-    ни проектов."""
+    """Компьютер не на связи: в панели — его строка и слова вместо проектов; нажатие — те же слова, ни одного запроса
+    к мосту, ни поля PIN, ни проектов."""
     login = "code-off"
     live.add_user(login)
     aid, _ = enroll_live(live, login, "Спящий ПК")
-    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
-        ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"), ("eval", "spy", CODE_SPY),
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "spy", CODE_SPY), *go("code"),
+        ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
+        ("wait", "!!document.querySelector('#code-offline')"),
         ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
-        ("wait", "document.querySelector('#code-status').textContent !== ''"),
-        ("eval", "words", "document.querySelector('#code-status').textContent"),
+        ("eval", "words", settled("document.querySelector('#code-panel #code-offline')?.textContent")),
         ("eval", "calls", settled("window.codeCalls")),
         ("eval", "rest", f"[{CODE_PIN_SHOWN}, !!document.querySelector('#code-projects'), location.hash]")],
         width=320, mobile=True)
@@ -7175,25 +7254,25 @@ def test_code_offline_computer_shows_only_its_row(browser, live):
 
 
 def test_code_pin_query_for_offline_computer_says_why(browser, live):
-    """Переход к PIN (#/code?pin=<aid>), а компьютер тем временем пропал со связи: список и слова в #code-status,
-    без панели PIN и запросов к /api/code."""
+    """Ссылка к PIN (#/code?pin=<aid>), а компьютер не на связи: в панели слова, без поля PIN и запросов к мосту;
+    ?pin из адреса уходит."""
     login = "code-pin-off"
     live.add_user(login)
     aid, _ = enroll_live(live, login, "Пропавший ПК")
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "spy", CODE_SPY), *go(f"code?pin={aid}"),
-        ("wait", "document.querySelector('#code-status')?.textContent !== ''"
+        ("wait", "!!document.querySelector('#code-panel #code-offline')"
                  f" && !!document.querySelector(\"#code-agents li[data-id='{aid}']\")"),
-        ("eval", "words", "document.querySelector('#code-status').textContent"),
-        ("eval", "rest", f"[{CODE_PIN_SHOWN}, location.hash, window.codeCalls]")], width=320, mobile=True)
+        ("eval", "words", "document.querySelector('#code-offline').textContent"),
+        ("eval", "rest", f"[{CODE_PIN_SHOWN}, location.hash, window.codeCalls, {CODE_PANEL_OPEN}]")], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["words"] == "Компьютер не на связи — включите его и запустите мост"
-    assert v["rest"] == [False, "#/code", []]
+    assert v["rest"] == [False, "#/code", [], True]
     assert not problems(r), problems(r)
 
 
 def test_code_pin_field_is_not_a_password(browser, live):
-    """Панель PIN — не форма входа: без <form> и type=password (менеджер паролей не предложит сохранить PIN), поле
+    """Поле PIN — не форма входа: без <form> и type=password (менеджер паролей не предложит сохранить PIN), поле
     text с точками (-webkit-text-security), autocomplete=off, цифровая клавиатура; Enter открывает компьютер."""
     login = "code-pin-text"
     live.add_user(login)
@@ -7216,72 +7295,193 @@ def test_code_pin_field_is_not_a_password(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["field"] == ["DIV", False, False, "text", "disc", "off", "numeric"]
-    assert v["hash"] == f"#/code/{aid}"
+    assert v["hash"] == "#/code"
     assert [q.get("pin") for q in code_requests(machine, "open")] == [None, CODE_PIN]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-def test_code_level_frame_drawn_before_answer(browser, live):
-    """Компьютер открыт PIN-ом, а список проектов отвечает медленно: рамка уровня (строка пути) — сразу, панели PIN
-    с доступной «Открыть» на экране уже нет; список — по ответу."""
+def test_code_pin_leaves_before_the_projects_answer(browser, live):
+    """Компьютер открыт PIN-ом, а список проектов отвечает медленно: поля PIN с доступной «Открыть» в панели уже нет,
+    списка ещё нет; список — по ответу."""
     login = "code-frame"
     live.add_user(login)
     aid, sb = code_online(live, login, code_machine())
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u).endsWith('/projects')
       ? real(u, o).then((r) => new Promise((ok) => setTimeout(() => ok(r), 1500))) : real(u, o); return true; })()"""
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
-            ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"), ("eval", "slow", slow),
-            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("wait", CODE_PIN_SHOWN),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "slow", slow), *go("code"),
+            ("wait", f"document.querySelector(\"#code-agents li[data-id='{aid}']\")"), ("wait", CODE_PIN_SHOWN),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
-            ("wait", f"location.hash === '#/code/{aid}' && !{CODE_PIN_SHOWN}"),
-            ("eval", "early", "[!!document.querySelector('#code-projects'), !!document.querySelector('#code-agents'),"
-                              " document.querySelector('.code-crumbs a')?.textContent]"),
+            ("wait", f"!{CODE_PIN_SHOWN}"),
+            ("eval", "early", "[!!document.querySelector('#code-projects'), !!document.querySelector('#code-agents')]"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2"),
-            ("eval", "here", "document.querySelector('.code-crumb-here').textContent")], width=320, mobile=True)
+            ("eval", "hash", "location.hash")], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["early"] == [False, False, "Компьютеры"] and v["here"] == "Рабочий ПК"
+    assert v["early"] == [False, True] and v["hash"] == "#/code"
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-def test_code_double_closed_keeps_return_address(browser, live):
-    """Два отказа closed одного уровня подряд (вкладка «Файлы»: список папки и чаты — параллельно; ответы приходят
-    в одной задаче, раньше hashchange первого перехода к PIN): после PIN — исходный адрес, а не снова панель."""
+def test_code_closed_shows_the_pin_in_the_panel_and_returns(browser, live):
+    """Сессия закрыта на машине (блокировка студии, перезапуск моста), а владелец переходит в другой проект: отказ
+    closed — поле PIN этого компьютера в панели (телефон — панель открыта), адрес — тот же; верный PIN — тот же
+    проект на экране, панель спрятана. Записей в истории — только переход в проект; open с PIN после отказа — один."""
     from fake_bridge import pid
-    login = "code-twice"
+    login = "code-closed-pin"
     live.add_user(login)
-    machine = code_files_machine()
-    machine.pin = CODE_PIN
+    machine = code_machine()
     aid, sb = code_online(live, login, machine)
-    here = f"#/code/{aid}/{pid('alpha')}?tab=files"
-    # ответы files и chats отдаются странице вместе, когда пришли оба (дальше — как есть)
-    pair = r"""(() => { const real = window.fetch; const held = []; window.paired = false;
-      window.fetch = (u, o) => window.paired || !/\/projects\/[0-9a-f]{16}\/(files|chats)$/.test(String(u)) ? real(u, o)
-        : real(u, o).then(async (r) => { const data = await r.json();
-          const copy = { ok: r.ok, status: r.status, headers: r.headers, json: async () => data };
-          return new Promise((ok) => { held.push(() => ok(copy));
-            if (held.length === 2) { window.paired = true; held.forEach((f) => f()); } }); });
-      return true; })()"""
+    beta = f"#/code/{aid}/{pid('beta')}"
+
+    def close_sessions():
+        wait_for(lambda: code_requests(machine, "chats"), 60)
+        machine.open_sessions.clear()
+        live_sql(live, "UPDATE agents SET name = ? WHERE id = ?", ("Закрытый ПК", aid))
+
+    closer = threading.Thread(target=close_sessions, daemon=True)
+    closer.start()
+    named = "fetch('/api/agents').then((r) => r.json()).then((j) => j.items.some((a) => a.name === 'Закрытый ПК'))"
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "pair", pair),
-            *go(here[2:]), ("wait", CODE_PIN_SHOWN), ("eval", "paired", "window.paired"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
+            ("wait", "!!document.querySelector('#code-chats')"), ("wait", named),
+            ("eval", "len0", "history.length"),
+            ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
+            ("click", f"#code-projects li[data-pid='{pid('beta')}'] a"),
+            ("wait", CODE_PIN_SHOWN),
+            ("eval", "pin", f"[location.hash, document.querySelector('#code-pin').dataset.id, {CODE_PANEL_OPEN}]"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
-            ("wait", f"location.hash === '{here}' && document.querySelectorAll('#code-files li[data-name]').length === 5"),
-            ("eval", "pin", CODE_PIN_SHOWN)], width=320, mobile=True)
+            ("wait", f"location.hash === '{beta}' && !!document.querySelector('#code-chats')"
+                     f" && !{CODE_PIN_SHOWN} && !{CODE_PANEL_OPEN}"),
+            ("eval", "place", "document.querySelector('#code-place .code-place-project').textContent"),
+            ("eval", "len1", "history.length")], width=320, mobile=True)
+        closer.join(5)
     finally:
         sb.stop()
     assert not r.get("failed"), r
-    assert r["values"]["paired"] is True and r["values"]["pin"] is False
-    assert [q.get("pin") for q in code_requests(machine, "open")] == [CODE_PIN]
+    v = r["values"]
+    assert v["pin"] == [beta, str(aid), True] and v["place"] == "beta"
+    assert v["len1"] == v["len0"] + 1                 # только переход в проект
+    assert [q.get("pin") for q in code_requests(machine, "open")] == [None, CODE_PIN, CODE_PIN]
+    chats = code_requests(machine, "chats")
+    assert [q["project"] for q in chats] == [pid("alpha"), pid("beta"), pid("beta")]   # отказ closed, затем — после PIN
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-def test_code_project_lists_chats_with_marks_and_closes_one(browser, live):
-    """Проект: «Новый чат», вкладки «Чаты», «Файлы», «Git»; чаты — название (без него «Новый чат»), время,
-    откуда сессия, «идёт ход», «ждёт ответа»; «Закрыть» — «закрыт» и в конце списка; «Открыть снова» — назад."""
+def test_code_restores_the_last_project_after_reload(browser, live):
+    """Открыт проект beta; страница заново на #/code — тот же проект (адрес заменой), плашка «Рабочий ПК / beta»."""
+    from fake_bridge import pid
+    login = "code-restore"
+    live.add_user(login)
+    machine = code_free_machine()
+    machine.projects["beta"] = {}
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
+            ("wait", "!!document.querySelector('#code-chats')")], width=1280)
+        assert not r.get("failed"), r
+        r = browser.drive(live.url + "/#/code", [("wait", READY),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('beta')}'"
+                     " && document.querySelector('#code-place .code-place-project')?.textContent === 'beta'"),
+            ("eval", "place", CODE_PLACE), ("eval", "length", "history.length"),
+            ("eval", "here", "document.querySelector('#code-projects a[aria-current=page]')?.closest('li').dataset.pid")],
+            width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["place"] == "Рабочий ПК / beta" and v["here"] == pid("beta")
+    assert not problems(r), problems(r)
+
+
+def test_code_restore_with_an_offline_computer(browser, live):
+    """Запомненный проект — на компьютере, который сейчас не на связи: раздел открывается, в панели и справа —
+    «Компьютер не на связи — включите его и запустите мост», к мосту — ни одного запроса, ошибок нет."""
+    import bridge
+    from fake_bridge import pid
+    login = "code-restore-off"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_free_machine())
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
+            ("wait", "!!document.querySelector('#code-chats')")], width=1280)
+        assert not r.get("failed"), r
+    finally:
+        sb.stop()
+    wait_for(lambda: aid not in bridge.LINKS)
+    r = browser.drive(live.url + "/", [("wait", READY), ("eval", "spy", CODE_SPY), *go("code"),
+        ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}'"
+                 " && !!document.querySelector('#code-panel #code-offline')"
+                 " && document.querySelector('#code-status')?.textContent !== ''"),
+        ("eval", "words", "[document.querySelector('#code-offline').textContent,"
+                          " document.querySelector('#code-status').textContent]"),
+        ("eval", "calls", settled("window.codeCalls")), ("eval", "fits", NO_OVERFLOW)], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["words"] == ["Компьютер не на связи — включите его и запустите мост"] * 2
+    assert v["calls"] == [] and v["fits"] is True
+    assert not problems(r), problems(r)
+
+
+def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
+    """Телефон: проекта нет — панель открыта сама; выбор компьютера её не закрывает, выбор проекта — закрывает; ☰ —
+    открыта; нажатие на фон и Escape — закрыта."""
+    login = "code-phone"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_free_machine())
+    visible = "(() => { const p = document.querySelector('#code-panel').getBoundingClientRect(); return p.left >= 0; })()"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"),
+            ("eval", "first", CODE_PANEL_OPEN), ("eval", "shown", settled(visible, 400)),
+            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("eval", "kept", settled(CODE_PANEL_OPEN)),
+            *code_project(aid, "alpha"), ("eval", "chosen", CODE_PANEL_OPEN),
+            ("eval", "toggle", "getComputedStyle(document.querySelector('#code-panel-toggle')).display !== 'none'"),
+            ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
+            ("eval", "backdrop", "document.querySelector('.code-backdrop').click()"), ("wait", f"!{CODE_PANEL_OPEN}"),
+            ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
+            ("press", "Escape"), ("wait", f"!{CODE_PANEL_OPEN}"),
+            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["first"] is True and v["shown"] is True and v["kept"] is True and v["chosen"] is False
+    assert v["toggle"] is True
+    assert v["fits"] is True
+    assert not problems(r), problems(r)
+
+
+def test_code_place_is_one_line(browser, live):
+    """Длинные имена (проект — 80 знаков, компьютер — 64, предел привязки): плашка пути — одна строка, обрезана
+    многоточием (сначала имя компьютера), не заходит под три значка справа; страница не шире экрана."""
+    from fake_bridge import FakeMachine
+    login = "code-place-long"
+    live.add_user(login)
+    long_project = "проект-" + "п" * 73
+    aid, sb = code_online(live, login, FakeMachine(projects={long_project: {}}), name="Компьютер-" + "к" * 54)
+    shape = """(() => { const p = document.querySelector('#code-place'); const r = p.getBoundingClientRect();
+      const a = document.querySelector('.code-place-agent');
+      return [r.height < 2 * parseFloat(getComputedStyle(p).lineHeight), a.scrollWidth > a.clientWidth,
+        r.right <= innerWidth - 130]; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"),
+            ("click", "#code-projects li[data-pid] a"),
+            ("wait", f"document.querySelector('#code-place .code-place-project')?.textContent === '{long_project}'"),
+            ("eval", "shape", shape), ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["shape"] == [True, True, True] and r["values"]["fits"] is True
+    assert not problems(r), problems(r)
+
+
+def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
+    """Проект: «Новый чат» первой строкой, затем сессии в порядке сервера (открытые, затем закрытые) — название (без
+    него «Новый чат»), время, откуда сессия, «закрыт», «идёт ход», «ждёт ответа»; кнопок «Закрыть» нет. Нажатие на
+    закрытую — PATCH open, затем её чат."""
     from fake_bridge import T0, pid
     login = "code-chats"
     live.add_user(login)
@@ -7294,36 +7494,34 @@ def test_code_project_lists_chats_with_marks_and_closes_one(browser, live):
         asking: {"title": "Тесты", "created": T0, "modified": T0 + 10, "tag": None, "messages": []}})
     machine.running = {busy: {"asks": {}}, asking: {"asks": {"r1": {}}}}
     aid, sb = code_online(live, login, machine)
-    row = f'#code-chats li[data-chat="{mine}"]'
+    close = (f"(async () => {{ await {API}.api('PATCH', '/api/code/agents/{aid}/projects/{pid('alpha')}/chats/{mine}',"
+             " { state: 'closed' }); return true; })()")
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid),
-            ("click", f"#code-projects li[data-pid='{pid('alpha')}'] a"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), ("eval", "close", close),
+            *code_project(aid, "alpha"),
             ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 4"),
             ("eval", "hash", "location.hash"),
-            ("eval", "newChat", "document.querySelector('#code-new-chat').textContent"),
-            ("eval", "tabs", "['#code-tab-chats', '#code-tab-files', '#code-tab-git'].map((s) => document.querySelector(s).textContent)"),
+            ("eval", "first", "document.querySelector('#code-chats li').querySelector('#code-new-chat')?.textContent"),
+            ("eval", "views", "['#code-tab-chat', '#code-tab-files', '#code-tab-git'].map((s) => document.querySelector(s).textContent)"),
             ("eval", "rows", CODE_CHATS), ("eval", "fits", NO_OVERFLOW),
-            ("click", f"{row} .code-chat-close"),
-            ("wait", f"document.querySelector('#code-chats li[data-chat]:last-child').dataset.chat === '{mine}'"
-                     f" && !!document.querySelector('{row} .code-chat-reopen')"),
-            ("eval", "closed", CODE_CHATS),
-            ("click", f"{row} .code-chat-reopen"),
-            ("wait", f"document.querySelector('#code-chats li[data-chat]').dataset.chat === '{mine}'"
-                     f" && !!document.querySelector('{row} .code-chat-close')"),
+            ("eval", "buttons", "document.querySelectorAll('#code-chats .code-chat-close, #code-chats .code-chat-reopen').length"),
+            ("click", f'#code-chats li[data-chat="{mine}"] .code-chat-link'),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}/{mine}'"
+                     f" && document.querySelector('#code-chat')?.dataset.chat === '{mine}'"),
+            *go(f"code/{aid}/{pid('alpha')}"),
+            ("wait", f"document.querySelector('#code-chats li[data-chat]')?.dataset.chat === '{mine}'"),
             ("eval", "reopened", CODE_CHATS)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}" and v["fits"] is True
-    assert v["newChat"] == "Новый чат" and v["tabs"] == ["Чаты", "Файлы", "Git"]
-    assert v["rows"] == [[mine, "Починить вход", True, ["студия"], "Закрыть"],
-                         [other, "Новый чат", True, ["VS Code или терминал"], "Закрыть"],
-                         [busy, "Сборка", True, ["студия", "идёт ход"], "Закрыть"],
-                         [asking, "Тесты", True, ["VS Code или терминал", "ждёт ответа"], "Закрыть"]]
-    assert [c[0] for c in v["closed"]] == [other, busy, asking, mine]
-    assert v["closed"][3] == [mine, "Починить вход", True, ["студия", "закрыт"], "Открыть снова"]
-    assert v["reopened"] == v["rows"]
+    assert v["first"] == "Новый чат" and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
+    assert v["rows"] == [[other, "Новый чат", True, ["VS Code или терминал"]],
+                         [busy, "Сборка", True, ["студия", "идёт ход"]],
+                         [asking, "Тесты", True, ["VS Code или терминал", "ждёт ответа"]],
+                         [mine, "Починить вход", True, ["студия", "закрыт"]]]
+    assert v["reopened"][0] == [mine, "Починить вход", True, ["студия"]]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -7335,8 +7533,8 @@ def test_code_new_chat_opens_its_page(browser, live):
     uid = live.add_user(login)
     aid, sb = code_online(live, login, code_machine())
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid),
-            ("click", f"#code-projects li[data-pid='{pid('beta')}'] a"), ("wait", "document.querySelector('#code-new-chat')"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "beta"),
+            ("wait", "document.querySelector('#code-new-chat')"),
             ("click", "#code-new-chat"),
             ("wait", "/^#\\/code\\/\\d+\\/[0-9a-f]{16}\\/[0-9a-f-]{36}$/.test(location.hash)"
                      " && !!document.querySelector('#code-chat')"),
@@ -7364,8 +7562,9 @@ def test_code_push_click_opens_the_chat_in_an_open_studio(browser, live):
     чат; адрес другого вида не открывается."""
     login = "code-push-click"
     live.add_user(login)
+    aid, _ = enroll_live(live, login, "Спящий ПК")          # не на связи: чат — словами, без запросов к мосту
     chat = "55555555-5555-4555-8555-555555555555"
-    href = f"code/7/0123456789abcdef/{chat}"
+    href = f"code/{aid}/0123456789abcdef/{chat}"
     post = "navigator.serviceWorker.dispatchEvent(new MessageEvent('message', {{ data: {{ jobs: {!r} }} }}))"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
         ("eval", "bad", post.format("code/7/../x")), ("eval", "badHash", settled("location.hash")),
@@ -7374,43 +7573,7 @@ def test_code_push_click_opens_the_chat_in_an_open_studio(browser, live):
         ("eval", "page", "document.querySelector('#code-chat').dataset.chat")])
     assert not r.get("failed"), r
     assert r["values"]["badHash"] == "#/chat" and r["values"]["page"] == chat
-    assert not known_refusals(problems(r), 404), problems(r)       # компьютера 7 у учётки нет — чат его не нашёл
-
-
-def test_code_lock_and_unlock_asks_for_the_pin_again(browser, live):
-    """Компьютер открыт PIN-ом; студия на телефоне заперлась и открыта ключом — мост получил close этой сессии,
-    и следующий переход по проекту ведёт к панели PIN (409 closed), а не к ошибке; после PIN — снова в этот
-    проект. Перенаправления к PIN и назад записей в историю браузера не добавляют."""
-    from fake_bridge import pid
-    login = "code-lock"
-    live.add_user(login)
-    machine = code_machine()
-    aid, sb = code_online(live, login, machine)
-    try:
-        r = browser.drive(live.url + "/", [*phone_with_key(login), *code_open(aid),
-            hide(), ("wait", CURTAIN_OPEN), later(61000), show(), ("wait", LOCK_OPEN),
-            ("wait", f"{ME_STATUS}.then(s => s === 423)"),
-            ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN} && !{CURTAIN_OPEN}"),
-            ("eval", "len0", "history.length"),
-            ("click", f"#code-projects li[data-pid='{pid('alpha')}'] a"),
-            ("wait", CODE_PIN_SHOWN),
-            ("eval", "hash", "location.hash"),
-            ("eval", "projects", "!!document.querySelector('#code-projects')"),
-            ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
-            ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}' && !!document.querySelector('#code-chats')"
-                     " && document.querySelector('.code-crumb-here')?.textContent === 'alpha'"),
-            ("eval", "len1", "history.length")], **PHONE)
-        wait_for(lambda: len(code_requests(machine, "chats")) == 2)
-    finally:
-        sb.stop()
-    assert not r.get("failed"), r
-    assert r["values"]["hash"] == "#/code" and r["values"]["projects"] is False
-    assert r["values"]["len1"] == r["values"]["len0"] + 1           # только переход в проект
-    chats = [q for q in machine.requests if q["op"] == "chats"]
-    assert len(chats) == 2                     # отказ closed, затем — от сессии, открытой PIN-ом
-    assert chats[0]["session"] == chats[1]["session"]
-    assert [q.get("pin") for q in machine.requests if q["op"] == "open"] == [None, CODE_PIN, CODE_PIN]
-    assert not known_refusals(problems(r), 409, 423), problems(r)
+    assert not problems(r), problems(r)
 
 
 # чат Claude Code (code-chat.js): лента, ход потоком, карточки, остановка, обрыв связи
@@ -7912,7 +8075,8 @@ def test_code_stop_and_offline(browser, live):
             state["sb"].stop()
     assert not r.get("failed"), r
     assert r["values"]["stop"] is True
-    assert [q.get("pin") for q in code_requests(machine, "open")] == [None, None]     # второй — после нового канала
+    # второй — вход в раздел второй страницей (панель открывает компьютер), третий — после нового канала
+    assert [q.get("pin") for q in code_requests(machine, "open")] == [None, None, None]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -8008,7 +8172,7 @@ def test_code_foreign_session_warns_about_two_writers(browser, live):
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_B),
             ("eval", "noteB", "document.querySelector('#code-shared-note')?.textContent ?? null"),
-            ("eval", "here", "document.querySelector('.code-crumb-here').textContent"),
+            ("eval", "here", CODE_PLACE),
             ("eval", "fits", NO_OVERFLOW),
             *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
             ("eval", "noteA", "!!document.querySelector('#code-shared-note')")], width=320, mobile=True)
@@ -8018,7 +8182,7 @@ def test_code_foreign_session_warns_about_two_writers(browser, live):
     v = r["values"]
     assert v["noteB"] == ("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах"
                           " сразу — ответы перемешаются.")
-    assert v["here"] == "Чат B" and v["fits"] is True and v["noteA"] is False
+    assert v["here"] == "Рабочий ПК / alpha" and v["fits"] is True and v["noteA"] is False
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -8107,7 +8271,7 @@ def test_code_closed_event_leads_to_the_pin_and_back_to_the_chat(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["pin"] == ["#/code", str(aid)] and v["len1"] == v["len0"]
+    assert v["pin"] == [f"#/{here}", str(aid)] and v["len1"] == v["len0"]
     assert [q.get("pin") for q in code_requests(machine, "open")] == [None, CODE_PIN, CODE_PIN]
     assert len(code_requests(machine, "turn")) == 1 and CODE_CHAT_A in machine.running
     # событие, а не запасной путь (поток без конца → live → 409 closed): watch — до хода и после PIN, не третий
@@ -8270,7 +8434,7 @@ def code_tab(aid, tab, project="alpha"):
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
             ("wait", f"document.querySelector(\"#code-projects li[data-pid='{pid(project)}']\")"),
             ("click", f"#code-projects li[data-pid='{pid(project)}'] a"),
-            ("wait", f"document.querySelector('.code-crumb-here')?.textContent === '{project}'"
+            ("wait", f"document.querySelector('#code-place .code-place-project')?.textContent === '{project}'"
                      f" && !!document.querySelector('#code-tab-{tab}')"),
             ("click", f"#code-tab-{tab}")]
 
@@ -8320,7 +8484,7 @@ def test_code_files_open_edit_and_save(browser, live):
     assert v["text"] == "print(1)\nprint(2)\n" and v["filePath"] == ["alpha", "src", "app.py"]
     assert v["save"] == "Сохранить" and "monospace" in v["mono"] and v["fits"] is True
     assert v["status"] == "Сохранено" and v["cleared"] == ""
-    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}"
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}?tab=files"
     assert "app.py" not in v["stored"] and "print" not in v["stored"]
     assert v["back"] == ["alpha"]
     assert machine.projects["alpha"]["files"]["src/app.py"] == b"print(4)\r\n"
@@ -8417,16 +8581,16 @@ CODE_UNLOAD_ASKS = ("(() => { const e = new Event('beforeunload', { cancelable: 
                     " return e.defaultPrevented; })()")
 
 
-def test_code_unsaved_edit_survives_crumb_navigation(browser, live):
-    """Правка не сохранена, а уходят с уровня проекта (строка пути раздела) или в другой раздел студии: адрес
-    возвращается, окно «Изменения не сохранены»; «Остаться» — файл, правка и адрес на месте; «Уйти без
-    сохранения» — туда, куда шли. Закрытие вкладки с правкой — beforeunload; без правки и после ухода — нет."""
+def test_code_unsaved_edit_survives_a_project_link(browser, live):
+    """Правка не сохранена, а уходят по ссылке проекта в панели или в другой раздел студии: адрес возвращается, окно
+    «Изменения не сохранены»; «Остаться» — файл, правка и адрес на месте; «Уйти без сохранения» — туда, куда шли.
+    Закрытие вкладки с правкой — beforeunload; без правки и после ухода — нет."""
     from fake_bridge import pid
     login = "code-unsaved-level"
     live.add_user(login)
     machine = code_files_machine()
     aid, sb = code_online(live, login, machine)
-    here = f"#/code/{aid}/{pid('alpha')}"
+    here = f"#/code/{aid}/{pid('alpha')}?tab=files"
     editor = "document.querySelector('#code-editor')?.value"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
@@ -8435,10 +8599,11 @@ def test_code_unsaved_edit_survives_crumb_navigation(browser, live):
             ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
             ("eval", "clean", CODE_UNLOAD_ASKS),
             set_value("#code-editor", "print('правка')\n"), ("eval", "dirty", CODE_UNLOAD_ASKS),
-            ("click", f"nav.code-crumbs a[href='#/code/{aid}']"), ("wait", CODE_UNSAVED),
+            ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
+            ("click", f"#code-projects li[data-pid='{pid('alpha')}'] a"), ("wait", CODE_UNSAVED),
             ("eval", "asked", "location.hash"),
             ("click", "#code-unsaved .dialog-close"), ("wait", f"!{CODE_UNSAVED}"),
-            ("eval", "stayed", f"[location.hash, {editor}, document.querySelector('.code-crumb-here')?.textContent]"),
+            ("eval", "stayed", f"[location.hash, {editor}, document.querySelector('#code-place .code-place-project').textContent]"),
             *go("chat"), ("wait", CODE_UNSAVED),
             ("eval", "kept", "[location.hash, document.querySelector('#rail .tab[aria-current=page]').dataset.section]"),
             ("click", "#code-unsaved-leave"),
@@ -8458,18 +8623,21 @@ def test_code_unsaved_edit_survives_crumb_navigation(browser, live):
 
 
 def test_code_unsaved_edit_back_and_stay_keeps_the_history(browser, live):
-    """Ревью: «Назад» с несохранённой правкой и «Остаться» писали адрес файла в прежнюю запись истории — уровень,
-    с которого пришли к файлу, пропадал. Теперь «Остаться» — файл, правка и адрес на месте, записей столько же;
-    «Сохранить» и снова «Назад» — проекты компьютера, откуда пришли."""
+    """Ревью: «Назад» с несохранённой правкой и «Остаться» писали адрес файла в прежнюю запись истории — запись, с
+    которой пришли к файлу, пропадала. Теперь «Остаться» — файл, правка и адрес на месте, записей столько же;
+    «Сохранить» и снова «Назад» — проект, откуда пришли."""
     from fake_bridge import pid
     login = "code-unsaved-back"
     live.add_user(login)
     machine = code_files_machine()
+    machine.projects["beta"] = {"files": {}, "chats": {}}
     aid, sb = code_online(live, login, machine)
-    here = f"#/code/{aid}/{pid('alpha')}"
+    here = f"#/code/{aid}/{pid('alpha')}?tab=files"
     editor = "document.querySelector('#code-editor')?.value"
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
+            ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN), *code_project(aid, "alpha"),
+            ("click", "#code-tab-files"),
             code_root_names(5), ("click", code_item("src")),
             ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
             ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
@@ -8480,15 +8648,14 @@ def test_code_unsaved_edit_back_and_stay_keeps_the_history(browser, live):
             ("eval", "stayed", f"[location.hash, {editor}, history.length === window.length0]"),
             ("click", "#code-save"), ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'"),
             ("eval", "again", "history.back()"),
-            ("wait", f"location.hash === '#/code/{aid}'"
-                     f" && document.querySelector(\"#code-projects li[data-pid='{pid('alpha')}']\")"),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('beta')}' && !!document.querySelector('#code-chats')"),
             ("eval", "landed", f"[location.hash, !{CODE_UNSAVED}]")], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["stayed"] == [here, "print('правка')\n", True]
-    assert v["landed"] == [f"#/code/{aid}", True]
+    assert v["landed"] == [f"#/code/{aid}/{pid('beta')}", True]
     assert [q["text"] for q in code_requests(machine, "save")] == ["print('правка')\r\n"]
     assert not problems(r), problems(r)
 
@@ -8659,7 +8826,7 @@ def test_code_git_panel(browser, live):
 
     def project_git(name):
         return [*go(f"code/{aid}/{pid(name)}"),
-                ("wait", f"document.querySelector('.code-crumb-here')?.textContent === '{name}'"),
+                ("wait", f"document.querySelector('#code-place .code-place-project')?.textContent === '{name}'"),
                 ("click", "#code-tab-git")]
 
     try:
@@ -8696,7 +8863,8 @@ def test_git_hides_zero_ahead_behind(browser, live):
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "git"),
             ("wait", "document.querySelector('#code-git .code-git-head')"), ("eval", "alpha", marks),
-            *go(f"code/{aid}/{pid('beta')}"), ("wait", "document.querySelector('.code-crumb-here')?.textContent === 'beta'"),
+            *go(f"code/{aid}/{pid('beta')}"),
+            ("wait", "document.querySelector('#code-place .code-place-project')?.textContent === 'beta'"),
             ("click", "#code-tab-git"), ("wait", "document.querySelector('#code-git .code-git-head')"),
             ("eval", "beta", marks)], width=320, mobile=True)
     finally:

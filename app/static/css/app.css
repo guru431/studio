@@ -1054,42 +1054,99 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .search-row mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 #search-more { align-self: center; }
 
-/* ---- Claude Code (code.js): компьютеры, PIN, проекты, чаты проекта ------------------------- */
+/* ---- Claude Code (code.js, code-panel.js, code-sessions.js): панель, путь, переключатели, сессии ----------------- */
 
-.code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; min-width: 0; }
-.code-crumbs > * { overflow-wrap: anywhere; min-width: 0; }
-.code-crumb-here { font-weight: 600; }
-#code-status:empty { display: none; }
-.code-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.code-agent, .code-project, .code-chats li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; width: 100%;
-  min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
-  color: var(--text); text-align: left; text-decoration: none; }
-.code-agent:hover, .code-project:hover { background: var(--panel-2); }
-.code-agent-name, .code-project { overflow-wrap: anywhere; min-width: 0; }
-.code-agent-name { font-weight: 600; }
-.code-agent-meta { flex-basis: 100%; }
-.code-pin { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 12px;
+/* раскладка: панель слева, правая часть рядом; прокручивается #view — панель и верх правой части к нему прилипают */
+.code-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; }
+.code-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.code-panel { width: 220px; flex: none; position: sticky; top: 0; height: 100dvh; align-self: flex-start;
+  display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--border); }
+/* компьютеры — без прокрутки, прокручиваются только проекты под ними */
+.code-panel-agents { flex: none; padding: 10px 8px 8px; border-bottom: 1px solid var(--border); }
+.code-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.code-agents, .code-projects, .code-chats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.code-agents, .code-projects { gap: 2px; }
+.code-agent { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 7px 8px; border: 0;
+  border-radius: 8px; background: none; color: var(--text); text-align: left; font-size: 14px; cursor: pointer; }
+.code-agent:hover { background: var(--panel-2); }
+.code-agent[aria-current="true"] { background: var(--panel); font-weight: 600; }
+.code-agent-state { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--border); }
+.code-agent-state.on { background: var(--ok); }
+.code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-agent-pin { flex: none; }
+.code-project { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border-radius: 8px;
+  color: var(--text); text-decoration: none; font-size: 14px; }
+.code-project:hover { background: var(--panel-2); }
+.code-project[aria-current="page"] { background: var(--panel); font-weight: 600; }
+.code-project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-project-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.code-offline { margin: 4px; font-size: 14px; overflow-wrap: anywhere; }
+#code-panel-status { margin: 0; padding: 0 12px 10px; font-size: 13px; overflow-wrap: anywhere; }
+#code-panel-status:empty { display: none; }
+.code-pin { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px;
   background: var(--panel); }
-.code-pin h2 { margin: 0; font-size: 16px; }
+.code-pin h2 { margin: 0; font-size: 15px; }
 .code-pin-name { margin: 0; overflow-wrap: anywhere; }
 .code-pin-row { display: flex; gap: 8px; }
-.code-pin-row .input { flex: 1; min-width: 0; max-width: 220px; background: var(--bg); letter-spacing: .2em; }
+.code-pin-row .input { flex: 1; min-width: 0; background: var(--bg); letter-spacing: .2em; }
 /* PIN — не пароль: поле text с точками вместо цифр, менеджеры паролей его не сохраняют */
 #code-pin-input { -webkit-text-security: disc; }
 .code-pin .error { margin: 0; }
 .code-pin .error:empty { display: none; }
-/* «Скачать мост» (ui.js agentDownload): здесь — пустой список компьютеров, в «Настройках» — блок «Компьютеры» */
+/* «Скачать мост» (ui.js agentDownload): здесь — пустой раздел без компьютеров, в «Настройках» — блок «Компьютеры» */
 .agent-download { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
 .agent-download p { margin: 0; overflow-wrap: anywhere; }
 .empty .agent-download { align-items: center; }
-.code-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.code-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-.code-tabs .chip[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
+/* верх правой части: плашка пути — одна строка (сжимается сначала имя компьютера), справа «Чат · Файлы · Git» */
+.code-top { position: sticky; top: 0; z-index: 3; background: var(--bg); border-bottom: 1px solid var(--border); }
+.code-head { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 54px; padding: 8px 16px; }
+.code-place { flex: 0 1 auto; min-width: 0; display: flex; padding: 3px 9px; border-radius: 8px; background: var(--panel-2);
+  font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: nowrap; overflow: hidden; }
+.code-place-agent { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.code-place-sep { flex: none; color: var(--muted); white-space: pre; }
+.code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.code-views { flex: none; display: flex; gap: 6px; margin-left: auto; }
+.code-views .chip[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
+.code-panel-toggle, .code-backdrop { display: none; }
+.code-status-box:empty { display: none; }
+#code-status { margin: 12px 16px 0; overflow-wrap: anywhere; }
+#code-status:empty { display: none; }
+.code-body { flex: 1; width: 100%; max-width: 860px; min-width: 0; margin: 0 auto; padding: 16px; display: flex;
+  flex-direction: column; gap: 16px; }
+.code-pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.code-pick-note { margin: auto; }
+.code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; min-width: 0; }
+.code-crumbs > * { overflow-wrap: anywhere; min-width: 0; }
+.code-crumb-here { font-weight: 600; }
+/* сессии проекта (code-sessions.js): «Новый чат» первой строкой, затем сессии с пометками */
+.code-chats { gap: 6px; }
+.code-chat-link { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; width: 100%; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); text-align: left;
+  font: inherit; cursor: pointer; }
+.code-chat-link:hover { background: var(--panel-2); }
+.code-chat-link:disabled { opacity: .6; cursor: default; }
+.code-new-chat { color: var(--accent); font-weight: 600; }
+.code-chat-title { flex: 1 1 160px; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .code-chats li.closed .code-chat-title { color: var(--muted); }
-.code-chat-link { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; color: var(--text); text-decoration: none; }
-.code-chat-title { font-weight: 600; overflow-wrap: anywhere; }
 .code-marks { display: flex; flex-wrap: wrap; gap: 4px; }
-.code-chats .btn-sm { margin-left: auto; }
+
+/* телефон: панель выезжает слева по ☰ (как список диалогов чата), переключатели — второй строкой */
+@media (max-width: 760px) {
+  .code-panel { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw); height: auto;
+    padding-top: env(safe-area-inset-top, 0px); transform: translateX(-100%); visibility: hidden;
+    transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
+  .code-ws.panel-open .code-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow); }
+  .code-backdrop { display: block; position: fixed; z-index: 24; inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
+  .code-panel-toggle { display: inline-grid; margin-left: -6px; }
+  /* справа сверху три значка (поиск, «В работе», профиль): плашка кончается за 142 px от края, как у .head */
+  .code-head { flex-wrap: wrap; row-gap: 6px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 16px; }
+  .code-place { flex: 1 1 0; max-width: max-content; margin-right: 126px; }
+  .code-views { flex-basis: 100%; margin-left: 0; }
+  #code-status { margin: 12px 12px 0; }
+  .code-body { padding: 12px; }
+}
+@media (max-width: 360px) { .code-place { margin-right: 122px; } }
+@media (prefers-reduced-motion: reduce) { .code-panel { transition: none !important; } }
 
 /* чат (code-chat.js): лента, шаги, карточки, поле */
 .code-chat { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

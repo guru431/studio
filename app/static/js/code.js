@@ -1,58 +1,68 @@
-/* Раздел «Claude Code» (#/code) — спека 2026-10-28-studio-claude-code-design, 6.3 и 6.5.
+/* Раздел «Claude Code» (#/code) — спека 2026-10-29-studio-code-workspace-design (раскладка, панель, адреса, рабочее
+ * место) поверх 2026-10-28-studio-claude-code-design (мост, PIN, чат, файлы).
  *
- * Уровни по хвосту адреса (ctx.id, делится по «/»); рамка уровня (шапка, строка пути) рисуется сразу, список —
- * по ответу (прежний уровень, например панель PIN, до ответа не остаётся):
- * - #/code — компьютеры учётки (GET /api/agents, без моста): имя, «на связи» / «не на связи», значок «PIN»;
- *   пусто — «Компьютеров пока нет.» и ссылка «Скачать мост» (ui.js agentDownload).
- *   Компьютер не на связи — только строка: нажатие говорит словами и ничего не запрашивает. На связи —
- *   POST …/open с pin: null; 204 — проекты, 409 pin_needed — панель PIN (#code-pin: не <form> и не password —
- *   менеджеры паролей не предложат сохранить PIN; Enter и «Открыть» отправляют).
- * - #/code/<aid> — проекты (GET …/projects); #/code/<aid>/<pid> — проект: «Новый чат», вкладки «Чаты»,
- *   «Файлы», «Git» (две последние рисует code-files.js: «Файлы» — при первом показе вкладки, «Git» — заново
- *   при каждом), чаты (GET …/chats) с пометками и «Закрыть» / «Открыть снова» (PATCH).
- * - #/code/<aid>/<pid>/<chat> — чат: section#code-chat сразу, затем компьютер, проект и откуда чат (GET агентов,
- *   проектов и чатов проекта — и при переходе по адресу из push) и chatView (code-chat.js). «Открыть файл»
- *   шага — вкладка «Файлы» проекта (#/code/<aid>/<pid>?tab=files) и filesView.open(путь): путь ждёт перехода
- *   в памяти модуля (wantFile), в адрес не попадает.
+ * Раскладка строится один раз на показ раздела (mount) и живёт до unmount: слева — панель компьютеров и проектов
+ * (code-panel.js), справа — строка пути и переключатели «Чат · Файлы · Git», под ними тело; update(ctx) перерисовывает
+ * только правую часть. Компьютеров нет — панели нет, справа «Компьютеров пока нет.» и «Скачать мост» (ui.js
+ * agentDownload). Прокручивается #view: панель и верх правой части к нему прилипают (лента чата — code-chat.js — по
+ * #view, как прежде). Телефон (≤ 760 px): панель выезжает по ☰ (#code-panel-toggle), прячется после выбора проекта,
+ * нажатия на фон и Escape; сама открыта, пока проекта нет, и при отказе closed.
  *
- * PIN проверяет мост: набранный PIN живёт только в поле и переменной обработчика, после ответа поле
- * очищается; ни в хранилище браузера, ни в адрес он не попадает. Любой 409 closed или событие closed потока
- * (сессию закрыли: блокировка, выход, 30 минут простоя, перезапуск моста) — toPin: адрес уровня, где это
- * случилось, — в памяти модуля (returnTo), переход на #/code?pin=<aid>: у компьютера с PIN сразу панель, без
- * PIN — тот же POST open, что и нажатие, не на связи — слова; ?pin из адреса уходит. Второй отказ до перехода
- * (параллельные запросы уровня) адрес возврата не трогает. Открылся — назад на запомненный адрес
- * (чат, проект; отказ «Сохранить» — вкладка «Файлы» с этим файлом и правкой), а не к проектам. Перенаправления (к PIN и назад, хвост не того вида — на #/code, компьютера
- * нет) — location.replace: «Назад» не возвращает на них. Текст сервера и машины — только textContent.
+ * Адреса (§6.7):
+ * - #/code — открытый проект и вид из рабочего места учётки (code-workspace.js; location.replace на его адрес), его
+ *   нет — «Выберите проект слева»; #/code/<aid> — входная ссылка: этот компьютер в панели, дальше как #/code;
+ * - #/code/<aid>/<pid> — проект: сессии (code-sessions.js); ?tab=files|git — «Файлы» и «Git» (code-files.js: «Файлы» —
+ *   один экземпляр, пока открыт тот же проект, «Git» — заново при каждом показе);
+ * - #/code/<aid>/<pid>/<chat> — чат: section#code-chat сразу, затем chatView (code-chat.js); «Открыть файл» шага —
+ *   «Файлы» проекта и файл: путь ждёт перехода в памяти модуля (wantFile), в адрес не попадает.
+ * Переключатели меняют адрес заменой (location.replace); проект и вид — в рабочее место (act('place')). Плашка пути —
+ * имя компьютера (GET /api/agents) и проекта (GET …/projects — память на время показа раздела, общая с панелью); не
+ * ссылка. Компьютер не на связи (по списку компьютеров) — справа только слова, запросов к мосту нет.
  *
- * Правка файла не сохранена, а адрес уходит (строка пути, «Назад», другой раздел студии) — адрес возвращается
+ * PIN — в панели. Любой 409 closed или событие closed потока (сессию закрыли: блокировка, выход, 30 минут простоя,
+ * перезапуск моста) — returnTo (адрес, где застал отказ, и файл отказа «Сохранить») и поле PIN этого компьютера в
+ * панели; адрес не меняется. Второй отказ того же адреса returnTo не трогает. Компьютер открылся (opened) — правая
+ * часть заново по этому адресу, у «Файлов» — с файлом и правкой. ?pin=<aid> (прежние ссылки) — то же поле, ?pin уходит
+ * из адреса. PIN живёт только в поле панели и переменной её обработчика. Текст сервера и машины — только textContent.
+ *
+ * Правка файла не сохранена, а адрес уходит (переключатель, проект, «Назад», другой раздел студии) — адрес возвращается
  * (history.replaceState новой записи; «Назад» и «Вперёд» на запись с меткой entry роутера — pushState после неё) и
- * спрашивает окно «Изменения не сохранены» вкладки «Файлы»; «Уйти без сохранения» — снова туда (hold — его зовёт
- * роутер app.js до смены уровня или раздела). */
+ * спрашивает окно «Изменения не сохранены» «Файлов»; «Уйти без сохранения» — снова туда (hold — его зовёт роутер
+ * app.js до смены адреса или раздела). */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
-import { attemptsLeft } from './lock.js';
+import { panelView } from './code-panel.js';
+import { sessionList } from './code-sessions.js';
+import { act, get, load, reset } from './code-workspace.js';
 import { agentDownload, el, words } from './ui.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
-const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
 const NONE = 'Компьютеров пока нет.';
-const UNTITLED = 'Новый чат';
+const PICK = 'Выберите проект слева';
+const NO_AGENT = 'Нет такого компьютера';
 const AID_RE = /^\d+$/;
 const PID_RE = /^[0-9a-f]{16}$/;
 const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CODE_ICON = '<path d="M4 6l5 5-5 5M11 18h9"/>';
-const TABS = [['chats', 'Чаты'], ['files', 'Файлы'], ['git', 'Git']];
+const MENU_ICON = '<path d="M4 6h16M4 12h16M4 18h16"/>';
+const VIEWS = [['chat', 'Чат'], ['files', 'Файлы'], ['git', 'Git']];
 
 let host = null;
 let ctx = null;
-let gen = 0;            // номер отрисовки: ответ прежнего уровня новый не перерисует
-let view = null;        // чат (chatView) или вкладки проекта — снимается со сменой уровня
-let wantFile = null;    // путь файла из шага чата до перехода на вкладку «Файлы» — только в памяти
+let gen = 0;            // номер отрисовки: ответ прежнего адреса новый не перерисует
+let ui = null;          // раскладка раздела
+let panel = null;
+let none = false;       // компьютеров нет
+let view = null;        // чат или сессии — снимаются со сменой адреса
+let proj = null;        // открытый проект: { key, aid, pid, naming, files, git, chatBox, filesBox, gitBox }
+let wantFile = null;    // путь файла из шага чата до перехода на «Файлы» — только в памяти
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
-let shownHash = null;   // адрес отрисованного уровня: сюда возвращает несохранённая правка
-let shownEntry = null;  // метка записи отрисованного уровня ({ entry: n } в history.state — ставит роутер app.js)
+let shownHash = null;   // адрес отрисованной правой части: сюда возвращает несохранённая правка
+let shownEntry = null;  // метка записи отрисованного адреса ({ entry: n } в history.state — ставит роутер app.js)
+/** Проекты компьютеров (GET …/projects): aid → обещание списка, пока показан раздел; отказ не запоминается. */
+const lists = new Map();
 
 /** Перенаправление без записи в истории браузера; своё — без вопроса о несохранённой правке. */
 function redirect(path) {
@@ -60,366 +70,316 @@ function redirect(path) {
   location.replace(shownHash);
 }
 
-/** Роутер app.js перед любой сменой адреса (уровень, раздел, «Назад»): правка файла не сохранена — адрес назад,
- * вопрос окном вкладки «Файлы»; «Уйти без сохранения» — снова на новый адрес. true — переход задержан.
- * Новая запись (ссылка, location.hash =) метки не несёт — она и становится адресом файла. С меткой — переход по
- * истории («Назад», «Вперёд») на запись, что студия уже показывала (любой раздел): её не трогать (иначе запись,
- * куда ушли, пропала бы из истории), адрес файла — новой записью после неё; «Уйти» — назад на неё. */
+/** Роутер app.js перед любой сменой адреса (переключатель, проект, раздел, «Назад»): правка файла не сохранена —
+ * адрес назад, вопрос окном «Файлов»; «Уйти без сохранения» — снова на новый адрес. true — переход задержан.
+ * Новая запись (ссылка, location.hash =, location.replace) метки не несёт — она и становится адресом файла. С меткой —
+ * переход по истории («Назад», «Вперёд») на запись, что студия уже показывала (любой раздел): её не трогать (иначе
+ * запись, куда ушли, пропала бы из истории), адрес файла — новой записью после неё; «Уйти» — назад на неё. */
 export function hold() {
-  if (!view || !view.dirty || !view.dirty() || !shownHash || location.hash === shownHash) return false;
+  const files = proj && proj.files;
+  if (!files || !files.dirty() || !shownHash || location.hash === shownHash) return false;
   const target = location.hash;
   if (history.state && history.state.entry) {
     history.pushState({ entry: shownEntry }, '', shownHash);
-    view.leave(() => history.back());
+    files.leave(() => history.back());
   } else {
     history.replaceState({ entry: shownEntry }, '', shownHash);
-    view.leave(() => location.replace(target));
+    files.leave(() => location.replace(target));
   }
   return true;
-}
-
-/** Компьютер закрыт для сессии — к его панели PIN, запомнив, откуда (`back` и `file` — вкладка «Файлы» и файл,
- * чьё сохранение застал отказ: после PIN он откроется с правкой). Адрес уже ведёт к PIN (второй отказ того же
- * уровня раньше hashchange первого) — запомненное не трогать. */
-function toPin(aid, back = location.hash, file = null) {
-  if (location.hash.startsWith('#/code?pin=')) return;
-  returnTo = { aid: String(aid), hash: back, file };
-  redirect(`code?pin=${aid}`);
-}
-
-/** Компьютер открыт: назад, где его закрытость застала, иначе — его проекты. */
-function opened(aid) {
-  const back = returnTo && returnTo.aid === String(aid) ? returnTo : null;
-  returnTo = null;
-  if (!back) {
-    ctx.navigate(`code/${aid}`);
-    return;
-  }
-  wantFile = back.file;                 // render возьмёт его для вкладки «Файлы»
-  location.replace(back.hash);
-}
-
-function when(ts) {
-  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function base(aid, pid) {
   return `/api/code/agents/${aid}${pid ? `/projects/${pid}` : ''}`;
 }
 
-function crumbsNav(crumbs) {
-  const nav = el('nav', { class: 'code-crumbs', 'aria-label': 'Путь' });
-  crumbs.forEach(([text, href], i) => {
-    if (i) nav.append(el('span', { class: 'muted', 'aria-hidden': 'true' }, '›'));
-    nav.append(href ? el('a', { href }, text) : el('span', { class: 'code-crumb-here' }, text));
-  });
-  return nav;
-}
-
-/** Шапка, строка пути (ссылки на уровни выше) и строка отказов; тело уровня — в возвращённом main. */
-function frame(crumbs) {
-  const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
-  const nav = crumbs.length ? crumbsNav(crumbs) : null;
-  const main = el('div', { class: 'page code' }, nav, status);
-  host.replaceChildren(el('header', { class: 'head' }, el('h1', {}, 'Claude Code')), main);
-  return { main, status, nav };
-}
-
-/** Отказ запроса: closed — к панели PIN этого компьютера (с `file` — после PIN к этому файлу проекта `pid`),
- * offline — словами из «Текстов», прочее — словами. */
-function failed(err, aid, status, pid = null, file = null) {
-  if (err && err.code === 'closed') {
-    if (file && pid) toPin(aid, `#/code/${aid}/${pid}?tab=files`, file);
-    else toPin(aid);
-    return;
-  }
-  status.textContent = err && err.code === 'offline' ? OFFLINE : words(err);
-}
-
-async function agentsList() {
-  return (await api('GET', '/api/agents')).items;
-}
-
-/* ---- компьютеры ----------------------------------------------------------------- */
-
-function computers(mine) {
-  const { main, status } = frame([]);
-  const wanted = ctx.query && ctx.query.get('pin');
-  if (wanted) history.replaceState(history.state, '', '#/code');   // метка записи (hold) — та же
-  let pinBox = null;
-
-  function showPin(agent) {
-    if (pinBox) pinBox.remove();
-    // не <form> и не password: исчезнув после удачного запроса, они дали бы менеджеру паролей сохранить PIN
-    // компьютера в синхронизируемое хранилище браузера; точки вместо цифр — -webkit-text-security (app.css)
-    const input = el('input', { id: 'code-pin-input', class: 'input', type: 'text', inputmode: 'numeric',
-      autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64',
-      'aria-label': 'PIN компьютера' });
-    const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'button' }, 'Открыть');
-    const error = el('p', { id: 'code-pin-error', class: 'error', 'aria-live': 'polite' });
-    pinBox = el('div', { id: 'code-pin', class: 'code-pin', role: 'group', 'aria-label': 'PIN компьютера', 'data-id': agent.id },
-      el('h2', {}, 'PIN компьютера'), el('p', { class: 'muted code-pin-name' }, agent.name),
-      el('div', { class: 'code-pin-row' }, input, go), error);
-    go.addEventListener('click', send);
-    input.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' || event.isComposing) return;
-      event.preventDefault();
-      send();
+function projectsOf(aid, fresh = false) {
+  const key = String(aid);
+  if (fresh || !lists.has(key)) {
+    const promise = api('GET', `${base(aid)}/projects`).then((out) => out.items);
+    lists.set(key, promise);
+    promise.catch(() => {
+      if (lists.get(key) === promise) lists.delete(key);
     });
-    async function send() {
-      if (go.disabled || !input.value) return;
-      const pin = input.value;
-      go.disabled = true;
-      error.textContent = '';
-      try {
-        await api('POST', `${base(agent.id)}/open`, { pin });
-        if (mine === gen) opened(agent.id);
-        return;
-      } catch (err) {
-        if (mine !== gen) return;
-        const left = err.detail && err.detail.left;
-        if (err.code === 'pin') error.textContent = Number.isInteger(left) ? `Неверный PIN — ${attemptsLeft(left)}` : 'Неверный PIN';
-        else if (err.code === 'pin_locked') error.textContent = PIN_LOCKED;
-        else if (err.code === 'offline') error.textContent = OFFLINE;
-        else error.textContent = words(err);
-      } finally {
-        input.value = '';
-        go.disabled = false;
-      }
-      input.focus();
-    }
-    main.append(pinBox);
-    input.focus();
   }
-
-  async function choose(agent) {
-    status.textContent = '';
-    if (pinBox) pinBox.remove();
-    pinBox = null;
-    if (!agent.online) {
-      status.textContent = OFFLINE;
-      return;
-    }
-    try {
-      await api('POST', `${base(agent.id)}/open`, { pin: null });
-      if (mine === gen) opened(agent.id);
-    } catch (err) {
-      if (mine !== gen) return;
-      if (err.code === 'pin_needed') showPin(agent);
-      else if (err.code === 'pin_locked') status.textContent = PIN_LOCKED;
-      else failed(err, agent.id, status);
-    }
-  }
-
-  agentsList().then((items) => {
-    if (mine !== gen) return;
-    if (!items.length) {
-      const badge = el('span', { class: 'badge', 'aria-hidden': 'true' });
-      badge.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${CODE_ICON}</svg>`;   // константа выше
-      main.append(el('div', { id: 'code-empty', class: 'empty' }, badge, el('p', {}, NONE), agentDownload()));
-      return;
-    }
-    const list = el('ul', { id: 'code-agents', class: 'code-list' });
-    for (const agent of items) {
-      const row = el('button', { type: 'button', class: 'code-agent' },
-        el('b', { class: 'code-agent-name' }, agent.name),
-        el('span', { class: `tag code-agent-state${agent.online ? ' server' : ''}` }, agent.online ? 'на связи' : 'не на связи'),
-        agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null,
-        agent.online && agent.cc_version ? el('span', { class: 'muted small code-agent-meta' }, `Claude Code ${agent.cc_version}`) : null);
-      row.addEventListener('click', () => choose(agent));
-      list.append(el('li', { 'data-id': agent.id }, row));
-    }
-    main.insertBefore(list, status);
-    const back = items.find((a) => String(a.id) === wanted);
-    if (back && back.online) {
-      if (back.has_pin) showPin(back);
-      else choose(back);
-    } else if (back) status.textContent = OFFLINE;   // пропал, пока шёл переход к PIN
-  }, (err) => {
-    if (mine === gen) status.textContent = words(err);
-  });
+  return lists.get(key);
 }
 
-/* ---- проекты ---------------------------------------------------------------------- */
+async function agentOf(aid) {
+  return ((await panel.agents()) || []).find((a) => String(a.id) === String(aid)) || null;
+}
 
-async function agentName(aid) {
+/** Имя проекта (из списка проектов его компьютера) — один запрос на проект; отказ — повтор при следующем показе. */
+function projectName(p) {
+  if (!p.naming) {
+    p.naming = projectsOf(p.aid).then((items) => (items.find((x) => x.pid === p.pid) || {}).name || null);
+    p.naming.catch(() => {
+      p.naming = null;
+    });
+  }
+  return p.naming;
+}
+
+/* ---- раскладка ------------------------------------------------------------------- */
+
+function panelOpen(open) {
+  if (!ui) return;
+  ui.root.classList.toggle('panel-open', open);
+  ui.backdrop.hidden = !open;
+  ui.toggle.setAttribute('aria-expanded', String(open));
+}
+
+function onKey(event) {
+  if (event.key === 'Escape') panelOpen(false);
+}
+
+function layout() {
+  const toggle = el('button', { type: 'button', id: 'code-panel-toggle', class: 'icon-btn code-panel-toggle',
+    'aria-controls': 'code-panel', 'aria-expanded': 'false', 'aria-label': 'Компьютеры и проекты',
+    title: 'Компьютеры и проекты' });
+  toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${MENU_ICON}</svg>`;   // константа выше
+  const placeAgent = el('span', { class: 'code-place-agent' });
+  const placeProject = el('b', { class: 'code-place-project' });
+  const place = el('span', { id: 'code-place', class: 'code-place', hidden: true }, placeAgent,
+    el('span', { class: 'code-place-sep', 'aria-hidden': 'true' }, ' / '), placeProject);
+  const switches = VIEWS.map(([key, text]) => {
+    const button = el('button', { type: 'button', role: 'tab', id: `code-tab-${key}`, class: 'chip', 'aria-selected': 'false' },
+      text);
+    button.addEventListener('click', () => switchTo(key));
+    return button;
+  });
+  const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': 'Вид проекта', hidden: true }, ...switches);
+  const top = el('div', { class: 'code-top' }, el('div', { class: 'code-head' }, toggle, place, views));
+  const statusBox = el('div', { class: 'code-status-box' });
+  const body = el('div', { class: 'code-body' });
+  const backdrop = el('div', { class: 'code-backdrop', hidden: true });
+  const root = el('div', { class: 'code-ws' }, el('section', { class: 'code-main' }, top, statusBox, body), backdrop);
+  toggle.addEventListener('click', () => panelOpen(!root.classList.contains('panel-open')));
+  backdrop.addEventListener('click', () => panelOpen(false));
+  document.addEventListener('keydown', onKey);
+  host.replaceChildren(root);
+  ui = { root, top, toggle, place, placeAgent, placeProject, views, switches, statusBox, body, backdrop };
+}
+
+/** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
+function empty() {
+  none = true;
+  closeProject();
+  panelOpen(false);
+  if (panel) panel.unmount();
+  ui.top.hidden = true;
+  ui.statusBox.replaceChildren();
+  const badge = el('span', { class: 'badge', 'aria-hidden': 'true' });
+  badge.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${CODE_ICON}</svg>`;   // константа выше
+  ui.body.replaceChildren(el('div', { id: 'code-empty', class: 'empty' }, badge, el('p', {}, NONE), agentDownload()));
+}
+
+/** Переключатели вида и плашка пути: key — вид открытого проекта, null — проекта нет. */
+function frame(key) {
+  ui.place.hidden = key === null;
+  ui.views.hidden = key === null;
+  for (const button of ui.switches) button.setAttribute('aria-selected', String(button.id === `code-tab-${key}`));
+  if (!proj) return;
+  proj.chatBox.hidden = key !== 'chat';
+  proj.filesBox.hidden = key !== 'files';
+  proj.gitBox.hidden = key !== 'git';
+}
+
+function switchTo(key) {
+  if (!proj) return;
+  const hash = `#/code/${proj.aid}/${proj.pid}${key === 'chat' ? '' : `?tab=${key}`}`;
+  if (location.hash !== hash) location.replace(hash);
+}
+
+/** Проект справа: «Файлы» и «Git» прежнего проекта уходят, плашка — имя компьютера и проекта. */
+function enter(aid, pid) {
+  const key = `${aid}/${pid}`;
+  if (proj && proj.key === key) {
+    if (!ui.placeProject.textContent || ui.placeProject.textContent === 'Проект') plaque(proj);
+    return;
+  }
+  closeProject();
+  const pane = (hidden) => el('div', { class: 'code-pane', hidden });
+  proj = { key, aid, pid, naming: null, files: null, git: null, chatBox: pane(false), filesBox: pane(true), gitBox: pane(true) };
+  ui.body.replaceChildren(proj.chatBox, proj.filesBox, proj.gitBox);
+  ui.placeAgent.textContent = '';
+  ui.placeProject.textContent = '…';
+  panel.here(aid, pid);
+  plaque(proj);
+}
+
+function closeProject() {
+  if (!proj) return;
+  if (proj.files) proj.files.unmount();
+  if (proj.git) proj.git.unmount();
+  proj = null;
+  if (panel) panel.here(null);
+}
+
+async function plaque(p) {
+  const agent = await agentOf(p.aid);
+  if (proj !== p) return;
+  ui.placeAgent.textContent = agent ? agent.name : 'Компьютер';
+  if (!agent || !agent.online) {
+    ui.placeProject.textContent = 'Проект';
+    return;
+  }
+  let name = null;
   try {
-    const agent = (await agentsList()).find((a) => String(a.id) === aid);
-    return agent ? agent.name : '';
+    name = await projectName(p);
   } catch {
-    return '';            // имя — только подпись пути
+    // отказ скажет правая часть
   }
+  if (proj === p) ui.placeProject.textContent = name || 'Проект';
 }
 
-async function projects(mine, aid) {
-  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Компьютер', null]]);
-  const [name, out] = await Promise.all([agentName(aid),
-    api('GET', `${base(aid)}/projects`).then((o) => ({ items: o.items }), (err) => ({ err }))]);
-  if (mine !== gen) return;
-  if (name) nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [name, null]]));
-  if (out.err) {
-    failed(out.err, aid, status);
+/** Проект и вид — в рабочее место, если там другое. */
+function remember(aid, pid, key) {
+  const place = get().place;
+  if (!place || place.aid !== Number(aid) || place.pid !== pid || place.view !== key) act('place', { aid: Number(aid), pid, view: key });
+}
+
+/* ---- отказы и PIN ------------------------------------------------------------------ */
+
+/** Отказ запроса: closed — поле PIN этого компьютера в панели (с `file` — после PIN к этому файлу), offline — словами
+ * из «Текстов», прочее — словами. */
+function failed(err, aid, status, file = null) {
+  if (err && err.code === 'closed') {
+    const key = String(aid);
+    if (!returnTo || returnTo.aid !== key || returnTo.hash !== location.hash) returnTo = { aid: key, hash: location.hash, file };
+    else if (file) returnTo.file = file;
+    panelOpen(true);
+    panel.pin(aid);
     return;
   }
-  const list = el('ul', { id: 'code-projects', class: 'code-list' });
-  for (const p of out.items) {
-    list.append(el('li', { 'data-pid': p.pid }, el('a', { class: 'code-project', href: `#/code/${aid}/${p.pid}` }, p.name)));
-  }
-  main.insertBefore(list, status);
+  if (status) status.textContent = err && err.code === 'offline' ? OFFLINE : words(err);
 }
 
-/* ---- проект ----------------------------------------------------------------------- */
-
-function chatRow(mine, aid, pid, chat, reload, status) {
-  const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
-  if (chat.state === 'closed') marks.push(el('span', { class: 'tag code-closed' }, 'закрыт'));
-  if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));
-  else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, 'идёт ход'));
-  const closed = chat.state === 'closed';
-  const toggle = el('button', { type: 'button', class: `btn btn-sm ${closed ? 'code-chat-reopen' : 'code-chat-close'}` },
-    closed ? 'Открыть снова' : 'Закрыть');
-  toggle.addEventListener('click', async () => {
-    toggle.disabled = true;
-    status.textContent = '';
-    try {
-      await api('PATCH', `${base(aid, pid)}/chats/${chat.chat}`, { state: closed ? 'open' : 'closed' });
-      reload();
-    } catch (err) {
-      toggle.disabled = false;
-      if (mine === gen) failed(err, aid, status);
-    }
-  });
-  const link = el('a', { class: 'code-chat-link', href: `#/code/${aid}/${pid}/${chat.chat}` },
-    el('span', { class: 'code-chat-title' }, chat.title || UNTITLED),
-    typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null);
-  return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link,
-    el('span', { class: 'code-marks' }, ...marks), toggle);
+/** Компьютер открыт (панель): назад, где его закрытость застала; иначе правая часть не меняется. */
+function opened(aid) {
+  const back = returnTo && returnTo.aid === String(aid) ? returnTo : null;
+  if (!back) return;
+  returnTo = null;
+  panelOpen(false);
+  wantFile = back.file;                 // render возьмёт его для «Файлов»
+  if (location.hash !== back.hash) location.replace(back.hash);
+  else render();
 }
 
-async function project(mine, aid, pid, tab, path) {
-  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Компьютер', `#/code/${aid}`], ['Проект', null]]);
-  const [name, found] = await Promise.all([agentName(aid),
-    api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid), () => null)]);
-  if (mine !== gen) return;
-  let files = null;
-  let git = null;
-  view = {
-    dirty: () => !!files && files.dirty(),             // несохранённая правка вкладки «Файлы» (hold)
-    leave: (go) => files.leave(go),
-    unmount() {
-      if (files) files.unmount();
-      if (git) git.unmount();
-    },
-  };
-  nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [name || 'Компьютер', `#/code/${aid}`],
-    [found ? found.name : 'Проект', null]]));
-  const add = el('button', { type: 'button', id: 'code-new-chat', class: 'btn btn-accent' }, 'Новый чат');
-  add.addEventListener('click', async () => {
-    add.disabled = true;
-    status.textContent = '';
-    try {
-      const { chat } = await api('POST', `${base(aid, pid)}/chats`);
-      if (mine !== gen) return;
-      freshChat = chat;
-      ctx.navigate(`code/${aid}/${pid}/${chat}`);
-    } catch (err) {
-      add.disabled = false;
-      if (mine === gen) failed(err, aid, status);
-    }
-  });
-  const tabs = el('div', { class: 'code-tabs', role: 'tablist' });
-  const panes = {};
-  const first = TABS.some(([key]) => key === tab) ? tab : 'chats';
-  const refuse = (err, box, file = null) => {
-    if (mine === gen) failed(err, aid, box, pid, file);
-  };
-  let shown = null;
-  function show(key) {
-    if (shown === 'files' && key !== 'files' && files) {
-      files.leave(() => {
-        if (mine === gen) showTab(key);
-      });
-      return;
-    }
-    showTab(key);
-  }
-  function showTab(key) {
-    shown = key;
-    for (const t of tabs.children) t.setAttribute('aria-selected', String(t.id === `code-tab-${key}`));
-    for (const [k, pane] of Object.entries(panes)) pane.hidden = k !== key;
-    if (key === 'files' && !files) {
-      files = filesView(panes.files, { aid, pid, name: found ? found.name : '', failed: refuse, path });
-    }
-    if (key === 'git') {
-      if (git) git.unmount();
-      git = gitView(panes.git, { aid, pid, failed: refuse });
-    }
-  }
-  for (const [key, text] of TABS) {
-    const tab = el('button', { type: 'button', role: 'tab', id: `code-tab-${key}`, class: 'chip',
-      'aria-selected': String(key === first), 'aria-controls': `code-pane-${key}` }, text);
-    panes[key] = el('div', { id: `code-pane-${key}`, role: 'tabpanel', 'aria-labelledby': `code-tab-${key}`,
-      hidden: key !== first });
-    tab.addEventListener('click', () => show(key));
-    tabs.append(tab);
-  }
-  const list = el('ul', { id: 'code-chats', class: 'code-list code-chats' });
-  panes.chats.append(list);
-  main.insertBefore(el('div', { class: 'code-bar' }, add, tabs), status);
-  main.append(panes.chats, panes.files, panes.git);
-  show(first);
-
-  async function reload() {
-    try {
-      const { items } = await api('GET', `${base(aid, pid)}/chats`);
-      if (mine !== gen) return;
-      list.replaceChildren(...items.map((c) => chatRow(mine, aid, pid, c, reload, status)));
-    } catch (err) {
-      if (mine === gen) failed(err, aid, status);
-    }
-  }
-  await reload();
+function usable(agent, status) {
+  if (!agent) status.textContent = NO_AGENT;
+  else if (!agent.online) status.textContent = OFFLINE;
+  return !!agent && agent.online;
 }
 
-/* ---- чат (code-chat.js) ------------------------------------------------------------- */
+/* ---- правая часть ------------------------------------------------------------------ */
 
-async function chat(mine, aid, pid, id) {
-  const { main, status, nav } = frame([['Компьютеры', '#/code'], ['Проекты', `#/code/${aid}`],
-    ['Чаты', `#/code/${aid}/${pid}`]]);
-  const section = el('section', { id: 'code-chat', class: 'code-chat', 'data-chat': id });
-  main.append(section);
-  let agents;
-  let found;
-  let row;
+async function lobby(mine, aid) {
+  const pinFor = ctx.query && ctx.query.get('pin');
+  if (!aid && pinFor && AID_RE.test(pinFor)) {
+    history.replaceState(history.state, '', '#/code');     // метка записи (hold) — та же
+    shownHash = location.hash;
+    panelOpen(true);
+    panel.pin(pinFor);
+  } else if (aid) panel.select(aid);
+  const place = get().place;
+  if (place) {
+    redirect(`code/${place.aid}/${place.pid}${place.view === 'chat' ? '' : `?tab=${place.view}`}`);
+    return;
+  }
+  closeProject();
+  frame(null);
+  ui.body.replaceChildren();
+  const items = await panel.agents();
+  if (mine !== gen || none) return;
+  if (items && !items.length) {
+    empty();
+    return;
+  }
+  ui.body.replaceChildren(el('p', { id: 'code-pick', class: 'muted code-pick-note' }, PICK));
+  panelOpen(true);
+}
+
+async function sessions(mine, p, status) {
+  let items;
   try {
-    [agents, found, row] = await Promise.all([agentsList(),
-      api('GET', `${base(aid)}/projects`).then((o) => o.items.find((p) => p.pid === pid) || null),
-      api('GET', `${base(aid, pid)}/chats`).then((o) => o.items.find((c) => c.chat === id) || null)]);
+    items = (await api('GET', `${base(p.aid, p.pid)}/chats`)).items;
   } catch (err) {
-    if (mine === gen) failed(err, aid, status);
+    if (mine === gen) failed(err, p.aid, status);
     return;
   }
   if (mine !== gen) return;
-  const agent = agents.find((a) => String(a.id) === aid);
-  if (!agent) {
-    redirect('code');
-    return;
-  }
-  nav.replaceWith(crumbsNav([['Компьютеры', '#/code'], [agent.name, `#/code/${aid}`],
-    [found ? found.name : 'Проект', `#/code/${aid}/${pid}`], [(row && row.title) || UNTITLED, null]]));
-  status.remove();                           // у чата своя строка #code-status
-  const fresh = freshChat === id;
-  freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
-  view = chatView(section, { aid, pid, chat: id, agent, project: found ? { pid, name: found.name } : null,
-    origin: row ? row.origin : 'studio', fresh, navigate: ctx.navigate,
-    closed: () => toPin(aid),
-    openFile: (path) => {
-      wantFile = path;
-      ctx.navigate(`code/${aid}/${pid}?tab=files`);
+  const to = (chat) => ctx.navigate(`code/${p.aid}/${p.pid}/${chat}`);
+  view = sessionList(p.chatBox, { aid: p.aid, pid: p.pid, items, picked: to,
+    created: (chat) => {
+      freshChat = chat;
+      to(chat);
+    },
+    failed: (err) => {
+      if (mine === gen) failed(err, p.aid, status);
     } });
 }
 
-/* ---- маршрут ---------------------------------------------------------------------- */
+async function chat(mine, p, id, agent, section, status) {
+  let name;
+  let row;
+  try {
+    [name, row] = await Promise.all([projectName(p),
+      api('GET', `${base(p.aid, p.pid)}/chats`).then((o) => o.items.find((c) => c.chat === id) || null)]);
+  } catch (err) {
+    if (mine === gen) failed(err, p.aid, status);
+    return;
+  }
+  if (mine !== gen) return;
+  ui.statusBox.replaceChildren();            // у чата своя строка #code-status
+  const fresh = freshChat === id;
+  freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
+  view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
+    origin: row ? row.origin : 'studio', fresh, navigate: ctx.navigate,
+    closed: () => failed({ code: 'closed' }, p.aid, null),
+    openFile: (path) => {
+      wantFile = path;
+      ctx.navigate(`code/${p.aid}/${p.pid}?tab=files`);
+    } });
+}
+
+async function files(mine, p, path, status) {
+  let name;
+  try {
+    name = await projectName(p);
+  } catch (err) {
+    if (mine === gen) failed(err, p.aid, status);
+    return;
+  }
+  if (mine !== gen || proj !== p) return;
+  const refuse = (err, box, file = null) => {
+    if (proj === p) failed(err, p.aid, box, file);
+  };
+  if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path });
+  else if (path) p.files.open(path);
+}
+
+function git(p) {
+  if (p.git) p.git.unmount();
+  p.git = gitView(p.gitBox, { aid: p.aid, pid: p.pid,
+    failed: (err, box) => {
+      if (proj === p) failed(err, p.aid, box);
+    } });
+}
+
+async function project(mine, aid, pid, id, key, path, status) {
+  const p = proj;
+  const section = id ? el('section', { id: 'code-chat', class: 'code-chat', 'data-chat': id }) : null;
+  if (key === 'chat') p.chatBox.replaceChildren(...(section ? [section] : []));
+  const agent = await agentOf(aid);
+  if (mine !== gen) return;
+  if (agent) remember(aid, pid, key);
+  if (!usable(agent, status)) return;
+  if (id) chat(mine, p, id, agent, section, status);
+  else if (key === 'files') files(mine, p, path, status);
+  else if (key === 'git') git(p);
+  else sessions(mine, p, status);
+}
 
 function render() {
   const mine = ++gen;
@@ -429,6 +389,7 @@ function render() {
   shownEntry = history.state && history.state.entry;
   const path = wantFile;
   wantFile = null;
+  if (none) return;
   const parts = ctx.id ? ctx.id.split('/') : [];
   const [aid, pid, id] = parts;
   const ok = parts.length <= 3 && (!aid || AID_RE.test(aid)) && (!pid || PID_RE.test(pid)) && (!id || CHAT_RE.test(id));
@@ -436,35 +397,66 @@ function render() {
     redirect('code');
     return;
   }
-  // запомненный адрес живёт только до панели PIN своего компьютера: ушли куда-то ещё — забыт
-  if (returnTo && (aid || !ctx.query || ctx.query.get('pin') !== returnTo.aid)) returnTo = null;
-  if (id) chat(mine, aid, pid, id);
-  else if (pid) {
-    const tab = ctx.query && ctx.query.get('tab');
-    project(mine, aid, pid, tab, tab === 'files' ? path : null);
+  // запомненный адрес живёт, пока на нём остаются: ушли куда-то ещё — забыт
+  if (returnTo && returnTo.hash !== location.hash) returnTo = null;
+  const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
+  ui.statusBox.replaceChildren(status);
+  if (!pid) {
+    lobby(mine, aid);
+    return;
   }
-  else if (aid) projects(mine, aid);
-  else computers(mine);
+  const tab = ctx.query && ctx.query.get('tab');
+  const key = !id && (tab === 'files' || tab === 'git') ? tab : 'chat';
+  panelOpen(false);                          // проект открыт — панели на телефоне незачем (отказ closed откроет снова)
+  enter(aid, pid);
+  frame(key);
+  project(mine, aid, pid, id, key, key === 'files' ? path : null, status);
 }
 
-export function mount(view, context) {
-  host = view;
+export function mount(node, context) {
+  host = node;
   ctx = context;
-  render();
+  none = false;
+  const mine = ++gen;
+  layout();
+  load().catch(() => null).then(() => {
+    if (mine !== gen || !host) return;
+    const ws = get();
+    const [aid, pid] = ctx.id ? ctx.id.split('/') : [];
+    const pinFor = ctx.query && ctx.query.get('pin');
+    const first = [pinFor, pid ? null : aid, ws.panel, aid, ws.place && ws.place.aid].map(Number)
+      .find((n) => Number.isInteger(n) && n > 0);
+    panel = panelView(ui.root, { selected: first ?? null, opened,
+      chose: () => panelOpen(false), list: projectsOf });
+    ui.root.prepend(ui.root.querySelector('#code-panel'));
+    const shown = panel;
+    panel.agents().then((items) => {
+      if (panel === shown && items && !items.length && !none) empty();
+    });
+    render();
+  });
 }
 
 export function update(context) {
   ctx = context;
-  render();
+  if (panel) render();
 }
 
 export function unmount() {
-  shownHash = null;
   gen += 1;
   if (view) view.unmount();
   view = null;
+  closeProject();
+  if (panel) panel.unmount();
+  panel = null;
+  document.removeEventListener('keydown', onKey);
+  reset();
+  lists.clear();
+  shownHash = null;
   wantFile = null;
   returnTo = null;
+  none = false;
   host = null;
   ctx = null;
+  ui = null;
 }
