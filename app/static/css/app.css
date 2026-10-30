@@ -5,14 +5,14 @@
 /* ---- токены ---------------------------------------------------------------- */
 
 :root, [data-theme="light"] { --bg:#fbfaf7; --side:#f3f0ea; --rail:#ebe7df; --panel:#ffffff; --panel-2:#efebe4; --bubble:#eeeae3;
-  --text:#1f1d1a; --muted:#7b766d; --border:#e3dfd6; --accent:#c96442; --accent-text:#ffffff; --ok:#2f9e6f; --danger:#b42318;
+  --text:#1f1d1a; --muted:#7b766d; --border:#e3dfd6; --accent:#c96442; --accent-text:#ffffff; --ok:#2f9e6f; --danger:#b42318; --git-modified:#956800;
   --shadow: 0 10px 30px rgba(31, 29, 26, .12); --backdrop: rgba(31, 29, 26, .35); color-scheme: light; }
 [data-theme="dark"] { --bg:#1b1b1b; --side:#131313; --rail:#0d0d0d; --panel:#262626; --panel-2:#303030; --bubble:#2f2f2f;
-  --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171;
+  --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
   --shadow: 0 10px 30px rgba(0, 0, 0, .5); --backdrop: rgba(0, 0, 0, .6); color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) { --bg:#1b1b1b; --side:#131313; --rail:#0d0d0d; --panel:#262626; --panel-2:#303030; --bubble:#2f2f2f;
-    --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171;
+    --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
     --shadow: 0 10px 30px rgba(0, 0, 0, .5); --backdrop: rgba(0, 0, 0, .6); color-scheme: dark; }
 }
 
@@ -1099,14 +1099,23 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .empty .agent-download { align-items: center; }
 /* верх правой части: плашка пути — одна строка (сжимается сначала имя компьютера), справа «Чат · Файлы · Git» */
 .code-top { position: sticky; top: 0; z-index: 3; background: var(--bg); border-bottom: 1px solid var(--border); }
-.code-head { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 54px; padding: 8px 16px; }
+.code-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; min-height: 48px; padding: 8px 16px; }
+.code-location { display: contents; }
 .code-place { flex: 0 1 auto; min-width: 0; display: flex; padding: 3px 9px; border-radius: 8px; background: var(--panel-2);
   font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: nowrap; overflow: hidden; }
 .code-place-agent { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .code-place-sep { flex: none; color: var(--muted); white-space: pre; }
 .code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .code-views { flex: none; display: flex; gap: 6px; margin-left: auto; }
-.code-starts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 16px 10px; }
+.code-starts { display: flex; flex: none; align-items: center; gap: 6px; }
+.code-repo-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; padding: 4px 6px;
+  border: 0; border-radius: 5px; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
+.code-repo-status:hover { background: var(--panel-2); color: var(--text); }
+.code-repo-icon { display: inline-flex; flex: none; }
+.code-repo-icon .ico { width: 15px; height: 15px; }
+.code-repo-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-repo-sync { flex: none; white-space: nowrap; }
+.code-repo-status.unavailable { font-family: inherit; }
 .code-views .chip[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
 .code-panel-toggle, .code-backdrop { display: none; }
 .code-status-box:empty { display: none; }
@@ -1114,6 +1123,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 #code-status:empty { display: none; }
 .code-body { flex: 1; width: 100%; max-width: 860px; min-width: 0; margin: 0 auto; padding: 16px; display: flex;
   flex-direction: column; gap: 16px; }
+.code-main:has(.code-pane:not([hidden]) .code-files-view) .code-body { max-width: none; }
 .code-pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .code-pick-note { margin: auto; }
 .code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; min-width: 0; }
@@ -1177,12 +1187,16 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-panel-toggle { display: inline-grid; margin-left: -6px; }
   /* справа сверху три значка (поиск, «В работе», профиль): плашка кончается за 142 px от края, как у .head */
   .code-head { flex-wrap: wrap; row-gap: 6px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: 16px; }
-  .code-place { flex: 1 1 0; max-width: max-content; margin-right: 126px; }
-  .code-views { flex-basis: 100%; margin-left: 0; }
+  .code-location { display: flex; flex-basis: 100%; align-items: center; gap: 10px; min-width: 0; padding-right: 126px; }
+  .code-place { flex: 0 1 auto; max-width: 100%; }
+  .code-views { order: 3; margin-left: 0; }
+  .code-starts { order: 2; flex-basis: 100%; flex-wrap: wrap; }
+  .code-starts > .small { display: none; }
+  .code-repo-status { order: 4; margin-left: auto; max-width: calc(100% - 190px); }
   #code-status { margin: 12px 12px 0; }
   .code-body { padding: 12px; }
 }
-@media (max-width: 360px) { .code-place { margin-right: 122px; } }
+@media (max-width: 360px) { .code-location { padding-right: 122px; } }
 @media (prefers-reduced-motion: reduce) { .code-panel { transition: none !important; } }
 
 /* чат (code-chat.js): лента, шаги, карточки, поле */
@@ -1236,17 +1250,24 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   overflow-wrap: anywhere; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
 #code-files-error:empty { display: none; }
 .code-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-width: 0;
-  border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
+  background: var(--panel); overflow: hidden; padding: 4px 0; }
 .code-files:empty { display: none; }
-.code-files li + li { border-top: 1px solid var(--border); }
-.code-file-item { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; border: 0;
-  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.code-files ul { list-style: none; margin: 0; padding: 0; }
+.code-file-item { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0;
+  padding: 3px 10px 3px min(calc(4px + var(--tree-depth, 0) * 16px), 45%); border: 0;
+  background: none; color: var(--text); font: 13px/22px var(--mono); text-align: left; cursor: pointer; }
 .code-file-item:hover { background: var(--panel-2); }
-.code-file-icon { display: inline-flex; color: var(--muted); }
+.code-files li[aria-selected="true"] > .code-file-item { background: var(--panel-2); outline: 1px solid var(--border); outline-offset: -1px; }
+.code-file-chevron { display: inline-block; flex: none; width: 13px; text-align: center; color: var(--muted); }
+.code-files li[aria-expanded="true"] > .code-file-item .code-file-chevron { transform: rotate(90deg); }
+.code-file-icon { display: inline-flex; flex: none; color: var(--muted); }
 .code-file-icon svg.ico { width: 17px; height: 17px; }
-.code-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.code-file-item.dir .code-file-name { font-weight: 600; }
-.code-file-size { flex: none; }
+.code-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-file-git { flex: none; font-size: 12px; font-weight: 600; }
+.code-file-item[data-git="modified"], .code-file-item[data-git="renamed"] { color: var(--git-modified); }
+.code-file-item[data-git="added"], .code-file-item[data-git="untracked"] { color: var(--ok); }
+.code-file-item[data-git="conflict"], .code-file-item[data-git="deleted"] { color: var(--danger); }
+.code-tree-note { padding: 3px 12px; font-size: 12px; }
 .code-file { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .code-file[hidden] { display: none; }
 .code-file-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1269,7 +1290,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 /* узко список папки уступает место открытому файлу (назад ведёт путь); широко — рядом */
 .code-files-view.has-file .code-files { display: none; }
 @media (min-width: 900px) {
-  .code-files-view.has-file { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+  .code-files-view.has-file { grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); }
   .code-files-view.has-file > :not(.code-files):not(.code-file) { grid-column: 1 / -1; }
   .code-files-view.has-file .code-files { display: flex; align-self: start; }
 }

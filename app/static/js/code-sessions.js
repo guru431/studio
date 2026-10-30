@@ -17,7 +17,7 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false }) {
+export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false, starts = true }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
 
@@ -63,8 +63,11 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
     return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
   }
 
-  const list = el('ul', { id: 'code-chats', class: 'code-chats' }, el('li', { class: 'code-chats-new' }, add));
-  if (addCodex) list.append(el('li', { class: 'code-chats-new' }, addCodex));
+  const list = el('ul', { id: 'code-chats', class: 'code-chats' });
+  if (starts) {
+    list.append(el('li', { class: 'code-chats-new' }, add));
+    if (addCodex) list.append(el('li', { class: 'code-chats-new' }, addCodex));
+  }
   const rows = (found) => found.filter((c) => !exclude.has(c.chat)).map(row);
   if (Array.isArray(items)) list.append(...rows(items));
   else {

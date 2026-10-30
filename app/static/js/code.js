@@ -43,6 +43,7 @@
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
+import { projectGit } from './code-git.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
@@ -58,6 +59,7 @@ const PID_RE = /^[0-9a-f]{16}$/;
 const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CODE_ICON = '<path d="M4 6l5 5-5 5M11 18h9"/>';
 const MENU_ICON = '<path d="M4 6h16M4 12h16M4 18h16"/>';
+const BRANCH_ICON = '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10M18 7v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/>';
 const VIEWS = [['chat', 'Чат'], ['files', 'Файлы'], ['git', 'Git']];
 const IDLE_POLL_SEC = 20;        // метки вкладок: GET …/chats открытого проекта (тесты подменяют паузу setTimeout)
 const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в разделе (как опрос live чата)
@@ -179,7 +181,10 @@ function layout() {
   newClaude.addEventListener('click', () => startChat('claude'));
   newCodex.addEventListener('click', () => startChat('codex'));
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
-  const top = el('div', { class: 'code-top' }, tabsHost, el('div', { class: 'code-head' }, toggle, place, views), starts);
+  const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
+  repoStatus.addEventListener('click', () => switchTo('git'));
+  const top = el('div', { class: 'code-top' }, tabsHost,
+    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place), repoStatus, starts, views));
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
@@ -192,7 +197,7 @@ function layout() {
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
   ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, starts, newClaude, newCodex,
-    statusBox, body, backdrop };
+    repoStatus, statusBox, body, backdrop };
 }
 
 /** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
@@ -213,10 +218,15 @@ function frame(key) {
   ui.place.hidden = key === null;
   ui.views.hidden = key === null;
   ui.starts.hidden = key === null;
+  ui.repoStatus.hidden = key === null || !ui.repoStatus.textContent;
   ui.newClaude.disabled = ui.newCodex.disabled = true;
   if (key === null) ui.tabsHost.hidden = true;
   for (const button of ui.switches) button.setAttribute('aria-selected', String(button.id === `code-tab-${key}`));
   if (!proj) return;
+  if (key !== 'git' && proj.git) {
+    proj.git.unmount();
+    proj.git = null;
+  }
   proj.chatBox.hidden = key !== 'chat';
   proj.filesBox.hidden = key !== 'files';
   proj.gitBox.hidden = key !== 'git';
@@ -262,7 +272,7 @@ function paintTabs() {
   if (!p || !p.bar) return;
   const { tabs } = tabsOf(p.aid, p.pid);
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
-  ui.tabsHost.hidden = blocked === String(p.aid) || (!tabs.length && shownKey === 'chat');
+  ui.tabsHost.hidden = blocked === String(p.aid) || !tabs.length;
   p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded });
   ensurePoll();
 }
@@ -271,10 +281,10 @@ function paintTabs() {
 
 /** Опрос продлевает открытость компьютера (каждая просьба мосту, протокол §3): забытая вкладка браузера не должна
  * держать его открытым вечно — только видимая страница, не дольше IDLE_POLL_FOR_SEC после действия, и только у
- * проекта с вкладками (меткам больше негде быть). */
+ * открытого проекта; список чатов нужен только при открытых вкладках, снимок Git — всегда. */
 function polling(p) {
   return !!p && proj === p && document.visibilityState !== 'hidden' && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000
-    && tabsOf(p.aid, p.pid).tabs.length > 0;
+    && p.canStart;
 }
 
 function stopPoll() {
@@ -289,7 +299,8 @@ function ensurePoll() {
     pollTimer = null;
     if (!polling(p)) return;
     try {
-      await chatsOf(p, true);             // ответ перерисует ряд (paintTabs) и поставит следующий опрос
+      await Promise.all([p.repo.refresh(true), ...(tabsOf(p.aid, p.pid).tabs.length ? [chatsOf(p, true)] : [])]);
+      ensurePoll();
     } catch {
       // закрыт, не на связи — опрос до следующего действия; скажет о нём показанный чат
     }
@@ -309,6 +320,7 @@ function onVisibility() {
     return;
   }
   load().catch(() => {});
+  if (proj?.canStart) proj.repo.refresh(true);
   ensurePoll();
 }
 
@@ -362,8 +374,35 @@ function enter(aid, pid) {
   closeProject();
   const pane = (hidden) => el('div', { class: 'code-pane', hidden });
   const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
+    repo: projectGit(aid, pid),
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true) };
   proj = p;
+  ui.repoStatus.replaceChildren();
+  ui.repoStatus.hidden = true;
+  p.repo.subscribe((state) => {
+    if (proj !== p) return;
+    const { data, error } = state;
+    ui.repoStatus.classList.toggle('unavailable', !!error);
+    ui.repoStatus.hidden = !data && !error;
+    if (!data) {
+      ui.repoStatus.textContent = error?.code === 'not_git' ? 'Без Git' : error ? 'Git недоступен' : '';
+      ui.repoStatus.title = error?.code === 'not_git' ? 'Не репозиторий git' : 'Открыть Git и повторить проверку';
+      ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
+      return;
+    }
+    const files = Array.isArray(data.files) ? data.files : [];
+    const branch = typeof data.branch === 'string' && data.branch ? data.branch : 'HEAD';
+    const ahead = data.upstream ? Number(data.ahead) || 0 : 0;
+    const behind = data.upstream ? Number(data.behind) || 0 : 0;
+    const glyph = el('span', { class: 'code-repo-icon', 'aria-hidden': 'true' });
+    glyph.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${BRANCH_ICON}</svg>`;
+    ui.repoStatus.replaceChildren(glyph, el('span', { class: 'code-repo-branch' }, `${branch}${files.length ? '*' : ''}`));
+    if (behind) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↓${behind}`));
+    if (ahead) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↑${ahead}`));
+    ui.repoStatus.title = [`Ветка ${branch}`, files.length ? `Незакоммиченных файлов: ${files.length}` : 'Изменений нет',
+      data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Впереди на ${ahead}` : ''].filter(Boolean).join(' · ');
+    ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
+  });
   p.bar = tabBar(ui.tabsHost, { aid, pid,
     read: () => chatsOf(p, true),
     pick: (chat) => toChat(p, chat),
@@ -386,6 +425,7 @@ function closeProject() {
   if (proj.bar) proj.bar.unmount();
   if (proj.files) proj.files.unmount();
   if (proj.git) proj.git.unmount();
+  proj.repo.unmount();
   proj = null;
   if (panel) panel.here(null);
 }
@@ -421,6 +461,7 @@ function failed(err, aid, status, file = null) {
   if (err && err.code === 'closed') {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;
+      proj.repo.clear();
       showStarts(proj);
     }
     const key = String(aid);
@@ -495,7 +536,7 @@ async function sessions(mine, p, status) {
   }
   if (mine !== gen) return;
   view = sessionList(p.chatBox, { aid: p.aid, pid: p.pid, items, picked: (chat) => toChat(p, chat),
-    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex,
+    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, starts: false,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
@@ -538,13 +579,13 @@ async function files(mine, p, path, status) {
   const refuse = (err, box, file = null) => {
     if (proj === p) failed(err, p.aid, box, file);
   };
-  if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path });
+  if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path, git: p.repo });
   else if (path !== null) p.files.open(path);
 }
 
 function git(p) {
   if (p.git) p.git.unmount();
-  p.git = gitView(p.gitBox, { aid: p.aid, pid: p.pid,
+  p.git = gitView(p.gitBox, { git: p.repo,
     failed: (err, box) => {
       if (proj === p) failed(err, p.aid, box);
     } });
@@ -579,6 +620,8 @@ async function project(mine, aid, pid, id, key, path, status) {
   }
   p.canStart = true;
   showStarts(p);
+  p.repo.refresh(key === 'git');
+  ensurePoll();
   if (id) chat(mine, p, id, agent, section, status);
   else if (key === 'files') files(mine, p, path, status);
   else if (key === 'git') git(p);

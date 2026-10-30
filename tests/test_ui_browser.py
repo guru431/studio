@@ -7064,6 +7064,9 @@ def code_online(live, login, machine, name="Рабочий ПК"):
     """Компьютер учётки на связи через настоящий WebSocket: (agent_id, SocketBridge)."""
     import bridge
     from fake_bridge import SocketBridge
+    # Обычные проекты сценариев — чистые репозитории; отсутствие Git задаётся явно через git=None.
+    for project in machine.projects.values():
+        project.setdefault("git", {"branch": "main", "upstream": "origin/main", "ahead": 0, "behind": 0, "files": []})
     aid, key = enroll_live(live, login, name)
     sb = SocketBridge(live.url, key, machine).start()
     wait_for(lambda: aid in bridge.LINKS)
@@ -7572,7 +7575,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
             *code_project(aid, "alpha"),
             ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 4"),
             ("eval", "hash", "location.hash"),
-            ("eval", "first", "document.querySelector('#code-chats li').querySelector('#code-new-chat')?.textContent"),
+            ("eval", "first", "!!document.querySelector('#code-chats .code-new-chat')"),
             ("eval", "views", "['#code-tab-chat', '#code-tab-files', '#code-tab-git'].map((s) => document.querySelector(s).textContent)"),
             ("eval", "rows", CODE_CHATS), ("eval", "fits", NO_OVERFLOW),
             ("eval", "buttons", "document.querySelectorAll('#code-chats .code-chat-close, #code-chats .code-chat-reopen').length"),
@@ -7587,7 +7590,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}" and v["fits"] is True
-    assert v["first"] == "Новый чат Claude Code" and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
+    assert v["first"] is False and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
     assert v["rows"] == [[other, "Новый чат", True, ["Claude Code", "VS Code или терминал"]],
                          [busy, "Сборка", True, ["Claude Code", "студия", "идёт ход"]],
                          [asking, "Тесты", True, ["Claude Code", "VS Code или терминал", "ждёт ответа"]],
@@ -8470,7 +8473,8 @@ def code_files_machine(chats=None):
     files = {"README.md": "# Заголовок\n\nТекст **жирный**.\n".encode(), "src/app.py": CODE_APP,
              "src/lib/util.py": b"x = 1\n", "a.pdf": scan_pdf("first page", "second page"), "bin.dat": b"ab\0cd",
              "big.txt": b"x" * (2 * 1024 * 1024 + 1)}
-    return FakeMachine(projects={"alpha": {"files": files, "chats": chats or {}}})
+    return FakeMachine(projects={"alpha": {"files": files, "chats": chats or {},
+        "git": {"branch": "main", "upstream": "origin/main", "ahead": 0, "behind": 0, "files": []}}})
 
 
 def code_tab(aid, tab, project="alpha"):
@@ -8489,8 +8493,149 @@ def code_item(name):
 
 
 def code_root_names(n):
-    return ("wait", f"document.querySelectorAll('#code-files li[data-name]').length === {n}"
+    return ("wait", f"document.querySelectorAll('#code-files > li[data-name]').length === {n}"
                     " && document.querySelector('#code-file').hidden")
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_compact_header_and_git_file_tree(browser, live, width):
+    """Создание чатов в шапке без дублей; дерево раскрывается на месте и помечает изменения Git."""
+    from test_codex import CATALOG
+    login = f"code-tree-{width}"
+    live.add_user(login, theme="dark" if width == 320 else "light")
+    machine = code_files_machine()
+    machine.codex = CATALOG
+    machine.projects["alpha"]["git"] = {
+        "branch": "stage-5g", "upstream": "origin/stage-5g", "ahead": 2, "behind": 1,
+        "files": [{"path": "src/app.py", "status": " M"}, {"path": "src/lib/util.py", "status": "??"},
+                  {"path": "README.md", "status": "M "}]}
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            ("wait", "document.querySelector('#code-repo-status')?.textContent.includes('stage-5g')"),
+            ("eval", "header", "document.querySelector('#code-repo-status').textContent"),
+            ("eval", "duplicates", "document.querySelectorAll('#code-chats .code-new-chat').length"),
+            ("eval", "oneLine", "(() => { const a = document.querySelector('#code-place').getBoundingClientRect();"
+                                  " const b = document.querySelector('#code-start-claude').getBoundingClientRect();"
+                                  " return Math.abs(a.top + a.height / 2 - b.top - b.height / 2) < 2; })()"),
+            ("click", code_item("src")), ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("eval", "rootStays", "!!document.querySelector(\"#code-files > li[data-name='README.md']\")"),
+            ("eval", "expanded", "document.querySelector(\"#code-files li[data-name='src']\").getAttribute('aria-expanded')"),
+            ("eval", "modified", "document.querySelector(\"#code-files li[data-path='src/app.py'] .code-file-git\").textContent"),
+            ("eval", "parentMark", "document.querySelector(\"#code-files li[data-path='src'] .code-file-git\").textContent"),
+            ("click", code_item("lib")), ("wait", "document.querySelector(\"#code-files li[data-name='util.py']\")"),
+            ("eval", "untracked", "document.querySelector(\"#code-files li[data-path='src/lib/util.py'] .code-file-git\").textContent"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", code_item("src")),
+            ("eval", "collapsed", "document.querySelector(\"#code-files li[data-name='src'] > ul\").hidden"),
+            ("click", code_item("src")),
+            ("eval", "nestedKept", "document.querySelector(\"#code-files li[data-name='lib']\").getAttribute('aria-expanded')")],
+            width=width, mobile=width == 320)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "stage-5g*" in v["header"] and "↑2" in v["header"] and "↓1" in v["header"]
+    assert v["duplicates"] == 0 and (width == 320 or v["oneLine"])
+    assert v["rootStays"] and v["expanded"] == "true" and v["modified"] == "M"
+    assert v["parentMark"] == "•" and v["untracked"] == "U" and v["fits"]
+    assert v["collapsed"] and v["nestedKept"] == "true"
+    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src", "src/lib"]
+    assert not problems(r), problems(r)
+
+
+def test_code_git_refresh_updates_tree_without_losing_the_editor(browser, live):
+    """Сохранение обновляет общий статус; внешняя правка добавляет файл в раскрытое дерево, редактор остаётся."""
+    login = "code-tree-refresh"
+    live.add_user(login)
+    machine = code_files_machine()
+    project = machine.projects["alpha"]
+    save = machine._op_save
+    read_git = machine._op_git
+
+    def changed(req, events):
+        result = save(req, events)
+        project["git"]["files"] = [{"path": "src/app.py", "status": " M"}]
+        return result
+
+    def external_commit(req, events):
+        if len(code_requests(machine, "git")) >= 3:
+            project["files"]["src/new.py"] = b"new = 1\n"
+            project["git"] = {"branch": "release", "upstream": None, "ahead": 0, "behind": 0,
+                              "files": [{"path": "src/new.py", "status": "??"}]}
+        return read_git(req, events)
+
+    machine._op_save = changed
+    machine._op_git = external_commit
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('saved')\n"),
+            ("click", code_item("src")), ("eval", "kept", "document.querySelector('#code-editor').value"),
+            ("eval", "noDialog", f"!{CODE_UNSAVED}"), ("click", code_item("src")),
+            ("click", "#code-save"),
+            ("wait", "document.querySelector('#code-repo-status').textContent.includes('main*')"
+                     " && document.querySelector(\"li[data-path='src/app.py'] > button\").dataset.git === 'modified'"),
+            ("click", "#code-repo-status"),
+            ("wait", "document.querySelector('#code-git .code-git-branch')?.textContent === 'release'"
+                     " && document.querySelector(\"li[data-path='src/new.py']\")"),
+            ("eval", "header", "document.querySelector('#code-repo-status').textContent"),
+            ("click", "#code-tab-files"),
+            ("wait", "document.querySelector('#code-tab-files').getAttribute('aria-selected') === 'true'"
+                     " && document.querySelector('#code-files').getClientRects().length > 0"),
+            ("eval", "editor", "document.querySelector('#code-editor').value"),
+            ("eval", "mark", "document.querySelector(\"li[data-path='src/new.py'] .code-file-git\").textContent"),
+            ("eval", "oldClean", "document.querySelector(\"li[data-path='src/app.py'] > button\").dataset.git"),
+            ("eval", "focus", "document.querySelector(\"li[data-path='src'] > button\").focus()"),
+            ("press", "ArrowRight"),
+            ("wait", "document.activeElement.closest('li')?.dataset.path === 'src/lib'"),
+            ("eval", "keyChild", "document.activeElement.closest('li').dataset.path"),
+            ("press", "ArrowLeft"),
+            ("eval", "keyParent", "document.activeElement.closest('li').dataset.path")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kept"] == v["editor"] == "print('saved')\n" and v["noDialog"]
+    assert "release*" in v["header"] and v["mark"] == "U" and v["oldClean"] == ""
+    assert v["keyChild"] == "src/lib" and v["keyParent"] == "src"
+    assert not problems(r), problems(r)
+
+
+def test_code_tree_refresh_closed_keeps_unsaved_text_for_the_pin(browser, live):
+    """Фоновое обновление дерева получило closed: PIN возвращает несохранённый текст с прежней версией."""
+    login = "code-tree-pin"
+    live.add_user(login)
+    machine = code_files_machine()
+    read_git = machine._op_git
+
+    def close_before_refresh(req, events):
+        if len(code_requests(machine, "git")) == 2:
+            machine.projects["alpha"]["git"]["files"] = [{"path": "src/app.py", "status": " M"}]
+            machine.pin = CODE_PIN
+            machine.open_sessions.clear()
+        return read_git(req, events)
+
+    machine._op_git = close_before_refresh
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            code_root_names(5), ("click", code_item("src")),
+            ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('unsaved')\n"),
+            ("eval", "refresh", "document.dispatchEvent(new Event('visibilitychange'))"),
+            ("wait", CODE_PIN_SHOWN), ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
+            ("wait", "document.querySelector('#code-editor')?.value === \"print('unsaved')\\n\""),
+            ("click", "#code-save"), ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('unsaved')\r\n"
+    assert not known_refusals(problems(r), 409), problems(r)
 
 
 def test_code_files_open_edit_and_save(browser, live):
@@ -8525,7 +8670,7 @@ def test_code_files_open_edit_and_save(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["root"] == ["src", "README.md", "a.pdf", "big.txt", "bin.dat"] and v["rootPath"] == ["alpha"]
-    assert v["src"] == ["lib", "app.py"] and v["srcPath"] == ["alpha", "src"]
+    assert v["src"] == ["src", "lib", "app.py", "README.md", "a.pdf", "big.txt", "bin.dat"] and v["srcPath"] == ["alpha", "src"]
     assert v["text"] == "print(1)\nprint(2)\n" and v["filePath"] == ["alpha", "src", "app.py"]
     assert v["save"] == "Сохранить" and "monospace" in v["mono"] and v["fits"] is True
     assert v["status"] == "Сохранено" and v["cleared"] == ""
@@ -8537,7 +8682,7 @@ def test_code_files_open_edit_and_save(browser, live):
     assert [(q["path"], q["text"], q["version"]) for q in saves] == [
         ("src/app.py", "print(1)\r\nprint(3)\r\n", _version(CODE_APP)),
         ("src/app.py", "print(4)\r\n", _version(b"print(1)\r\nprint(3)\r\n"))]
-    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src", ""]
+    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src"]
     assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
     assert not problems(r), problems(r)
 
@@ -8891,7 +9036,7 @@ def test_code_git_panel(browser, live):
     assert v["rows"] == [["M", "src/app.py"], ["??", "новое/очень-длинное-имя-файла-без-пробелов-которое-не-влезет-в-узкий-экран.txt"]]
     assert v["gamma"] == ["Ветка ", "work", None, None] and v["empty"] == "Изменений нет"
     assert v["beta"] == "Не репозиторий git"
-    assert len(code_requests(machine, "git")) == 3
+    assert {q["project"] for q in code_requests(machine, "git")} == {pid("alpha"), pid("beta"), pid("gamma")}
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -8954,7 +9099,7 @@ def test_code_step_file_link_opens_the_file(browser, live):
     assert v["path"] == ["alpha", "src", "app.py"] and v["fits"] is True
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}?tab=files"
     assert "app.py" not in v["stored"]
-    assert [q["path"] for q in code_requests(machine, "files")] == ["src"]          # сразу папка файла
+    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src"]    # раскрывает дерево до файла
     assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
     assert not problems(r), problems(r)
 
@@ -9062,7 +9207,7 @@ def test_code_new_chat_is_a_tab(browser, live):
                        " && document.querySelector('#code-chat')?.dataset.chat === location.hash.split('/').pop()")
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
-            ("wait", "document.querySelector('#code-new-chat')"), ("click", "#code-new-chat"), new_tab,
+            ("wait", "!document.querySelector('#code-start-claude').disabled"), ("click", "#code-start-claude"), new_tab,
             ("eval", "first", "window.firstTab = location.hash.split('/').pop()"),
             ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu #code-new-chat')"),
             ("click", "#code-tab-menu #code-new-chat"),
@@ -9334,7 +9479,7 @@ def test_code_long_tab_titles_fit(browser, live, width):
 # метки вкладок, числа вкладок в панели, возвращение на экран
 
 #: класс метки вкладки чата (нет метки — null)
-CODE_MARK = "document.querySelector(\"#code-tabbar .code-tab[data-chat='{}'] .code-tab-mark\")?.className ?? null"
+CODE_MARK = "(document.querySelector(\"#code-tabbar .code-tab[data-chat='{}'] .code-tab-mark\")?.className ?? null)"
 #: GET …/chats страницы — счётчиком window.chatsCalls (для init вместе с CODE_FAST_IDLE)
 CODE_CHATS_SPY = """(() => { window.chatsCalls = 0; const real = window.fetch; window.fetch = (u, o) => {
   if (/\\/chats$/.test(String(u)) && !(o && o.method && o.method !== 'GET')) window.chatsCalls += 1; return real(u, o); };
@@ -9379,6 +9524,7 @@ def test_code_tab_marks_follow_the_machine(browser, live):
             ("wait", f"{mark} === null"),
             ("eval", "a", CODE_MARK.format(CODE_CHAT_A))], width=1280, init=CODE_FAST_IDLE)
         player.join(10)
+        assert not player.is_alive(), "Проверка завершилась до окончания фонового хода"
     finally:
         sb.stop()
     assert not r.get("failed"), r
@@ -9538,7 +9684,7 @@ def test_code_computer_back_online_redraws_the_right_side(browser, live):
                      f" && document.querySelector('#code-status')?.textContent === '{offline}'"),
             ("wait", "fetch('/api/agents').then((r) => r.json()).then((j) => j.items.some((a) => a.name === 'Проснулся'))"),
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
-            ("wait", "document.querySelectorAll('#code-chats li').length >= 1"
+            ("wait", "!!document.querySelector('#code-chats')"
                      " && !document.querySelector('#code-status')?.textContent"),
             ("eval", "hash", "location.hash")], width=1280)
         waker.join(10)
