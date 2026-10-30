@@ -16,7 +16,7 @@ from pathlib import Path
 from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage)
 
-from . import cli, events, limits, sessions, store
+from . import cli, events, image_input, limits, sessions, store
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,8 @@ class Runner:
 
     # --- просьбы студии ---
 
-    def start(self, project: Path, pid: str, chat: str, text: str, model: str | None, effort: str | None) -> str:
+    def start(self, project: Path, pid: str, chat: str, text: str, model: str | None, effort: str | None,
+              *, images: list[dict] | None = None) -> str:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
@@ -111,7 +112,7 @@ class Runner:
             raise Refused("busy")
         t = _Turn(project, pid, chat, secrets.token_hex(8))
         self._turns[chat] = t
-        t.task = asyncio.create_task(self._run(t, text, model, effort))
+        t.task = asyncio.create_task(self._run(t, text, model, effort, images or []))
         log.info("ход %s: начат", t.turn)
         return t.turn
 
@@ -228,7 +229,7 @@ class Runner:
 
     # --- ход ---
 
-    async def _run(self, t: _Turn, text: str, model: str | None, effort: str | None) -> None:
+    async def _run(self, t: _Turn, text: str, model: str | None, effort: str | None, images: list[dict]) -> None:
         failure, cancelled, new, sent = None, False, False, False
         try:
             new, model, effort = await asyncio.to_thread(self._choose, t, model, effort)
@@ -238,7 +239,7 @@ class Runner:
                 await t.client.connect()
             if not (t.stopped or t.closing):
                 sent = True  # дальше файл сессии может появиться
-                await t.client.query(text)
+                await t.client.query(image_input.prompt(text, images) if images else text)
                 async for message in t.client.receive_response():
                     for e in t.feed.events(message):
                         self._send(t, e)

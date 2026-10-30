@@ -7694,6 +7694,57 @@ def code_requests(machine, op):
     return [q for q in machine.requests if q["op"] == op]
 
 
+@pytest.mark.parametrize("engine,width", [("claude", 320), ("codex", 1280)])
+def test_code_screenshots_paste_pick_drop_and_retry(browser, live, engine, width):
+    """Скриншоты тремя способами; черновик переживает вкладки и отказ, без текста уходит обеим системам."""
+    from test_codex import CATALOG
+    login = "screenshots-" + engine
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Скриншоты")})
+    machine.codex = CATALOG
+    machine.script = [{"k": "text", "text": "Вижу скриншоты"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    setup_file = """(() => { window.shot = new File([Uint8Array.from(atob(%s), (c) => c.charCodeAt(0))],
+      'screen.png', {type: 'image/png'}); window.shots = new DataTransfer(); shots.items.add(shot); return true; })()""" % json.dumps(base64.b64encode(PNG_REAL).decode())
+    pick = "(() => { const p = document.querySelector('#code-image-input'); p.files = shots.files; p.dispatchEvent(new Event('change')); return true; })()"
+    paste = "document.querySelector('#code-text').dispatchEvent(new ClipboardEvent('paste', {clipboardData: shots, bubbles: true, cancelable: true}))"
+    drop = "(() => { const dt = new DataTransfer(); dt.items.add(shot); return document.querySelector('#code-composer').dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true})); })()"
+    fail_once = """(() => { const real = window.fetch; let fail = true;
+      window.fetch = (u, o) => { if (fail && String(u).includes('/turn')) { fail = false;
+        return Promise.resolve(new Response(JSON.stringify({detail: {code: 'invalid', message: 'Попробуйте ещё'}}),
+          {status: 422, headers: {'content-type': 'application/json'}})); } return real(u, o); }; return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *([("click", "#code-start-codex"), ("wait", "document.querySelector('.code-chat-bar .code-engine')?.textContent === 'Codex'"
+                " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
+            ("eval", "file", setup_file), ("eval", "paste", paste),
+            ("wait", "document.querySelectorAll('#code-images img').length === 1"),
+            ("eval", "pick", pick), ("wait", "document.querySelectorAll('#code-images img').length === 2"),
+            ("eval", "drop", drop), ("wait", "document.querySelectorAll('#code-images img').length === 3"),
+            ("click", ".code-image-remove"), ("eval", "count", "document.querySelectorAll('#code-images img').length"),
+            ("click", "#code-tab-files"), ("wait", "!!document.querySelector('#code-files')"),
+            ("click", "#code-tab-chat"), ("wait", "document.querySelectorAll('#code-images img').length === 2"),
+            ("eval", "stored", "JSON.stringify({...localStorage, ...sessionStorage}).includes('screen.png')"),
+            ("eval", "fail", fail_once), ("click", "#code-send"),
+            ("wait", "document.querySelector('#code-status').textContent === 'Попробуйте ещё'"),
+            ("eval", "kept", "document.querySelectorAll('#code-images img').length"),
+            ("click", "#code-send"),
+            ("wait", "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Вижу скриншоты')"),
+            ("eval", "sent", "[...document.querySelectorAll('.code-sent-image')].map((i) => i.naturalWidth > 0)"),
+            ("eval", "cleared", "document.querySelectorAll('#code-images img').length"),
+            ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 320)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    values = r["values"]
+    assert values["count"] == values["kept"] == 2 and values["cleared"] == 0
+    assert values["sent"] == [True, True] and values["fits"] and not values["stored"]
+    [turn] = code_requests(machine, "turn")
+    assert turn["text"] == "" and turn.get("engine", "claude") == engine
+    assert turn["images"] == [{"mime": "image/png", "data": base64.b64encode(PNG_REAL).decode()}] * 2
+    assert not known_refusals(problems(r), 422), problems(r)
+
+
 def test_code_turn_streams_text_and_steps(browser, live):
     """«Отправить» — ход потоком: текст по кускам в одном ответе (разметка), шаги с итогом (ошибка — классом),
     «Открыть файл» — только у шага Read/Edit/Write с путём внутри проекта; после done «Остановить» не видно.

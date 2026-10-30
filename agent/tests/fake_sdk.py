@@ -76,7 +76,7 @@ class FakeClient:
         self.connected = True
 
     async def query(self, prompt):
-        self.queries.append(prompt)
+        self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])
 
     async def receive_response(self):
         for item in self.script:

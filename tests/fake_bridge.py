@@ -63,13 +63,15 @@ class FakeMachine:
         self.now = T0
         self.turns = 0
         self.codex = None
+        self.images = True
 
     @property
     def hello(self) -> dict:
         return {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": "C:\\work\\projects",
                 "has_pin": self.pin is not None,
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
-                "efforts": ["low", "high"], **({"codex": self.codex} if self.codex is not None else {})}
+                "efforts": ["low", "high"], "images": self.images,
+                **({"codex": self.codex} if self.codex is not None else {})}
 
     # ---- просьбы ----------------------------------------------------------------
 

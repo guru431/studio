@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import events, files, gitinfo, limits, projects, sessions, store
+from . import events, files, gitinfo, image_input, limits, projects, sessions, store
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -74,7 +74,7 @@ class Agent:
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts}
+                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True}
         if self.codex is not None and self.codex.catalog is not None:
             hello["codex"] = self.codex.catalog
         return hello
@@ -249,13 +249,17 @@ class Agent:
         return self.codex if frame.get("engine") == "codex" else self.runner
 
     async def _op_turn(self, frame, after):
+        images = frame.get("images", [])
+        await asyncio.to_thread(image_input.validate, images)
+        if not frame["text"].strip() and not images:
+            raise Refused("invalid", "задание пустое")
         project = await self._project(frame)
         runner = self._runner(frame)
         total = len(self.runner.live()) + (len(self.codex.live()) if self.codex else 0)
         if frame["chat"] not in runner.live() and total >= limits.MAX_TURNS:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
-                                     frame.get("model"), frame.get("effort"))}
+                                     frame.get("model"), frame.get("effort"), images=images)}
 
     async def _op_watch(self, frame, after):
         """Хода нет (или он другого проекта) — `{"running": false}` без проверки чата (протокол §4); идёт — снимок

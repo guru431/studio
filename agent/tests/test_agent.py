@@ -72,7 +72,7 @@ async def opened(a: Agent, session=SESSION, pin=None) -> None:
 
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
-                             "has_pin": False, "models": MODELS, "efforts": ["low", "high"]}
+                             "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
