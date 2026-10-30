@@ -29,7 +29,7 @@ import connections
 import state
 
 SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation")   # порядок вкладок
-NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Расшифровка", "ocr": "Распознавание",
+NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Записи", "ocr": "Сканы",
          "translate": "Перевод", "speech": "Озвучка", "dictation": "Голосовой ввод"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections

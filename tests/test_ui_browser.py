@@ -621,18 +621,47 @@ def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, 
     assert not problems(r), problems(r)
 
 
-def test_settings_menu_and_old_profile_route(browser, live):
-    live.add_user("menuer")
-    r = browser.drive(live.url + "/", [*signin("menuer"), ("wait", READY),
+@pytest.mark.parametrize("width", [390, 1280])
+def test_settings_menu_and_old_profile_route(browser, live, width):
+    login = f"menuer{width}"
+    live.add_user(login)
+    dictation = '.section-panel[data-section=dictation]'
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
         ("click", "#avatar"), ("eval", "item", "document.querySelector('#menu a[href=\"#/settings\"]').textContent"),
         ("press", "Escape"),
         ("eval", "go", "location.hash = '#/profile'"), ("wait", "location.hash.startsWith('#/settings')"),
         ("wait", "document.querySelector('.settings-nav a')"),
-        ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => a.dataset.section)")])
+        ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => [a.dataset.section, a.textContent])"),
+        *go("settings/transcribe"), ("wait", "document.querySelector('.section-panel[data-section=transcribe] h2')"),
+        ("eval", "records", "document.querySelector('.section-panel h2').textContent"),
+        *go("settings/ocr"), ("wait", "document.querySelector('.section-panel[data-section=ocr] h2')"),
+        ("eval", "scans", "document.querySelector('.section-panel h2').textContent"),
+        *go("settings/code"), ("wait", "document.querySelector('#code-defaults-save') && document.querySelector('#agents li')"),
+        ("eval", "code", "!!document.querySelector('[data-section=code] #code-defaults-save') && "
+                          "!!document.querySelector('[data-section=code] #agents') && !document.querySelector('[data-section=dictation]')"),
+        ("eval", "codeFits", NO_OVERFLOW),
+        *go("settings/other"), ("wait", f"document.querySelector('{dictation} input.model-default[value=gigaam]')"),
+        ("eval", "other", "!document.querySelector('#code-defaults-save, #agents') && !!document.querySelector('#pw-current')"),
+        set_value("#pw-current", "unsaved-password"),
+        ("eval", "mark", f"document.querySelector('{dictation}').dataset.before = '1'"),
+        ("click", f"{dictation} input.model-default[value=whisperx]"),
+        ("wait", f"document.querySelector('{dictation}').dataset.before !== '1' && "
+                 f"document.querySelector('{dictation} input.model-default[value=whisperx]').checked"),
+        ("eval", "draft", "document.querySelector('#pw-current').value"),
+        ("eval", "otherFits", NO_OVERFLOW),
+        *go("settings/dictation"), ("wait", "document.querySelector('.settings-nav [data-section=other][aria-current=page]')"),
+        ("eval", "reload", "location.reload()"), ("wait", READY),
+        ("wait", f"document.querySelector('{dictation} input.model-default[value=whisperx]')?.checked"),
+        ("eval", "saved", f"document.querySelector('{dictation} input.model-default:checked').value")],
+        width=width, mobile=width == 390)
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
-    assert r["values"]["nav"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation",
-                                  "other"]
+    v = r["values"]
+    assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["transcribe", "Записи"],
+                        ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Код"], ["other", "Прочее"]]
+    assert v["records"] == "Записи" and v["scans"] == "Сканы"
+    assert v["code"] and v["other"] and v["codeFits"] and v["otherFits"]
+    assert v["draft"] == "unsaved-password" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
 
 
@@ -6837,7 +6866,7 @@ AGENT_EVENTS = "[...document.querySelectorAll('#agent-events li')].map((li) => l
 
 
 def test_settings_lists_computers_and_revokes_one(browser, live):
-    """«Прочее» → «Компьютеры (Claude Code)»: два компьютера, один на связи с PIN; история подключений по 50
+    """«Код» → «Компьютеры (Claude Code)»: два компьютера, один на связи с PIN; история подключений по 50
     и «Показать ещё»; «Отозвать» → окно → подтверждение: строка ушла, мост получил 4401, в истории «отозван»."""
     import bridge
     from fake_bridge import FakeMachine, SocketBridge
@@ -6852,7 +6881,7 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     sb = SocketBridge(live.url, key, FakeMachine(pin="1234")).start()
     try:
         wait_for(lambda: work in bridge.LINKS)
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
             ("wait", "document.querySelectorAll('#agents li[data-id]').length === 2"),
             ("wait", "document.querySelectorAll('#agent-events li').length === 50"),
             ("eval", "title", "document.querySelector('.agents-block h2').textContent"),
@@ -6911,7 +6940,7 @@ def test_settings_agents_block_has_download(browser, live):
     login = "agents-download"
     live.add_user(login)
     agents_loaded = "document.querySelector('#agents li')"
-    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", agents_loaded),
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"), ("wait", agents_loaded),
         ("eval", "link", AGENTS_DOWNLOAD), ("eval", "empty", "document.querySelector('#agents li').textContent"),
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
@@ -6921,7 +6950,7 @@ def test_settings_agents_block_has_download(browser, live):
     assert not problems(r), problems(r)
 
     enroll_live(live, login, "Рабочий ПК")
-    r = browser.drive(live.url + "/#/settings/other", [("wait", READY), ("wait", "document.querySelector('#agents li[data-id]')"),
+    r = browser.drive(live.url + "/#/settings/code", [("wait", READY), ("wait", "document.querySelector('#agents li[data-id]')"),
         ("eval", "link", AGENTS_DOWNLOAD)], width=1280)
     assert not r.get("failed"), r
     assert r["values"]["link"] == [True, "/api/agent/download", True, "Скачать мост для Windows"]
@@ -8247,7 +8276,7 @@ def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live
     chosen_access = "read-only" if engine == "codex" else "plan"
     prefix = f"#code-defaults-{engine}"
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
             ("wait", "!!document.querySelector('#code-defaults-save')"),
             set_value(prefix + "-model", chosen_model), set_value(prefix + "-effort", chosen_effort),
             set_value(prefix + "-access", chosen_access),

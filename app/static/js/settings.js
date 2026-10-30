@@ -1,6 +1,7 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — шесть разделов и «Прочее» (пароль, блокировка на телефоне, уведомления и push, компьютеры Claude Code, ключ Exa «Интернета» чата, хранилище и выгрузка истории, удаление истории), справа — выбранный раздел: его
+ * Слева — разделы, «Код» (умолчания чатов и компьютеры) и «Прочее» (голосовой ввод, пароль,
+ * блокировка, уведомления и push, ключ Exa, хранилище и история), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -19,7 +20,7 @@
  * с микрофона, её текст и имя (POST /api/voices), список с «Удалить».
  *
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
- * переключаются на месте, «Прочего», голосов и прямого списка моделей нет). На телефоне без раздела
+ * переключаются на месте, в «Прочем» — только голосовой ввод; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
@@ -902,7 +903,8 @@ function voicesBlock(host) {
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const ids = [...Object.keys(SECTION_NAMES), ...(other ? ['other'] : [])];
+  const names = { ...SECTION_NAMES, code: 'Код', other: 'Прочее' };
+  const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['code'] : []), 'other'];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
   const root = el('div', { class: 'settings' }, nav, panel);
@@ -912,10 +914,12 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   const checking = new Set();     // подключения, которые проверяются сейчас
   const opened = new Set();       // `<раздел>:<подключение>` — паспорт раскрыт
   let data = [];
+  let dictationHost = null;
+  if (section === 'dictation') section = 'other';  // прежняя ссылка открывает перенесённые настройки
   let current = ids.includes(section) ? section : null;
 
   for (const id of ids) {
-    const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, id === 'other' ? 'Прочее' : SECTION_NAMES[id]);
+    const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, names[id]);
     if (!hash) {
       link.addEventListener('click', (event) => {
         event.preventDefault();
@@ -1109,7 +1113,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
     const box = el('div', {}, field('Подключение', select, 'existing'), form.el);
     const save = button('Добавить', { class: 'btn btn-accent', id: 'link-save' });
-    const dialog = openDialog(host, { id: 'link-dialog', title: `Адрес для раздела «${s.name}»`, body: [box], actions: [save] });
+    const dialog = openDialog(host, { id: 'link-dialog', title: `Адрес для раздела «${names[s.id]}»`, body: [box], actions: [save] });
     save.addEventListener('click', async () => {
       if (save.disabled) return;
       save.disabled = true;
@@ -1127,6 +1131,20 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     });
   }
 
+  function sectionBlock(s) {
+    const list = el('ul', { class: 'links' }, ...(s.links.length ? s.links.map((l) => linkCard(s, l))
+      : [el('li', { class: 'muted' }, 'В разделе пока нет подключений')]));
+    return el('section', { class: 'block section-panel', 'data-section': s.id },
+      el('h2', {}, names[s.id]), list,
+      el('div', { class: 'row' }, button('+ Адрес для раздела', { class: 'btn', id: 'link-add' }, () => addLink(s))),
+      note);
+  }
+
+  function renderDictation() {
+    const s = sectionOf('dictation');
+    dictationHost.replaceChildren(s ? sectionBlock(s) : note);
+  }
+
   function render() {
     const shown = current || ids[0];
     root.dataset.view = current ? 'panel' : 'nav';
@@ -1134,12 +1152,24 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       if (a.dataset.section === shown) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
+    if (shown === 'other' && dictationHost) {
+      renderDictation();
+      return;
+    }
+    dictationHost = null;
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
+    if (shown === 'code') {
+      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
+        codeDefaultsBlock(), agentsBlock(host)));
+      return;
+    }
     if (shown === 'other') {
-      const storage = storageBlock(host);
-      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, passwordBlock(),
-        lockBlock(), notifyBlock(), codeDefaultsBlock(), agentsBlock(host), exaBlock(), storage.el, wipeBlock(host, storage.reload)));
+      dictationHost = el('div', { class: 'dictation-settings' });
+      renderDictation();
+      const storage = other ? storageBlock(host) : null;
+      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, dictationHost,
+        ...(other ? [passwordBlock(), lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
       return;
     }
     const s = sectionOf(shown);
@@ -1147,15 +1177,11 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       panel.replaceChildren(back, note);
       return;
     }
-    const list = el('ul', { class: 'links' }, ...(s.links.length ? s.links.map((l) => linkCard(s, l))
-      : [el('li', { class: 'muted' }, 'В разделе пока нет подключений')]));
-    panel.replaceChildren(back, el('section', { class: 'block section-panel', 'data-section': s.id },
-      el('h2', {}, s.name), list,
-      el('div', { class: 'row' }, button('+ Адрес для раздела', { class: 'btn', id: 'link-add' }, () => addLink(s))),
-      note), ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
+    panel.replaceChildren(back, sectionBlock(s), ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
   }
 
   function show(id) {
+    if (id === 'dictation') id = 'other';
     const next = ids.includes(id) ? id : null;
     if (next !== current) say(note, '');
     current = next;
@@ -1168,8 +1194,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     } catch (err) {
       say(note, words(err), 'error');
     }
-    // «Прочее» разделов не читает: перерисовка заменила бы его блоки новыми, пустыми до своих ответов
-    if ((current || ids[0]) !== 'other') render();
+    // Ответ разделов обновляет только голосовой ввод: личные блоки и «Код» сохраняют поля и свои ответы.
+    if (dictationHost) renderDictation();
+    else if ((current || ids[0]) !== 'code') render();
   }
 
   render();

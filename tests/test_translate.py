@@ -614,7 +614,7 @@ def test_scanned_pdf_without_ocr_is_refused_with_words(studio):
     assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
     r = send_file(studio, "Скан.pdf", scan_pdf("ink"))
     assert r.status_code == 422
-    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Распознавание» в настройках"}
+    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Сканы» в настройках"}
     assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
 
 
@@ -626,7 +626,7 @@ def test_partly_scanned_pdf_without_ocr_is_refused_too(studio):
     assert r.status_code == 422
     assert r.json()["detail"] == {"code": "scan", "message": (
         "страниц-сканов в PDF — 1 из 2, без распознавания перевод вышел бы без них"
-        " — подключите «Распознавание» в настройках")}
+        " — подключите «Сканы» в настройках")}
     assert (count(studio, "media"), count(studio, "translations"), count(studio, "scans")) == (0, 0, 0)
     assert studio.gw.chat_requests == []
     r = send_file(studio, "Договор.pdf", scan_pdf("empty", "ink", "This page has a text layer long enough to be read."))

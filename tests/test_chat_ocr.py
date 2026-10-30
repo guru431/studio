@@ -156,7 +156,7 @@ def test_without_an_ocr_connection_the_chat_works_as_before(studio):
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == doc("скан.pdf", LAYER)
     r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf("ink"), "application/pdf")})
     assert r.status_code == 422
-    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Распознавание» в настройках"}
+    assert r.json()["detail"] == {"code": "scan", "message": "это скан — подключите «Сканы» в настройках"}
     assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM scans").fetchone()[0]) == 0
     assert studio.gw.ocr_requests == []
 
@@ -179,7 +179,7 @@ def test_mixed_scan_pdf_without_ocr_is_refused(studio):
     r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf(LAYER, "ink"), "application/pdf")})
     assert r.status_code == 422 and r.json()["detail"] == {"code": "scan", "message": (
         "страниц-сканов в PDF — 1 из 2, без распознавания модель получила бы документ без них"
-        " — подключите «Распознавание» в настройках")}
+        " — подключите «Сканы» в настройках")}
     assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM attachments").fetchone()[0]) == 0
     assert studio.gw.ocr_requests == []
 

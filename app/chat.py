@@ -132,7 +132,7 @@ WEB_NOTE = ("У тебя есть доступ к интернету через 
             "результат; если вернул ошибку — так и скажи и не выдумывай данные.")
 STORAGE = "хранилище недоступно"
 SCAN_POLL_SEC = 1                # ход ждёт скан: состояние документов — из базы раз в столько
-NO_OCR = "это скан — подключите «Распознавание» в настройках"
+NO_OCR = "это скан — подключите «Сканы» в настройках"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания модель получила бы документ без них"
 #: начало слов ответа-ошибки «скан не распознан: …» — они хранятся в content ответа, страница получает их `error`
 SCAN_FAILED = "скан не распознан"
@@ -1113,7 +1113,7 @@ def _layer_text(layer: list[tuple[str, bool]], reader) -> str:
             words = NO_OCR if reader is None else sections.unlisted(reader[0])
         else:
             words = SOME_SCANS.format(wanted, len(layer)) + (
-                " — подключите «Распознавание» в настройках" if reader is None
+                " — подключите «Сканы» в настройках" if reader is None
                 else f"; {sections.unlisted(reader[0])}")
         raise HTTPException(422, {"code": "scan", "message": words})
     text = "\n\n".join(t for t, _ in layer if t)     # как documents.extract

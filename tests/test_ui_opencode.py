@@ -134,7 +134,7 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
                       {"k": "text", "text": "Готово OpenCode"}, {"k": "done", "status": "done"}]
     aid, sb = code_online(live, login, machine)
     try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
             ("wait", "!!document.querySelector('#code-defaults-save')"),
             ("eval", "settingsModels", "[...document.querySelector('#code-defaults-opencode-model').options].map(o => o.value)"),
             set_value("#code-defaults-opencode-model", MODEL),

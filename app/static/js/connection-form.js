@@ -14,8 +14,8 @@ const KINDS = {
   openai: { label: 'OpenAI-совместимый', placeholder: 'адрес API, https, оканчивается на /v1' },
   srvllm: { label: 'Шлюз srvllm', placeholder: 'адрес шлюза, http, IP и порт, без пути' },
 };
-export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Расшифровка',
-  speech: 'Озвучка', ocr: 'Распознавание', translate: 'Перевод', dictation: 'Голосовой ввод' };
+export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Записи',
+  speech: 'Озвучка', ocr: 'Сканы', translate: 'Перевод', dictation: 'Голосовой ввод' };
 const ERROR_FIELD = { name: 'name', token: 'token' };   // прочие коды — под адресом
 
 export function sectionsText(sections) {

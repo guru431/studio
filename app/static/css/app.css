@@ -440,7 +440,7 @@ label { font-size: 13px; color: var(--muted); }
 .voice b, .passkey b { font-weight: 600; }
 .voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
 .lock-block > .check { margin-bottom: 12px; }
-/* push и компьютеры Claude Code («Прочее») */
+/* push («Прочее») и компьютеры («Код») */
 .notify-block > .push-check { margin-top: 14px; }
 .notify-block > #push-hint { margin: 6px 0 0; }
 .agents { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
