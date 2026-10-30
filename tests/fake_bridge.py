@@ -62,13 +62,14 @@ class FakeMachine:
         self.running: dict[str, dict] = {}       # chat → идущий ход
         self.now = T0
         self.turns = 0
+        self.codex = None
 
     @property
     def hello(self) -> dict:
         return {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": "C:\\work\\projects",
                 "has_pin": self.pin is not None,
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
-                "efforts": ["low", "high"]}
+                "efforts": ["low", "high"], **({"codex": self.codex} if self.codex is not None else {})}
 
     # ---- просьбы ----------------------------------------------------------------
 
@@ -119,7 +120,7 @@ class FakeMachine:
     def _chat(self, req) -> dict:
         _, project = self._project(req)
         chat = project.setdefault("chats", {}).get(req.get("chat"))
-        if chat is None:
+        if chat is None or chat.get("engine", "claude") != req.get("engine", "claude"):
             raise Refused("not_found", "нет такого чата")
         return chat
 
@@ -131,7 +132,7 @@ class FakeMachine:
         ход у неё работают."""
         _, project = self._project(req)
         items = [{"chat": chat, "title": c.get("title"), "created": c.get("created"), "modified": c.get("modified"),
-                  "tag": c.get("tag"), "running": chat in self.running,
+                  "tag": c.get("tag"), "engine": c.get("engine", "claude"), "running": chat in self.running,
                   "asking": chat in self.running and bool(self.running[chat]["asks"])}
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
@@ -155,7 +156,7 @@ class FakeMachine:
         chat = chats.get(chat_id)
         if chat is None:             # новая сессия с session_id = chat и меткой studio
             chat = chats[chat_id] = {"title": req.get("text", "")[:120], "created": self.now, "modified": self.now,
-                                     "tag": "studio", "messages": []}
+                                     "tag": "studio", "messages": [], "engine": req.get("engine", "claude")}
         chat["messages"].append({"id": f"m-{len(chat['messages'])}", "role": "user", "text": req.get("text", ""),
                                  "steps": [], "time": self.now})
         chat["modified"] = self.now

@@ -364,7 +364,7 @@ export function queueText(pending) {
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
 const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
   ['speech', 'Озвучка'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
-  ['code', 'Claude Code: чаты'], ['agents', 'Claude Code: подключения']];
+  ['code', 'Код: чаты'], ['agents', 'Код: подключения']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -581,7 +581,7 @@ function pushBox() {
       box.disabled = false;
     }, (err) => say(note, words(err), 'error'));
   }
-  return [el('label', { class: 'check push-check' }, box, 'Push от Claude Code на этом устройстве'),
+  return [el('label', { class: 'check push-check' }, box, 'Push от Claude Code и Codex на этом устройстве'),
     el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '
       + 'разрешения, вопрос, конец хода. Идут через серверы Apple или Google — содержимое зашифровано, но факт и время '
       + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
@@ -687,7 +687,7 @@ function agentsBlock(host) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code)'), agentDownload(),
+  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code и Codex)'), agentDownload(),
     list, note,
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
@@ -697,7 +697,7 @@ function wipeBlock(host, onWiped) {
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
     const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.'
-      + ' Чаты Claude Code хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
+      + ' Чаты Claude Code и Codex хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
     const fail = el('p', { class: 'error' });
     const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });

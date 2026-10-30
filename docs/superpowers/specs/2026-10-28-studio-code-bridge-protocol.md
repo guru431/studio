@@ -61,6 +61,18 @@
 
 ### 2.2 Просьбы студии и ответы моста
 
+Добавка v1 от 2026-10-30 (studio-agent 0.3.0): `hello` может нести `codex` — объект
+`{version, models, efforts}`. Пределы версии и моделей как у Claude; усилия Codex — подмножество
+`none, minimal, low, medium, high, xhigh, max, ultra`, только объявленные установленным Codex.
+Без поля мост поддерживает только Claude Code. Элементы `chats.items` могут нести `engine: codex`
+(без поля — `claude`). Просьбы `history`, `turn`, `watch`, `answer`, `stop` могут нести `engine: codex`;
+без поля — Claude. Неподдерживаемый помощник — `unsupported`. Формы событий, снимков и ответов прежние;
+общий предел одновременных ходов — 2 на машину. Студия хранит помощника в отметке чата (шаг схемы 21),
+UUID чатов разных помощников не смешивает. Мост хранит соответствие UUID студии → thread Codex и проект
+только локально, поскольку UUID новой сессии Codex задаёт app-server. Каталог и история читаются через
+app-server, ходы продолжают сессии Codex; авторизация, sandbox и правила — настройки Codex компьютера.
+Документация транспорта: [Codex app-server](https://learn.chatgpt.com/docs/app-server).
+
 ```json
 {"t": "req", "id": "9f2c4a…", "op": "chats", "session": "3b1e…", "project": "a1b2c3d4e5f60718"}
 {"t": "res", "id": "9f2c4a…", "ok": true, "data": {"items": […]}}

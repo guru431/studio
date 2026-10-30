@@ -799,7 +799,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     v = r["values"]
     assert v["made"] is True and v["before"] == [1, 1]
     assert v["confirmHidden"] is True and v["closed"] is True
-    assert v["warning"].endswith(" Чаты Claude Code хранятся на компьютерах — студия забудет только свои отметки,"
+    assert v["warning"].endswith(" Чаты Claude Code и Codex хранятся на компьютерах — студия забудет только свои отметки,"
                                  " сами сессии останутся.")
     assert v["after"] == [0, 0] and v["conns"] == 1
     assert not problems(r), problems(r)
@@ -876,7 +876,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
                                               "translate", "code", "agents")]
-    assert v["labels"] == ["Claude Code: чаты", "Claude Code: подключения"]
+    assert v["labels"] == ["Код: чаты", "Код: подключения"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
@@ -6859,7 +6859,7 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["title"] == "Компьютеры (Claude Code)"
+    assert v["title"] == "Компьютеры (Claude Code и Codex)"
     assert v["rows"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"],
                          [work, "Рабочий ПК", "на связи", "PIN", "Отозвать"]]
     assert v["first"][:3] == [["Рабочий ПК", "на связи", "127.0.0.1"], ["Рабочий ПК", "привязан", "127.0.0.1"],
@@ -6978,7 +6978,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True, init=init)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["label"] == "Push от Claude Code на этом устройстве"
+    assert v["label"] == "Push от Claude Code и Codex на этом устройстве"
     assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос, конец хода."
                          " Идут через серверы Apple или Google — содержимое зашифровано, но факт и время им видны."
                          " На iPhone — только у студии, добавленной на экран «Домой».")
@@ -7148,7 +7148,7 @@ def test_code_empty_offers_agent_download(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows", 1]
-    assert v["texts"] == ["ZIP, нужны Python 3.11+ и Claude Code",
+    assert v["texts"] == ["ZIP, нужны Python 3.11+ и Claude Code или Codex",
                           "Распакуйте архив и запустите install.cmd. В окне моста войдите логином и паролем студии —"
                           " компьютер появится здесь."]
     assert v["badge"] is True and v["fits"] is True
@@ -7500,6 +7500,50 @@ def test_code_place_is_one_line(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["shape"] == [True, True, True] and r["values"]["fits"] is True
     assert not problems(r), problems(r)
+
+
+def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
+    """Мост с двумя помощниками: новый Codex, его модель и карточка; новая вкладка Claude сохраняет свой каталог."""
+    from test_codex import CATALOG
+    login = "code-codex"
+    live.add_user(login)
+    machine = code_machine()
+    machine.codex = CATALOG
+    machine.script = [{"k": "ask", "kind": "permission", "request_id": "p1", "tool": "Shell",
+                       "input": {"command": "git status"}, "always": True},
+                      {"k": "text", "text": "Готово Codex"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
+            ("wait", "document.querySelector('#code-new-codex')"), ("click", "#code-new-codex"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("eval", "engine", "document.querySelector('.code-chat-bar .code-engine').textContent"),
+            ("eval", "models", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
+            ("eval", "pick", "(() => { const m = document.querySelector('#code-model'); m.value = 'codex-test';"
+                              " m.dispatchEvent(new Event('change')); const e = document.querySelector('#code-effort');"
+                              " e.value = 'ultra'; e.dispatchEvent(new Event('change')); return true; })()"),
+            *code_send("Проверь проект"), ("wait", "document.querySelector('.code-ask-yes')"),
+            ("eval", "card", "document.querySelector('.code-ask-title').textContent"),
+            ("eval", "always", "document.querySelector('.code-ask-always').textContent"),
+            ("click", ".code-ask-yes"),
+            ("wait", "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Готово Codex')"),
+            ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-new-chat')"),
+            ("click", "#code-new-chat"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
+                                              " && document.querySelector('.code-chat-bar .code-engine').textContent === 'Claude Code'"),
+            ("eval", "claude", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
+            ("eval", "choice", "document.querySelector('#code-model').value"),
+            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
+    assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
+    assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
+    [turn] = code_requests(machine, "turn")
+    assert (turn["engine"], turn["model"], turn["effort"]) == ("codex", "codex-test", "ultra")
+    assert code_requests(machine, "answer")[-1]["engine"] == "codex"
+    assert not [p for p in problems(r) if "/open)" not in p], problems(r)
 
 
 def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):

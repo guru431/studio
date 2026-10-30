@@ -204,7 +204,7 @@ def test_notify_sends_an_encrypted_payload_and_forgets_gone_subscriptions(studio
     assert (h["ttl"], h["urgency"], h["content-encoding"], h["content-type"]) == (
         "3600", "high", "aes128gcm", "application/octet-stream")
     assert h["authorization"].startswith("vapid t=") and h["authorization"].endswith(f", k={push.public_key()}")
-    assert d.decrypt(req.content) == {"title": "Claude Code", "body": "Рабочий ПК: вопрос",
+    assert d.decrypt(req.content) == {"title": "Код", "body": "Рабочий ПК: вопрос",
                                       "href": f"code/1/{ALPHA}/{A}", "tag": f"code-{A}"}
     assert studio.gw.requests == []                  # мимо шлюза
     studio.gw.push_status = 500
@@ -235,7 +235,7 @@ def test_cards_and_ends_push_only_without_watchers(studio):
     emit(studio, link, ALPHA, A, ask)
     settle(studio)
     [req] = studio.gw.push_requests
-    assert d.decrypt(req.content) == {"title": "Claude Code", "body": "Рабочий ПК: ждёт подтверждения",
+    assert d.decrypt(req.content) == {"title": "Код", "body": "Рабочий ПК: ждёт подтверждения",
                                       "href": f"code/{aid}/{ALPHA}/{A}", "tag": f"code-{A}"}
     # ход идёт и карточку смотрит открытый поток: push не нужен
     m.script = [{"k": "text", "text": "При"}, ask]

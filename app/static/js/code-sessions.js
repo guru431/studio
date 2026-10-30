@@ -17,7 +17,7 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed }) {
+export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
 
@@ -35,12 +35,20 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
   const add = el('button', { type: 'button', id: 'code-new-chat', class: 'code-chat-link code-new-chat' }, 'Новый чат');
   add.addEventListener('click', () => busy(add, async () => {
     const { chat } = await api('POST', base);
-    if (alive) created(chat);
+    if (alive) created(chat, 'claude');
+  }));
+  const addCodex = codex ? el('button', { type: 'button', id: 'code-new-codex', class: 'code-chat-link code-new-chat' },
+    'Новый чат Codex') : null;
+  if (addCodex) addCodex.addEventListener('click', () => busy(addCodex, async () => {
+    const { chat } = await api('POST', `${base}?engine=codex`);
+    if (alive) created(chat, 'codex');
   }));
 
   function row(chat) {
     const closed = chat.state === 'closed';
     const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
+    if (codex || chat.engine === 'codex') marks.unshift(el('span', { class: 'tag code-engine' },
+      chat.engine === 'codex' ? 'Codex' : 'Claude Code'));
     if (closed) marks.push(el('span', { class: 'tag code-closed' }, 'закрыт'));
     if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));
     else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, 'идёт ход'));
@@ -49,13 +57,14 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
       typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
       el('span', { class: 'code-marks' }, ...marks));
     link.addEventListener('click', () => busy(link, async () => {
-      if (closed) await api('PATCH', `${base}/${chat.chat}`, { state: 'open' });
+      if (closed) await api('PATCH', `${base}/${chat.chat}${chat.engine === 'codex' ? '?engine=codex' : ''}`, { state: 'open' });
       if (alive) picked(chat.chat);
     }));
     return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
   }
 
   const list = el('ul', { id: 'code-chats', class: 'code-chats' }, el('li', { class: 'code-chats-new' }, add));
+  if (addCodex) list.append(el('li', { class: 'code-chats-new' }, addCodex));
   const rows = (found) => found.filter((c) => !exclude.has(c.chat)).map(row);
   if (Array.isArray(items)) list.append(...rows(items));
   else {

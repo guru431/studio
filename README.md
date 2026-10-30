@@ -495,7 +495,15 @@ srvllm — свои образцы: «Настройки» → «Озвучка�
 озвучивает по одной и склеивает в mp3. У внешнего сервиса (OpenAI `/audio/speech`) — голос по имени
 (alloy, nova и т. п.).
 
-## Claude Code
+## Claude Code и Codex
+
+Раздел «Код» поддерживает обоих помощников через один Windows-мост. Для Codex нужен studio-agent 0.3.0+
+и установленный Codex с выполненным входом (`codex login`). В проекте или меню «+» выберите **«Новый чат
+Codex»**; обычный «Новый чат» создаёт чат Claude Code. Сессии Codex из VS Code и терминала тоже видны
+в списке, с меткой Codex. У чата свои модель и усилие, поток ответа, шаги, вопросы, разрешения и остановка;
+выбор моделей двух помощников не смешивается. Компьютеры, PIN, файлы, git, вкладки и push — общие.
+Мост использует локальный Codex и его настройки, отдельный API-ключ студии не нужен. При обновлении
+разверните новую студию и обновите мост архивом: старые мосты продолжат работать с Claude Code.
 
 Спека — [docs/superpowers/specs/2026-10-28-studio-claude-code-design.md](docs/superpowers/specs/2026-10-28-studio-claude-code-design.md),
 протокол канала с мостом — [docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md).

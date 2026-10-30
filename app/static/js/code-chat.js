@@ -93,9 +93,12 @@ function tailOf(filePath, agent, project) {
   return parts.some((p) => p === '' || p === '.' || p === '..') ? null : parts.join('/');
 }
 
-export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, closed: toPin, closedChat, gone,
+export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, closedChat, gone,
   openFile }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
+  const endpoint = (tail = '') => `${url}${tail}${engine === 'codex' ? '?engine=codex' : ''}`;
+  const choiceKey = engine === 'codex' ? `${aid}:codex` : aid;
+  const assistant = engine === 'codex' ? 'Codex' : 'Claude Code';
   const draftKey = `${aid}/${chat}`;
   const scroller = document.getElementById('view');
   let alive = true;
@@ -114,8 +117,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание', maxlength: '100000' });
-  const models = Array.isArray(agent && agent.models) ? agent.models : [];
-  const efforts = Array.isArray(agent && agent.efforts) ? agent.efforts : [];
+  const catalog = engine === 'codex' ? agent?.codex : agent;
+  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  const efforts = Array.isArray(catalog?.efforts) ? catalog.efforts : [];
   const model = el('select', { id: 'code-model', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...models.map((m) => el('option', { value: String(m.id) }, String(m.label || m.id))));
   const effort = el('select', { id: 'code-effort', class: 'chip' }, el('option', { value: '' }, DEFAULT),
@@ -124,7 +128,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Выбор устройства — в новый чат, пока свой не тронут. */
   function applySaved() {
     if (touched) return;
-    const saved = loadChoice(aid);
+    const saved = loadChoice(choiceKey);
     if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
     if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
   }
@@ -139,7 +143,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       el('div', { class: 'composer-opts' },
         el('label', { class: 'code-pick' }, 'Модель', model), el('label', { class: 'code-pick' }, 'Усилие', effort)),
       stop, send));
-  host.append(el('div', { class: 'code-chat-bar' }, closeChat),
+  host.append(el('div', { class: 'code-chat-bar' }, el('span', { class: 'tag code-engine' }, assistant), closeChat),
     origin === 'other' ? el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED) : null,
     more, feed, status, form);
   if (drafts.has(draftKey)) {
@@ -234,7 +238,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const b of buttons) b.disabled = true;
       error.textContent = '';
       try {
-        await api('POST', `${url}/answer`, { request_id: a.request_id, ...body });
+        await api('POST', endpoint('/answer'), { request_id: a.request_id, ...body });
       } catch (err) {
         if (err.code === 'gone') card.remove();             // запроса уже нет: ответили в другой вкладке
         else if (err.code === 'closed') closed();
@@ -288,12 +292,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
     const instead = el('textarea', { class: 'input code-ask-instead', rows: '2', maxlength: '2000',
       placeholder: INSTEAD, 'aria-label': INSTEAD });
-    card.append(el('p', { class: 'code-ask-title' }, ASK_TITLE),
+    card.append(el('p', { class: 'code-ask-title' }, engine === 'codex' ? 'Codex просит разрешения' : ASK_TITLE),
       el('b', { class: 'code-ask-tool' }, String(a.tool ?? '')),
       el('pre', { class: 'code-ask-input' }, JSON.stringify(a.input && typeof a.input === 'object' ? a.input : {}, null, 2)),
       el('div', { class: 'code-ask-actions' },
         action('code-ask-yes', 'Да', () => ({ decision: 'allow' }), true),
-        a.always ? action('code-ask-always', 'Да, больше не спрашивать', () => ({ decision: 'always' })) : null,
+        a.always ? action('code-ask-always', engine === 'codex' ? 'Да, для этой сессии' : 'Да, больше не спрашивать', () => ({ decision: 'always' })) : null,
         action('code-ask-no', 'Нет', () => ({ decision: 'deny', message: instead.value.trim() || null }))),
       instead, error);
     return card;
@@ -444,7 +448,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const own = take();
     let response;
     try {
-      response = await api('GET', `${url}/live`, undefined, { signal: own.signal });
+      response = await api('GET', endpoint('/live'), undefined, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
@@ -463,7 +467,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function loadHistory(thenLive) {
     let page;
     try {
-      page = await api('GET', url);
+      page = await api('GET', endpoint());
     } catch (err) {
       if (!alive) return;
       if (err.code === 'closed') closed();
@@ -492,7 +496,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Сменили модель или усилие — на устройстве для новых чатов (другое из пары остаётся прежним). */
   function remember(key, select) {
     touched = true;
-    saveChoice(aid, { ...loadChoice(aid), [key]: select.value || null });
+    saveChoice(choiceKey, { ...loadChoice(choiceKey), [key]: select.value || null });
   }
 
   async function submit() {
@@ -509,7 +513,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
     try {
-      response = await api('POST', `${url}/turn`, { text: value, model: model.value || null,
+      response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null }, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
@@ -544,7 +548,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   more.addEventListener('click', async () => {
     more.disabled = true;
     try {
-      const page = await api('GET', `${url}?before=${start}`);
+      const page = await api('GET', `${endpoint()}${engine === 'codex' ? '&' : '?'}before=${start}`);
       if (!alive) return;
       const height = scroller ? scroller.scrollHeight : 0;
       feed.prepend(...messages(page.items));
@@ -562,7 +566,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   stop.addEventListener('click', async () => {
     stop.disabled = true;
     try {
-      await api('POST', `${url}/stop`);
+      await api('POST', endpoint('/stop'));
     } catch (err) {
       if (err.code === 'closed') closed();
       else if (err.code !== 'idle') status.textContent = words(err);     // idle — ход уже кончился
@@ -574,7 +578,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   closeChat.addEventListener('click', async () => {
     closeChat.disabled = true;
     try {
-      await api('PATCH', url, { state: 'closed' });
+      await api('PATCH', endpoint(), { state: 'closed' });
       if (alive) closedChat();
     } catch (err) {
       closeChat.disabled = false;

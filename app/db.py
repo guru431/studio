@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 20
+VERSION = 21
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -305,6 +305,10 @@ CREATE TABLE code_place(user_id INTEGER PRIMARY KEY REFERENCES users ON DELETE C
        project TEXT, view TEXT NOT NULL DEFAULT 'chat' CHECK (view IN ('chat','files','git')));
 """
 
+CODE_21 = """ALTER TABLE code_chats ADD COLUMN engine TEXT NOT NULL DEFAULT 'claude'
+CHECK (engine IN ('claude', 'codex'));
+"""
+
 SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
@@ -347,7 +351,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -418,6 +422,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     19: CODE_19,
     # Claude Code: рабочее место учётки — вкладки проектов, компьютер панели, открытый проект и вид
     20: CODE_20,
+    21: CODE_21,
 }
 
 
