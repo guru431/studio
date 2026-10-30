@@ -724,8 +724,14 @@ SQL — как у шага 16 ниже.
 `.venv/Scripts/python -m pip install -r requirements-dev.txt`. Приложение в быстрых тестах —
 фикстура `studio` (`tests/conftest.py`): шлюз подменён `httpx.MockTransport` (`tests/fakes.py`),
 часы — `clock.NOW`, паузы — `clock.SLEEP`. Браузерные сценарии — `tests/test_ui_browser.py`
-(живая служба `tests/live_app.py`, драйвер `tests/browser.py` + `cdp_driver.mjs`). Договорённость
-юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`. Набор идёт четырьмя процессами
+(живая служба `tests/live_app.py`, драйвер `tests/browser.py` + `cdp_driver.mjs`).
+Движок Safari проверяется отдельно в `tests/test_ui_webkit.py` (Playwright WebKit, касания, 393×852 и
+852×393, также 320 px). Установка движка: `.venv/Scripts/python -m playwright install webkit`;
+точечно — `.venv/Scripts/python -m pytest tests/test_ui_webkit.py -q -m integration -n0`.
+Без установленного движка эти проверки пропускаются. В мобильной `.code-panel` обязательно
+`align-self: stretch`: WebKit при настольном `flex-start` и `height: auto` сжимает фиксированную
+панель до высоты компьютеров, обрезая проекты, несмотря на заданные `top` и `bottom`.
+Договорённость юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`. Набор идёт четырьмя процессами
 (`-n 4 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
 его не делят; `integration` и `manual` — группой `serial` (хук в `tests/conftest.py`), одним
 процессом по очереди. Один тест без параллели — `-n0`. Срок теста (`timeout = 30`, на Windows метод `thread`)

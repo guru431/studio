@@ -8,3 +8,5 @@ httpx2>=2.16
 pytest-timeout>=2.3
 # `-n 4` в pytest.ini: набор — четырьмя процессами
 pytest-xdist>=3.6
+# Safari/WebKit: браузер ставится отдельно командой python -m playwright install webkit.
+playwright>=1.64

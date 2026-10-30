@@ -1178,7 +1178,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 
 /* телефон: панель выезжает слева по ☰ (как список диалогов чата), переключатели — второй строкой */
 @media (max-width: 760px) {
-  .code-panel { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw); height: auto;
+  .code-panel { position: fixed; z-index: 25; top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, 85vw); height: auto; align-self: stretch;
     padding-top: env(safe-area-inset-top, 0px); transform: translateX(-100%); visibility: hidden;
     transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
   .code-ws.panel-open .code-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow); }
