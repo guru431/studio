@@ -65,6 +65,7 @@ import images
 import media
 import ocr
 import ocr_render
+import push
 import sections
 import state
 import translate_spot
@@ -213,8 +214,11 @@ def _store(job: Job) -> None:
 
 def _finish(tid: str, state_: str, detail_: str) -> None:
     """Итог записи одним UPDATE — с переводом готовых кусков (поиск видит и недоделанное)."""
-    state.DB.execute("UPDATE translations SET state = ?, detail = ?, finished = ?, text = ? WHERE id = ?",
-                     (state_, detail_, clock.NOW(), joined(tid) or None, tid))
+    changed = state.DB.execute("UPDATE translations SET state = ?, detail = ?, finished = ?, text = ?"
+                               " WHERE id = ? AND finished IS NULL",
+                               (state_, detail_, clock.NOW(), joined(tid) or None, tid)).rowcount
+    if changed:
+        push.job_finished("translations", tid)
 
 
 def _check(job: Job) -> None:

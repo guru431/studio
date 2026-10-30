@@ -45,6 +45,7 @@ import connections
 import db
 import forms
 import media
+import push
 import sections
 import state
 import upstream
@@ -128,9 +129,12 @@ def _out(row, with_chain=True) -> dict:
 def _settle(video_id: str, state_: str, detail: str, media_id: "str | None" = None) -> bool:
     """Конец ролика, если он ещё идёт; False — его уже отменили или удалили."""
     progress = ", progress = 100" if state_ == "done" else ""
-    return state.DB.execute(f"UPDATE videos SET state = ?, detail = ?, media_id = ?, finished = ?{progress}"
-                            f" WHERE id = ? AND {WHERE_ACTIVE}",
-                            (state_, detail, media_id, clock.NOW(), video_id)).rowcount == 1
+    changed = state.DB.execute(f"UPDATE videos SET state = ?, detail = ?, media_id = ?, finished = ?{progress}"
+                               f" WHERE id = ? AND {WHERE_ACTIVE}",
+                               (state_, detail, media_id, clock.NOW(), video_id)).rowcount == 1
+    if changed:
+        push.job_finished("videos", video_id)
+    return changed
 
 
 def _int(value, default):

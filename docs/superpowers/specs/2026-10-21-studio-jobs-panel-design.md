@@ -49,7 +49,11 @@
 
 ## 5. Сервер
 
-**`GET /api/jobs?since=<время>`** (за `auth.guard`) → `{now, running: [...], finished: [...]}`:
+**`GET /api/jobs?since=<время>`** (за `auth.guard`) → `{now, running: [...], finished: [...], push}`:
+
+Дополнение 2026-10-30: `push` — подписка текущей сессии. Если она есть, о готовности и ошибках сообщает сервер
+через общую подписку Web Push (см. §6.8 спеки «Кода»); локальное уведомление из опроса не дублирует push.
+
 - `running` — свои идущие: картинки `working`/`cancelling` и `queued` серии (если есть),
   ролики `queued`/`in_progress`, расшифровки и озвучки `working`, ответы чата через сервер
   (`messages.status='streaming'`, `via='server'`, сообщение — своих диалогов).

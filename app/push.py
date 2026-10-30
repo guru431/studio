@@ -1,4 +1,4 @@
-"""Web Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8).
+"""Web Push раздела «Код» и готовых фоновых заданий.
 
 - Ключ VAPID (P-256) заводит служба при первом обращении и хранит в `settings` (`vapid`) шифром
   `STUDIO_DATA_KEY`, как токены подключений. Ключ данных сменили — прежний не расшифровать: новый ключ VAPID,
@@ -7,7 +7,7 @@
   уносит её. Адрес присылает браузер, а запрос на него шлёт сервер — поэтому только https-адреса служб push из
   `HOSTS` (исключение из правила списка разрешённых адресов, CLAUDE.md «Правила»); иной адрес — 422.
 - Полезная нагрузка — RFC 8291 (aes128gcm, RFC 8188) одной записью, подпись — VAPID (RFC 8292, ES256); всё на
-  `cryptography`. Текст — только «<имя компьютера>: <повод>», подробности — в студии.
+  `cryptography`. Текст — только повод (у «Кода» ещё имя компьютера), подробности — в студии.
 - Журнал — без адреса подписки и текста: «push: ответ <код>», «push: сбой сети», «пользователь N: …».
 """
 import asyncio
@@ -44,6 +44,14 @@ JWT_SEC = 12 * 3600
 ENDPOINT_MAX = 1024
 RECORD_SIZE = 4096
 TITLE = "Код"
+JOB_NOTICES = {
+    "images": ("photo", "картинка готова", "картинка не получилась"),
+    "videos": ("video", "ролик готов", "ролик не получился"),
+    "transcripts": ("transcribe", "расшифровка готова", "расшифровка не получилась"),
+    "scans": ("ocr", "распознавание готово", "распознавание не получилось"),
+    "translations": ("translate", "перевод готов", "перевод не получился"),
+    "speeches": ("speech", "озвучка готова", "озвучка не получилась"),
+}
 
 #: ключ VAPID процесса (тесты очищают)
 KEY: ec.EllipticCurvePrivateKey | None = None
@@ -149,12 +157,12 @@ def vapid_header(endpoint: str) -> str:
 
 # ---- отправка ------------------------------------------------------------------
 
-async def notify(user_id: int, body: str, href: str, tag: str) -> None:
+async def notify(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
     """Уведомление каждой подписке пользователя; 404 и 410 — подписки больше нет."""
     rows = state.DB.execute("SELECT endpoint, p256dh, auth FROM push_subs WHERE user_id = ?", (user_id,)).fetchall()
     if not rows:
         return
-    payload = json.dumps({"title": TITLE, "body": body, "href": href, "tag": tag}, ensure_ascii=False).encode()
+    payload = json.dumps({"title": title, "body": body, "href": href, "tag": tag}, ensure_ascii=False).encode()
     for row in rows:
         endpoint = row["endpoint"]
         headers = {"TTL": str(TTL_SEC), "Urgency": "high", "Content-Encoding": "aes128gcm",
@@ -172,16 +180,28 @@ async def notify(user_id: int, body: str, href: str, tag: str) -> None:
             log.warning("push: ответ %d", r.status_code)
 
 
-def notify_later(user_id: int, body: str, href: str, tag: str) -> None:
-    """`notify` фоном: событие моста не ждёт службу push."""
+def notify_later(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
+    """`notify` фоном: завершение задания и событие моста не ждут службу push."""
     async def run():
         try:
-            await notify(user_id, body, href, tag)
+            await notify(user_id, body, href, tag, title=title)
         except Exception as e:           # фон: сбой одной отправки не роняет цикл и не теряется молча
             log.warning("push: сбой (%s)", type(e).__name__)
     task = asyncio.get_running_loop().create_task(run())
     TASKS.add(task)
     task.add_done_callback(TASKS.discard)
+
+
+def job_finished(table: str, item_id: str) -> None:
+    """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого."""
+    section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
+    row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
+                            " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
+                            " AND EXISTS (SELECT 1 FROM push_subs p WHERE p.user_id = j.user_id)",
+                            (item_id,)).fetchone()
+    if row is not None:
+        notify_later(row["user_id"], done if row["state"] == "done" else error,
+                     f"{section}?id={item_id}", item_id, title="Студия")
 
 
 async def stop() -> None:

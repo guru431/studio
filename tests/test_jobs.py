@@ -105,7 +105,7 @@ def test_other_users_jobs_are_not_listed(studio):
     speech(other, "s9", state_="done", finished=T0 - 5)
     answer(other, "c9", "m9")
     me(studio)
-    assert get(studio) == {"now": T0, "running": [], "finished": []}
+    assert get(studio) == {"now": T0, "running": [], "finished": [], "push": False}
 
 
 def test_finished_window_since_and_limit(studio):

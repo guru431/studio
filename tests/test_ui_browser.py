@@ -5956,6 +5956,27 @@ JOBS_STUB = """(() => { window.jobsOut = null; const real = window.fetch;
 KICK = "(await import('/static/js/jobs.js')).kick()"
 
 
+def test_jobs_push_replaces_local_notifications_and_leaves_a_fallback(browser, live):
+    """Подписанная сессия не дублирует push локальным уведомлением; без подписки локальное остаётся."""
+    login = "jobs-push"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("eval", "stub", JOBS_STUB),
+        ("eval", "notify", "localStorage.setItem('studio-notify', '1')"), hide(),
+        ("eval", "push", f"""(async () => {{ window.jobsOut = {{ push: true, running: [],
+          finished: [job('translate', 'push-done', 'done', Date.now() / 1000)] }}; {KICK}; }})()"""),
+        ("wait", "document.querySelector('#jobs').dataset.new === '1'"),
+        ("eval", "withPush", "window.shown.length"),
+        ("eval", "local", f"""(async () => {{ window.jobsOut = {{ push: false, running: [],
+          finished: [job('speech', 'local-done', 'done', Date.now() / 1000)] }}; {KICK}; }})()"""),
+        ("wait", "window.shown.length === 1"), ("eval", "shown", "window.shown"), show()], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    assert r["values"]["withPush"] == 0
+    assert r["values"]["shown"] == [{"title": "Студия: озвучка готова", "options": {
+        "tag": "local-done", "icon": "/static/icons/icon-192.png", "data": {"href": "speech?id=local-done"}}}]
+    assert not problems(r), problems(r)
+
+
 def test_jobs_panel_keeps_rows_and_focus_between_polls(browser, live):
     """Открытая панель на опросе не пересобирается: фокус на «Открыть» остаётся, строка того же id — тот
     же узел с новым ходом, ставшее готовым уходит из «Идёт» и встаёт сверху «Готово за час» (новое)."""
@@ -6978,8 +6999,9 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True, init=init)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["label"] == "Push от Claude Code и Codex на этом устройстве"
-    assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос, конец хода."
+    assert v["label"] == "Push на этом устройстве"
+    assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода"
+                         " Claude Code или Codex, готовность и ошибки фоновых заданий."
                          " Идут через серверы Apple или Google — содержимое зашифровано, но факт и время им видны."
                          " На iPhone — только у студии, добавленной на экран «Домой».")
     assert v["before"] is False and v["status"] == "Push включён на этом устройстве" and v["fits"] is True
