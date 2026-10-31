@@ -1272,7 +1272,12 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-session-notice p { margin: 0 0 6px; }
 .code-session-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .code-session-actions .btn { white-space: normal; }
-.code-composer { margin: 0; min-width: 0; width: 100%; }
+.code-message-nav { position: absolute; right: 0; bottom: calc(100% + 8px); display: flex; flex-direction: column; gap: 4px; }
+.code-message-nav .icon-btn { width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 50%;
+  background: var(--panel); color: var(--text); box-shadow: 0 2px 8px #0002; }
+.code-message-nav .icon-btn:hover { background: var(--panel-2); }
+.code-message-nav .icon-btn:disabled { opacity: .4; cursor: default; }
+.code-composer { --code-meta-font: calc(10px * var(--font-scale, 1)); margin: 0; min-width: 0; width: 100%; }
 .code-composer .composer-bar { align-items: center; }
 .code-composer .composer-opts { flex-wrap: nowrap; }
 .code-composer .composer-go { flex: none; white-space: nowrap; }
@@ -1300,16 +1305,22 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-image img { width: 100%; height: 100%; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; }
 .code-image-remove { position: absolute; top: 0; right: 0; background: var(--panel); border-radius: 50%; }
 .code-sent-image { display: block; max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 8px; margin-bottom: 6px; }
-.code-pick { display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; }
+.code-pick { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0;
+  max-width: 160px; gap: 5px; padding: 6px 8px; font-size: var(--code-meta-font); color: var(--text); }
 .code-pick-name { display: none; }
-.code-pick select { width: auto; min-width: 0; max-width: 160px; text-overflow: ellipsis;
-  font-size:calc(12px * var(--font-scale, 1)); }
-#code-effort { max-width: 80px; }
-#code-access { max-width: 150px; }
+.code-pick-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-pick::after { content: ''; flex: none; width: 4px; height: 4px; margin-top: -3px;
+  border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); }
+/* Прозрачный нативный select поверх компактной подписи сохраняет размер от 16px на iOS без автозума. */
+.code-pick select { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; max-width: none; opacity: 0; cursor: pointer; }
+.code-pick:has(select:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.code-pick:has(select:disabled) { opacity: .5; }
+.code-pick:has(#code-effort) { max-width: 80px; }
+.code-pick:has(#code-access) { max-width: 150px; }
 .code-context { --context-color:var(--muted); --context-percent:0%; position:relative; display:inline-grid; flex:none;
   place-items:center; width:42px; height:42px; border-radius:50%; color:var(--text); white-space:nowrap;
   background:conic-gradient(var(--context-color) var(--context-percent), var(--border) 0);
-  font-size:calc(10px * var(--font-scale, 1)); font-weight:600; font-variant-numeric:tabular-nums; }
+  font-size:var(--code-meta-font); font-weight:600; font-variant-numeric:tabular-nums; }
 .code-context::before { content:''; position:absolute; inset:4px; border-radius:50%; background:var(--panel); }
 #code-context-text { position:relative; }
 .code-context[data-level="green"] { --context-color:var(--ok); }
@@ -1322,9 +1333,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-composer .composer-go { padding: 6px; min-width: 32px; }
   .code-composer .composer-bar, .code-composer .composer-opts { gap: 4px; }
   .code-context { width:36px; height:36px; }
-  .code-pick { flex: 1 1 0; }
+  .code-pick { flex: 1 1 0; padding: 6px 4px; }
   .code-pick:first-child { flex-grow: 1.5; }
-  .code-pick select { width: 100%; padding: 6px 2px; }
 }
 @media (pointer: coarse) {
   /* iOS увеличивает страницу при фокусе мелкого поля. Минимум 16px учитывает CSS zoom
