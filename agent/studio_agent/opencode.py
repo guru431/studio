@@ -481,8 +481,8 @@ class OpenCodeRunner(Runner):
                 multi = schema.get("type") == "array"
                 if multi:
                     choices = schema.get("items", {}).get("oneOf", [])
-                fields[label] = {"key": key, "schema": schema, "choices": choices, "multi": multi}
-                questions.append({"question": label, "header": None, "multi": multi,
+                fields[key] = {"label": label, "schema": schema, "choices": choices, "multi": multi}
+                questions.append({"id": key, "question": label, "header": None, "multi": multi,
                     "options": [{"label": str(o.get("title") or o.get("const")), "description": o.get("description", "")}
                                 for o in choices]})
             if not questions:
@@ -521,8 +521,10 @@ class OpenCodeRunner(Runner):
                 raise Refused("invalid")
             else:
                 content = {}
-                for label, field in frame["_fields"].items():
-                    value = answers.get(label)
+                for key, field in frame["_fields"].items():
+                    value = answers.get(key)
+                    if value is None and sum(row["label"] == field["label"] for row in frame["_fields"].values()) == 1:
+                        value = answers.get(field["label"])  # страницы прежней версии
                     if not isinstance(value, str) or not value or len(value) > 2000:
                         raise Refused("invalid")
                     choices = {str(o.get("title") or o.get("const")): o.get("const") for o in field["choices"]}
@@ -530,16 +532,18 @@ class OpenCodeRunner(Runner):
                         selected = value.split(", ")
                         if any(v not in choices for v in selected):
                             raise Refused("invalid")
-                        content[field["key"]] = [choices[v] for v in selected]
+                        content[key] = [choices[v] for v in selected]
                     elif choices and value not in choices:
-                        custom = field["key"] + "_custom"
+                        custom = key + "_custom"
                         if custom not in frame["params"].get("requestedSchema", {}).get("properties", {}):
                             raise Refused("invalid")
                         content[custom] = value
                     else:
                         schema = field["schema"]
+                        if not choices and schema.get("type") == "boolean" and value.lower() not in ("true", "false"):
+                            raise Refused("invalid")
                         try:
-                            content[field["key"]] = (choices[value] if choices else
+                            content[key] = (choices[value] if choices else
                                 int(value) if schema.get("type") == "integer" else
                                 float(value) if schema.get("type") == "number" else
                                 value.lower() == "true" if schema.get("type") == "boolean" else value)

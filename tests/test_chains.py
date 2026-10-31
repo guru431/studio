@@ -104,6 +104,52 @@ def test_old_rows_get_a_chain_from_their_links(studio):
     assert kinds(studio.c.get("/api/images/ib").json()) == ["generation", "edit"]
 
 
+def test_video_feed_counts_legacy_chains_in_one_batch(studio):
+    cid = add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
+    for n in range(3):
+        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, source_media_id, media_id,"
+                         " state, detail, created) VALUES (?, ?, 'edit', 'flux', 'p', '8x8', 1, ?, ?, 'done', '', ?)",
+                         (f"i{n}", uid, f"m{n - 1}" if n else None, f"m{n}", T0))
+    for n in range(8):
+        state.DB.execute("INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                         " state, detail, created) VALUES (?, ?, ?, 'm2', 'p', 5, 'standard', 1, 'done', '', ?)",
+                         (f"v{n}", uid, cid, T0))
+    queries = []
+    studio.c.portal.call(state.DB.set_trace_callback, queries.append)
+    try:
+        items = studio.c.get("/api/videos").json()["items"]
+    finally:
+        studio.c.portal.call(state.DB.set_trace_callback, None)
+    assert len(items) == 8 and all(v["steps"] == 4 and "chain" not in v for v in items)
+    image_queries = [q for q in queries if "FROM images" in q]
+    assert len(image_queries) == 1
+
+
+def test_legacy_video_counts_match_detail_for_snapshots_foreign_sources_cycles_and_depth(studio):
+    cid = add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
+    foreign = make_user(studio, "bob")
+    images = [("snapshot", None, json.dumps([{"kind": "generation"}] * 3), uid),
+              ("foreign", None, json.dumps([{"kind": "generation"}] * 5), foreign),
+              ("circle-a", "circle-b", None, uid), ("circle-b", "circle-a", None, uid)]
+    images += [(f"deep-{n}", f"deep-{n - 1}" if n else None, None, uid) for n in range(chains.MAX_DEPTH + 1)]
+    state.DB.executemany(
+        "INSERT INTO images(id, media_id, source_media_id, chain, user_id, kind, model, prompt, size, seed, state,"
+        " detail, created) VALUES (?, ?, ?, ?, ?, 'edit', 'flux', 'p', '8x8', 1, 'done', '', ?)",
+        [(iid, iid, source, snapshot, owner, T0) for iid, source, snapshot, owner in images])
+    sources = {"snapshot": 4, "foreign": 2, "circle-a": 3, f"deep-{chains.MAX_DEPTH}": chains.MAX_DEPTH + 1}
+    for source in sources:
+        state.DB.execute("INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                         " state, detail, created) VALUES (?, ?, ?, ?, 'p', 5, 'standard', 1, 'done', '', ?)",
+                         (source, uid, cid, source, T0))
+    counts = {v["id"]: v["steps"] for v in studio.c.get("/api/videos").json()["items"]}
+    assert counts == sources
+    for source, expected in sources.items():
+        detail = studio.c.get(f"/api/videos/{source}").json()
+        assert detail["steps"] == len(detail["chain"]) == expected
+
+
 def test_old_rows_linked_in_a_circle_still_answer(studio):
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users").fetchone()[0]

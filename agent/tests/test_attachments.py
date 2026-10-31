@@ -70,6 +70,17 @@ def test_combined_size_and_count_limits_include_images(monkeypatch):
         attachments.validate([FILE])
 
 
+@pytest.mark.parametrize("operation", ["turn", "steer"])
+async def test_combined_size_is_checked_before_start_or_followup(agent, monkeypatch, operation):
+    from test_image_input import PNG
+
+    await opened(agent)
+    monkeypatch.setattr(limits, "IMAGES_MAX", 25)
+    reply = (await agent.handle(req(operation, project=projects.pid("demo"), chat=CHAT, text="",
+                                    attachments=[FILE], images=[PNG])))[0]
+    assert reply["code"] == "too_large" and not agent.runner.live()
+
+
 def test_original_name_never_controls_disk_path_and_empty_files_are_allowed():
     files = attachments.Files()
     try:

@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 
 import httpx
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
@@ -129,7 +130,10 @@ def token(conn: Connection) -> str:
         raise upstream.ConnectionChanged(conn, deleted=True)
     if row["kind"] != conn.kind or _address(row["base_url"]) != _address(conn.base_url):
         raise upstream.ConnectionChanged(conn, deleted=False)
-    return security.decrypt(row["token_enc"])
+    try:
+        return security.decrypt(row["token_enc"])
+    except InvalidToken:
+        raise upstream.UpstreamRefused(f"подключение {conn.id}: токен не расшифрован", "token") from None
 
 
 def _api(conn: Connection) -> str:
@@ -192,8 +196,13 @@ def save_passport(snap: tuple, passport: dict) -> bool:
 
 def out(conn: Connection, passport: bool = True) -> dict:
     """passport=False — зеркала панели администратора: паспорт чужого подключения туда не идёт."""
-    secret = token(conn)
-    hint = "…" + secret[-4:] if len(secret) > 8 else "…"   # короткий токен по хвосту угадывается целиком
+    try:
+        secret = token(conn)
+        hint = "…" + secret[-4:] if len(secret) > 8 else "…"   # короткий токен по хвосту угадывается целиком
+    except upstream.UpstreamRefused as e:
+        if e.reason != "token":
+            raise
+        hint = "нужно ввести заново"
     item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
             "dropped": dropped(conn), "token_hint": hint}
@@ -402,4 +411,8 @@ async def get_token(conn_id: int, request: Request):
     if conn.server_only or conn.proxied or conn.kind == "srvllm" or not _direct_ok(conn.base_url):
         raise HTTPException(403, {"code": "proxied", "message": "токен подключения через сервер не выдаётся"})
     # адреса — вместе с токеном: браузер несёт его только туда, а не по списку, который мог устареть
-    return {"token": token(conn), "chat_url": chat_url(conn), "models_url": models_url(conn)}
+    try:
+        secret = token(conn)
+    except upstream.UpstreamRefused as e:
+        raise refused(conn, e) from None
+    return {"token": secret, "chat_url": chat_url(conn), "models_url": models_url(conn)}

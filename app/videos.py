@@ -112,15 +112,15 @@ def _row(user_id: int, video_id: str):
     return row
 
 
-def _out(row, with_chain=True) -> dict:
+def _out(row, with_chain=True, steps=None) -> dict:
     """Запись ленты; цепочка промптов — только у одной записи, в ленте — число шагов (как у картинок)."""
     end = row["finished"] if row["finished"] is not None else clock.NOW()
-    chain = chains.of_video(row["user_id"], row)
+    chain = chains.of_video(row["user_id"], row) if with_chain else None
     out = {"id": row["id"], "state": row["state"], "progress": row["progress"], "detail": row["detail"],
            "prompt": row["prompt"], "prompt_source": row["prompt_source"], "seconds": row["seconds"],
            "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"],
            "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"],
-           "elapsed": int(max(0, end - row["created"])), "steps": len(chain)}
+           "elapsed": int(max(0, end - row["created"])), "steps": len(chain) if with_chain else steps}
     if with_chain:
         out["chain"] = chains.annotate(row["user_id"], chain)
     return out
@@ -336,8 +336,10 @@ async def create_video(request: Request):
 async def list_videos(request: Request, before: "float | None" = None,
                       before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
     """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "videos", request.state.user.id, before, before_id, limit)
-    return {"items": [_out(r, with_chain=False) for r in rows]}
+    uid = request.state.user.id
+    rows = db.page(state.DB, "videos", uid, before, before_id, limit).fetchall()
+    steps = chains.video_counts(uid, rows)
+    return {"items": [_out(r, with_chain=False, steps=steps[r["id"]]) for r in rows]}
 
 
 @router.get("/{video_id}")
@@ -395,17 +397,17 @@ async def _fail(row, detail: str, conn: "Connection | None" = None) -> None:
         await _drop_quietly(conn, row["gateway_id"], row["id"])
 
 
-def _update(row, body: dict) -> "int | None":
-    """Ход ролика по ответу шлюза; пустые поля прежних значений не стирают. Итог — seed."""
+def _update(row, body: dict) -> "tuple[bool, int | None]":
+    """Ход ролика по ответу шлюза; итог — строка ещё активна и её seed."""
     status = body.get("status")
     seed = _int(body.get("seed"), row["seed"])
-    state.DB.execute(f"UPDATE videos SET state = ?, progress = ?, detail = ?, prompt = ?, prompt_source = ?, seed = ?"
+    changed = state.DB.execute(f"UPDATE videos SET state = ?, progress = ?, detail = ?, prompt = ?, prompt_source = ?, seed = ?"
                      f" WHERE id = ? AND {WHERE_ACTIVE}",
                      (status if status in ACTIVE else row["state"],
                       min(100, max(0, _int(body.get("progress"), row["progress"]))),
                       _text(body.get("detail"), row["detail"]), _text(body.get("prompt"), row["prompt"]),
-                      _text(body.get("prompt_source"), row["prompt_source"]), seed, row["id"]))
-    return seed
+                      _text(body.get("prompt_source"), row["prompt_source"]), seed, row["id"])).rowcount == 1
+    return changed, seed
 
 
 def _failure_words(body: dict) -> str:
@@ -488,7 +490,9 @@ async def _poll(row) -> None:
         log.warning("ролик %s: статус не получен — код %s", row["id"][:8], r.status_code)
         return
     body = upstream.json_body(r)
-    seed = _update(row, body)
+    active, seed = _update(row, body)
+    if not active:
+        return
     if body.get("status") == "completed":
         await _fetch(row, conn, seed)
     elif body.get("status") == "failed":

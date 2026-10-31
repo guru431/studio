@@ -437,11 +437,14 @@ class CodexRunner(Runner):
         if temporary.get("ephemeral") is not True or not isinstance(tid, str) or tid == target:
             raise Refused("unsupported", "обновите Codex: недоступно безопасное чтение состояния чата")
         try:
-            default_effort = next((m.get("defaultReasoningEffort") for m in
-                (await self._metadata(project, "model/list", {"limit": 50})).get("data", [])
-                if m.get("model") == data.get("model")), None)
+            actual_model = data.get("model") or model
+            default_effort = self.default_efforts.get(actual_model)
+            if default_effort is None:
+                default_effort = next((m.get("defaultReasoningEffort") for m in
+                    (await self._metadata(project, "model/list", {"limit": 50})).get("data", [])
+                    if m.get("model") == actual_model), None)
             context = await asyncio.to_thread(last_context, (thread or {}).get("path"))
-            return {"settings": {"model": data.get("model") or model,
+            return {"settings": {"model": actual_model,
                         "effort": effort or data.get("reasoningEffort") or default_effort,
                         "access": permissions.codex_value(data.get("sandbox")) or access,
                         "approval": data.get("approvalPolicy")}, "context": context or saved.get("context")}
@@ -638,8 +641,16 @@ class CodexRunner(Runner):
             return
         rid = secrets.token_hex(8)
         if method == "item/tool/requestUserInput":
-            questions = [{"question": q["question"], "header": q.get("header"), "multi": False,
-                          "options": q.get("options") or []} for q in p.get("questions", [])]
+            rows = p.get("questions")
+            if not isinstance(rows, list) or not rows or any(
+                    not isinstance(q, dict) or not isinstance(q.get("id"), str) or not 0 < len(q["id"]) <= 200
+                    or not isinstance(q.get("question"), str) or not q["question"] for q in rows) or \
+                    len({q["id"] for q in rows}) != len(rows):
+                await t.client.rpc.send({"id": frame["id"],
+                    "error": {"code": -32602, "message": "Invalid questions"}})
+                return
+            questions = [{"id": q["id"], "question": q["question"], "header": q.get("header"), "multi": False,
+                          "options": q.get("options") or []} for q in rows]
             event = events.bound({"k": "ask", "request_id": rid, "kind": "question", "questions": questions})
         elif method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval",
                         "item/permissions/requestApproval"):
@@ -683,8 +694,11 @@ class CodexRunner(Runner):
             if decision != "allow" or not isinstance(answers, dict):
                 raise Refused("invalid")
             result = {}
-            for q in frame["params"].get("questions", []):
-                value = answers.get(q["question"])
+            questions = frame["params"]["questions"]
+            for q in questions:
+                value = answers.get(q["id"])
+                if value is None and sum(row["question"] == q["question"] for row in questions) == 1:
+                    value = answers.get(q["question"])  # страницы прежней версии
                 if not isinstance(value, str) or not value or len(value) > 2000:
                     raise Refused("invalid")
                 result[q["id"]] = {"answers": [value]}

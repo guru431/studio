@@ -435,9 +435,10 @@ def forget(user_id: int, digest: str, *, close_computers: bool = True) -> None:
     session = tag(digest)
     for hook in FORGET_HOOKS:
         hook(user_id, session)
-    for queues in WATCHERS.values():
-        for q in queues:
+    for (aid, chat), queues in list(WATCHERS.items()):
+        for q in list(queues):
             if q.session == session:
+                unwatch(aid, chat, q)
                 q.put_nowait(("closed", None))
     if not close_computers:
         return

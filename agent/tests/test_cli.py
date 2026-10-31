@@ -115,6 +115,17 @@ async def test_probe_failure_is_empty_and_still_disconnects(tmp_path, caplog):
     assert "RuntimeError" in caplog.text and "claude.exe" not in caplog.text
 
 
+async def test_probe_keeps_only_eight_recent_project_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "DEFAULTS", {})
+    for index in range(9):
+        await cli.probe(str(tmp_path / str(index)), None, Client)
+    assert len(cli.DEFAULTS) == 8
+    assert str(tmp_path / "0") not in cli.DEFAULTS
+    await cli.probe(str(tmp_path / "1"), None, Client)
+    await cli.probe(str(tmp_path / "9"), None, Client)
+    assert str(tmp_path / "1") in cli.DEFAULTS and str(tmp_path / "2") not in cli.DEFAULTS
+
+
 def test_current_keeps_the_path_while_the_file_exists_then_finds_the_newest(tmp_path):
     old = _ext(tmp_path, "2.1.311")
     new = _ext(tmp_path, "2.1.312")

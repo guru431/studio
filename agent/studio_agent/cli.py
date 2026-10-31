@@ -26,6 +26,7 @@ MODELS_MAX = 50
 LABEL_MAX = 100
 SETTINGS = ["user", "project", "local"]
 DEFAULTS: dict[str, dict] = {}
+DEFAULTS_MAX = 8
 ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
 # Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
 SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
@@ -139,7 +140,11 @@ async def probe(root: str, cli_path: Path | None, factory=ClaudeSDKClient) -> tu
     async def ask():
         await client.connect()
         info = await client.get_server_info() or {}
-        DEFAULTS[str(root)] = await asyncio.to_thread(settings_from, info, root)
+        defaults = await asyncio.to_thread(settings_from, info, root)
+        DEFAULTS.pop(str(root), None)
+        DEFAULTS[str(root)] = defaults
+        while len(DEFAULTS) > DEFAULTS_MAX:
+            DEFAULTS.pop(next(iter(DEFAULTS)))
         return info
 
     try:

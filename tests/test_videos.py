@@ -45,6 +45,26 @@ def poll(s):
     s.c.portal.call(videos.poll_once)
 
 
+@pytest.mark.parametrize("gone", [False, True], ids=["cancelled", "deleted"])
+def test_cancelled_or_deleted_video_is_not_downloaded_after_a_stale_status(studio, gone):
+    add_gateway(studio)
+    video = create_video(studio).json()
+    gateway_id = v_gateway_id(studio)
+
+    async def completed(request):
+        if gone:
+            state.DB.execute("DELETE FROM videos WHERE id = ?", (video["id"],))
+        else:
+            state.DB.execute("UPDATE videos SET state = 'cancelled' WHERE id = ?", (video["id"],))
+        return httpx.Response(200, json={"status": "completed", "seed": 42})
+
+    studio.gw.on[f"/slot/videos/{gateway_id}"] = completed
+    poll(studio)
+
+    assert not any(r.url.path == f"/slot/videos/{gateway_id}/content" for r in studio.gw.requests)
+    assert studio.gw.video_deleted == []
+
+
 def item(s, video_id):
     return s.c.get(f"/api/videos/{video_id}").json()
 

@@ -133,6 +133,24 @@ def test_explicit_source_skips_detection(studio, monkeypatch):
     assert studio.gw.chat_requests[0]["messages"][0]["content"] == translate_text.system_prompt("de", "ru")
 
 
+def test_missing_queued_job_reports_a_lost_task_without_blame_on_restart(studio):
+    cid = add_gateway(studio)
+
+    async def lost():
+        uid = owner_of(cid)
+        conn, model = sections.resolve(uid, "translate", None, None)
+        tid = translate.create(uid, conn, model, kind="text", name="hello", source="Hello",
+                               source_lang="en", target_lang="ru")
+        translate.JOBS.pop(tid)
+        await translate._runner(uid, "text")
+        return tid
+
+    row = row_of(studio, on_loop(studio, lost))
+    assert row["state"] == "error" and row["finished"] is not None
+    assert row["detail"] == "задание потеряно — переведите заново"
+    assert studio.gw.chat_requests == []
+
+
 def test_local_model_frees_image_models_once(studio, monkeypatch):
     monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
     add_gateway(studio)

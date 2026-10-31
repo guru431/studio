@@ -94,6 +94,7 @@ def images():
     edits — «result-png» и seed 7. files — (поле, имя файла, тип) файловых частей multipart."""
     log = []
     files = []
+    seeds = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -115,6 +116,8 @@ def images():
                 reply = {"data": [{"b64_json": base64.b64encode(b"result-png").decode(), "seed": 7}]}
             elif self.path == "/slot/images/generations":
                 reply = {"data": [{"b64_json": base64.b64encode(b"png-%d" % len(log)).decode()}]}
+                if seeds:
+                    reply["data"][0]["seed"] = seeds.pop(0)
             else:
                 reply = {"ok": True}
             body = json.dumps(reply).encode()
@@ -130,7 +133,7 @@ def images():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
-    yield SimpleNamespace(log=log, files=files, url=f"http://127.0.0.1:{server.server_port}/slot")
+    yield SimpleNamespace(log=log, files=files, seeds=seeds, url=f"http://127.0.0.1:{server.server_port}/slot")
     server.shutdown()
     server.server_close()
     thread.join(1)
@@ -197,11 +200,25 @@ def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, image
              "002-01_second_ab_s5.png", "002-02_second_ab_s6.png"]
     assert sorted(p.name for p in out.glob("*.png")) == names
     assert [(out / n).read_bytes() for n in names] == [b"png-1", b"png-2", b"png-3", b"png-4"]
-    assert (out / "manifest.tsv").read_text(encoding="utf-8-sig").splitlines() == [
+    assert (out / "manifest.tsv").read_text(encoding="utf-8").splitlines() == [
         "n\tfile\tseed\tsize\tmodel\tprompt",
         f"1-1\t{names[0]}\t5\tsquare\tflux\tfirst prompt", f"1-2\t{names[1]}\t6\tsquare\tflux\tfirst prompt",
         f"2-1\t{names[2]}\t5\tsquare\tflux\tsecond: a/b", f"2-2\t{names[3]}\t6\tsquare\tflux\tsecond: a/b"]
     assert images.log[-1] == ("/slot/images/release", "Bearer test-key", {"model": "flux-3-image-klein"})
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_response_seed_is_normalized_before_naming_and_manifest(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("first\n", encoding="utf-8")
+    images.seeds.append("00042")
+    out = tmp_path / "out"
+
+    run_script(runner, images, "-PromptsFile", str(prompts), "-KeepCard", "-OutDir", str(out))
+
+    assert [p.name for p in out.glob("*.png")] == ["001-01_first_s42.png"]
+    assert (out / "manifest.tsv").read_text(encoding="utf-8").splitlines() == [
+        "n\tfile\tseed\tsize\tmodel\tprompt", "1-1\t001-01_first_s42.png\t42\tportrait\tlustify\tfirst"]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

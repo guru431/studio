@@ -243,6 +243,42 @@ async def test_question_schema_options_map_labels_back_to_values(runner):
     assert runner.fake.replies[-1] == {"id": 92, "result": {"action": "accept", "content": {"pm": "bun"}}}
 
 
+async def test_boolean_question_rejects_unrecognized_values(runner):
+    runner.fake.ask = {"id": 92, "method": "elicitation/create", "params": {"sessionId": SESSION, "mode": "form",
+        "requestedSchema": {"type": "object", "properties": {"enabled": {"type": "boolean"}}}}}
+    runner.start(runner.project, runner.pid, CHAT, "вопрос", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        for value in ("yes", "1", "true "):
+            with pytest.raises(Refused, match="invalid"):
+                runner.answer(runner.pid, CHAT, rid, "allow", None, {"enabled": value})
+        runner.answer(runner.pid, CHAT, rid, "allow", None, {"enabled": "FALSE"})
+        await task
+        assert runner.fake.replies[-1]["result"] == {"action": "accept", "content": {"enabled": False}}
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+
+
+async def test_question_property_ids_distinguish_identical_titles(runner):
+    runner.fake.ask = {"id": 92, "method": "elicitation/create", "params": {"sessionId": SESSION, "mode": "form",
+        "requestedSchema": {"type": "object", "properties": {
+            key: {"type": "string", "title": "Выбор"} for key in ("first", "second")}}}}
+    runner.start(runner.project, runner.pid, CHAT, "вопрос", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        runner.answer(runner.pid, CHAT, rid, "allow", None, {"first": "A", "second": "B"})
+        await task
+        assert runner.fake.replies[-1]["result"] == {"action": "accept", "content": {"first": "A", "second": "B"}}
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+
+
 async def test_foreign_request_is_rejected_without_card(runner):
     runner.fake.ask["params"]["sessionId"] = "ses_foreign"
     runner.start(runner.project, runner.pid, CHAT, "привет", None, None)

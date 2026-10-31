@@ -481,7 +481,10 @@ function build(view, ctx) {
       sending = false;
       paintRight();
       paintGo();
-      if (xhr.status === 401) location.href = '/login';
+      if (xhr.status === 401) {
+        location.href = '/login';
+        return;
+      }
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): тот же файл — после отпирания

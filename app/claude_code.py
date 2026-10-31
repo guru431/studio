@@ -442,13 +442,19 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
     if len(recent) >= NEW_CHATS_PER_MIN:
         raise _refuse(429, "too_many", TOO_MANY)
     recent.append(now)
-    data = await ask(request, aid, "chat_fork", project=pid, chat=chat, message_id=body.message_id)
-    child = data.get("chat")
-    if not isinstance(child, str) or child == chat:
-        raise _refuse(502, "bridge", "Мост не создал независимый чат")
-    check_chat(child)
-    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
-                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, child, now, now, engine))
+    try:
+        data = await ask(request, aid, "chat_fork", project=pid, chat=chat, message_id=body.message_id)
+        child = data.get("chat")
+        if not isinstance(child, str) or child == chat:
+            raise _refuse(502, "bridge", "Мост не создал независимый чат")
+        check_chat(child)
+        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
+                         " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, child, now, now, engine))
+    except BaseException:
+        # Резерв занят до await для параллельных просьб; неудачная попытка его возвращает.
+        if now in recent:
+            recent.remove(now)
+        raise
     _event(request, agent, "session_start")
     return {"chat": child, "engine": engine, "draft": str(data.get("draft", ""))[:TEXT_MAX]}
 

@@ -734,7 +734,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       });
       const go = el('button', { type: 'button', class: 'btn btn-accent code-ask-answer' }, 'Ответить');
       go.addEventListener('click', () => {
-        const answers = {};
+        const answers = Object.create(null);
         for (const { q, own, box } of groups) {
           const typed = own.value.trim();
           const inputs = [...box.querySelectorAll('input:not(.code-ask-own)')];
@@ -743,7 +743,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
             (inputs[0] || own).focus();
             return;
           }
-          answers[String(q.question ?? '')] = typed || picked.join(', ');
+          answers[String(q.id || q.question || '')] = typed || picked.join(', ');
         }
         reply({ decision: 'allow', answers });
       });
@@ -1160,6 +1160,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (controller === own) controller = null;
       restoreInput();
       if (err.code === 'closed') closed();
+      else if (err.status === 404 && err.code === 'not_found') gone();
       else if (err.code === 'offline') waitForComputer();
       else {
         showStatus(words(err));

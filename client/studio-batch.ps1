@@ -225,8 +225,9 @@ function Get-Slug([string]$Text) {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $manifest = Join-Path $OutDir 'manifest.tsv'
+$manifestEncoding = New-Object System.Text.UTF8Encoding($false)
 if (-not (Test-Path -LiteralPath $manifest)) {
-    "n`tfile`tseed`tsize`tmodel`tprompt" | Out-File -LiteralPath $manifest -Encoding utf8
+    [IO.File]::WriteAllText($manifest, "n`tfile`tseed`tsize`tmodel`tprompt`n", $manifestEncoding)
 }
 
 $total = $prompts.Count * $Count
@@ -262,11 +263,12 @@ try {
                 $item = @(($r.Text | ConvertFrom-Json).data)[0]
                 if (-not $item.b64_json) { throw 'в ответе шлюза нет картинки (data[0].b64_json)' }
                 # FLUX может не вернуть seed — тогда в manifest запрошенный
-                $seedOut = if ($null -ne $item.seed) { $item.seed } else { $seedValue }
+                $seedOut = if ($null -ne $item.seed) { [long]$item.seed } else { $seedValue }
                 $file = '{0:D3}-{1:D2}_{2}_s{3}.png' -f ($p + 1), ($k + 1), (Get-Slug $prompt), $seedOut
                 [IO.File]::WriteAllBytes((Join-Path $OutDir $file), [Convert]::FromBase64String($item.b64_json))
-                ("{0}-{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f ($p + 1), ($k + 1), $file, $seedOut, $Size, $Model,
-                    ($prompt -replace "`t", ' ')) | Out-File -LiteralPath $manifest -Encoding utf8 -Append
+                $manifestLine = "{0}-{1}`t{2}`t{3}`t{4}`t{5}`t{6}`n" -f ($p + 1), ($k + 1), $file, $seedOut, $Size, $Model,
+                    ($prompt -replace "`t", ' ')
+                [IO.File]::AppendAllText($manifest, $manifestLine, $manifestEncoding)
                 $done++
                 Write-Host ("  готово за {0:N0} с → {1}" -f ((Get-Date) - $t0).TotalSeconds, $file)
             } catch {
