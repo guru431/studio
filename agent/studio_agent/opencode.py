@@ -334,6 +334,8 @@ class OpenCodeRunner(Runner):
     async def _run(self, t, text, model, effort, images):
         failure, cancelled, requests, prompt = None, False, set(), None
         try:
+            text = await self._attachment_text(t, text, t.attachments)
+            t.attachments = []
             saved = await asyncio.to_thread(self.choices.details, t.chat)
             model, effort = model or saved.get("model"), effort or saved.get("effort")
             t.access, t.context = t.access or saved.get("access"), saved.get("context")
@@ -362,6 +364,7 @@ class OpenCodeRunner(Runner):
             content = [{"type": "image", "mimeType": image["mime"], "data": image["data"]} for image in images]
             if text.strip():
                 content.insert(0, {"type": "text", "text": text})
+            t.start_attempted = True
             prompt = asyncio.create_task(rpc.request("session/prompt", {"sessionId": target, "prompt": content}, timeout=None))
             self._accepted(t)
             marker = object()

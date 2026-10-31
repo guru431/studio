@@ -27,6 +27,8 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
   host.append(root);
   let state = { tabs: [], active: null, info: new Map(), loaded: false };
   let list = null;           // сессии в меню
+  const nodes = new Map();
+  const signatures = new Map();
 
   function openMenu(open) {
     if (list) list.unmount();
@@ -111,7 +113,24 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
       state = next;
       // открытое меню не пересобирается (опрос меток, ответ рабочего места): пункт под рукой и идущий выбор —
       // те же; новый список — при следующем открытии
-      bar.replaceChildren(...next.tabs.map(tabNode), add);
+      const orderChanged = [...bar.querySelectorAll('.code-tab')].map((n) => n.dataset.chat).join(',') !== next.tabs.join(',');
+      for (const id of [...nodes.keys()]) {
+        if (!next.tabs.includes(id)) { nodes.get(id).remove(); nodes.delete(id); signatures.delete(id); }
+      }
+      for (const id of next.tabs) {
+        const info = next.info.get(id);
+        const signature = JSON.stringify([next.loaded, !!info, info?.title, info?.engine, !!info?.asking, !!info?.running]);
+        if (!nodes.has(id) || signatures.get(id) !== signature) {
+          const node = tabNode(id);
+          if (nodes.has(id)) nodes.get(id).replaceWith(node);
+          nodes.set(id, node);
+          signatures.set(id, signature);
+        }
+        const node = nodes.get(id);
+        node.setAttribute('aria-selected', String(id === next.active));
+        node.tabIndex = id === (next.active || next.tabs[0]) ? 0 : -1;
+      }
+      if (orderChanged) bar.replaceChildren(...next.tabs.map((id) => nodes.get(id)), add);
       if (chat) {
         const target = next.tabs.includes(chat) ? next.tabs.indexOf(chat) : Math.min(index, next.tabs.length - 1);
         (bar.querySelectorAll('.code-tab')[target] || add).focus({ preventScroll: true });

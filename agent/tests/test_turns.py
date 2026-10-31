@@ -204,7 +204,7 @@ async def test_missing_cli_ends_with_words_and_frees_the_chat(home, project, mar
     r.start(project, PID, CHAT, "Привет", None, None)
     await settle(r)
     assert [s["e"] for s in sent] == [{"k": "done", "status": "error",
-                                       "message": "Claude Code не найден на компьютере"}]
+                                       "message": "Claude Code не найден на компьютере", "not_started": True}]
     assert f.clients[0].disconnected and marked == []  # запроса не было — метки нет
     f.fail = None
     f.script = [result_ok()]

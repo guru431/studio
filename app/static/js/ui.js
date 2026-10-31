@@ -53,7 +53,7 @@ export function button(text, attrs = {}, onClick) {
 }
 
 /** «Скачать мост для Windows» (спека 2026-10-28-studio-agent-download-and-window-design, 4.2): ссылка на ZIP моста
- * Claude Code, что нужно и шаги установки. Один источник — «Claude Code» без компьютеров и «Настройки» → «Код». */
+ * Claude Code, что нужно и шаги установки. Один источник — «Агенты» без компьютеров и «Настройки» → «Агенты». */
 export function agentDownload() {
   return el('div', { class: 'agent-download' },
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: true },

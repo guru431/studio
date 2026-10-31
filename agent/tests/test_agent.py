@@ -72,10 +72,23 @@ async def opened(a: Agent, session=SESSION, pin=None) -> None:
     assert (await a.handle(req("open", session=session, pin=pin)))[0]["ok"] is True
 
 
+async def test_activity_requires_pin_and_aggregates_all_backends(agent):
+    assert (await agent.handle(req("activity")))[0]["code"] == "closed"
+    await opened(agent)
+    agent.runner.activity = lambda: [{"project": "a" * 16, "chat": CHAT, "running": True, "asking": False}]
+    agent.codex = SimpleNamespace(catalog={"models": []}, activity=lambda: [
+        {"project": "b" * 16, "chat": CHAT, "running": True, "asking": True}])
+    result = (await agent.handle(req("activity")))[0]
+    assert result["ok"] is True
+    assert [(row["project"], row["engine"], row["asking"]) for row in result["data"]["items"]] == [
+        ("a" * 16, "claude", False), ("b" * 16, "codex", True)]
+
+
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
-                             "chat_control": True}
+                             "chat_control": True, "attachments": True, "project_activity": True,
+                             "subscription_usage": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -102,6 +115,18 @@ async def test_everything_but_open_is_closed_until_opened(agent):
     assert (await agent.handle(req("projects")))[0]["code"] == "closed"
     assert (await agent.handle(req("open", pin=None)))[0]["ok"] is True
     assert (await agent.handle(req("projects")))[0]["data"]["items"] == [{"pid": projects.pid("demo"), "name": "demo"}]
+
+
+async def test_subscription_usage_requires_open_session_and_valid_refresh(agent):
+    agent._usage.read = AsyncMock(return_value={"available": False})
+    assert (await agent.handle(req("usage")))[0]["code"] == "closed"
+    agent._usage.read.assert_not_called()
+    await opened(agent)
+    assert (await agent.handle(req("usage", refresh="true")))[0]["code"] == "invalid"
+    assert (await agent.handle(req("usage", refresh=True)))[0]["data"] == {"available": False}
+    agent._usage.read.assert_awaited_once_with("claude", agent.cfg.projects_root, agent.runner, refresh=True)
+    agent.new_link()
+    assert (await agent.handle(req("usage")))[0]["code"] == "closed"
 
 
 async def test_answer_keeps_the_request_id(agent):

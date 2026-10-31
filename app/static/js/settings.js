@@ -1,6 +1,6 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — разделы, «Код» (умолчания чатов и компьютеры) и «Прочее» (голосовой ввод, пароль,
+ * Слева — разделы, «Агенты» (умолчания чатов и компьютеры) и «Прочее» (голосовой ввод, пароль,
  * блокировка, уведомления и push, ключ Exa, хранилище и история), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
@@ -432,7 +432,7 @@ export function queueText(pending) {
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
 const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['transcribe', 'Расшифровка'],
   ['speech', 'Озвучка'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
-  ['code', 'Код: чаты'], ['agents', 'Код: подключения']];
+  ['code', 'Агенты: чаты'], ['agents', 'Агенты: подключения']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -656,7 +656,7 @@ function pushBox() {
       + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
 }
 
-/* Локальные уведомления (jobs.js) — запасной вариант без подписки; Web Push — для всех фоновых заданий и «Кода». */
+/* Локальные уведомления (jobs.js) — запасной вариант без подписки; Web Push — для всех фоновых заданий и «Агентов». */
 function notifyBlock() {
   const note = status('notify-status');
   const supported = notifySupported();
@@ -903,7 +903,7 @@ function voicesBlock(host) {
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, code: 'Код', other: 'Прочее' };
+  const names = { ...SECTION_NAMES, code: 'Агенты', other: 'Прочее' };
   const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['code'] : []), 'other'];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
@@ -1194,7 +1194,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     } catch (err) {
       say(note, words(err), 'error');
     }
-    // Ответ разделов обновляет только голосовой ввод: личные блоки и «Код» сохраняют поля и свои ответы.
+    // Ответ разделов обновляет только голосовой ввод: личные блоки и «Агенты» сохраняют поля и свои ответы.
     if (dictationHost) renderDictation();
     else if ((current || ids[0]) !== 'code') render();
   }

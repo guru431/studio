@@ -67,6 +67,10 @@ class FakeMachine:
         self.images = True
         self.chat_state = True
         self.chat_control = True
+        self.attachments = False
+        self.project_activity = False
+        self.subscription_usage = False
+        self.usage_data = None
         self.context = None
 
     @property
@@ -76,6 +80,8 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage")
+                   if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
                    if catalog is not None}}
@@ -135,6 +141,14 @@ class FakeMachine:
 
     def _op_projects(self, req, events):
         return {"items": [{"pid": pid(name), "name": name} for name in sorted(self.projects)]}
+
+    def _op_activity(self, req, events):
+        return {"items": [{"project": turn["project"], "chat": chat, "running": True,
+                           "asking": bool(turn.get("asks")), "engine": turn.get("engine", "claude")}
+                          for chat, turn in self.running.items()]}
+
+    def _op_usage(self, req, events):
+        return self.usage_data
 
     def _op_chats(self, req, events):
         """Сессия с `"listed": False` в список не попадает (как старше 200 новейших на настоящем мосте), а история и

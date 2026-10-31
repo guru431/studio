@@ -658,7 +658,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
     assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["transcribe", "Записи"],
-                        ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Код"], ["other", "Прочее"]]
+                        ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"], ["other", "Прочее"]]
     assert v["records"] == "Записи" and v["scans"] == "Сканы"
     assert v["code"] and v["other"] and v["codeFits"] and v["otherFits"]
     assert v["draft"] == "unsaved-password" and v["saved"] == "whisperx"
@@ -905,7 +905,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
                                               "translate", "code", "agents")]
-    assert v["labels"] == ["Код: чаты", "Код: подключения"]
+    assert v["labels"] == ["Агенты: чаты", "Агенты: подключения"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
@@ -2450,7 +2450,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
     assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Записи", "Озвучка", "Сканы", "Перевод",
-                                                            "Код"]
+                                                            "Агенты"]
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
         assert 0 <= r["values"]["room"] <= 16, r["values"]["room"]
@@ -7158,7 +7158,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
     assert not r.get("failed"), r
     v = r["values"]
     assert v["tabs"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "code"]
-    assert v["tab"] == "Код" and v["current"] == "code" and v["head"] is False and v["panel"] is False
+    assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -8337,7 +8337,7 @@ def test_code_concrete_settings_context_and_access_are_visible(browser, live, en
     assert not r.get("failed"), r
     values = r["values"]
     assert all("умолчанию" not in v and "Загрузка" not in v and "получено" not in v for v in values["before"])
-    assert values["context"] == "Контекст 5%" and values["after"][0] == canonical
+    assert values["context"] == "5%" and values["after"][0] == canonical
     assert "70" in values["contextAfter"] and values["fits"]
     [turn] = code_requests(machine, "turn")
     assert turn["access"] == chosen and turn.get("engine", "claude") == engine

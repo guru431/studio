@@ -13,6 +13,7 @@ RAW_MAX = 10 * MIB  # raw (PDF)
 IMAGE_COUNT = 4
 IMAGE_MAX = 5 * MIB  # картинка хода
 IMAGES_MAX = 8 * MIB  # картинки одного хода вместе
+ATTACHMENT_COUNT = 8  # файлы и картинки вместе
 PATH_MAX = 1024  # знаков пути
 CLIP = 20_000  # строки событий и шагов, дальше — «…»
 EVENT_MAX = 1 * MIB  # событие хода в ASCII-JSON; больше — урезка строже (CLIP_TIGHT), затем ввод пометкой

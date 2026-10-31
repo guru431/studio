@@ -28,6 +28,8 @@ import bridge
 import chat
 import checks
 import claude_code
+import code_usage
+import code_activity
 import config
 import connections
 import db
@@ -144,6 +146,8 @@ app.include_router(agents.router)
 app.include_router(bridge.router)
 app.include_router(workspace.router)
 app.include_router(claude_code.router)
+app.include_router(code_usage.router)
+app.include_router(code_activity.router)
 app.include_router(push.router)
 
 
