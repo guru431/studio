@@ -25,6 +25,7 @@ import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
+import { setCodeActivity } from './code-activity.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -72,11 +73,13 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     activityRequested = true;
     try {
       const data = await api('GET', `/api/code/agents/${aid}/activity`);
+      setCodeActivity(aid, data.items || []);
       if (alive && selected === aid && mode === 'projects') {
         activity.set(aid, new Map((data.items || []).map((item) => [item.chat, item])));
         paintCounts();
       }
     } catch {
+      setCodeActivity(aid, []);
       if (alive && selected === aid) { activity.delete(aid); paintCounts(); }
     } finally {
       activityRequested = false;

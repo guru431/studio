@@ -25,6 +25,7 @@
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
 import { api, loadMe, me } from './api.js';
 import { setupJobs } from './jobs.js';
+import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
 import { setupAppearance } from './appearance.js';
@@ -345,6 +346,7 @@ async function enter(worker) {
   setupTheme();
   window.addEventListener('hashchange', render);
   await render();
+  setupCodeActivity();
   await worker;
   document.documentElement.dataset.ready = '1';
 }
