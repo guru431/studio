@@ -85,7 +85,9 @@ def list_dir(project: Path, path: str) -> dict:
             except OSError:
                 continue
             is_dir = stat.S_ISDIR(st.st_mode)
+            created = getattr(st, "st_birthtime", st.st_ctime if os.name == "nt" else None)
             items.append({"name": e.name, "dir": is_dir, "size": 0 if is_dir else st.st_size,
+                          "created": int(created) if created is not None else None,
                           "modified": int(st.st_mtime)})
     items.sort(key=lambda i: (not i["dir"], i["name"].casefold(), i["name"]))
     if len(items) > limits.FILES_MAX:

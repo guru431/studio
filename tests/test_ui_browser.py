@@ -8885,7 +8885,8 @@ def test_code_files_open_edit_and_save(browser, live):
     assert [(q["path"], q["text"], q["version"]) for q in saves] == [
         ("src/app.py", "print(1)\r\nprint(3)\r\n", _version(CODE_APP)),
         ("src/app.py", "print(4)\r\n", _version(b"print(1)\r\nprint(3)\r\n"))]
-    assert [q["path"] for q in code_requests(machine, "files")] == ["", "src"]
+    listed = [q["path"] for q in code_requests(machine, "files")]
+    assert listed[:2] == ["", "src"] and len(listed) >= 3 and all(path == "src" for path in listed[2:])
     assert [q["path"] for q in code_requests(machine, "read")] == ["src/app.py"]
     assert not problems(r), problems(r)
 

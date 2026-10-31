@@ -1100,11 +1100,15 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   border-top: 1px solid var(--border); background: var(--side); }
 .code-panel-footer .input, .code-panel-footer .btn { width: 100%; min-width: 0; min-height: 32px;
   padding: 4px 6px; border-radius: 7px; font-size: calc(12px * var(--font-scale, 1)); line-height: 1.2; }
-.code-panel-footer select { appearance: none; padding-right: 22px; text-overflow: ellipsis;
+.code-panel-footer .code-project-sort { position: relative; display: flex; align-items: center;
+  padding-right: 22px; font-size: calc(10px * var(--font-scale, 1));
   background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
     linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position: calc(100% - 11px) center, calc(100% - 7px) center;
   background-size: 4px 4px; background-repeat: no-repeat; }
+.code-project-sort-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-panel-footer .code-project-sort select { position: absolute; inset: 0; height: 100%; opacity: 0; cursor: pointer; }
+.code-project-sort:has(select:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .code-panel-footer .btn { padding: 0; font-size: calc(20px * var(--font-scale, 1)); line-height: 1; }
 .code-panel-footer p { grid-column: 1 / -1; margin: 0; font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 .code-agents, .code-projects, .code-chats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -1400,9 +1404,20 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   background: var(--panel); overflow: hidden; padding: 4px 0; }
 .code-files:empty { display: none; }
 .code-files ul { list-style: none; margin: 0; padding: 0; }
-.code-file-item { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0;
-  padding: 3px 10px 3px min(calc(4px + var(--tree-depth, 0) * 16px), 45%); border: 0;
+.code-file-table { --file-columns: minmax(220px, 1fr) 48px 100px 54px 54px 145px 145px;
+  min-width: 0; overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.code-file-columns, .code-file-item { display: grid; grid-template-columns: var(--file-columns); align-items: center;
+  gap: 10px; min-width: 900px; padding: 3px 10px; }
+.code-file-columns { background: var(--panel-2); color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); }
+.code-file-size-column, .code-file-files-column, .code-file-folders-column { text-align: right; }
+.code-file-item { width: 100%; border: 0;
   background: none; color: var(--text); font: 13px/22px var(--mono); text-align: left; cursor: pointer; }
+.code-file-table .code-files { min-width: 900px; }
+.code-file-label { display: flex; align-items: center; gap: 5px; min-width: 0;
+  padding-left: min(calc(var(--tree-depth, 0) * 16px), 50%); }
+.code-file-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.code-file-size, .code-file-files, .code-file-folders { text-align: right; }
 .code-file-item:hover { background: var(--panel-2); }
 .code-files li[aria-selected="true"] > .code-file-item { background: var(--panel-2); outline: 1px solid var(--border); outline-offset: -1px; }
 .code-file-chevron { display: inline-block; flex: none; width: 13px; text-align: center; color: var(--muted); }
@@ -1435,11 +1450,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-pdf img { display: block; max-width: 100%; height: auto; margin: 0 auto; border: 1px solid var(--border);
   border-radius: 8px; }
 /* узко список папки уступает место открытому файлу (назад ведёт путь); широко — рядом */
-.code-files-view.has-file .code-files { display: none; }
+.code-files-view.has-file .code-file-table { display: none; }
 @media (min-width: 900px) {
   .code-files-view.has-file { grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); }
-  .code-files-view.has-file > :not(.code-files):not(.code-file) { grid-column: 1 / -1; }
-  .code-files-view.has-file .code-files { display: flex; align-self: start; }
+  .code-files-view.has-file > :not(.code-file-table):not(.code-file) { grid-column: 1 / -1; }
+  .code-files-view.has-file .code-file-table { display: block; align-self: start; }
 }
 .code-git { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .code-git-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; margin: 0; }

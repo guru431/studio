@@ -537,6 +537,8 @@ function sessions(mine, p, status) {
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
+  const scroller = host.closest('#view');
+  if (scroller) scroller.scrollTop = 0;
 }
 
 async function chat(mine, p, id, agent, section, status) {

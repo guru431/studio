@@ -173,20 +173,23 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
 
     before = position()
     controls = page.locator('.code-panel-footer').evaluate("""footer => {
-      const sort=footer.querySelector('select').getBoundingClientRect();
+      const select=footer.querySelector('select'), sort=select.closest('label').getBoundingClientRect();
       const button=footer.querySelector('button'), refresh=button.getBoundingClientRect();
       const updated=footer.querySelector('p').getBoundingClientRect();
       return {sameLine:Math.abs(sort.top-refresh.top)<1 && sort.right<refresh.left,
         compact:sort.height<=34 && refresh.height<=34 && refresh.width<=34 && button.scrollWidth<=button.clientWidth,
+        smallLabel:parseFloat(getComputedStyle(footer.querySelector('.code-project-sort-text')).fontSize)<=11,
+        noAutozoom:parseFloat(getComputedStyle(select).fontSize)>=16,
         dateBelow:updated.top>=Math.max(sort.bottom, refresh.bottom),
         heights:[sort.height,refresh.height], widths:[sort.width,refresh.width],
         tops:[sort.top,refresh.top,updated.top]};
     }""")
-    assert controls['sameLine'] and controls['compact'] and controls['dateBelow'], controls
+    assert all(controls[key] for key in ('sameLine', 'compact', 'dateBelow', 'smallLabel', 'noAutozoom')), controls
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
     page.locator('#code-project-sort').select_option('findings')
+    pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
     button.tap()
     pw.expect(button).to_be_enabled()
     assert button.evaluate('e => e.scrollWidth <= e.clientWidth')
@@ -547,14 +550,24 @@ def test_opencode_stop_restores_queued_text_and_screenshot(iphone):
 
 @pytest.mark.parametrize("iphone", [(393, 852), (852, 393)], ids=["portrait", "landscape"], indirect=True)
 def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
+    from fake_bridge import T0
+    from test_ui_browser import code_session
+
     page, aid = iphone
+    chats = page.studio_machine.projects['alpha']['chats']
+    chats[CODE_CHAT_A]['messages'].append({'id': 'm-1', 'role': 'assistant', 'text': 'Ответ.\n\n' * 150,
+                                          'steps': [], 'time': T0})
+    chats.update({f'{i:08x}-1111-4111-8111-111111111111': code_session(f'Сессия {i}') for i in range(60)})
     page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name").tap()
     if page.viewport_size["width"] <= 760:
         page.locator("#code-panel").wait_for(state="hidden")
     page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()
     pw.expect(page.locator("#code-feed")).to_contain_text("про A")
     pw.expect(page.locator("#code-feed")).to_be_in_viewport()
+    assert page.locator('#view').evaluate('view => view.scrollTop > 1000')
     page.locator("#code-tab-add").tap()
+    pw.expect(page.locator('#code-chat-search')).to_be_in_viewport()
+    assert page.locator('#view').evaluate('view => view.scrollTop === 0')
     page.locator(f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] button").tap()
     pw.expect(page.locator("#code-feed")).to_contain_text("про B")
     page.locator(f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title").tap()
@@ -562,6 +575,16 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page.screenshot(path=str(tmp_path / "chat.png"))
     fits(page)
     page.locator("#code-tab-files").tap()
+    page.locator('#code-files li[data-path="src"] > button .code-file-label').tap()
+    pw.expect(page.locator('#code-files li[data-path="src"] > button .code-file-files')).to_have_text('1')
+    pw.expect(page.locator('#code-files li[data-path="src/app.py"] .code-file-ext')).to_have_text('py')
+    pw.expect(page.locator('#code-files li[data-path="src/app.py"] .code-file-size')).to_have_text('9')
+    pw.expect(page.locator('#code-files li[data-path="src/app.py"] .code-file-created')).not_to_have_text('—')
+    table = page.locator('.code-file-table')
+    assert table.evaluate('el => { el.scrollLeft=el.scrollWidth; return el.scrollLeft>0; }')
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'file-tree.png'))
+    table.evaluate('el => el.scrollLeft=0')
     page.locator("#code-files li[data-name='README.md'] button").tap()
     pw.expect(page.locator("#code-editor")).to_have_value("# Hello\n\nPreview text")
     page.locator("#code-md-view").get_by_role("button", name="Вид", exact=True).tap()
