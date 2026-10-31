@@ -12,6 +12,82 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_agents_icon_counts_sessions_across_computers_and_sections(browser, live, width, tmp_path):
+    login = f"agent-count-{width}"
+    live.add_user(login)
+    third = "c3333333-3333-4333-8333-333333333333"
+    machine = code_free_machine({CODE_CHAT_A: code_session("Открытый чат"), CODE_CHAT_B: code_session("Работает")})
+    machine.projects["beta"] = {"chats": {third: code_session("Ждёт ответа")}}
+    machine.project_activity = True
+    machine.running = {CODE_CHAT_B: {"project": pid("alpha"), "asks": {}},
+                       third: {"project": pid("beta"), "asks": {"r": {}}}}
+    machine.script = [{"k": "text", "text": "Работаю"}]
+    second = code_free_machine({CODE_CHAT_B: code_session("Другой компьютер")})
+    second.project_activity = True
+    second.running = {CODE_CHAT_B: {"project": pid("alpha"), "asks": {}}}
+    for computer in (machine, second):
+        for turn in computer.running.values():
+            turn.update(text="", steps=[])
+    aid, server = code_online(live, login, machine)
+    other_aid, other_server = code_online(live, login, second, name="Второй ПК")
+    badge = "document.querySelector('#code-running-count')"
+    fits = """(() => {
+      const badge = document.querySelector('#code-running-count').getBoundingClientRect();
+      const icon = document.querySelector('[data-section=code] svg').getBoundingClientRect();
+      return badge.width >= 17 && badge.height >= 17 && badge.left < icon.right && badge.right > icon.right
+        && badge.top < icon.top && badge.bottom > icon.top && badge.left >= 0 && badge.right <= innerWidth
+        && document.documentElement.scrollWidth <= innerWidth;
+    })()"""
+    stops = [(aid, "alpha", CODE_CHAT_B), (aid, "beta", third), (other_aid, "alpha", CODE_CHAT_B)]
+    stop_all = "import('/static/js/api.js').then(async ({api}) => {" + "".join(
+        f"await api('POST','/api/code/agents/{computer}/projects/{pid(project)}/chats/{chat}/stop');"
+        for computer, project, chat in stops) + "document.dispatchEvent(new Event('visibilitychange')); return true; })"
+    delayed = """(() => {
+      const original = window.fetch;
+      window.fetch = async (url, options) => {
+        const response = await original(url, options);
+        if (String(url) === '/api/code/activity') {
+          await new Promise(resolve => { window.releaseCount = resolve; });
+          const json = response.json.bind(response);
+          response.json = async () => { const result = await json(); window.countDelivered = true; return result; };
+          window.fetch = original;
+        }
+        return response;
+      };
+      document.dispatchEvent(new Event('visibilitychange')); return true;
+    })()"""
+    event = f"new CustomEvent('studio-code-activity', {{detail: {{aid: {aid}, chat: '{CODE_CHAT_A}', running: true}}}})"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            ("wait", f"!{badge}.hidden && {badge}.textContent === '3'"),
+            ("eval", "outside", "!location.hash.includes('/code')"),
+            ("eval", "label", "document.querySelector('[data-section=code]').getAttribute('aria-label')"),
+            ("eval", "fits", fits), ("screenshot", str(tmp_path / f"agent-count-{width}.png")),
+            *code_chat(aid, CODE_CHAT_A), set_value("#code-text", "Новая задача"), ("click", "#code-send"),
+            ("wait", f"document.querySelector('#code-chat').dataset.running === '1' && {badge}.textContent === '4'"),
+            ("click", "#code-stop"), ("wait", f"{badge}.textContent === '3'"),
+            *go("photo"), ("eval", "kept", f"!{badge}.hidden && {badge}.textContent === '3'"),
+            ("eval", "stopped", stop_all), ("wait", f"{badge}.hidden"),
+            ("eval", "emptyLabel", "document.querySelector('[data-section=code]').getAttribute('aria-label')"),
+            ("eval", "delay", delayed), ("wait", "typeof window.releaseCount === 'function'"),
+            ("eval", "start", f"document.dispatchEvent({event}); document.dispatchEvent({event}); true"),
+            ("eval", "release", "window.releaseCount(); true"), ("wait", "window.countDelivered"),
+            ("eval", "fresh", f"!{badge}.hidden && {badge}.textContent === '1'"),
+            ("eval", "large", "import('/static/js/code-activity.js').then(m => m.setCodeActivity(" + str(aid)
+                + ", Array.from({length:123}, (_, i) => ({chat:String(i),running:true}))))"),
+            ("eval", "largeFits", fits)],
+            width=width, mobile=width == 320)
+    finally:
+        server.stop()
+        other_server.stop()
+    assert not result.get("failed"), result
+    assert all(result["values"][key] for key in ("outside", "fits", "kept", "fresh", "largeFits"))
+    assert result["values"]["label"] == "Агенты · Запущенных сессий: 3"
+    assert result["values"]["emptyLabel"] == "Агенты"
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_new_tab_session_history_starts_at_top_after_long_chat(browser, live, width):
     from fake_bridge import T0
 

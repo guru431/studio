@@ -81,6 +81,10 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 #rail .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
+#rail .tab .tab-icon { position: relative; display: flex; overflow: visible; }
+#rail .tab .tab-count { position: absolute; top: -7px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; background: var(--ok); color: var(--panel); font-size: 10px; font-weight: 700;
+  line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
 #rail .spacer { flex: 1; }
 #avatar, .jobs-toggle, .search-toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bubble);
   color: var(--text); font-weight: 600; font-size:calc(13px * var(--font-scale, 1)); display: grid; place-items: center; padding: 0; }
