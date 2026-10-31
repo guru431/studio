@@ -12,6 +12,78 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_session_picker_uses_cached_titles_and_search_while_refreshing(browser, live, width, tmp_path):
+    login = f"session-cache-{width}"
+    live.add_user(login)
+    title = "Длинное название чата про ёлку " * 12
+    machine = code_free_machine({CODE_CHAT_A: code_session("Открытый чат"), CODE_CHAT_B: code_session(title)})
+    aid, server = code_online(live, login, machine)
+    gate = """(() => { const real = window.fetch; window.chatReads = 0;
+      window.fetch = async (url, options) => {
+        if (String(url).endsWith('/chats') && (!options?.method || options.method === 'GET')) {
+          window.chatReads++;
+          if (window.holdChats) await new Promise(resolve => { window.releaseChats = resolve; });
+        }
+        return real(url, options);
+      }; return true; })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            ("eval", "gate", gate), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "hold", "window.holdChats = true"), ("click", "#code-tab-add"),
+            ("wait", "!!window.releaseChats && !!document.querySelector('#code-chat-search')"),
+            ("eval", "cached", f"!!document.querySelector('#code-chats li[data-chat=\"{CODE_CHAT_B}\"]')"),
+            ("eval", "height", """(() => { const n = document.querySelector('.code-chat-title');
+              return n.getBoundingClientRect().height <= 2 * parseFloat(getComputedStyle(n).lineHeight) + 1; })()"""),
+            ("click", f".code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title"),
+            ("wait", f"document.querySelector('#code-chat')?.dataset.chat === '{CODE_CHAT_A}'"),
+            ("click", "#code-tab-add"),
+            ("wait", "!!document.querySelector('#code-chat-search')"),
+            ("eval", "joined", "window.chatReads"),
+            set_value("#code-chat-search", "ЕЛКУ длинное"),
+            ("eval", "found", "document.querySelectorAll('#code-chats li[data-chat]').length"),
+            set_value("#code-chat-search", "нет такого чата"),
+            ("eval", "empty", "document.querySelector('#code-chats').textContent.includes('Ничего не найдено')"),
+            ("eval", "refresh", "window.holdChats = false; window.releaseChats(); true"),
+            ("wait", "document.querySelector('#code-chats').getAttribute('aria-busy') === 'false'"),
+            ("eval", "kept", "[document.querySelector('#code-chat-search').value, document.querySelectorAll('#code-chats li[data-chat]').length]"),
+            set_value("#code-chat-search", "елку"),
+            ("screenshot", str(tmp_path / f"session-search-{width}.png")),
+            ("click", f"#code-chats li[data-chat='{CODE_CHAT_B}'] button"), code_tab_ready(CODE_CHAT_B),
+            ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
+            ("eval", "reads", "window.chatReads")], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["cached"] and values["height"] and values["fits"]
+    assert values["found"] == 1 and values["empty"]
+    assert values["kept"] == ["нет такого чата", 0]
+    assert values["joined"] == values["reads"] == 2
+    assert not problems(result), problems(result)
+
+
+def test_locked_reload_needs_only_one_lock_state_request(browser, live):
+    from test_ui_browser import LOCK_OPEN, PIN_SHOWN, PHONE, known_refusals, phone_with_pin, pin_locked, tap
+
+    login = "pin-start-once"
+    live.add_user(login)
+    gate = """(() => { const real = window.fetch; window.lockReads = 0;
+      window.fetch = (url, options) => {
+        if (String(url) === '/api/lock' && ++window.lockReads > 1
+          && performance.getEntriesByType('navigation')[0]?.type === 'reload') return new Promise(() => {});
+        return real(url, options);
+      }; return true; })()"""
+    result = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(),
+        ("eval", "reload", "location.reload(); true"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN} && {PIN_SHOWN}"),
+        ("eval", "reads", "window.lockReads"), *tap("2580"), ("click", "#lock-pin-ok"),
+        ("wait", f"!{LOCK_OPEN} && {READY}")], init=gate, **PHONE)
+    assert not result.get("failed"), result
+    assert result["values"]["reads"] == 1
+    assert not known_refusals(problems(result), 423), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, width, tmp_path):
     login = f"agent-picker-{width}"
     live.add_user(login)

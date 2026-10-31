@@ -144,6 +144,7 @@ let digits = '';         // набранные цифры: только здес
 let pinGoing = false;    // идёт POST /api/lock/pin: нажатия, «OK» и Enter — мимо
 let stale = false;       // GET /api/lock при показе экрана не пришёл: ключи и PIN неизвестны — перечитать
 let rereading = null;    // идущее перечитывание: возвращение, таймер и «Открыть» его не повторяют
+let reading = null;      // старт оболочки и её 423 используют один запрос состояния
 
 function say(text, kind) {
   note.textContent = text || '';
@@ -169,11 +170,13 @@ function guarded() {
 }
 
 /** Состояние блокировки и с ним CSRF сессии. */
-async function lockState() {
-  const state = await api('GET', '/api/lock');
-  useCsrf(state.csrf);
-  token = true;
-  return state;
+function lockState() {
+  if (!reading) reading = api('GET', '/api/lock').then((state) => {
+    useCsrf(state.csrf);
+    token = true;
+    return state;
+  }).finally(() => { reading = null; });
+  return reading;
 }
 
 /** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи
@@ -273,7 +276,7 @@ function pinGone(text) {
 
 /** Экран блокировки. lockNow — обещание запроса «заперто» (true — сервер согласился): пока он не
  * прошёл, ответу «не заперто» не верить — иначе обрыв связи открыл бы студию без ключа. */
-async function showLock(lockNow) {
+async function showLock(lockNow, knownState) {
   say('');
   cancelRecording();
   for (const player of document.querySelectorAll('video, audio')) player.pause();
@@ -291,7 +294,7 @@ async function showLock(lockNow) {
   const trusted = lockNow ? await lockNow : true;
   let state;
   try {
-    state = await lockState();
+    state = knownState || await lockState();
   } catch (err) {
     keys = true;                       // неизвестно: «Открыть», возвращение и таймер перечитают состояние
     stale = true;
@@ -338,12 +341,12 @@ function refresh() {
   return rereading;
 }
 
-function waitOpen(lockNow = null) {
+function waitOpen(lockNow = null, knownState = null) {
   if (!waiting) {
     let resolve;
     waiting = { promise: new Promise((done) => { resolve = done; }), resolve };
     shroud();
-    showLock(lockNow);
+    showLock(lockNow, knownState);
   }
   return waiting.promise;
 }
@@ -507,7 +510,7 @@ async function onVisibility() {
 async function begin() {
   try {
     const state = await lockState();                  // CSRF до профиля: отметка — запрос POST
-    if (state.locked) waitOpen();
+    if (state.locked) waitOpen(null, state);
     else mark();
   } catch {
     // нет входа (api.js уводит на вход) или нет связи — отметка придёт по таймеру
@@ -516,6 +519,7 @@ async function begin() {
 
 /** Оболочка зовёт до loadMe(): запертый старт ждёт отпирания внутри api.js. */
 export function installLock() {
+  if (screen) return;          // ранний lock-start.js и оболочка вызывают один раз
   curtain = document.getElementById('curtain');
   screen = document.getElementById('lock');
   openButton = document.getElementById('lock-open');
