@@ -45,6 +45,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/chats/1/answer"): {"request_id": "r1", "decision": "allow"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/stop"): None,
     ("POST", "/api/code/agents/1/projects/1/files"): {"path": ""},
+    ("POST", "/api/code/agents/1/projects/1/files/stats"): {"path": ""},
     ("POST", "/api/code/agents/1/projects/1/read"): {"path": ""},
     ("PUT", "/api/code/agents/1/projects/1/file"): {"path": "a", "text": "", "version": "v"},
     ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},

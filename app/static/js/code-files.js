@@ -29,7 +29,7 @@
 import { api } from './api.js';
 import { fileMark, GIT_ACTIONS } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
-import { button, el, openDialog, words } from './ui.js';
+import { button, el, openDialog, plural, words } from './ui.js';
 
 const SAVED = 'Сохранено';
 const CONFLICT = 'Файл изменился на компьютере — откройте его заново, чтобы не затереть правки';
@@ -86,8 +86,13 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   let treeGen = 0;
   const nodes = new Map();
   const directories = new Map();
+  const statistics = new Map();
+  let statsGen = 0;
 
   const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
+  const calculate = button('Просчитать все подпапки', { id: 'code-files-calculate', class: 'btn btn-sm',
+    title: 'Размеры и количество файлов и папок во всём проекте, включая вложенные папки' });
+  const statsStatus = el('p', { id: 'code-files-stats', class: 'muted small', 'aria-live': 'polite' });
   const list = el('ul', { id: 'code-files', class: 'code-files', role: 'tree', 'aria-label': 'Файлы проекта' });
   const table = el('div', { class: 'code-file-table', tabindex: '0', role: 'region', 'aria-label': 'Сведения о файлах' },
     el('div', { class: 'code-file-columns', 'aria-hidden': 'true' },
@@ -95,12 +100,54 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', hidden: true });
-  const view = el('div', { class: 'code-files-view' }, crumbs, listError, table, file);
+  const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, calculate),
+    statsStatus, listError, table, file);
   host.replaceChildren(view);
+
+  function clearStats() {
+    statsGen += 1;
+    statistics.clear();
+    statsStatus.textContent = '';
+    for (const node of nodes.values()) decorate(node);
+  }
+
+  calculate.addEventListener('click', async () => {
+    if (calculate.disabled) return;
+    const mine = ++statsGen;
+    calculate.disabled = true;
+    calculate.textContent = 'Считаю…';
+    statsStatus.textContent = 'Подсчёт файлов и папок во всём проекте…';
+    try {
+      const result = await api('POST', `${url}/files/stats`, { path: '' });
+      if (!alive || mine !== statsGen) return;
+      statistics.clear();
+      for (const item of result.items) statistics.set(item.path, item);
+      for (const node of nodes.values()) decorate(node);
+      const total = statistics.get('');
+      const prefix = result.complete ? 'Всего:' : 'Подсчёт неполный — не менее';
+      statsStatus.textContent = `${prefix} ${total.size.toLocaleString('ru-RU')} Б · ${total.files.toLocaleString('ru-RU')} `
+        + `${plural(total.files, ['файл', 'файла', 'файлов'])} · ${total.folders.toLocaleString('ru-RU')} `
+        + `${plural(total.folders, ['папка', 'папки', 'папок'])}. С учётом вложенных папок.`
+        + ` Подсчитано: ${fileDate(result.checked_at)}.`
+        + (result.skipped_links ? ` Ссылок пропущено: ${result.skipped_links}.` : '')
+        + (!result.complete ? ' Достигнут предел обхода или часть записей недоступна.' : '');
+    } catch (err) {
+      if (alive && mine === statsGen) {
+        statsStatus.textContent = words(err);
+        if (err.code === 'closed') refuse(err, statsStatus, null);
+      }
+    } finally {
+      if (alive) {
+        calculate.disabled = false;
+        calculate.textContent = 'Просчитать все подпапки';
+      }
+    }
+  });
 
   function refuse(err, box, path) {
     if (!alive) return;
     if (err.code === 'closed') {
+      clearStats();
       if (dirty()) editing.keep();
       if (path == null && selected) path = selected;
       treeGen += 1;
@@ -175,15 +222,20 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     badge.textContent = mark ? item.dir ? '•' : mark.label : '';
     badge.title = mark ? item.dir ? `Изменений в папке: ${changes.length}` : mark.title : '';
     const ext = item.dir || item.name.lastIndexOf('.') <= 0 ? '' : item.name.slice(item.name.lastIndexOf('.') + 1);
-    const count = (key) => node.counts ? `${node.counts.truncated ? '≥' : ''}${node.counts[key].toLocaleString('ru-RU')}` : '—';
-    const values = { ext: ext || '—', size: item.dir ? 'Папка' : Number.isFinite(item.size) ? item.size.toLocaleString('ru-RU') : '—',
+    const recursive = item.dir && statistics.get(path);
+    const counts = recursive || node.counts;
+    const lowerBound = recursive ? !recursive.complete : counts?.truncated;
+    const count = (key) => counts ? `${lowerBound ? '≥' : ''}${counts[key].toLocaleString('ru-RU')}` : '—';
+    const values = { ext: ext || '—', size: item.dir ? recursive ? count('size') : 'Папка'
+      : Number.isFinite(item.size) ? item.size.toLocaleString('ru-RU') : '—',
       files: item.dir ? count('files') : '—', folders: item.dir ? count('folders') : '—',
       created: fileDate(item.created), modified: fileDate(item.modified) };
     for (const [key, cell] of Object.entries(node.cells)) {
       cell.textContent = values[key];
       const label = FILE_COLUMNS.find(([column]) => column === key)[1];
-      cell.title = `${label}: ${values[key]}${key === 'size' && !item.dir ? ' Б' : ''}`;
-      if (key === 'files' || key === 'folders') cell.title += ' — непосредственно в папке, без вложенных папок; после раскрытия';
+      cell.title = `${label}: ${values[key]}${key === 'size' && (!item.dir || recursive) ? ' Б' : ''}`;
+      if (key === 'files' || key === 'folders' || key === 'size' && recursive) cell.title += recursive
+        ? ' — включая все вложенные папки' : ' — непосредственно в папке, без вложенных папок; после раскрытия';
     }
     row.title = [path, ...Object.values(node.cells).map((cell) => cell.title), badge.title].filter(Boolean).join('\n');
     li.setAttribute('aria-label', `${item.name}\n${row.title}`);
@@ -198,6 +250,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     for (const node of nodes.values()) decorate(node);
     const paths = JSON.stringify(gitFiles.map((f) => f.path).sort());
     if (data && gitPaths !== null && gitPaths !== paths) {
+      clearStats();
       for (const [path] of directories) {
         if (!path || nodes.get(path)?.li.getAttribute('aria-expanded') === 'true') loadDir(path, true);
       }
@@ -423,6 +476,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       try {
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
         mark.base = sent;
+        clearStats();
         if (alive && mine === fileGen) say(status, SAVED, false);
         if (alive) {
           loadDir(parentOf(path), true);

@@ -68,6 +68,7 @@ async def test_turn_streams_text_steps_and_ends_done(home, project):
     assert kinds(sent) == ["text", "text", "step", "result", "done"]
     assert {e["turn"] for e in sent} == {turn} and sent[-1]["e"] == {"k": "done", "status": "done"}
     assert all(e["t"] == "ev" and e["project"] == PID and e["chat"] == CHAT for e in sent)
+    assert sent[-1]["project_name"] == project.name
     assert sent[2]["e"] == {"k": "step", "id": "t1", "tool": "Read", "input": {"file_path": "a"}}
     assert sent[3]["e"] == {"k": "result", "id": "t1", "text": "ok", "error": False}
     opts = f.options[0]

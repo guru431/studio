@@ -550,10 +550,13 @@ def test_opencode_stop_restores_queued_text_and_screenshot(iphone):
 
 @pytest.mark.parametrize("iphone", [(393, 852), (852, 393)], ids=["portrait", "landscape"], indirect=True)
 def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
+    import bridge
     from fake_bridge import T0
     from test_ui_browser import code_session
 
     page, aid = iphone
+    page.studio_machine.file_stats = True
+    bridge.LINKS[aid].hello['file_stats'] = True
     chats = page.studio_machine.projects['alpha']['chats']
     chats[CODE_CHAT_A]['messages'].append({'id': 'm-1', 'role': 'assistant', 'text': 'Ответ.\n\n' * 150,
                                           'steps': [], 'time': T0})
@@ -575,6 +578,9 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page.screenshot(path=str(tmp_path / "chat.png"))
     fits(page)
     page.locator("#code-tab-files").tap()
+    page.locator('#code-files-calculate').tap()
+    pw.expect(page.locator('#code-files-stats')).to_contain_text('Всего:')
+    pw.expect(page.locator('#code-files li[data-path="src"] .code-file-size')).to_have_text('9')
     page.locator('#code-files li[data-path="src"] > button .code-file-label').tap()
     pw.expect(page.locator('#code-files li[data-path="src"] > button .code-file-files')).to_have_text('1')
     pw.expect(page.locator('#code-files li[data-path="src/app.py"] .code-file-ext')).to_have_text('py')

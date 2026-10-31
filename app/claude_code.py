@@ -723,6 +723,37 @@ async def files(aid: int, pid: str, body: PathBody, request: Request):
     return _relay(await ask(request, aid, "files", project=pid, path=check_path(body.path)))
 
 
+@router.post("/agents/{aid}/projects/{pid}/files/stats")
+async def file_stats(aid: int, pid: str, body: PathBody, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    path = check_path(body.path)
+    link = bridge.LINKS.get(aid)
+    if link is not None and not link.hello.get("file_stats"):
+        raise _refuse(409, "unsupported", "обновите мост на компьютере для подсчёта всех подпапок")
+    data = await ask(request, aid, "file_stats", project=pid, path=path)
+    items = data.get("items")
+    if not isinstance(items, list) or not items or len(items) > 5000:
+        raise _refuse(502, "bridge", ODD)
+    result = []
+    for item in items:
+        if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                or (path and item["path"] != path and not item["path"].startswith(path + "/"))
+                or not all(type(item.get(key)) is int and item[key] >= 0 for key in ("size", "files", "folders"))):
+            raise _refuse(502, "bridge", ODD)
+        try:
+            check_path(item["path"])
+        except HTTPException:
+            raise _refuse(502, "bridge", ODD) from None
+        result.append({key: item[key] for key in ("path", "size", "files", "folders")}
+                      | {"complete": item.get("complete") is True})
+    if not any(item["path"] == path for item in result):
+        raise _refuse(502, "bridge", ODD)
+    return {"items": result, "complete": data.get("complete") is True and all(item["complete"] for item in result),
+            "skipped_links": data.get("skipped_links") if type(data.get("skipped_links")) is int and data["skipped_links"] >= 0 else 0,
+            "checked_at": _time(data.get("checked_at"))}
+
+
 @router.post("/agents/{aid}/projects/{pid}/read")
 async def read(aid: int, pid: str, body: PathBody, request: Request):
     """Чтение — POST: путь только в теле (строку запроса пишет журнал Apache)."""

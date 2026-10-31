@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, cli, events, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subscription
+from . import attachments, cli, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subscription
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -38,6 +38,7 @@ OPS = {
     "answer": ("project", "chat", "request_id"),
     "stop": ("project", "chat"),
     "files": ("project", "path"),
+    "file_stats": ("project", "path"),
     "read": ("project", "path"),
     "raw": ("project", "path"),
     "save": ("project", "path", "text", "version"),
@@ -78,6 +79,7 @@ class Agent:
         self.on_pin_locked: Callable[[], None] | None = None  # PIN заблокировала эта проверка (трей — «Снять блок»)
         self._open_lock = asyncio.Lock()
         self._usage = subscription.UsageCache(now=now)
+        self._file_stats_lock = asyncio.Lock()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
     def hello(self) -> dict:
@@ -85,7 +87,7 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
-                 "subscription_usage": True, "project_summary": True}
+                 "subscription_usage": True, "project_summary": True, "file_stats": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -357,6 +359,13 @@ class Agent:
     async def _op_files(self, frame, after):
         project = await self._project(frame)
         return await asyncio.to_thread(files.list_dir, project, frame["path"])
+
+    async def _op_file_stats(self, frame, after):
+        project = await self._project(frame)
+        if self._file_stats_lock.locked():
+            raise Refused("busy", "подсчёт уже идёт — дождитесь завершения")
+        async with self._file_stats_lock:
+            return await asyncio.to_thread(file_stats.scan, project, frame["path"])
 
     async def _op_read(self, frame, after):
         project = await self._project(frame)

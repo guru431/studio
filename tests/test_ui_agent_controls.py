@@ -50,6 +50,69 @@ def test_new_tab_session_history_starts_at_top_after_long_chat(browser, live, wi
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_calculate_all_subfolders_preserves_collapsed_tree_and_editor(browser, live, width, tmp_path):
+    from fake_bridge import FakeMachine
+    from test_ui_browser import code_item, code_tab
+
+    login = f"file-stats-{width}"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"files": {"src/app.py": b"123", "src/lib/u.py": b"12", ".git/objects/x": b"12345"}}})
+    machine.file_stats = True
+    calculate_stats = machine._op_file_stats
+
+    def partial_on_repeat(req, events):
+        result = calculate_stats(req, events)
+        if len(code_requests(machine, 'file_stats')) > 1:
+            result['complete'] = False
+            for row in result['items']:
+                row['complete'] = False
+        return result
+
+    machine._op_file_stats = partial_on_repeat
+    aid, server = code_online(live, login, machine)
+    gate = """(() => { const original = window.fetch;
+      window.fetch = async (url, options) => {
+        if (String(url).endsWith('/files/stats') && window.holdStats)
+          await new Promise(resolve => { window.releaseStats = resolve; });
+        return original(url, options);
+      }; return true; })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            ("wait", "document.querySelector('#code-files li[data-path=\"src\"]')"),
+            ("eval", "gate", gate), ("eval", "hold", "window.holdStats = true"),
+            ("click", "#code-files-calculate"), ("wait", "!!window.releaseStats"),
+            ("eval", "busy", "document.querySelector('#code-files-calculate').disabled"),
+            ("eval", "release", "window.holdStats=false; window.releaseStats(); true"),
+            ("wait", "!document.querySelector('#code-files-calculate').disabled"),
+            ("eval", "summary", "document.querySelector('#code-files-stats').textContent"),
+            ("eval", "src", """[...document.querySelectorAll('#code-files li[data-path="src"] > button [data-column]')]
+              .map(cell => [cell.dataset.column,cell.textContent])"""),
+            ("eval", "collapsed", "document.querySelector('#code-files li[data-path=\"src\"]').getAttribute('aria-expanded')"),
+            ("click", code_item("src")), ("wait", "document.querySelector('#code-files li[data-path=\"src/lib\"]')"),
+            ("eval", "nested", "document.querySelector('#code-files li[data-path=\"src/lib\"] .code-file-size').textContent"),
+            ("screenshot", str(tmp_path / f"file-stats-{width}.png")),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "unsaved text"),
+            ("click", "#code-files-calculate"), ("wait", "!document.querySelector('#code-files-calculate').disabled"),
+            ("eval", "editor", "document.querySelector('#code-editor').value"),
+            ("eval", "partial", "document.querySelector('#code-files-stats').textContent.includes('Подсчёт неполный')"
+                                " && document.querySelector('#code-files li[data-path=\"src\"] .code-file-size').textContent === '≥5'"),
+            ("eval", "noDialog", "!document.querySelector('#code-unsaved')"),
+            ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth")], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["busy"] and '10 Б' in values["summary"] and '3 файла' in values["summary"] and '4 папки' in values["summary"]
+    assert {key: value for key, value in values["src"] if key in ('size', 'files', 'folders')} == {'size': '5', 'files': '2', 'folders': '1'}
+    assert values["collapsed"] == 'false' and values["nested"] == '2'
+    assert values["editor"] == 'unsaved text' and values["noDialog"] and values["fits"] and values["partial"]
+    assert len(code_requests(machine, 'file_stats')) == 2
+    assert [req['path'] for req in code_requests(machine, 'files')] == ['', 'src']
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_file_tree_details_expand_and_refresh_after_saving(browser, live, width, tmp_path):
     from fake_bridge import FakeMachine, T0
     from test_ui_browser import code_item, code_tab

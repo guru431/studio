@@ -70,6 +70,7 @@ class FakeMachine:
         self.attachments = False
         self.project_activity = False
         self.project_summary = False
+        self.file_stats = False
         self.subscription_usage = False
         self.usage_data = None
         self.context = None
@@ -81,7 +82,7 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary")
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -293,6 +294,29 @@ class FakeMachine:
             else:
                 plain.append({"name": head, "dir": False, "size": len(data), "created": self.now, "modified": self.now})
         return {"items": sorted(dirs.values(), key=lambda i: i["name"]) + sorted(plain, key=lambda i: i["name"])}
+
+    def _op_file_stats(self, req, events):
+        _, project = self._project(req)
+        if "file_statistics" in project:
+            return project["file_statistics"]
+        path = req["path"]
+        prefix = path + "/" if path else ""
+        rows = {path: {"path": path, "size": 0, "files": 0, "folders": 0, "complete": True}}
+        for filename, data in self._files(req).items():
+            if not filename.startswith(prefix):
+                continue
+            parents = [path]
+            tail = filename[len(prefix):].split("/")[:-1]
+            for i in range(len(tail)):
+                folder = prefix + "/".join(tail[:i + 1])
+                rows.setdefault(folder, {"path": folder, "size": 0, "files": 0, "folders": 0, "complete": True})
+                parents.append(folder)
+            for parent in parents:
+                rows[parent]["size"] += len(data)
+                rows[parent]["files"] += 1
+        for parent, row in rows.items():
+            row["folders"] = sum(folder != parent and (not parent or folder.startswith(parent + "/")) for folder in rows)
+        return {"items": list(rows.values()), "complete": True, "skipped_links": 0, "checked_at": self.now}
 
     def _file(self, req) -> bytes:
         data = self._files(req).get(req["path"])

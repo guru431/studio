@@ -1397,6 +1397,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 
 /* файлы и git (code-files.js): список, правка, .md, .pdf, статус */
 .code-files-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.code-files-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.code-files-toolbar .code-path { min-width: 0; }
+#code-files-calculate { flex: none; font-size: calc(11px * var(--font-scale, 1)); }
+#code-files-stats { margin: 0; overflow-wrap: anywhere; }
+#code-files-stats:empty { display: none; }
 .code-path-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer;
   overflow-wrap: anywhere; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
 #code-files-error:empty { display: none; }
