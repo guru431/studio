@@ -1,5 +1,6 @@
 """Расшифровка записей (app/transcripts.py): загрузка потоком на шару, задание в фоне, ожидание
 карты, отмена, перезапуск, удаление; имя файла и текст — не в журнал."""
+import asyncio
 import json
 import logging
 import pathlib
@@ -97,6 +98,30 @@ def test_done_is_written_after_the_temp_file_is_gone(studio, env, fake_audio, mo
     go.set()
     assert wait_tr(studio, tid, {"done", "error"})["state"] == "done"
     assert not list((env.db_path.parent / "tmp").iterdir()) and transcripts.JOBS == {}
+
+
+def test_cancellation_during_cleanup_waits_for_the_temp_file(studio, env, fake_audio, monkeypatch):
+    add_gateway(studio)
+    unlinking, go = hold_temp_unlink(env, monkeypatch)
+    tid = upload(studio).json()["id"]
+    assert unlinking.wait(5)
+
+    async def scenario():
+        job = transcripts.JOBS[tid]
+        job.by_user = True
+        try:
+            for _ in range(2):
+                job.task.cancel()
+                await asyncio.sleep(0)
+                assert not job.task.done(), "задание кончилось до уборки MP3"
+                assert state.DB.execute("SELECT state FROM transcripts WHERE id = ?", (tid,)).fetchone()[0] == "working"
+        finally:
+            go.set()
+            await asyncio.gather(job.task, return_exceptions=True)
+
+    studio.c.portal.call(scenario)
+    assert not list((env.db_path.parent / "tmp").iterdir()) and transcripts.JOBS == {}
+    assert studio.c.get(f"/api/transcripts/{tid}").json()["state"] in transcripts.TERMINAL
 
 
 def test_card_busy_waits_and_says_so(studio, fake_audio, monkeypatch):

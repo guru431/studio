@@ -2,6 +2,7 @@
 сервис OpenAI-стиля; освобождение карты перед речью."""
 import asyncio
 import json
+import threading
 
 import httpx
 import pytest
@@ -37,6 +38,36 @@ def test_transcribe_asks_whisperx_with_diarization(studio, tmp_path):
     assert b'name="audio_file"' in q.content
     assert [(s.speaker, s.text, s.start, s.end) for s in segs] == [
         ("Собеседник 1", "Бюро переводов. Здравствуйте.", 0.9, 4.0), ("Собеседник 2", "У меня вопрос.", 4.1, 6.0)]
+
+
+def test_transcribe_cancellation_waits_for_the_audio_reader(tmp_path):
+    """Отмена не отдаёт временный MP3 уборке, пока поток держит файл открытым."""
+    path = tmp_path / "a.mp3"
+    path.write_bytes(b"ID3fake")
+    reading, release = threading.Event(), threading.Event()
+
+    class HeldAudio:
+        def read_bytes(self):
+            with path.open("rb") as source:
+                reading.set()
+                assert release.wait(5)
+                return source.read()
+
+    async def scenario():
+        task = asyncio.create_task(speech.transcribe(None, "whisperx", HeldAudio(), "audio/mpeg"))
+        try:
+            assert await asyncio.to_thread(reading.wait, 5)
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done(), "отмена вернулась при открытом MP3"
+        finally:
+            release.set()
+            [result] = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(result, asyncio.CancelledError)
+        path.unlink()
+
+    asyncio.run(scenario())
 
 
 def test_turns_keep_the_recognized_segments_with_their_turn():
