@@ -55,6 +55,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/chats/1/stop"): None,
     ("POST", "/api/code/agents/1/projects/1/files"): {"path": ""},
     ("POST", "/api/code/agents/1/projects/1/files/stats"): {"path": ""},
+    ("POST", "/api/code/agents/1/projects/1/files/operate"): {"operation": "delete", "path": "a.txt"},
     ("POST", "/api/code/agents/1/projects/1/read"): {"path": ""},
     ("PUT", "/api/code/agents/1/projects/1/file"): {"path": "a", "text": "", "version": "v"},
     ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},

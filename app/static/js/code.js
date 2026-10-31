@@ -578,9 +578,9 @@ async function chat(mine, p, id, agent, section, status) {
 }
 
 async function files(mine, p, path, status) {
-  let name;
+  let name, agent;
   try {
-    name = await projectName(p);
+    [name, agent] = await Promise.all([projectName(p), agentOf(p.aid)]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -589,7 +589,8 @@ async function files(mine, p, path, status) {
   const refuse = (err, box, file = null) => {
     if (proj === p) failed(err, p.aid, box, file);
   };
-  if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path, git: p.repo });
+  if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path,
+    git: p.repo, operations: agent?.file_operations === true });
   else if (path !== null) p.files.open(path);
 }
 

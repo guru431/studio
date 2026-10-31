@@ -19,6 +19,14 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.8.1 `hello.file_operations: true`: op `file_operation {project,operation,path,destination}`,
+`operation` — `create_file|create_dir|move|delete`. Пустые пути (корень), reparse-point в пути и перенос
+папки внутрь себя запрещены. Создание через exclusive open/mkdir, Windows rename не затирает назначение
+(`exists`); rename поддерживает смену регистра. Удаление папок — `shutil.rmtree`, вложенные junction
+не обходятся. Операции и `save` под общим async-замком и в `to_thread`. Полные пути и системные тексты
+исключений наружу/в журнал не попадают. `tests/test_file_operations.py` проверяет настоящий junction,
+границы, сохранность назначения и PIN; сервер и интерфейс требуют capability старого моста.
+
 С 0.8.0 необязательные `hello.file_suggestions/chat_search/queue_edit/chat_fork/subagents/worktrees`
 объявляют инструменты рабочего места; контракт — §11 спецификации протокола. `discovery.py` читает
 только локальные пути/историю с пределами и без постоянного индекса, поисковый текст — только в POST body.

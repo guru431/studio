@@ -41,6 +41,7 @@ OPS = {
     "stop": ("project", "chat"),
     "files": ("project", "path"),
     "file_stats": ("project", "path"),
+    "file_operation": ("project", "operation", "path", "destination"),
     "file_suggestions": ("project", "query"),
     "chat_search": ("project", "query"),
     "chat_fork": ("project", "chat", "message_id"),
@@ -89,6 +90,7 @@ class Agent:
         self._open_lock = asyncio.Lock()
         self._usage = subscription.UsageCache(now=now)
         self._file_stats_lock = asyncio.Lock()
+        self._files_lock = asyncio.Lock()
         self._search_lock = asyncio.Lock()
         self._file_index = discovery.FileIndex()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
@@ -98,7 +100,7 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
-                 "subscription_usage": True, "project_summary": True, "file_stats": True,
+                 "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -199,6 +201,10 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "operation":
+            return value in ("create_file", "create_dir", "move", "delete")
+        if name == "destination" and value is None:
+            return True
         if name == "refresh":
             return value is None or type(value) is bool
         if name == "query":
@@ -228,7 +234,7 @@ class Agent:
             return isinstance(value, str) and VERSION.fullmatch(value) is not None
         if name == "request_id":
             return isinstance(value, str) and REQUEST_ID.fullmatch(value) is not None
-        if name == "path":
+        if name in ("path", "destination"):
             try:
                 files._parts(value)
             except Refused:
@@ -484,13 +490,20 @@ class Agent:
         project = await self._project(frame)
         return await asyncio.to_thread(files.read_text, project, frame["path"])
 
+    async def _op_file_operation(self, frame, after):
+        project = await self._project(frame)
+        async with self._files_lock:
+            return await asyncio.to_thread(files.operate, project, frame["operation"], frame["path"],
+                                           frame.get("destination"))
+
     async def _op_raw(self, frame, after):
         project = await self._project(frame)
         return await asyncio.to_thread(files.read_raw, project, frame["path"])
 
     async def _op_save(self, frame, after):
         project = await self._project(frame)
-        return await asyncio.to_thread(files.save_text, project, frame["path"], frame["text"], frame["version"])
+        async with self._files_lock:
+            return await asyncio.to_thread(files.save_text, project, frame["path"], frame["text"], frame["version"])
 
     async def _op_git(self, frame, after):
         project = await self._project(frame)

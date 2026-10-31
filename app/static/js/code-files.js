@@ -29,7 +29,7 @@
 import { api } from './api.js';
 import { fileMark, GIT_ACTIONS } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
-import { button, el, openDialog, plural, words } from './ui.js';
+import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const SAVED = 'Сохранено';
 const CONFLICT = 'Файл изменился на компьютере — откройте его заново, чтобы не затереть правки';
@@ -72,7 +72,7 @@ const FILE_COLUMNS = [
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
 const edits = new Map();
 
-export function filesView(host, { aid, pid, name, failed, path: start = null, git }) {
+export function filesView(host, { aid, pid, name, failed, path: start = null, git, operations = false }) {
   const url = `/api/code/agents/${aid}/projects/${pid}`;
   let alive = true;
   let dir = '';
@@ -88,6 +88,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   const directories = new Map();
   const statistics = new Map();
   let statsGen = 0;
+  let operating = false;
 
   const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
   const calculate = button('Просчитать все подпапки', { id: 'code-files-calculate', class: 'btn btn-sm',
@@ -100,9 +101,124 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', hidden: true });
-  const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, calculate),
+  const create = el('div', { class: 'code-files-create', hidden: !operations },
+    button('Новый файл', { id: 'code-new-file', class: 'btn btn-sm' }, () => operationDialog('create_file', dir)),
+    button('Новая папка', { id: 'code-new-folder', class: 'btn btn-sm' }, () => operationDialog('create_dir', dir)));
+  const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, create, calculate),
     statsStatus, listError, table, file);
   host.replaceChildren(view);
+
+  const contains = (parent, path) => path != null && (path === parent || path.startsWith(`${parent}/`));
+
+  async function refreshTree(operation, path, destination) {
+    const remap = (value) => {
+      if (!contains(path, value) || operation.startsWith('create_')) return value;
+      return operation === 'move' ? destination + value.slice(path.length) : parentOf(path);
+    };
+    const expanded = [...nodes.values()].filter((node) => node.li.getAttribute('aria-expanded') === 'true')
+      .filter((node) => operation !== 'delete' || !contains(path, node.path)).map((node) => remap(node.path));
+    const currentDir = remap(dir);
+    const movedFile = selected && contains(path, selected) && operation === 'move' ? remap(selected) : null;
+    if (operation === 'delete' && contains(path, selected)) closeFile();
+    treeGen += 1;
+    listGen += 1;
+    nodes.clear();
+    directories.clear();
+    list.replaceChildren();
+    directories.set('', { group: list, loaded: false, pending: null });
+    clearStats();
+    dir = currentDir;
+    if (movedFile) openFile(movedFile);
+    else showPath(selected || dir, !!selected);
+    if (!(await loadDir('')) || !alive) return;
+    for (const target of [...expanded, currentDir]) {
+      const parts = target.split('/').filter(Boolean);
+      for (let i = 1; i <= parts.length; i += 1) {
+        const node = nodes.get(parts.slice(0, i).join('/'));
+        if (!node?.item.dir) break;
+        expand(node, true);
+        if (!(await loadDir(node.path)) || !alive) return;
+      }
+    }
+    dir = currentDir;
+    showPath(selected || dir, !!selected);
+    git.refresh(true);
+  }
+
+  function operationDialog(action, path, isDir = false) {
+    if (!alive || operating) return;
+    const creating = action.startsWith('create_');
+    const moving = action === 'rename' || action === 'move';
+    const deleting = action === 'delete';
+    const title = { create_file: 'Новый файл', create_dir: 'Новая папка', rename: 'Переименовать',
+      move: 'Переместить', delete: 'Удалить' }[action];
+    const input = el('input', { id: 'code-file-operation-path', class: 'input', maxlength: '1024',
+      autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+    input.value = action === 'rename' ? nameOf(path) : moving ? path : '';
+    const error = el('p', { id: 'code-file-operation-error', class: 'error', 'aria-live': 'polite' });
+    const submit = button(title, { id: 'code-file-operation-submit', class: `btn ${deleting ? 'btn-danger' : 'btn-accent'}` });
+    const body = [el('p', { class: 'code-operation-source' }, creating ? `Папка: ${path || name || 'Проект'}` : path)];
+    if (deleting) body.push(el('p', {}, isDir ? 'Папка и всё её содержимое будут удалены без возможности отмены.'
+      : 'Файл будет удалён без возможности отмены.'));
+    else body.push(field(moving && action !== 'rename' ? 'Новый путь от корня проекта, включая имя' : 'Имя', input),
+      el('p', { class: 'muted small' }, action === 'rename' ? 'Введите имя без пути.'
+        : 'Разделитель папок — /. Родительская папка должна существовать.'));
+    body.push(error);
+    const dialog = openDialog(host, { id: 'code-file-operation', title, body, actions: [submit] });
+    if (!deleting) { input.focus(); if (action === 'rename') input.select(); }
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); submit.click(); }
+    });
+    submit.addEventListener('click', async () => {
+      if (operating || !alive) return;
+      const value = input.value;
+      if (!deleting && (!value || action === 'rename' && value.includes('/'))) {
+        error.textContent = 'Введите корректное имя или путь';
+        return;
+      }
+      if (!creating && contains(path, selected) && dirty()) {
+        error.textContent = 'Сначала сохраните изменения открытого файла';
+        return;
+      }
+      const operation = action === 'rename' ? 'move' : action;
+      const source = creating ? join(path, value) : path;
+      const destination = action === 'rename' ? join(parentOf(path), value) : moving ? value : null;
+      operating = true;
+      submit.disabled = true;
+      dialog.querySelector('.dialog-close').disabled = true;
+      const preventCancel = (event) => event.preventDefault();
+      dialog.addEventListener('cancel', preventCancel);
+      error.textContent = '';
+      try {
+        await api('POST', `${url}/files/operate`, { operation, path: source, destination });
+        dialog.close();
+        if (alive) await refreshTree(operation, source, destination);
+      } catch (err) {
+        if (!alive) return;
+        if (err.code === 'closed') { dialog.close(); refuse(err, listError, null); }
+        else {
+          error.textContent = words(err);
+          // При частичном удалении обновить сведения, оставив открытый текст на месте.
+          if (deleting) { clearStats(); for (const target of directories.keys()) loadDir(target, true); }
+        }
+      } finally {
+        operating = false;
+        submit.disabled = false;
+        dialog.querySelector('.dialog-close').disabled = false;
+        dialog.removeEventListener('cancel', preventCancel);
+      }
+    });
+  }
+
+  function actionsMenu(path, isDir) {
+    if (!operations || operating) return;
+    const actions = [['rename', 'Переименовать'], ['move', 'Переместить'], ['delete', 'Удалить']];
+    if (isDir) actions.unshift(['create_file', 'Новый файл'], ['create_dir', 'Новая папка']);
+    const choices = el('div', { class: 'code-file-actions' });
+    const dialog = openDialog(host, { id: 'code-file-actions', title: nameOf(path), body: [choices], cancelText: 'Закрыть' });
+    for (const [action, label] of actions) choices.append(button(label, { class: `btn${action === 'delete' ? ' btn-danger' : ''}`,
+      'data-action': action }, () => { dialog.close(); operationDialog(action, path, isDir); }));
+  }
 
   function clearStats() {
     statsGen += 1;
@@ -283,6 +399,16 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       'aria-label': item.name, class: item.dir ? 'dir' : null }, row);
     const node = { path, item, row, badge, li, cells };
     nodes.set(path, node);
+    if (operations) {
+      const menu = button('⋯', { class: 'code-file-menu', 'aria-label': `Действия: ${item.name}`,
+        title: 'Действия с файлом или папкой', 'aria-haspopup': 'dialog' }, () => actionsMenu(path, node.item.dir));
+      li.classList.add('has-actions');
+      li.append(menu);
+      row.addEventListener('contextmenu', (event) => { event.preventDefault(); actionsMenu(path, node.item.dir); });
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'F10' && event.shiftKey) { event.preventDefault(); actionsMenu(path, node.item.dir); }
+      });
+    }
     if (item.dir) {
       const group = el('ul', { role: 'group', hidden: true });
       li.append(group);
@@ -418,6 +544,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     showPath(path, true);
     const status = el('p', { id: 'code-file-status', class: 'code-file-status', 'aria-live': 'polite' });
     const bar = el('div', { class: 'code-file-bar' });
+    if (operations) bar.append(button('⋯', { class: 'btn btn-sm', id: 'code-open-file-actions',
+      'aria-label': 'Действия с открытым файлом' }, () => actionsMenu(path, false)));
     file.replaceChildren(bar, status);
     file.hidden = false;
     view.classList.add('has-file');
@@ -559,6 +687,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   }
 
   function openFile(path) {
+    dir = parentOf(path);
     if (/\.pdf$/i.test(path)) openPdf(path);
     else openText(path);
   }

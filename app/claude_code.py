@@ -75,7 +75,7 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409}
+          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 IMAGE_MAX = 5 * 1024 * 1024
@@ -847,6 +847,11 @@ class PdfPage(PathBody):
     page: StrictInt = Field(ge=1)
 
 
+class FileOperation(PathBody):
+    operation: Literal["create_file", "create_dir", "move", "delete"]
+    destination: Any = None
+
+
 def check_path(path: object) -> str:
     """Путь внутри проекта (протокол §6): `""` — корень, иначе части через `/` — без пустых, `.` и `..`, без `\\`,
     управляющих знаков и одиноких суррогатов, не длиннее PATH_MAX. Иное — 422 `path` до моста."""
@@ -900,6 +905,22 @@ async def file_stats(aid: int, pid: str, body: PathBody, request: Request):
     return {"items": result, "complete": data.get("complete") is True and all(item["complete"] for item in result),
             "skipped_links": data.get("skipped_links") if type(data.get("skipped_links")) is int and data["skipped_links"] >= 0 else 0,
             "checked_at": _time(data.get("checked_at"))}
+
+
+@router.post("/agents/{aid}/projects/{pid}/files/operate", status_code=204)
+async def file_operation(aid: int, pid: str, body: FileOperation, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    path = check_path(body.path)
+    destination = check_path(body.destination) if body.destination is not None else None
+    if not path or (body.operation == "move") != (destination is not None) or destination == "":
+        raise _refuse(422, "invalid", BAD_BODY)
+    require_capability(aid, "file_operations")
+    await ask(request, aid, "file_operation", project=pid, operation=body.operation, path=path,
+              destination=destination)
+    # Перенос/удаление PDF не оставляет старую копию в кэше просмотра.
+    _forget_pdf(request.state.user.id, bridge.tag(request.state.digest))
+    return Response(status_code=204)
 
 
 @router.post("/agents/{aid}/projects/{pid}/read")

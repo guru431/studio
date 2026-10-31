@@ -72,6 +72,7 @@ class FakeMachine:
         self.project_activity = False
         self.project_summary = False
         self.file_stats = False
+        self.file_operations = False
         self.file_suggestions = False
         self.chat_search = False
         self.queue_edit = False
@@ -89,7 +90,7 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats", "file_operations",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
@@ -382,8 +383,10 @@ class FakeMachine:
 
     def _op_files(self, req, events):
         files, path = self._files(req), req["path"]
+        _, project = self._project(req)
+        empty_dirs = project.setdefault("dirs", set())
         prefix = path + "/" if path else ""
-        if path and not any(f.startswith(prefix) for f in files):
+        if path and path not in empty_dirs and not any(f.startswith(prefix) for f in files):
             raise Refused("not_found", "нет такой папки")
         dirs, plain = {}, []
         for f, data in files.items():
@@ -394,7 +397,53 @@ class FakeMachine:
                 dirs[head] = {"name": head, "dir": True, "size": 0, "created": self.now, "modified": self.now}
             else:
                 plain.append({"name": head, "dir": False, "size": len(data), "created": self.now, "modified": self.now})
+        for folder in empty_dirs:
+            if folder.startswith(prefix) and folder != path:
+                head = folder[len(prefix):].split("/")[0]
+                dirs[head] = {"name": head, "dir": True, "size": 0, "created": self.now, "modified": self.now}
         return {"items": sorted(dirs.values(), key=lambda i: i["name"]) + sorted(plain, key=lambda i: i["name"])}
+
+    def _op_file_operation(self, req, events):
+        files = self._files(req)
+        _, project = self._project(req)
+        dirs = project.setdefault("dirs", set())
+        for filename in list(files):
+            parts = filename.split("/")
+            dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        path, operation, destination = req["path"], req["operation"], req.get("destination")
+        if not path or operation == "move" and not destination:
+            raise Refused("invalid", "неверные поля")
+        if operation.startswith("create_"):
+            if path in files or path in dirs:
+                raise Refused("exists", "файл или папка с таким именем уже существует")
+            if path.rpartition("/")[0] not in dirs | {""}:
+                raise Refused("not_found", "нет такой папки")
+            if operation == "create_file":
+                files[path] = b""
+            else:
+                dirs.add(path)
+        else:
+            if path not in files and path not in dirs:
+                raise Refused("not_found", "файл или папка не найдены")
+            if path in self.read_only:
+                raise Refused("read_only", "файл только для чтения")
+            if operation == "move":
+                if destination in files or destination in dirs:
+                    raise Refused("exists", "файл или папка с таким именем уже существует")
+                if destination.startswith(path + "/"):
+                    raise Refused("invalid", "нельзя переместить папку внутрь самой себя")
+                if destination.rpartition("/")[0] not in dirs | {""}:
+                    raise Refused("not_found", "нет такой папки")
+            affected = lambda value: value == path or value.startswith(path + "/")
+            for filename in [value for value in files if affected(value)]:
+                content = files.pop(filename)
+                if operation == "move":
+                    files[destination + filename[len(path):]] = content
+            for folder in [value for value in dirs if affected(value)]:
+                dirs.remove(folder)
+                if operation == "move":
+                    dirs.add(destination + folder[len(path):])
+        return {}
 
     def _op_file_stats(self, req, events):
         _, project = self._project(req)

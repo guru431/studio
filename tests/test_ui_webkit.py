@@ -74,6 +74,44 @@ def fits(page):
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
+def test_file_operations_accept_phone_taps(iphone, tmp_path):
+    import bridge
+
+    page, aid = iphone
+    page.studio_machine.file_operations = True
+    bridge.LINKS[aid].hello["file_operations"] = True
+    page.reload()
+    page.goto(page.url.split('/#')[0] + f'/#/code/{aid}/{pid("alpha")}?tab=files')
+    page.locator('#code-new-folder').tap()
+    page.locator('#code-file-operation-path').fill('phone')
+    page.locator('#code-file-operation-submit').tap()
+    folder = page.locator('#code-files li[data-path="phone"]')
+    pw.expect(folder).to_be_visible()
+    menu = folder.locator('> .code-file-menu')
+    pw.expect(menu).to_be_in_viewport()
+    menu.tap()
+    page.locator('#code-file-actions [data-action="create_file"]').tap()
+    page.locator('#code-file-operation-path').fill('a.txt')
+    page.locator('#code-file-operation-submit').tap()
+    pw.expect(page.locator('#code-file-operation[open]')).to_have_count(0)
+    folder.locator('> .code-file-item').tap()
+    child = page.locator('#code-files li[data-path="phone/a.txt"]')
+    pw.expect(child).to_be_visible()
+    page.locator('.code-file-table').evaluate('table => table.scrollLeft = 0')
+    pw.expect(child.locator('> .code-file-menu')).to_be_in_viewport()
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'file-operations-phone.png'))
+    folder.locator('> .code-file-menu').tap()
+    page.locator('#code-file-actions [data-action="delete"]').tap()
+    pw.expect(page.locator('#code-file-operation')).to_contain_text('всё её содержимое')
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'file-delete-phone.png'))
+    page.locator('#code-file-operation-submit').tap()
+    pw.expect(folder).to_have_count(0)
+    assert not any(path.startswith('phone/') for path in page.studio_machine.projects['alpha']['files'])
+
+
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
 def test_code_file_hints_and_held_queue_accept_phone_taps(iphone, tmp_path):
     import bridge
 

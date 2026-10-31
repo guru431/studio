@@ -218,6 +218,7 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `read` | `project`, `path` | `{"text", "version"}` | `outside`, `too_large` (больше 2 МиБ), `binary` |
 | `raw` | `project`, `path` | `{"data": base64, "size", "version"}` | `outside`, `too_large` (больше 10 МиБ) |
 | `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
+| `file_operation` (0.8.1, `hello.file_operations`) | `project`, `operation`, `path`, `destination` (путь или `null`) | `{}` | `outside`, `invalid`, `not_found`, `exists` (409), `read_only` (409), `busy` (409) |
 | `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git` |
 
 - `chats`: `title` — `custom_title`, иначе `summary`, иначе начало `first_prompt` (до 120 знаков);
@@ -254,6 +255,17 @@ app-server, ходы продолжают сессии Codex; авторизац
   со `status: "stopped"`.
 - `version` файла — sha256 его байтов (hex). `save` пишет, только если `version` совпал с нынешним, байты
   — UTF-8 текста как есть (без смены концов строк).
+- Добавка v1 с 0.8.1: `hello.file_operations: true` объявляет `file_operation` через
+  `POST /api/code/agents/{aid}/projects/{pid}/files/operate` (успех HTTP 204).
+  `operation` — `create_file`, `create_dir`, `move` (включая переименование), `delete`.
+  `path` непустой, `destination` непустой только для `move`, в остальных случаях `null`/отсутствует.
+  Все пути относительны проекту и передаются только в теле; PIN, владелец и CSRF обязательны как у `save`.
+  Создание требует существующего родителя; перенос не перезаписывает назначение, допускает смену регистра.
+  Корень, пути через ссылки/reparse-point и перенос папки внутрь себя запрещены.
+  `delete` удаляет папку рекурсивно без обхода вложенных junction; интерфейс заранее подтверждает необратимость.
+  При ошибке удаления часть записей могла быть удалена: интерфейс обновляет дерево.
+  `save` и операции сериализованы на машине. Успех сбрасывает кэш PDF сессии, статистику дерева и обновляет Git.
+  Старый мост без capability — HTTP 409 `unsupported`, интерфейс скрывает операции.
 
 ## 5. Проект
 
