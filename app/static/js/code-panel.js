@@ -391,6 +391,12 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           && !event.shiftKey && !event.altKey) event.preventDefault();
         chose();
       });
+      row.addEventListener('click', (event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.target.closest('a, button, input, select, textarea')
+          || window.getSelection()?.toString()) return;
+        link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window,
+          ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }));
+      });
       const li = el('li', { 'data-pid': p.pid }, row);
       paintSummary(li, summaries.get(agent.id)?.get(p.pid));
       return li;

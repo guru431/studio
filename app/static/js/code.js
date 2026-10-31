@@ -183,10 +183,9 @@ function layout() {
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
   repoStatus.addEventListener('click', () => switchTo('git'));
-  const gitActions = el('div', { class: 'code-git-actions-host' });
   const top = el('div', { class: 'code-top' },
     el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place),
-      el('div', { class: 'code-project-tools' }, repoStatus, views)), gitActions, tabsHost);
+      el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
@@ -199,7 +198,7 @@ function layout() {
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
   ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches,
-    repoStatus, gitActions, statusBox, body, backdrop };
+    repoStatus, statusBox, body, backdrop };
 }
 
 /** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
@@ -283,6 +282,7 @@ function paintTabs() {
   ui.tabsHost.hidden = blocked === String(p.aid) || !tabs.length;
   p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded,
     choosing: shownKey === 'chat' && !shownChat });
+  p.git?.controls(gitControls(p));
   ensurePoll();
 }
 
@@ -540,6 +540,8 @@ function sessions(mine, p, status) {
 }
 
 async function chat(mine, p, id, agent, section, status) {
+  const gitAction = p.gitAction?.chat === id ? p.gitAction.prompt : null;
+  p.gitAction = null;
   let name;
   let row;
   try {
@@ -555,7 +557,7 @@ async function chat(mine, p, id, agent, section, status) {
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
-    gitHost: ui.gitActions, git: p.repo,
+    git: p.repo, gitAction,
     taskDone: () => { p.repo.refresh(true); panel.updateSummary(p.aid, p.pid); },
     closed: () => failed({ code: 'closed' }, p.aid, null),
     gone: () => closeTab(p, id),
@@ -581,9 +583,23 @@ async function files(mine, p, path, status) {
   else if (path !== null) p.files.open(path);
 }
 
+function gitControls(p) {
+  const { active } = tabsOf(p.aid, p.pid);
+  const busy = p.info.get(active)?.running || p.info.get(active)?.asking;
+  return { enabled: !!active && p.canStart && !busy,
+    message: !active ? 'Откройте чат проекта для выполнения действий Git'
+      : busy ? 'Дождитесь завершения задания в выбранном чате' : '' };
+}
+
 function git(p) {
   if (p.git) p.git.unmount();
-  p.git = gitView(p.gitBox, { git: p.repo,
+  p.git = gitView(p.gitBox, { git: p.repo, controls: gitControls(p),
+    action: (prompt) => {
+      if (!gitControls(p).enabled) return;
+      const { active } = tabsOf(p.aid, p.pid);
+      p.gitAction = { chat: active, prompt };
+      toChat(p, active);
+    },
     failed: (err, box) => {
       if (proj === p) failed(err, p.aid, box);
     } });
@@ -623,7 +639,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   else if (key === 'files') files(mine, p, path, status);
   else if (key === 'git') git(p);
   else sessions(mine, p, status);
-  if (key !== 'chat') chatsOf(p).catch(() => {});     // названия вкладок; отказ скажут «Файлы» или «Git»
+  if (key !== 'chat') chatsOf(p, key === 'git').catch(() => {}); // Git также сверяет занятость выбранного чата.
 }
 
 function render() {
