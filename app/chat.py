@@ -33,6 +33,8 @@
    ответа отсчитывается от готовности. Прямому подключению — 409 `not_ready`: ждёт страница.
 """
 import asyncio
+from html import escape
+import re
 import base64
 import json
 import logging
@@ -290,7 +292,7 @@ def _alive(row) -> bool:
             and clock.NOW() - row["alive_at"] < ALIVE_SEC)
 
 
-def _message_out(row, atts: list) -> dict:
+def _message_out(row, atts: list, views: dict | None = None) -> dict:
     """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
     `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null), `ocr` — ход
     распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `error` — слова ответа-ошибки
@@ -305,23 +307,24 @@ def _message_out(row, atts: list) -> dict:
             "error": error,
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
-            "attachments": [_attachment_out(a) for a in atts],
+            "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
             "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
             "ocr": live.scan_state if live else None}
 
 
-def _attachment_out(a) -> dict:
+def _attachment_out(a, scans: dict | None = None, sources: set | None = None) -> dict:
     """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»);
     документ, чей скан ещё распознаётся, — `ocr {id}` (знаков у него пока нет; страница опрашивает документ).
     Текст есть — скан кончился: запроса нет."""
     out = {"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"], "chars": a["chars"]}
     if a["kind"] == "document" and a["text"] is None:
-        scans = ocr.pending(a["user_id"], [a["id"]])
-        if scans:
-            out["ocr"] = {"id": scans[0]}
+        pending = ocr.pending(a["user_id"], [a["id"]]) if scans is None else scans.get(a["id"], [])
+        if pending:
+            out["ocr"] = {"id": pending[0]}
     if a["source_transcript_id"] is not None:
-        exists = state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
-                                  (a["source_transcript_id"], a["user_id"])).fetchone() is not None
+        exists = (state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
+                                   (a["source_transcript_id"], a["user_id"])).fetchone() is not None
+                  if sources is None else a["source_transcript_id"] in sources)
         out["source"] = {"transcript_id": a["source_transcript_id"], "exists": exists}
     return out
 
@@ -350,7 +353,7 @@ def recover() -> None:
 def _content(text: str, atts: list):
     """Текст пользователя с документами перед ним; с картинками — части OpenAI: картинка — пока
     только id media, данные ставит fill_photos."""
-    docs = "".join(f'<document name="{a["name"]}">\n{a["text"]}\n</document>\n\n'
+    docs = "".join(f'<document name="{escape(a["name"], quote=True)}">\n{a["text"]}\n</document>\n\n'
                    for a in atts if a["kind"] == "document")
     pics = [a for a in atts if a["kind"] == "image"]
     if not pics:
@@ -700,7 +703,10 @@ class StreamTask:
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
                 if r.status_code != 200:
                     await r.aread()
-                    no_tools = offer and r.status_code == 400 and "tool" in r.text.lower()
+                    no_tools = offer and r.status_code == 400 and re.search(
+                        r"(?:tools?|tool[_ ]choice).{0,40}(?:not supported|unsupported|not enabled|requires)"
+                        r"|(?:does not|doesn't|cannot) support (?:tools?|function calling)"
+                        r"|(?:not supported|unsupported).{0,20}(?:tools?|tool[_ ]choice)", r.text.lower())
                     return NO_TOOLS if no_tools else upstream.gateway_error(r, self.conn.name), None, [], text
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:
@@ -1053,7 +1059,23 @@ async def get_chat(chat_id: str, request: Request):
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
     atts = _attachments(chat_id)
-    return {"chat": _chat_view(uid, row), "messages": [_message_out(m, atts.get(m["id"], [])) for m in _messages(chat_id)]}
+    all_atts = [a for group in atts.values() for a in group]
+    scans, sources = {}, set()
+    pending = [a["id"] for a in all_atts if a["kind"] == "document" and a["text"] is None]
+    if pending:
+        marks = ",".join("?" * len(pending))
+        for scan in state.DB.execute(
+                f"SELECT attachment_id, id FROM scans WHERE user_id = ? AND state IN {ocr.RUNNING}"
+                f" AND attachment_id IN ({marks}) ORDER BY created, rowid", (uid, *pending)):
+            scans.setdefault(scan["attachment_id"], []).append(scan["id"])
+    linked = {a["source_transcript_id"] for a in all_atts if a["source_transcript_id"] is not None}
+    if linked:
+        marks = ",".join("?" * len(linked))
+        sources = {r[0] for r in state.DB.execute(
+            f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
+    views = {a["id"]: _attachment_out(a, scans, sources) for a in all_atts}
+    return {"chat": _chat_view(uid, row),
+            "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
 
 
 @router.patch("/chats/{chat_id}")

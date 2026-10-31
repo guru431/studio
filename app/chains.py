@@ -85,6 +85,45 @@ def of_video(user_id: int, row) -> list[dict]:
     return of_source(user_id, row["source_media_id"]) + [{**own, **last}]
 
 
+def video_counts(user_id: int, rows) -> dict[str, int]:
+    """Число шагов ленты без полных цепочек; предки старых роликов — одним запросом, только свои."""
+    counts = {r["id"]: len(json.loads(r["chain"])) for r in rows if r["chain"] is not None}
+    legacy = [r for r in rows if r["chain"] is None]
+    sources = list({r["source_media_id"] for r in legacy if r["source_media_id"] is not None})
+    parents = {}
+    if sources:
+        marks = ",".join("?" for _ in sources)
+        ancestors = state.DB.execute(
+            "WITH RECURSIVE ancestors(id, media_id, source_media_id, steps, depth) AS ("
+            " SELECT id, media_id, source_media_id, json_array_length(chain), 1 FROM images"
+            f" WHERE user_id = ? AND media_id IN ({marks})"
+            " UNION SELECT i.id, i.media_id, i.source_media_id, json_array_length(i.chain), a.depth + 1"
+            " FROM images i JOIN ancestors a ON i.media_id = a.source_media_id"
+            " WHERE i.user_id = ? AND a.steps IS NULL AND a.depth < ?)"
+            " SELECT id, media_id, source_media_id, steps FROM ancestors",
+            (user_id, *sources, user_id, MAX_DEPTH))
+        parents = {r["media_id"]: r for r in ancestors}
+    for row in legacy:
+        count, source, seen = 1, row["source_media_id"], set()  # свой шаг ролика
+        while source is not None:
+            parent = parents.get(source)
+            if parent is None:
+                count += 1                                  # загрузка с устройства
+                break
+            if parent["id"] in seen:
+                break
+            if parent["steps"] is not None:
+                count += parent["steps"]
+                break
+            count += 1
+            seen.add(parent["id"])
+            if len(seen) >= MAX_DEPTH:
+                break
+            source = parent["source_media_id"]
+        counts[row["id"]] = count
+    return counts
+
+
 def _exists(table: str, user_id: int, key: str, value: str) -> bool:
     # table и key — из кода этого модуля, не из запроса
     return state.DB.execute(f"SELECT 1 FROM {table} WHERE {key} = ? AND user_id = ?", (value, user_id)).fetchone() is not None

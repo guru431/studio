@@ -185,11 +185,16 @@ function build(view, ctx) {
     dialog.addEventListener('close', () => dialog.remove());
     // 1:1 — точка под пальцем или курсором остаётся на месте; клик мимо картинки — закрыть
     img.addEventListener('click', (event) => {
-      const fx = event.offsetX / img.clientWidth;
-      const fy = event.offsetY / img.clientHeight;
+      const imageRect = img.getBoundingClientRect();
+      const fx = (event.clientX - imageRect.left) / imageRect.width;
+      const fy = (event.clientY - imageRect.top) / imageRect.height;
       if (!dialog.classList.toggle('full')) return;
-      stage.scrollLeft = fx * img.offsetWidth - event.clientX;
-      stage.scrollTop = fy * img.offsetHeight - event.clientY;
+      const rect = stage.getBoundingClientRect();
+      // clientX/Y — экранные координаты, scrollLeft/Top — CSS px до масштаба интерфейса.
+      const x = (event.clientX - rect.left) * stage.offsetWidth / rect.width - stage.clientLeft;
+      const y = (event.clientY - rect.top) * stage.offsetHeight / rect.height - stage.clientTop;
+      stage.scrollLeft = fx * img.offsetWidth - x;
+      stage.scrollTop = fy * img.offsetHeight - y;
     });
     stage.addEventListener('click', (event) => { if (event.target === stage) dialog.close(); });
     root.append(dialog);

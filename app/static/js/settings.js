@@ -730,8 +730,11 @@ function pushBox() {
     }
   });
   if (pushSupported()) {
-    api('GET', '/api/me/push').then(async ({ subscribed }) => {
-      let on = pushFlag() && subscribed;
+    api('GET', '/api/me/push').then(async (answer) => {
+      if (!answer || typeof answer.subscribed !== 'boolean') {
+        throw new Error('Сервер вернул некорректные данные подписки push — обновите страницу');
+      }
+      let on = pushFlag() && answer.subscribed;
       if (on) {
         // браузер мог снять подписку сам, а переподписка служебного работника (pushsubscriptionchange, sw.js) — не
         // дойти до сервера: тогда она снята и там — флажок по подписке браузера, флаг устройства прочь
@@ -743,7 +746,7 @@ function pushBox() {
       }
       box.checked = on;
       box.disabled = false;
-    }, (err) => say(note, words(err), 'error'));
+    }).catch((err) => say(note, words(err), 'error'));
   }
   return [el('label', { class: 'check push-check' }, box, 'Push на этом устройстве'),
     el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '

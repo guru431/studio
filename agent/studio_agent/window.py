@@ -41,6 +41,29 @@ MAIN_BUTTONS = {"off": ("Отключиться", "Danger.TButton"), "relogin": 
 _window = None
 
 
+def _work_area(win):
+    """Рабочая область монитора окна, без панели задач; запасной вариант — границы Tk."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("size", wintypes.DWORD), ("monitor", wintypes.RECT),
+                        ("work", wintypes.RECT), ("flags", wintypes.DWORD)]
+
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        user.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user.MonitorFromWindow.restype = wintypes.HANDLE
+        user.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+        info = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
+        monitor = user.MonitorFromWindow(int(win.wm_frame(), 0), 2)
+        if monitor and user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            area = info.work
+            return area.left, area.top, area.right - area.left, area.bottom - area.top
+    width, height = win.wm_maxsize()
+    return 0, 0, min(width, win.winfo_screenwidth()), min(height, win.winfo_screenheight())
+
+
 def view_of(enrolled: bool) -> str:
     """`link` — «Подключение» (есть ключ), `login` — «Вход»."""
     return "link" if enrolled else "login"
@@ -173,6 +196,17 @@ class MainWindow:
         self.win.protocol("WM_DELETE_WINDOW", self.close)
         self.win.bind("<Escape>", lambda e: self.close())
         theme.dark_title(self.win, self.c["dark"])
+        self.win.rowconfigure(0, weight=1)
+        self.win.columnconfigure(0, weight=1)
+        self.viewport = tk.Canvas(self.win, background=self.c["bg"], highlightthickness=0,
+                                  borderwidth=0, takefocus=False)
+        self.viewport.grid(row=0, column=0, sticky="nsew")
+        self.scroll = ttk.Scrollbar(self.win, orient="vertical", command=self.viewport.yview)
+        self.viewport.configure(yscrollcommand=self.scroll.set)
+        self._fit_pending = False
+        self._body_window = None
+        self.win.bind("<MouseWheel>", self.scroll_wheel)
+        self.win.bind("<FocusIn>", self.reveal_focus)
         self.body = None
         self.render()
         self.lift()
@@ -183,6 +217,51 @@ class MainWindow:
 
     def px(self, n: float) -> int:
         return round(n * self.scale)
+
+    def schedule_fit(self, _event=None) -> None:
+        if not self._fit_pending:
+            self._fit_pending = True
+            self.win.after_idle(self.fit_content)
+
+    def fit_content(self) -> None:
+        self._fit_pending = False
+        if not self.alive():
+            return
+        left, top, available_width, available_height = _work_area(self.win)
+        width = min(self.body.winfo_reqwidth(), max(1, available_width - self.px(32)))
+        content_height = self.body.winfo_reqheight()
+        height = min(content_height, max(1, available_height - self.px(48)))
+        if content_height > height:
+            self.scroll.grid(row=0, column=1, sticky="ns")
+        else:
+            self.scroll.grid_remove()
+        self.viewport.itemconfigure(self._body_window, width=width)
+        self.viewport.configure(width=width, height=height, scrollregion=(0, 0, width, content_height))
+        outer_width = width + (self.scroll.winfo_reqwidth() if content_height > height else 0) + self.px(16)
+        x = max(left, min(self.win.winfo_x(), left + available_width - outer_width))
+        y = max(top, min(self.win.winfo_y(), top + available_height - height - self.px(48)))
+        self.win.geometry(f"{x:+d}{y:+d}")
+
+    def scroll_wheel(self, event):
+        if self.viewport.yview() != (0.0, 1.0):
+            self.viewport.yview_scroll(-int(event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
+            return "break"
+
+    def reveal_focus(self, event) -> None:
+        widget = event.widget
+        if widget is self.win or not str(widget).startswith(str(self.body) + "."):
+            return
+        self.win.after_idle(lambda: self.reveal_widget(widget))
+
+    def reveal_widget(self, widget) -> None:
+        if not self.alive() or not widget.winfo_exists():
+            return
+        top = widget.winfo_rooty() - self.viewport.winfo_rooty()
+        bottom = top + widget.winfo_height()
+        shift = top if top < 0 else bottom - self.viewport.winfo_height() if bottom > self.viewport.winfo_height() else 0
+        if shift:
+            position = self.viewport.canvasy(0) + shift
+            self.viewport.yview_moveto(position / max(1, self.body.winfo_height()))
 
     def alive(self) -> bool:
         try:
@@ -281,14 +360,19 @@ class MainWindow:
         self.backend_widgets = {}
         if self.body is not None:
             self.body.destroy()
-        self.body = ttk.Frame(self.win, padding=self.px(20))
-        self.body.grid(row=0, column=0, sticky="nsew")
+        if self._body_window is not None:
+            self.viewport.delete(self._body_window)
+        self.body = ttk.Frame(self.viewport, padding=self.px(20))
+        self._body_window = self.viewport.create_window(0, 0, window=self.body, anchor="nw")
+        self.body.bind("<Configure>", self.schedule_fit)
+        self.viewport.yview_moveto(0)
         self.body.columnconfigure(0, weight=1, minsize=self.px(400))  # ширина не скачет со сменой состояния
         self.header()
         if view_of(self.enrolled) == "login":
             self.login_view()
         else:
             self.link_view()
+        self.schedule_fit()
 
     def header(self) -> None:
         from PIL import ImageTk

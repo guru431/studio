@@ -536,6 +536,22 @@ def test_unenroll_asks_studio_and_forgets(make, home, root, enrolled):
     assert ctrl.links[0].hello["has_pin"] is True and ctrl.agent.has_pin is False
 
 
+@pytest.mark.parametrize("stage", ["_close_runners", "_drop_link"])
+def test_unenroll_cleanup_error_propagates_without_reading_unassigned_result(make, enrolled, monkeypatch, stage):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+
+    async def failure(*args, **kwargs):
+        raise OSError("cleanup failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ctrl, stage, failure)
+        with pytest.raises(OSError, match="cleanup failed"):
+            ctrl.unenroll()
+    assert ctrl.enrolled and not ctrl.unenrolls
+
+
 @pytest.mark.parametrize("answer", [405, 403, 401, 500, "unavailable", "broken"])
 def test_unenroll_without_studio_still_forgets(make, home, root, enrolled, answer):
     def unenroll(url, key):

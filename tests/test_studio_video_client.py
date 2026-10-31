@@ -336,6 +336,19 @@ def test_full_queue_waits_for_sent_jobs_and_resends(runner, service, tmp_path):
     assert fake.release == [], "-KeepCard: карта не освобождается"
 
 
+@pytest.mark.integration      # первая отправка получила 429: настоящая пауза 5 с
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_full_queue_on_first_job_retries_without_skipping_it(runner, service, tmp_path):
+    fake = service(busy_posts={1})
+    (tmp_path / "a.png").write_bytes(b"img-a")
+
+    run_script(runner, fake, tmp_path, "-KeepCard")
+
+    assert fake.log.count(("POST", "/slot/videos")) == 2
+    assert [p["input_reference"] for p in fake.posts] == [b"img-a"]
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["a.png"]
+
+
 @pytest.mark.integration      # ждёт паузу перед повтором по-настоящему (5 с)
 @pytest.mark.parametrize("runner", RUNNERS)
 def test_unavailable_service_gets_the_job_again_after_a_pause(runner, service, tmp_path):

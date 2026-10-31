@@ -40,6 +40,7 @@ def test_phrases_split_by_sentences_and_keep_the_text():
     pieces = speeches.phrases(words)
     assert all(len(p) <= speeches.PHRASE_MAX for p in pieces) and " ".join(pieces) == words
     assert speeches.phrases("  \n ") == []
+    assert speeches.phrases("one  two\tthree   four", limit=10) == ["one two", "three four"]
 
 
 def test_two_phrases_in_a_cloned_voice_become_one_mp3(studio, fake_audio, caplog):

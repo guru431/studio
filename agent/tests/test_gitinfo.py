@@ -9,18 +9,18 @@ from studio_agent import errors, gitinfo, limits
 def test_parse_branch_upstream_and_files():
     out = (b"# branch.oid abc\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +3 -1\0"
            b"1 .M N... 100644 100644 100644 a b \xd0\xbf\xd0\xb0\xd0\xbf\xd0\xba\xd0\xb0/f 1.txt\0"
-           b"2 R. N... 100644 100644 100644 a b R100 new.txt\0old.txt\0? x.log\0")
+           b"2 R. N... 100644 100644 100644 a b R100 new  name with spaces.txt\0old  name.txt\0? x.log\0")
     assert gitinfo.parse(out) == {"branch": "main", "upstream": "origin/main", "ahead": 3, "behind": 1,
-        "files": [{"path": "папка/f 1.txt", "status": "M"}, {"path": "new.txt", "status": "R"},
+        "files": [{"path": "папка/f 1.txt", "status": "M"}, {"path": "new  name with spaces.txt", "status": "R"},
                   {"path": "x.log", "status": "??"}]}
 
 
 def test_parse_detached_without_upstream_conflict_and_both_sides():
     out = (b"# branch.oid abc\0# branch.head (detached)\0"
            b"1 MM N... 100644 100644 100644 a b both.txt\0"
-           b"u UU N... 100644 100644 100644 100644 a b c conflict.txt\0")
+           b"u UU N... 100644 100644 100644 100644 a b c conflict with  spaces.txt\0")
     assert gitinfo.parse(out) == {"branch": None, "upstream": None, "ahead": 0, "behind": 0,
-        "files": [{"path": "both.txt", "status": "MM"}, {"path": "conflict.txt", "status": "U"}]}
+        "files": [{"path": "both.txt", "status": "MM"}, {"path": "conflict with  spaces.txt", "status": "U"}]}
 
 
 def test_parse_keeps_at_most_git_files_max(monkeypatch):
@@ -77,6 +77,32 @@ def test_status_of_a_real_repository(tmp_path, monkeypatch):
     with pytest.raises(errors.Refused) as e:
         gitinfo.status(plain)
     assert e.value.code == "not_git"
+
+
+@pytest.mark.integration
+def test_real_merge_conflict_and_rename_keep_all_path_spaces(tmp_path):
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+
+    def run(*args, check=True):
+        return subprocess.run([*git, *args], check=check, capture_output=True)
+
+    run("init", "-q", "-b", "main")
+    conflict = tmp_path / "conflict with  spaces.txt"
+    conflict.write_text("base\n")
+    (tmp_path / "old  name.txt").write_text("rename\n")
+    run("add", "-A")
+    run("commit", "-qm", "base")
+    run("checkout", "-qb", "side")
+    conflict.write_text("side\n")
+    run("commit", "-qam", "side")
+    run("checkout", "-q", "main")
+    conflict.write_text("main\n")
+    run("commit", "-qam", "main")
+    assert run("merge", "side", check=False).returncode == 1
+    run("mv", "old  name.txt", "new name with  spaces.txt")
+    assert sorted(gitinfo.status(tmp_path)["files"], key=lambda row: row["path"]) == [
+        {"path": "conflict with  spaces.txt", "status": "U"},
+        {"path": "new name with  spaces.txt", "status": "R"}]
 
 
 def test_no_upstream_counts_unpublished_commits_and_keeps_failed_count_unknown(monkeypatch, tmp_path):

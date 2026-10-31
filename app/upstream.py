@@ -52,6 +52,8 @@ def refused_words(e: UpstreamRefused, conn) -> str:
     if isinstance(e, ConnectionChanged):
         return (f"подключение «{conn.name}» удалено из профиля" if e.deleted
                 else f"подключение «{conn.name}» изменено — запустите заново")
+    if e.reason == "token":
+        return f"токен подключения «{conn.name}» не удалось расшифровать — введите его заново"
     if e.reason == "internal":
         return f"имя адреса подключения «{conn.name}» разрешается во внутренний адрес — сервер туда не ходит"
     return f"адрес подключения «{conn.name}» убран из списка администратора"

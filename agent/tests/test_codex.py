@@ -114,6 +114,54 @@ def runner(home):
     return runner
 
 
+async def test_question_ids_distinguish_identical_text(runner):
+    runner.fake.ask = "item/tool/requestUserInput"
+    runner.fake.ask_params = {"questions": [{"id": key, "question": "Как?", "options": []}
+                                            for key in ("first", "second")]}
+    runner.start(runner.project, "project", CHAT, "вопрос", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        card = runner._turns[CHAT].asks[rid].event
+        assert [q["id"] for q in card["questions"]] == ["first", "second"]
+        runner.answer("project", CHAT, rid, "allow", None, {"first": "A", "second": "B"})
+        await task
+        assert runner.fake.replies[-1]["result"] == {"answers": {
+            "first": {"answers": ["A"]}, "second": {"answers": ["B"]}}}
+    finally:
+        if not task.done():
+            await runner.stop("project", CHAT)
+            await task
+
+
+@pytest.mark.parametrize("questions", [
+    [{"question": "missing"}], [{"id": 1, "question": "numeric"}],
+    [{"id": "same", "question": "A"}, {"id": "same", "question": "B"}]])
+async def test_malformed_question_ids_are_rejected_before_showing_a_card(runner, questions):
+    runner.fake.ask = "item/tool/requestUserInput"
+    runner.fake.ask_params = {"questions": questions}
+    runner.start(runner.project, "project", CHAT, "вопрос", None, None)
+    await runner._turns[CHAT].task
+    assert not any(frame["e"]["k"] == "ask" for frame in runner.sent)
+    assert runner.fake.replies[-1]["error"]["code"] == -32602
+
+
+async def test_state_uses_selected_model_default_when_response_omits_model_and_effort(runner, monkeypatch):
+    original = FakeRpc.request
+
+    async def request(self, method, params):
+        data = await original(self, method, params)
+        if method in ("thread/start", "thread/fork"):
+            data.pop("model", None)
+            data.pop("reasoningEffort", None)
+        return data
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    result = await runner.state(runner.project, CHAT, model="codex-test")
+    assert result["settings"]["model"] == "codex-test"
+    assert result["settings"]["effort"] == "high"
+
+
 async def test_native_fork_releases_only_its_own_writer(runner):
     runner.fake.exists = True
     result = await runner.fork_chat(runner.project, THREAD)

@@ -87,6 +87,7 @@ CANCELLING = "останавливаю"
 CANCELLED = "остановлено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
+LOST = "задание потеряно — переведите заново"
 NO_CONNECTION = "подключение перевода удалено — переведите заново"
 SCAN_FAILED = "скан не распознан"
 PHOTO_FAILED = "снимок не распознан"
@@ -557,7 +558,7 @@ async def _runner(user_id: int, lane: str) -> None:
                 return
             job = JOBS.get(row["id"])
             if job is None:                          # снимка подключения нет — такого быть не должно
-                _finish(row["id"], "error", INTERRUPTED)
+                _finish(row["id"], "error", LOST)
                 continue
             await run(job)
     finally:

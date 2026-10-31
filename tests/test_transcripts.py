@@ -5,12 +5,14 @@ import json
 import logging
 import pathlib
 import threading
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import clock
 import media
 import state
 import transcripts
+from fastapi import HTTPException
 from conftest import T0, add_gateway, make_user, signin
 
 NAME = "Звонок Ивану.m4a"
@@ -204,6 +206,52 @@ def test_one_running_per_user_and_history_wipe_takes_all(studio, env, fake_audio
     assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     assert transcripts.JOBS == {}                     # и задание стёртой истории не держится в памяти
+
+
+def test_two_uploads_finishing_together_start_only_one_job(studio, monkeypatch):
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
+    save_stream = media.save_stream
+
+    async def scenario():
+        uploaded, held = asyncio.Event(), asyncio.Event()
+        arrivals = 0
+
+        async def save(*args):
+            nonlocal arrivals
+            source = await save_stream(*args)
+            arrivals += 1
+            if arrivals == 2:
+                uploaded.set()
+            await uploaded.wait()
+            return source
+
+        async def run(job):
+            try:
+                await held.wait()
+            finally:
+                transcripts.JOBS.pop(job.id, None)
+
+        async def stream():
+            yield b"recording"
+
+        monkeypatch.setattr(media, "save_stream", save)
+        monkeypatch.setattr(transcripts, "run", run)
+        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)), stream=stream,
+                                  headers={"content-type": "audio/mp4"})
+        results = await asyncio.gather(transcripts.upload(request), transcripts.upload(request), return_exceptions=True)
+        jobs = list(transcripts.JOBS.values())
+        try:
+            assert len(jobs) == 1
+            assert sum(isinstance(r, dict) for r in results) == 1
+            error, = (r for r in results if isinstance(r, HTTPException))
+            assert error.status_code == 409 and error.detail["code"] == "busy"
+            assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 1
+            assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 1
+        finally:
+            await transcripts._cancel(jobs)
+
+    studio.c.portal.call(scenario)
 
 
 def test_deleting_a_user_drops_their_jobs_from_memory(studio, fake_audio, monkeypatch):

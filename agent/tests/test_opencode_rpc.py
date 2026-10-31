@@ -69,6 +69,31 @@ async def test_acp_handshake_incoming_requests_and_unlimited_prompt():
     assert not client.pending and not client.methods and client.process is None
 
 
+async def test_load_response_is_a_barrier_for_ordered_replay_updates():
+    process = Process()
+
+    async def spawn(*args, **kwargs):
+        return process
+
+    client = opencode_rpc.Client(Path("opencode.exe"), Path("C:/project"), spawn=spawn)
+    await client.connect()
+    try:
+        load = asyncio.create_task(client.request("session/load", {"sessionId": "ses_test"}))
+        await asyncio.sleep(0)
+        rid = process.sent[-1]["id"]
+        for text in ("first", "last"):
+            process.feed({"method": "session/update", "params": {"sessionId": "ses_test", "update": {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+            await asyncio.sleep(0)
+            assert not load.done()
+        process.feed({"id": rid, "result": {}})
+        await load
+        assert [client.inbox.get_nowait()["params"]["update"]["content"]["text"] for _ in range(2)] == ["first", "last"]
+        assert client.inbox.empty()
+    finally:
+        await client.disconnect()
+
+
 async def test_errors_eof_and_timeout_remove_waiters_without_private_content():
     process = Process()
 
@@ -95,4 +120,3 @@ async def test_errors_eof_and_timeout_remove_waiters_without_private_content():
         await task
     assert await client.inbox.get() is None
     await client.disconnect()
-
