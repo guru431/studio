@@ -1138,7 +1138,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .code-project-tools { display: flex; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
 .code-views { flex: none; display: flex; gap: 6px; }
-.code-starts { display: flex; flex: none; align-items: center; gap: 6px; }
 .code-repo-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; padding: 4px 6px;
   border: 0; border-radius: 5px; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
 .code-repo-status:hover { background: var(--panel-2); color: var(--text); }
@@ -1155,12 +1154,13 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-body { flex: 1; width: 100%; max-width: 860px; min-width: 0; margin: 0 auto; padding: 16px; display: flex;
   flex-direction: column; gap: 16px; }
 .code-main:has(.code-pane:not([hidden]) .code-files-view) .code-body { max-width: none; }
+.code-main:has(.code-pane:not([hidden]) .code-session-picker) .code-body { max-width: none; }
 .code-pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .code-pick-note { margin: auto; }
 .code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size:calc(14px * var(--font-scale, 1)); min-width: 0; }
 .code-crumbs > * { overflow-wrap: anywhere; min-width: 0; }
 .code-crumb-here { font-weight: 600; }
-/* вкладки сессий (code-tabs.js): ряд под строкой пути, листается вбок, «+» прилипает справа; меню — под рядом */
+/* вкладки сессий (code-tabs.js): ряд под строкой пути, листается вбок, «+» открывает экран новой вкладки */
 .code-top { display: flex; flex-direction: column; }
 .code-tabs-row { position: relative; }
 .code-tabbar { position: relative; display: flex; align-items: flex-end; gap: 2px; min-width: 0; padding: 6px 12px 0;
@@ -1184,14 +1184,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   border: 0; border-radius: 9px 9px 0 0; background: var(--bg); color: var(--muted); font-size:calc(20px * var(--font-scale, 1)); line-height: 1;
   cursor: pointer; }
 .code-tab-add:hover, .code-tab-add[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
-.code-tab-menu { position: absolute; z-index: 12; top: calc(100% + 4px); left: 12px; width: min(420px, calc(100% - 24px));
-  max-height: 60dvh; overflow-y: auto; padding: 8px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 12px; box-shadow: var(--shadow); }
-.code-tab-menu .code-chat-link { padding: 8px 10px; }
+.code-pane:has(> .code-session-picker) { flex: 1; }
+.code-session-picker { flex: 1; width: 100%; min-width: 0; }
 @media (max-width: 760px) {
   .code-tabbar { padding: 6px 8px 0; border-bottom: 0; border-top: 1px solid var(--border); }
   .code-tab { max-width: 180px; }
-  .code-tab-menu { left: 8px; width: calc(100% - 16px); }
 }
 
 /* сессии проекта (code-sessions.js): «Новый чат» первой строкой, затем сессии с пометками */
@@ -1219,8 +1216,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-location { display: flex; flex-basis: 100%; align-items: center; gap: 10px; min-width: 0; padding-right: 126px; }
   .code-place { flex: 0 1 auto; max-width: 100%; }
   .code-project-tools { order: 3; flex-basis: 100%; justify-content: flex-end; gap: 8px; margin-left: 0; }
-  .code-starts { order: 2; flex-basis: 100%; flex-wrap: wrap; }
-  .code-starts > .small { display: none; }
   .code-repo-status { max-width: calc(100% - 176px); }
   #code-status { margin: 12px 12px 0; }
   .code-body { padding: 12px; }
@@ -1304,7 +1299,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-sent-image { display: block; max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 8px; margin-bottom: 6px; }
 .code-pick { display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; }
 .code-pick-name { display: none; }
-.code-pick select { width: auto; min-width: 0; max-width: 160px; text-overflow: ellipsis; }
+.code-pick select { width: auto; min-width: 0; max-width: 160px; text-overflow: ellipsis;
+  font-size:calc(12px * var(--font-scale, 1)); }
 #code-effort { max-width: 80px; }
 #code-access { max-width: 150px; }
 .code-context { --context-color:var(--muted); --context-percent:0%; position:relative; display:inline-grid; flex:none;
@@ -1325,10 +1321,10 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-context { width:36px; height:36px; }
   .code-pick { flex: 1 1 0; }
   .code-pick:first-child { flex-grow: 1.5; }
-  .code-pick select { width: 100%; padding: 6px 2px; font-size:calc(16px * var(--font-scale, 1)); }
+  .code-pick select { width: 100%; padding: 6px 2px; }
 }
 @media (pointer: coarse) {
-  .code-chat :is(input, select, textarea) { font-size:calc(16px * var(--font-scale, 1)); }
+  .code-chat :is(input, textarea) { font-size:calc(16px * var(--font-scale, 1)); }
 }
 
 /* файлы и git (code-files.js): список, правка, .md, .pdf, статус */

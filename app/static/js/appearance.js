@@ -6,7 +6,7 @@ export function setupAppearance() {
   if (!host) return;
   const root = document.documentElement;
   const font = el('input', { id: 'appearance-font', type: 'range', min: '85', max: '150', step: '5', value: '100' });
-  const scale = el('select', { id: 'appearance-scale' }, ...[75, 85, 100, 110, 125, 150].map((n) =>
+  const scale = el('select', { id: 'appearance-scale' }, ...[50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].map((n) =>
     el('option', { value: n }, `${n}%`)));
   const fontValue = el('output', { for: 'appearance-font' });
   const reset = el('button', { type: 'button', class: 'btn-link' }, 'Сбросить');

@@ -13,7 +13,8 @@
  *   их адрес), их нет — «Выберите проект слева»; #/code/<aid> — входная ссылка: этот компьютер в панели, дальше как
  *   #/code;
  * - #/code/<aid>/<pid> — проект: есть вкладки — заменой на активную (или на «Файлы» / «Git», если рабочее место
- *   смотрело их у этого проекта), нет — сессии во всю ширину (code-sessions.js); ?tab=files|git — «Файлы» и «Git»
+ *   смотрело их у этого проекта), нет — создание чата и сессии во всю ширину (code-sessions.js); ?tab=new — тот же
+ *   экран новой вкладки по «+»; ?tab=files|git — «Файлы» и «Git»
  *   (code-files.js: «Файлы» — один экземпляр, пока открыт тот же проект, «Git» — заново при каждом показе);
  * - #/code/<aid>/<pid>/<chat> — чат: section#code-chat сразу, затем chatView (code-chat.js); сессии нет во вкладках
  *   (push, «В работе») — она добавляется (act('open')); «Открыть файл» шага — «Файлы» проекта и файл: путь ждёт
@@ -42,7 +43,6 @@
  * app.js до смены адреса или раздела). */
 import { api } from './api.js';
 import { chatView } from './code-chat.js';
-import { ENGINE_NAMES } from './code-options.js';
 import { filesView, gitView } from './code-files.js';
 import { projectGit } from './code-git.js';
 import { panelView } from './code-panel.js';
@@ -173,22 +173,11 @@ function layout() {
     return button;
   });
   const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': 'Вид проекта', hidden: true }, ...switches);
-  const newClaude = el('button', { type: 'button', id: 'code-start-claude', class: 'chip', disabled: true,
-    title: 'Новый чат Claude Code' }, '+ Claude Code');
-  const newCodex = el('button', { type: 'button', id: 'code-start-codex', class: 'chip', disabled: true,
-    title: 'Новый чат Codex' }, '+ Codex');
-  const newOpenCode = el('button', { type: 'button', id: 'code-start-opencode', class: 'chip', disabled: true,
-    title: 'Новый чат OpenCode' }, '+ OpenCode');
-  const starts = el('div', { class: 'code-starts', hidden: true }, el('span', { class: 'muted small' }, 'Новый чат'),
-    newClaude, newCodex, newOpenCode);
-  newClaude.addEventListener('click', () => startChat('claude'));
-  newCodex.addEventListener('click', () => startChat('codex'));
-  newOpenCode.addEventListener('click', () => startChat('opencode'));
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
   repoStatus.addEventListener('click', () => switchTo('git'));
   const top = el('div', { class: 'code-top' },
-    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place), starts,
+    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place),
       el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
@@ -201,7 +190,7 @@ function layout() {
   document.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
-  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches, starts, newClaude, newCodex, newOpenCode,
+  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches,
     repoStatus, statusBox, body, backdrop };
 }
 
@@ -222,9 +211,7 @@ function empty() {
 function frame(key) {
   ui.place.hidden = key === null;
   ui.views.hidden = key === null;
-  ui.starts.hidden = key === null;
   ui.repoStatus.hidden = key === null || !ui.repoStatus.textContent;
-  ui.newClaude.disabled = ui.newCodex.disabled = ui.newOpenCode.disabled = true;
   if (key === null) ui.tabsHost.hidden = true;
   for (const button of ui.switches) button.setAttribute('aria-selected', String(button.id === `code-tab-${key}`));
   if (!proj) return;
@@ -278,7 +265,8 @@ function paintTabs() {
   const { tabs } = tabsOf(p.aid, p.pid);
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
   ui.tabsHost.hidden = blocked === String(p.aid) || !tabs.length;
-  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded });
+  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded,
+    choosing: shownKey === 'chat' && !shownChat });
   ensurePoll();
 }
 
@@ -334,7 +322,13 @@ function closeTab(p, chat) {
   const shown = proj === p && shownKey === 'chat' && shownChat === chat;
   if (shown) shownChat = null;
   act('close', { aid: Number(p.aid), pid: p.pid, chat });
-  if (!shown) return;
+  if (!shown) {
+    if (proj === p && shownKey === 'chat' && !shownChat && view) {
+      view.unmount();
+      sessions(gen, p, shownStatus);
+    }
+    return;
+  }
   const { active } = tabsOf(p.aid, p.pid);
   if (active) toChat(p, active);
   else location.replace(`#/code/${p.aid}/${p.pid}`);
@@ -344,31 +338,6 @@ function created(p, chat, engine = 'claude') {
   freshChat = chat;
   p.info.set(chat, { chat, title: null, engine });
   toChat(p, chat);
-}
-
-function showStarts(p) {
-  if (proj !== p) return;
-  ui.newClaude.disabled = !p.canStart || !!p.creating;
-  ui.newCodex.disabled = !p.canStart || !p.codex || !!p.creating;
-  ui.newCodex.title = p.codex ? 'Новый чат Codex' : 'Обновите мост и установите Codex на компьютере';
-  ui.newOpenCode.disabled = !p.canStart || !p.opencode || !!p.creating;
-  ui.newOpenCode.title = p.opencode ? 'Новый чат OpenCode' : 'Обновите мост и установите OpenCode на компьютере';
-}
-
-async function startChat(engine) {
-  const p = proj;
-  if (!p || !p.canStart || p.creating || !ENGINE_NAMES[engine] || (engine !== 'claude' && !p[engine])) return;
-  p.creating = true;
-  showStarts(p);
-  try {
-    const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${engine !== 'claude' ? `?engine=${engine}` : ''}`);
-    if (proj === p) created(p, chat, engine);
-  } catch (err) {
-    if (proj === p) failed(err, p.aid, shownStatus);
-  } finally {
-    p.creating = false;
-    showStarts(p);
-  }
 }
 
 /** Проект справа: «Файлы» и «Git» прежнего проекта уходят, плашка — имя компьютера и проекта. */
@@ -410,16 +379,11 @@ function enter(aid, pid) {
       data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Впереди на ${ahead}` : ''].filter(Boolean).join(' · ');
     ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
   });
-  p.bar = tabBar(ui.tabsHost, { aid, pid,
-    read: () => chatsOf(p, true),
+  p.bar = tabBar(ui.tabsHost, {
+    add: () => location.replace(`#/code/${aid}/${pid}?tab=new`),
     pick: (chat) => toChat(p, chat),
     close: (chat) => closeTab(p, chat),
-    created: (chat, engine) => created(p, chat, engine),
-    codex: () => !!p.codex,
-    opencode: () => !!p.opencode,
-    failed: (err) => {
-      if (proj === p) failed(err, aid, shownStatus);
-    } });
+  });
   ui.body.replaceChildren(p.chatBox, p.filesBox, p.gitBox);
   ui.placeAgent.textContent = '';
   ui.placeProject.textContent = '…';
@@ -470,7 +434,6 @@ function failed(err, aid, status, file = null) {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;
       proj.repo.clear();
-      showStarts(proj);
     }
     const key = String(aid);
     if (!returnTo || returnTo.aid !== key || returnTo.hash !== location.hash) returnTo = { aid: key, hash: location.hash, file };
@@ -533,18 +496,13 @@ async function lobby(mine, aid) {
   panelOpen(true);
 }
 
-/** Проект без вкладок: его сессии во всю ширину; выбранная — первой вкладкой. */
-async function sessions(mine, p, status) {
-  let items;
-  try {
-    items = await chatsOf(p);
-  } catch (err) {
-    if (mine === gen) failed(err, p.aid, status);
-    return;
-  }
-  if (mine !== gen) return;
-  view = sessionList(p.chatBox, { aid: p.aid, pid: p.pid, items, picked: (chat) => toChat(p, chat),
-    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode, starts: false,
+/** Экран новой вкладки: создание чата и сессии без открытых вкладок во всю рабочую область. */
+function sessions(mine, p, status) {
+  const picker = el('section', { id: 'code-tab-menu', class: 'code-session-picker', 'aria-label': 'Новая вкладка' });
+  p.chatBox.replaceChildren(picker);
+  view = sessionList(picker, { aid: p.aid, pid: p.pid, items: chatsOf(p, true), exclude: new Set(tabsOf(p.aid, p.pid).tabs),
+    picked: (chat) => toChat(p, chat),
+    created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
@@ -607,7 +565,6 @@ async function project(mine, aid, pid, id, key, path, status) {
   p.codex = agent?.codex || null;
   p.opencode = agent?.opencode || null;
   p.canStart = false;
-  showStarts(p);
   if (agent && id) {
     // чат на экране — его вкладка активна (нет её — добавляется: push, «В работе», выбор в «+»), проект и вид — его
     const { tabs, active } = tabsOf(aid, pid);
@@ -627,7 +584,6 @@ async function project(mine, aid, pid, id, key, path, status) {
     return;
   }
   p.canStart = true;
-  showStarts(p);
   p.repo.refresh(key === 'git');
   ensurePoll();
   if (id) chat(mine, p, id, agent, section, status);
@@ -667,7 +623,7 @@ function render() {
   }
   const tab = ctx.query && ctx.query.get('tab');
   const key = !id && (tab === 'files' || tab === 'git') ? tab : 'chat';
-  if (!id && key === 'chat') {
+  if (!id && key === 'chat' && tab !== 'new') {
     const { active } = tabsOf(aid, pid);
     const place = get().place;
     const seen = place && place.aid === Number(aid) && place.pid === pid && place.view !== 'chat' ? place.view : null;
