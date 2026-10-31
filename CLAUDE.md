@@ -33,6 +33,15 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+studio-agent 0.8.0: `file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`, `subagents`, `worktrees` —
+необязательные возможности `hello`, §11 [протокола](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md).
+Поиск/пути только на компьютере; сервер ретранслирует POST body. `code-autocomplete.js`, `code-diff.js`,
+`code-queue.js`, `code-subagents.js`, `code-worktrees.js` дополняют рабочее место; новые кнопки скрыты для
+старых мостов. Редактирование ставит очередь на паузу до сохранения/отмены; исходное задание не прерывается.
+Ветвление/дети — Claude и Codex через штатные API; worktree открывается отдельным проектом из HEAD,
+переписка и локальные настройки туда не копируются. Проверки: `test_code_discovery.py`, `test_ui_code_tools.py`,
+сценарий `code_file_hints_and_held_queue` в `test_ui_webkit.py`, соответствующие тесты `agent/tests/`.
+
 Вертикальный `#rail` прокручивается на коротких экранах; его кнопки не сжимаются. Нижняя навигация
 телефона сохраняет `overflow: visible` для фиксированных кнопок поиска, заданий и профиля.
 При отмене расшифровки `speech.transcribe` ждёт закрытия MP3 в потоке, а `transcripts.run` —

@@ -12,6 +12,7 @@
 import { api } from './api.js';
 import { ENGINE_NAMES } from './code-options.js';
 import { el } from './ui.js';
+import { worktreeView } from './code-worktrees.js';
 
 const UNTITLED = 'Новый чат';
 
@@ -19,11 +20,12 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, refresh = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true }) {
+export function sessionList(host, { aid, pid, items, refresh = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
   let found = Array.isArray(items) ? items : null;
   let loadError = false;
+  let remote = null, timer = null, request = null, generation = 0;
 
   async function busy(button, work) {
     button.disabled = true;
@@ -68,14 +70,17 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       el('span', { class: 'code-marks' }, ...marks));
     link.addEventListener('click', () => busy(link, async () => {
       if (closed) await api('PATCH', `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`, { state: 'open' });
-      if (alive) picked(chat.chat);
+      if (alive) picked(chat.chat, chat);
     }));
     return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
   }
 
   const list = el('ul', { id: 'code-chats', class: 'code-chats' });
   const search = el('input', { id: 'code-chat-search', class: 'input code-chat-search', type: 'search',
-    placeholder: 'Поиск по названиям чатов', 'aria-label': 'Поиск по названиям чатов', autocomplete: 'off' });
+    placeholder: 'Поиск по названиям чатов', 'aria-label': 'Поиск чатов', autocomplete: 'off', maxlength: '200' });
+  const scope = el('button', { type: 'button', id: 'code-search-content', class: 'btn btn-sm',
+    'aria-pressed': 'false', hidden: !contentSearch }, 'По переписке');
+  const note = el('p', { class: 'small muted', role: 'status', id: 'code-search-status' });
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   const startsRows = [];
   if (starts) {
@@ -85,14 +90,52 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   }
   function paint() {
     const terms = normalize(search.value).trim().split(/\s+/).filter(Boolean);
-    const matches = (found || []).filter((c) => !exclude.has(c.chat)
+    const content = scope.getAttribute('aria-pressed') === 'true' && search.value.trim();
+    const matches = content ? remote || [] : (found || []).filter((c) => !exclude.has(c.chat)
       && terms.every((term) => normalize(c.title || UNTITLED).includes(term)));
     const empty = loadError ? 'Не удалось загрузить чаты' : found === null ? 'Загружаю…'
       : terms.length ? 'Ничего не найдено' : 'Прошлых чатов пока нет';
-    list.replaceChildren(...startsRows, ...(matches.length ? matches.map(row)
+    list.replaceChildren(...startsRows, ...(matches.length ? matches.map((chat) => {
+      const li = row({ ...(found || []).find((item) => item.chat === chat.chat), ...chat });
+      for (const snippet of chat.snippets || []) li.querySelector('button').append(
+        el('span', { class: 'code-search-snippet' }, `${snippet.role === 'user' ? 'Вы' : 'Ответ'}: ${snippet.text}`));
+      return li;
+    })
       : [el('li', { class: 'code-chats-wait muted', role: 'status' }, empty)]));
   }
-  search.addEventListener('input', paint);
+  function query() {
+    clearTimeout(timer);
+    request?.abort();
+    const mine = ++generation;
+    note.textContent = '';
+    remote = null;
+    paint();
+    if (scope.getAttribute('aria-pressed') !== 'true' || !search.value.trim()) return;
+    note.textContent = 'Ищу на компьютере…';
+    timer = setTimeout(async () => {
+      const own = new AbortController();
+      request = own;
+      try {
+        const data = await api('POST', `/api/code/agents/${aid}/projects/${pid}/search`,
+          { query: search.value.trim() }, { signal: own.signal });
+        if (!alive || own.signal.aborted || mine !== generation) return;
+        remote = data.items || [];
+        note.textContent = data.complete === false ? 'Поиск ограничен: проверена часть истории или не все помощники доступны' : '';
+        paint();
+      } catch (err) {
+        if (!alive || own.signal.aborted || mine !== generation) return;
+        note.textContent = 'Не удалось выполнить поиск';
+        failed(err);
+      }
+    }, 350);
+  }
+  search.addEventListener('input', query);
+  scope.addEventListener('click', () => {
+    const active = scope.getAttribute('aria-pressed') !== 'true';
+    scope.setAttribute('aria-pressed', String(active));
+    search.placeholder = active ? 'Слова из переписки на компьютере' : 'Поиск по названиям чатов';
+    query();
+  });
   paint();
   const pending = refresh || (!Array.isArray(items) ? items : null);
   list.setAttribute('aria-busy', String(!!pending));
@@ -107,11 +150,17 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       failed(err);
     }).finally(() => { if (alive) list.setAttribute('aria-busy', 'false'); });
   }
-  host.append(search, list);
+  host.append(search, scope, note, list);
+  const copies = worktrees ? worktreeView(host, { aid, pid, opened: worktreeOpened }) : null;
   return {
     unmount() {
       alive = false;
+      clearTimeout(timer);
+      request?.abort();
       search.remove();
+      scope.remove();
+      note.remove();
+      copies?.unmount();
       list.remove();
     },
   };

@@ -19,6 +19,18 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.8.0 необязательные `hello.file_suggestions/chat_search/queue_edit/chat_fork/subagents/worktrees`
+объявляют инструменты рабочего места; контракт — §11 спецификации протокола. `discovery.py` читает
+только локальные пути/историю с пределами и без постоянного индекса, поисковый текст — только в POST body.
+`diffs.py` сохраняет предоставленные CLI фрагменты/patch; наличие только нового текста не означает создание файла.
+Очередь всех Runner остаётся в `_Turn`: режим `queue` дожидается результата, `queue_pause` удерживает доставку,
+`queue_edit` под `input_lock` проверяет владельца и версию. `_wait_queue` ждёт вне замка; Stop/close будят ожидание.
+Claude ветвится через SDK `fork_session`, Codex — `thread/fork.lastTurnId` с проверкой отсечения и unsubscribe
+потомка в finally; исходный writer не трогается. Подзадачи только читаются и сверяются с родителем.
+`worktrees.py` создаёт worktree из HEAD в подпапке настроенного корня; не переносит правки, не удаляет папки
+и не меняет ветку исходника. Реальная Git-проверка — `tests/test_worktrees_integration.py` (`integration`).
+OpenCode ACP не объявляет ветвление/историю детей; общие подсказки, поиск, очередь и диффы работают.
+
 С 0.7.4 `context.usage` необязательно несёт накопленные `total/input/output/cached/cache_write/reasoning`.
 Codex: `tokenUsage.total` и `total_token_usage` из rollout; `used` по-прежнему из `last`, не из total.
 Claude: `sessions.token_usage` читает SDK-историю главной сессии, объединяет блоки по API message.id,

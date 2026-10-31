@@ -112,6 +112,22 @@ class ChatState(BaseModel):
     state: Literal["open", "closed"]
 
 
+class DiscoveryQuery(BaseModel):
+    query: str = Field(max_length=200, pattern=r"^[^\x00-\x1f]*$")
+
+
+class WorktreeName(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,30}$")
+
+
+class ForkPoint(BaseModel):
+    message_id: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[^\x00-\x1f]+$")
+
+
+class SubagentId(BaseModel):
+    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class TurnImage(BaseModel):
     mime: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
     data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
@@ -135,6 +151,7 @@ class Turn(ChatSettings):
     text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
     images: list[TurnImage] = Field(default_factory=list, max_length=4)
     attachments: list[TurnAttachment] = Field(default_factory=list, max_length=8)
+    mode: Literal["steer", "queue"] = "steer"
 
 
 def _turn_images(images: list[TurnImage]) -> list[dict]:
@@ -326,6 +343,106 @@ async def project_summary(aid: int, pid: str, request: Request):
               for key in ("findings", "ideas", "changed", "unpushed")}
     return {**result, "modified": _time(data.get("modified")), "checked_at": _time(data.get("checked_at")),
             "git": data.get("git") if data.get("git") in ("ok", "not_git", "error") else "error"}
+
+
+def require_capability(aid: int, capability: str):
+    link = bridge.LINKS.get(aid)
+    if link is not None and link.hello.get(capability) is not True:
+        raise _refuse(409, "unsupported", "Обновите мост на компьютере для этой возможности")
+
+
+@router.post("/agents/{aid}/projects/{pid}/files/suggest")
+async def file_suggestions(aid: int, pid: str, body: DiscoveryQuery, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "file_suggestions")
+    data = await ask(request, aid, "file_suggestions", project=pid, query=body.query.strip())
+    return {"items": [path for path in data.get("items", [])[:50]
+                      if isinstance(path, str) and len(path) <= PATH_MAX],
+            "complete": data.get("complete") is True, "more": data.get("more") is True}
+
+
+@router.post("/agents/{aid}/projects/{pid}/search")
+async def chat_search(aid: int, pid: str, body: DiscoveryQuery, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "chat_search")
+    data = await ask(request, aid, "chat_search", project=pid, query=body.query.strip())
+    items = []
+    for row in data.get("items", [])[:60]:
+        if not isinstance(row, dict) or not isinstance(row.get("chat"), str) or row.get("engine", "claude") not in ACCESS:
+            continue
+        try:
+            check_chat(row["chat"])
+        except HTTPException:
+            continue
+        items.append({"chat": row["chat"], "engine": row.get("engine", "claude"),
+                      "title": str(row.get("title", ""))[:200],
+                      "snippets": [{"text": str(s.get("text", ""))[:400], "role": s.get("role")}
+                                   for s in row.get("snippets", [])[:3] if isinstance(s, dict)
+                                   and s.get("role") in ("user", "assistant")]})
+    return {"items": items, "complete": data.get("complete") is True}
+
+
+@router.get("/agents/{aid}/projects/{pid}/worktrees")
+async def worktree_list(aid: int, pid: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "worktrees")
+    return _relay(await ask(request, aid, "worktrees", project=pid))
+
+
+@router.post("/agents/{aid}/projects/{pid}/worktrees")
+async def worktree_create(aid: int, pid: str, body: WorktreeName, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "worktrees")
+    return _relay(await ask(request, aid, "worktree_create", project=pid, query=body.name))
+
+
+@router.get("/agents/{aid}/projects/{pid}/chats/{chat}/subagents")
+async def subagents(aid: int, pid: str, chat: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, "subagents")
+    return _relay(await ask(request, aid, "subagents", project=pid, chat=chat))
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/subagent")
+async def subagent_history(aid: int, pid: str, chat: str, body: SubagentId, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, "subagents")
+    return _relay(await ask(request, aid, "subagent_history", project=pid, chat=chat, request_id=body.request_id))
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/fork")
+async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Request):
+    agent = own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, "chat_fork")
+    engine = chat_engine(request, aid, chat)
+    if engine == "opencode":
+        raise _refuse(409, "unsupported", "OpenCode ACP не предоставляет ветвление истории")
+    now = clock.NOW()
+    recent = NEW_CHATS.setdefault(aid, deque())
+    while recent and now - recent[0] >= 60:
+        recent.popleft()
+    if len(recent) >= NEW_CHATS_PER_MIN:
+        raise _refuse(429, "too_many", TOO_MANY)
+    recent.append(now)
+    data = await ask(request, aid, "chat_fork", project=pid, chat=chat, message_id=body.message_id)
+    child = data.get("chat")
+    if not isinstance(child, str) or child == chat:
+        raise _refuse(502, "bridge", "Мост не создал независимый чат")
+    check_chat(child)
+    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
+                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, child, now, now, engine))
+    _event(request, agent, "session_start")
+    return {"chat": child, "engine": engine, "draft": str(data.get("draft", ""))[:TEXT_MAX]}
 
 
 @router.get("/agents/{aid}/projects/{pid}/chats")
@@ -570,6 +687,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     link = bridge.LINKS.get(aid)
     if op == "steer" and link is not None and not link.hello.get("chat_control"):
         raise _refuse(409, "unsupported", "Обновите мост для отправки уточнений во время работы")
+    if op == "steer" and body.mode == "queue":
+        require_capability(aid, "queue_edit")
     engine = chat_engine(request, aid, chat)
     if engine != "claude":
         require_engine(aid, engine)
@@ -589,6 +708,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
             raise _refuse(422, "effort", NO_EFFORT)
     if op == "steer":
         return _relay(await ask(request, aid, "steer", project=pid, chat=chat, text=body.text,
+                                **({"mode": "queue"} if body.mode == "queue" else {}),
                                 **({"attachments": attachments} if attachments else {}),
                                 **({"images": images} if images else {})))
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
@@ -603,6 +723,34 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
 
 class Claim(BaseModel):
     fork: bool = False
+
+
+class QueueEdit(BaseModel):
+    request_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    version: int = Field(ge=1, strict=True)
+    text: str | None = Field(max_length=TEXT_MAX)
+
+
+class QueuePause(BaseModel):
+    paused: bool = Field(strict=True)
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/queue/pause")
+async def queue_pause(aid: int, pid: str, chat: str, body: QueuePause, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, "queue_edit")
+    return _relay(await ask(request, aid, "queue_pause", project=pid, chat=chat, paused=body.paused))
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/queue")
+async def queue_edit(aid: int, pid: str, chat: str, body: QueueEdit, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, "queue_edit")
+    return _relay(await ask(request, aid, "queue_edit", project=pid, chat=chat, **body.model_dump()))
 
 
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/claim")

@@ -5,7 +5,7 @@ import json
 
 from claude_agent_sdk import AssistantMessage, StreamEvent, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 
-from . import limits
+from . import diffs, limits
 
 HIDDEN = {"…": "ввод не показан — слишком большой"}
 
@@ -43,7 +43,9 @@ def bound(e: dict) -> dict:
     `CLIP_TIGHT`; всё ещё больше — `input` пометкой `HIDDEN`. Кадр так не подходит к `FRAME_MAX` и сам по себе."""
     if _size(e) <= limits.EVENT_MAX:
         return e
-    e = {k: clip(v, limits.CLIP_TIGHT) if k in ("input", "text", "questions") else v for k, v in e.items()}
+    e = {k: clip(v, limits.CLIP_TIGHT) if k in ("input", "text", "questions", "changes") else v for k, v in e.items()}
+    if isinstance(e.get("changes"), list):
+        e["changes"] = [{**change, "truncated": True} for change in e["changes"] if isinstance(change, dict)]
     if "input" in e and _size(e) > limits.EVENT_MAX:
         e["input"] = dict(HIDDEN)
     return e
@@ -115,6 +117,9 @@ class Feed:
                     step = self._by_id.get(block.tool_use_id)
                     if step is not None:
                         step.update(text=e["text"], error=e["error"])
+                        changes = diffs.for_tool(step["tool"], step["input"]) if not e["error"] else []
+                        if changes:
+                            e["changes"] = step["changes"] = changes
                     out.append(e)
         return out
 

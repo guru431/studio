@@ -28,6 +28,15 @@ ALPHA, BETA = pid("alpha"), pid("beta")
 #: (тела: {"text": "x"}, {"request_id": "r1", "decision": "allow"}, {"path": ""},
 #: {"path": "a", "text": "", "version": "v"}, {"path": "a.pdf", "page": 1}).
 BODIES = {
+    ("POST", "/api/code/agents/1/projects/1/chats/1/queue/pause"): {"paused": False},
+    ("GET", "/api/code/agents/1/projects/1/worktrees"): None,
+    ("POST", "/api/code/agents/1/projects/1/worktrees"): {"name": "task"},
+    ("POST", "/api/code/agents/1/projects/1/chats/1/fork"): {},
+    ("GET", "/api/code/agents/1/projects/1/chats/1/subagents"): None,
+    ("POST", "/api/code/agents/1/projects/1/chats/1/subagent"): {"request_id": "child"},
+    ("POST", "/api/code/agents/1/projects/1/files/suggest"): {"query": "a"},
+    ("POST", "/api/code/agents/1/projects/1/search"): {"query": "a"},
+    ("POST", "/api/code/agents/1/projects/1/chats/1/queue"): {"request_id": "0" * 16, "version": 1, "text": "a"},
     ("GET", "/api/code/agents/1/usage"): None,
     ("POST", "/api/code/agents/1/open"): {"pin": None},
     ("GET", "/api/code/agents/1/projects"): None,

@@ -73,6 +73,38 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
+def test_code_file_hints_and_held_queue_accept_phone_taps(iphone, tmp_path):
+    import bridge
+
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.file_suggestions = machine.queue_edit = True
+    bridge.LINKS[aid].hello.update(file_suggestions=True, queue_edit=True)
+    machine.script = [{"k": "text", "text": "Работаю"}]
+    page.reload()
+    page.goto(page.url.split('/#')[0] + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-loaded', '1')
+    page.locator('#code-text').fill('@app')
+    page.locator('#code-file-options button').first.tap()
+    pw.expect(page.locator('#code-text')).to_have_value('src/app.py ')
+    page.locator('#code-text').fill('Основная задача')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-running', '1')
+    page.locator('#code-delivery').select_option('queue')
+    page.locator('#code-text').fill('После задачи')
+    page.locator('#code-send').tap()
+    page.locator('button[aria-label="Изменить ожидающее задание"]').tap()
+    page.locator('.code-queue-text').fill('Исправлено на телефоне')
+    pw.expect(page.locator('#code-send')).to_be_disabled()
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'code-tools-phone.png'))
+    page.locator('.code-queue-actions button').first.tap()
+    pw.expect(page.locator('.code-queue-preview')).to_have_text('Исправлено на телефоне')
+    page.locator('#code-stop').tap()
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-running', '0')
+
+
 @pytest.mark.parametrize("iphone", [(852, 393)], indirect=True)
 def test_landscape_navigation_reaches_every_section_and_profile(iphone, tmp_path):
     page, _ = iphone

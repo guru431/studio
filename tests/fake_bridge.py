@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import threading
+import uuid
 
 import bridge
 import state
@@ -71,6 +72,12 @@ class FakeMachine:
         self.project_activity = False
         self.project_summary = False
         self.file_stats = False
+        self.file_suggestions = False
+        self.chat_search = False
+        self.queue_edit = False
+        self.chat_fork = False
+        self.subagents = False
+        self.worktrees = False
         self.subscription_usage = False
         self.usage_data = None
         self.context = None
@@ -82,7 +89,8 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats")
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats",
+                                           "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -167,6 +175,59 @@ class FakeMachine:
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
 
+    def _op_file_suggestions(self, req, events):
+        _, project = self._project(req)
+        return {"items": [path for path in sorted(project.get("files", {})) if req["query"].casefold() in path.casefold()][:50],
+                "complete": True, "more": False}
+
+    def _op_chat_fork(self, req, events):
+        _, project = self._project(req)
+        source = self._chat(req)
+        if req["chat"] in self.running:
+            raise Refused("running")
+        messages, draft = source["messages"], ""
+        if req.get("message_id"):
+            index = next(i for i, message in enumerate(messages) if message["id"] == req["message_id"])
+            draft = messages[index]["text"]
+            messages = messages[:index]
+        child = str(uuid.uuid4())
+        project["chats"][child] = {**source, "title": "Ветка чата", "messages": json.loads(json.dumps(messages)), "tag": "studio"}
+        return {"chat": child, "engine": req.get("engine", "claude"), "draft": draft}
+
+    def _op_subagents(self, req, events):
+        row = self._chat(req)
+        return {"items": [{"id": key, "title": value.get("title", key), "status": "completed"}
+                          for key, value in row.get("children", {}).items()]}
+
+    def _op_subagent_history(self, req, events):
+        row = self._chat(req)
+        child = row.get("children", {}).get(req["request_id"])
+        if child is None:
+            raise Refused("not_found")
+        return {"items": child["messages"], "complete": True}
+
+    def _op_worktrees(self, req, events):
+        name, _ = self._project(req)
+        return {"items": [{"pid": pid(name), "name": name, "branch": "main", "current": True}]}
+
+    def _op_worktree_create(self, req, events):
+        name, _ = self._project(req)
+        folder = name + "--" + req["query"]
+        self.projects[folder] = {"chats": {}, "files": {}, "git": {"branch": "studio/" + req["query"], "files": []}}
+        return {"pid": pid(folder), "name": folder, "branch": "studio/" + req["query"]}
+
+    def _op_chat_search(self, req, events):
+        _, project = self._project(req)
+        items = []
+        query = req["query"].casefold()
+        for chat, row in project.get("chats", {}).items():
+            snippets = [{"text": message["text"][:200], "role": message["role"]}
+                        for message in row.get("messages", []) if query in message.get("text", "").casefold()]
+            if snippets or query in (row.get("title") or "").casefold():
+                items.append({"chat": chat, "title": row.get("title") or "", "engine": row.get("engine", "claude"),
+                              "snippets": snippets[:3]})
+        return {"items": items, "complete": True}
+
     def _op_state(self, req, events):
         _, project = self._project(req)
         engine = req.get("engine", "claude")
@@ -218,11 +279,48 @@ class FakeMachine:
             raise Refused("idle", "хода нет")
         if run.get("owner") and run["owner"] != req.get("window"):
             raise Refused("owned", "задание выполняется в другом окне")
-        mode = 'queue' if req.get('engine') == 'opencode' else 'steer'
-        item = {"id": f"followup-{len(run['followups'])}", "text": req["text"], "mode": mode}
+        mode = 'queue' if req.get('engine') == 'opencode' or req.get('mode') == 'queue' else 'steer'
+        identifier = f"{len(run['followups']):016x}" if self.queue_edit else f"followup-{len(run['followups'])}"
+        item = {"id": identifier, "text": req["text"], "mode": mode,
+                **({"version": 1, "input_text": req["text"]} if self.queue_edit and mode == 'queue' else {})}
         run["followups"].append(item)
         events.append(self._ev(req["chat"], {"k": "followup", **item}))
         return {"mode": mode, "id": item['id']}
+
+    def _op_queue_edit(self, req, events):
+        self._chat(req)
+        run = self.running.get(req["chat"])
+        if run is None:
+            raise Refused("gone")
+        if run.get("owner") and run["owner"] != req.get("window"):
+            raise Refused("owned")
+        item = next((item for item in run["followups"] if item["id"] == req["request_id"] and not item.get("sent")), None)
+        if item is None:
+            raise Refused("gone")
+        if item["version"] != req["version"]:
+            raise Refused("conflict")
+        if req.get("text") is None:
+            run["followups"].remove(item)
+            events.append(self._ev(req["chat"], {"k": "followup_removed", "id": item["id"]}))
+        else:
+            item.update(text=req["text"], input_text=req["text"], version=item["version"] + 1)
+        result = {"items": [item for item in run["followups"] if item["mode"] == "queue" and not item.get("sent")],
+                  "paused": run.get("queue_paused", False)}
+        events.append(self._ev(req["chat"], {"k": "queue", **result}))
+        return result
+
+    def _op_queue_pause(self, req, events):
+        self._chat(req)
+        run = self.running.get(req["chat"])
+        if run is None:
+            raise Refused("gone")
+        if run.get("owner") and run["owner"] != req.get("window"):
+            raise Refused("owned")
+        run["queue_paused"] = req["paused"]
+        result = {"items": [item for item in run["followups"] if item["mode"] == "queue" and not item.get("sent")],
+                  "paused": req["paused"]}
+        events.append(self._ev(req["chat"], {"k": "queue", **result}))
+        return result
 
     def _op_claim(self, req, events):
         self._chat(req)
@@ -242,6 +340,9 @@ class FakeMachine:
                                              "steps": [dict(s) for s in run["steps"]], "asks": asks,
                                              **({"owner": run["owner"], "accepted": True} if run.get("owner") else {}),
                                              **({"followups": run["followups"]} if run.get("followups") else {}),
+                                             **({"queue": [item for item in run["followups"] if item["mode"] == "queue" and not item.get("sent")]}
+                                                if self.queue_edit else {}),
+                                             **({"queue_paused": True} if run.get("queue_paused") else {}),
                                              **({"activity": run["activity"]} if run.get("activity") else {})}))
         return {"running": run is not None}
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
 
-from . import limits, permissions
+from . import diffs, limits, permissions
 from .errors import Refused
 from .events import clip, text_of
 
@@ -39,14 +39,14 @@ def chats(project: Path, live: dict[str, bool]) -> list[dict]:
     return items
 
 
-def normalize(messages: list) -> list[dict]:
+def normalize(messages: list, *, include_subagents=False) -> list[dict]:
     """Записи сессии → сообщения `{"id", "role", "text", "steps", "time"}` главного агента.
 
     Подряд идущие ответы ассистента до следующего вопроса — одно сообщение; итоги инструментов — к его шагам."""
     items, texts = [], {}  # texts: id(элемента ответа) → тексты блоков
     answer, steps = None, {}  # текущий ответ и его шаги по tool_use_id
     for m in messages:
-        if m.parent_tool_use_id is not None:
+        if m.parent_tool_use_id is not None and not include_subagents:
             continue
         content = m.message.get("content") if isinstance(m.message, dict) else None
         if m.type == "user":
@@ -56,6 +56,9 @@ def normalize(messages: list) -> list[dict]:
                     if step is not None:
                         step["text"] = clip(text_of(block.get("content")))
                         step["error"] = bool(block.get("is_error"))
+                        changes = diffs.for_tool(step["tool"], step["input"]) if not step["error"] else []
+                        if changes:
+                            step["changes"] = changes
             text = text_of(content)
             if text:
                 items.append({"id": m.uuid, "role": "user", "text": text, "steps": [], "time": None})
