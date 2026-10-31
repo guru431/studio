@@ -2,8 +2,8 @@
 import pytest
 
 from fake_bridge import T0, pid
-from test_ui_browser import (CODE_CHAT_A, READY, browser, code_chat, code_free_machine, code_online,
-                             code_requests, code_session, live, problems, set_value, signin)
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_online,
+                             code_requests, code_session, code_tab_click, live, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, width, tmp_path):
     login = f"git-actions-{width}"
     live.add_user(login)
-    machine = code_free_machine({CODE_CHAT_A: code_session("Git")})
+    machine = code_free_machine({CODE_CHAT_A: code_session("Git"), CODE_CHAT_B: code_session("Другой чат")})
     machine.project_summary = True
     for name, changed, unpushed in [("alpha", 1, 2), ("beta", 0, 2), ("gamma", 0, 0)]:
         project = machine.projects.setdefault(name, {})
@@ -39,23 +39,37 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
         return real(url, options);
       }; return true; })()"""
     try:
-        actions = [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("wait", "!document.querySelector('#code-git-commit').disabled"),
+        actions = [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_B), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "chatHasNoActions", "!document.querySelector('.code-git-actions')"),
             ("wait", "document.querySelectorAll('.code-project-git[data-git-level]:not([data-git-level=unknown])').length === 3"),
             ("eval", "colors", "[...document.querySelectorAll('.code-project-git')].map(n=>n.dataset.gitLevel)"),
             ("eval", "red", "document.querySelector('#code-repo-status').dataset.gitLevel"),
             set_value("#code-text", "Мой черновик"), ("eval", "gate", gate),
+            ("click", "#code-repo-status"), ("wait", "!document.querySelector('#code-git-commit').disabled"),
+            ("eval", "toolbar", """(() => {
+              const toolbar = document.querySelector('.code-git-actions'), content = document.querySelector('#code-git');
+              const buttons = [...toolbar.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
+              const r = toolbar.getBoundingClientRect();
+              return { oneRow: buttons.every(b=>Math.abs(b.top-buttons[0].top)<1),
+                aboveStatus: r.bottom <= content.getBoundingClientRect().top,
+                inside: toolbar.parentElement === content.parentElement && !toolbar.closest('.code-top'),
+                fits: document.documentElement.scrollWidth <= innerWidth,
+                scrollable: toolbar.scrollWidth > toolbar.clientWidth };
+            })()"""),
+            ("screenshot", str(tmp_path / f"git-actions-{width}.png")),
             ("click", "#code-git-commit"), ("wait", "typeof window.releaseGit === 'function'"),
-            ("eval", "busy", "[...document.querySelectorAll('.code-git-actions button')].every(b=>b.disabled)"),
+            ("eval", "busy", "document.querySelector('#code-send').disabled && !document.querySelector('.code-git-actions')?.getClientRects().length"),
             ("eval", "release", "window.holdGit=false; window.releaseGit(); true"),
-            ("wait", "document.querySelector('#code-repo-status').dataset.gitLevel === 'yellow' && !document.querySelector('#code-git-push').disabled"),
-            ("eval", "yellow", "getComputedStyle(document.querySelector('#code-repo-status')).color"),
-            ("screenshot", str(tmp_path / f"git-actions-{width}.png"))]
+            ("wait", "document.querySelector('#code-repo-status').dataset.gitLevel === 'yellow' && !document.querySelector('#code-send').disabled"),
+            ("eval", "yellow", "getComputedStyle(document.querySelector('#code-repo-status')).color")]
         for count, action in enumerate(["push", "push-all", "deploy"], 2):
-            actions += [("click", f"#code-git-{action}"),
-                ("wait", f"document.querySelectorAll('#code-feed .code-msg.user').length === {count} && !document.querySelector('#code-git-commit').disabled")]
+            actions += [("click", "#code-repo-status"), ("wait", "!document.querySelector('#code-git-commit').disabled"),
+                ("click", f"#code-git-{action}"),
+                ("wait", f"document.querySelectorAll('#code-feed .code-msg.user').length === {count} && !document.querySelector('#code-send').disabled && document.querySelector('#code-chat').dataset.running === '0'")]
         actions += [("wait", "document.querySelector('#code-repo-status').dataset.gitLevel === 'green'"),
             ("eval", "draft", "document.querySelector('#code-text').value"),
+            *code_tab_click(CODE_CHAT_B), *code_tab_click(CODE_CHAT_A),
+            ("eval", "draftAfterReturn", "document.querySelector('#code-text').value"),
             ("eval", "green", "getComputedStyle(document.querySelector('#code-repo-status')).color"),
             ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth")]
         result = browser.drive(live.url + "/", actions, width=width, mobile=width == 320)
@@ -63,9 +77,12 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
         server.stop()
     assert not result.get("failed"), result
     values = result["values"]
+    assert values["chatHasNoActions"]
+    assert all(values["toolbar"][key] for key in ("oneRow", "aboveStatus", "inside", "fits")), values
+    assert not values["toolbar"]["scrollable"]
     assert values["colors"] == ["red", "yellow", "green"] and values["red"] == "red"
     assert values["yellow"] != values["green"] and values["busy"] and values["fits"]
-    assert values["draft"] == "Мой черновик"
+    assert values["draft"] == values["draftAfterReturn"] == "Мой черновик"
     turns = code_requests(machine, "turn")
     assert len(turns) == 4 and all(t["chat"] == CODE_CHAT_A and t["project"] == pid("alpha") for t in turns)
     assert len({t["text"] for t in turns}) == 4

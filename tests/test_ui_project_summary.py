@@ -161,10 +161,21 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
     panel = [("eval", "panel", """(() => { const toggle = document.querySelector('#code-panel-toggle');
       if (getComputedStyle(toggle).display !== 'none') toggle.click(); return true; })()"""),
       ("wait", "document.querySelector('#code-panel').getBoundingClientRect().left >= 0")]
+    def blank(name, line):
+        return ("eval", "blank-" + name + "-" + line, f"""(() => {{
+          const row = document.querySelector('#code-projects li[data-pid="{pid(name)}"] .code-project');
+          const r = row.getBoundingClientRect(), line = row.querySelector('.code-project-{line}').getBoundingClientRect();
+          const target = document.elementFromPoint(r.right - 4, line.top + line.height / 2);
+          const blank = target?.closest('.code-project') === row && !target.closest('a');
+          if (blank) target.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}}));
+          return blank; }})()""")
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
             ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
             ("eval", "validLinks", "document.querySelectorAll('#code-projects a a').length === 0"),
+            blank('beta', 'heading'), ("wait", "document.querySelector('.code-place-project')?.textContent === 'beta'"),
+            *panel, blank('alpha', 'summary'), ("wait", "document.querySelector('.code-place-project')?.textContent === 'alpha'"),
+            *panel,
             ("click", alpha + " .code-project-findings"),
             ("wait", "document.querySelector('#code-editor')?.value.includes('Problem document')"),
             ("eval", "findings", "[location.hash, document.querySelector('#code-path').textContent]"),
@@ -172,6 +183,8 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
             *panel, ("click", alpha + " .code-project-ideas"),
             ("wait", "document.querySelector('#code-editor')?.value.includes('Idea document')"),
             set_value("#code-editor", "Unsaved journal draft"),
+            *panel, blank('beta', 'summary'), ("wait", "document.querySelector('#code-unsaved')?.open"),
+            ("press", "Escape"),
             *panel, ("click", beta + " .code-project-git"),
             ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"), ("eval", "retained", "document.querySelector('#code-editor').value"),
@@ -185,6 +198,7 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
     assert not result.get("failed"), result
     values = result["values"]
     assert values["validLinks"] and values["fits"]
+    assert all(values[key] for key in ('blank-beta-heading', 'blank-alpha-summary', 'blank-beta-summary'))
     assert values["findings"][0].endswith('?tab=files&journal=findings') and 'FINDINGS.md' in values["findings"][1]
     assert values["retained"] == "Unsaved journal draft"
     assert values["git"] == [f"#/code/{aid}/{pid('beta')}?tab=git", "beta"]

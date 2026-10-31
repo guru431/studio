@@ -1109,7 +1109,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-agent-pin { flex: none; }
 .code-project { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
-  color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); }
+  color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); cursor: pointer; }
 .code-project:hover { background: var(--panel-2); }
 .code-project a { color: inherit; text-decoration: none; }
 .code-project a:hover { text-decoration: underline; }
@@ -1128,8 +1128,16 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-project-git[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
 .code-project-git[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
 .code-project-git[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
-.code-git-actions { display:flex; flex-wrap:wrap; gap:6px; padding:0 12px 8px; }
-.code-git-actions-host:empty { display:none; }
+.code-git-actions { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px;
+  width:100%; min-width:0; padding-bottom:8px; container-type:inline-size; }
+.code-git-actions .btn { min-width:0; padding-inline:4px; white-space:nowrap; }
+.code-git-actions .btn span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.code-git-label-compact { display:none; }
+@container (max-width:720px) {
+  .code-git-label-full { display:none; }
+  .code-git-label-compact { display:block; }
+}
+.code-git-hint { margin:0 0 10px; }
 .code-offline { margin: 4px; font-size:calc(14px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 #code-panel-status { margin: 0; padding: 0 12px 10px; font-size:calc(13px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 #code-panel-status:empty { display: none; }

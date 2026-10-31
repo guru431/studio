@@ -35,7 +35,6 @@ import { readSSE } from './sse.js';
 import { el, words } from './ui.js';
 import { usageView } from './code-usage.js';
 import { contextView } from './code-context.js';
-import { GIT_ACTIONS } from './code-git.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -95,7 +94,7 @@ function tailOf(filePath, agent, project) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, gitHost, git, taskDone }) {
+  openFile, git, gitAction = null, taskDone }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -160,18 +159,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
   const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage });
-  const gitButtons = GIT_ACTIONS.map(({ id, label, prompt }) => {
-    const button = el('button', { type: 'button', id: `code-git-${id}`, class: 'btn btn-sm',
-      title: `${label} · выполнить в этом чате`, disabled: true }, label);
-    button.addEventListener('click', () => submit(prompt));
-    return button;
-  });
-  const gitActions = el('div', { class: 'code-git-actions', 'aria-label': 'Действия Git в текущем чате' }, ...gitButtons);
-  gitHost?.append(gitActions);
   let hasGit = false;
   const unsubscribeGit = git?.subscribe(({ data }) => {
     hasGit = !!data;
-    for (const button of gitButtons) button.disabled = !hasGit || running || sending || adding || resolving || foreign || external;
   });
 
   /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
@@ -495,7 +485,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function updateControls() {
-    for (const button of gitButtons) button.disabled = !hasGit || running || sending || adding || resolving || foreign || external;
     send.disabled = sending || adding || resolving || foreign || external || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
     model.disabled = effort.disabled = access.disabled = resolving || running;
@@ -952,7 +941,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!alive) return;
     host.dataset.loaded = '1';
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    if (thenLive) openLive();
+    if (thenLive && gitAction) {
+      const prompt = gitAction;
+      gitAction = null;
+      submit(prompt);
+    } else if (thenLive) openLive();
   }
 
   /* ---- действия ----------------------------------------------------------------- */
@@ -970,7 +963,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function submit(quick = null) {
     const value = quick ?? text.value;
-    if (quick && (!hasGit || running)) return;
+    if (quick && (!hasGit || running)) {
+      showStatus(running ? 'Дождитесь завершения задания в чате' : 'Git недоступен — обновите статус проекта');
+      return;
+    }
     if ((!value.trim() && !images.length) || sending || adding || resolving || foreign || external) return;
     if (running) {
       if (!agent?.chat_control) {
@@ -1156,7 +1152,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     unmount() {
       alive = false;
       unsubscribeGit?.();
-      gitActions.remove();
       context.unmount();
       usage.unmount();
       stateRequest?.abort();

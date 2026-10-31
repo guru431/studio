@@ -74,6 +74,59 @@ def fits(page):
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
+def test_project_opens_by_tapping_empty_area_of_either_line(iphone):
+    page, aid = iphone
+    for name, line in [('beta', 'heading'), ('alpha', 'summary')]:
+        if page.locator('#code-panel-toggle').is_visible() and not page.locator('.code-ws').evaluate(
+                "el=>el.classList.contains('panel-open')"):
+            page.locator('#code-panel-toggle').tap()
+        row = page.locator(f'#code-projects li[data-pid="{pid(name)}"] .code-project')
+        row.scroll_into_view_if_needed()
+        position = row.evaluate("""(row, line) => {
+          const r=row.getBoundingClientRect(), band=row.querySelector('.code-project-'+line).getBoundingClientRect();
+          return {x:r.width-4, y:band.top-r.top+band.height/2};
+        }""", line)
+        row.tap(position=position)
+        pw.expect(page.locator('.code-place-project')).to_have_text(name)
+        fits(page)
+    assert not any(r['op'] == 'turn' for r in page.studio_machine.requests)
+
+
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
+def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, tmp_path):
+    page, aid = iphone
+    machine = page.studio_machine
+    base = page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}"
+    page.goto(base + '?tab=git')
+    buttons = page.locator('.code-git-actions button')
+    pw.expect(buttons).to_have_count(4)
+    for button in buttons.all():
+        pw.expect(button).to_be_disabled()
+    pw.expect(page.locator('.code-git-hint')).to_contain_text('Откройте чат')
+    page.goto(base + '/' + CODE_CHAT_A)
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    machine.script = [{"k": "text", "text": "В работе"}]
+    page.locator('#code-text').fill('Продолжай работу')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-feed')).to_contain_text('В работе')
+    page.locator('#code-text').fill('Черновик')
+    page.locator('#code-repo-status').tap()
+    pw.expect(page.locator('.code-git-hint')).to_contain_text('Дождитесь')
+    for button in buttons.all():
+        pw.expect(button).to_be_disabled()
+    page.locator('#code-git-commit').evaluate('b=>b.click()')
+    assert len([r for r in machine.requests if r['op'] == 'turn']) == 1
+    geometry = page.locator('.code-git-actions').evaluate("""toolbar => {
+      const r=toolbar.getBoundingClientRect(), buttons=[...toolbar.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
+      return buttons.every(b=>Math.abs(b.top-buttons[0].top)<1 && b.left>=r.left && b.right<=r.right+1)
+        && toolbar.scrollWidth<=toolbar.clientWidth;
+    }""")
+    assert geometry
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'git-toolbar.png'))
+
+
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
 def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path):
     import bridge
 
