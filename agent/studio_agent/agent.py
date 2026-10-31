@@ -103,10 +103,12 @@ class Agent:
     def close_session(self, session: str) -> None:
         self.open.close(session)
 
-    def new_link(self) -> None:
-        """Новый канал: все открытые сессии прочь (протокол §3), и те, что открываются сейчас (`_open`)."""
+    def new_link(self, *, reconnect: bool = False) -> None:
+        """Сменить поколение канала; переподключение сохраняет отметки PIN без продления срока.
+        Явная настройка сбрасывает доступ, незавершённые проверки прежнего канала всегда отменяются."""
         self._link += 1
-        self.open.clear()
+        if not reconnect:
+            self.open.clear()
 
     def emit(self, frame: dict) -> None:
         """Событие хода — в канал, если он есть; иначе пропадает (вернувшись, студия просит `watch`)."""
@@ -215,8 +217,8 @@ class Agent:
     async def _open(self, session: str, pin) -> dict:
         """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить; блок; `null` — нужен PIN; проверка.
 
-        Пока шла проверка, пришёл новый канал (`new_link`) — сессия не открывается, `closed`: новый канал сбрасывает
-        открытость и той сессии, что открывалась по прежнему (протокол §3)."""
+        Пока шла проверка, пришёл новый канал (`new_link`) — сессия не открывается, `closed`:
+        поздняя проверка прежнего канала не должна давать доступ по новому (протокол §3)."""
         if not (pin is None or (isinstance(pin, str) and len(pin) <= PIN_FIELD_MAX)):
             raise Refused("invalid")
         link = self._link

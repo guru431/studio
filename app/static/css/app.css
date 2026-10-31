@@ -1324,7 +1324,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   .code-pick select { width: 100%; padding: 6px 2px; }
 }
 @media (pointer: coarse) {
-  .code-chat :is(input, textarea) { font-size:calc(16px * var(--font-scale, 1)); }
+  /* iOS увеличивает страницу при фокусе мелкого поля. Минимум 16px учитывает CSS zoom
+     и имеет приоритет над компактными размерами полей отдельных разделов. */
+  :is(input, textarea, select):not([type="range"]):not([type="checkbox"]):not([type="file"]) {
+    font-size:max(calc(16px * var(--font-scale, 1)), calc(16px / var(--ui-scale, 1))) !important;
+  }
 }
 
 /* файлы и git (code-files.js): список, правка, .md, .pdf, статус */

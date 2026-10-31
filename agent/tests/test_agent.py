@@ -195,12 +195,29 @@ async def test_close_and_new_link_close_sessions(agent):
     assert (await agent.handle(req("projects", session=other)))[0]["code"] == "closed"
 
 
-async def test_a_pin_checked_across_a_new_link_does_not_open_the_session(agent_with_pin, monkeypatch):
+async def test_reconnect_preserves_pin_without_extending_idle_time(home, root):
+    clock = Clock()
+    PinStore(home).set_pin("2468")
+    a = make(home, root, clock=clock)
+    await opened(a, pin="2468")
+    clock.t += 1801
+    a.new_link(reconnect=True)
+    assert (await a.handle(req("open", pin=None)))[0]["ok"]
+    assert (await a.handle(req("projects", session="ab" * 16)))[0]["code"] == "closed"
+    clock.t += 10799
+    a.new_link(reconnect=True)
+    clock.t += 2
+    a.new_link(reconnect=True)
+    assert (await a.handle(req("open", pin=None)))[0]["code"] == "pin_needed"
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_a_pin_checked_across_a_new_link_does_not_open_the_session(agent_with_pin, monkeypatch, reconnect):
     a = agent_with_pin
     real = a.pins.check
 
     def check(pin):                                                 # scrypt кончился уже после нового канала
-        a.new_link()
+        a.new_link(reconnect=reconnect)
         return real(pin)
 
     monkeypatch.setattr(a.pins, "check", check)

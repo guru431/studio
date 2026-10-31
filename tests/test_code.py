@@ -169,7 +169,7 @@ def test_lone_surrogates_are_422_before_the_bridge(studio):
     assert len(m.requests) == before and link.closed_with is None and not bridge.WATCHERS
 
 
-def test_unopened_computer_is_409_closed_and_unlock_closes_it_again(studio):
+def test_unopened_computer_is_409_closed_and_screen_unlock_preserves_access(studio):
     aid, _, _ = setup(studio, opened=False)
     r = studio.c.get(url(aid, "projects"))
     assert (r.status_code, detail(r)["code"]) == (409, "closed")
@@ -181,7 +181,7 @@ def test_unopened_computer_is_409_closed_and_unlock_closes_it_again(studio):
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
     r = studio.c.get(url(aid, "projects"))
-    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+    assert r.status_code == 200
 
 
 def test_chats_merge_machine_sessions_with_studio_marks(studio):
@@ -264,7 +264,7 @@ def test_closed_foreign_session_does_not_come_back_as_ghost(studio):
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
     r = studio.c.patch(url(aid, "projects", ALPHA, "chats", other), json={"state": "open"})
-    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+    assert (r.status_code, detail(r)["code"]) == (404, "not_found")
     assert count() == 2
 
 
@@ -645,9 +645,8 @@ def test_live_skips_events_before_the_first_snapshot(studio, monkeypatch):
 
 
 def test_lock_ends_the_streams_of_the_session_with_closed(studio):
-    """Студия заперлась: поток хода этой сессии кончается `closed` (страница спросит PIN), ход на машине жив;
-    после отпирания компьютер для сессии закрыт."""
-    aid, m, _ = setup(studio)
+    """Блокировка обрывает поток; после отпирания ход возобновляется без повторного PIN компьютера."""
+    aid, m, link = setup(studio)
     m.script = [text("Удаляю"), ASK]
     with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Убери a.txt"}) as r:
         events = events_of(r.iter_lines())
@@ -658,8 +657,12 @@ def test_lock_ends_the_streams_of_the_session_with_closed(studio):
     assert A in m.running
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
-    r = studio.c.get(chat_url(aid, "live"))
-    assert (r.status_code, detail(r)["code"]) == (409, "closed")
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        assert r.status_code == 200
+        events = events_of(r.iter_lines())
+        assert next(events)[0] == "snapshot"
+        fake_bridge.emit(studio, link, ALPHA, A, DONE)
+        assert list(events) == [("done", {"status": "done"})]
 
 
 def test_streams_end_closed_when_the_session_ends_or_locks_by_time(studio, monkeypatch):
@@ -943,7 +946,7 @@ def test_pdf_memory_is_per_session(studio, monkeypatch):
 
 def test_pdf_memory_still_asks_the_bridge(studio, monkeypatch):
     """Страница из памяти — только после просьбы `projects` той же сессии: компьютер не на связи — `offline`.
-    Заперлась и отперлась — `closed`, а память уходит (`bridge.forget`): после PIN файл тянется заново."""
+    Заперлась и отперлась — память уходит (`bridge.forget`), файл тянется заново без повторного PIN."""
     monkeypatch.setattr(ocr_render, "MAX_SIDE", 200)
     aid, m, link = with_files(studio)
 
@@ -955,12 +958,8 @@ def test_pdf_memory_still_asks_the_bridge(studio, monkeypatch):
     assert studio.c.post("/api/lock/now").status_code == 204
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
-    r = page(2)
-    assert (r.status_code, detail(r)["code"]) == (409, "closed")
-    assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
-    assert len(sent(m, "raw")) == 2                                   # памяти нет — отказ на самой `raw`
-    assert page(2).status_code == 200 and len(sent(m, "raw")) == 3
-    assert page(1).status_code == 200 and len(sent(m, "raw")) == 3
+    assert page(2).status_code == 200 and len(sent(m, "raw")) == 2
+    assert page(1).status_code == 200 and len(sent(m, "raw")) == 2
     fake_bridge.drop(studio, link)
     r = page(2)
     assert (r.status_code, detail(r)["code"]) == (409, "offline")

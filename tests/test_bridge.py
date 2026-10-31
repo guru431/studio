@@ -330,7 +330,7 @@ def test_password_change_keeps_the_device_key(studio):
         assert aid in bridge.LINKS
 
 
-def test_lock_and_unlock_close_the_session_on_the_bridge(studio):
+def test_lock_and_unlock_preserve_computer_pin_but_block_access_while_locked(studio):
     uid = make_user(studio, "owner")
     make_user(studio, "friend")
     signin(studio, "owner")
@@ -339,7 +339,6 @@ def test_lock_and_unlock_close_the_session_on_the_bridge(studio):
     link = connect(studio, aid, machine)
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
-    close = {"t": "close", "session": session}
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner"}]
 
     def closes():
@@ -347,20 +346,24 @@ def test_lock_and_unlock_close_the_session_on_the_bridge(studio):
         return [f for f in link.sent if f["t"] == "close"]
 
     machine.open_sessions.add(session)
+    state.DB.execute("UPDATE users SET screen_lock = 1 WHERE id = ?", (uid,))
+    state.DB.execute("UPDATE sessions SET mobile = 1 WHERE user_id = ?", (uid,))
     assert studio.c.post("/api/lock/now").status_code == 204
-    assert closes() == [close] and session not in machine.open_sessions
+    assert closes() == [] and session in machine.open_sessions
+    assert studio.c.get(f"/api/code/agents/{aid}/projects").status_code == 423
     assert studio.c.post("/api/lock/password", json={"password": "wrong-password"}).status_code == 403
-    assert closes() == [close]
+    assert closes() == []
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
-    assert closes() == [close] * 2
+    assert closes() == [] and session in machine.open_sessions
+    assert studio.c.get(f"/api/code/agents/{aid}/projects").status_code == 200
     assert studio.c.put("/api/me/pin", json={"pin": "2468", "password": "password-123"}).status_code == 200
     assert studio.c.post("/api/lock/pin", json={"pin": "1111"}).status_code == 403
-    assert closes() == [close] * 2
+    assert closes() == []
     assert studio.c.post("/api/lock/pin", json={"pin": "2468"}).status_code == 204
-    assert closes() == [close] * 3
+    assert closes() == [] and session in machine.open_sessions
     key = add_key(studio)
     assert open_with(studio, key).status_code == 204
-    assert closes() == [close] * 4
+    assert closes() == [] and session in machine.open_sessions
     assert [f["t"] for f in foreign.sent] == ["welcome"]
     assert state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0] == uid
 

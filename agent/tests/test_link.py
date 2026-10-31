@@ -151,17 +151,18 @@ async def test_unknown_key_is_revoked_without_pauses(fake_studio, agent):
     assert pauses.list == [] and states == ["connecting", "revoked"]
 
 
-async def test_restart_reconnects_and_closes_open_sessions(fake_studio, agent):
+async def test_restart_reconnects_without_resetting_open_sessions(fake_studio, agent):
     pauses = Pauses()
     lk, states, task = start(fake_studio, agent, sleep=pauses)
     await fake_studio.connected()
     assert (await fake_studio.request("open", pin=None))["ok"] is True
     await fake_studio.close(1012)
     await fake_studio.connected(2)
-    assert (await fake_studio.request("projects"))["code"] == "closed"  # новый канал — сессии прочь
+    assert (await fake_studio.request("projects"))["ok"]  # переподключение не обнуляет три часа простоя
     assert pauses.list == [1]
     fake_studio.drop()                                                  # обрыв без закрытия
     await fake_studio.connected(3)
+    assert (await fake_studio.request("projects"))["ok"]
     assert pauses.list == [1, 1]                                        # счёт сброшен после welcome
     await until(lambda: states.count("online") == 3)
     assert states == ["connecting", "online", "offline"] * 2 + ["connecting", "online"]
@@ -246,8 +247,6 @@ async def test_turn_res_comes_before_its_events_and_a_card_survives_reconnect(fa
 
     await fake_studio.close(1012)                                       # карточка открыта
     await fake_studio.connected(2)
-    assert (await fake_studio.request("watch", project=pid, chat=CHAT))["code"] == "closed"
-    assert (await fake_studio.request("open", pin=None))["ok"] is True
     watch = await fake_studio.request("watch", project=pid, chat=CHAT)
     assert watch["data"] == {"running": True}
     await until(lambda: any(f.get("e", {}).get("k") == "snapshot" for n, f in fake_studio.frames if n == 1))

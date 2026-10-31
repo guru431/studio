@@ -71,6 +71,32 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+@pytest.mark.parametrize("scale,font", [(100, 85), (80, 100), (50, 85)])
+def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone, scale, font, tmp_path):
+    page, aid = iphone
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#avatar').tap()
+    page.locator('#appearance-font').fill(str(font))
+    page.locator('#appearance-scale').select_option(str(scale))
+    page.locator('#avatar').tap()
+    page.locator('#code-text').tap()
+    page.locator('#code-text').fill('Длинный черновик ' * 100)
+    geometry = page.evaluate("""() => {
+      const root = document.documentElement, field = document.querySelector('#code-text');
+      const scale = parseFloat(root.style.zoom), box = field.getBoundingClientRect();
+      return { readable: parseFloat(getComputedStyle(field).fontSize) * scale >= 16,
+        viewport: visualViewport.scale === 1,
+        fits: box.left >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+        shell: document.body.getBoundingClientRect().height <= innerHeight + 1 };
+    }""")
+    assert all(geometry.values()), geometry
+    page.locator('#code-text').blur()
+    fits(page)
+    page.screenshot(path=str(tmp_path / f'focused-{scale}-{font}.png'))
+
+
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], ids=["320", "iphone15pro"], indirect=True)
 def test_code_phone_projects_fill_the_panel_and_accept_taps(iphone, tmp_path):
     page, aid = iphone
@@ -124,7 +150,7 @@ def test_code_composer_fits_long_draft_and_sends_followup_while_working(iphone, 
         return { statusAbove: status.bottom <= box.top, shortInput: input.height <= innerHeight * .25 + 1,
             noDuplicate: !document.querySelector('.code-chat-bar') && !document.querySelector('#code-close-chat'),
             column: buttons.every(b => Math.abs(b.x - buttons[0].x) < 1),
-            font: picks.every(e => parseFloat(getComputedStyle(e).fontSize) === 12),
+            font: picks.every(e => parseFloat(getComputedStyle(e).fontSize) >= 16),
             picksInside: picks.every(e => e.getBoundingClientRect().right <= innerWidth),
             canSend: !document.querySelector('#code-send').disabled, noZoom: visualViewport.scale === 1 };
     }""")

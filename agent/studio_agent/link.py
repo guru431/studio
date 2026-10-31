@@ -163,7 +163,7 @@ class Link:
                     self.on_welcome(frame)
                 except Exception as e:
                     log.warning("канал: welcome: %s", type(e).__name__)
-            self.agent.new_link()
+            self.agent.new_link(reconnect=True)
             self._queue = queue
             self.agent.send = self.send
             writer = asyncio.create_task(self._write(ws, queue))
