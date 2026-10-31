@@ -1122,7 +1122,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-project-metrics, .code-project-summary { min-width: 0; font-weight: 400;
   font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; color: var(--muted); }
 .code-project-metrics { flex: none; white-space: nowrap; }
-.code-project-summary { display: flex; align-items: baseline; white-space: nowrap; overflow: hidden; }
+.code-project-summary { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; }
 .code-project-git, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
 .code-project-modified { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .code-project-git[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
