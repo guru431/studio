@@ -111,7 +111,8 @@ def test_opencode_profile_defaults_preserve_legacy_models_and_efforts(studio):
 
 def test_step_23_preserves_old_chat_ids_engines_constraints_and_cascades(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.LOCK_24).removesuffix(db.CODE_23) + "\nPRAGMA user_version = 22;")
+    conn.executescript(db.SCHEMA.removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
+                       + "\nPRAGMA user_version = 22;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'h1', 0)")
     for cid, engine, status in ((7, "claude", "open"), (9, "codex", "closed")):

@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet
 
 import auth
 import clock
+import code_actions
 import sections
 import security
 import state
@@ -65,7 +66,7 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
-                       "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults",
+                       "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout"}
 
 
@@ -86,6 +87,37 @@ def test_bad_code_defaults_do_not_change_the_profile(studio, value):
     make_user(studio, "owner"); signin(studio, "owner")
     assert studio.c.patch("/api/me", json={"code_defaults": value}).status_code == 422
     assert studio.c.get("/api/me").json()["code_defaults"] == {}
+
+
+def test_quick_actions_preserve_exact_text_order_and_user_isolation(studio, caplog):
+    make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == code_actions.DEFAULTS
+    saved = [{"title": "Мой аудит", "text": "  Частный текст\n\nсо всеми пробелами.  "},
+             {"title": "Другой", "text": "Следующее действие"}]
+    with caplog.at_level(logging.DEBUG):
+        response = studio.c.patch("/api/me", json={"code_quick_actions": saved})
+    assert response.status_code == 200 and response.json()["code_quick_actions"] == saved
+    assert "Частный текст" not in caplog.text
+    studio.c.patch("/api/me", json={"theme": "dark"})
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == saved
+    studio.c.delete("/api/history")
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == saved
+    make_user(studio, "friend"); signin(studio, "friend")
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == code_actions.DEFAULTS
+    assert studio.c.patch("/api/me", json={"code_quick_actions": []}).json()["code_quick_actions"] == []
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == []
+    signin(studio, "owner")
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == saved
+
+
+@pytest.mark.parametrize("value", [None, {}, [{"title": "", "text": "x"}], [{"title": "\n", "text": "x"}],
+                                  [{"title": "x\ny", "text": "x"}], [{"title": "x" * 81, "text": "x"}],
+                                  [{"title": "x", "text": " \n "}], [{"title": "x", "text": "x" * 100001}],
+                                  [{"title": "x", "text": "x"}] * 21])
+def test_invalid_quick_actions_leave_settings_unchanged(studio, value):
+    make_user(studio, "owner"); signin(studio, "owner")
+    assert studio.c.patch("/api/me", json={"code_quick_actions": value}).status_code == 422
+    assert studio.c.get("/api/me").json()["code_quick_actions"] == code_actions.DEFAULTS
 
 
 def test_theme_is_validated(studio):

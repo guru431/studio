@@ -125,6 +125,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let waitingForRelease = false;
   let claimTimer = null;
   let claiming = false;
+  let historyEmpty = false;
   const followups = new Map();
   const sentFollowups = new Set();
   const unsentFollowups = new Set();
@@ -159,6 +160,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': 'Права доступа' },
     el('option', { value: '' }, DEFAULT), ...Object.entries(ACCESS[engine]).map(([value, label]) =>
       el('option', { value }, label)));
+  const delivery = el('select', { id: 'code-delivery', class: 'chip code-delivery',
+    'aria-label': 'Когда передать сообщение' },
+    el('option', { value: 'steer' }, 'Уточнить сейчас'), el('option', { value: 'queue' }, 'После текущей задачи'));
   const context = contextView(host, { chat, engine, project,
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
@@ -193,6 +197,20 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
+  const actions = el('div', { class: 'code-chat-actions' });
+  const statusBar = el('div', { class: 'code-status-bar' }, activity, actions, contextBox, usage.button);
+  const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
+    'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
+  for (const action of me?.code_quick_actions || []) {
+    const button = el('button', { type: 'button', class: 'btn code-quick-action', title: action.title }, action.title);
+    button.addEventListener('click', () => {
+      if (quickActions.hidden || send.disabled) return;
+      text.value = action.text;
+      text.dispatchEvent(new Event('input', { bubbles: true }));
+      form.requestSubmit();
+    });
+    quickActions.append(button);
+  }
   const field = fieldBox(text);
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input',
@@ -215,32 +233,31 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox, usage.button),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
       stop, send));
   host.dataset.engine = engine;
   host.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, status, el('div', { class: 'code-compose-area' }, navigation, sessionNotice, activity, form));
+    more, feed, quickActions, status, el('div', { class: 'code-compose-area' }, navigation, sessionNotice, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  const actions = el('div', { class: 'code-chat-actions' });
-  feed.after(actions);
   if (agent?.chat_fork && engine !== 'opencode') {
-    const copy = el('button', { type: 'button', class: 'btn btn-sm code-fork', id: 'code-fork-chat',
-      title: 'Копия переписки; файлы остаются в текущем состоянии' }, 'Создать ветку чата');
+    const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
+      'aria-label': 'Создать ветку чата', title: 'Создать ветку чата · копия переписки, файлы в текущем состоянии' });
+    copy.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10m12-10c0 6-12 3-12 10"/></svg>';
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
   const children = agent?.subagents && engine !== 'opencode' ? subagentView(host, { endpoint }) : null;
   if (children) actions.append(children.button);
-  const delivery = el('select', { id: 'code-delivery', class: 'chip code-delivery',
-    'aria-label': 'Когда передать сообщение', hidden: true },
-    el('option', { value: 'steer' }, 'Уточнить сейчас'), el('option', { value: 'queue' }, 'После текущей задачи'));
-  form.prepend(delivery);
+  const deliveryPick = pick('Когда передать сообщение', delivery);
+  deliveryPick.hidden = true;
+  access.closest('.code-pick').after(deliveryPick);
+  delivery.addEventListener('change', paintPicks);
   const hintsHost = el('div', { hidden: true });
   form.insertBefore(hintsHost, field.box);
   const hints = agent?.file_suggestions ? fileHints(text, hintsHost, { aid, pid, failed: (err) => {
@@ -254,7 +271,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   paintImages();
 
   function paintPicks() {
-    for (const select of [model, effort, access]) {
+    for (const select of [model, effort, access, delivery]) {
       const label = select.closest('.code-pick');
       if (!label) continue;
       const value = select.selectedOptions[0]?.textContent || DEFAULT;
@@ -524,10 +541,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function updateControls() {
     send.disabled = sending || adding || resolving || foreign || external || queue.paused() || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
-    delivery.hidden = !running || !agent?.queue_edit || engine === 'opencode';
+    deliveryPick.hidden = !running || !agent?.queue_edit || engine === 'opencode';
     delivery.disabled = foreign || sending;
     queue.ownership(foreign || external);
     for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending;
+    paintQuickActions();
     model.disabled = effort.disabled = access.disabled = resolving || running;
     const label = running ? (engine === 'opencode' ? 'Отправить после ответа' : 'Отправить уточнение') : 'Отправить';
     send.title = label;
@@ -552,9 +570,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     takeSession.disabled = claiming;
   }
 
+  function paintQuickActions() {
+    quickActions.hidden = !historyEmpty || running || sending || !!feed.querySelector('.code-msg')
+      || quickActions.children.length <= 1;
+    for (const button of quickActions.querySelectorAll('button')) button.disabled = send.disabled;
+  }
+
   function acknowledgeInput() {
     const pending = pendingInputs.get(draftKey);
     if (!pending) return;
+    historyEmpty = false;
     if (pending.quick) { pendingInputs.delete(draftKey); return; }
     if (drafts.get(draftKey) === pending.value) drafts.delete(draftKey);
     if (imageDrafts.get(draftKey) === pending.images) imageDrafts.delete(draftKey);
@@ -1005,7 +1030,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function loadHistory(thenLive) {
     const cached = thenLive && historyCache.get(draftKey);
-    if (cached) feed.replaceChildren(...messages(cached.items));
+    if (cached) {
+      feed.replaceChildren(...messages(cached.items));
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    }
     let page;
     try {
       page = await api('GET', endpoint());
@@ -1022,6 +1050,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (historyCache.size > 12) historyCache.delete(historyCache.keys().next().value);
     if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     if (!cached || JSON.stringify(cached) !== JSON.stringify(page)) feed.replaceChildren(...messages(page.items));
+    historyEmpty = page.total === 0;
+    paintQuickActions();
     followups.clear();
     const pending = pendingInputs.get(draftKey);
     const lastUser = page.items?.findLast((m) => m.role === 'user');
@@ -1033,6 +1063,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!alive) return;
     host.dataset.loaded = '1';
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (thenLive) requestAnimationFrame(() => {
+      if (alive && scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
     if (thenLive && gitAction) {
       const prompt = gitAction;
       gitAction = null;
@@ -1109,7 +1142,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const mine = messageNode({ role: 'user', text: value, images: sentImages });
     pendingInputs.set(draftKey, { value, images: sentImages, mine, quick: !!quick });
     grow(() => feed.append(mine));
-    if (!quick) text.value = ''; // Быстрое действие сохраняет текст и вложения черновика.
+    if (!quick) text.value = ''; // Действие Git сохраняет текст и вложения черновика.
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
@@ -1182,7 +1215,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   next.addEventListener('click', () => jumpMessage(1));
   scroller?.addEventListener('scroll', paintNavigation, { passive: true });
   window.addEventListener('resize', paintNavigation);
-  const feedObserver = new MutationObserver(paintNavigation);
+  const feedObserver = new MutationObserver(() => { paintNavigation(); paintQuickActions(); });
   feedObserver.observe(feed, { childList: true });
 
   stop.addEventListener('click', async () => {

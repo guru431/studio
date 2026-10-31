@@ -29,7 +29,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     aid, sb = code_online(live, login, machine)
     geometry = """(() => {
       const rect = (s) => document.querySelector(s).getBoundingClientRect();
-      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-context', '#code-stop', '#code-send'];
+      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-stop', '#code-send'];
       const boxes = selectors.map(rect), bar = rect('#code-composer .composer-bar');
       const attach = document.querySelector('#code-attach'), mic = document.querySelector('#code-composer .mic');
       return { row: boxes.every(b => b.top >= bar.top - 1 && b.bottom <= bar.bottom + 1),
@@ -47,7 +47,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
             ("eval", "compact", "(() => { const r = s => document.querySelector(s).getBoundingClientRect(); return "
                 "r('#code-effort').left - r('#code-model').right <= 12 && "
                 "r('#code-access').left - r('#code-effort').right <= 12; })()"),
-            ("eval", "idleHidden", "getComputedStyle(document.querySelector('#code-activity')).display === 'none'"),
+            ("eval", "idleStatus", "document.querySelector('#code-activity').textContent === 'Нет активной задачи'"),
             ("screenshot", str(tmp_path / f"composer-idle-{width}.png"), "#code-composer"),
             *code_send("Проверь проект"), ("wait", "!!document.querySelector('.code-ask-yes')"),
             ("eval", "geometry", geometry), ("eval", "fits", NO_OVERFLOW),
@@ -60,7 +60,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     assert not r.get("failed"), r
     assert all(r["values"]["geometry"].values()), r["values"]["geometry"]
     assert r["values"]["fits"] and r["values"]["emptyAttach"]
-    assert r["values"]["compact"] and r["values"]["idleHidden"], r["values"]
+    assert r["values"]["compact"] and r["values"]["idleStatus"], r["values"]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
