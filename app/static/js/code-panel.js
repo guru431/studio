@@ -31,8 +31,15 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
+  const sort = el('select', { id: 'code-project-sort', class: 'input', 'aria-label': 'Сортировка проектов' },
+    ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
+      ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные']]
+      .map(([value, label]) => el('option', { value }, label)));
+  const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button' }, 'Обновить сведения');
+  const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sort, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
-    el('div', { class: 'code-panel-agents' }, agentsBox), body, status);
+    el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
 
   let alive = true;
@@ -86,6 +93,115 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   let shown = null;        // { aid, pid } — проект справа
   let pending = 0;         // select/pin ждут списка: выбор при входе их не перебивает
   let opening = null;      // идущий POST …/open: { aid, done } — done: открылся ли (ready ждёт его)
+  let projectItems = [];
+  let refreshing = null;
+  const summaries = new Map(); // Только память страницы, отдельно для каждого компьютера.
+  const checked = new Map();
+
+  function dateText(stamp) {
+    return Number.isFinite(stamp) ? new Date(stamp * 1000).toLocaleString('ru-RU') : 'нет данных';
+  }
+
+  function paintUpdated() {
+    const supported = items.find((a) => a.id === selected)?.project_summary;
+    updated.textContent = !supported ? 'Для сведений обновите мост на компьютере'
+      : checked.has(selected) ? `Обновлено: ${dateText(checked.get(selected))}` : 'Ещё не обновлено';
+  }
+
+  function paintSummary(li, data) {
+    const summary = li.querySelector('.code-project-summary');
+    const metrics = li.querySelector('.code-project-metrics');
+    const value = (key) => Number.isInteger(data?.[key]) ? String(data[key]) : '—';
+    metrics.replaceChildren(...[['findings', 'Проблемы'], ['ideas', 'Идеи']].map(([key, label]) =>
+      el('span', { class: `code-project-${key}`, title: `${label}: ${value(key)}` }, `${label}: ${value(key)}`)));
+    const git = data?.git === 'not_git' ? 'Без Git'
+      : `Изменено: ${value('changed')} · Не запушено: ${value('unpushed')}`;
+    summary.replaceChildren(el('span', { class: 'code-project-git',
+      title: 'Изменено — число файлов. Не запушено — число коммитов по локальным данным Git, без fetch.' }, git),
+    el('span', { class: 'code-project-modified' }, `Изменён: ${dateText(data?.modified)}`),
+    ...(data?.stale ? [el('span', { class: 'error' }, 'Не удалось обновить')] : []));
+    li.classList.toggle('has-unpushed', data?.unpushed > 0);
+    if (data?.checked_at) summary.title = `Проверено: ${dateText(data.checked_at)}`;
+  }
+
+  function sortProjects() {
+    const listBox = body.querySelector('#code-projects');
+    if (!listBox) return;
+    const details = summaries.get(selected);
+    const names = new Map(projectItems.map((p) => [p.pid, p.name]));
+    const rows = [...listBox.children];
+    rows.sort((a, b) => {
+      if (sort.value !== 'name') {
+        const av = details?.get(a.dataset.pid)?.[sort.value];
+        const bv = details?.get(b.dataset.pid)?.[sort.value];
+        const diff = (Number.isFinite(bv) ? bv : -1) - (Number.isFinite(av) ? av : -1);
+        if (diff) return diff;
+      }
+      return names.get(a.dataset.pid).localeCompare(names.get(b.dataset.pid), 'ru', { numeric: true });
+    });
+    listBox.append(...rows);
+  }
+
+  async function refreshSummaries(mine, agent) {
+    paintUpdated();
+    if (!agent.project_summary) return;
+    const own = {};
+    refreshing = own;
+    refresh.disabled = true;
+    refresh.textContent = 'Обновление…';
+    footer.setAttribute('aria-busy', 'true');
+    const queue = [...projectItems];
+    const results = new Map(summaries.get(agent.id));
+    let failures = 0;
+    let blocked = false;
+    async function worker() {
+      while (alive && mine === gen && queue.length && !blocked) {
+        const project = queue.shift();
+        try {
+          const data = await api('GET', `/api/code/agents/${agent.id}/projects/${project.pid}/summary`);
+          results.set(project.pid, data);
+        } catch (err) {
+          failures += 1;
+          results.set(project.pid, { ...results.get(project.pid), stale: true });
+          if (['closed', 'offline'].includes(err.code)) {
+            blocked = true;
+            if (alive && mine === gen) {
+              if (err.code === 'closed') pin(agent.id);
+              else { footer.hidden = true; offline(); }
+            }
+          }
+        }
+      }
+    }
+    try {
+      await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
+      if (!alive || mine !== gen) return;
+      summaries.set(agent.id, results);
+      if (!failures) checked.set(agent.id, Date.now() / 1000);
+      else status.textContent = `Не удалось обновить сведения: ${failures}. Повторите обновление.`;
+      for (const li of body.querySelectorAll('#code-projects li[data-pid]')) paintSummary(li, results.get(li.dataset.pid));
+      sortProjects();
+      paintUpdated();
+    } finally {
+      if (refreshing === own) {
+        refreshing = null;
+        refresh.disabled = false;
+        refresh.textContent = 'Обновить сведения';
+        footer.setAttribute('aria-busy', 'false');
+      }
+    }
+  }
+
+  sort.addEventListener('change', sortProjects);
+  refresh.addEventListener('click', async () => {
+    if (refresh.disabled || mode !== 'projects') return;
+    const mine = ++gen;
+    const agent = items.find((a) => a.id === selected);
+    refresh.disabled = true;
+    status.textContent = '';
+    try { await projects(mine, agent, null, true); }
+    finally { if (alive && mine === gen && !refreshing) refresh.disabled = false; }
+  });
 
   /** Список компьютеров; не прочитался — null (прежний список остаётся, «компьютеров нет» не сказать). */
   async function readAgents() {
@@ -159,6 +275,8 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     selected = aid;
     paintSelected();
     status.textContent = '';
+    footer.hidden = true;
+    refresh.disabled = false;
     const agent = items.find((a) => a.id === aid);
     if (!agent) {
       mode = 'idle';
@@ -220,7 +338,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     projects(mine, agent, found);
   }
 
-  async function projects(mine, agent, found = null) {
+  async function projects(mine, agent, found = null, keep = false) {
     try {
       if (found === null) found = await list(agent.id, true);
     } catch (err) {
@@ -228,32 +346,44 @@ export function panelView(host, { selected: first = null, opened, chose, list })
         await openIt(mine, agent);
         return;
       }
-      if (alive && mine === gen) refused(err);
+      if (alive && mine === gen) {
+        if (keep && err.code !== 'offline') status.textContent = words(err);
+        else { footer.hidden = true; refused(err); }
+      }
       return;
     }
     if (!alive || mine !== gen) return;
     mode = 'projects';
+    projectItems = found;
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project', href: `#/code/${agent.id}/${p.pid}` },
-        el('span', { class: 'code-project-name' }, p.name),
+        el('span', { class: 'code-project-name', title: p.name }, p.name),
         el('span', { class: 'code-project-state running', hidden: true }),
         el('span', { class: 'code-project-state asking', hidden: true }),
-        el('span', { class: 'code-project-count' }));
+        el('span', { class: 'code-project-count' }),
+        el('span', { class: 'code-project-metrics' }),
+        el('span', { class: 'code-project-summary' }));
       link.addEventListener('click', (event) => {
         if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
           && !event.shiftKey && !event.altKey) event.preventDefault();
         chose();
       });
-      return el('li', { 'data-pid': p.pid }, link);
+      const li = el('li', { 'data-pid': p.pid }, link);
+      paintSummary(li, summaries.get(agent.id)?.get(p.pid));
+      return li;
     });
     body.replaceChildren(el('ul', { id: 'code-projects', class: 'code-projects' }, ...rows));
     paintCounts();
     paintHere();
+    footer.hidden = false;
+    sortProjects();
     refreshActivity();
+    await refreshSummaries(mine, agent);
   }
 
   function showPin(mine, agent) {
     mode = 'pin';
+    footer.hidden = true;
     // не <form> и не password: исчезнув после удачного запроса, они дали бы менеджеру паролей сохранить PIN
     // компьютера в синхронизируемое хранилище браузера; точки вместо цифр — -webkit-text-security (app.css)
     const input = el('input', { id: 'code-pin-input', class: 'input', type: 'text', inputmode: 'numeric',

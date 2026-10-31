@@ -91,7 +91,8 @@ def test_agents_belong_to_their_user(studio):
     assert items == [{"id": agent_id, "name": "Рабочий ПК", "online": False, "has_pin": False, "cc_version": None,
                       "projects_root": None, "created": items[0]["created"], "last_seen": None,
                           "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}, "chat_control": False,
-                          "attachments": False, "project_activity": False, "subscription_usage": False}]
+                          "attachments": False, "project_activity": False, "subscription_usage": False,
+                          "project_summary": False}]
 
 
 def test_revoke_removes_the_agent_and_keeps_the_history(studio):

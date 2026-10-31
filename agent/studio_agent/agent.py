@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, cli, events, files, gitinfo, limits, permissions, projects, sessions, store, subscription
+from . import attachments, cli, events, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subscription
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -26,6 +26,7 @@ PIN_FIELD_MAX = 64
 OPS = {
     "usage": ("refresh",),
     "projects": (),
+    "project_summary": ("project",),
     "activity": (),
     "chats": ("project",),
     "history": ("project", "chat", "before", "limit"),
@@ -84,7 +85,7 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
-                 "subscription_usage": True}
+                 "subscription_usage": True, "project_summary": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -256,6 +257,9 @@ class Agent:
 
     async def _op_projects(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_projects, self.cfg.projects_root)}
+
+    async def _op_project_summary(self, frame, after):
+        return await asyncio.to_thread(project_summary.read, await self._project(frame))
 
     async def _op_activity(self, frame, after):
         items = []

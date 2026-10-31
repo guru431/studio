@@ -31,6 +31,7 @@ BODIES = {
     ("GET", "/api/code/agents/1/usage"): None,
     ("POST", "/api/code/agents/1/open"): {"pin": None},
     ("GET", "/api/code/agents/1/projects"): None,
+    ("GET", "/api/code/agents/1/projects/1/summary"): None,
     ("GET", "/api/code/agents/1/activity"): None,
     ("GET", "/api/code/agents/1/projects/1/chats"): None,
     ("POST", "/api/code/agents/1/projects/1/chats"): None,

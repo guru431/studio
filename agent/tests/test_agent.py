@@ -84,11 +84,24 @@ async def test_activity_requires_pin_and_aggregates_all_backends(agent):
         ("a" * 16, "claude", False), ("b" * 16, "codex", True)]
 
 
+async def test_project_summary_requires_pin_and_resolves_project(agent, root, monkeypatch):
+    from studio_agent import project_summary
+
+    frame = req("project_summary", project=projects.pid("demo"))
+    assert (await agent.handle(frame))[0]["code"] == "closed"
+    await opened(agent)
+    seen = []
+    monkeypatch.setattr(project_summary, "read", lambda path: seen.append(path) or {"findings": 2})
+    assert (await agent.handle(frame))[0]["data"] == {"findings": 2}
+    assert seen == [root / "demo"]
+    assert (await agent.handle(req("project_summary", project="0" * 16)))[0]["code"] == "not_found"
+
+
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "project_activity": True,
-                             "subscription_usage": True}
+                             "subscription_usage": True, "project_summary": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

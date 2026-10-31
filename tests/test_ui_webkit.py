@@ -73,6 +73,35 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
+def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path):
+    import bridge
+
+    page, aid = iphone
+    bridge.LINKS[aid].hello["project_summary"] = True
+    page.reload()
+    page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
+    button = page.locator('#code-project-refresh')
+
+    def position():
+        return button.evaluate("""e => {const r=e.getBoundingClientRect();
+          const body=document.querySelector('.code-panel-body').getBoundingClientRect();
+          const footer=document.querySelector('.code-panel-footer').getBoundingClientRect();
+          return [r.top, r.bottom <= innerHeight && body.bottom <= footer.top + 1
+            && e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))];} """)
+
+    before = position()
+    page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
+    after = position()
+    assert before[1] and after[1] and abs(before[0] - after[0]) < 1
+    page.locator('#code-project-sort').select_option('findings')
+    button.tap()
+    pw.expect(button).to_be_enabled()
+    pw.expect(page.locator('#code-project-updated')).to_contain_text('Обновлено:')
+    page.screenshot(path=str(tmp_path / f'projects-webkit-{page.viewport_size["width"]}.png'))
+    fits(page)
+
+
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 @pytest.mark.parametrize("scale", [100, 50])
 def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(iphone, scale, tmp_path):

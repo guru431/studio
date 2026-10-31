@@ -314,6 +314,20 @@ def _time(value) -> float | None:
     return value if ok else None
 
 
+@router.get("/agents/{aid}/projects/{pid}/summary")
+async def project_summary(aid: int, pid: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    link = bridge.LINKS.get(aid)
+    if link is not None and not link.hello.get("project_summary"):
+        raise _refuse(409, "unsupported", "обновите мост на компьютере для сведений о проектах")
+    data = await ask(request, aid, "project_summary", project=pid)
+    result = {key: value if type(value := data.get(key)) is int and value >= 0 else None
+              for key in ("findings", "ideas", "changed", "unpushed")}
+    return {**result, "modified": _time(data.get("modified")), "checked_at": _time(data.get("checked_at")),
+            "git": data.get("git") if data.get("git") in ("ok", "not_git", "error") else "error"}
+
+
 @router.get("/agents/{aid}/projects/{pid}/chats")
 async def chats(aid: int, pid: str, request: Request):
     """Сессии машины с отметками студии; открытые строки `code_chats` проекта без сессии на машине (новый чат
