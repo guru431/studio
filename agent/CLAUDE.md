@@ -123,6 +123,11 @@ UUID нового чата задаёт студия, настоящий thread 
   чтения» до записи, прочие атрибуты прежнего файла — новому `SetFileAttributesW`).
   С 0.7.5 `list_dir` добавляет необязательный `created`: секунды Unix из `st_birthtime`, в Python 3.11 на
   Windows — из `st_ctime` (создание); без даты создания — `null`. Рекурсивного обхода нет.
+  С 0.7.6 `hello.file_stats` объявляет op `file_stats {project,path}`: один обход `file_stats.scan` в потоке,
+  общая блокировка не допускает параллельных подсчётов. Результат — `items[{path,size,files,folders,complete}]`,
+  общий `complete`, `skipped_links`, `checked_at`. Все счётчики рекурсивные, ссылки исключены; пределы —
+  20 с / 5000 папок с корнем / около 4 МиБ ASCII-JSON. Ошибки доступа и пределы сохраняют нижние границы.
+  `Runner._frame` добавляет имя папки проекта `project_name` только к `ask`/`done` для push, без пути и текста чата.
 - `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
   `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
   `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).

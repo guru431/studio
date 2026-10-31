@@ -522,7 +522,10 @@ class Runner:
 
     @staticmethod
     def _frame(t: _Turn, e: dict) -> dict:
-        return {"t": "ev", "project": t.pid, "chat": t.chat, "turn": t.turn, "e": e}
+        frame = {"t": "ev", "project": t.pid, "chat": t.chat, "turn": t.turn, "e": e}
+        if e.get("k") in ("ask", "done"):
+            frame["project_name"] = t.project.name
+        return frame
 
     def _send(self, t: _Turn, e: dict) -> None:
         """Событие в канал (готовится снимок `watch` — за него); сбой канала ход не роняет."""

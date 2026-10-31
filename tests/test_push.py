@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import bridge
 from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -317,6 +318,30 @@ def test_cards_and_ends_push_only_without_watchers(studio):
     settle(studio)
     assert [d.decrypt(r.content)["body"] for r in studio.gw.push_requests[1:]] == [
         "Рабочий ПК: вопрос", "Рабочий ПК: ход прерван", "Рабочий ПК: ошибка", "Рабочий ПК: ход окончен"]
+
+
+def test_agent_push_includes_project_name_and_no_chat_content(studio, caplog):
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    link = connect(studio, aid, FakeMachine({"alpha": {}}))
+    for event in ({"k": "ask", "kind": "question", "questions": ["private-question"]},
+                  {"k": "done", "status": "done", "message": "private-answer"}):
+        studio.c.portal.call(bridge.deliver, link, {"t": "ev", "project": ALPHA, "project_name": "private-project",
+                                                   "chat": A, "e": event})
+    settle(studio)
+    messages = [device.decrypt(req.content) for req in studio.gw.push_requests]
+    assert [message["body"] for message in messages] == ["Рабочий ПК · private-project: вопрос",
+                                                         "Рабочий ПК · private-project: ход окончен"]
+    assert all(message["href"] == f"code/{aid}/{ALPHA}/{A}" for message in messages)
+    assert "private-question" not in json.dumps(messages) and "private-answer" not in json.dumps(messages)
+    assert "private-project" not in caplog.text
+    studio.c.portal.call(bridge.deliver, link, {"t": "ev", "project": ALPHA, "project_name": "../outside",
+                                               "chat": A, "e": {"k": "done", "status": "error"}})
+    settle(studio)
+    assert device.decrypt(studio.gw.push_requests[-1].content)["body"] == "Рабочий ПК: ошибка"
 
 
 def test_push_log_holds_no_endpoint(studio, caplog):

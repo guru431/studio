@@ -124,6 +124,7 @@ async def list_agents(request: Request):
                       "attachments": hello.get("attachments", False),
                       "project_activity": hello.get("project_activity", False),
                       "project_summary": hello.get("project_summary", False),
+                      "file_stats": hello.get("file_stats", False),
                       "subscription_usage": hello.get("subscription_usage", False),
                       **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
     return {"items": items}

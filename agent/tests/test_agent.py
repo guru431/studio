@@ -97,11 +97,26 @@ async def test_project_summary_requires_pin_and_resolves_project(agent, root, mo
     assert (await agent.handle(req("project_summary", project="0" * 16)))[0]["code"] == "not_found"
 
 
+async def test_file_stats_checks_pin_project_and_serializes_scans(agent, root, monkeypatch):
+    from studio_agent import file_stats
+
+    frame = req("file_stats", project=projects.pid("demo"), path="")
+    assert (await agent.handle(frame))[0]["code"] == "closed"
+    await opened(agent)
+    seen = []
+    monkeypatch.setattr(file_stats, "scan", lambda project, path: seen.append((project, path)) or {"items": []})
+    assert (await agent.handle(frame))[0]["data"] == {"items": []}
+    assert seen == [(root / "demo", "")]
+    async with agent._file_stats_lock:
+        assert (await agent.handle(frame))[0]["code"] == "busy"
+    assert (await agent.handle(req("file_stats", project=projects.pid("demo"), path="../outside")))[0]["code"] == "invalid"
+
+
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "project_activity": True,
-                             "subscription_usage": True, "project_summary": True}
+                             "subscription_usage": True, "project_summary": True, "file_stats": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

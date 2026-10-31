@@ -196,7 +196,7 @@ def parse_hello(frame: dict) -> dict:
         if type(frame["images"]) is not bool:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
-    for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary"):
+    for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "file_stats"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -339,7 +339,13 @@ def _push(link: Link, frame: dict) -> None:
     text = words.get(value) if isinstance(value, str) else None
     if text is None or watching(link.agent_id, frame["chat"]):
         return
-    push.notify_later(link.user_id, f"{link.name}: {text}",
+    project_name = frame.get("project_name")
+    # Имя — только один компонент пути; неизвестный/старый мост сохраняет прежний текст push.
+    valid_name = (isinstance(project_name, str) and 0 < len(project_name) <= 255
+                  and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
+                  or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
+    place = f"{link.name} · {project_name}" if valid_name else link.name
+    push.notify_later(link.user_id, f"{place}: {text}",
                       f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
 
 
