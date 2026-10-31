@@ -8,7 +8,7 @@ import pytest
 
 from fake_bridge import pid
 from test_codex import CATALOG
-from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live
+from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live, wait_for
 
 pw = pytest.importorskip("playwright.sync_api")
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -45,6 +45,8 @@ def iphone(webkit, live, request):
                                 extra_http_headers={"Cookie": cookie}) as context:
             page = context.new_page()
             page.studio_machine = machine
+            page.studio_bridge = bridge
+            page.studio_cookie = cookie
             page.set_default_timeout(10000)
             errors = []
             # WebKit r2370 ошибочно превращает отмену fetch при reload в pageerror:
@@ -69,6 +71,42 @@ def iphone(webkit, live, request):
 
 def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_closing_phone_browser_keeps_job_running_and_result_is_available_on_return(iphone):
+    import bridge
+
+    page, aid = iphone
+    machine, channel = page.studio_machine, page.studio_bridge
+    cookie, browser = page.studio_cookie, page.context.browser
+    url = page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    machine.script = [{"k": "text", "text": "Работаю"}]
+    page.goto(url)
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#code-text').fill('Заверши задание без открытого телефона')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-feed')).to_contain_text('Работаю')
+    page.context.close()
+    wait_for(lambda: not bridge.watching(aid, CODE_CHAT_A), 10)
+    assert CODE_CHAT_A in machine.running
+    assert not any(r['op'] == 'stop' for r in machine.requests)
+
+    # Модель заканчивает уже без браузера; ответ остаётся в истории компьютера.
+    machine.running[CODE_CHAT_A]['text'] = 'Задание завершено при закрытом телефоне'
+    completed = []
+    machine._finish(CODE_CHAT_A, completed, {"k": "done", "status": "done"})
+    channel.send_events(pid('alpha'), CODE_CHAT_A, *(frame['e'] for frame in completed))
+    assert CODE_CHAT_A not in machine.running
+
+    with browser.new_context(viewport={"width": 393, "height": 852}, is_mobile=True, has_touch=True,
+                             extra_http_headers={"Cookie": cookie}) as context:
+        returned = context.new_page()
+        returned.goto(url)
+        returned.locator('#code-chat[data-loaded="1"]').wait_for()
+        pw.expect(returned.locator('#code-feed')).to_contain_text('Задание завершено при закрытом телефоне')
+        assert sum(r['op'] == 'turn' for r in machine.requests) == 1
+        assert not any(r['op'] == 'stop' for r in machine.requests)
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)

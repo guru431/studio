@@ -70,12 +70,12 @@ def run_key():
             pass
 
 
-def install(src, local):
+def install(src, local, *, success=True):
     env = {**os.environ, "LOCALAPPDATA": str(local)}
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
                         str(src / "install.ps1"), "-NoVenv", "-NoStart", "-RunKey", "HKCU:\\" + RUN_KEY], env=env,
                        capture_output=True, timeout=120)
-    assert r.returncode == 0, (r.stdout + r.stderr).decode("cp866", "replace")
+    assert (r.returncode == 0) == success, (r.stdout + r.stderr).decode("cp866", "replace")
 
 
 def test_install_cmd_is_ascii_crlf():
@@ -118,8 +118,13 @@ def test_install_ps1_installs_into_programs_from_archive(tmp_path):
         (src / "README.md").write_text("новая версия\n", encoding="utf-8")
         (src / ".venv").mkdir()                                         # своя .venv архива не копируется
         (src / ".venv" / "foreign").write_text("x", encoding="utf-8")
-        install(src, local)
-        assert running.wait(timeout=30) is not None                     # работавший мост остановлен
+        previous = (target / "README.md").read_bytes()
+        install(src, local, success=False)
+        assert running.poll() is None                                 # установка не прерывает задания
+        assert (target / "README.md").read_bytes() == previous
+        running.terminate()
+        running.wait(timeout=10)
+        install(src, local)                                            # обновление после явного выхода
     finally:
         if running.poll() is None:
             running.kill()
@@ -165,3 +170,13 @@ def test_install_from_studio_checkout_keeps_the_component_in_place(tmp_path):
     install(src, local)
     assert not (local / "Programs").exists()
     assert (src / "studio_agent.pyw").is_file()
+
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",
+                                str(src / "studio_agent.pyw")])
+    try:
+        install(src, local, success=False)
+        assert running.poll() is None
+        assert not (local / "Programs").exists()
+    finally:
+        running.terminate()
+        running.wait(timeout=10)

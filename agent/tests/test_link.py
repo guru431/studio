@@ -170,6 +170,44 @@ async def test_restart_reconnects_without_resetting_open_sessions(fake_studio, a
     assert await task == "stopped"
 
 
+async def test_job_finishes_when_the_link_has_no_observers(fake_studio, home, root, monkeypatch):
+    gate, completed = asyncio.Event(), result_ok()
+    factory = FakeFactory([delta("Работаю"), completed])
+    agent = make(home, root, factory)
+    marked = []
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: marked.append(chat))
+    lk, states, task = start(fake_studio, agent)
+    await fake_studio.connected()
+    await fake_studio.request("open", pin=None)
+
+    original_factory = agent.runner.factory
+
+    def delayed_factory(**kwargs):
+        client = original_factory(**kwargs)
+        original_response = client.receive_response
+
+        async def response():
+            async for message in original_response():
+                if message is completed:
+                    await gate.wait()
+                yield message
+
+        client.receive_response = response
+        return client
+
+    agent.runner.factory = delayed_factory
+    await fake_studio.request("turn", project=projects.pid("demo"), chat=CHAT, text="Закончи без связи",
+                              model=None, effort=None)
+    await until(lambda: any(e["e"]["k"] == "text" for e in fake_studio.events))
+    await lk.stop()
+    assert await task == "stopped"
+    assert CHAT in agent.runner.live() and not factory.clients[0].interrupted
+    gate.set()
+    await until(lambda: not agent.runner.live())
+    assert marked == [CHAT] and factory.clients[0].disconnected
+    assert not factory.clients[0].interrupted
+
+
 async def test_protocol_close_pauses_a_minute(fake_studio, agent):
     pauses = Pauses()
     lk, states, task = start(fake_studio, agent, sleep=pauses)
