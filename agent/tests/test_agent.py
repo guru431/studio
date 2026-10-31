@@ -90,6 +90,43 @@ async def opened(a: Agent, session=SESSION, pin=None) -> None:
     assert (await a.handle(req("open", session=session, pin=pin)))[0]["ok"] is True
 
 
+async def test_turn_limit_counts_all_backends_and_changes_without_stopping_jobs(home, root):
+    backends = [Runner(lambda f: None, choices=store.Choices(home), cli_path=None, factory=FakeFactory([HOLD]))
+                for _ in range(3)]
+    for backend in backends[1:]:
+        backend.catalog = {"models": MODELS, "efforts": ["high"]}
+        backend.models, backend.efforts = MODELS, ["high"]
+    agent = Agent(store.Config(projects_root=str(root)), PinStore(home), backends[0], cc_version="test",
+                  models=MODELS, efforts=["high"], codex=backends[1], opencode=backends[2])
+    await opened(agent)
+
+    async def start(number, engine="claude"):
+        return (await agent.handle(req("turn", project=projects.pid("demo"),
+                                       chat=f"00000000-0000-4000-8000-{number:012x}", text="Задание",
+                                       model=None, effort=None, engine=engine)))[0]
+
+    try:
+        assert agent.cfg.max_turns == 8
+        for number in range(8):
+            assert (await start(number))["ok"]
+        assert (await start(8, "opencode"))["code"] == "busy"
+        agent.set_max_turns(10)
+        assert [backend.max_turns for backend in backends] == [10, 10, 10]
+        assert (await start(8, "opencode"))["ok"]
+        assert (await start(9, "codex"))["ok"]
+        assert (await start(10))["code"] == "busy"
+        # Понижение предела не прерывает десять идущих заданий и не разрешает новые.
+        before = [dict(backend._turns) for backend in backends]
+        agent.set_max_turns(1)
+        assert [dict(backend._turns) for backend in backends] == before
+        assert (await start(10))["code"] == "busy"
+        assert (await start(0))["code"] == "running"
+        await asyncio.gather(*(backend.close() for backend in backends))
+        assert (await start(10))["ok"]
+    finally:
+        await asyncio.gather(*(backend.close(final=True) for backend in backends))
+
+
 async def test_activity_requires_pin_and_aggregates_all_backends(agent):
     assert (await agent.handle(req("activity")))[0]["code"] == "closed"
     await opened(agent)
@@ -372,6 +409,7 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
     assert not backend.start.called
     monkeypatch.setattr(agent.runner, "live", lambda: {"claude-turn": False})
     agent.codex = SimpleNamespace(live=lambda: {"codex-turn": False})
+    agent.set_max_turns(2)
     res = (await agent.handle(req("turn", **frame, text="тест", model=model, effort="high", access="default")))[0]
     assert res["code"] == "busy" and not backend.start.called
     agent.codex = None

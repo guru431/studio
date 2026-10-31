@@ -579,6 +579,7 @@ class MainWindow:
         self.theme_controls(box, row=1, card=True)
         problem = tk.StringVar()
         self.folders_control(box, row=2, folders=list(cfg.projects_roots), problem=problem, save=True)
+        self.turn_limit_control(box, row=4, value=cfg.max_turns, problem=problem)
         auto = tk.BooleanVar(value=self.ctrl.autostart_enabled())  # реестр, а не config.json
 
         def toggle() -> None:
@@ -594,15 +595,47 @@ class MainWindow:
 
         box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
-        box_auto.grid(row=4, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
+        box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
         self.buttons.append(box_auto)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
-        self.pin_line.grid(row=5, column=0, columnspan=2, sticky="ew")
+        self.pin_line.grid(row=6, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
         ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
-            row=6, column=0, columnspan=2, sticky="w")
+            row=7, column=0, columnspan=2, sticky="w")
         self.settings_problem = problem
         self.show_pin()
+
+    def turn_limit_control(self, box, *, row: int, value: int, problem) -> None:
+        tk, ttk = self.tk, self.ttk
+        area = ttk.Frame(box, style="Card.TFrame")
+        area.grid(row=row, column=0, columnspan=2, sticky="ew")
+        area.columnconfigure(0, weight=1)
+        ttk.Label(area, text="Одновременных заданий", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        limit = tk.StringVar(value=str(value))
+        entry = ttk.Entry(area, textvariable=limit, width=5)
+        entry.grid(row=0, column=1, padx=(self.px(8), self.px(8)))
+
+        def save() -> None:
+            problem.set("")
+            try:
+                proposed = int(limit.get())
+                if proposed < 1:
+                    raise ValueError
+            except ValueError:
+                problem.set("Число заданий — целое число больше нуля")
+                return
+
+            def done(_, failed) -> None:
+                if failed:
+                    problem.set(FAILED)
+                else:
+                    limit.set(str(self.ctrl.config().max_turns))
+
+            self.work(lambda: self.ctrl.set_max_turns(proposed), done)
+
+        button = ttk.Button(area, text="Сохранить", command=save)
+        button.grid(row=0, column=2, sticky="e")
+        self.buttons.extend([entry, button])
 
     def folders_control(self, box, *, row: int, folders: list[str], problem, save: bool = False) -> None:
         """Список разрешённых папок и добавление/удаление; при привязке сохраняется сразу."""

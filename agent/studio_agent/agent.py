@@ -80,6 +80,7 @@ class Agent:
         self.runner = runner
         self.codex = codex
         self.opencode = opencode
+        self.set_max_turns(cfg.max_turns)
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
@@ -94,6 +95,13 @@ class Agent:
         self._search_lock = asyncio.Lock()
         self._file_index = discovery.FileIndex()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
+
+    def set_max_turns(self, value: int) -> None:
+        """Общий предел и пределы помощников меняются вместе, уже идущие задания продолжаются."""
+        self.cfg.max_turns = value
+        for backend in (self.runner, self.codex, self.opencode):
+            if backend is not None:
+                backend.max_turns = value
 
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
@@ -416,7 +424,7 @@ class Agent:
         project = await self._project(frame)
         runner = self._runner(frame)
         total = sum(len(backend.live()) for backend in (self.runner, self.codex, self.opencode) if backend is not None)
-        if frame["chat"] not in runner.live() and total >= limits.MAX_TURNS:
+        if frame["chat"] not in runner.live() and total >= self.cfg.max_turns:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
                                      frame.get("model"), frame.get("effort"), images=images,
