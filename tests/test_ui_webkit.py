@@ -148,7 +148,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 def test_session_picker_keeps_titles_after_leaving_the_section(iphone):
     page, aid = iphone
-    page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] a").tap()
+    page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name").tap()
     page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()
     page.locator('#code-chat[data-loaded="1"]').wait_for()
     page.locator('#rail [data-section=photo]').tap()
@@ -282,7 +282,7 @@ def test_code_phone_projects_fill_the_panel_and_accept_taps(iphone, tmp_path):
     rail = page.locator("#rail").bounding_box()
     assert abs(box["height"] - rail["y"]) <= 1, (box, rail)
     # Проверка попадания касания: наличие строк в DOM не означает, что они видны в обрезанной панели.
-    alpha = page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] a")
+    alpha = page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name")
     alpha.tap(trial=True)
     assert alpha.evaluate("""e => {
         const r = e.getBoundingClientRect();
@@ -294,12 +294,12 @@ def test_code_phone_projects_fill_the_panel_and_accept_taps(iphone, tmp_path):
     page.locator("#code-chats li[data-chat]").first.wait_for()
     page.locator("#code-panel-toggle").tap()
     panel.wait_for(state="visible")
-    page.locator(f"#code-projects li[data-pid='{pid('beta')}'] a").tap()
+    page.locator(f"#code-projects li[data-pid='{pid('beta')}'] .code-project-name").tap()
     panel.wait_for(state="hidden")
     pw.expect(page.locator(".code-place-project")).to_have_text("beta")
     assert page.url.endswith(f"#/code/{aid}/{pid('beta')}")
     page.locator("#code-panel-toggle").tap()
-    page.locator(f"#code-projects li[data-pid='{pid('zulu')}'] a").tap()
+    page.locator(f"#code-projects li[data-pid='{pid('zulu')}'] .code-project-name").tap()
     panel.wait_for(state="hidden")
     pw.expect(page.locator(".code-place-project")).to_have_text("zulu")
     fits(page)
@@ -455,7 +455,7 @@ def test_opencode_stop_restores_queued_text_and_screenshot(iphone):
 @pytest.mark.parametrize("iphone", [(393, 852), (852, 393)], ids=["portrait", "landscape"], indirect=True)
 def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page, aid = iphone
-    page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] a").tap()
+    page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name").tap()
     if page.viewport_size["width"] <= 760:
         page.locator("#code-panel").wait_for(state="hidden")
     page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()

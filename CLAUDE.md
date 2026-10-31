@@ -53,6 +53,9 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 `agent/studio_agent/project_summary.py`, без содержимого и путей в ответе. В `code-panel.js` четыре параллельных
 чтения, сводка только в памяти панели; ручное обновление сохраняет прежние значения при ошибке.
 `.code-panel-footer` вне прокрутки содержит сортировку, кнопку и дату полного обновления.
+Проект занимает две строки: название с `(П: N · И: N)`, затем Git и короткая дата. Счётчики —
+отдельные ссылки `?tab=files&journal=findings|ideas` (фиксированные журналы), Git — `?tab=git`;
+обычная защита несохранённых правок `code.js::hold` действует и для этих переходов.
 Проверки — `tests/test_project_summary.py`, `tests/test_ui_project_summary.py`, `tests/test_ui_webkit.py`
 и `agent/tests/test_project_summary.py`; активному мосту обновление из его задания не применять.
 `lock-start.js` запускает блокировку до модулей оболочки; `lock.js` объединяет одновременные чтения состояния

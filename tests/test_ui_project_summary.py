@@ -3,7 +3,7 @@
 import pytest
 
 from fake_bridge import FakeMachine, T0, pid
-from test_ui_browser import READY, browser, code_online, go, live, problems, signin
+from test_ui_browser import READY, browser, code_online, code_requests, go, live, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -47,6 +47,18 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             *go("code"), ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
             ("eval", "counts", f"document.querySelector(\"{alpha}\").textContent"),
+            ("eval", "twoLines", """[...document.querySelectorAll('#code-projects .code-project')].every(row => {
+              const heading = row.querySelector('.code-project-heading').getBoundingClientRect();
+              const name = row.querySelector('.code-project-name').getBoundingClientRect();
+              const metrics = row.querySelector('.code-project-metrics').getBoundingClientRect();
+              const summary = row.querySelector('.code-project-summary').getBoundingClientRect();
+              const git = row.querySelector('.code-project-git').getBoundingClientRect();
+              const date = row.querySelector('.code-project-modified').getBoundingClientRect();
+              const lineHeight = parseFloat(getComputedStyle(row.querySelector('.code-project-summary')).lineHeight);
+              return metrics.left >= name.right && metrics.top < heading.bottom
+                && summary.top >= heading.bottom && Math.abs(git.top - date.top) < 1
+                && summary.height <= lineHeight + 1 && row.children.length === 2;
+            })"""),
             order("findings"), order("ideas"), order("modified"), order("unpushed"),
             ("eval", "initial-unpushed", first), order("name"),
             ("eval", "before", geometry),
@@ -74,9 +86,10 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["final-unpushed"] == pid("alpha"), {key: values[key] for key in ('fresh', 'reads', 'final-unpushed')}
     assert values["before"][1] and values["after"][1]
     assert abs(values["before"][0] - values["after"][0]) < 1
-    assert "Проблемы: 1" in values["counts"] and "Не запушено: 0" in values["counts"]
-    assert values["previous"] == "Проблемы: 1" and "Проблемы: 20" in values["fresh"]
-    assert "Изменено: 7" in values["fresh"] and values["reads"] == 78
+    assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 изм. ↑0" in values["counts"]
+    assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
+    assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == 78
+    assert values["twoLines"]
     assert "null" not in values["counts"] and "undefined" not in values["counts"]
     assert not values["overflow"] and not problems(result), problems(result)
 
@@ -129,7 +142,52 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
         server.stop()
     assert not result.get("failed"), result
     values = result["values"]
-    assert values["initial"] == values["retained"] == values["afterListFailure"] == "Проблемы: 5"
+    assert values["initial"] == values["retained"] == values["afterListFailure"] == "П: 5"
     assert values["unchanged"] and values["stillOther"]
-    assert values["other"] == values["keptOther"] == "Проблемы: 7"
+    assert values["other"] == values["keptOther"] == "П: 7"
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(browser, live, width):
+    login = f"project-links-{width}"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"files": {"FINDINGS.md": b"# Findings\nProblem document\n",
+        "IDEAS.md": b"# Ideas\nIdea document\n"}}, "beta": {}})
+    machine.project_summary = True
+    aid, server = code_online(live, login, machine)
+    alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
+    beta = f"#code-projects li[data-pid='{pid('beta')}']"
+    panel = [("eval", "panel", """(() => { const toggle = document.querySelector('#code-panel-toggle');
+      if (getComputedStyle(toggle).display !== 'none') toggle.click(); return true; })()"""),
+      ("wait", "document.querySelector('#code-panel').getBoundingClientRect().left >= 0")]
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
+            ("eval", "validLinks", "document.querySelectorAll('#code-projects a a').length === 0"),
+            ("click", alpha + " .code-project-findings"),
+            ("wait", "document.querySelector('#code-editor')?.value.includes('Problem document')"),
+            ("eval", "findings", "[location.hash, document.querySelector('#code-path').textContent]"),
+            *panel, ("click", alpha + " .code-project-findings"),
+            *panel, ("click", alpha + " .code-project-ideas"),
+            ("wait", "document.querySelector('#code-editor')?.value.includes('Idea document')"),
+            set_value("#code-editor", "Unsaved journal draft"),
+            *panel, ("click", beta + " .code-project-git"),
+            ("wait", "document.querySelector('#code-unsaved')?.open"),
+            ("press", "Escape"), ("eval", "retained", "document.querySelector('#code-editor').value"),
+            *panel, ("click", beta + " .code-project-git"),
+            ("wait", "document.querySelector('#code-unsaved')?.open"),
+            ("click", "#code-unsaved-leave"), ("wait", "!!document.querySelector('#code-git')"),
+            ("eval", "git", "[location.hash, document.querySelector('.code-place-project').textContent]"),
+            ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth")], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["validLinks"] and values["fits"]
+    assert values["findings"][0].endswith('?tab=files&journal=findings') and 'FINDINGS.md' in values["findings"][1]
+    assert values["retained"] == "Unsaved journal draft"
+    assert values["git"] == [f"#/code/{aid}/{pid('beta')}?tab=git", "beta"]
+    assert [r["path"] for r in code_requests(machine, "read")] == ["FINDINGS.md", "FINDINGS.md", "IDEAS.md"]
+    assert not code_requests(machine, "save") and not code_requests(machine, "turn")
     assert not problems(result), problems(result)
