@@ -14,6 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 import auth
+import code_actions
 import history
 import media
 import sections
@@ -37,10 +38,23 @@ class CodeChoice(BaseModel):
                     "read-only", "workspace-write", "danger-full-access"] | None = None
 
 
+class CodeQuickAction(BaseModel):
+    title: str = Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")
+    text: str = Field(min_length=1, max_length=100000)
+
+    @field_validator("title", "text")
+    @classmethod
+    def _not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("blank")
+        return value
+
+
 class MePatch(BaseModel):
     theme: str | None = None
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
     code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
+    code_quick_actions: list[CodeQuickAction] = Field(default_factory=list, max_length=20)
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
 
     @field_validator("code_defaults")
@@ -81,7 +95,7 @@ def _me(request: Request) -> dict:
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
-                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout FROM users WHERE id = ?",
+                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -90,6 +104,7 @@ def _me(request: Request) -> dict:
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
+            "code_quick_actions": json.loads(row["code_quick_actions"]) if row["code_quick_actions"] is not None else code_actions.DEFAULTS,
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"]}
 
@@ -122,6 +137,8 @@ async def patch_me(body: MePatch, request: Request):
         for engine, choice in body.code_defaults.items():
             stored[engine] = {**stored.get(engine, {}), **choice.model_dump(exclude_unset=True)}
         changes["code_defaults"] = json.dumps(stored)
+    if "code_quick_actions" in sent:
+        changes["code_quick_actions"] = json.dumps([action.model_dump() for action in body.code_quick_actions])
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))

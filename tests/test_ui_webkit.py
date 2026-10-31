@@ -472,6 +472,35 @@ def test_code_phone_projects_fill_the_panel_and_accept_taps(iphone, tmp_path):
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
+def test_new_chat_quick_actions_and_bottom_composer_accept_phone_taps(iphone, tmp_path):
+    import code_actions
+
+    page, aid = iphone
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#code-tab-add').tap()
+    page.locator('#code-new-chat').tap()
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    pw.expect(page.locator('#code-quick-actions')).to_be_visible()
+    assert page.evaluate("""() => {
+      const c=document.querySelector('#code-composer').getBoundingClientRect();
+      const v=document.querySelector('#view'), r=v.getBoundingClientRect();
+      const toolbar=document.querySelector('.code-status-bar');
+      return Math.abs(c.bottom-r.bottom+parseFloat(getComputedStyle(v).paddingBottom)) < 20
+        && toolbar.contains(document.querySelector('#code-context'))
+        && toolbar.contains(document.querySelector('#code-usage'));
+    }""")
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'quick-actions-phone.png'))
+    page.locator('.code-quick-action').first.tap()
+    pw.expect(page.locator('#code-quick-actions')).to_be_hidden()
+    pw.expect(page.locator('.code-msg.user').first).to_have_text(code_actions.DEFAULTS[0]['text'])
+    requests = [r for r in page.studio_machine.requests if r['op'] == 'turn']
+    assert len(requests) == 1 and requests[0]['text'] == code_actions.DEFAULTS[0]['text']
+    fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
 def test_code_composer_fits_long_draft_and_sends_followup_while_working(iphone, tmp_path):
     page, aid = iphone
     page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")

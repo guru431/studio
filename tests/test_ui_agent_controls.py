@@ -380,7 +380,7 @@ def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, 
     assert not result.get("failed"), result
     values = result["values"]
     assert all(values["initial"].values()) and all(values["opened"].values()), values
-    assert values["fonts"] == ["10px"] * 4
+    assert values["fonts"] == ["10px"] * 5
     assert values["rows"] == [CODE_CHAT_B] and values["stillOpen"] and values["lastClosed"]
     assert values["draft"] == "Черновик задания"
     assert not problems(result), problems(result)

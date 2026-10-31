@@ -24,6 +24,7 @@
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
+import { quickActionsBlock } from './code-quick-actions.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
@@ -1256,7 +1257,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'code') {
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(), computerPinBlock(), agentsBlock(host)));
+        codeDefaultsBlock(), quickActionsBlock(), computerPinBlock(), agentsBlock(host)));
       return;
     }
     if (shown === 'other') {

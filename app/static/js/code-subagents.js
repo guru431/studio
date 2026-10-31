@@ -4,7 +4,9 @@ import { el, words } from './ui.js';
 import { renderMarkdown } from './markdown.js';
 
 export function subagentView(host, { endpoint }) {
-  const button = el('button', { type: 'button', id: 'code-subagents', class: 'btn btn-sm' }, 'Подзадачи');
+  const button = el('button', { type: 'button', id: 'code-subagents', class: 'icon-btn',
+    'aria-label': 'Подзадачи', title: 'Подзадачи' });
+  button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/></svg>';
   const list = el('div', { class: 'code-subagents-list' });
   const history = el('div', { class: 'code-subagent-history' });
   const status = el('p', { class: 'muted small', role: 'status' });

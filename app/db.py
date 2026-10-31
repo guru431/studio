@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 24
+VERSION = 25
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -311,6 +311,8 @@ CHECK (engine IN ('claude', 'codex'));
 
 CODE_22 = "ALTER TABLE users ADD COLUMN code_defaults TEXT NOT NULL DEFAULT '{}';"
 
+CODE_25 = "ALTER TABLE users ADD COLUMN code_quick_actions TEXT;"
+
 LOCK_24 = """ALTER TABLE users ADD COLUMN screen_lock_sections TEXT NOT NULL DEFAULT '["*"]';
 ALTER TABLE users ADD COLUMN screen_lock_timeout INTEGER NOT NULL DEFAULT 60;
 ALTER TABLE users ADD COLUMN computer_pin_timeout INTEGER NOT NULL DEFAULT 10800;
@@ -371,7 +373,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -446,6 +448,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     22: CODE_22,
     23: CODE_23,
     24: LOCK_24,
+    25: CODE_25,
 }
 
 
