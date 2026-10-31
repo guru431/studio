@@ -472,6 +472,11 @@ label { font-size:calc(13px * var(--font-scale, 1)); color: var(--muted); }
 .voice b, .passkey b { font-weight: 600; }
 .voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
 .lock-block > .check { margin-bottom: 12px; }
+.lock-block > .checks { margin-bottom: 12px; }
+.lock-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 12px 0; }
+.lock-timeout { display: flex; align-items: center; gap: 8px; }
+.lock-timeout > .input { min-width: 0; width: 50%; }
+.lock-block > .row, .lock-block > [hidden] + .pin-row { margin-bottom: 12px; }
 /* push («Прочее») и компьютеры («Код») */
 .notify-block > .push-check { margin-top: 14px; }
 .notify-block > #push-hint { margin: 6px 0 0; }

@@ -11,7 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
 import auth
 import history
@@ -41,6 +41,7 @@ class MePatch(BaseModel):
     theme: str | None = None
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
     code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
+    computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
 
     @field_validator("code_defaults")
     @classmethod
@@ -79,7 +80,8 @@ def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
-                           " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults FROM users WHERE id = ?",
+                           " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
+                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -87,7 +89,9 @@ def _me(request: Request) -> dict:
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
-            "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"])}
+            "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
+            "screen_lock_sections": json.loads(row["screen_lock_sections"]),
+            "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"]}
 
 
 @router.get("/me")
@@ -100,6 +104,10 @@ async def patch_me(body: MePatch, request: Request):
     uid = request.state.user.id
     sent = body.model_fields_set
     changes = {}
+    if "computer_pin_timeout" in sent:
+        if body.computer_pin_timeout is None:
+            raise HTTPException(422, {"code": "timeout", "message": "укажите таймер PIN компьютера"})
+        changes["computer_pin_timeout"] = body.computer_pin_timeout
     if "theme" in sent:
         if body.theme not in THEMES:
             raise HTTPException(422, {"code": "theme", "message": "тема — auto, dark или light"})

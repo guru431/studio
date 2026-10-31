@@ -93,6 +93,10 @@ def apply(root, dark: bool | None = None) -> dict:
     s.map("TEntry", bordercolor=[("focus", c["accent"])], lightcolor=[("focus", c["field"])],
           fieldbackground=[("readonly", c["bg"]), ("disabled", c["bg"])],
           foreground=[("disabled", c["muted"])])
+    s.configure("Folders.Treeview", background=c["field"], fieldbackground=c["field"], foreground=c["text"],
+                bordercolor=c["edge"], rowheight=round(24 * root.winfo_fpixels("1i") / 96))
+    s.map("Folders.Treeview", background=[("selected", c["accent"])],
+          foreground=[("selected", c["on_accent"])])
     button = {"padding": (14, 5), "relief": "solid", "borderwidth": 1, "focusthickness": 0, "font": base}
     s.configure("TButton", background=c["panel"], foreground=c["text"], bordercolor=c["edge"],
                 lightcolor=c["panel"], darkcolor=c["panel"], **button)

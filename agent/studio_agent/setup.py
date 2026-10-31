@@ -1,6 +1,6 @@
 """Настройка моста (окно и консоль): проверка полей и запись — привязка, ключ, `config.json`, PIN.
 
-Поля формы: `url`, `login`, `password`, `name`, `projects_root`, `pin`, `pin2`, `no_pin`, `autostart`.
+Поля формы: `url`, `login`, `password`, `name`, `projects_roots` (раньше `projects_root`), `pin`, `pin2`, `no_pin`, `autostart`.
 Пароль студии уходит только в привязку и нигде не сохраняется."""
 
 import unicodedata
@@ -26,6 +26,19 @@ def name_ok(name: str) -> bool:
     return 1 <= len(name) <= NAME_MAX and not any(unicodedata.category(c).startswith("C") for c in name)
 
 
+def folders(form: dict) -> list[str]:
+    """Новая форма передаёт список; прежняя форма и консоль с одним полем продолжают работать."""
+    if "projects_roots" not in form:
+        root = _text(form, "projects_root").strip()
+        return [root] if root else []
+    roots = form["projects_roots"]
+    return [p.strip() for p in roots] if isinstance(roots, list) and all(isinstance(p, str) for p in roots) else []
+
+
+def folder_errors(roots: list[str]) -> list[str]:
+    return [] if roots and all(root and Path(root).is_dir() for root in roots) else [NO_FOLDER]
+
+
 def validate(form: dict, *, enrolled: bool) -> list[str]:
     """Ошибки формы словами окна; пусто — можно `apply`. Привязан — логин и пароль оба или ни одного."""
     errors = []
@@ -38,9 +51,7 @@ def validate(form: dict, *, enrolled: bool) -> list[str]:
         errors.append(enroll.LOGIN)
     if not name_ok(_text(form, "name")):
         errors.append(enroll.NAME)
-    root = _text(form, "projects_root").strip()
-    if not (root and Path(root).is_dir()):
-        errors.append(NO_FOLDER)
+    errors += folder_errors(folders(form))
     if not form.get("no_pin"):
         errors += pin_errors(_text(form, "pin"), _text(form, "pin2"))
     return errors
@@ -67,7 +78,7 @@ def apply(h: Path, form: dict, *, enroll_fn=enroll.enroll) -> store.Config:
         store.save_key(h, key)
         cfg.agent_id, cfg.name = agent_id, name
     cfg.url = url
-    cfg.projects_root = _text(form, "projects_root").strip()
+    cfg.set_project_roots(folders(form))
     cfg.autostart = bool(form.get("autostart"))
     store.save_config(h, cfg)
     pins = PinStore(h)

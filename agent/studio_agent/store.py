@@ -24,9 +24,33 @@ class Config:
     agent_id: int | None = None
     name: str = ""
     projects_root: str = ""
+    projects_roots: list[str] = dataclasses.field(default_factory=list)
+    projects_legacy_root: str = ""  # исходная папка сохраняет прежние pid, даже после удаления из списка
     autostart: bool = True
     login: str = ""  # логин учётки студии: из ответа привязки и `welcome`; только для окна и трея
     theme: str = "auto"  # прежние настройки следуют Windows, явный выбор окна — light или dark
+
+    def __post_init__(self) -> None:
+        if not self.projects_roots and self.projects_root:
+            self.projects_roots = [self.projects_root]
+        if self.projects_roots:
+            self.projects_root = self.projects_roots[0]
+        if not self.projects_legacy_root:
+            self.projects_legacy_root = self.projects_root
+
+    def set_project_roots(self, roots: list[str]) -> None:
+        """Порядок папок — порядок добавления; один настоящий путь указывается только один раз."""
+        unique, seen = [], set()
+        for root in roots:
+            path = os.path.normpath(root.strip()) if root.strip() else ""
+            key = os.path.normcase(os.path.realpath(path)) if path else ""
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(path)
+        if not self.projects_legacy_root and unique:
+            self.projects_legacy_root = unique[0]
+        self.projects_roots = unique
+        self.projects_root = unique[0] if unique else ""
 
 
 def home() -> Path:
@@ -67,6 +91,8 @@ def load_config(h: Path) -> Config:
 
 _KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, str),
           "projects_root": lambda v: isinstance(v, str), "autostart": lambda v: isinstance(v, bool),
+          "projects_roots": lambda v: isinstance(v, list) and all(isinstance(p, str) and p.strip() for p in v),
+          "projects_legacy_root": lambda v: isinstance(v, str),
           "login": lambda v: isinstance(v, str),
           "theme": lambda v: isinstance(v, str) and v in ("auto", "light", "dark"),
           "agent_id": lambda v: v is None or (type(v) is int)}

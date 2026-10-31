@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 23
+VERSION = 24
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -311,6 +311,11 @@ CHECK (engine IN ('claude', 'codex'));
 
 CODE_22 = "ALTER TABLE users ADD COLUMN code_defaults TEXT NOT NULL DEFAULT '{}';"
 
+LOCK_24 = """ALTER TABLE users ADD COLUMN screen_lock_sections TEXT NOT NULL DEFAULT '["*"]';
+ALTER TABLE users ADD COLUMN screen_lock_timeout INTEGER NOT NULL DEFAULT 60;
+ALTER TABLE users ADD COLUMN computer_pin_timeout INTEGER NOT NULL DEFAULT 10800;
+"""
+
 #: Расширение CHECK помощников. На code_chats нет входящих FK; идентификаторы, отметки, индекс и
 #: каскад удаления сохраняются. Старый код продолжает читать прежние столбцы после отката.
 CODE_23 = """CREATE TABLE code_chats_23(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
@@ -366,7 +371,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -440,6 +445,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     21: CODE_21,
     22: CODE_22,
     23: CODE_23,
+    24: LOCK_24,
 }
 
 

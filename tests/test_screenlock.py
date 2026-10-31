@@ -73,11 +73,11 @@ def test_lock_paths_are_not_refused_while_locked(studio):
         assert studio.c.post(path, json={}).status_code != 423, path
 
 
-def test_computer_session_is_never_locked(studio):
+def test_computer_session_uses_the_app_lock_too(studio):
     uid = owner(studio)
     lock_on(uid)
     studio.clock[0] += 3600
-    assert studio.c.get("/api/me").status_code == 200
+    assert studio.c.get("/api/me").status_code == 423
 
 
 def test_lock_off_never_locks_a_phone(studio):
@@ -171,7 +171,7 @@ def test_lock_state_gives_csrf_and_keys_but_no_profile(studio):
     studio.c.post("/api/lock/now")
     r = studio.c.get("/api/lock")
     assert r.status_code == 200 and r.json() == {"locked": True, "keys": False, "csrf": csrf, "pin": False,
-                                                 "pin_left": 10}
+                                                 "pin_left": 10, "enabled": True, "sections": ["*"], "timeout": 60}
     assert "owner" not in r.text
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     assert studio.c.get("/api/lock").json()["locked"] is False
@@ -205,14 +205,14 @@ def test_password_opens_and_shares_the_password_pause(studio):
 def test_lock_is_enabled_freely_and_disabled_only_with_the_password(studio):
     owner(studio)
     r = studio.c.post("/api/me/screen-lock", json={"enabled": True})
-    assert r.status_code == 200 and r.json() == {"screen_lock": True}
+    assert r.status_code == 200 and r.json() == {"screen_lock": True, "screen_lock_sections": ["*"], "screen_lock_timeout": 60}
     assert studio.c.get("/api/me").json()["screen_lock"] is True
     for body in ({"enabled": False}, {"enabled": False, "password": ""}, {"enabled": False, "password": "wrong-pw"}):
         r = studio.c.post("/api/me/screen-lock", json=body)
         assert r.status_code == 403 and code(r) == "password", body
     assert studio.c.get("/api/me").json()["screen_lock"] is True
     r = studio.c.post("/api/me/screen-lock", json={"enabled": False, "password": "password-123"})
-    assert r.status_code == 200 and r.json() == {"screen_lock": False}
+    assert r.status_code == 200 and r.json() == {"screen_lock": False, "screen_lock_sections": ["*"], "screen_lock_timeout": 60}
     assert studio.c.get("/api/me").json()["screen_lock"] is False
 
 
@@ -368,7 +368,7 @@ def test_passkey_opens_a_locked_phone(studio):
     lock_on(uid); phone(studio)
     assert studio.c.post("/api/lock/now").status_code == 204
     assert studio.c.get("/api/lock").json() == {"locked": True, "keys": True, "csrf": studio.c.headers[auth.CSRF_HEADER],
-                                                "pin": False, "pin_left": 10}
+                                                "pin": False, "pin_left": 10, "enabled": True, "sections": ["*"], "timeout": 60}
     options = studio.c.post("/api/lock/challenge").json()
     assert [(c["id"], c["transports"]) for c in options["allowCredentials"]] == [(key.id, ["internal"])]
     assert options["userVerification"] == "required" and options["rpId"] == "testserver"

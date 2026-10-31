@@ -5153,17 +5153,110 @@ def test_phone_back_within_a_minute_is_not_locked(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_computer_never_locks(browser, live):
+def test_computer_locks_after_the_configured_idle_time(browser, live):
     login = "lk-pc"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
-        ("eval", "on", f"(async () => (await {API}.api('POST', '/api/me/screen-lock', {{ enabled: true }})).screen_lock)()"),
+        ("eval", "on", f"(async () => {{ const api = {API}; const answer = await api.api('POST', '/api/me/screen-lock', {{ enabled: true }});"
+                        " await api.loadMe(); document.dispatchEvent(new Event('studio-me')); return answer.screen_lock; })()"),
         hide(), ("eval", "covered", settled(CURTAIN_OPEN)), later(3_600_000), show(),
-        ("eval", "shown", settled(f"{CURTAIN_OPEN} || {LOCK_OPEN}")), ("eval", "me", ME_STATUS)], width=1280)
+        ("wait", LOCK_OPEN), ("eval", "me", ME_STATUS),
+        ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"), ("wait", f"!{LOCK_OPEN}"),
+        ("eval", "opened", ME_STATUS)], width=1280)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["on"] is True and v["covered"] is False and v["shown"] is False and v["me"] == 200
+    assert v["on"] is True and v["covered"] is True and v["me"] == 423 and v["opened"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_pin_settings_save_sections_and_both_timers(browser, live, width, tmp_path):
+    login = f"pin-policy-{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("click", "#lock-scope-sections"), ("click", "#lock-section-photo"), ("click", "#lock-section-code"),
+        set_value("#lock-timeout", "10"), ("click", "#lock-enabled"), server_lock_is(True),
+        ("click", "#lock-section-chat"), ("type", "#lock-policy-password", "password-123"),
+        ("eval", "refresh", f"(async () => {{ await {API}.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"),
+        ("eval", "passwordKept", "document.querySelector('#lock-policy-password').value === 'password-123'"),
+        ("click", "#lock-save"),
+        ("wait", "document.querySelector('#screen-lock-status').textContent.includes('сохранены')"),
+        ("eval", "reload", "location.reload()"), ("wait", READY), ("wait", "document.querySelector('#lock-section-chat')"),
+        ("eval", "policy", "fetch('/api/me').then(r => r.json()).then(m => [m.screen_lock_sections, m.screen_lock_timeout])"),
+        ("eval", "checked", "['chat','photo','code'].map(s => document.querySelector('#lock-section-' + s).checked)"),
+        ("eval", "timer", "document.querySelector('#lock-timeout').value"),
+        ("eval", "fit", "document.documentElement.scrollWidth <= innerWidth"),
+        ("eval", "scroll", "document.querySelector('.lock-block').scrollIntoView({block:'start'})"),
+        ("screenshot", str(tmp_path / f"pin-settings-{width}.png")), *go("settings/code"),
+        ("wait", "document.querySelector('#computer-pin-timeout')"), set_value("#computer-pin-timeout", "2"),
+        ("click", "#computer-pin-save"), ("wait", "document.querySelector('#computer-pin-status').textContent.includes('сохранён')"),
+        ("eval", "computer", "fetch('/api/me').then(r => r.json()).then(m => m.computer_pin_timeout)"),
+        ("eval", "scroll", "document.querySelector('#computer-pin-timeout').closest('section').scrollIntoView({block:'start'})"),
+        ("screenshot", str(tmp_path / f"computer-pin-{width}.png"))],
+        width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["policy"] == [["chat", "photo", "code"], 600] and v["checked"] == [True, True, True]
+    assert v["timer"] == "10" and v["computer"] == 7200 and v["fit"] is True and v["passwordKept"] is True
     assert not problems(r), problems(r)
+
+
+def test_partial_pin_keeps_other_sections_available_and_guards_direct_return(browser, live):
+    login = "pin-scope-route"
+    live.add_user(login)
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('PUT', '/api/me/pin', {{password:'password-123', pin:'2580'}});
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, sections:['photo','code'], timeout:60}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
+        *go("photo"), ("wait", "document.querySelector('#rail [data-section=photo][aria-current=page]')"),
+        hide(), later(61000), show(), ("wait", LOCK_OPEN),
+        ("eval", "hidden", "getComputedStyle(document.querySelector('#view')).visibility"),
+        ("click", "#lock-elsewhere"), ("wait", "location.hash === '#/chat' && !document.documentElement.classList.contains('shrouded')"),
+        ("wait", "document.querySelector('#chat-input')"),
+        ("eval", "available", "fetch('/api/me').then(r => r.status)"),
+        ("eval", "direct", "location.hash = '#/photo'"), ("wait", LOCK_OPEN), ("wait", PIN_SHOWN),
+        ("eval", "reload", "location.reload()"), ("wait", LOCK_OPEN), ("wait", PIN_SHOWN),
+        *tap("2580"), ("click", "#lock-pin-ok"), ("wait", f"!{LOCK_OPEN} && {READY}"),
+        ("wait", "document.querySelector('#rail [data-section=photo][aria-current=page]')"),
+        ("eval", "scope", "fetch('/api/lock?section=photo').then(r => r.json()).then(s => s.locked)")])
+    assert not r.get("failed"), r
+    assert r["values"]["hidden"] == "hidden" and r["values"]["available"] == 200 and r["values"]["scope"] is False
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+def test_partial_pin_first_navigation_after_idle_does_not_renew_access(browser, live):
+    login = "pin-first-nav"
+    live.add_user(login)
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, sections:['photo'], timeout:60}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
+        later(61000), ("click", "#rail [data-section=photo]"), ("wait", LOCK_OPEN),
+        ("eval", "locked", "fetch('/api/lock?section=photo').then(r => r.json()).then(s => s.locked)"),
+        ("click", "#lock-elsewhere"), ("wait", "location.hash === '#/chat' && !document.documentElement.classList.contains('shrouded')"),
+        ("click", "#rail [data-section=photo]"), ("wait", LOCK_OPEN),
+        ("eval", "hidden", "getComputedStyle(document.querySelector('#view')).visibility"),
+        ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"), ("wait", f"!{LOCK_OPEN}")])
+    assert not r.get("failed"), r
+    assert r["values"]["locked"] is True and r["values"]["hidden"] == "hidden"
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
+@pytest.mark.parametrize("timeout", [0, 1])
+def test_pin_timer_locks_on_return_or_while_visible(browser, live, timeout):
+    login = f"pin-timer-{timeout}"
+    live.add_user(login)
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, timeout:{timeout}}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    steps = [hide(), ("wait", LOCK_OPEN), show()] if timeout == 0 else []
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure), *steps,
+        ("wait", LOCK_OPEN), ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"),
+        ("wait", f"!{LOCK_OPEN}"), ("eval", "opened", ME_STATUS)])
+    assert not r.get("failed"), r
+    assert r["values"]["opened"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
 
 
 def test_password_opens_and_a_reload_stays_locked(browser, live):
@@ -5421,7 +5514,7 @@ def test_mic_stops_under_the_curtain(browser, live):
 FAIL_LOCK_STATE = """(() => { const real = window.fetch;
   window.fetch = function (input, init) {
     const left = Number(sessionStorage.getItem('failLock') || 0);
-    if (left > 0 && input === '/api/lock' && init && init.method === 'GET') {
+    if (left > 0 && String(input).split('?')[0] === '/api/lock' && init && init.method === 'GET') {
       sessionStorage.setItem('failLock', String(left - 1));
       return Promise.reject(new TypeError('Failed to fetch'));
     }
@@ -5453,8 +5546,9 @@ def test_cold_start_without_the_lock_state_still_opens(browser, live, way):
 FAIL_GETS = """(() => { const real = window.fetch; window.marks = [];
   window.fetch = async function (input, init) {
     const fail = JSON.parse(sessionStorage.getItem('fail') || '{}');
-    if (fail[input] > 0 && (!init || !init.method || init.method === 'GET')) {
-      fail[input] -= 1;
+    const path = String(input).split('?')[0];
+    if (fail[path] > 0 && (!init || !init.method || init.method === 'GET')) {
+      fail[path] -= 1;
       sessionStorage.setItem('fail', JSON.stringify(fail));
       throw new TypeError('Failed to fetch');
     }

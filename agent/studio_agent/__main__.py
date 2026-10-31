@@ -57,7 +57,7 @@ def _enroll(h) -> int:
     cfg = store.load_config(h)
     form = {"url": _ask("Адрес студии", cfg.url), "login": _ask("Логин"),
             "name": _ask("Имя компьютера", cfg.name or os.environ.get("COMPUTERNAME", "")),
-            "projects_root": _ask("Папка проектов", cfg.projects_root), "pin": "", "pin2": "", "no_pin": False,
+            "projects_roots": _ask_folders(cfg.projects_roots), "pin": "", "pin2": "", "no_pin": False,
             "autostart": cfg.autostart}
     form["password"] = getpass.getpass("Пароль: ")
     errors = setup.validate(form, enrolled=False)
@@ -71,6 +71,17 @@ def _enroll(h) -> int:
         return 1
     print(f"Привязан: компьютер {cfg.agent_id}. Работающий мост подхватит ключ после перезапуска.")
     return 0
+
+
+def _ask_folders(current: list[str]) -> list[str]:
+    """Пустой первый ввод сохраняет список; затем можно добавить сколько угодно папок."""
+    if current:
+        print("Папки проектов:\n" + "\n".join(f"  {path}" for path in current))
+    first = input("Папка проектов (Enter — оставить прежние): " if current else "Папка проектов: ").strip()
+    roots = [first] if first else list(current)
+    while path := input("Ещё папка проектов (Enter — закончить): ").strip():
+        roots.append(path)
+    return roots
 
 
 def _set_pin(h) -> int:
@@ -92,7 +103,7 @@ def _status(h) -> int:
     except OSError:
         pin = "не читается"
     print(f"Адрес студии: {cfg.url}\nКомпьютер: {cfg.agent_id if cfg.agent_id is not None else '—'}\n"
-          f"Имя компьютера: {cfg.name or '—'}\nПапка проектов: {cfg.projects_root or '—'}\n"
+          f"Имя компьютера: {cfg.name or '—'}\nПапки проектов: {', '.join(cfg.projects_roots) or '—'}\n"
           f"Ключ устройства: {'есть' if store.load_key(h) is not None else 'нет'}\nPIN: {pin}")
     return 0
 

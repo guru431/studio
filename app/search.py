@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import db
+import lock_policy
 import state
 
 Q_MAX = 200
@@ -119,6 +120,10 @@ async def find(body: SearchIn, request: Request):
     if not terms and not (body.section or body.model or body.since or body.until):
         raise HTTPException(400, EMPTY)
     where, args = ["d.user_id = ?", KNOWN], [uid]
+    hidden = sorted(lock_policy.hidden(request.state.digest))
+    if hidden:
+        where.append("d.section NOT IN (" + ",".join("?" for _ in hidden) + ")")
+        args.extend(hidden)
     for column, value in (("section", body.section), ("model", body.model)):
         if value:
             where.append(f"d.{column} = ?")
@@ -183,9 +188,10 @@ async def find(body: SearchIn, request: Request):
 @router.get("/models")
 async def models(request: Request):
     out: dict[str, list[str]] = {}
+    hidden = lock_policy.hidden(request.state.digest)
     for row in state.DB.execute("SELECT DISTINCT section, model FROM search_docs WHERE user_id = ? AND model IS NOT NULL"
                                 " ORDER BY section, model", (request.state.user.id,)):
-        if row["section"] not in TITLES:                 # раздел новее кода (KNOWN)
+        if row["section"] not in TITLES or row["section"] in hidden:
             continue
         out.setdefault(row["section"], []).append(row["model"])
     return {"models": out}

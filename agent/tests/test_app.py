@@ -790,6 +790,27 @@ def test_set_folder_validates_and_restarts(make, home, configured, tmp_path):
     assert store.load_config(home).projects_root == str(other)
 
 
+def test_set_folders_saves_together_and_restarts_with_all_projects(make, home, configured, tmp_path):
+    from studio_agent import projects
+
+    ctrl = make()
+    original = store.load_config(home).projects_root
+    other = tmp_path / "personal"
+    (other / "second").mkdir(parents=True)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.set_folders([original, str(other / "missing")]) == ["Папки нет"]
+    assert store.load_config(home).projects_roots == [original]
+    assert ctrl.set_folders([original, str(other)]) == []
+    until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
+    assert ctrl.agent.cfg.projects_roots == [original, str(other)]
+    second = next(row for row in projects.list_projects(ctrl.agent.cfg) if row["name"] == "second")
+    assert projects.find_project(ctrl.agent.cfg, second["pid"]) == other / "second"
+    assert ctrl.set_folders([str(other)]) == []
+    until(lambda: len(ctrl.links) == 3 and ctrl.state == "online")
+    assert projects.find_project(ctrl.agent.cfg, second["pid"]) == other / "second"
+
+
 def test_autostart_box_follows_the_registry_not_the_config(make, home, configured):
     ctrl = make()
     cfg = store.load_config(home)

@@ -387,7 +387,7 @@ class MainWindow:
         url = tk.StringVar(value=cfg.url)
         login, password = tk.StringVar(), tk.StringVar()
         name = tk.StringVar(value=cfg.name or os.environ.get("COMPUTERNAME", ""))
-        folder = tk.StringVar(value=cfg.projects_root)
+        folders = list(cfg.projects_roots)
         pin, pin2 = tk.StringVar(), tk.StringVar()
         auto = tk.BooleanVar(value=cfg.autostart)
         errors = tk.StringVar()
@@ -413,20 +413,7 @@ class MainWindow:
         r += 3
         field("Имя компьютера", name)
         r += 2
-        ttk.Label(box, text="Папка проектов", style="Card.TLabel").grid(row=r, column=0, columnspan=2, sticky="w")
-        line = ttk.Frame(box, style="Card.TFrame")
-        line.grid(row=r + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), gap))
-        line.columnconfigure(0, weight=1)
-        ttk.Entry(line, textvariable=folder).grid(row=0, column=0, sticky="ew")
-
-        def browse() -> None:
-            from tkinter import filedialog
-
-            chosen = filedialog.askdirectory(parent=self.win, initialdir=folder.get() or None, mustexist=True)
-            if chosen:
-                folder.set(os.path.normpath(chosen))
-
-        ttk.Button(line, text="Обзор…", command=browse).grid(row=0, column=1, padx=(self.px(8), 0))
+        self.folders_control(box, row=r, folders=folders, problem=errors)
         r += 2
         box.columnconfigure(0, weight=1, uniform="pin")
         box.columnconfigure(1, weight=1, uniform="pin")
@@ -447,7 +434,7 @@ class MainWindow:
             if not go.instate(["!disabled"]):
                 return
             form = {"url": url.get(), "login": login.get(), "password": password.get(), "name": name.get(),
-                    "projects_root": folder.get(), "pin": pin.get(), "pin2": pin2.get(), "no_pin": False,
+                    "projects_roots": list(folders), "pin": pin.get(), "pin2": pin2.get(), "no_pin": False,
                     "autostart": auto.get()}
             password.set("")
             pin.set("")
@@ -591,30 +578,7 @@ class MainWindow:
                                                                        pady=(0, self.px(10)))
         self.theme_controls(box, row=1, card=True)
         problem = tk.StringVar()
-        ttk.Label(box, text="Папка проектов", style="Card.Muted.TLabel").grid(row=2, column=0, sticky="w")
-        folder = ttk.Label(box, text=cfg.projects_root or DASH, style="Card.TLabel", wraplength=self.px(300))
-        folder.grid(row=3, column=0, sticky="w")
-
-        def change() -> None:
-            from tkinter import filedialog
-
-            problem.set("")
-            current = self.ctrl.config().projects_root
-            chosen = filedialog.askdirectory(parent=self.win, initialdir=current or None, mustexist=True)
-            if not chosen:
-                return
-            path = os.path.normpath(chosen)
-
-            def done(found, failed) -> None:
-                if failed or found:
-                    problem.set("\n".join(found) if found else FAILED)
-                    return
-                folder.configure(text=path)
-
-            self.work(lambda: self.ctrl.set_folder(path), done)
-
-        pick = ttk.Button(box, text="Изменить…", command=change)
-        pick.grid(row=2, column=1, rowspan=2, sticky="e", padx=(self.px(12), 0))
+        self.folders_control(box, row=2, folders=list(cfg.projects_roots), problem=problem, save=True)
         auto = tk.BooleanVar(value=self.ctrl.autostart_enabled())  # реестр, а не config.json
 
         def toggle() -> None:
@@ -631,7 +595,7 @@ class MainWindow:
         box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
         box_auto.grid(row=4, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
-        self.buttons += [pick, box_auto]
+        self.buttons.append(box_auto)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
         self.pin_line.grid(row=5, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
@@ -639,6 +603,85 @@ class MainWindow:
             row=6, column=0, columnspan=2, sticky="w")
         self.settings_problem = problem
         self.show_pin()
+
+    def folders_control(self, box, *, row: int, folders: list[str], problem, save: bool = False) -> None:
+        """Список разрешённых папок и добавление/удаление; при привязке сохраняется сразу."""
+        ttk = self.ttk
+        ttk.Label(box, text="Папки проектов", style="Card.Muted.TLabel").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        area = ttk.Frame(box, style="Card.TFrame")
+        area.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), self.px(10)))
+        area.columnconfigure(0, weight=1)
+        viewport = ttk.Frame(area, width=self.px(285), height=self.px(76), style="Card.TFrame")
+        viewport.grid(row=0, column=0, sticky="ew")
+        viewport.grid_propagate(False)
+        viewport.rowconfigure(0, weight=1)
+        viewport.columnconfigure(0, weight=1)
+        listing = ttk.Treeview(viewport, show="tree", selectmode="browse", height=3, style="Folders.Treeview")
+        listing.column("#0", minwidth=self.px(180), width=self.px(285), stretch=False)
+        listing.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(area, orient="vertical", command=listing.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        listing.configure(yscrollcommand=scroll.set)
+        horizontal = ttk.Scrollbar(area, orient="horizontal", command=listing.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        listing.configure(xscrollcommand=horizontal.set)
+        bar = ttk.Frame(area, style="Card.TFrame")
+        bar.grid(row=2, column=0, columnspan=2, sticky="e", pady=(self.px(6), 0))
+
+        def render() -> None:
+            import tkinter.font as tkfont
+
+            listing.delete(*listing.get_children())
+            font = tkfont.nametofont("TkDefaultFont", self.root)
+            listing.column("#0", width=max(self.px(285), max((font.measure(p) for p in folders), default=0) + self.px(24)))
+            for index, path in enumerate(folders):
+                listing.insert("", "end", iid=str(index), text=path)
+            if folders:
+                listing.selection_set(str(len(folders) - 1))
+                listing.see(str(len(folders) - 1))
+
+        def apply(proposed: list[str]) -> None:
+            problem.set("")
+            if not save:
+                folders[:] = proposed
+                render()
+                return
+
+            def done(found, failed) -> None:
+                if failed or found:
+                    problem.set("\n".join(found) if found else FAILED)
+                    return
+                folders[:] = self.ctrl.config().projects_roots
+                render()
+
+            self.work(lambda: self.ctrl.set_folders(proposed), done)
+
+        def add() -> None:
+            from tkinter import filedialog
+
+            if self.busy:
+                return
+            chosen = filedialog.askdirectory(parent=self.win, initialdir=folders[-1] if folders else None, mustexist=True)
+            if chosen:
+                path = os.path.normpath(chosen)
+                if os.path.normcase(path) not in {os.path.normcase(p) for p in folders}:
+                    apply([*folders, path])
+
+        def remove() -> None:
+            if self.busy or not listing.selection():
+                return
+            if len(folders) <= 1:
+                problem.set("Нужна хотя бы одна папка проектов")
+                return
+            index = int(listing.selection()[0])
+            apply(folders[:index] + folders[index + 1:])
+
+        for column, (label, action) in enumerate((("Добавить…", add), ("Убрать", remove))):
+            button = ttk.Button(bar, text=label, command=action)
+            button.grid(row=0, column=column, padx=(self.px(8), 0))
+            self.buttons.append(button)
+        render()
 
     def show_pin(self) -> None:
         """Строка PIN (`pin_row`) на месте: слова и кнопки."""
