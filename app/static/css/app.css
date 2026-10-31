@@ -1239,7 +1239,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   overflow-wrap: anywhere; }
 .code-compose-area { position: sticky; bottom: 0; z-index: 1; min-width: 0; width: 100%; background: var(--bg);
   container-type: inline-size; padding-top: 4px; }
-.code-compose-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 0 4px 4px; }
 .code-session-notice { margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel-2); font-size: 13px; overflow-wrap: anywhere; }
 .code-session-notice p { margin: 0 0 6px; }
@@ -1256,7 +1255,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-composer textarea { min-height: 32px; max-height: 25dvh; padding: 4px 0; font-size: 16px; }
 .code-go-icon { display: none; }
 .code-activity { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0;
-  color: var(--muted); font-size: 12px; }
+  margin: 0 4px 4px; color: var(--muted); font-size: 12px; }
 .code-activity[data-state="idle"] { display: none; }
 .code-activity > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-activity-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }

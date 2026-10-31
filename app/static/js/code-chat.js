@@ -187,13 +187,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox),
       stop, send));
   host.dataset.engine = engine;
   host.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, status, el('div', { class: 'code-compose-area' }, sessionNotice,
-      el('div', { class: 'code-compose-status' }, activity, contextBox), form));
+    more, feed, status, el('div', { class: 'code-compose-area' }, sessionNotice, activity, form));
   if (drafts.has(draftKey)) {
     text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
     autosize();
