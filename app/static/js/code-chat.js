@@ -133,6 +133,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
+  const previous = el('button', { type: 'button', id: 'code-message-up', class: 'icon-btn',
+    'aria-label': 'Предыдущее моё сообщение', title: 'Предыдущее моё сообщение', disabled: true });
+  const next = el('button', { type: 'button', id: 'code-message-down', class: 'icon-btn',
+    'aria-label': 'Следующее моё сообщение', title: 'Следующее моё сообщение', disabled: true });
+  previous.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>';
+  next.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-6-6 6 6 6-6"/></svg>';
+  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': 'Мои сообщения', hidden: true }, previous, next);
+  let messageTarget = null;
+  let messageScrollTop = 0;
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание',
     placeholder: 'Задание…', maxlength: '100000' });
   const catalog = engine === 'claude' ? agent : agent?.[engine];
@@ -162,6 +171,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
       showStatus('Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате');
     }
+    paintPicks();
   }
 
   if (fresh) applyDefaults();
@@ -192,7 +202,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   const pick = (label, select) => {
     select.setAttribute('aria-label', label);
-    return el('label', { class: 'code-pick' }, el('span', { class: 'code-pick-name' }, label), select);
+    return el('label', { class: 'code-pick chip' }, el('span', { class: 'code-pick-name' }, label),
+      el('span', { class: 'code-pick-value', 'aria-hidden': 'true' }, select.selectedOptions[0].textContent), select);
   };
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
@@ -202,12 +213,22 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   host.dataset.engine = engine;
   host.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, status, el('div', { class: 'code-compose-area' }, sessionNotice, activity, form));
+    more, feed, status, el('div', { class: 'code-compose-area' }, navigation, sessionNotice, activity, form));
   if (drafts.has(draftKey)) {
     text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
     autosize();
   }
   paintImages();
+
+  function paintPicks() {
+    for (const select of [model, effort, access]) {
+      const label = select.closest('.code-pick');
+      if (!label) continue;
+      const value = select.selectedOptions[0]?.textContent || DEFAULT;
+      label.querySelector('.code-pick-value').textContent = value;
+      label.title = value;
+    }
+  }
 
   function paintSettings(data) {
     model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : 'Не получено';
@@ -215,6 +236,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     effort.options[0].textContent = effortLabel(data.effort);
     access.options[0].textContent = accessLabel(engine, data.access);
     if (model.value && typeof data.model === 'string' && data.model) model.selectedOptions[0].textContent = data.model;
+    paintPicks();
   }
 
   function paintContext(data) {
@@ -345,9 +367,54 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return !scroller || scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }
 
+  /** Якорь — верх ленты под прилипшей шапкой. Сохраняем выбранное сообщение даже у конца прокрутки. */
+  function messageNeighbours() {
+    const users = [...feed.querySelectorAll('.code-msg.user')];
+    if (messageTarget && (!feed.contains(messageTarget) || Math.abs(scroller.scrollTop - messageScrollTop) > 2)) {
+      messageTarget = null;
+    }
+    const index = users.indexOf(messageTarget);
+    if (index >= 0) return { before: users[index - 1], after: users[index + 1] };
+    if (stuck()) return { before: users.at(-1), after: null };
+    const top = messageTop();
+    return { before: users.findLast((node) => node.getBoundingClientRect().top < top - 2),
+      after: users.find((node) => node.getBoundingClientRect().top > top + 2) };
+  }
+
+  function messageTop() {
+    const header = host.closest('.code-main')?.querySelector('.code-top');
+    const scale = scroller.getBoundingClientRect().height / scroller.offsetHeight;
+    return Math.max(scroller.getBoundingClientRect().top, header?.getBoundingClientRect().bottom || 0) + 12 * scale;
+  }
+
+  function paintNavigation() {
+    if (!scroller) return;
+    const { before, after } = messageNeighbours();
+    navigation.hidden = !feed.querySelector('.code-msg.user') && start <= 0;
+    previous.disabled = more.disabled || (!before && start <= 0);
+    next.disabled = !after;
+  }
+
+  async function jumpMessage(direction) {
+    acted = Date.now();
+    let target = messageNeighbours()[direction < 0 ? 'before' : 'after'];
+    while (!target && direction < 0 && start > 0) {
+      const first = feed.querySelector('.code-msg.user');
+      if (!await loadEarlier() || !alive) return;
+      const users = [...feed.querySelectorAll('.code-msg.user')];
+      target = first ? users[users.indexOf(first) - 1] : users.at(-1);
+    }
+    if (!target || !scroller) return;
+    messageTarget = target;
+    const scale = scroller.getBoundingClientRect().height / scroller.offsetHeight;
+    scroller.scrollTop += (target.getBoundingClientRect().top - messageTop()) / scale;
+    messageScrollTop = scroller.scrollTop;
+    paintNavigation();
+  }
+
   /** Правка ленты: была внизу — остаётся внизу. */
   function grow(change) {
-    const was = stuck();
+    const was = !messageTarget && stuck();
     change();
     if (was && scroller) scroller.scrollTop = scroller.scrollHeight;
   }
@@ -878,6 +945,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Выбор здесь действует в этом чате; умолчания учётки меняются в настройках. */
   function remember() {
     touched = true;
+    paintPicks();
   }
 
   async function submit() {
@@ -972,23 +1040,38 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     await follow(response, own);
   }
 
-  more.addEventListener('click', async () => {
+  async function loadEarlier() {
+    if (more.disabled || start <= 0) return false;
     more.disabled = true;
+    paintNavigation();
     try {
       const page = await api('GET', `${endpoint()}${engine !== 'claude' ? '&' : '?'}before=${start}`);
-      if (!alive) return;
+      if (!alive) return false;
       const height = scroller ? scroller.scrollHeight : 0;
       feed.prepend(...messages(page.items));
       if (scroller) scroller.scrollTop += scroller.scrollHeight - height;   // глаза — на прежнем месте
+      if (messageTarget) messageScrollTop = scroller.scrollTop;
+      const oldStart = start;
       start = Number.isInteger(page.start) ? page.start : 0;
       more.hidden = start <= 0;
+      return start < oldStart;
     } catch (err) {
       if (err.code === 'closed') closed();
       else showStatus(words(err));
+      return false;
     } finally {
       more.disabled = false;
+      paintNavigation();
     }
-  });
+  }
+
+  more.addEventListener('click', loadEarlier);
+  previous.addEventListener('click', () => jumpMessage(-1));
+  next.addEventListener('click', () => jumpMessage(1));
+  scroller?.addEventListener('scroll', paintNavigation, { passive: true });
+  window.addEventListener('resize', paintNavigation);
+  const feedObserver = new MutationObserver(paintNavigation);
+  feedObserver.observe(feed, { childList: true });
 
   stop.addEventListener('click', async () => {
     stop.disabled = true;
@@ -1053,6 +1136,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       usage.unmount();
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
+      scroller?.removeEventListener('scroll', paintNavigation);
+      window.removeEventListener('resize', paintNavigation);
+      feedObserver.disconnect();
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);
       clearTimeout(paintTimer);

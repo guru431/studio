@@ -74,6 +74,43 @@ def fits(page):
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+@pytest.mark.parametrize("scale", [100, 50])
+def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(iphone, scale, tmp_path):
+    page, aid = iphone
+    from fake_bridge import T0
+
+    page.studio_machine.projects['alpha']['chats'][CODE_CHAT_A]['messages'] = [
+        {"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant",
+         "text": f"Запрос {i}" if i % 2 == 0 else "Ответ.\n\n" * 50, "steps": [], "time": T0 + i}
+        for i in range(6)]
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#avatar').tap()
+    page.locator('#appearance-scale').select_option(str(scale))
+    page.locator('#avatar').tap()
+    page.evaluate("document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight")
+    for direction, number in [('up', 4), ('up', 2), ('up', 0), ('down', 2)]:
+        button = page.locator(f'#code-message-{direction}')
+        assert button.evaluate("""e => {
+          const r = e.getBoundingClientRect();
+          return e.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+        }""")
+        button.tap()
+        page.wait_for_function("""number => {
+          const view = document.querySelector('#view');
+          const top = document.querySelector('.code-top').getBoundingClientRect().bottom
+            + 12 * view.getBoundingClientRect().height / view.offsetHeight;
+          const message = [...document.querySelectorAll('#code-feed .code-msg.user')]
+            .find(e => e.textContent === `Запрос ${number}`);
+          return Math.abs(message.getBoundingClientRect().top - top) < 2;
+        }""", arg=number)
+        if number == 0:
+            pw.expect(page.locator('#code-message-up')).to_be_disabled()
+    fits(page)
+    page.screenshot(path=str(tmp_path / f'message-arrows-{scale}.png'))
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 def test_session_picker_keeps_titles_after_leaving_the_section(iphone):
     page, aid = iphone
     page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] a").tap()
@@ -182,6 +219,10 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
       const root = document.documentElement, field = document.querySelector('#code-text');
       const scale = parseFloat(root.style.zoom), box = field.getBoundingClientRect();
       return { readable: parseFloat(getComputedStyle(field).fontSize) * scale >= 16,
+        compactPicks: [...document.querySelectorAll('.code-pick-value')].every(e =>
+          getComputedStyle(e).fontSize === getComputedStyle(document.querySelector('#code-context')).fontSize),
+        nativePicks: [...document.querySelectorAll('.code-pick select')].every(e =>
+          parseFloat(getComputedStyle(e).fontSize) * scale >= 16),
         viewport: visualViewport.scale === 1,
         fits: box.left >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
         shell: document.body.getBoundingClientRect().height <= innerHeight + 1 };
@@ -190,6 +231,12 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
     page.locator('#code-text').blur()
     fits(page)
     page.screenshot(path=str(tmp_path / f'focused-{scale}-{font}.png'))
+    page.locator('#code-effort').select_option(index=1)
+    assert page.locator('#code-effort').evaluate("""e => {
+      const r = e.getBoundingClientRect(), label = e.closest('.code-pick');
+      return label.querySelector('.code-pick-value').textContent === e.selectedOptions[0].textContent
+        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === e;
+    }""")
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], ids=["320", "iphone15pro"], indirect=True)

@@ -12,6 +12,73 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live, width, tmp_path):
+    from fake_bridge import T0
+
+    login = f"message-arrows-{width}"
+    live.add_user(login)
+    messages = [{"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant",
+                 "text": f"Запрос {i}" if i % 2 == 0 else ("Длинный ответ.\n\n" * 20),
+                 "steps": [], "time": T0 + i} for i in range(106)]
+    machine = code_free_machine({CODE_CHAT_A: code_session("История", messages=messages)})
+    aid, server = code_online(live, login, machine)
+    def arrow(direction):
+        # Драйвер click всегда вызывает scrollIntoView(center), что сдвигает якорь sticky-кнопки.
+        # Нажимаем видимую кнопку без прокрутки; настоящие касания проверяет WebKit.
+        return ("eval", "arrow", f"document.querySelector('#code-message-{direction}').click(); true")
+
+    at_top = """(() => {
+      const top = document.querySelector('.code-top').getBoundingClientRect().bottom + 12;
+      return [...document.querySelectorAll('#code-feed .code-msg.user')]
+        .find(n => Math.abs(n.getBoundingClientRect().top - top) < 3)?.textContent;
+    })()"""
+    placement = """(() => {
+      const nav = document.querySelector('.code-message-nav').getBoundingClientRect();
+      const input = document.querySelector('.code-compose-area').getBoundingClientRect();
+      const last = document.querySelector('#code-feed').getBoundingClientRect();
+      const button = document.querySelector('#code-message-up'), box = button.getBoundingClientRect();
+      return nav.right <= innerWidth && Math.abs(nav.right - input.right) < 2 && nav.bottom < input.top
+        && nav.top > document.querySelector('.code-top').getBoundingClientRect().bottom && nav.top < last.bottom
+        && button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+    })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "placement", placement),
+            ("eval", "bottom", "document.querySelector('#code-message-down').disabled"),
+            arrow("up"), ("eval", "last", at_top),
+            arrow("up"), ("eval", "previous", at_top),
+            arrow("down"), ("eval", "next", at_top),
+            ("eval", "manual", "document.querySelector('#view').scrollTop = 0"),
+            ("wait", "document.querySelector('#view').scrollTop === 0"),
+            arrow("up"),
+            ("wait", "document.querySelectorAll('#code-feed .code-msg').length === 106"),
+            ("eval", "older", at_top), arrow("up"),
+            arrow("up"), ("eval", "first", at_top),
+            ("eval", "start", "document.querySelector('#code-message-up').disabled"),
+            arrow("down"), ("eval", "afterFirst", at_top),
+            ("eval", "bottomAgain", "document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight"),
+            ("wait", "document.querySelector('#code-message-down').disabled"),
+            arrow("up"), ("eval", "afterManual", at_top),
+            ("screenshot", str(tmp_path / f"message-arrows-{width}.png")),
+            ("click", "#code-tab-add"),
+            ("wait", "!!document.querySelector('#code-tab-menu #code-new-chat')"),
+            ("eval", "away", "!document.querySelector('.code-message-nav')?.getClientRects().length"),
+            *code_tab_click(CODE_CHAT_A),
+            ("wait", "!document.querySelector('.code-message-nav').hidden"),
+            ("eval", "returned", placement)], width=width, mobile=width == 320, touch=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), {"failed": result.get("failed"), "values": result["values"]}
+    values = result["values"]
+    assert values["placement"] and values["bottom"] and values["away"] and values["returned"], values
+    assert [values[key] for key in ("last", "previous", "next", "older", "first", "afterFirst", "afterManual")] == [
+        "Запрос 104", "Запрос 102", "Запрос 104", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 104"]
+    assert values["start"]
+    assert [r["before"] for r in code_requests(machine, "history")][:2] == [None, 6]
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_session_picker_uses_cached_titles_and_search_while_refreshing(browser, live, width, tmp_path):
     login = f"session-cache-{width}"
     live.add_user(login)
@@ -105,7 +172,7 @@ def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, 
             ("eval", "initial", shape), ("screenshot", str(tmp_path / f"picker-empty-{width}.png")),
             ("click", f"#code-chats li[data-chat='{CODE_CHAT_A}'] button"), code_tab_ready(CODE_CHAT_A),
             set_value("#code-text", "Черновик задания"),
-            ("eval", "fonts", "[...document.querySelectorAll('.code-pick select')].map(s => getComputedStyle(s).fontSize)"),
+            ("eval", "fonts", "[...document.querySelectorAll('.code-pick select')].map(s => getComputedStyle(s.closest('.code-pick').querySelector('.code-pick-value') || s).fontSize).concat(getComputedStyle(document.querySelector('#code-context')).fontSize)"),
             ("click", "#code-tab-add"),
             ("wait", "document.querySelectorAll('#code-tab-menu li[data-chat]').length === 1"),
             ("eval", "opened", shape),
@@ -125,7 +192,7 @@ def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, 
     assert not result.get("failed"), result
     values = result["values"]
     assert all(values["initial"].values()) and all(values["opened"].values()), values
-    assert values["fonts"] == ["12px"] * 3
+    assert values["fonts"] == ["10px"] * 4
     assert values["rows"] == [CODE_CHAT_B] and values["stillOpen"] and values["lastClosed"]
     assert values["draft"] == "Черновик задания"
     assert not problems(result), problems(result)
