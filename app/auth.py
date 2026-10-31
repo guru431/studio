@@ -16,9 +16,9 @@
   Apache (unix-сокет), начало заголовка мог прислать сам клиент.
 - Хеш считается в потоке: вход и подтверждение паролем после него сверяют учётку заново
   (still_valid) — сброс пароля, отключение или удаление посреди проверки старым паролем не обойти.
-- Блокировка на телефоне (спека 2026-10-21-studio-screen-lock, 6.2): сессия заперта, когда у учётки
-  включена блокировка, сессия мобильная и отметки «на экране» (screenlock.py) не было дольше STALE_SEC.
-  Запертой — 423 `screen_locked` на всё /api/*, кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
+- Блокировка приложения: включена у учётки и истёк таймер активности (screenlock.py, lock_policy.py).
+  На всех устройствах 423 `screen_locked` на защищённые разделы; для всего приложения — всё /api/*,
+  кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
   (LOCK_SEC, locked, 429 `locked`).
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся.
 """
@@ -36,6 +36,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import clock
+import lock_policy
 import security
 import state
 
@@ -48,7 +49,7 @@ LOGIN_BODY_MAX = 4096
 CSRF_HEADER = "x-studio-csrf"
 LOGIN_RE = r"[a-z0-9._-]{2,32}"
 DELAY_MAX = 30
-STALE_SEC = 75
+STALE_SEC = lock_policy.DEFAULT_TIMEOUT + lock_policy.HEARTBEAT_GRACE
 #: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
 SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
                                "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
@@ -110,9 +111,10 @@ def create_session(user_id: int) -> tuple[str, str]:
     return value, csrf
 
 
-def screen_locked(enabled: int, mobile: int, seen: float | None, now: float) -> bool:
-    """Заперта ли сессия: блокировка учётки включена, сессия мобильная, свежей отметки нет."""
-    return bool(enabled) and bool(mobile) and (seen is None or now - seen > STALE_SEC)
+def screen_locked(enabled: int, mobile: int, seen: float | None, now: float,
+                  timeout: int = lock_policy.DEFAULT_TIMEOUT) -> bool:
+    """Таймер приложения действует на всех устройствах; 15 с — допуск доставки отметки."""
+    return bool(enabled) and (seen is None or now - seen > timeout + lock_policy.HEARTBEAT_GRACE)
 
 
 def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool, bool] | None:
@@ -123,7 +125,7 @@ def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool, bool]
     key = security.digest(value)
     row = state.DB.execute(
         "SELECT u.id, u.login, u.name, u.is_admin, u.theme, u.default_connection_id, u.default_model,"
-        " u.disabled, u.screen_lock, s.csrf, s.expires, s.renewed, s.mobile, s.seen"
+        " u.disabled, u.screen_lock, u.screen_lock_timeout, s.csrf, s.expires, s.renewed, s.mobile, s.seen"
         " FROM sessions s JOIN users u ON u.id = s.user_id"
         " WHERE s.digest = ?", (key,)).fetchone()
     if row is None:
@@ -139,7 +141,8 @@ def _live(value: str | None, renew: bool = True) -> tuple[User, str, bool, bool]
     user = User(id=row["id"], login=row["login"], name=row["name"], is_admin=bool(row["is_admin"]),
                 theme=row["theme"], default_connection_id=row["default_connection_id"],
                 default_model=row["default_model"])
-    return user, row["csrf"], renewed, screen_locked(row["screen_lock"], row["mobile"], row["seen"], now)
+    return user, row["csrf"], renewed, screen_locked(row["screen_lock"], row["mobile"], row["seen"], now,
+                                                  row["screen_lock_timeout"])
 
 
 def session_user(value: str | None, renew: bool = True) -> tuple[User, str] | None:
@@ -178,18 +181,27 @@ async def guard(request: Request, call_next):
         # байты: compare_digest со строкой не-ASCII падает TypeError
         if not hmac.compare_digest(sent.encode("utf-8"), csrf.encode("utf-8")):
             return JSONResponse({"detail": {"code": "csrf", "message": "обновите страницу"}}, status_code=403)
-    if screen and path not in SCREEN_LOCK_PATHS:
+    digest = security.digest(request.cookies[COOKIE])
+    if screen and path not in SCREEN_LOCK_PATHS and lock_policy.blocks(request, user.id, digest):
         response = JSONResponse({"detail": {"code": "screen_locked", "message": "студия заперта"}}, status_code=423,
                                 headers={"Cache-Control": "no-store"})
     else:
         request.state.user, request.state.csrf = user, csrf
-        request.state.locked, request.state.digest = screen, security.digest(request.cookies[COOKIE])
-        response = await call_next(request)
+        request.state.locked, request.state.digest = screen, digest
+        restriction = lock_policy.RESTRICTED.set(frozenset(lock_policy.hidden(digest)))
+        try:
+            response = await call_next(request)
+        finally:
+            lock_policy.RESTRICTED.reset(restriction)
     if renewed:                      # срок в браузере догоняет продлённый на сервере
         _set_cookie(response, request.cookies[COOKIE])
     # ответы API (токен прямого подключения, csrf в /api/me, чаты) — не в дисковый кеш браузера;
     # свой заголовок (media: private, max-age) остаётся
-    response.headers.setdefault("Cache-Control", "no-store")
+    policy = lock_policy.session(digest)
+    if policy and policy["screen_lock"]:
+        response.headers["Cache-Control"] = "no-store"
+    else:
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 

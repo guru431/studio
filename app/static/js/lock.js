@@ -1,14 +1,14 @@
-/* Блокировка на телефоне (спека 2026-10-21-studio-screen-lock): шторка, экран блокировки, отметки
+/* Блокировка приложения или выбранных разделов: шторка, экран блокировки, отметки
  * «на экране» и помощники passkey.
  *
- * Запирает сервер (auth.guard: 423 на всё /api/*, кроме запросов блокировки); здесь — экран и
- * согласие с сервером. Видимая вкладка шлёт отметку при старте, при возвращении и раз в ALIVE_SEC
- * (touch — основной указатель палец: сервер защёлкивает по нему сессию как мобильную). Отметки шлёт
- * и компьютер: сессия, защёлкнутая в режиме планшета, иначе запиралась бы посреди работы. Ушла с
- * экрана (телефон, блокировка включена) — сразу шторка; вернулась через AWAY_SEC и больше —
- * «заперто» серверу и экран блокировки, раньше — отметка решает, убрать ли шторку. Со скрытой
- * студии шторка не снимается никогда. Любой ответ 423 ждёт одного общего отпирания (api.js
- * hooks.locked) и повторяется.
+ * Сервер проверяет защиту каждого API; ensureSectionOpen проверяет маршрут до показа кэша раздела.
+ * Защита действует на телефоне и компьютере. У выбранных разделов общий срок отпирания;
+ * остальные разделы доступны и после его истечения. Видимая вкладка шлёт отметку раз в ALIVE_SEC,
+ * продлевая срок только после настоящего действия владельца. Положительный таймер считает
+ * бездействие, в том числе у видимой вкладки; нулевой запирает при каждом уходе с экрана.
+ * Защищённый экран при уходе сразу закрывается шторкой до проверки возвращения.
+ * Ответ 423 ждёт одного общего отпирания (api.js hooks.locked) и повторяется; у частичной защиты
+ * из экрана PIN можно перейти в открытый раздел, не разрешая ожидающие защищённые запросы.
  * Шторка и экран — <dialog> через showModal: поверх открытых окон просмотра, остальное — inert;
  * Escape их не закрывает (cancel отменён, closedby="none", а закрытое силой окно открывается снова);
  * пока заперто или под шторкой, <html class="shrouded"> прячет оболочку и в миг до нового showModal.
@@ -35,7 +35,6 @@ import { api, hooks, loadMe, me, useCsrf } from './api.js';
 import { cancelRecording } from './mic.js';
 import { plural, words } from './ui.js';
 
-const AWAY_SEC = 60;
 const ALIVE_SEC = 15;
 const MARK_SEC = 8;
 /** Вызов passkey живёт на сервере 120 с (screenlock.CHALLENGE_SEC): варианты старше — готовить заново. */
@@ -144,7 +143,39 @@ let digits = '';         // набранные цифры: только здес
 let pinGoing = false;    // идёт POST /api/lock/pin: нажатия, «OK» и Enter — мимо
 let stale = false;       // GET /api/lock при показе экрана не пришёл: ключи и PIN неизвестны — перечитать
 let rereading = null;    // идущее перечитывание: возвращение, таймер и «Открыть» его не повторяют
-let reading = null;      // старт оболочки и её 423 используют один запрос состояния
+const readings = new Map(); // один запрос состояния на раздел; переход не использует ответ прежнего раздела
+let policy = null;       // GET /api/lock доступен раньше профиля
+let activityAt = 0;      // только настоящие действия пользователя, загрузка/возвращение их не подделывают
+let markedAt = 0;
+let checkedAt = Date.now();
+let idleTimer = null;
+let elsewhere;
+
+function visibleSection() {
+  const parts = /^#\/([a-z]+)(?:\/([^/?]+))?/.exec(location.hash);
+  if (!parts) return 'chat';
+  // Настройки отдельного раздела содержат его подключения и модели; общие настройки доступны отдельно.
+  return parts[1] === 'settings' && ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].includes(parts[2])
+    ? parts[2] : parts[1];
+}
+
+function currentPolicy() {
+  return me ? { enabled: me.screen_lock, sections: me.screen_lock_sections || ['*'], timeout: me.screen_lock_timeout ?? 60 }
+    : policy || { enabled: false, sections: ['*'], timeout: 60 };
+}
+
+function guarded(section = visibleSection()) {
+  const p = currentPolicy();
+  return !!p.enabled && (p.sections.includes('*') || p.sections.includes(section));
+}
+
+function blocking() {
+  return !!waiting && (waiting.forced || guarded());
+}
+
+function lockScope() {
+  return waiting?.forced ? 'security' : visibleSection();
+}
 
 function say(text, kind) {
   note.textContent = text || '';
@@ -154,7 +185,7 @@ function say(text, kind) {
 /** Пока заперто или под шторкой — <html class="shrouded">: содержимое скрыто (app.css) и в миг между
  * закрытием окна силой и его открытием снова. */
 function shroud() {
-  document.documentElement.classList.toggle('shrouded', covering || !!waiting);
+  document.documentElement.classList.toggle('shrouded', covering || blocking());
 }
 
 function cover(on) {
@@ -165,33 +196,85 @@ function cover(on) {
   shroud();
 }
 
-function guarded() {
-  return isTouch() && !!me && !!me.screen_lock;
-}
-
 /** Состояние блокировки и с ним CSRF сессии. */
-function lockState() {
-  if (!reading) reading = api('GET', '/api/lock').then((state) => {
+function lockState(section = lockScope()) {
+  if (!readings.has(section)) readings.set(section, api('GET', `/api/lock?section=${encodeURIComponent(section)}`).then((state) => {
     useCsrf(state.csrf);
     token = true;
+    policy = { enabled: state.enabled, sections: state.sections || ['*'], timeout: state.timeout ?? 60 };
+    if (me) {
+      me.screen_lock = policy.enabled;
+      me.screen_lock_sections = policy.sections;
+      me.screen_lock_timeout = policy.timeout;
+    }
     return state;
-  }).finally(() => { reading = null; });
-  return reading;
+  }).finally(() => { readings.delete(section); }));
+  return readings.get(section);
 }
 
 /** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи
  * или ответа нет дольше MARK_SEC (у fetch своего срока нет, iOS ждёт минуту и больше). */
-async function mark() {
+async function mark(allowActivity = true) {
   if (waiting) return null;
   try {
     if (!me && !token) await lockState();          // холодный старт без связи: без CSRF отметка получила бы 403
-    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch() },
+    const timeout = currentPolicy().timeout;
+    const expired = currentPolicy().enabled && timeout > 0 && Date.now() - (activityAt || checkedAt) >= timeout * 1000;
+    const active = timeout === 0 || (allowActivity && activityAt > markedAt && !expired);
+    const sentAt = activityAt;
+    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch(), active, section: visibleSection() },
       { signal: AbortSignal.timeout(MARK_SEC * 1000) });
-    if (locked) waitOpen();
+    if (active) markedAt = Math.max(markedAt, sentAt);
+    if (locked && guarded()) waitOpen();
     return locked;
   } catch {
-    return null;         // нет связи: без отметок сервер запрёт сам через 75 с
+    return null;         // нет связи: сервер проверит срок перед следующим защищённым запросом
   }
+}
+
+/** Положительный таймер отсчитывает бездействие даже у открытой вкладки. Нулевой — уход с экрана. */
+function armIdle() {
+  clearTimeout(idleTimer);
+  const timeout = currentPolicy().timeout;
+  if (!guarded() || waiting || !timeout || document.visibilityState !== 'visible') return;
+  const left = Math.max(0, timeout * 1000 - (Date.now() - (activityAt || checkedAt)));
+  idleTimer = setTimeout(() => {
+    if (guarded() && !waiting) waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+  }, left);
+}
+
+function activity(event) {
+  if (!event.isTrusted || waiting || covering || document.visibilityState !== 'visible') return;
+  const p = currentPolicy();
+  if (p.enabled && p.timeout > 0 && Date.now() - (activityAt || checkedAt) >= p.timeout * 1000) {
+    // Первое нажатие после простоя (в том числе переход из открытого раздела) не продлевает доступ.
+    if (guarded()) waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    return;
+  }
+  activityAt = Date.now();
+  armIdle();
+}
+
+/** До mount/update: защищённый раздел, включая сохранённые в памяти узлы, ждёт проверки сервера. */
+export async function ensureSectionOpen(section) {
+  if (!screen) installLock();
+  if (waiting && !waiting.forced && !guarded(section)) {
+    if (screen.open) screen.close();
+    cover(false);
+  }
+  if (!guarded(section)) {
+    armIdle();
+    return;
+  }
+  const timeout = currentPolicy().timeout;
+  if (timeout > 0 && Date.now() - (activityAt || checkedAt) >= timeout * 1000) {
+    await waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    armIdle();
+    return;
+  }
+  const state = await lockState(section);
+  if (state.locked) await waitOpen(null, state);
+  armIdle();
 }
 
 /** Варианты свежие: вызов на сервере проживёт ещё хотя бы 20 с. */
@@ -290,6 +373,8 @@ async function showLock(lockNow, knownState) {
   passwordForm.hidden = true;
   usePin.hidden = true;
   stale = false;
+  elsewhere.hidden = currentPolicy().sections.includes('*');
+  if (!blocking()) return;
   if (!screen.open) screen.showModal();
   const trusted = lockNow ? await lockNow : true;
   let state;
@@ -301,6 +386,7 @@ async function showLock(lockNow, knownState) {
     say(words(err), 'error');
     return;
   }
+  if (!blocking()) return;
   if (!state.locked && trusted) {
     await opened();
     return;
@@ -341,11 +427,14 @@ function refresh() {
   return rereading;
 }
 
-function waitOpen(lockNow = null, knownState = null) {
+function waitOpen(lockNow = null, knownState = null, forced = false) {
   if (!waiting) {
     let resolve;
-    waiting = { promise: new Promise((done) => { resolve = done; }), resolve };
-    shroud();
+    waiting = { promise: new Promise((done) => { resolve = done; }), resolve, forced };
+  } else if (forced) waiting.forced = true;
+  clearTimeout(idleTimer);
+  shroud();
+  if (blocking() && !screen.open) {
     showLock(lockNow, knownState);
   }
   return waiting.promise;
@@ -364,6 +453,8 @@ function reloadMedia() {
 async function opened() {
   const done = waiting;
   waiting = null;                      // до loadMe: его 423 начнёт новое ожидание, а не будет ждать это
+  checkedAt = activityAt = Date.now();  // успешное отпирание — явное действие владельца
+  markedAt = activityAt;
   try {
     await loadMe();
   } catch {
@@ -378,6 +469,7 @@ async function opened() {
   passwordInput.value = '';
   forgetDigits();
   if (done) done.resolve();
+  armIdle();
 }
 
 async function openWithPasskey() {
@@ -480,9 +572,12 @@ function onKey(event) {
 async function onVisibility() {
   if (document.visibilityState !== 'visible') {
     forgetDigits();                    // набранное не переживает уход с экрана
-    if (guarded()) {                   // и при открытом экране блокировки: отпирание могло пройти уже без человека
+    if (guarded() || blocking()) {     // отпирание могло пройти уже без человека
       hiddenAt = Date.now();
       cover(true);
+    }
+    if (currentPolicy().enabled && currentPolicy().timeout === 0 && !waiting) {
+      waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
     }
     return;
   }
@@ -490,28 +585,37 @@ async function onVisibility() {
   hiddenAt = null;
   if (waiting) {                       // уже заперта: варианты passkey могли истечь, пока экран был погашен
     cover(false);
+    if (!blocking()) return;
+    if (!screen.open) showLock();
     if (stale && screen.open) refresh();          // состояние не пришло при показе экрана — перечитать
     else if (keys && screen.open && !fresh()) prepare();
     return;
   }
   if (since === null) {
-    mark();
+    mark(false);
+    armIdle();
     return;
   }
-  if (Date.now() - since >= AWAY_SEC * 1000) {
+  const timeout = currentPolicy().timeout;
+  if (guarded() && (timeout === 0 || Date.now() - (activityAt || checkedAt) >= timeout * 1000)) {
     waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
     return;
   }
-  const locked = await mark();
+  const locked = await mark(false);
   // «не заперто» или нет связи — шторку убрать, если студия всё ещё на экране и не заперлась
   if (!locked && !waiting && document.visibilityState === 'visible') cover(false);
+  armIdle();
 }
 
 async function begin() {
   try {
     const state = await lockState();                  // CSRF до профиля: отметка — запрос POST
     if (state.locked) waitOpen(null, state);
-    else mark();
+    else {
+      checkedAt = Date.now();
+      mark(false);
+      armIdle();
+    }
   } catch {
     // нет входа (api.js уводит на вход) или нет связи — отметка придёт по таймеру
   }
@@ -531,9 +635,26 @@ export function installLock() {
   pinPad = document.getElementById('lock-pin');
   pinDots = document.getElementById('lock-pin-dots');
   pinOk = document.getElementById('lock-pin-ok');
-  hooks.locked = () => waitOpen();
+  elsewhere = document.createElement('button');
+  elsewhere.type = 'button';
+  elsewhere.className = 'btn-link';
+  elsewhere.id = 'lock-elsewhere';
+  elsewhere.textContent = 'Открыть другой раздел';
+  elsewhere.hidden = true;
+  screen.append(elsewhere);
+  elsewhere.addEventListener('click', () => {
+    if (waiting) waiting.forced = false;
+    const view = document.getElementById('view');
+    view.style.visibility = 'hidden';
+    view.inert = true;
+    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].find((s) => !guarded(s)) || 'settings';
+    location.hash = `#/${next}`;
+    screen.close();
+    cover(false);
+  });
+  hooks.locked = () => waitOpen(null, null, true);
   for (const dialog of [curtain, screen]) dialog.addEventListener('cancel', (event) => event.preventDefault());
-  screen.addEventListener('close', () => { if (waiting) screen.showModal(); });
+  screen.addEventListener('close', () => { if (blocking()) screen.showModal(); });
   curtain.addEventListener('close', () => { if (covering) curtain.showModal(); });
   openButton.addEventListener('click', openWithPasskey);
   usePassword.addEventListener('click', offerPassword);
@@ -548,7 +669,15 @@ export function installLock() {
   document.getElementById('lock-pin-back').addEventListener('click', eraseDigit);
   pinOk.addEventListener('click', openWithPin);
   document.addEventListener('keydown', onKey);
+  for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel']) document.addEventListener(event, activity, { passive: true, capture: true });
   document.addEventListener('visibilitychange', onVisibility);
+  document.addEventListener('studio-me', () => {
+    if (!guarded() && !waiting?.forced) {
+      if (screen.open) screen.close();
+      cover(false);
+    }
+    armIdle();
+  });
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     mark();

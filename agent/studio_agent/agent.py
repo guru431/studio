@@ -102,7 +102,7 @@ class Agent:
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                 "chat_fork": True, "subagents": True, "worktrees": True}
+                 "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -171,9 +171,12 @@ class Agent:
         session = frame.get("session")
         if not (isinstance(session, str) and SESSION.fullmatch(session)):
             raise Refused("invalid")
+        idle_sec = frame.get("idle_sec", limits.OPEN_IDLE_SEC)
+        if type(idle_sec) is not int or not 60 <= idle_sec <= 604800:
+            raise Refused("invalid")
         if op == "open":
-            return await self._open(session, frame.get("pin"))
-        if not self.open.touch(session):
+            return await self._open(session, frame.get("pin"), idle_sec)
+        if not self.open.touch(session, idle_sec):
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
@@ -242,7 +245,7 @@ class Agent:
             return True
         raise AssertionError(name)
 
-    async def _open(self, session: str, pin) -> dict:
+    async def _open(self, session: str, pin, idle_sec: int = limits.OPEN_IDLE_SEC) -> dict:
         """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить; блок; `null` — нужен PIN; проверка.
 
         Пока шла проверка, пришёл новый канал (`new_link`) — сессия не открывается, `closed`:
@@ -255,7 +258,7 @@ class Agent:
             if not has_pin:
                 self._open_now(session, link)
                 return {}
-            if pin is None and self.open.touch(session):
+            if pin is None and self.open.touch(session, idle_sec):
                 return {}
             if locked:
                 raise Refused("pin_locked")
@@ -278,12 +281,12 @@ class Agent:
         self.open.open(session)
 
     async def _project(self, frame: dict):
-        return await asyncio.to_thread(projects.find_project, self.cfg.projects_root, frame["project"])
+        return await asyncio.to_thread(projects.find_project, self.cfg, frame["project"])
 
     # --- op ---
 
     async def _op_projects(self, frame, after):
-        return {"items": await asyncio.to_thread(projects.list_projects, self.cfg.projects_root)}
+        return {"items": await asyncio.to_thread(projects.list_projects, self.cfg)}
 
     async def _op_project_summary(self, frame, after):
         return await asyncio.to_thread(project_summary.read, await self._project(frame))
@@ -292,10 +295,10 @@ class Agent:
         return await self._file_index.read(await self._project(frame), frame["query"])
 
     async def _op_worktrees(self, frame, after):
-        return await asyncio.to_thread(worktrees.list_worktrees, await self._project(frame), self.cfg.projects_root)
+        return await asyncio.to_thread(worktrees.list_worktrees, await self._project(frame), self.cfg)
 
     async def _op_worktree_create(self, frame, after):
-        return await asyncio.to_thread(worktrees.create, await self._project(frame), self.cfg.projects_root, frame["query"])
+        return await asyncio.to_thread(worktrees.create, await self._project(frame), self.cfg, frame["query"])
 
     async def _op_chat_fork(self, frame, after):
         project = await self._project(frame)

@@ -68,6 +68,24 @@ async def settle(a: Agent) -> None:
         await asyncio.wait({t.task for t in a.runner._turns.values()})
 
 
+async def test_configurable_pin_timeout_is_checked_on_open_and_each_request(agent_with_pin):
+    agent = agent_with_pin
+    assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
+    agent.open._now.t += 601
+    response = (await agent.handle(req("projects", idle_sec=600)))[0]
+    assert response["code"] == "closed"
+    response = (await agent.handle(req("open", pin=None, idle_sec=600)))[0]
+    assert response["code"] == "pin_needed"
+    assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
+
+
+@pytest.mark.parametrize("value", [True, 0, 59, 604801, None, "600"])
+async def test_invalid_pin_timeout_never_opens_the_computer(agent_with_pin, value):
+    response = (await agent_with_pin.handle(req("open", pin="2468", idle_sec=value)))[0]
+    assert response["code"] == "invalid"
+    assert not agent_with_pin.open.touch(SESSION)
+
+
 async def opened(a: Agent, session=SESSION, pin=None) -> None:
     assert (await a.handle(req("open", session=session, pin=pin)))[0]["ok"] is True
 
@@ -118,7 +136,7 @@ def test_hello(agent):
                              "chat_control": True, "attachments": True, "project_activity": True,
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                             "chat_fork": True, "subagents": True, "worktrees": True}
+                             "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

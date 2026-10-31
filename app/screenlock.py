@@ -1,4 +1,4 @@
-"""Блокировка на телефоне (спека 2026-10-21-studio-screen-lock): отметки «на экране», «заперто»,
+"""Блокировка приложения/разделов: отметки активности, «заперто»,
 отпирание паролем учётки, passkey и PIN, ключи учётки, PIN учётки, включение и выключение.
 
 Признак «заперто» считает auth.guard (auth.screen_locked); запертая сессия делает только запросы
@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import webauthn
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, field_validator
 from webauthn.helpers import bytes_to_base64url
 from webauthn.helpers.structs import (AttestationConveyancePreference, AuthenticatorAttachment,
                                       AuthenticatorSelectionCriteria, AuthenticatorTransport,
@@ -31,6 +31,7 @@ from webauthn.helpers.structs import (AttestationConveyancePreference, Authentic
 import auth
 import bridge
 import clock
+import lock_policy
 import security
 import state
 
@@ -52,6 +53,8 @@ router = APIRouter(prefix="/api")
 
 class Alive(BaseModel):
     touch: bool = False          # основной указатель — палец (matchMedia('(pointer: coarse)'))
+    active: bool = True
+    section: str | None = Field(None, max_length=32)
 
 
 class Password(BaseModel):
@@ -61,6 +64,23 @@ class Password(BaseModel):
 class ScreenLock(BaseModel):
     enabled: bool
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
+    sections: list[str] | None = Field(None, max_length=8)
+    timeout: StrictInt | None = Field(None, ge=0, le=86400)
+
+    @field_validator("sections")
+    @classmethod
+    def valid_sections(cls, value):
+        if value is None or not value or ("*" in value and value != ["*"]) or any(
+                section not in (*lock_policy.SECTIONS, "*") for section in value):
+            raise ValueError("выберите всё приложение или хотя бы один из восьми разделов")
+        return list(dict.fromkeys(value))
+
+    @field_validator("timeout")
+    @classmethod
+    def valid_timeout(cls, value):
+        if value is None:
+            raise ValueError("укажите время ожидания")
+        return value
 
 
 class KeyPassword(BaseModel):
@@ -91,6 +111,12 @@ def _has_keys(uid: int) -> bool:
 
 def _seen(request: Request, value: float | None) -> None:
     state.DB.execute("UPDATE sessions SET seen = ? WHERE digest = ?", (value, request.state.digest))
+
+
+def _forget_code(request: Request) -> None:
+    policy = lock_policy.session(request.state.digest)
+    if policy and lock_policy.protected(policy, "code"):
+        bridge.forget(request.state.user.id, request.state.digest, close_computers=False)
 
 
 def _rp() -> tuple[str, str]:
@@ -133,38 +159,39 @@ def _descriptors(uid: int) -> list[PublicKeyCredentialDescriptor]:
 # ---- отметки, «заперто», пароль ----------------------------------------------
 
 @router.get("/lock")
-async def lock_state(request: Request):
+async def lock_state(request: Request, section: str | None = None):
     """Только «заперто ли», «есть ли ключи», CSRF (без него не отправить отпирание), задан ли PIN и
     сколько попыток PIN осталось — профиля нет."""
     uid = request.state.user.id
     row = state.DB.execute("SELECT pin_hash IS NOT NULL AS pin, pin_fails FROM users WHERE id = ?", (uid,)).fetchone()
-    return {"locked": request.state.locked, "keys": _has_keys(uid), "csrf": request.state.csrf,
-            "pin": bool(row["pin"]), "pin_left": max(0, PIN_FAILS - row["pin_fails"])}
+    policy = lock_policy.session(request.state.digest)
+    return {"locked": lock_policy.locked(request.state.digest, section), "keys": _has_keys(uid), "csrf": request.state.csrf,
+            "pin": bool(row["pin"]), "pin_left": max(0, PIN_FAILS - row["pin_fails"]),
+            "sections": json.loads(policy["screen_lock_sections"]), "timeout": policy["screen_lock_timeout"],
+            "enabled": bool(policy["screen_lock"])}
 
 
 @router.post("/lock/alive")
 async def alive(body: Alive, request: Request):
-    """Отметка «на экране». Сначала защёлка mobile (сбросить её может только новый вход), затем
-    «заперто» заново по базе: иначе старая сессия телефона с пустым seen открылась бы первой же
-    отметкой. Запертой seen не трогается."""
+    """Только явная активность продлевает доступ; истёкший доступ отметка не открывает.
+    Прежняя отметка mobile сохраняется для совместимости с откатом, на область защиты не влияет."""
     if body.touch:
         state.DB.execute("UPDATE sessions SET mobile = 1 WHERE digest = ?", (request.state.digest,))
-    row = state.DB.execute("SELECT u.screen_lock, s.mobile, s.seen FROM sessions s JOIN users u ON u.id = s.user_id"
-                           " WHERE s.digest = ?", (request.state.digest,)).fetchone()
+    row = lock_policy.session(request.state.digest)
     if row is None:                  # сессию закрыли между guard и этим запросом
         raise HTTPException(401, {"code": "login", "message": "нужен вход"})
     now = clock.NOW()
-    locked = auth.screen_locked(row["screen_lock"], row["mobile"], row["seen"], now)
-    if not locked:
+    expired = lock_policy.expired(row, now)
+    if not expired and body.active:
         _seen(request, now)
-    return {"locked": locked}
+    return {"locked": expired and lock_policy.protected(row, body.section)}
 
 
 @router.post("/lock/now", status_code=204)
 async def lock_now(request: Request):
-    """Студия на телефоне заперлась сама (ушла с экрана дольше минуты): сервер с ней согласен."""
+    """Таймер страницы истёк: запереть доступ выбранной политикой, сохраняя срок PIN компьютера."""
     _seen(request, None)
-    bridge.forget(request.state.user.id, request.state.digest, close_computers=False)
+    _forget_code(request)
     log.info("пользователь %d: заперто", request.state.user.id)
     return Response(status_code=204)
 
@@ -175,7 +202,7 @@ async def open_with_password(body: Password, request: Request):
     await auth.confirm_password(uid, body.password, "отпирание")
     state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ?", (uid,))    # PIN снова работает везде
     _seen(request, clock.NOW())
-    bridge.forget(uid, request.state.digest, close_computers=False)
+    _forget_code(request)
     log.info("пользователь %d: открыто (пароль)", uid)
     return Response(status_code=204)
 
@@ -202,7 +229,7 @@ async def open_with_pin(body: Pin, request: Request):
     if right and state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ? AND pin_hash = ? AND disabled = 0",
                                   (uid, stored)).rowcount == 1:
         _seen(request, clock.NOW())
-        bridge.forget(uid, request.state.digest, close_computers=False)
+        _forget_code(request)
         log.info("пользователь %d: открыто (PIN)", uid)
         return Response(status_code=204)
     log.warning("пользователь %d: PIN неверен", uid)
@@ -213,14 +240,20 @@ async def open_with_pin(body: Pin, request: Request):
 
 @router.post("/me/screen-lock")
 async def set_screen_lock(body: ScreenLock, request: Request):
-    """Включить — без пароля; выключить — только с паролем учётки: иначе получивший телефон открытым
-    на минуту выключил бы её. Запертой сессии путь не открыт (guard)."""
+    """Включить — без пароля; выключить и перенастроить включённую защиту — с паролем учётки.
+    Запертой сессии путь не открыт (guard)."""
     uid = request.state.user.id
-    if not body.enabled:
-        await auth.confirm_password(uid, body.password or "", "выключение блокировки")
-    state.DB.execute("UPDATE users SET screen_lock = ? WHERE id = ?", (int(body.enabled), uid))
+    current = lock_policy.session(request.state.digest)
+    if current["screen_lock"] and (not body.enabled or ({"sections", "timeout"} & body.model_fields_set)):
+        await auth.confirm_password(uid, body.password or "", "настройка блокировки")
+    sections = body.sections if body.sections is not None else json.loads(current["screen_lock_sections"])
+    timeout = body.timeout if body.timeout is not None else current["screen_lock_timeout"]
+    state.DB.execute("UPDATE users SET screen_lock = ?, screen_lock_sections = ?, screen_lock_timeout = ? WHERE id = ?",
+                     (int(body.enabled), json.dumps(sections), timeout, uid))
+    if body.enabled:
+        _seen(request, clock.NOW())
     log.info("пользователь %d: блокировка %s", uid, "включена" if body.enabled else "выключена")
-    return {"screen_lock": body.enabled}
+    return {"screen_lock": body.enabled, "screen_lock_sections": sections, "screen_lock_timeout": timeout}
 
 
 # ---- PIN учётки --------------------------------------------------------------
@@ -360,6 +393,6 @@ async def open_with_passkey(body: Answer, request: Request):
     state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",
                      (verified.new_sign_count, now, row["id"]))
     _seen(request, now)
-    bridge.forget(uid, request.state.digest, close_computers=False)
+    _forget_code(request)
     log.info("пользователь %d: открыто (passkey)", uid)
     return Response(status_code=204)

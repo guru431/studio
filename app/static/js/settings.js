@@ -187,7 +187,48 @@ function day(ts) {
   return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
-/* «Блокировка»: переключатель (выключить — только с паролем учётки), PIN учётки, ключи учётки с «Удалить» и — на
+const LOCK_SECTIONS = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Разговоры', speech: 'Речь',
+  ocr: 'Сканы', translate: 'Перевод', code: 'Агенты' };
+
+/** Пользователь задаёт время в удобных единицах; сервер всегда получает целое число секунд. */
+function timeoutField(id, seconds, max) {
+  const unit = seconds > 0 && seconds % 3600 === 0 ? 3600 : seconds > 0 && seconds % 60 === 0 ? 60 : 1;
+  const amount = el('input', { class: 'input', id, type: 'number', min: '0', step: '1', value: seconds / unit });
+  const units = el('select', { class: 'input', id: `${id}-unit`, 'aria-label': 'Единицы времени' },
+    ...[[1, 'секунд'], [60, 'минут'], [3600, 'часов']].map(([value, text]) => el('option', { value }, text)));
+  units.value = String(unit);
+  const read = () => Number(amount.value) * Number(units.value);
+  return { node: el('div', { class: 'lock-timeout' }, amount, units), read,
+    valid: (min = 0) => amount.value !== '' && Number.isInteger(read()) && read() >= min && read() <= max };
+}
+
+function computerPinBlock() {
+  const timer = timeoutField('computer-pin-timeout', me.computer_pin_timeout ?? 10800, 604800);
+  const note = status('computer-pin-status');
+  const save = button('Сохранить таймер компьютера', { class: 'btn', id: 'computer-pin-save' }, async () => {
+    if (!timer.valid(60)) {
+      say(note, 'Укажите время от 1 минуты до 7 дней', 'error');
+      return;
+    }
+    save.disabled = true;
+    try {
+      const answer = await api('PATCH', '/api/me', { computer_pin_timeout: timer.read() });
+      me.computer_pin_timeout = answer.computer_pin_timeout;
+      say(note, 'Таймер PIN компьютера сохранён', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return el('section', { class: 'block' }, el('h2', {}, 'PIN компьютера'),
+    el('p', { class: 'muted small' }, 'Через это время без обращений компьютер снова запросит свой PIN. '
+      + 'Настройка действует для всех ваших компьютеров и отдельно от PIN приложения.'),
+    field('Запрашивать повторно через', timer.node, 'computer-pin-period'), el('div', { class: 'row' }, save, note));
+}
+
+/* «Блокировка»: всё приложение или выбранные разделы и таймер; изменения включённой защиты и выключение —
+ * с паролем учётки. PIN учётки, ключи учётки с «Удалить» и — на
  * телефоне и планшете — «Добавить Face ID / отпечаток»: пароль и «Далее» готовят варианты, и нажатие
  * «Добавить» сразу зовёт navigator.credentials.create (Safari без нажатия Face ID не покажет). Варианты
  * старше FRESH_SEC — снова к паролю и «Далее»: вызов на сервере истекает через 120 с. */
@@ -200,11 +241,41 @@ function lockBlock() {
   const offBox = el('div', { hidden: true }, field('Пароль учётки — чтобы выключить блокировку', offPassword, 'lock-off'),
     el('div', { class: 'row' }, off));
   const list = el('ul', { class: 'passkeys', id: 'passkeys' });
+  const chosen = me.screen_lock_sections || ['*'];
+  const all = el('input', { type: 'radio', name: 'lock-scope', id: 'lock-scope-all', checked: chosen.includes('*') });
+  const some = el('input', { type: 'radio', name: 'lock-scope', id: 'lock-scope-sections', checked: !chosen.includes('*') });
+  const checks = Object.entries(LOCK_SECTIONS).map(([id, title]) => {
+    const input = el('input', { type: 'checkbox', id: `lock-section-${id}`, value: id, checked: chosen.includes(id) });
+    return { id, input, node: el('label', { class: 'check' }, input, title) };
+  });
+  const selection = el('div', { class: 'lock-sections', id: 'lock-sections', hidden: all.checked }, ...checks.map((c) => c.node));
+  const timer = timeoutField('lock-timeout', me.screen_lock_timeout ?? 60, 86400);
+  const password = el('input', { class: 'input', id: 'lock-policy-password', type: 'password',
+    autocomplete: 'current-password', maxlength: '1024' });
+  const passwordBox = el('div', { hidden: !me.screen_lock }, field('Пароль учётки — чтобы изменить защиту', password, 'lock-policy'));
+  const save = button('Сохранить защиту приложения', { class: 'btn', id: 'lock-save' });
+  const selected = () => all.checked ? ['*'] : checks.filter((c) => c.input.checked).map((c) => c.id);
+  const valid = () => {
+    if (!selected().length) {
+      say(note, 'Выберите хотя бы один раздел или всё приложение', 'error');
+      return false;
+    }
+    if (!timer.valid()) {
+      say(note, 'Укажите время от 0 секунд до 24 часов', 'error');
+      return false;
+    }
+    return true;
+  };
+  for (const radio of [all, some]) radio.addEventListener('change', () => { selection.hidden = all.checked; });
 
   async function setLock(body) {
     const answer = await api('POST', '/api/me/screen-lock', body);
     me.screen_lock = answer.screen_lock;
+    me.screen_lock_sections = answer.screen_lock_sections || body.sections || me.screen_lock_sections;
+    me.screen_lock_timeout = answer.screen_lock_timeout ?? body.timeout ?? me.screen_lock_timeout;
     enabled.checked = answer.screen_lock;
+    passwordBox.hidden = !answer.screen_lock;
+    document.dispatchEvent(new Event('studio-me'));
   }
 
   enabled.addEventListener('change', async () => {
@@ -215,11 +286,29 @@ function lockBlock() {
       offPassword.focus();
       return;
     }
+    if (!valid()) {
+      enabled.checked = false;
+      return;
+    }
     try {
-      await setLock({ enabled: true });
+      await setLock({ enabled: true, sections: selected(), timeout: timer.read() });
+      say(note, 'Защита приложения включена', 'ok');
     } catch (err) {
       enabled.checked = false;
       say(note, words(err), 'error');
+    }
+  });
+  save.addEventListener('click', async () => {
+    if (!valid()) return;
+    save.disabled = true;
+    try {
+      await setLock({ enabled: enabled.checked, sections: selected(), timeout: timer.read(), password: password.value });
+      password.value = '';
+      say(note, 'Настройки защиты приложения сохранены', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = false;
     }
   });
   off.addEventListener('click', async () => {
@@ -390,9 +479,15 @@ function lockBlock() {
   }
 
   reload();
-  return el('section', { class: 'block lock-block' }, el('h2', {}, 'Блокировка'),
-    el('label', { class: 'check' }, enabled, 'Запирать на телефоне и планшете через минуту после ухода с экрана'),
-    offBox, el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, ...adding, note);
+  return el('section', { class: 'block lock-block' }, el('h2', {}, 'PIN приложения'),
+    el('label', { class: 'check' }, enabled, 'Запрашивать PIN, пароль или ключ устройства'),
+    el('div', { class: 'checks' }, el('label', { class: 'check' }, all, 'Всё приложение'),
+      el('label', { class: 'check' }, some, 'Выбранные разделы')), selection,
+    el('p', { class: 'muted small' }, 'Защита действует на телефоне и компьютере. Одно отпирание открывает все выбранные разделы.'),
+    field('Запрашивать после бездействия', timer.node, 'lock-period'),
+    el('p', { class: 'muted small' }, '0 — при каждом возвращении в приложение. Максимум — 24 часа.'),
+    passwordBox, el('div', { class: 'row' }, save), offBox,
+    el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, ...adding, note);
 }
 
 /* «Хранилище»: свои файлы по видам (из базы: размер оригиналов, без миниатюр), итог и очередь удаления —
@@ -1161,7 +1256,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'code') {
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(), agentsBlock(host)));
+        codeDefaultsBlock(), computerPinBlock(), agentsBlock(host)));
       return;
     }
     if (shown === 'other') {

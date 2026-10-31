@@ -55,6 +55,16 @@ def test_open_sessions_close_and_clear():
     assert not s.touch("b" * 32) and not s.touch("c" * 32)
 
 
+def test_custom_timeout_closes_only_the_idle_session_and_cannot_reopen_it():
+    t = [0.0]
+    opened = pin.OpenSessions(now=lambda: t[0])
+    opened.open("short"); opened.open("long")
+    t[0] = 601
+    assert not opened.touch("short", 600)
+    assert opened.touch("long", 3600)
+    assert not opened.touch("short", 3600)
+
+
 def test_new_pin_and_no_pin_reset_the_count(home):
     p = pin.PinStore(home); p.set_pin("2468")
     for _ in range(5):

@@ -238,15 +238,19 @@ class Controller:
         self._relink_live()
 
     def set_folder(self, path: str) -> list[str]:
-        """Папка проектов: нет такой — слова ошибки; иначе запись и канал заново (новый `projects_root` в `hello`)."""
-        path = (path or "").strip()
-        if not (path and Path(path).is_dir()):
-            return [setup.NO_FOLDER]
+        """Совместимость прежнего окна: заменить список одной папкой."""
+        return self.set_folders([path])
+
+    def set_folders(self, paths: list[str]) -> list[str]:
+        """Разрешённые папки: проверить все, записать целиком и заново открыть канал."""
+        roots = setup.folders({"projects_roots": paths})
+        if errors := setup.folder_errors(roots):
+            return errors
         with self._cfg_lock:
             cfg = store.load_config(self.h)
-            cfg.projects_root = path
+            cfg.set_project_roots(roots)
             store.save_config(self.h, cfg)
-        log.info("папка проектов сменена")
+        log.info("папки проектов сменены: %d", len(cfg.projects_roots))
         self._relink_live()
         return []
 

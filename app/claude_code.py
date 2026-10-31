@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field, StrictInt, field_validator, model_validat
 import auth
 import bridge
 import clock
+import lock_policy
 import ocr_render
 import state
 
@@ -264,6 +265,13 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
     except UnicodeEncodeError:
         raise _refuse(422, "invalid", BAD_BODY) from None
     try:
+        link = bridge.LINKS.get(aid)
+        timeout = state.DB.execute("SELECT computer_pin_timeout FROM users WHERE id = ?",
+                                   (request.state.user.id,)).fetchone()[0]
+        if link is not None and link.hello.get("pin_timeout"):
+            args["idle_sec"] = timeout
+        elif timeout != lock_policy.COMPUTER_TIMEOUT:
+            raise _refuse(409, "unsupported", "обновите агент на компьютере для настройки таймера PIN")
         return await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
     except bridge.Offline:
         error = _refuse(409, "offline", "компьютер не на связи")
@@ -576,11 +584,11 @@ def _sse(event: str, data: dict) -> str:
 
 def _session_open(digest: str) -> bool:
     """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления)."""
-    row = state.DB.execute("SELECT u.disabled, u.screen_lock, s.expires, s.mobile, s.seen FROM sessions s"
+    row = state.DB.execute("SELECT u.disabled, s.expires FROM sessions s"
                            " JOIN users u ON u.id = s.user_id WHERE s.digest = ?", (digest,)).fetchone()
     now = clock.NOW()
     return (row is not None and not row["disabled"] and row["expires"] > now
-            and not auth.screen_locked(row["screen_lock"], row["mobile"], row["seen"], now))
+            and not lock_policy.locked(digest, "code"))
 
 
 async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, digest: str):

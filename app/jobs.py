@@ -16,6 +16,7 @@ from fastapi import APIRouter, Request
 
 import chat
 import clock
+import lock_policy
 import images
 import ocr
 import speeches
@@ -139,9 +140,11 @@ def _chat(uid: int) -> list:
 async def list_jobs(request: Request, since: "float | None" = None):
     uid, now = request.state.user.id, clock.NOW()
     after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
+    hidden = lock_policy.hidden(request.state.digest)
     items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after)
              + _translate(uid, after) + _speech(uid, after))
-    running = sorted([i for i in items if i["finished"] is None] + _chat(uid), key=lambda i: i["started"], reverse=True)
+    items = [i for i in items if i["section"] not in hidden]
+    running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
     subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ?", (request.state.digest,)).fetchone()
     return {"now": now, "running": running, "finished": finished[:FINISHED_MAX], "push": subscribed is not None}

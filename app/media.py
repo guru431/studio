@@ -45,6 +45,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 import clock
+import lock_policy
 import state
 
 THUMB_SIDE = 384
@@ -314,6 +315,7 @@ async def save_stream(user_id: int, chunks: AsyncIterator[bytes], mime: str, dow
 # ---- чтение и удаление -----------------------------------------------------
 
 def _row(user_id: int, media_id: str):
+    lock_policy.require_media(user_id, media_id)
     row = state.DB.execute("SELECT id, rel_path, mime, has_thumb, download_name FROM media"
                            " WHERE id = ? AND user_id = ?", (media_id, user_id)).fetchone()
     if row is None:

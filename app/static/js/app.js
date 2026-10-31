@@ -25,7 +25,7 @@
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
 import { api, loadMe, me } from './api.js';
 import { setupJobs } from './jobs.js';
-import { installLock } from './lock.js';
+import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
 import { setupAppearance } from './appearance.js';
 
@@ -188,7 +188,22 @@ function allowed({ section, id }) {
 }
 
 async function render() {
-  if (current && current.module.hold && current.module.hold()) return;
+  if (current && current.module.hold && current.module.hold()) {
+    // Несохранённый файл вернул прежний адрес. Его диалог и сохранённые узлы тоже защищены PIN.
+    const held = ++renders;
+    view.style.visibility = 'hidden';
+    view.inert = true;
+    try {
+      await ensureSectionOpen(current.section);
+    } catch {
+      return;                // данные остаются скрыты; следующая попытка перехода повторит проверку
+    }
+    if (held === renders) {
+      view.style.visibility = '';
+      view.inert = false;
+    }
+    return;
+  }
   let route = parse(location.hash);
   if (route.section === 'profile') {            // прежний адрес профиля — настройки
     route = { section: 'settings', id: null, query: new URLSearchParams() };
@@ -198,6 +213,26 @@ async function render() {
     route = { section: 'chat', id: null, query: new URLSearchParams() };
     history.replaceState(history.state, '', '#/chat');
   }
+  const mine = ++renders;
+  // Проверка идёт до update/mount: старые узлы и кэш защищённого раздела не мелькают при переходе.
+  view.style.visibility = 'hidden';
+  view.inert = true;
+  const guardedSection = route.section === 'settings' && route.id in SECTIONS && route.id !== 'other'
+    ? route.id : route.section;
+  try {
+    await ensureSectionOpen(guardedSection);
+  } catch (err) {
+    if (mine !== renders) return;
+    if (current) current.module.unmount();
+    current = null;
+    const retry = el('button', { type: 'button', class: 'btn', id: 'section-unlock-retry' }, 'Повторить');
+    retry.addEventListener('click', render);
+    view.replaceChildren(head(SECTIONS[route.section].title), notice('wait', err.message, 'empty'), retry);
+    view.style.visibility = '';
+    view.inert = false;
+    return;
+  }
+  if (mine !== renders) return;
   // метка записи: hold() раздела отличает «Назад»/«Вперёд» (запись с меткой) от новой записи; разделы, меняя адрес
   // своей записи, держат history.state
   if (!(history.state && history.state.entry)) history.replaceState({ ...history.state, entry: ++entries }, '');
@@ -207,10 +242,12 @@ async function render() {
   }
   const ctx = { me, navigate, id: route.id, query: route.query, hint: hintOf(route.section) };
   if (current && current.section === route.section && current.module.update) {
-    current.module.update(ctx);
+    await current.module.update(ctx);
+    if (mine !== renders) return;
+    view.style.visibility = '';
+    view.inert = false;
     return;
   }
-  const mine = ++renders;
   let module;
   try {
     module = await SECTIONS[route.section].load();
@@ -224,6 +261,8 @@ async function render() {
   view.replaceChildren();
   current = { section: route.section, module };
   module.mount(view, ctx);
+  view.style.visibility = '';
+  view.inert = false;
 }
 
 function openMenu(open) {

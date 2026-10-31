@@ -92,7 +92,7 @@ class PinStore:
 
 
 class OpenSessions:
-    """Сессии студии, открытые PIN: только в памяти, простой дольше OPEN_IDLE_SEC закрывает."""
+    """Сессии студии, открытые PIN: только в памяти; таймер запроса или OPEN_IDLE_SEC по умолчанию."""
 
     def __init__(self, now: Callable[[], float] = time.monotonic):
         self._now = now
@@ -101,11 +101,11 @@ class OpenSessions:
     def open(self, session: str) -> None:
         self._seen[session] = self._now()
 
-    def touch(self, session: str) -> bool:
-        """Открыта и не простаивала дольше OPEN_IDLE_SEC — продлить; иначе убрать и False."""
+    def touch(self, session: str, idle_sec: int = OPEN_IDLE_SEC) -> bool:
+        """Открыта и не простаивала дольше idle_sec — продлить; иначе убрать и False."""
         seen = self._seen.get(session)
         now = self._now()
-        if seen is None or now - seen > OPEN_IDLE_SEC:
+        if seen is None or now - seen > idle_sec:
             self._seen.pop(session, None)
             return False
         self._seen[session] = now
