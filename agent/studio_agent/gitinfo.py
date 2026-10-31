@@ -66,4 +66,16 @@ def status(project: Path) -> dict:
         raise Refused("not_git") from None
     if r.returncode != 0:
         raise Refused("not_git")
-    return parse(r.stdout)
+    state = parse(r.stdout)
+    if not state["upstream"]:
+        state["unpushed"] = None
+        if b"# branch.oid (initial)\0" in r.stdout:
+            state["unpushed"] = 0
+        elif b"# branch.oid " in r.stdout:
+            try:
+                count = run(project, ["rev-list", "--count", "HEAD", "--not", "--remotes"], timeout=5)
+                if count.returncode == 0:
+                    state["unpushed"] = int(count.stdout.strip())
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+    return state

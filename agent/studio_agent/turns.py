@@ -200,7 +200,8 @@ class Runner:
             raw = await client.get_context_usage()
             current = await asyncio.to_thread(cli.settings_from, info, project, raw, model=model, effort=effort, access=access)
             return {"settings": current,
-                    "context": permissions.context(raw.get("totalTokens"), raw.get("maxTokens"))}
+                    "context": permissions.context(raw.get("totalTokens"), raw.get("maxTokens"),
+                        await asyncio.to_thread(sessions.token_usage, project, chat))}
         finally:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(client.disconnect(), DISCONNECT_SEC)
@@ -398,7 +399,8 @@ class Runner:
             info = await t.client.get_server_info() or {}
             t.settings = await asyncio.to_thread(cli.settings_from, info, t.project, raw, model=model, effort=effort, access=t.access)
             self._send(t, {"k": "settings", **t.settings})
-            current = permissions.context(raw.get("totalTokens"), raw.get("maxTokens"))
+            usage = await asyncio.to_thread(sessions.token_usage, t.project, t.chat)
+            current = permissions.context(raw.get("totalTokens"), raw.get("maxTokens"), usage)
             if current:
                 t.context = current
                 self._send(t, {"k": "context", **t.context})

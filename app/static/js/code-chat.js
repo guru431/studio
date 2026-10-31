@@ -34,6 +34,8 @@ import { renderMarkdown } from './markdown.js';
 import { readSSE } from './sse.js';
 import { el, words } from './ui.js';
 import { usageView } from './code-usage.js';
+import { contextView } from './code-context.js';
+import { GIT_ACTIONS } from './code-git.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -93,7 +95,7 @@ function tailOf(filePath, agent, project) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile }) {
+  openFile, gitHost, git, taskDone }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -154,12 +156,23 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': 'Права доступа' },
     el('option', { value: '' }, DEFAULT), ...Object.entries(ACCESS[engine]).map(([value, label]) =>
       el('option', { value }, label)));
-  const contextMeter = el('meter', { id: 'code-context-meter', class: 'sr', min: '0', max: '100', value: '0', hidden: true });
-  const contextText = el('span', { id: 'code-context-text' }, '—');
-  const contextBox = el('span', { id: 'code-context', class: 'code-context', role: 'img', 'aria-label': 'Контекст: нет данных',
-    title: 'Статистика контекста ещё не получена' },
-    contextMeter, contextText);
+  const context = contextView(host, { chat, engine, project,
+    messages: () => feed.querySelectorAll('.code-msg').length });
+  const contextBox = context.button;
   const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage });
+  const gitButtons = GIT_ACTIONS.map(({ id, label, prompt }) => {
+    const button = el('button', { type: 'button', id: `code-git-${id}`, class: 'btn btn-sm',
+      title: `${label} · выполнить в этом чате`, disabled: true }, label);
+    button.addEventListener('click', () => submit(prompt));
+    return button;
+  });
+  const gitActions = el('div', { class: 'code-git-actions', 'aria-label': 'Действия Git в текущем чате' }, ...gitButtons);
+  gitHost?.append(gitActions);
+  let hasGit = false;
+  const unsubscribeGit = git?.subscribe(({ data }) => {
+    hasGit = !!data;
+    for (const button of gitButtons) button.disabled = !hasGit || running || sending || adding || resolving || foreign || external;
+  });
 
   /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
   function applyDefaults() {
@@ -231,6 +244,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintSettings(data) {
+    context.settings(data);
     model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : 'Не получено';
     model.title = typeof data.model === 'string' ? data.model : '';
     effort.options[0].textContent = effortLabel(data.effort);
@@ -240,17 +254,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintContext(data) {
-    if (!data || !Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) return;
-    const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);
-    contextMeter.value = percent;
-    contextMeter.hidden = false;
-    contextText.textContent = `${Math.round(percent)}%`;
-    contextBox.style.setProperty('--context-percent', `${percent}%`);
-    contextBox.dataset.level = percent < 50 ? 'green' : percent < 70 ? 'yellow' : percent < 90 ? 'orange' : 'red';
-    contextBox.setAttribute('aria-label', `Контекст заполнен на ${percent}%`);
-    contextBox.title = `${data.used.toLocaleString('ru-RU')} / ${data.limit.toLocaleString('ru-RU')} токенов`;
-    contextBox.dataset.used = String(data.used);
-    contextBox.dataset.limit = String(data.limit);
+    context.update(data);
   }
 
   async function loadState() {
@@ -491,6 +495,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function updateControls() {
+    for (const button of gitButtons) button.disabled = !hasGit || running || sending || adding || resolving || foreign || external;
     send.disabled = sending || adding || resolving || foreign || external || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
     model.disabled = effort.disabled = access.disabled = resolving || running;
@@ -520,6 +525,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function acknowledgeInput() {
     const pending = pendingInputs.get(draftKey);
     if (!pending) return;
+    if (pending.quick) { pendingInputs.delete(draftKey); return; }
     if (drafts.get(draftKey) === pending.value) drafts.delete(draftKey);
     if (imageDrafts.get(draftKey) === pending.images) imageDrafts.delete(draftKey);
     pendingInputs.delete(draftKey);
@@ -533,6 +539,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!pending) return;
     pendingInputs.delete(draftKey);
     pending.mine?.remove();
+    if (pending.quick) return;
     text.value = text.value && text.value !== pending.value ? `${pending.value}\n\n${text.value}` : pending.value;
     if (text.value) drafts.set(draftKey, text.value);
     images = [...pending.images, ...images.filter((i) => !pending.images.includes(i))];
@@ -728,6 +735,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     activeTools.clear();
     paintActivity(data.status === 'error' ? 'error' : data.status === 'stopped' ? 'stopped' : 'done');
     setRunning(false);
+    taskDone?.();
+    usage.refresh();
     idlePoll();
   }
 
@@ -959,8 +968,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     paintPicks();
   }
 
-  async function submit() {
-    const value = text.value;
+  async function submit(quick = null) {
+    const value = quick ?? text.value;
+    if (quick && (!hasGit || running)) return;
     if ((!value.trim() && !images.length) || sending || adding || resolving || foreign || external) return;
     if (running) {
       if (!agent?.chat_control) {
@@ -998,17 +1008,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       }
       return;
     }
-    const sentImages = images;
+    const sentImages = quick ? [] : images;
     acted = Date.now();
     sending = true;
+    updateControls();
     attach.disabled = true;
     paintImages();
     send.disabled = true;
     showStatus('');
     const mine = messageNode({ role: 'user', text: value, images: sentImages });
-    pendingInputs.set(draftKey, { value, images: sentImages, mine });
+    pendingInputs.set(draftKey, { value, images: sentImages, mine, quick: !!quick });
     grow(() => feed.append(mine));
-    text.value = '';             // черновик (drafts) остаётся до ответа: отказ и уход к PIN его не теряют
+    if (!quick) text.value = ''; // Быстрое действие сохраняет текст и вложения черновика.
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
@@ -1144,6 +1155,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   return {
     unmount() {
       alive = false;
+      unsubscribeGit?.();
+      gitActions.remove();
+      context.unmount();
       usage.unmount();
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);

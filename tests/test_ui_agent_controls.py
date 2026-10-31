@@ -256,7 +256,8 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
     machine = code_free_machine({CODE_CHAT_A: code_session("Вложения"), CODE_CHAT_B: code_session("В работе")})
     machine.projects["beta"] = {"chats": {}}
     machine.attachments = machine.project_activity = machine.subscription_usage = True
-    machine.context = {"used": 85000, "limit": 100000, "percent": 85}
+    machine.context = {"used": 85000, "limit": 100000, "percent": 85,
+                       "usage": {"total": 234567, "input": 200000, "output": 34567, "cached": 10000}}
     machine.running = {CODE_CHAT_B: {"project": pid("alpha"), "asks": {}},
                        "c3333333-3333-4333-8333-333333333333": {"project": pid("beta"), "asks": {"r": {}}}}
     machine.usage_data = {"engine": "claude", "available": True, "source": "test", "checked_at": 1800000000,
@@ -280,6 +281,12 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
             ("wait", "[...document.querySelectorAll('.code-project-state:not([hidden])')].length === 2"),
             ("eval", "statuses", "[...document.querySelectorAll('.code-project-state:not([hidden])')].map(n=>n.getAttribute('aria-label'))"),
             ("eval", "context", "[document.querySelector('#code-context-text').textContent, document.querySelector('#code-context').dataset.level]"),
+            ("click", "#code-context"), ("wait", "document.querySelector('#code-context-dialog').open"),
+            ("eval", "details", "document.querySelector('#code-context-dialog').textContent.replaceAll(/\\s/g,'')"),
+            ("screenshot", str(tmp_path / f"agent-context-{width}.png")),
+            ("click", "#code-context-dialog .btn"),
+            ("wait", "document.querySelector('#code-usage-remaining').textContent === '60%'"),
+            ("eval", "week", "document.querySelector('#code-usage').getAttribute('aria-label')"),
             ("eval", "keepTab", "window.firstAgentTab = document.querySelector('.code-tab'); import('/static/js/code-workspace.js').then(w=>w.act('panel',{aid:" + str(aid) + "}))"),
             ("idle",), ("eval", "sameTab", "window.firstAgentTab === document.querySelector('.code-tab')"),
             ("eval", "files", pick), ("wait", "document.querySelectorAll('#code-images .code-file').length === 2"),
@@ -294,6 +301,8 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
         server.stop()
     assert not result.get("failed"), result
     assert result["values"]["context"] == ["85%", "orange"]
+    assert "100000" in result["values"]["details"] and "234567" in result["values"]["details"]
+    assert CODE_CHAT_A in result["values"]["details"] and "60%" in result["values"]["week"]
     assert result["values"]["statuses"] == ["В работе: 1", "Требуют вашего ответа: 1"]
     assert result["values"]["sameTab"] and not result["values"]["accept"]
     assert "Осталось 75%" in result["values"]["usage"] and "Нет данных" in result["values"]["usage"]

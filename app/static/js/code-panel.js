@@ -24,6 +24,7 @@ import { api } from './api.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
+import { gitLevel } from './code-git.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -124,6 +125,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const git = data?.git === 'not_git' ? 'Без Git'
       : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
     summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
+      'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
     el('span', { 'aria-hidden': 'true' }, ' · '),
     el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
@@ -516,6 +518,19 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   return {
+    async updateSummary(aid, pid) {
+      const agent = items.find((a) => a.id === Number(aid));
+      if (!agent?.project_summary || selected !== Number(aid)) return;
+      const mine = gen;
+      try {
+        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary`);
+        if (!alive || mine !== gen) return;
+        summaries.get(selected)?.set(pid, data);
+        const row = body.querySelector(`li[data-pid="${pid}"]`);
+        if (row) paintSummary(row, data);
+        sortProjects();
+      } catch { /* Прежние сведения остаются до ручного обновления. */ }
+    },
     select,
     pin,
     ready,

@@ -197,7 +197,8 @@ async def test_access_and_context_use_native_policy_and_last_request(runner):
     runner._notification(t, "thread/tokenUsage/updated", {"tokenUsage": {
         "last": {"totalTokens": 32000}, "total": {"totalTokens": 900000}, "modelContextWindow": 128000}})
     _, snapshot = await runner.watch(pid, CHAT)
-    assert snapshot[0]["e"]["context"] == {"used": 32000, "limit": 128000, "percent": 25}
+    assert snapshot[0]["e"]["context"] == {"used": 32000, "limit": 128000, "percent": 25,
+                                          "usage": {"total": 900000}}
     assert snapshot[0]["e"]["settings"]["access"] == "read-only"
     runner.answer(pid, CHAT, rid, "deny", None, None)
     await task

@@ -12,7 +12,8 @@ export function usageView(host, { aid, engine, supported }) {
   let loading = false;
   const button = el('button', { type: 'button', id: 'code-usage', class: 'icon-btn code-usage',
     title: 'Лимиты и статистика подписки', 'aria-label': 'Лимиты и статистика подписки', 'aria-haspopup': 'dialog' });
-  button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16v-5m6 5V4m6 12V8"/><path d="M4 4h3"/></svg>';
+  const remainingText = el('b', { id: 'code-usage-remaining' }, '—');
+  button.append(el('span', {}, 'Неделя'), remainingText);
   const content = el('div', { class: 'code-usage-content', 'aria-live': 'polite' });
   const close = el('button', { type: 'button', class: 'btn' }, 'Закрыть');
   const refresh = el('button', { type: 'button', class: 'btn', id: 'code-usage-refresh' }, 'Обновить');
@@ -22,6 +23,13 @@ export function usageView(host, { aid, engine, supported }) {
   host.append(dialog);
   close.addEventListener('click', () => dialog.close());
   function paint(data) {
+    const week = (Array.isArray(data.windows) ? data.windows : []).find((w) => w.id === 'seven_day' || w.window_minutes === 10080);
+    const remaining = week?.available && Number.isFinite(week.remaining_percent) ? week.remaining_percent : null;
+    remainingText.textContent = remaining === null ? '—' : `${number(remaining)}%`;
+    button.dataset.level = remaining === null ? 'unknown' : remaining <= 10 ? 'red' : remaining <= 30 ? 'yellow' : 'green';
+    button.title = remaining === null ? 'Недельный лимит не сообщается · Подробности подписки'
+      : `Недельный лимит: осталось ${number(remaining)}% · сброс: ${date(week.resets_at)}`;
+    button.setAttribute('aria-label', button.title);
     const windows = (Array.isArray(data.windows) ? data.windows : []).map((w) => {
       const remaining = w.available && Number.isFinite(w.remaining_percent) ? w.remaining_percent : null;
       const meter = el('meter', { min: '0', max: '100', value: remaining ?? 0, hidden: remaining === null,
@@ -67,13 +75,19 @@ export function usageView(host, { aid, engine, supported }) {
     loading = true;
     refresh.disabled = true;
     controller = new AbortController();
-    content.replaceChildren(el('p', { class: 'muted' }, 'Получаю данные подписки…'));
+    if (dialog.open) content.replaceChildren(el('p', { class: 'muted' }, 'Получаю данные подписки…'));
     try {
       const data = await api('GET', `/api/code/agents/${aid}/usage?engine=${engine}&refresh=${fresh}`, undefined,
         { signal: controller.signal });
       if (alive) paint(data);
     } catch (err) {
-      if (alive && !controller.signal.aborted) content.replaceChildren(el('p', { class: 'error' }, words(err)));
+      if (alive && !controller.signal.aborted) {
+        remainingText.textContent = '—';
+        button.dataset.level = 'unknown';
+        button.title = `Лимиты недоступны: ${words(err)}`;
+        button.setAttribute('aria-label', button.title);
+        content.replaceChildren(el('p', { class: 'error' }, words(err)));
+      }
     } finally {
       loading = false;
       if (alive) refresh.disabled = false;
@@ -81,5 +95,6 @@ export function usageView(host, { aid, engine, supported }) {
   }
   button.addEventListener('click', () => { dialog.showModal(); load(); });
   refresh.addEventListener('click', () => load(true));
-  return { button, unmount() { alive = false; controller?.abort(); dialog.remove(); } };
+  load();
+  return { button, refresh: () => load(), unmount() { alive = false; controller?.abort(); dialog.remove(); } };
 }

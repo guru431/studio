@@ -21,6 +21,22 @@ def text(t):
     return {"type": "text", "text": t}
 
 
+def test_session_usage_counts_each_api_message_once_and_ignores_subagents(monkeypatch, tmp_path):
+    first, duplicate, second = A("a1", []), A("a2", []), A("a3", [])
+    for message in (first, duplicate):
+        message.message.update(id="same-api-message", usage={"input_tokens": 100, "output_tokens": 20,
+            "cache_read_input_tokens": 50, "cache_creation_input_tokens": 10})
+    duplicate.message["usage"]["output_tokens"] = 25
+    second.message["usage"] = {"input_tokens": 200, "output_tokens": 30}
+    child = A("child", [], parent="tool")
+    child.message["usage"] = {"input_tokens": 9000, "output_tokens": 9000}
+    monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **kw: [first, duplicate, child, second])
+    assert sessions.token_usage(tmp_path, CHAT) == {"input": 300, "output": 55, "cached": 50,
+                                                 "cache_write": 10, "total": 415}
+    monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **kw: [])
+    assert sessions.token_usage(tmp_path, CHAT) is None
+
+
 def tool(tid, name, inp):
     return {"type": "tool_use", "id": tid, "name": name, "input": inp}
 

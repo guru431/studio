@@ -75,5 +75,15 @@ def test_existing_codex_context_reads_only_counters_under_the_profile(tmp_path):
     path.write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
         "total_token_usage": {"total_tokens": 800000}, "last_token_usage": {"total_tokens": 25000},
         "model_context_window": 100000}}}) + '\n{"type":"message","text":"private"}\n', "utf-8")
-    assert last_context(str(path), folder) == {"used": 25000, "limit": 100000, "percent": 25}
+    assert last_context(str(path), folder) == {"used": 25000, "limit": 100000, "percent": 25,
+                                             "usage": {"total": 800000}}
     assert last_context(str(path), tmp_path / "other") is None
+
+
+def test_usage_distinguishes_cached_input_from_anthropic_cache_and_rejects_bad_counters():
+    assert permissions.token_usage({"inputTokens": 100, "outputTokens": 20, "cachedInputTokens": 60,
+                                    "reasoningOutputTokens": 10}) == {
+        "input": 100, "output": 20, "cached": 60, "reasoning": 10, "total": 120}
+    assert permissions.token_usage({"input_tokens": 100, "output_tokens": 20,
+                                    "cache_creation_input_tokens": 30})["total"] == 150
+    assert permissions.token_usage({"input_tokens": True, "outputTokens": -1, "total_tokens": "100"}) is None

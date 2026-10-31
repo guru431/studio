@@ -9,7 +9,7 @@ from pathlib import Path
 
 from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
 
-from . import limits
+from . import limits, permissions
 from .errors import Refused
 from .events import clip, text_of
 
@@ -156,6 +156,26 @@ def last_model(project: Path, chat: str) -> str | None:
         if isinstance(model, str) and model != "<synthetic>" and limits.MODEL_ID.fullmatch(model):
             return model
     return None
+
+
+def token_usage(project: Path, chat: str) -> dict | None:
+    """Расход главной сессии из истории CLI; блоки одного ответа не удваивают счётчик."""
+    messages = {}
+    for m in get_session_messages(chat, directory=str(project)):
+        if m.type != "assistant" or m.parent_tool_use_id is not None or not isinstance(m.message, dict):
+            continue
+        if m.message.get("model") == "<synthetic>":
+            continue
+        usage = permissions.token_usage(m.message.get("usage"))
+        if usage:
+            key = m.message.get("id") or m.uuid
+            previous = messages.setdefault(key, {})
+            for name, value in usage.items():
+                previous[name] = max(previous.get(name, 0), value)
+    if not messages:
+        return None
+    return {name: sum(usage.get(name, 0) for usage in messages.values())
+            for name in set().union(*(usage.keys() for usage in messages.values()))}
 
 
 def mark_studio(project: Path, chat: str) -> None:
