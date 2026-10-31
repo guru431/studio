@@ -29,7 +29,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     aid, sb = code_online(live, login, machine)
     geometry = """(() => {
       const rect = (s) => document.querySelector(s).getBoundingClientRect();
-      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-stop', '#code-send'];
+      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-context', '#code-stop', '#code-send'];
       const boxes = selectors.map(rect), bar = rect('#code-composer .composer-bar');
       const attach = document.querySelector('#code-attach'), mic = document.querySelector('#code-composer .mic');
       return { row: boxes.every(b => b.top >= bar.top - 1 && b.bottom <= bar.bottom + 1),
