@@ -9,6 +9,83 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_project_sort_restores_after_navigation_reload_and_account_switch(browser, live, width):
+    login, other = f"project-sort-{width}", f"project-sort-other-{width}"
+    live.add_user(login)
+    live.add_user(other)
+    projects = {name: {"summary": {"findings": count, "ideas": count, "changed": 0, "unpushed": 0,
+        "modified": T0, "checked_at": T0, "git": "ok"}} for name, count in (("alpha", 1), ("beta", 5))}
+    machine, second = FakeMachine(projects), FakeMachine(projects)
+    machine.project_summary = second.project_summary = True
+    aid, server = code_online(live, login, machine)
+    bid, other_server = code_online(live, other, second)
+    ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    selection = """[document.querySelector('#code-project-sort').value,
+      document.querySelector('.code-project-sort-text').textContent,
+      document.querySelector('#code-projects li').dataset.pid]"""
+    logout = [*go("settings/code"), ("wait", "!!document.querySelector('#code-defaults-save')"),
+              ("click", "#avatar"), ("click", "#menu-logout"),
+              ("wait", "location.pathname === '/login' && document.querySelector('#login')")]
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), ("wait", ready),
+            set_value("#code-project-sort", "findings"), ("eval", "chosen", selection),
+            *go("settings/code"), ("wait", "!!document.querySelector('#code-defaults-save')"),
+            *go("code"), ("wait", ready), ("eval", "returned", selection),
+            ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", ready),
+            ("eval", "reloaded", selection),
+            *logout, *signin(other), ("wait", READY), *go("code"), ("wait", ready),
+            ("eval", "other", selection),
+            *logout, *signin(login), ("wait", READY), *go("code"), ("wait", ready),
+            ("eval", "signedInAgain", selection)], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+        other_server.stop()
+    assert not result.get("failed"), result
+    for key in ("chosen", "returned", "reloaded", "signedInAgain"):
+        assert result["values"][key] == ["findings", "По количеству проблем", pid("beta")], result["values"]
+    assert result["values"]["other"] == ["name", "По имени", pid("alpha")]
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("storage", ["invalid", "unavailable"])
+def test_project_sort_remains_usable_with_bad_or_unavailable_storage(browser, live, storage):
+    login = f"project-sort-storage-{storage}"
+    live.add_user(login)
+    machine = FakeMachine({name: {"summary": {"ideas": count, "git": "ok"}}
+                           for name, count in (("alpha", 1), ("beta", 3))})
+    machine.project_summary = True
+    _, server = code_online(live, login, machine)
+    init = """(() => {
+      const read = Storage.prototype.getItem, write = Storage.prototype.setItem;
+      Storage.prototype.getItem = function(key) {
+        if (key.startsWith('studio-code-project-sort:')) {
+          if (MODE === 'invalid') return 'unknown-sort';
+          throw new DOMException('Storage blocked', 'SecurityError');
+        }
+        return read.call(this, key);
+      };
+      Storage.prototype.setItem = function(key, value) {
+        if (MODE === 'unavailable' && key.startsWith('studio-code-project-sort:'))
+          throw new DOMException('Storage blocked', 'SecurityError');
+        return write.call(this, key, value);
+      };
+    })();""".replace('MODE', repr(storage))
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
+            ("eval", "fallback", "document.querySelector('#code-project-sort').value"),
+            set_value("#code-project-sort", "ideas"),
+            ("eval", "selected", "[document.querySelector('#code-project-sort').value, document.querySelector('#code-projects li').dataset.pid]")],
+            init=init)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["fallback"] == "name"
+    assert result["values"]["selected"] == ["ideas", pid("beta")]
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser, live, width, tmp_path):
     login = f"project-summary-{width}"
     live.add_user(login)

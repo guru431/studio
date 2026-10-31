@@ -20,7 +20,7 @@
  *   chose() — нажат проект или его ссылка (телефон прячет панель); openJournal(path) — повторный переход
  *   к журналу по уже открытому адресу, через обычную защиту несохранённых правок «Файлов».
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
-import { api } from './api.js';
+import { api, me } from './api.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
@@ -37,6 +37,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
       ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные']]
       .map(([value, label]) => el('option', { value }, label)));
+  const sortKey = `studio-code-project-sort:${me.id}`;
+  try {
+    const saved = localStorage.getItem(sortKey);
+    if ([...sort.options].some((option) => option.value === saved)) sort.value = saved;
+  } catch { /* Закрытое хранилище не мешает пользоваться панелью. */ }
   const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
   const sortBox = el('label', { class: 'input code-project-sort' }, sortText, sort);
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
@@ -214,6 +219,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   sort.addEventListener('change', () => {
     sortText.textContent = sort.selectedOptions[0].textContent;
     sortProjects();
+    try { localStorage.setItem(sortKey, sort.value); } catch { /* Выбор действует в открытой панели. */ }
   });
   refresh.addEventListener('click', async () => {
     if (refresh.disabled || mode !== 'projects') return;
