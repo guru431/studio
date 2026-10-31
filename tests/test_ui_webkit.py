@@ -74,6 +74,63 @@ def fits(page):
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_session_picker_keeps_titles_after_leaving_the_section(iphone):
+    page, aid = iphone
+    page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] a").tap()
+    page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#rail [data-section=photo]').tap()
+    page.locator('#code-chat').wait_for(state='detached')
+    page.evaluate("""() => {
+      const real = window.fetch;
+      window.fetch = async (url, options) => {
+        if (String(url).endsWith('/chats') && options?.method === 'GET') {
+          await new Promise(resolve => { window.resumeChatList = resolve; });
+        }
+        return real(url, options);
+      };
+    }""")
+    page.locator('#rail [data-section=code]').tap()
+    pw.expect(page.locator(f'.code-tab[data-chat="{CODE_CHAT_A}"] .code-tab-title')).to_have_text('Чат A')
+    page.locator('#code-tab-add').tap()
+    page.locator('#code-chat-search').fill('ЧАТ b')
+    pw.expect(page.locator('#code-chats li[data-chat]')).to_have_count(1)
+    pw.expect(page.locator(f'#code-chats li[data-chat="{CODE_CHAT_B}"]')).to_be_visible()
+    page.evaluate('() => window.resumeChatList()')
+    pw.expect(page.locator('#code-chats')).to_have_attribute('aria-busy', 'false')
+    pw.expect(page.locator('#code-chat-search')).to_have_value('ЧАТ b')
+    fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_pin_starts_before_the_app_shell_loads(iphone, tmp_path):
+    page, _ = iphone
+    page.evaluate("""async () => {
+      const {api} = await import('/static/js/api.js');
+      await api('POST', '/api/me/screen-lock', {enabled: true});
+      await api('PUT', '/api/me/pin', {password: 'password-123', pin: '2580'});
+      await api('POST', '/api/lock/alive', {touch: true});
+      await api('POST', '/api/lock/now');
+    }""")
+    # Service worker выключен только здесь, чтобы Playwright мог перехватить модуль оболочки.
+    with page.context.browser.new_context(viewport=page.viewport_size, is_mobile=True, has_touch=True,
+            extra_http_headers={'Cookie': page.studio_cookie}, service_workers='block') as context:
+        early = context.new_page()
+        early.route('**/static/js/app.js?*', lambda route: route.fulfill(
+            status=200, content_type='text/javascript', body='window.shellBlocked = true;'))
+        early.goto(page.url)
+        pw.expect(early.locator('#lock-pin')).to_be_visible()
+        assert early.evaluate('window.shellBlocked === true && !document.documentElement.dataset.ready')
+        early.screenshot(path=str(tmp_path / 'early-pin.png'))
+        fits(early)
+        for digit in '2580':
+            early.locator(f'#lock-pin [data-digit="{digit}"]').tap()
+        early.locator('#lock-pin-ok').tap()
+        pw.expect(early.locator('#lock')).not_to_be_visible()
+        assert early.evaluate("async () => (await fetch('/api/me')).status") == 200
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 def test_closing_phone_browser_keeps_job_running_and_result_is_available_on_return(iphone):
     import bridge
 

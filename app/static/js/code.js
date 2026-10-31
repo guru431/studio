@@ -41,7 +41,7 @@
  * (history.replaceState новой записи; «Назад» и «Вперёд» на запись с меткой entry роутера — pushState после неё) и
  * спрашивает окно «Изменения не сохранены» «Файлов»; «Уйти без сохранения» — снова туда (hold — его зовёт роутер
  * app.js до смены адреса или раздела). */
-import { api } from './api.js';
+import { api, me } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
 import { projectGit } from './code-git.js';
@@ -87,6 +87,13 @@ let shownHash = null;   // адрес отрисованной правой ча
 let shownEntry = null;  // метка записи отрисованного адреса ({ entry: n } в history.state — ставит роутер app.js)
 /** Проекты компьютеров (GET …/projects): aid → обещание списка, пока показан раздел; отказ не запоминается. */
 const lists = new Map();
+// Только метаданные списков, в памяти этой страницы; ключ включает учётку, компьютер и проект.
+const chatLists = new Map();
+const CHAT_LISTS_MAX = 20;
+
+function cacheKey(p) {
+  return `${me.id}/${p.key}`;
+}
 
 /** Перенаправление без записи в истории браузера; своё — без вопроса о несохранённой правке. */
 function redirect(path) {
@@ -240,20 +247,28 @@ function toChat(p, chat) {
 
 /** Сессии проекта (GET …/chats): один запрос на открытие проекта; ответ — названия и метки вкладок. */
 function chatsOf(p, fresh = false) {
-  if (fresh || !p.listing) {
+  if (!p.listing || (fresh && !p.listingPending)) {
+    p.listingPending = true;
     const promise = api('GET', `${base(p.aid, p.pid)}/chats`).then((out) => {
       if (p.listing === promise) {
         p.items = out.items;
         p.loaded = true;
         p.info = new Map(out.items.map((c) => [c.chat, c]));
-        if (proj === p) paintTabs();
+        if (proj === p) {
+          const key = cacheKey(p);
+          chatLists.delete(key);
+          // При возвращении метки активности ждут свежего ответа компьютера.
+          chatLists.set(key, out.items.map((c) => ({ ...c, running: false, asking: false })));
+          if (chatLists.size > CHAT_LISTS_MAX) chatLists.delete(chatLists.keys().next().value);
+          paintTabs();
+        }
       }
       return out.items;
     });
     p.listing = promise;
     promise.catch(() => {
       if (p.listing === promise) p.listing = null;
-    });
+    }).finally(() => { if (!p.listing || p.listing === promise) p.listingPending = false; });
   }
   return p.listing;
 }
@@ -352,6 +367,12 @@ function enter(aid, pid) {
   const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
     repo: projectGit(aid, pid),
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true) };
+  const cached = chatLists.get(cacheKey(p));
+  if (cached) {
+    p.items = cached;
+    p.info = new Map(cached.map((c) => [c.chat, c]));
+    p.loaded = true;
+  }
   proj = p;
   ui.repoStatus.replaceChildren();
   ui.repoStatus.hidden = true;
@@ -434,6 +455,11 @@ function failed(err, aid, status, file = null) {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;
       proj.repo.clear();
+      chatLists.delete(cacheKey(proj));
+      proj.listing = null;
+      proj.items = [];
+      proj.info.clear();
+      proj.loaded = false;
     }
     const key = String(aid);
     if (!returnTo || returnTo.aid !== key || returnTo.hash !== location.hash) returnTo = { aid: key, hash: location.hash, file };
@@ -500,7 +526,9 @@ async function lobby(mine, aid) {
 function sessions(mine, p, status) {
   const picker = el('section', { id: 'code-tab-menu', class: 'code-session-picker', 'aria-label': 'Новая вкладка' });
   p.chatBox.replaceChildren(picker);
-  view = sessionList(picker, { aid: p.aid, pid: p.pid, items: chatsOf(p, true), exclude: new Set(tabsOf(p.aid, p.pid).tabs),
+  const listing = chatsOf(p, true);
+  view = sessionList(picker, { aid: p.aid, pid: p.pid, items: p.loaded ? p.items : listing,
+    refresh: p.loaded ? listing : null, exclude: new Set(tabsOf(p.aid, p.pid).tabs),
     picked: (chat) => toChat(p, chat),
     created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
     failed: (err) => {

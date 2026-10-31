@@ -3,7 +3,8 @@
  * («студия» / «VS Code или терминал»), «закрыт», «идёт ход», «ждёт ответа».
  *
  * sessionList(host, { aid, pid, items, exclude, picked, created, failed }) → { unmount() }:
- * - items — ответ GET …/chats или обещание ответа (меню «+»), exclude — чаты, которых в списке не надо;
+ * - items — сохранённый список или обещание ответа, refresh — его фоновая сверка; поиск сохраняется при обновлении;
+ *   exclude — чаты, которых в списке не надо;
  * - нажатие на сессию — picked(chat); закрытая сначала открывается снова (PATCH {state: "open"});
  * - «Новый чат» (#code-new-chat) — POST …/chats, затем created(chat);
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
@@ -18,9 +19,11 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true }) {
+export function sessionList(host, { aid, pid, items, refresh = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
+  let found = Array.isArray(items) ? items : null;
+  let loadError = false;
 
   async function busy(button, work) {
     button.disabled = true;
@@ -60,7 +63,7 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
     if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));
     else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, 'идёт ход'));
     const link = el('button', { type: 'button', class: 'code-chat-link' },
-      el('span', { class: 'code-chat-title' }, chat.title || UNTITLED),
+      el('span', { class: 'code-chat-title', title: chat.title || UNTITLED }, chat.title || UNTITLED),
       typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
       el('span', { class: 'code-marks' }, ...marks));
     link.addEventListener('click', () => busy(link, async () => {
@@ -71,26 +74,44 @@ export function sessionList(host, { aid, pid, items, exclude = new Set(), picked
   }
 
   const list = el('ul', { id: 'code-chats', class: 'code-chats' });
+  const search = el('input', { id: 'code-chat-search', class: 'input code-chat-search', type: 'search',
+    placeholder: 'Поиск по названиям чатов', 'aria-label': 'Поиск по названиям чатов', autocomplete: 'off' });
+  const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+  const startsRows = [];
   if (starts) {
-    list.append(el('li', { class: 'code-chats-new' }, add));
-    if (addCodex) list.append(el('li', { class: 'code-chats-new' }, addCodex));
-    if (addOpenCode) list.append(el('li', { class: 'code-chats-new' }, addOpenCode));
+    startsRows.push(el('li', { class: 'code-chats-new' }, add));
+    if (addCodex) startsRows.push(el('li', { class: 'code-chats-new' }, addCodex));
+    if (addOpenCode) startsRows.push(el('li', { class: 'code-chats-new' }, addOpenCode));
   }
-  const rows = (found) => found.filter((c) => !exclude.has(c.chat)).map(row);
-  if (Array.isArray(items)) list.append(...rows(items));
-  else {
-    const wait = el('li', { class: 'code-chats-wait muted' }, 'Загружаю…');
-    list.append(wait);
-    items.then((found) => {
-      if (alive) list.append(...rows(found));
+  function paint() {
+    const terms = normalize(search.value).trim().split(/\s+/).filter(Boolean);
+    const matches = (found || []).filter((c) => !exclude.has(c.chat)
+      && terms.every((term) => normalize(c.title || UNTITLED).includes(term)));
+    const empty = loadError ? 'Не удалось загрузить чаты' : found === null ? 'Загружаю…'
+      : terms.length ? 'Ничего не найдено' : 'Прошлых чатов пока нет';
+    list.replaceChildren(...startsRows, ...(matches.length ? matches.map(row)
+      : [el('li', { class: 'code-chats-wait muted', role: 'status' }, empty)]));
+  }
+  search.addEventListener('input', paint);
+  paint();
+  const pending = refresh || (!Array.isArray(items) ? items : null);
+  list.setAttribute('aria-busy', String(!!pending));
+  if (pending) {
+    pending.then((next) => {
+      if (!alive) return;
+      found = next;
+      paint();
     }, (err) => {
-      if (alive) failed(err);
-    }).finally(() => wait.remove());
+      if (!alive) return;
+      if (found === null) { loadError = true; paint(); }
+      failed(err);
+    }).finally(() => { if (alive) list.setAttribute('aria-busy', 'false'); });
   }
-  host.append(list);
+  host.append(search, list);
   return {
     unmount() {
       alive = false;
+      search.remove();
       list.remove();
     },
   };
