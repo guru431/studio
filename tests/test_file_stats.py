@@ -27,4 +27,3 @@ def test_file_stats_rejects_malformed_bridge_data(studio, bad):
     link.hello["file_stats"] = True
     machine.projects["alpha"]["file_statistics"] = {"items": [bad], "secret": "must not pass"}
     assert studio.c.post(f"/api/code/agents/{aid}/projects/{ALPHA}/files/stats", json={"path": ""}).status_code == 502
-
