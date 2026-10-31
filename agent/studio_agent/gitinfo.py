@@ -14,7 +14,7 @@ def _path(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def parse(out: bytes) -> dict:
+def parse(out: bytes, *, truncate: bool = True) -> dict:
     """Вывод porcelain v2 с `-z` → ветка, upstream, ahead/behind и файлы (`XY` без точек)."""
     res = {"branch": None, "upstream": None, "ahead": 0, "behind": 0, "files": []}
     records = out.split(b"\0")
@@ -41,8 +41,17 @@ def parse(out: bytes) -> dict:
             res["files"].append({"path": _path(rec.split(b" ", 10)[10]), "status": "U"})
         elif rec.startswith(b"? "):
             res["files"].append({"path": _path(rec[2:]), "status": "??"})
-    del res["files"][limits.GIT_FILES_MAX:]
+    if truncate:
+        del res["files"][limits.GIT_FILES_MAX:]
     return res
+
+
+def run(project: Path, args: list[str], *, timeout: float = GIT_SEC) -> subprocess.CompletedProcess:
+    """Локальное чтение Git в границах проекта, без окна, запроса пароля и необязательных замков."""
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
+               GIT_CEILING_DIRECTORIES=str(Path(os.path.realpath(project)).parent))
+    return subprocess.run(["git", "-C", str(project), *args], capture_output=True, env=env, timeout=timeout,
+                          creationflags=subprocess.CREATE_NO_WINDOW)
 
 
 def status(project: Path) -> dict:
@@ -51,12 +60,8 @@ def status(project: Path) -> dict:
     Выше проекта git не ищет (`GIT_CEILING_DIRECTORIES` — родитель настоящего пути): проект без своего `.git` внутри
     чужого репозитория — `not_git`, ветка и пути внешнего не уходят в студию.
     Срок вышел — `subprocess.TimeoutExpired` летит наружу (просьба получит `error`)."""
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
-               GIT_CEILING_DIRECTORIES=str(Path(os.path.realpath(project)).parent))
     try:
-        r = subprocess.run(["git", "-C", str(project), "status", "--porcelain=v2", "--branch", "-z"],
-                           capture_output=True, env=env, timeout=GIT_SEC,
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+        r = run(project, ["status", "--porcelain=v2", "--branch", "-z"])
     except FileNotFoundError:
         raise Refused("not_git") from None
     if r.returncode != 0:

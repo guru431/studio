@@ -69,6 +69,7 @@ class FakeMachine:
         self.chat_control = True
         self.attachments = False
         self.project_activity = False
+        self.project_summary = False
         self.subscription_usage = False
         self.usage_data = None
         self.context = None
@@ -80,7 +81,7 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage")
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -141,6 +142,11 @@ class FakeMachine:
 
     def _op_projects(self, req, events):
         return {"items": [{"pid": pid(name), "name": name} for name in sorted(self.projects)]}
+
+    def _op_project_summary(self, req, events):
+        _, project = self._project(req)
+        return project.get("summary", {"findings": 0, "ideas": 0, "changed": 0, "unpushed": 0,
+                                       "modified": self.now, "checked_at": self.now, "git": "ok"})
 
     def _op_activity(self, req, events):
         return {"items": [{"project": turn["project"], "chat": chat, "running": True,
