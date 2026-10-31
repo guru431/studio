@@ -7,7 +7,7 @@
     var font = Number(localStorage.getItem('studio-font-size')) || 100;
     var scale = Number(localStorage.getItem('studio-ui-scale')) || 100;
     if (font >= 85 && font <= 150) document.documentElement.style.setProperty('--font-scale', font / 100);
-    if ([75, 85, 100, 110, 125, 150].indexOf(scale) !== -1) {
+    if ([50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].indexOf(scale) !== -1) {
       document.documentElement.style.setProperty('--ui-scale', scale / 100);
       document.documentElement.style.zoom = String(scale / 100);
     }

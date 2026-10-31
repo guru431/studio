@@ -7569,9 +7569,9 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
-            ("wait", "document.querySelector('#code-start-codex') && !document.querySelector('#code-start-codex').disabled"),
-            ("eval", "starters", "[...document.querySelectorAll('.code-starts button')].map((b) => b.textContent)"),
-            ("click", "#code-start-codex"),
+            ("wait", "!!document.querySelector('#code-new-codex')"),
+            ("eval", "starters", "[...document.querySelectorAll('#code-tab-menu .code-new-chat')].map((b) => b.textContent)"),
+            ("click", "#code-new-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "engine", "document.querySelector('.code-tab[aria-selected=true] .code-tab-engine').textContent"),
             ("eval", "nullText", "[...document.querySelector('#code-chat').childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === 'null')"),
@@ -7584,7 +7584,8 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
             ("eval", "always", "document.querySelector('.code-ask-always').textContent"),
             ("click", ".code-ask-yes"),
             ("wait", "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Готово Codex')"),
-            ("click", "#code-start-claude"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
+            ("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-new-chat')"),
+            ("click", "#code-new-chat"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
                                               " && document.querySelector('#code-chat').dataset.engine === 'claude'"),
             ("eval", "claude", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
             ("eval", "choice", "document.querySelector('#code-model').value"),
@@ -7596,7 +7597,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     v = r["values"]
     assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
     assert v["nullText"] is False
-    assert v["starters"] == ['+ Claude Code', '+ Codex', '+ OpenCode'] and v["engines"] == ['Codex', 'Claude Code']
+    assert v["starters"] == ['Новый чат Claude Code', 'Новый чат Codex'] and v["engines"] == ['Codex', 'Claude Code']
     assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
     assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
     [turn] = code_requests(machine, "turn")
@@ -7643,7 +7644,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}" and v["fits"] is True
-    assert v["first"] is False and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
+    assert v["first"] is True and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
     assert v["rows"] == [[other, "Новый чат", True, ["Claude Code", "VS Code или терминал"]],
                          [busy, "Сборка", True, ["Claude Code", "студия", "идёт ход"]],
                          [asking, "Тесты", True, ["Claude Code", "VS Code или терминал", "ждёт ответа"]],
@@ -7746,7 +7747,8 @@ def test_code_screenshots_paste_pick_drop_and_retry(browser, live, engine, width
           {status: 422, headers: {'content-type': 'application/json'}})); } return real(u, o); }; return true; })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            *([("click", "#code-start-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
+            *([("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-new-codex')"),
+                ("click", "#code-new-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
                 " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
             ("eval", "file", setup_file), ("eval", "paste", paste),
             ("wait", "document.querySelectorAll('#code-images img').length === 1"),
@@ -8289,7 +8291,8 @@ def test_code_defaults_are_saved_in_settings_and_used_after_reload(browser, live
             ("wait", f"document.querySelector('{prefix}-model')?.value === '{chosen_model}'"),
             ("eval", "effort", f"document.querySelector('{prefix}-effort').value"),
             *go("code"), ("wait", "!!document.querySelector('#code-projects li[data-pid]')"),
-            *code_project(aid, "alpha"), ("click", f"#code-start-{engine}"),
+            *code_project(aid, "alpha"), ("wait", "!!document.querySelector('#code-new-chat')"),
+            ("click", "#code-new-codex" if engine == "codex" else "#code-new-chat"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
             ("eval", "access", "document.querySelector('#code-access').value"),
@@ -8323,7 +8326,8 @@ def test_code_concrete_settings_context_and_access_are_visible(browser, live, en
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            *([("click", "#code-start-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
+            *([("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-new-codex')"),
+                ("click", "#code-new-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
                 " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
             ("eval", "before", "['#code-model', '#code-effort', '#code-access'].map((s) => document.querySelector(s).selectedOptions[0].textContent)"),
             ("eval", "context", "document.querySelector('#code-context-text').textContent"),
@@ -8686,7 +8690,7 @@ def code_root_names(n):
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_code_compact_header_and_git_file_tree(browser, live, width):
-    """Создание чатов в шапке без дублей; дерево раскрывается на месте и помечает изменения Git."""
+    """Компактная шапка без кнопок создания; дерево раскрывается на месте и помечает изменения Git."""
     from test_codex import CATALOG
     login = f"code-tree-{width}"
     live.add_user(login, theme="dark" if width == 320 else "light")
@@ -8702,9 +8706,7 @@ def test_code_compact_header_and_git_file_tree(browser, live, width):
             ("wait", "document.querySelector('#code-repo-status')?.textContent.includes('stage-5g')"),
             ("eval", "header", "document.querySelector('#code-repo-status').textContent"),
             ("eval", "duplicates", "document.querySelectorAll('#code-chats .code-new-chat').length"),
-            ("eval", "oneLine", "(() => { const a = document.querySelector('#code-place').getBoundingClientRect();"
-                                  " const b = document.querySelector('#code-start-claude').getBoundingClientRect();"
-                                  " return Math.abs(a.top + a.height / 2 - b.top - b.height / 2) < 2; })()"),
+            ("eval", "oneLine", "!document.querySelector('.code-starts')"),
             ("eval", "gitBeforeChat", "(() => { const g = document.querySelector('#code-repo-status').getBoundingClientRect();"
                                          " const c = document.querySelector('#code-tab-chat').getBoundingClientRect();"
                                          " return g.right <= c.left && Math.abs(g.top + g.height / 2 - c.top - c.height / 2) < 2; })()"),
@@ -9398,7 +9400,7 @@ def test_code_new_chat_is_a_tab(browser, live):
                        " && document.querySelector('#code-chat')?.dataset.chat === location.hash.split('/').pop()")
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "beta"),
-            ("wait", "!document.querySelector('#code-start-claude').disabled"), ("click", "#code-start-claude"), new_tab,
+            ("wait", "!!document.querySelector('#code-new-chat')"), ("click", "#code-new-chat"), new_tab,
             ("eval", "first", "window.firstTab = location.hash.split('/').pop()"),
             ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu #code-new-chat')"),
             ("click", "#code-tab-menu #code-new-chat"),
@@ -9581,15 +9583,17 @@ def test_code_tab_opens_when_the_workspace_write_fails(browser, live):
     assert not [p for p in problems(r) if "status of 500" not in p], problems(r)
 
 
-def test_code_unsaved_edit_asks_before_a_tab_switch(browser, live):
-    """Правка во «Файлах» не сохранена, а нажата вкладка — окно «Изменения не сохранены»: «Остаться» — правка цела;
-    «Уйти без сохранения» — чат вкладки."""
-    login = "code-tab-unsaved"
+@pytest.mark.parametrize("target", ["chat", "new"])
+def test_code_unsaved_edit_asks_before_a_tab_switch(browser, live, target):
+    """Вкладка или «+» защищают несохранённую правку: «Остаться» — правка цела;
+    «Уйти без сохранения» — выбранный чат или экран новой вкладки."""
+    login = "code-tab-unsaved-" + target
     live.add_user(login)
     machine = code_files_machine({CODE_CHAT_A: code_session("Чат A")})
     aid, sb = code_online(live, login, machine)
     editor = "document.querySelector('#code-editor')?.value"
-    tab = f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title"
+    tab = "#code-tab-add" if target == "new" else f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title"
+    ready = ("wait", "!!document.querySelector('#code-tab-menu #code-new-chat')") if target == "new" else code_tab_ready(CODE_CHAT_A)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
             *code_from_list(CODE_CHAT_A), ("click", "#code-tab-files"), code_root_names(5),
@@ -9599,13 +9603,14 @@ def test_code_unsaved_edit_asks_before_a_tab_switch(browser, live):
             set_value("#code-editor", "print('правка')\n"),
             ("click", tab), ("wait", CODE_UNSAVED), ("click", "#code-unsaved .dialog-close"), ("wait", f"!{CODE_UNSAVED}"),
             ("eval", "stayed", f"[{editor}, location.hash.endsWith('?tab=files')]"),
-            ("click", tab), ("wait", CODE_UNSAVED), ("click", "#code-unsaved-leave"), code_tab_ready(CODE_CHAT_A),
-            ("eval", "left", "location.hash.split('/').pop()")], width=1280)
+            ("click", tab), ("wait", CODE_UNSAVED), ("click", "#code-unsaved-leave"), ready,
+            ("eval", "left", "location.hash.endsWith('?tab=new')" if target == "new" else "location.hash.split('/').pop()")], width=1280)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["selected"] == ["false"] and v["stayed"] == ["print('правка')\n", True] and v["left"] == CODE_CHAT_A
+    assert v["selected"] == ["false"] and v["stayed"] == ["print('правка')\n", True]
+    assert v["left"] == (True if target == "new" else CODE_CHAT_A)
     assert code_requests(machine, "save") == []
     assert not problems(r), problems(r)
 
@@ -10132,6 +10137,7 @@ def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
             *code_from_list(CODE_CHAT_A), ("wait", named), ("eval", "slow", slow), ("click", "#code-tab-add"),
+            ("wait", "!!document.querySelector('#code-tab-menu #code-new-chat')"),
             ("eval", "early", "[document.querySelector('#code-tab-menu #code-new-chat')?.textContent,"
                               " document.querySelector('#code-tab-menu .code-chats-wait')?.textContent]"),
             ("wait", f"document.querySelector(\"#code-tab-menu li[data-chat='{chat_d}']\")"), ("eval", "rows", rows),

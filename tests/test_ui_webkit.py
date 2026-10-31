@@ -124,7 +124,7 @@ def test_code_composer_fits_long_draft_and_sends_followup_while_working(iphone, 
         return { statusAbove: status.bottom <= box.top, shortInput: input.height <= innerHeight * .25 + 1,
             noDuplicate: !document.querySelector('.code-chat-bar') && !document.querySelector('#code-close-chat'),
             column: buttons.every(b => Math.abs(b.x - buttons[0].x) < 1),
-            font: picks.every(e => parseFloat(getComputedStyle(e).fontSize) >= 16),
+            font: picks.every(e => parseFloat(getComputedStyle(e).fontSize) === 12),
             picksInside: picks.every(e => e.getBoundingClientRect().right <= innerWidth),
             canSend: !document.querySelector('#code-send').disabled, noZoom: visualViewport.scale === 1 };
     }""")

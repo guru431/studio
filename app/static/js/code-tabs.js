@@ -1,48 +1,30 @@
 /* Ряд вкладок сессий открытого проекта Claude Code (спека 2026-10-29-studio-code-workspace-design, 6.4–6.5).
  *
- * tabBar(host, { aid, pid, pick, close, created, failed, read }) → { show({ tabs, active, info, loaded }), unmount() }:
+ * tabBar(host, { pick, close, add }) → { show({ tabs, active, info, loaded, choosing }), unmount() }:
  * - div#code-tabbar[role=tablist] — вкладки в порядке открытия: div.code-tab[data-chat][role=tab][aria-selected] —
  *   название сессии (span.code-tab-title: до списка пусто, нет в info — «Сессия», пустое — «Новый чат»; полное — подсказкой), метка
  *   «идёт ход» или «ждёт ответа» (span.code-tab-mark.running|.asking) и «×» (button.code-tab-close → close(chat):
  *   вкладка уходит, сессия на машине остаётся); в конце ряда — «+» (#code-tab-add);
- * - «+» — меню #code-tab-menu: «Новый чат» и сессии проекта без открытых вкладок (code-sessions.js; items — последний
- *   ответ GET …/chats у code.js; read() перечитывает его при открытии, открытое меню show() не пересобирает); выбор — pick(chat),
- *   «Новый чат» — created(chat), отказ — failed(err); меню закрывается выбором, нажатием вне и Escape;
+ * - «+» — add(): экран новой вкладки в основной области проекта (code.js), без всплывающего меню;
  * - нажатие на вкладку — pick(chat); active — показанная (null — ни одна: «Файлы», «Git»); она прокручивается в
  *   видимую часть ряда (телефон листает ряд вбок).
  * Текст машины — только textContent. */
-import { sessionList } from './code-sessions.js';
 import { ENGINE_NAMES } from './code-options.js';
 import { el } from './ui.js';
 
 const UNTITLED = 'Новый чат';
 const SESSION = 'Сессия';
 
-export function tabBar(host, { aid, pid, pick, close, created, failed, read, codex = () => false, opencode = () => false }) {
+export function tabBar(host, { pick, close, add: choose }) {
   const bar = el('div', { id: 'code-tabbar', class: 'code-tabbar', role: 'tablist', 'aria-label': 'Сессии проекта' });
   const add = el('button', { type: 'button', id: 'code-tab-add', class: 'code-tab-add', 'aria-label': 'Сессии проекта',
-    title: 'Сессии проекта', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'code-tab-menu' }, '+');
-  const menu = el('div', { id: 'code-tab-menu', class: 'code-tab-menu', hidden: true });
-  const root = el('div', { class: 'code-tabs-row' }, bar, menu);
+    title: 'Сессии проекта', 'aria-expanded': 'false', 'aria-controls': 'code-tab-menu' }, '+');
+  bar.append(add);
+  const root = el('div', { class: 'code-tabs-row' }, bar);
   host.append(root);
   let state = { tabs: [], active: null, info: new Map(), loaded: false };
-  let list = null;           // сессии в меню
   const nodes = new Map();
   const signatures = new Map();
-
-  function openMenu(open) {
-    if (list) list.unmount();
-    list = null;
-    menu.hidden = !open;
-    add.setAttribute('aria-expanded', String(open));
-    if (!open) return;
-    const done = (then) => (...args) => {
-      openMenu(false);
-      then(...args);
-    };
-    list = sessionList(menu, { aid, pid, items: read(), exclude: new Set(state.tabs), picked: done(pick),
-      created: done(created), failed, codex: codex(), opencode: opencode() });
-  }
 
   function tabNode(chat) {
     const known = state.info.get(chat);
@@ -89,20 +71,7 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
     else if (node.offsetLeft + node.offsetWidth > bar.scrollLeft + room) bar.scrollLeft = node.offsetLeft + node.offsetWidth - room;
   }
 
-  function onDoc(event) {
-    if (!menu.hidden && !menu.contains(event.target) && !add.contains(event.target)) openMenu(false);
-  }
-
-  function onKey(event) {
-    if (event.key === 'Escape' && !menu.hidden) {
-      openMenu(false);
-      add.focus();
-    }
-  }
-
-  add.addEventListener('click', () => openMenu(menu.hidden));
-  document.addEventListener('click', onDoc);
-  document.addEventListener('keydown', onKey);
+  add.addEventListener('click', choose);
 
   return {
     show(next) {
@@ -111,8 +80,7 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
       const index = state.tabs.indexOf(chat);
       const adding = document.activeElement === add;
       state = next;
-      // открытое меню не пересобирается (опрос меток, ответ рабочего места): пункт под рукой и идущий выбор —
-      // те же; новый список — при следующем открытии
+      add.setAttribute('aria-expanded', String(!!next.choosing));
       const orderChanged = [...bar.querySelectorAll('.code-tab')].map((n) => n.dataset.chat).join(',') !== next.tabs.join(',');
       for (const id of [...nodes.keys()]) {
         if (!next.tabs.includes(id)) { nodes.get(id).remove(); nodes.delete(id); signatures.delete(id); }
@@ -138,9 +106,6 @@ export function tabBar(host, { aid, pid, pick, close, created, failed, read, cod
       reveal();
     },
     unmount() {
-      if (list) list.unmount();
-      document.removeEventListener('click', onDoc);
-      document.removeEventListener('keydown', onKey);
       root.remove();
     },
   };

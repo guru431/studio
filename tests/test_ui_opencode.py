@@ -42,7 +42,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid),
-            *code_project(aid, "alpha"), ("click", "#code-start-codex"),
+            *code_project(aid, "alpha"), ("wait", "!!document.querySelector('#code-new-codex')"), ("click", "#code-new-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "compact", "(() => { const r = s => document.querySelector(s).getBoundingClientRect(); return "
                 "r('#code-effort').left - r('#code-model').right <= 12 && "
@@ -96,7 +96,8 @@ def test_codex_activity_thinking_tools_reply_reconnect_and_completion(browser, l
     advance = f"(async () => {API}.api('POST', '/api/code/agents/{aid}/projects/{pid('alpha')}/read', {{path:'advance.txt'}}))()"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
-            ("click", "#code-start-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
+            ("wait", "!!document.querySelector('#code-new-codex')"), ("click", "#code-new-codex"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             *code_send("Проверь проект"),
             ("wait", "document.querySelector('#code-activity')?.dataset.state === 'thinking'"),
             ("eval", "thinking", "document.querySelector('#code-activity').textContent"),
@@ -146,8 +147,8 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
             ("wait", f"document.querySelector('#code-defaults-opencode-model')?.value === '{MODEL}'"),
             ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults.opencode)()"),
             *code_open(aid), *code_project(aid, "alpha"),
-            ("wait", "!document.querySelector('#code-start-opencode').disabled"),
-            ("click", "#code-start-opencode"),
+            ("wait", "!!document.querySelector('#code-new-opencode')"),
+            ("click", "#code-new-opencode"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "chat", "location.hash.split('/').at(-1)"),
             ("eval", "engine", "document.querySelector('.code-tab[aria-selected=true] .code-tab-engine').textContent"),
@@ -189,10 +190,9 @@ def test_opencode_creation_is_disabled_without_the_machine_catalog(browser, live
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid), *code_project(aid, "alpha"),
-            ("wait", "!document.querySelector('#code-start-claude').disabled"),
-            ("eval", "disabled", "document.querySelector('#code-start-opencode').disabled"),
-            ("eval", "hint", "document.querySelector('#code-start-opencode').title"),
-            ("click", "#code-start-claude"),
+            ("wait", "!!document.querySelector('#code-new-chat')"),
+            ("eval", "unavailable", "!document.querySelector('#code-new-opencode')"),
+            ("click", "#code-new-chat"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("click", "#code-tab-add"),
             ("wait", "!!document.querySelector('#code-tab-menu #code-new-chat')"),
@@ -202,8 +202,7 @@ def test_opencode_creation_is_disabled_without_the_machine_catalog(browser, live
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["disabled"] is True and v["menu"] is False and v["fits"] is True
-    assert v["hint"] == "Обновите мост и установите OpenCode на компьютере"
+    assert v["unavailable"] is True and v["menu"] is False and v["fits"] is True
     assert not known_refusals(problems(r), 409), problems(r)
 
 
