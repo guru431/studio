@@ -61,6 +61,25 @@
 
 ### 2.2 Просьбы студии и ответы моста
 
+Добавка v1 от 2026-10-31 (studio-agent 0.6.0): boolean `hello.chat_control` объявляет
+`steer {project, chat, text, images?}` → `{mode: steer|queue, id}` и
+`claim {project, chat, fork?: bool}` → `{available?: bool, external?: bool, forked?: bool}`.
+Просьбы чата могут нести `window` — 32 hex, случайный id страницы (HTTP-заголовок `X-Studio-Window`).
+`turn` запоминает владельца, `steer/answer/stop` чужого окна получают `owned` (HTTP 409);
+`claim` явно передаёт управление, не прерывая работу. Нет активного хода — у обычных движков claim пустой;
+у Codex — проверка внешнего writer без генерации, либо при явном `fork: true` копия полной истории
+и новый alias этого чата. Исходный внешний процесс не останавливается.
+Codex передаёт уточнение в [turn/steer](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn)
+с обязательным expectedTurnId; Claude — SDK query, OpenCode ACP — очередь до конца текущего prompt.
+Мост не принимает новые model/effort/access в steer. До 20 уточнений и до 2 МиБ ASCII-JSON текстов
+на ход; очередь base64-картинок OpenCode — до 8 МиБ. Старому мосту эти просьбы не идут (409 unsupported).
+`input_accepted` подтверждает, что CLI принял исходное задание; при отказе до отправки turn/start `done.not_started: true`
+возвращает непринятый черновик, `done.code: writer_active` показывает ожидание/копию.
+`followup {id, text, mode, sent?}`, `followup_sent {id}` и `ownership {owner}` идут всем наблюдателям.
+`snapshot` дополнен owner/accepted/followups; картинки заменяются счётчиком, оригиналы уже переданы CLI
+либо находятся в ограниченной очереди моста. `done.unsent: [{id,text}]` возвращает очередь, снятую остановкой/ошибкой;
+страница возвращает тексты и сохранённые в памяти вложения в поле. Тексты и картинки не журналируются.
+
 Добавка v1 от 2026-10-30 (studio-agent 0.5.0): необязательный `hello.opencode` —
 `{version, models, efforts, defaults?}` третьего помощника. До 500 моделей, id —
 `[A-Za-z0-9._:\[\]/@+-]{1,300}`, label до 100 знаков; версия до 64 знаков. До 100 вариантов

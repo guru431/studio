@@ -154,6 +154,61 @@ class CodexRunner(Runner):
         self._meta = None
         self._meta_lock = asyncio.Lock()
 
+    async def takeover(self, project, pid, chat, owner, *, fork=False):
+        if self._turn(pid, chat) is not None:
+            return self.claim(pid, chat, owner)
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        path = await asyncio.to_thread(self.find_codex)
+        if path is None:
+            raise Refused("unsupported")
+        rpc, opened = self.rpc_factory(path, project), None
+        try:
+            await rpc.connect()
+            try:
+                data = await rpc.request("thread/read", {"threadId": target})
+            except codex_rpc.RpcError as e:
+                if e.not_found:
+                    return {"available": True}
+                raise
+            if not same_project(data.get("thread", {}).get("cwd"), project):
+                raise Refused("not_found")
+            data = await rpc.request("thread/fork" if fork else "thread/resume", {"threadId": target})
+            opened = data.get("thread", {}).get("id")
+            if not isinstance(opened, str) or not limits.CHAT_ID.fullmatch(opened) or not same_project(
+                    data.get("thread", {}).get("cwd"), project) or (fork and opened == target):
+                raise Refused("invalid")
+            if fork:
+                await asyncio.to_thread(self.aliases.put, project, chat, opened)
+            return {"available": True, "forked": fork}
+        except codex_rpc.RpcError as e:
+            if e.writer_active:
+                return {"available": False, "external": True}
+            raise Refused("conflict", "Не удалось проверить сессию Codex — повторите позже") from None
+        finally:
+            if opened:
+                with contextlib.suppress(codex_rpc.RpcError):
+                    await rpc.request("thread/unsubscribe", {"threadId": opened})
+            await rpc.disconnect()
+
+    async def _steer_input(self, t, text, images, message_id):
+        content = [{"type": "image", "url": f"data:{i['mime']};base64,{i['data']}"} for i in images]
+        if text.strip():
+            content.append({"type": "text", "text": text})
+        try:
+            await t.client.rpc.request("turn/steer", {"threadId": t.client.thread,
+                "expectedTurnId": t.client.turn, "input": content})
+        except codex_rpc.RpcError:
+            raise Refused("conflict", "Codex не принял уточнение — ход мог завершиться; текст сохранён в поле") from None
+        return "steer"
+
+    def _done(self, t, failure):
+        result = super()._done(t, failure)
+        if failure is not None and not t.accepted and not getattr(t, "start_attempted", False):
+            result["not_started"] = True
+            if getattr(t, "writer_active", False):
+                result["code"] = "writer_active"
+        return result
+
     async def _metadata(self, project, method, params):
         async with self._meta_lock:
             try:
@@ -348,8 +403,10 @@ class CodexRunner(Runner):
                 params["model"] = model
             if effort is not None:
                 params["effort"] = effort
+            t.start_attempted = True
             data = await rpc.request("turn/start", params)
             client.turn = data["turn"]["id"]
+            self._accepted(t)
             if t.stopped or t.closing:
                 await client.interrupt()
             while True:
@@ -365,9 +422,11 @@ class CodexRunner(Runner):
                 if p.get("threadId") != target:
                     continue
                 if frame.get("method") == "turn/completed":
-                    result = p.get("turn", {})
-                    if result.get("status") == "failed":
-                        failure = "Codex: " + events.clip((result.get("error") or {}).get("message", "ошибка хода"), 280)
+                    async with t.input_lock:
+                        t.finishing = True
+                        result = p.get("turn", {})
+                        if result.get("status") == "failed":
+                            failure = "Codex: " + events.clip((result.get("error") or {}).get("message", "ошибка хода"), 280)
                     break
                 self._notification(t, frame["method"], p)
         except asyncio.CancelledError:
@@ -376,6 +435,7 @@ class CodexRunner(Runner):
             failure = e.message
         except codex_rpc.RpcError as e:
             log.warning("ход %s: Codex RPC %s: %s", t.turn, e.method or "?", e.code)
+            t.writer_active = e.writer_active
             failure = ("Этот чат занят другим процессом Codex — завершите его работу с чатом и повторите отправку"
                        if e.writer_active else "Codex не ответил — проверьте вход и журнал Codex на компьютере")
         except Exception as e:

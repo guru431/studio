@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from fake_bridge import pid
+from test_codex import CATALOG
 from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live
 
 pw = pytest.importorskip("playwright.sync_api")
@@ -43,9 +44,21 @@ def iphone(webkit, live, request):
                                 has_touch=True, device_scale_factor=3,
                                 extra_http_headers={"Cookie": cookie}) as context:
             page = context.new_page()
+            page.studio_machine = machine
             page.set_default_timeout(10000)
             errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
+            # WebKit r2370 ошибочно превращает отмену fetch при reload в pageerror:
+            # https://github.com/microsoft/playwright/issues/8443
+            # Проверяем настоящие необработанные ошибки JS во всех документах страницы.
+            marker = 'studio-test-uncaught: '
+            page.on('console', lambda message: errors.append(message.text)
+                    if message.type == 'error' and message.text.startswith(marker) else None)
+            page.add_init_script("""addEventListener('error', event => {
+                if (event.error) console.error('studio-test-uncaught: ' + String(event.error.stack || event.message));
+            });
+            addEventListener('unhandledrejection', event => {
+                console.error('studio-test-uncaught: ' + String(event.reason?.stack || event.reason));
+            });""")
             page.goto(live.url + "/#/code")
             page.locator("#code-projects li[data-pid]").first.wait_for()
             yield page, aid
@@ -87,6 +100,153 @@ def test_code_phone_projects_fill_the_panel_and_accept_taps(iphone, tmp_path):
     panel.wait_for(state="hidden")
     pw.expect(page.locator(".code-place-project")).to_have_text("zulu")
     fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
+def test_code_composer_fits_long_draft_and_sends_followup_while_working(iphone, tmp_path):
+    page, aid = iphone
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    machine = page.studio_machine
+    machine.script = [{"k": "activity", "state": "thinking"}]
+    page.locator('#code-text').fill('Первое задание')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-activity')).to_contain_text('Думает')
+    draft = 'Уточнение: ' + 'длинная строка ' * 150
+    page.locator('#code-text').fill(draft)
+    geometry = page.evaluate("""() => {
+        const box = document.querySelector('#code-composer').getBoundingClientRect();
+        const status = document.querySelector('#code-activity').getBoundingClientRect();
+        const input = document.querySelector('#code-text').getBoundingClientRect();
+        const buttons = [...document.querySelectorAll('#code-composer .field-tools button')]
+            .filter(e => !e.hidden).map(e => e.getBoundingClientRect());
+        const picks = [...document.querySelectorAll('#code-composer select')];
+        return { statusAbove: status.bottom <= box.top, shortInput: input.height <= innerHeight * .25 + 1,
+            noDuplicate: !document.querySelector('.code-chat-bar') && !document.querySelector('#code-close-chat'),
+            column: buttons.every(b => Math.abs(b.x - buttons[0].x) < 1),
+            font: picks.every(e => parseFloat(getComputedStyle(e).fontSize) >= 16),
+            picksInside: picks.every(e => e.getBoundingClientRect().right <= innerWidth),
+            canSend: !document.querySelector('#code-send').disabled, noZoom: visualViewport.scale === 1 };
+    }""")
+    assert all(geometry.values()), geometry
+    fits(page)
+    page.screenshot(path=str(tmp_path / 'composer.png'))
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-text')).to_have_value('')
+    pw.expect(page.locator('#code-feed .code-msg.user').last).to_have_text(draft)
+    assert len([r for r in machine.requests if r['op'] == 'turn']) == 1
+    assert [r for r in machine.requests if r['op'] == 'steer'][0]['text'] == draft
+    assert CODE_CHAT_A in machine.running
+    fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_code_other_window_can_wait_and_take_control_without_restarting(iphone):
+    page, aid = iphone
+    target = page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    page.goto(target)
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.studio_machine.script = [{"k": "text", "text": "Выполняю задание"}]
+    page.locator('#code-text').fill('Работай')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-stop')).to_be_visible()
+    with page.context.new_page() as other:
+        other.goto(target)
+        pw.expect(other.locator('#code-session-notice')).to_contain_text('другом окне')
+        pw.expect(other.locator('#code-send')).to_be_disabled()
+        other.locator('#code-wait-session').tap()
+        pw.expect(other.locator('#code-session-notice')).to_contain_text('Жду завершения')
+        other.locator('#code-take-session').tap()
+        pw.expect(other.locator('#code-session-notice')).to_be_hidden()
+        pw.expect(page.locator('#code-send')).to_be_disabled()
+        other.locator('#code-text').fill('Уточнение из нового окна')
+        other.locator('#code-send').tap()
+        pw.expect(page.locator('#code-feed')).to_contain_text('Уточнение из нового окна')
+        assert len([r for r in page.studio_machine.requests if r['op'] == 'turn']) == 1
+        other.locator('#code-stop').tap()
+        pw.expect(page.locator('#code-session-notice')).to_be_hidden()
+        pw.expect(page.locator('#code-send')).to_be_enabled()
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+@pytest.mark.parametrize('mode', ['wait', 'fork'])
+def test_codex_external_writer_restores_input_and_offers_wait_or_copy(iphone, mode):
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.codex = CATALOG
+    machine.projects['alpha']['chats'][CODE_CHAT_A]['engine'] = 'codex'
+    # hello уже ушёл: обновить каталог только у подставного канала сервера.
+    import bridge
+    bridge.LINKS[aid].hello['codex'] = CATALOG
+    occupied = [True]
+
+    def refused_turn(req, events):
+        assert occupied[0]
+        events.append({'t': 'ev', 'project': req['project'], 'chat': req['chat'], 'turn': 'rejected',
+                       'e': {'k': 'done', 'status': 'error', 'not_started': True,
+                             'code': 'writer_active', 'message': 'Сессия занята'}})
+        return {'turn': 'rejected'}
+
+    def claim(req, events):
+        if req.get('fork'):
+            occupied[0] = False
+            return {'available': True, 'forked': True}
+        return {'available': not occupied[0], 'external': occupied[0]}
+
+    machine._op_turn = refused_turn
+    machine._op_claim = claim
+    page.add_init_script("""const later = window.setTimeout;
+        window.setTimeout = (fn, ms, ...args) => later(fn, ms === 5000 ? 50 : ms, ...args);""")
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.reload()
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#code-text').fill('Сохранённое задание')
+    page.locator('#code-image-input').set_input_files({'name': 'shot.png', 'mimeType': 'image/png',
+        'buffer': bytes.fromhex('89504e470d0a1a0a') + b'screenshot'})
+    pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-session-notice')).to_contain_text('Codex Desktop')
+    pw.expect(page.locator('#code-text')).to_have_value('Сохранённое задание')
+    pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
+    assert not any(r['op'] == 'claim' for r in machine.requests)
+    if mode == 'wait':
+        page.locator('#code-wait-session').tap()
+        pw.expect(page.locator('#code-session-notice')).to_contain_text('Жду освобождения')
+        occupied[0] = False
+    else:
+        page.locator('#code-take-session').tap()
+    pw.expect(page.locator('#code-session-notice')).to_be_hidden()
+    pw.expect(page.locator('#code-send')).to_be_enabled()
+    pw.expect(page.locator('#code-text')).to_have_value('Сохранённое задание')
+    pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
+    assert len([r for r in machine.requests if r['op'] == 'turn']) == 1
+    fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_opencode_stop_restores_queued_text_and_screenshot(iphone):
+    import bridge
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.opencode = CATALOG
+    machine.projects['alpha']['chats'][CODE_CHAT_A]['engine'] = 'opencode'
+    bridge.LINKS[aid].hello['opencode'] = CATALOG
+    machine.script = [{"k": "activity", "state": "thinking"}]
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.reload()
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#code-text').fill('Задание')
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-stop')).to_be_visible()
+    page.locator('#code-text').fill('Уточнение в очередь')
+    page.locator('#code-image-input').set_input_files({'name': 'shot.png', 'mimeType': 'image/png',
+        'buffer': bytes.fromhex('89504e470d0a1a0a') + b'screenshot'})
+    pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
+    page.locator('#code-send').tap()
+    pw.expect(page.locator('#code-text')).to_have_value('')
+    page.locator('#code-stop').tap()
+    pw.expect(page.locator('#code-text')).to_have_value('Уточнение в очередь')
+    pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
 
 
 @pytest.mark.parametrize("iphone", [(393, 852), (852, 393)], ids=["portrait", "landscape"], indirect=True)

@@ -29,13 +29,13 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     aid, sb = code_online(live, login, machine)
     geometry = """(() => {
       const rect = (s) => document.querySelector(s).getBoundingClientRect();
-      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-context', '#code-stop', '#code-send'];
+      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-stop', '#code-send'];
       const boxes = selectors.map(rect), bar = rect('#code-composer .composer-bar');
       const attach = document.querySelector('#code-attach'), mic = document.querySelector('#code-composer .mic');
       return { row: boxes.every(b => b.top >= bar.top - 1 && b.bottom <= bar.bottom + 1),
         fits: boxes.every(b => b.left >= bar.left - 1 && b.right <= bar.right + 1),
         controls: boxes.every(b => b.width >= 24),
-        adjacent: attach.nextElementSibling === mic && Math.abs(rect('#code-attach').top - rect('#code-composer .mic').top) < 1,
+        adjacent: attach.nextElementSibling === mic && Math.abs(rect('#code-attach').left - rect('#code-composer .mic').left) < 1,
         icon: !!attach.querySelector('svg') && !attach.textContent.trim(),
         always: !attach.hidden && !!attach.getAttribute('aria-label'),
         emptyInput: document.querySelector('#code-text').scrollHeight <= document.querySelector('#code-text').clientHeight + 1 };
@@ -150,7 +150,7 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
             ("click", "#code-start-opencode"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "chat", "location.hash.split('/').at(-1)"),
-            ("eval", "engine", "document.querySelector('.code-chat-bar .code-engine').textContent"),
+            ("eval", "engine", "document.querySelector('.code-tab[aria-selected=true] .code-tab-engine').textContent"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value, document.querySelector('#code-access').value]"),
             *code_send("Проверь проект"), ("wait", "document.querySelector('.code-ask-yes')"),
             ("eval", "card", "document.querySelector('.code-ask-title').textContent"),
@@ -161,7 +161,7 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
             ("wait", "!!document.querySelector('#code-tab-menu #code-new-opencode')"),
             ("eval", "menu", "document.querySelector('#code-tab-menu #code-new-opencode').textContent"),
             ("click", "#code-tab-menu #code-new-chat"),
-            ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1' && document.querySelector('.code-chat-bar .code-engine')?.textContent === 'Claude Code'"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1' && document.querySelector('#code-chat')?.dataset.engine === 'claude'"),
             ("eval", "claude", "[...document.querySelector('#code-model').options].map(o => o.value)"),
             ("eval", "tabs", "[...document.querySelectorAll('#code-tabbar .code-tab-engine')].map(e => e.textContent)")],
             width=320, mobile=True)

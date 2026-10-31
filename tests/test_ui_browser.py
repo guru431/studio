@@ -7573,7 +7573,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
             ("eval", "starters", "[...document.querySelectorAll('.code-starts button')].map((b) => b.textContent)"),
             ("click", "#code-start-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
-            ("eval", "engine", "document.querySelector('.code-chat-bar .code-engine').textContent"),
+            ("eval", "engine", "document.querySelector('.code-tab[aria-selected=true] .code-tab-engine').textContent"),
             ("eval", "nullText", "[...document.querySelector('#code-chat').childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === 'null')"),
             ("eval", "models", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
             ("eval", "pick", "(() => { const m = document.querySelector('#code-model'); m.value = 'codex-test';"
@@ -7585,7 +7585,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
             ("click", ".code-ask-yes"),
             ("wait", "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Готово Codex')"),
             ("click", "#code-start-claude"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"
-                                              " && document.querySelector('.code-chat-bar .code-engine').textContent === 'Claude Code'"),
+                                              " && document.querySelector('#code-chat').dataset.engine === 'claude'"),
             ("eval", "claude", "[...document.querySelector('#code-model').options].map((o) => o.value)"),
             ("eval", "choice", "document.querySelector('#code-model').value"),
             ("eval", "engines", "[...document.querySelectorAll('#code-tabbar .code-tab-engine')].map((e) => e.textContent)"),
@@ -7746,7 +7746,7 @@ def test_code_screenshots_paste_pick_drop_and_retry(browser, live, engine, width
           {status: 422, headers: {'content-type': 'application/json'}})); } return real(u, o); }; return true; })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            *([("click", "#code-start-codex"), ("wait", "document.querySelector('.code-chat-bar .code-engine')?.textContent === 'Codex'"
+            *([("click", "#code-start-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
                 " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
             ("eval", "file", setup_file), ("eval", "paste", paste),
             ("wait", "document.querySelectorAll('#code-images img').length === 1"),
@@ -7805,7 +7805,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
             ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
                                 ".map((o) => [o.value, o.textContent]))"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
-            ("eval", "words", "['#code-send', '#code-stop', '#code-close-chat'].map((s) => document.querySelector(s).textContent)"),
+            ("eval", "words", "['#code-send', '#code-stop'].map((s) => document.querySelector(s).textContent)"),
             ("eval", "note", "!!document.querySelector('#code-shared-note')"),
             *code_send("Запусти тесты"),
             ("wait", CODE_IDLE_AFTER.format(n=2) + " && [...document.querySelectorAll('.code-msg.assistant .md')]"
@@ -7826,7 +7826,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
     assert v["options"] == [[["", "opus"], ["opus", "Opus"], ["sonnet", "Sonnet"]],
                             [["", "high"], ["low", "low"], ["high", "high"]]]
     assert v["picked"] == ["", ""]
-    assert v["words"] == ["Отправить", "Остановить", "Закрыть чат"] and v["note"] is False
+    assert v["words"] == ["Отправить", "Остановить"] and v["note"] is False
     assert v["msgs"] == [["user", "Раньше"], ["assistant", "Было"], ["user", "Запусти тесты"],
                          ["assistant", "Сейчас проверю. Готово."]]
     assert v["steps"] == [["Bash", "pytest -q", "3 passed", False, None],
@@ -8160,7 +8160,9 @@ def test_code_answer_in_one_tab_removes_card_in_other(browser, live):
     try:
         wait_for(lambda: "r1" in machine.running.get(CODE_CHAT_A, {}).get("asks", {}), 90)
         r = browser.drive(live.url + "/", [("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("wait", card.format(id="r1")), ("click", ".code-ask[data-request='r1'] .code-ask-yes"),
+            ("wait", card.format(id="r1")), ("click", "#code-take-session"),
+            ("wait", "document.querySelector('#code-session-notice').hidden"),
+            ("click", ".code-ask[data-request='r1'] .code-ask-yes"),
             ("wait", f"!{card.format(id='r1')} && {card.format(id='r2')}")], width=320, mobile=True, init=ALWAYS_VISIBLE)
         one.join(90)
     finally:
@@ -8321,7 +8323,7 @@ def test_code_concrete_settings_context_and_access_are_visible(browser, live, en
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            *([("click", "#code-start-codex"), ("wait", "document.querySelector('.code-chat-bar .code-engine')?.textContent === 'Codex'"
+            *([("click", "#code-start-codex"), ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
                 " && document.querySelector('#code-chat').dataset.loaded === '1'")] if engine == "codex" else []),
             ("eval", "before", "['#code-model', '#code-effort', '#code-access'].map((s) => document.querySelector(s).selectedOptions[0].textContent)"),
             ("eval", "context", "document.querySelector('#code-context-text').textContent"),
@@ -9450,30 +9452,6 @@ def test_code_tab_close_picks_the_right_neighbour(browser, live):
     finally:
         conn.close()
     assert set(machine.projects["alpha"]["chats"]) == {CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C}
-    assert not problems(r), problems(r)
-
-
-def test_code_close_chat_removes_its_tab(browser, live):
-    """«Закрыть чат» в B — PATCH closed, вкладки B нет, активна соседняя (A)."""
-    import db
-    login = "code-close-chat-tab"
-    uid = live.add_user(login)
-    aid, sb = code_online(live, login, code_three())
-    try:
-        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
-            *code_from_list(CODE_CHAT_A), *code_from_menu(CODE_CHAT_B),
-            ("click", "#code-close-chat"), code_tab_ready(CODE_CHAT_A), ("eval", "tabs", CODE_TABS)], width=1280)
-    finally:
-        sb.stop()
-    assert not r.get("failed"), r
-    assert r["values"]["tabs"] == [[CODE_CHAT_A, "Чат A", "true"]]
-    conn = db.connect(live.db_path)
-    try:
-        state = conn.execute("SELECT state FROM code_chats WHERE user_id = ? AND session_id = ?",
-                             (uid, CODE_CHAT_B)).fetchone()[0]
-    finally:
-        conn.close()
-    assert state == "closed"
     assert not problems(r), problems(r)
 
 

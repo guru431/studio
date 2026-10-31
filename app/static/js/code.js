@@ -567,7 +567,6 @@ async function chat(mine, p, id, agent, section, status) {
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
     closed: () => failed({ code: 'closed' }, p.aid, null),
-    closedChat: () => closeTab(p, id),
     gone: () => closeTab(p, id),
     openFile: (path) => {
       wantFile = path;

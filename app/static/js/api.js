@@ -1,6 +1,6 @@
 /* Запросы к API студии.
  *
- * api(метод, путь, тело, { signal }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
+ * api(метод, путь, тело, { signal, headers }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
  * signal — обрыв запроса (AbortSignal, например срок).
  * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message, detail)
@@ -39,8 +39,8 @@ export async function loadMe() {
   return me;
 }
 
-export async function api(method, path, body, { signal } = {}) {
-  const headers = {};
+export async function api(method, path, body, { signal, headers: extraHeaders } = {}) {
+  const headers = { ...extraHeaders };
   let payload;
   const token = me ? me.csrf : csrf;
   if (method !== 'GET' && token) headers['x-studio-csrf'] = token;
@@ -74,7 +74,7 @@ export async function api(method, path, body, { signal } = {}) {
     if (code === 'login') location.href = '/login';
     if (code === 'screen_locked' && hooks.locked) {
       await hooks.locked();
-      return api(method, path, body, { signal });
+      return api(method, path, body, { signal, headers: extraHeaders });
     }
     throw new ApiError(response.status, code, message, fields);
   }

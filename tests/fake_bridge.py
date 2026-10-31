@@ -66,6 +66,7 @@ class FakeMachine:
         self.opencode = None
         self.images = True
         self.chat_state = True
+        self.chat_control = True
         self.context = None
 
     @property
@@ -74,6 +75,7 @@ class FakeMachine:
                 "has_pin": self.pin is not None,
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
+                "chat_control": self.chat_control,
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
                    if catalog is not None}}
@@ -181,10 +183,33 @@ class FakeMachine:
         self.turns += 1
         turn = f"t-{self.turns}"
         self.running[chat_id] = {"turn": turn, "project": req["project"], "rest": list(self.script),
-                                 "text": "", "steps": [], "asks": {}}
+                                 "text": "", "steps": [], "asks": {}, "owner": req.get("window"), "followups": []}
         self.script = []
+        if req.get("window"):
+            events.append(self._ev(chat_id, {"k": "input_accepted"}))
         self._play(chat_id, events)
         return {"turn": turn}
+
+    def _op_steer(self, req, events):
+        self._chat(req)
+        run = self.running.get(req["chat"])
+        if run is None:
+            raise Refused("idle", "хода нет")
+        if run.get("owner") and run["owner"] != req.get("window"):
+            raise Refused("owned", "задание выполняется в другом окне")
+        mode = 'queue' if req.get('engine') == 'opencode' else 'steer'
+        item = {"id": f"followup-{len(run['followups'])}", "text": req["text"], "mode": mode}
+        run["followups"].append(item)
+        events.append(self._ev(req["chat"], {"k": "followup", **item}))
+        return {"mode": mode, "id": item['id']}
+
+    def _op_claim(self, req, events):
+        self._chat(req)
+        run = self.running.get(req["chat"])
+        if run is not None:
+            run["owner"] = req["window"]
+            events.append(self._ev(req["chat"], {"k": "ownership", "owner": req["window"]}))
+        return {"available": True}
 
     def _op_watch(self, req, events):
         chat_id = req.get("chat")
@@ -194,6 +219,8 @@ class FakeMachine:
             asks = [{k: v for k, v in a.items() if k != "k"} for a in run["asks"].values()]
             events.append(self._ev(chat_id, {"k": "snapshot", "text": run["text"],
                                              "steps": [dict(s) for s in run["steps"]], "asks": asks,
+                                             **({"owner": run["owner"], "accepted": True} if run.get("owner") else {}),
+                                             **({"followups": run["followups"]} if run.get("followups") else {}),
                                              **({"activity": run["activity"]} if run.get("activity") else {})}))
         return {"running": run is not None}
 
@@ -218,7 +245,8 @@ class FakeMachine:
             raise Refused("idle", "хода нет")
         for request_id in list(run["asks"]):
             events.append(self._ev(chat_id, {"k": "asked", "request_id": request_id}))
-        self._finish(chat_id, events, {"k": "done", "status": "stopped"})
+        unsent = [{"id": item['id'], "text": item['text']} for item in run.get('followups', []) if item['mode'] == 'queue']
+        self._finish(chat_id, events, {"k": "done", "status": "stopped", **({'unsent': unsent} if unsent else {})})
         return {}
 
     def _files(self, req) -> dict:
