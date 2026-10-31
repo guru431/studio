@@ -41,7 +41,8 @@ def last_context(path, home=None):
                 if payload.get("type") == "token_count":
                     info = payload.get("info") or {}
                     result = permissions.context((info.get("last_token_usage") or {}).get("total_tokens"),
-                                                 info.get("model_context_window"))
+                                                 info.get("model_context_window"),
+                                                 permissions.token_usage(info.get("total_token_usage")))
                     if result:
                         return result
             except (ValueError, AttributeError):
@@ -488,7 +489,8 @@ class CodexRunner(Runner):
     def _notification(self, t, method, p):
         if method == "thread/tokenUsage/updated":
             usage = p.get("tokenUsage") or {}
-            current = permissions.context((usage.get("last") or {}).get("totalTokens"), usage.get("modelContextWindow"))
+            current = permissions.context((usage.get("last") or {}).get("totalTokens"), usage.get("modelContextWindow"),
+                                          permissions.token_usage(usage.get("total")))
             if current:
                 t.context = current
                 self._send(t, {"k": "context", **t.context})

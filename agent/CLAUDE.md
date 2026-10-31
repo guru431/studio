@@ -19,6 +19,12 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.7.4 `context.usage` необязательно несёт накопленные `total/input/output/cached/cache_write/reasoning`.
+Codex: `tokenUsage.total` и `total_token_usage` из rollout; `used` по-прежнему из `last`, не из total.
+Claude: `sessions.token_usage` читает SDK-историю главной сессии, объединяет блоки по API message.id,
+учитывает чтение и создание кэша. Неизвестные числа не заменяются нулями. В choices сохраняются только числа.
+`gitinfo.status` без upstream добавляет `unpushed` (rev-list HEAD --not --remotes, без fetch), null при ошибке.
+
 С 0.6.0 `hello.chat_control` объявляет `steer` и `claim`. `window` (32 hex) — id страницы:
 `_Turn.owner`, snapshot.owner и ownership; чужие steer/answer/stop получают `owned`, явный claim
 передаёт управление без прерывания. Codex использует `turn/steer` с threadId/expectedTurnId,

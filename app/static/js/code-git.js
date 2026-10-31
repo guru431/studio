@@ -1,6 +1,19 @@
 /* Один снимок Git открытого проекта для шапки, дерева и вкладки Git. Только память страницы. */
 import { api } from './api.js';
 
+export function gitLevel(changed, unpushed) {
+  if (Number.isInteger(changed) && changed > 0) return 'red';
+  if (Number.isInteger(unpushed) && unpushed > 0) return 'yellow';
+  return changed === 0 && unpushed === 0 ? 'green' : 'unknown';
+}
+
+export const GIT_ACTIONS = [
+  ['commit', 'Коммит', 'Закоммить изменения текущего проекта. Проверь diff и выполни проверки по правилам проекта. Не пушь и не деплой.'],
+  ['push', 'Пуш', 'Запушь уже созданные коммиты текущей ветки в основной удалённый репозиторий текущего проекта. Не создавай коммит и не деплой.'],
+  ['push-all', 'Пуш во все Git', 'Запушь уже созданные коммиты текущей ветки во все предназначенные для push удалённые репозитории текущего проекта. Не создавай коммит и не деплой.'],
+  ['deploy', 'Пуш во все Git и деплой', 'Запушь уже созданные коммиты текущей ветки во все предназначенные для push удалённые репозитории текущего проекта, затем задеплой проект по его инструкции и проверь результат. Не создавай коммит. Если хотя бы один обязательный push не выполнен, не начинай деплой.'],
+].map(([id, label, prompt]) => ({ id, label, prompt: `${prompt} Соблюдай AGENTS.md и CLAUDE.md проекта, включая правила зеркал. Не используй force-push. Сообщи результат каждого действия.` }));
+
 export function projectGit(aid, pid) {
   let state = { data: null, error: null, loading: false };
   let pending = null;

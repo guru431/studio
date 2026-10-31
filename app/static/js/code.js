@@ -44,7 +44,7 @@
 import { api, me } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
-import { projectGit } from './code-git.js';
+import { projectGit, gitLevel } from './code-git.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
@@ -183,9 +183,10 @@ function layout() {
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
   repoStatus.addEventListener('click', () => switchTo('git'));
+  const gitActions = el('div', { class: 'code-git-actions-host' });
   const top = el('div', { class: 'code-top' },
     el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place),
-      el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
+      el('div', { class: 'code-project-tools' }, repoStatus, views)), gitActions, tabsHost);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
@@ -198,7 +199,7 @@ function layout() {
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
   ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches,
-    repoStatus, statusBox, body, backdrop };
+    repoStatus, gitActions, statusBox, body, backdrop };
 }
 
 /** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
@@ -379,6 +380,7 @@ function enter(aid, pid) {
   p.repo.subscribe((state) => {
     if (proj !== p) return;
     const { data, error } = state;
+    ui.repoStatus.dataset.gitLevel = data ? gitLevel(data.files?.length, data.upstream ? data.ahead : data.unpushed) : 'unknown';
     ui.repoStatus.classList.toggle('unavailable', !!error);
     ui.repoStatus.hidden = !data && !error;
     if (!data) {
@@ -389,7 +391,7 @@ function enter(aid, pid) {
     }
     const files = Array.isArray(data.files) ? data.files : [];
     const branch = typeof data.branch === 'string' && data.branch ? data.branch : 'HEAD';
-    const ahead = data.upstream ? Number(data.ahead) || 0 : 0;
+    const ahead = data.upstream ? Number(data.ahead) || 0 : data.unpushed || 0;
     const behind = data.upstream ? Number(data.behind) || 0 : 0;
     const glyph = el('span', { class: 'code-repo-icon', 'aria-hidden': 'true' });
     glyph.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${BRANCH_ICON}</svg>`;
@@ -397,7 +399,8 @@ function enter(aid, pid) {
     if (behind) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↓${behind}`));
     if (ahead) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↑${ahead}`));
     ui.repoStatus.title = [`Ветка ${branch}`, files.length ? `Незакоммиченных файлов: ${files.length}` : 'Изменений нет',
-      data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Впереди на ${ahead}` : ''].filter(Boolean).join(' · ');
+      data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Не запушено: ${ahead}` : '',
+      'По локальным данным Git, без fetch'].filter(Boolean).join(' · ');
     ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
   });
   p.bar = tabBar(ui.tabsHost, {
@@ -552,6 +555,8 @@ async function chat(mine, p, id, agent, section, status) {
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
+    gitHost: ui.gitActions, git: p.repo,
+    taskDone: () => { p.repo.refresh(true); panel.updateSummary(p.aid, p.pid); },
     closed: () => failed({ code: 'closed' }, p.aid, null),
     gone: () => closeTab(p, id),
     openFile: (path) => {

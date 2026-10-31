@@ -69,6 +69,7 @@ def test_status_of_a_real_repository(tmp_path, monkeypatch):
     assert gitinfo.status(repo)["files"] == [{"path": "новый файл.txt", "status": "??"}]
     subprocess.run(git + ["add", "-A"], check=True)
     subprocess.run(git + ["commit", "-q", "-m", "x"], check=True)
+    assert gitinfo.status(repo)["unpushed"] == 1
     (repo / "новый файл.txt").write_text("b")
     got = gitinfo.status(repo)
     assert got["files"] == [{"path": "новый файл.txt", "status": "M"}] and got["upstream"] is None
@@ -76,6 +77,15 @@ def test_status_of_a_real_repository(tmp_path, monkeypatch):
     with pytest.raises(errors.Refused) as e:
         gitinfo.status(plain)
     assert e.value.code == "not_git"
+
+
+def test_no_upstream_counts_unpublished_commits_and_keeps_failed_count_unknown(monkeypatch, tmp_path):
+    outputs = iter([b"# branch.oid abc\0# branch.head main\0", b"3\n"])
+    monkeypatch.setattr(gitinfo, "run", lambda *a, **kw: subprocess.CompletedProcess([], 0, next(outputs)))
+    assert gitinfo.status(tmp_path)["unpushed"] == 3
+    outputs = iter([subprocess.CompletedProcess([], 0, b"# branch.oid abc\0"), subprocess.CompletedProcess([], 1, b"")])
+    monkeypatch.setattr(gitinfo, "run", lambda *a, **kw: next(outputs))
+    assert gitinfo.status(tmp_path)["unpushed"] is None
 
 
 @pytest.mark.integration
