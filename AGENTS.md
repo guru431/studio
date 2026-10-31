@@ -37,3 +37,4 @@
 - Выкладка: `bash deploy/deploy.sh [--new-secret] [--create-admin]` — закоммиченный HEAD на debian
   (`ssh -p 22222 deploy@10.77.1.10`, код `/opt/services/studio`, юниты
   [studio-web.service](deploy/studio-web.service), [studio-backup.timer](deploy/studio-backup.timer)).
+  Работающий мост из выполняемого им задания не перезапускать и не убивать: дождаться завершения заданий и выхода в трее. Закрытие Студии на телефоне задания не останавливает.
