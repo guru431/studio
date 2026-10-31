@@ -33,6 +33,7 @@ import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
 import { readSSE } from './sse.js';
 import { el, words } from './ui.js';
+import { usageView } from './code-usage.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -53,14 +54,21 @@ const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const IMAGE_MAX = 5 * 1024 * 1024;
 const IMAGES_MAX = 8 * 1024 * 1024;
-const IMAGE_COUNT = 4;
+const IMAGE_COUNT = 8;
 
 /** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
 const drafts = new Map();
 const imageDrafts = new Map();  // картинки черновика — только память, как текст
+const historyCache = new Map(); // последние 12 историй, только память этой страницы
 const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
 const WINDOW = crypto.randomUUID().replaceAll('-', '');
+
+function attachmentBody(items) {
+  const images = items.filter((i) => IMAGE_TYPES.has(i.mime)).map(({ mime, data }) => ({ mime, data }));
+  const attachments = items.filter((i) => !IMAGE_TYPES.has(i.mime)).map(({ name, mime, data }) => ({ name, mime, data }));
+  return { ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) };
+}
 
 /** Начало ввода шага: первая строка-значение (команда, путь, шаблон), иначе JSON. */
 function preview(input) {
@@ -137,10 +145,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': 'Права доступа' },
     el('option', { value: '' }, DEFAULT), ...Object.entries(ACCESS[engine]).map(([value, label]) =>
       el('option', { value }, label)));
-  const contextMeter = el('meter', { id: 'code-context-meter', min: '0', max: '100', value: '0', hidden: true });
-  const contextText = el('span', { id: 'code-context-text' }, 'Контекст —');
-  const contextBox = el('span', { id: 'code-context', class: 'code-context', title: 'Статистика контекста ещё не получена' },
+  const contextMeter = el('meter', { id: 'code-context-meter', class: 'sr', min: '0', max: '100', value: '0', hidden: true });
+  const contextText = el('span', { id: 'code-context-text' }, '—');
+  const contextBox = el('span', { id: 'code-context', class: 'code-context', role: 'img', 'aria-label': 'Контекст: нет данных',
+    title: 'Статистика контекста ещё не получена' },
     contextMeter, contextText);
+  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage });
 
   /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
   function applyDefaults() {
@@ -168,12 +178,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const activeTools = new Map();
   const field = fieldBox(text);
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
-  const picker = el('input', { type: 'file', id: 'code-image-input', accept: [...IMAGE_TYPES].join(','),
-    multiple: true, hidden: true, 'aria-label': 'Скриншоты' });
-  const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': 'Добавить скриншот',
-    title: agent?.images ? 'Выберите скриншот, вставьте Ctrl+V или перетащите в поле'
-      : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images });
-  attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 16 5-4 4 4 4-6 5 6"/></svg>';
+  const picker = el('input', { type: 'file', id: 'code-image-input',
+    multiple: true, hidden: true, 'aria-label': 'Вложения' });
+  const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': 'Добавить вложение',
+    title: agent?.attachments ? 'Прикрепить файлы любого типа · до 8 файлов, 5 МиБ на файл, 8 МиБ всего'
+      : 'Изображения · обновите мост для файлов любого типа', disabled: !agent?.images && !agent?.attachments });
+  attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 6.5-6.5a3 3 0 0 1 4.2 4.2L10 19.4a5 5 0 0 1-7.1-7.1L12 3.2m-6.2 11 8.7-8.7"/></svg>';
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
   const sessionText = el('p');
   const waitSession = el('button', { type: 'button', id: 'code-wait-session', class: 'btn btn-sm' }, 'Дождаться завершения');
@@ -187,7 +197,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox, usage.button),
       stop, send));
   host.dataset.engine = engine;
   host.append(
@@ -212,7 +222,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);
     contextMeter.value = percent;
     contextMeter.hidden = false;
-    contextText.textContent = `Контекст ${percent}%`;
+    contextText.textContent = `${Math.round(percent)}%`;
+    contextBox.style.setProperty('--context-percent', `${percent}%`);
+    contextBox.dataset.level = percent < 50 ? 'green' : percent < 70 ? 'yellow' : percent < 90 ? 'orange' : 'red';
+    contextBox.setAttribute('aria-label', `Контекст заполнен на ${percent}%`);
     contextBox.title = `${data.used.toLocaleString('ru-RU')} / ${data.limit.toLocaleString('ru-RU')} токенов`;
     contextBox.dataset.used = String(data.used);
     contextBox.dataset.limit = String(data.limit);
@@ -251,8 +264,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         images = images.filter((i) => i !== image);
         keepImages();
       });
-      return el('div', { class: 'code-image' },
-        el('img', { src: `data:${image.mime};base64,${image.data}`, alt: image.name }), remove);
+      return el('div', { class: `code-image${IMAGE_TYPES.has(image.mime) ? '' : ' code-file'}`, title: image.name },
+        IMAGE_TYPES.has(image.mime) ? el('img', { src: `data:${image.mime};base64,${image.data}`, alt: image.name })
+          : el('span', { class: 'code-file-name' }, image.name), remove);
     }));
   }
 
@@ -265,7 +279,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function addImages(files) {
     if (!files.length || sending || adding) return;
-    if (!agent?.images) {
+    if (!agent?.images && !agent?.attachments) {
       showStatus('Обновите мост на компьютере для отправки изображений');
       return;
     }
@@ -274,16 +288,21 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     attach.disabled = true;
     showStatus('');
     try {
-      if (images.length + files.length > IMAGE_COUNT) throw new Error('Можно прикрепить до 4 изображений');
-      if (files.some((f) => !IMAGE_TYPES.has(f.type))) throw new Error('Нужен PNG, JPEG, WebP или GIF');
-      if (files.some((f) => !f.size || f.size > IMAGE_MAX)) throw new Error('Размер изображения — от 1 байта до 5 МиБ');
+      if (images.length + files.length > IMAGE_COUNT) throw new Error('Можно прикрепить до 8 файлов');
+      if (!agent?.attachments && files.some((f) => !IMAGE_TYPES.has(f.type))) {
+        throw new Error('Обновите мост на компьютере для отправки файлов любого типа');
+      }
+      if (files.some((f) => f.size > IMAGE_MAX)) throw new Error('Размер файла — до 5 МиБ');
+      if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
+        throw new Error('Можно прикрепить до 4 изображений за один раз');
+      }
       if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
-        throw new Error('Общий размер изображений — до 8 МиБ');
+        throw new Error('Общий размер вложений — до 8 МиБ');
       }
       const selected = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve({ mime: file.type, data: String(reader.result).split(',')[1],
-          name: file.name || 'Скриншот', size: file.size });
+        reader.onload = () => resolve({ mime: file.type || 'application/octet-stream', data: String(reader.result).split(',')[1] || '',
+          name: file.name || 'Вложение', size: file.size });
         reader.onerror = () => reject(new Error('Не получилось прочитать изображение'));
         reader.readAsDataURL(file);
       })));
@@ -295,7 +314,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } finally {
       adding = false;
       updateControls();
-      attach.disabled = sending || !agent?.images;
+      attach.disabled = sending || (!agent?.images && !agent?.attachments);
     }
   }
 
@@ -354,8 +373,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function messageNode(m) {
     if (m.role === 'user') return el('div', { class: 'code-msg user' },
-      ...(Array.isArray(m.images) ? m.images : []).map((i) => el('img', { class: 'code-sent-image',
-        src: `data:${i.mime};base64,${i.data}`, alt: i.name })), typeof m.text === 'string' ? m.text : '');
+      ...(Array.isArray(m.images) ? m.images : []).map((i) => IMAGE_TYPES.has(i.mime)
+        ? el('img', { class: 'code-sent-image', src: `data:${i.mime};base64,${i.data}`, alt: i.name })
+        : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '');
     const md = el('div', { class: 'md' });
     if (typeof m.text === 'string' && m.text) md.append(renderMarkdown(m.text));
     return el('div', { class: 'code-msg assistant' },
@@ -491,6 +511,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     activity.dataset.state = state;
     activityText.textContent = text;
     activity.title = text;
+    document.dispatchEvent(new CustomEvent('studio-code-activity', { detail: { aid: Number(aid), pid, chat,
+      running: ['thinking', 'responding', 'tool', 'waiting'].includes(state), asking: state === 'waiting' } }));
   }
 
   function continueActivity() {
@@ -501,6 +523,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** Компьютер закрыт для сессии — к PIN (code.js запомнит этот чат); с чата уже ушли — никуда. */
   function closed() {
+    historyCache.clear();
     if (alive) toPin();
   }
 
@@ -590,6 +613,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /* ---- события хода ------------------------------------------------------------- */
 
   function finish(data) {
+    historyCache.delete(draftKey);
     for (const item of Array.isArray(data.unsent) ? data.unsent : []) {
       unsentFollowups.add(item.id);
       const queued = queuedInputs.get(draftKey)?.get(item.id);
@@ -812,6 +836,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   async function loadHistory(thenLive) {
+    const cached = thenLive && historyCache.get(draftKey);
+    if (cached) feed.replaceChildren(...messages(cached.items));
     let page;
     try {
       page = await api('GET', endpoint());
@@ -823,8 +849,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     if (!alive) return;
+    historyCache.delete(draftKey);
+    historyCache.set(draftKey, page);
+    if (historyCache.size > 12) historyCache.delete(historyCache.keys().next().value);
     if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
-    feed.replaceChildren(...messages(page.items));
+    if (!cached || JSON.stringify(cached) !== JSON.stringify(page)) feed.replaceChildren(...messages(page.items));
     followups.clear();
     const pending = pendingInputs.get(draftKey);
     const lastUser = page.items?.findLast((m) => m.role === 'user');
@@ -864,7 +893,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       updateControls();
       try {
         const result = await api('POST', endpoint('/steer'), { text: value,
-          ...(sentImages.length ? { images: sentImages.map(({ mime, data }) => ({ mime, data })) } : {}) });
+          ...attachmentBody(sentImages) });
         if (unsentFollowups.has(result.id)) return;
         if (result.mode === 'queue' && !sentFollowups.has(result.id)) {
           if (!queuedInputs.has(draftKey)) queuedInputs.set(draftKey, new Map());
@@ -912,7 +941,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null,
         ...(access.value ? { access: access.value } : {}),
-        ...(sentImages.length ? { images: sentImages.map(({ mime, data }) => ({ mime, data })) } : {}) }, { signal: own.signal });
+        ...attachmentBody(sentImages) }, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
@@ -928,7 +957,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } finally {
       sending = false;
       updateControls();
-      attach.disabled = adding || !agent?.images;
+      attach.disabled = adding || (!agent?.images && !agent?.attachments);
       paintImages();
     }
     // ход принят (ответ — поток, первое его событие — turn); набранное после — остаётся
@@ -1021,6 +1050,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   return {
     unmount() {
       alive = false;
+      usage.unmount();
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода

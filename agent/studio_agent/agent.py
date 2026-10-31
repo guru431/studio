@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import cli, events, files, gitinfo, image_input, limits, permissions, projects, sessions, store
+from . import attachments, cli, events, files, gitinfo, limits, permissions, projects, sessions, store, subscription
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -24,7 +24,9 @@ PIN_FIELD_MAX = 64
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
+    "usage": ("refresh",),
     "projects": (),
+    "activity": (),
     "chats": ("project",),
     "history": ("project", "chat", "before", "limit"),
     "state": ("project", "chat", "model", "effort", "access"),
@@ -74,13 +76,15 @@ class Agent:
         self.send: Callable[[dict], None] | None = None
         self.on_pin_locked: Callable[[], None] | None = None  # PIN заблокировала эта проверка (трей — «Снять блок»)
         self._open_lock = asyncio.Lock()
+        self._usage = subscription.UsageCache(now=now)
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
-                 "chat_state": True, "chat_control": True}
+                 "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
+                 "subscription_usage": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -177,6 +181,8 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "refresh":
+            return value is None or type(value) is bool
         if name == "project":
             return isinstance(value, str) and ID.fullmatch(value) is not None
         if name == "chat":
@@ -249,6 +255,13 @@ class Agent:
     async def _op_projects(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_projects, self.cfg.projects_root)}
 
+    async def _op_activity(self, frame, after):
+        items = []
+        for engine, runner in (("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode)):
+            if runner is not None:
+                items.extend({**item, "engine": engine} for item in runner.activity())
+        return {"items": items}
+
     async def _op_chats(self, frame, after):
         project = await self._project(frame)
         items = await asyncio.to_thread(sessions.chats, project, self.runner.live())
@@ -271,6 +284,10 @@ class Agent:
     def _runner(self, frame):
         return {"codex": self.codex, "opencode": self.opencode}.get(frame.get("engine"), self.runner)
 
+    async def _op_usage(self, frame, after):
+        return await self._usage.read(frame.get("engine", "claude"), self.cfg.projects_root,
+                                      self._runner(frame), refresh=frame.get("refresh", False))
+
     async def _op_state(self, frame, after):
         project = await self._project(frame)
         return await self._runner(frame).state(project, frame["chat"], frame.get("model"), frame.get("effort"),
@@ -278,8 +295,9 @@ class Agent:
 
     async def _op_turn(self, frame, after):
         images = frame.get("images", [])
-        await asyncio.to_thread(image_input.validate, images)
-        if not frame["text"].strip() and not images:
+        items = frame.get("attachments", [])
+        await asyncio.to_thread(attachments.validate, items, images)
+        if not frame["text"].strip() and not images and not items:
             raise Refused("invalid", "задание пустое")
         project = await self._project(frame)
         runner = self._runner(frame)
@@ -288,15 +306,18 @@ class Agent:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
                                      frame.get("model"), frame.get("effort"), images=images,
+                                     **({"attachments": items} if items else {}),
                                      access=frame.get("access"), owner=frame.get("window"))}
 
     async def _op_steer(self, frame, after):
         images = frame.get("images", [])
-        await asyncio.to_thread(image_input.validate, images)
-        if not frame["text"].strip() and not images:
+        items = frame.get("attachments", [])
+        await asyncio.to_thread(attachments.validate, items, images)
+        if not frame["text"].strip() and not images and not items:
             raise Refused("invalid", "уточнение пустое")
         await self._project(frame)
         return await self._runner(frame).steer(frame["project"], frame["chat"], frame["text"], images,
+                                               **({"attachments": items} if items else {}),
                                                owner=frame.get("window"))
 
     async def _op_claim(self, frame, after):

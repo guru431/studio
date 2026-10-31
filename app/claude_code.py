@@ -117,6 +117,13 @@ class TurnImage(BaseModel):
     data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
 
 
+class TurnAttachment(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    mime: str = Field(default="application/octet-stream", max_length=200,
+                      pattern=r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+    data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
+
+
 class ChatSettings(BaseModel):
     model: str | None = Field(None, max_length=300)
     effort: str | None = Field(None, max_length=64)
@@ -127,6 +134,7 @@ class ChatSettings(BaseModel):
 class Turn(ChatSettings):
     text: str                    # пусто и длина — своим 422 `text` (слова для человека), не общим FastAPI
     images: list[TurnImage] = Field(default_factory=list, max_length=4)
+    attachments: list[TurnAttachment] = Field(default_factory=list, max_length=8)
 
 
 def _turn_images(images: list[TurnImage]) -> list[dict]:
@@ -142,6 +150,27 @@ def _turn_images(images: list[TurnImage]) -> list[dict]:
         if len(raw) > IMAGE_MAX or total > IMAGES_MAX:
             raise _refuse(413, "too_large", "изображения больше предела: 5 МиБ на файл, 8 МиБ всего")
     return [image.model_dump() for image in images]
+
+
+def _turn_attachments(items: list[TurnAttachment], images: list[dict]) -> list[dict]:
+    if len(items) + len(images) > 8:
+        raise _refuse(422, "invalid", "можно прикрепить до 8 файлов")
+    total = sum(len(base64.b64decode(image["data"], validate=True)) for image in images)
+    result = []
+    for item in items:
+        name = item.name.replace("\\", "/").rsplit("/", 1)[-1]
+        name = "".join(c for c in name if c.isprintable()).strip(" .")
+        if not name:
+            raise _refuse(422, "invalid", "нужно имя вложения")
+        try:
+            raw = base64.b64decode(item.data, validate=True)
+        except ValueError:
+            raise _refuse(422, "invalid", "вложение не читается") from None
+        total += len(raw)
+        if len(raw) > IMAGE_MAX or total > IMAGES_MAX:
+            raise _refuse(413, "too_large", "вложения больше предела: 5 МиБ на файл, 8 МиБ всего")
+        result.append({**item.model_dump(), "name": name})
+    return result
 
 
 class Answer(BaseModel):
@@ -518,10 +547,11 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     try:
         body = Turn.model_validate(json.loads(raw))
     except (ValueError, RecursionError):
-        raise _refuse(422, "invalid", "нужны текст и до 4 изображений PNG, JPEG, WebP или GIF") from None
-    if (not body.text.strip() and not body.images) or len(body.text) > TEXT_MAX:
+        raise _refuse(422, "invalid", "нужны текст и до 8 вложений") from None
+    if (not body.text.strip() and not body.images and not body.attachments) or len(body.text) > TEXT_MAX:
         raise _refuse(422, "text", NO_TEXT)
     images = await asyncio.to_thread(_turn_images, body.images)
+    attachments = await asyncio.to_thread(_turn_attachments, body.attachments, images)
     link = bridge.LINKS.get(aid)
     if op == "steer" and link is not None and not link.hello.get("chat_control"):
         raise _refuse(409, "unsupported", "Обновите мост для отправки уточнений во время работы")
@@ -535,6 +565,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
             raise _refuse(409, "unsupported", "обновите мост для выбора прав доступа")
         if images and link.hello.get("images") is not True:
             raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки изображений")
+        if attachments and link.hello.get("attachments") is not True:
+            raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки вложений")
         catalog = link.hello if engine == "claude" else link.hello.get(engine, {})
         if body.model is not None and body.model not in {m["id"] for m in catalog.get("models", ())}:
             raise _refuse(422, "model", NO_MODEL)
@@ -542,9 +574,11 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
             raise _refuse(422, "effort", NO_EFFORT)
     if op == "steer":
         return _relay(await ask(request, aid, "steer", project=pid, chat=chat, text=body.text,
+                                **({"attachments": attachments} if attachments else {}),
                                 **({"images": images} if images else {})))
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
                              effort=body.effort, **({"access": body.access} if body.access is not None else {}),
+                             **({"attachments": attachments} if attachments else {}),
                              **({"images": images} if images else {}))
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")

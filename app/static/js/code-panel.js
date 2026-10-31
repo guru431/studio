@@ -39,6 +39,49 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   let gen = 0;             // номер показа компьютера: ответ прежнего показ не трогает
   let items = [];          // последний GET /api/agents
   let selected = null;     // id показанного компьютера
+  let activityTimer = null;
+  let activityRequested = false;
+  let lastAction = Date.now();
+  const activity = new Map();
+  function scheduleActivity() {
+    clearTimeout(activityTimer);
+    if (!alive || document.visibilityState === 'hidden' || mode !== 'projects'
+      || Date.now() - lastAction > 1800000) return;
+    activityTimer = setTimeout(() => { activityTimer = null; refreshActivity(); }, 20000);
+  }
+  async function refreshActivity() {
+    const aid = selected;
+    if (activityRequested || mode !== 'projects' || !items.find((a) => a.id === aid)?.project_activity) return;
+    activityRequested = true;
+    try {
+      const data = await api('GET', `/api/code/agents/${aid}/activity`);
+      if (alive && selected === aid && mode === 'projects') {
+        activity.set(aid, new Map((data.items || []).map((item) => [item.chat, item])));
+        paintCounts();
+      }
+    } catch {
+      if (alive && selected === aid) { activity.delete(aid); paintCounts(); }
+    } finally {
+      activityRequested = false;
+      scheduleActivity();
+    }
+  }
+  function onActivity(event) {
+    const item = event.detail;
+    if (!activity.has(item.aid)) activity.set(item.aid, new Map());
+    if (item.running) activity.get(item.aid).set(item.chat, { ...item, project: item.pid });
+    else activity.get(item.aid).delete(item.chat);
+    paintCounts();
+  }
+  function onAction() { lastAction = Date.now(); if (!activityTimer) scheduleActivity(); }
+  function onVisibility() {
+    if (document.visibilityState === 'visible') { lastAction = Date.now(); refreshActivity(); }
+    else clearTimeout(activityTimer);
+  }
+  document.addEventListener('studio-code-activity', onActivity);
+  document.addEventListener('visibilitychange', onVisibility);
+  host.addEventListener('pointerdown', onAction);
+  host.addEventListener('keydown', onAction);
   let mode = 'idle';       // idle | loading | projects | pin | offline | error
   let shown = null;        // { aid, pid } — проект справа
   let pending = 0;         // select/pin ждут списка: выбор при входе их не перебивает
@@ -96,6 +139,17 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     for (const li of body.querySelectorAll('#code-projects li[data-pid]')) {
       const n = count(selected, li.dataset.pid);
       li.querySelector('.code-project-count').textContent = n ? String(n) : '';
+      li.querySelector('.code-project-count').title = `Открыто вкладок: ${n}`;
+      const tasks = [...(activity.get(selected)?.values() || [])].filter((item) => item.project === li.dataset.pid);
+      for (const kind of ['running', 'asking']) {
+        const badge = li.querySelector(`.code-project-state.${kind}`);
+        const total = tasks.filter((item) => kind === 'asking' ? item.asking : item.running && !item.asking).length;
+        badge.hidden = !total;
+        badge.textContent = String(total);
+        const label = kind === 'asking' ? `Требуют вашего ответа: ${total}` : `В работе: ${total}`;
+        badge.title = label;
+        badge.setAttribute('aria-label', label);
+      }
     }
   }
 
@@ -181,7 +235,10 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     mode = 'projects';
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project', href: `#/code/${agent.id}/${p.pid}` },
-        el('span', { class: 'code-project-name' }, p.name), el('span', { class: 'code-project-count' }));
+        el('span', { class: 'code-project-name' }, p.name),
+        el('span', { class: 'code-project-state running', hidden: true }),
+        el('span', { class: 'code-project-state asking', hidden: true }),
+        el('span', { class: 'code-project-count' }));
       link.addEventListener('click', (event) => {
         if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
           && !event.shiftKey && !event.altKey) event.preventDefault();
@@ -192,6 +249,7 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     body.replaceChildren(el('ul', { id: 'code-projects', class: 'code-projects' }, ...rows));
     paintCounts();
     paintHere();
+    refreshActivity();
   }
 
   function showPin(mine, agent) {
@@ -318,6 +376,11 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     agents: () => loaded,
     unmount() {
       alive = false;
+      clearTimeout(activityTimer);
+      document.removeEventListener('studio-code-activity', onActivity);
+      document.removeEventListener('visibilitychange', onVisibility);
+      host.removeEventListener('pointerdown', onAction);
+      host.removeEventListener('keydown', onAction);
       gen += 1;
       unsubscribe();
       root.remove();

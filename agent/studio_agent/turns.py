@@ -16,6 +16,7 @@ from pathlib import Path
 from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage)
 
+from . import attachments as attachment_input
 from . import cli, events, image_input, limits, permissions, sessions, store
 from .errors import Refused
 
@@ -86,10 +87,13 @@ class _Turn:
     watch_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     owner: str | None = None
     accepted: bool = False
+    start_attempted: bool = False
     input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     pending: int = 1
     followups: list = field(default_factory=list)
     queued: list = field(default_factory=list)
+    attachments: list = field(default_factory=list)
+    files: attachment_input.Files = field(default_factory=attachment_input.Files)
 
 
 class Runner:
@@ -112,7 +116,8 @@ class Runner:
     # --- просьбы студии ---
 
     def start(self, project: Path, pid: str, chat: str, text: str, model: str | None, effort: str | None,
-              *, images: list[dict] | None = None, access: str | None = None, owner: str | None = None) -> str:
+              *, images: list[dict] | None = None, attachments: list[dict] | None = None,
+              access: str | None = None, owner: str | None = None) -> str:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
@@ -121,6 +126,7 @@ class Runner:
         if len(self._turns) >= self.max_turns:
             raise Refused("busy")
         t = _Turn(project, pid, chat, secrets.token_hex(8), access=access, owner=owner)
+        t.attachments = attachments or []
         self._turns[chat] = t
         t.task = asyncio.create_task(self._run(t, text, model, effort, images or []))
         log.info("ход %s: начат", t.turn)
@@ -138,7 +144,7 @@ class Runner:
             self._send(t, {"k": "ownership", "owner": owner})
         return {}
 
-    async def steer(self, pid, chat, text, images, *, owner=None):
+    async def steer(self, pid, chat, text, images, *, owner=None, attachments=None):
         t = self._turn(pid, chat)
         if t is None:
             raise Refused("idle")
@@ -153,9 +159,11 @@ class Runner:
             if len(json.dumps(t.followups, ensure_ascii=True)) + len(json.dumps(text, ensure_ascii=True)) > limits.HISTORY_BUDGET // 4:
                 raise Refused("busy", "Уточнения заполнили текущий ход — дождитесь ответа")
             message_id = secrets.token_hex(8)
-            mode = await self._steer_input(t, text, images, message_id)
+            prompt = await self._attachment_text(t, text, attachments or [])
+            mode = await self._steer_input(t, prompt, images, message_id)
             # В снимке нет повторных мегабайт картинок; оригиналы уже принял CLI.
-            item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else ""),
+            item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else "") +
+                    (f"\n[Вложений: {len(attachments)}]" if attachments else ""),
                     "mode": mode}
             t.followups.append(item)
             self._send(t, {"k": "followup", **item})
@@ -312,11 +320,30 @@ class Runner:
         """Идущие ходы: чат → ждёт ли ход ответа на карточку."""
         return {chat: bool(t.asks) for chat, t in self._turns.items()}
 
+    def activity(self) -> list[dict]:
+        """Только идентификаторы и статус; чтение не создаёт сессий CLI."""
+        return [{"project": t.pid, "chat": t.chat, "running": True, "asking": bool(t.asks)}
+                for t in self._turns.values()]
+
     # --- ход ---
+
+    async def _attachment_text(self, t, text, items):
+        if not items:
+            return text
+        work = asyncio.create_task(asyncio.to_thread(t.files.prompt, text, items))
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # Запись в потоке должна закончиться до _finish/cleanup.
+            with contextlib.suppress(Exception):
+                await work
+            raise
 
     async def _run(self, t: _Turn, text: str, model: str | None, effort: str | None, images: list[dict]) -> None:
         failure, cancelled, new, sent = None, False, False, False
         try:
+            text = await self._attachment_text(t, text, t.attachments)
+            t.attachments = []
             new, model, effort = await asyncio.to_thread(self._choose, t, model, effort)
             saved = await asyncio.to_thread(self.choices.details, t.chat)
             t.access = t.access or saved.get("access")
@@ -329,6 +356,7 @@ class Runner:
                 await self._usage(t, model, effort)
             if not (t.stopped or t.closing):
                 sent = True  # дальше файл сессии может появиться
+                t.start_attempted = True
                 await t.client.query(image_input.prompt(text, images) if images else text)
                 self._accepted(t)
                 while t.pending:
@@ -407,9 +435,14 @@ class Runner:
                 with contextlib.suppress(OSError):
                     await asyncio.to_thread(self.choices.update, t.chat, context=t.context)
         finally:  # и при отмене посреди конца: чат не остаётся занятым
-            if self._turns.get(t.chat) is t:
-                del self._turns[t.chat]
-            self._send(t, self._done(t, failure))
+            try:
+                await asyncio.to_thread(t.files.cleanup)
+            except OSError as e:
+                log.warning("ход %s: очистка вложений: %s", t.turn, type(e).__name__)
+            finally:
+                if self._turns.get(t.chat) is t:
+                    del self._turns[t.chat]
+                self._send(t, self._done(t, failure))
 
     def _done(self, t: _Turn, failure: str | None) -> dict:
         if t.closing:
@@ -420,8 +453,12 @@ class Runner:
             done = {"k": "done", "status": "error", "message": failure}
         else:
             done = {"k": "done", "status": "done"}
+        if not t.accepted and not t.start_attempted:
+            done["not_started"] = True
         if t.queued:
-            done["unsent"] = [{"id": message_id, "text": text} for message_id, text, _ in t.queued]
+            originals = {item["id"]: item["text"] for item in t.followups}
+            done["unsent"] = [{"id": message_id, "text": originals.get(message_id, text)}
+                              for message_id, text, _ in t.queued]
         log.info("ход %s: %s", t.turn, done["status"])
         return done
 

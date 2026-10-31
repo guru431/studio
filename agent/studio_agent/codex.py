@@ -209,6 +209,40 @@ class CodexRunner(Runner):
                 result["code"] = "writer_active"
         return result
 
+    async def subscription_usage(self, root):
+        """Только account RPC: не открывает thread и не расходует квоту генерации.
+
+        Старый app-server может знать лимиты, но не usage; отказ одного метода не стирает другой.
+        Общий бюджет меньше 30 секунд ожидания сервера студии.
+        """
+        result = {}
+        try:
+            async with asyncio.timeout(24):
+                async with self._meta_lock:
+                    try:
+                        if self._meta is None:
+                            path = await asyncio.to_thread(self.find_codex)
+                            if path is None:
+                                return result
+                            self._meta = self.rpc_factory(path, Path(root))
+                            await self._meta.connect()
+                        for key, method, params in (("account", "account/read", {"refreshToken": False}),
+                                ("limits", "account/rateLimits/read", {}), ("usage", "account/usage/read", {})):
+                            try:
+                                value = await self._meta.request(method, params)
+                                if isinstance(value, dict):
+                                    result[key] = value
+                            except codex_rpc.RpcError:
+                                continue
+                    except BaseException:
+                        if self._meta is not None:
+                            await self._meta.disconnect()
+                            self._meta = None
+                        raise
+        except (TimeoutError, OSError, codex_rpc.RpcError):
+            pass
+        return result
+
     async def _metadata(self, project, method, params):
         async with self._meta_lock:
             try:
@@ -343,6 +377,8 @@ class CodexRunner(Runner):
         self._activity(t, "thinking")
         failure, cancelled, requests = None, False, set()
         try:
+            text = await self._attachment_text(t, text, t.attachments)
+            t.attachments = []
             path = await asyncio.to_thread(self.find_codex)
             if path is None:
                 raise Refused("unsupported", "Codex не найден на компьютере")

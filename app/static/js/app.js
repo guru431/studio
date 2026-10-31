@@ -27,6 +27,7 @@ import { api, loadMe, me } from './api.js';
 import { setupJobs } from './jobs.js';
 import { installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
+import { setupAppearance } from './appearance.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -64,7 +65,7 @@ const SECTIONS = {
   speech: { title: 'Озвучка', load: () => import('./speech.js') },
   ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
   translate: { title: 'Перевод', load: () => import('./translate.js') },
-  code: { title: 'Claude Code / Codex', load: () => import('./code.js') },
+  code: { title: 'Агенты', load: () => import('./code.js') },
   search: { title: 'Поиск', load: () => import('./search.js') },
   settings: { title: 'Настройки', load: () => import('./settings.js') },
   admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
@@ -145,6 +146,7 @@ function paintToggle() {
 }
 
 function setupTheme() {
+  setupAppearance();
   paintToggle();
   toggle.addEventListener('click', () => {
     const next = visibleTheme() === 'dark' ? 'light' : 'dark';
