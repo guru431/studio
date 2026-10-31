@@ -433,7 +433,7 @@ async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, m
     runner.models, runner.efforts = [{"id": "codex-test", "label": "Codex"}], ["ultra"]
     runner.catalog = {"version": "test", "models": runner.models, "efforts": runner.efforts}
     claude = Runner(lambda f: None, choices=store.Choices(home), cli_path=None)
-    agent = Agent(store.Config(projects_root=str(home)), PinStore(home), claude, cc_version="test",
+    agent = Agent(store.Config(projects_root=str(home), max_turns=2), PinStore(home), claude, cc_version="test",
                   models=[{"id": "opus", "label": "Opus"}], efforts=["high"], codex=runner)
     await opened(agent)
     pid = projects.pid(runner.project.name)

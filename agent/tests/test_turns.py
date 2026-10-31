@@ -183,7 +183,7 @@ async def test_stop_without_a_card_interrupts(home, project):
 
 async def test_second_turn_in_the_chat_is_running_and_third_chat_is_busy(home, project):
     sent, f = [], FakeFactory([HOLD])
-    r = runner(home, f, sent)
+    r = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=f, max_turns=2)
     r.start(project, PID, CHAT, "1", None, None)
     with pytest.raises(errors.Refused) as e:
         r.start(project, PID, CHAT, "2", None, None)
@@ -191,7 +191,7 @@ async def test_second_turn_in_the_chat_is_running_and_third_chat_is_busy(home, p
     r.start(project, PID, OTHER, "3", None, None)
     with pytest.raises(errors.Refused) as e:
         r.start(project, PID, THIRD, "4", None, None)
-    assert e.value.code == "busy" and e.value.message == "на компьютере уже идут 2 хода — дождитесь конца"
+    assert e.value.code == "busy" and e.value.message == "достигнут лимит одновременных заданий — дождитесь завершения"
     assert r.live() == {CHAT: False, OTHER: False}
     await r.stop(PID, CHAT)
     await r.stop(PID, OTHER)

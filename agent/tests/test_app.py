@@ -283,6 +283,35 @@ def test_theme_is_saved_without_restarting_the_link(make, configured, home, root
     assert store.load_config(home).theme == "light"
 
 
+def test_turn_limit_is_persistent_and_updates_all_runners_without_reconnecting(make, configured, home):
+    class Backend(turns.Runner):
+        def __init__(self, emit, *, home, choices):
+            super().__init__(emit, choices=choices, cli_path=None)
+            self.catalog = None
+
+        async def probe(self, root):
+            return False
+
+    ctrl = make(codex_factory=Backend, opencode_factory=Backend)
+    ctrl.set_max_turns(12)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    link = ctrl.links[0]
+    assert ctrl.agent.cfg.max_turns == 12
+    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode)] == [12, 12, 12]
+    ctrl.set_max_turns(3)
+    assert ctrl.agent.cfg.max_turns == 3
+    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode)] == [3, 3, 3]
+    assert store.load_config(home).max_turns == 3
+    assert ctrl.links == [link] and not link.stopped
+    for value in (0, -1, True, 2.5, "8"):
+        with pytest.raises(ValueError, match="max_turns"):
+            ctrl.set_max_turns(value)
+    assert store.load_config(home).max_turns == 3
+    ctrl.restart_link().result(5)
+    assert ctrl.agent.cfg.max_turns == 3 and ctrl.runner.max_turns == 3
+
+
 def test_models_changed_while_revoked_do_not_bring_the_link_back(make, configured):
     gate, pauses = asyncio.Event(), []
 

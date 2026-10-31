@@ -272,6 +272,23 @@ class Controller:
             cfg.theme = choice
             store.save_config(self.h, cfg)
 
+    def set_max_turns(self, value: int) -> None:
+        """Сохранить общий предел и применить в цикле ядра без переподключения и остановки заданий."""
+        if type(value) is not int or value < 1:
+            raise ValueError("max_turns")
+        with self._cfg_lock:
+            cfg = store.load_config(self.h)
+            cfg.max_turns = value
+            store.save_config(self.h, cfg)
+        if self._loop is not None and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._refresh_max_turns(), self._loop).result()
+        log.info("лимит одновременных заданий: %d", value)
+
+    async def _refresh_max_turns(self) -> None:
+        await self._built.wait()
+        cfg = await asyncio.to_thread(self.config)
+        self.agent.set_max_turns(cfg.max_turns)
+
     def reset_pin(self) -> None:
         PinStore(self.h).reset()
         log.info("PIN: блок снят")
@@ -452,6 +469,7 @@ class Controller:
                 return
             cfg, key = await asyncio.to_thread(lambda: (store.load_config(self.h), store.load_key(self.h)))
             self.agent.cfg = cfg
+            self.agent.set_max_turns(cfg.max_turns)
             if not _configured(cfg, key):
                 self._set_state("setup")
                 return
