@@ -13,8 +13,8 @@
   Своего состояния хода студия не хранит: источник правды — машина (спека 6.10).
 - Признак сессии студии для моста — `tag`: не дайджест сессии и тем более не токен, а производное от
   дайджеста; мост открывает компьютер PIN-ом для этого признака. Заперлась сессия или отперлась —
-  `forget`: мост закрывает её (протокол §2.3), PIN — снова; очереди наблюдателей этой сессии (`Watch.session`)
-  получают `("closed", None)` — открытость кончилась и для потоков, а не только для следующей просьбы.
+  `forget(close_computers=False)`: очереди наблюдателей этой сессии (`Watch.session`) получают
+  `("closed", None)`, кэши уходят, срок PIN компьютеров сохраняется. Явный сброс шлёт мостам `close` (§2.3).
 - История подключений — `agent_events`: только добавляется (`record`), «Удалить всю историю» её не трогает,
   уходит только с учёткой. Строка несёт id и имя компьютера на момент события (после отзыва строки `agents`
   нет), краткий признак устройства (`device`) и адрес — ни ключа, ни PIN, ни текстов.
@@ -263,7 +263,7 @@ async def attach(link: Link) -> None:
     if old is not None and old is not link:
         log.info("агент %d: прежний канал заменён", link.agent_id)
         _fail_pending(old)               # ответов по закрытому каналу уже не будет
-        _offline(link.agent_id)          # и событий тоже: новый канал закрыл все сессии моста (протокол §3)
+        _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
     try:
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"]})
@@ -422,10 +422,9 @@ def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:
 
 # ---- закрытие ------------------------------------------------------------------
 
-def forget(user_id: int, digest: str) -> None:
-    """Сессия заперлась или отперлась: каждому компьютеру учётки — `close` её признака (протокол §2.3), её
-    потокам — `("closed", None)`, разделам — `FORGET_HOOKS`. Кадры — фоном: ответа нет, а запрос владельца не
-    ждёт чужой сокет."""
+def forget(user_id: int, digest: str, *, close_computers: bool = True) -> None:
+    """Снять потоки и кэши сессии. Блокировка экрана сохраняет срок PIN компьютеров;
+    явный сброс дополнительно шлёт мостам `close` фоном, не ожидая чужой сокет."""
     session = tag(digest)
     for hook in FORGET_HOOKS:
         hook(user_id, session)
@@ -433,6 +432,8 @@ def forget(user_id: int, digest: str) -> None:
         for q in queues:
             if q.session == session:
                 q.put_nowait(("closed", None))
+    if not close_computers:
+        return
     frame = {"t": "close", "session": session}
     for link in [x for x in LINKS.values() if x.user_id == user_id]:
         async def send(link=link):

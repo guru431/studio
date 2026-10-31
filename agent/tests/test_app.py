@@ -741,10 +741,12 @@ def test_set_pin_restarts_link(make, home, configured):
     ctrl.start()
     until(lambda: ctrl.state == "online")
     assert ctrl.pin_status() == "none" and not ctrl.has_pin
+    ctrl.agent.open.open("ab" * 16)
     ctrl.set_pin("2468")
     until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
     assert ctrl.links[0].stopped and ctrl.links[1].hello["has_pin"] is True
     assert ctrl.has_pin and ctrl.pin_status() == "set"
+    assert not ctrl.agent.open.touch("ab" * 16)
     for _ in range(5):
         PinStore(home).check("0000")
     assert ctrl.pin_status() == "locked"

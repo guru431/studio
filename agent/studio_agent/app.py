@@ -190,7 +190,7 @@ class Controller:
             done = concurrent.futures.Future()
             done.set_result(None)
             return done
-        return asyncio.run_coroutine_threadsafe(self._relink_task(), self._loop)
+        return asyncio.run_coroutine_threadsafe(self._relink_task(reset_access=True), self._loop)
 
     def apply_setup(self, form: dict) -> list[str]:
         """Окно настройки (блокирует — звать не из потока Tk): проверка, привязка, запись, автозапуск, новый канал.
@@ -429,10 +429,13 @@ class Controller:
         await asyncio.gather(*self._background, return_exceptions=True)  # welcome: потоки — до закрытия цикла
         log.info("мост: выход")
 
-    async def _relink_task(self) -> None:
+    async def _relink_task(self, *, reset_access: bool = False) -> None:
         task = asyncio.current_task()
         self._relinks.add(task)
         try:
+            await self._built.wait()
+            if reset_access:
+                self.agent.new_link()
             await self._relink()
         finally:
             self._relinks.discard(task)
