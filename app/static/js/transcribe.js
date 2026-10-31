@@ -85,13 +85,13 @@ function build(view, ctx) {
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), 'Загрузить запись', input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
-  const list = el('nav', { class: 'tr-list', 'aria-label': 'Записи' });
+  const list = el('nav', { class: 'tr-list', 'aria-label': 'Разговоры' });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
   const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Записи',
+  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Разговоры',
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'));
-  const title = el('h1', {}, 'Расшифровка');
+  const title = el('h1', {}, 'Разговоры');
   const head = el('header', { class: 'head' }, toggle, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });

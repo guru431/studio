@@ -1,9 +1,9 @@
-/* Раздел «Озвучка» (#/speech) — раскладка как у «Расшифровки» (спека 2026-10-20, раздел 6.4).
+/* Раздел «Речь» (#/speech) — раскладка как у «Разговоров» (спека 2026-10-20, раздел 6.4).
  *
  * Слева — озвучки по дням, справа — выбранная: текст, плеер, «Скачать» (mp3), «Удалить»; идущая —
  * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков; field.js: «очистить», микрофон)
  * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
- * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
+ * заводят в настройках раздела «Речь»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
  * выбор по номеру. Раздел без модели (ctx.hint): озвучки слушаются, скачиваются и удаляются, вместо
@@ -53,7 +53,7 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Озвучки',
     'aria-controls': 'sp-aside', 'aria-expanded': 'false' }, icon('list'));
-  const head = el('header', { class: 'head' }, toggle, el('h1', {}, 'Озвучка'));
+  const head = el('header', { class: 'head' }, toggle, el('h1', {}, 'Речь'));
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
@@ -92,7 +92,7 @@ function build(view, ctx) {
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       voiceBox.replaceChildren(pick);
       if (!voices.length) {
-        hint.replaceChildren('Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: ',
+        hint.replaceChildren('Голосов пока нет — добавьте голос в настройках раздела «Речь»: ',
           el('a', { href: '#/settings/speech' }, 'открыть настройки'));
         hint.hidden = false;
       }

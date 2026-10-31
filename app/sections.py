@@ -28,9 +28,9 @@ import clock
 import connections
 import state
 
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "dictation")   # порядок вкладок
-NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "transcribe": "Записи", "ocr": "Сканы",
-         "translate": "Перевод", "speech": "Озвучка", "dictation": "Голосовой ввод"}
+SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation")   # порядок вкладок
+NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "speech": "Речь", "transcribe": "Разговоры", "ocr": "Сканы",
+         "translate": "Перевод", "dictation": "Голосовой ввод"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections
 CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
