@@ -1,7 +1,7 @@
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
  *
- * panelView(host, { selected, opened, chose, list }) → { select, pin, here, refresh, agents, unmount }:
+ * panelView(host, { selected, opened, chose, list, openJournal }) → { select, pin, here, refresh, agents, unmount }:
  * - компьютеры — GET /api/agents (без моста): точка «на связи» (слова — для чтения с экрана), имя, «PIN»; версия Claude
  *   Code — подсказкой; agents() — последний список (обещание, пока показан раздел; не прочитался — null);
  * - показ компьютера (вход в раздел — selected, иначе первый; нажатие на имя): не на связи — p#code-offline, запросов
@@ -17,7 +17,8 @@
  *   запросы обгоняли бы открытие и получали closed); false — компьютер ждёт PIN;
  * - here(aid, pid) — открытый справа проект (aria-current); числа вкладок проектов (code-workspace.js, без запросов к
  *   мосту) — на каждую смену рабочего места (subscribe), refresh() — то же вручную;
- *   chose() — нажат проект (телефон прячет панель).
+ *   chose() — нажат проект или его ссылка (телефон прячет панель); openJournal(path) — повторный переход
+ *   к журналу по уже открытому адресу, через обычную защиту несохранённых правок «Файлов».
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api } from './api.js';
 import { act, count, get, subscribe } from './code-workspace.js';
@@ -27,7 +28,7 @@ import { el, words } from './ui.js';
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
 
-export function panelView(host, { selected: first = null, opened, chose, list }) {
+export function panelView(host, { selected: first = null, opened, chose, list, openJournal }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
@@ -98,8 +99,10 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   const summaries = new Map(); // Только память страницы, отдельно для каждого компьютера.
   const checked = new Map();
 
-  function dateText(stamp) {
-    return Number.isFinite(stamp) ? new Date(stamp * 1000).toLocaleString('ru-RU') : 'нет данных';
+  function dateText(stamp, compact = false) {
+    if (!Number.isFinite(stamp)) return compact ? '—' : 'нет данных';
+    return new Date(stamp * 1000).toLocaleString('ru-RU', compact
+      ? { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' } : undefined);
   }
 
   function paintUpdated() {
@@ -111,15 +114,28 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   function paintSummary(li, data) {
     const summary = li.querySelector('.code-project-summary');
     const metrics = li.querySelector('.code-project-metrics');
+    const href = li.querySelector('.code-project-name').getAttribute('href');
     const value = (key) => Number.isInteger(data?.[key]) ? String(data[key]) : '—';
-    metrics.replaceChildren(...[['findings', 'Проблемы'], ['ideas', 'Идеи']].map(([key, label]) =>
-      el('span', { class: `code-project-${key}`, title: `${label}: ${value(key)}` }, `${label}: ${value(key)}`)));
+    metrics.replaceChildren('(',
+      el('a', { class: 'code-project-findings', href: `${href}?tab=files&journal=findings`, title: `Открыть FINDINGS.md · Проблемы: ${value('findings')}`,
+        'aria-label': `Проблемы: ${value('findings')}` }, `П: ${value('findings')}`), ' · ',
+      el('a', { class: 'code-project-ideas', href: `${href}?tab=files&journal=ideas`, title: `Открыть IDEAS.md · Идеи: ${value('ideas')}`,
+        'aria-label': `Идеи: ${value('ideas')}` }, `И: ${value('ideas')}`), ')');
     const git = data?.git === 'not_git' ? 'Без Git'
-      : `Изменено: ${value('changed')} · Не запушено: ${value('unpushed')}`;
-    summary.replaceChildren(el('span', { class: 'code-project-git',
-      title: 'Изменено — число файлов. Не запушено — число коммитов по локальным данным Git, без fetch.' }, git),
-    el('span', { class: 'code-project-modified' }, `Изменён: ${dateText(data?.modified)}`),
-    ...(data?.stale ? [el('span', { class: 'error' }, 'Не удалось обновить')] : []));
+      : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
+    summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
+      title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
+    el('span', { 'aria-hidden': 'true' }, ' · '),
+    el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
+    ...(data?.stale ? [el('span', { class: 'error', title: 'Не удалось обновить', 'aria-label': 'Не удалось обновить' }, ' ⚠')] : []));
+    for (const link of metrics.querySelectorAll('a')) link.addEventListener('click', (event) => {
+      if (link.hash === location.hash && openJournal && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        openJournal(link.classList.contains('code-project-findings') ? 'FINDINGS.md' : 'IDEAS.md');
+      }
+      chose();
+    });
+    summary.querySelector('a').addEventListener('click', chose);
     li.classList.toggle('has-unpushed', data?.unpushed > 0);
     if (data?.checked_at) summary.title = `Проверено: ${dateText(data.checked_at)}`;
   }
@@ -244,10 +260,12 @@ export function panelView(host, { selected: first = null, opened, chose, list })
   }
 
   function paintHere() {
-    for (const link of body.querySelectorAll('#code-projects a.code-project')) {
+    for (const link of body.querySelectorAll('#code-projects .code-project')) {
       const li = link.closest('li');
-      if (shown && shown.aid === selected && li.dataset.pid === shown.pid) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
+      for (const target of [link, link.querySelector('.code-project-name')]) {
+        if (shown && shown.aid === selected && li.dataset.pid === shown.pid) target.setAttribute('aria-current', 'page');
+        else target.removeAttribute('aria-current');
+      }
     }
   }
 
@@ -356,19 +374,22 @@ export function panelView(host, { selected: first = null, opened, chose, list })
     mode = 'projects';
     projectItems = found;
     const rows = found.map((p) => {
-      const link = el('a', { class: 'code-project', href: `#/code/${agent.id}/${p.pid}` },
-        el('span', { class: 'code-project-name', title: p.name }, p.name),
-        el('span', { class: 'code-project-state running', hidden: true }),
-        el('span', { class: 'code-project-state asking', hidden: true }),
-        el('span', { class: 'code-project-count' }),
-        el('span', { class: 'code-project-metrics' }),
+      const link = el('a', { class: 'code-project-name', title: p.name, href: `#/code/${agent.id}/${p.pid}` }, p.name);
+      const row = el('div', { class: 'code-project' },
+        el('span', { class: 'code-project-heading' },
+          el('span', { class: 'code-project-title' },
+            link,
+            el('span', { class: 'code-project-metrics' })),
+          el('span', { class: 'code-project-state running', hidden: true }),
+          el('span', { class: 'code-project-state asking', hidden: true }),
+          el('span', { class: 'code-project-count' })),
         el('span', { class: 'code-project-summary' }));
       link.addEventListener('click', (event) => {
         if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
           && !event.shiftKey && !event.altKey) event.preventDefault();
         chose();
       });
-      const li = el('li', { 'data-pid': p.pid }, link);
+      const li = el('li', { 'data-pid': p.pid }, row);
       paintSummary(li, summaries.get(agent.id)?.get(p.pid));
       return li;
     });

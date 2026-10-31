@@ -627,7 +627,8 @@ function render() {
   view = null;
   shownHash = location.hash;
   shownEntry = history.state && history.state.entry;
-  const path = wantFile;
+  const journal = ctx.query && ctx.query.get('journal');
+  const path = wantFile ?? (journal === 'findings' ? 'FINDINGS.md' : journal === 'ideas' ? 'IDEAS.md' : null);
   wantFile = null;
   if (none) return;
   const parts = ctx.id ? ctx.id.split('/') : [];
@@ -684,7 +685,7 @@ export function mount(node, context) {
     const first = [pinFor, pid ? null : aid, ws.panel, aid, ws.place && ws.place.aid].map(Number)
       .find((n) => Number.isInteger(n) && n > 0);
     panel = panelView(ui.root, { selected: first ?? null, opened,
-      chose: () => panelOpen(false), list: projectsOf });
+      chose: () => panelOpen(false), list: projectsOf, openJournal: (path) => proj?.files?.open(path) });
     ui.root.prepend(ui.root.querySelector('#code-panel'));
     const shown = panel;
     panel.agents().then((items) => {

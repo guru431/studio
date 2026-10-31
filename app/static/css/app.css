@@ -1108,16 +1108,23 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-state.on { background: var(--ok); }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-agent-pin { flex: none; }
-.code-project { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
+.code-project { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
   color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); }
 .code-project:hover { background: var(--panel-2); }
+.code-project a { color: inherit; text-decoration: none; }
+.code-project a:hover { text-decoration: underline; }
+.code-project a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .code-project[aria-current="page"] { background: var(--panel); font-weight: 600; }
-.code-project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-project-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.code-project-title { display: flex; align-items: baseline; gap: 4px; flex: 1; min-width: 0; }
+.code-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-project-count { flex: none; color: var(--muted); font-size:calc(12px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
-.code-project-metrics, .code-project-summary { flex-basis: 100%; min-width: 0; font-weight: 400;
+.code-project-metrics, .code-project-summary { min-width: 0; font-weight: 400;
   font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; color: var(--muted); }
-.code-project-metrics { display: flex; flex-wrap: wrap; gap: 4px 10px; }
-.code-project-summary { display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.code-project-metrics { flex: none; white-space: nowrap; }
+.code-project-summary { display: flex; align-items: baseline; white-space: nowrap; overflow: hidden; }
+.code-project-git, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
+.code-project-modified { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .has-unpushed .code-project-git { color: var(--git-modified); }
 .code-offline { margin: 4px; font-size:calc(14px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 #code-panel-status { margin: 0; padding: 0 12px 10px; font-size:calc(13px * var(--font-scale, 1)); overflow-wrap: anywhere; }
