@@ -289,9 +289,9 @@ class FakeMachine:
                 continue
             head, _, rest = f[len(prefix):].partition("/")
             if rest:
-                dirs[head] = {"name": head, "dir": True, "size": 0, "modified": self.now}
+                dirs[head] = {"name": head, "dir": True, "size": 0, "created": self.now, "modified": self.now}
             else:
-                plain.append({"name": head, "dir": False, "size": len(data), "modified": self.now})
+                plain.append({"name": head, "dir": False, "size": len(data), "created": self.now, "modified": self.now})
         return {"items": sorted(dirs.values(), key=lambda i: i["name"]) + sorted(plain, key=lambda i: i["name"])}
 
     def _file(self, req) -> bytes:

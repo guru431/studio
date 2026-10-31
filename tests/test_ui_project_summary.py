@@ -48,11 +48,14 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
             *go("code"), ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
             ("eval", "counts", f"document.querySelector(\"{alpha}\").textContent"),
             ("eval", "compactControls", """(() => {
-              const sort = document.querySelector('#code-project-sort').getBoundingClientRect();
+              const select = document.querySelector('#code-project-sort'), sort = select.closest('label').getBoundingClientRect();
+              const label = document.querySelector('.code-project-sort-text');
               const button = document.querySelector('#code-project-refresh'), refresh = button.getBoundingClientRect();
               const updated = document.querySelector('#code-project-updated').getBoundingClientRect();
               return Math.abs(sort.top - refresh.top) < 1 && sort.right < refresh.left
                 && sort.height <= 34 && refresh.height <= 34 && refresh.width <= 34
+                && parseFloat(getComputedStyle(label).fontSize) <= 11
+                && (!matchMedia('(pointer: coarse)').matches || parseFloat(getComputedStyle(select).fontSize) >= 16)
                 && button.scrollWidth <= button.clientWidth
                 && updated.top >= Math.max(sort.bottom, refresh.bottom);
             })()"""),

@@ -80,6 +80,10 @@ def test_list_dir_gives_folders_then_files_by_name(tmp_path):
     items = files.list_dir(tmp_path, "")["items"]
     assert [(i["name"], i["dir"]) for i in items] == [("a", True), ("z", True), ("b.txt", False)]
     assert items[2]["size"] == 5 and isinstance(items[2]["modified"], int)
+    for item in items:
+        st = (tmp_path / item["name"]).stat()
+        assert item["created"] == int(getattr(st, "st_birthtime", st.st_ctime))
+        assert item["modified"] == int(st.st_mtime)
     assert [i["name"] for i in files.list_dir(tmp_path, "a")["items"]] == ["in.txt"]
     assert "truncated" not in files.list_dir(tmp_path, "")
 

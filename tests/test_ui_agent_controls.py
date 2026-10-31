@@ -12,6 +12,124 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_new_tab_session_history_starts_at_top_after_long_chat(browser, live, width):
+    from fake_bridge import T0
+
+    login = f"picker-scroll-{width}"
+    live.add_user(login)
+    messages = [{"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant",
+                 "text": "Длинная история.\n\n" * 30, "steps": [], "time": T0 + i} for i in range(20)]
+    chats = {f"{i:08x}-1111-4111-8111-111111111111": code_session(f"Сессия {i}") for i in range(60)}
+    chats[CODE_CHAT_A] = code_session("Открытый чат", messages=messages)
+    machine = code_free_machine(chats)
+    aid, server = code_online(live, login, machine)
+    top = """(() => {
+      const view = document.querySelector('#view');
+      const search = document.querySelector('#code-chat-search').getBoundingClientRect();
+      return view.scrollTop === 0 && search.top >= document.querySelector('.code-top').getBoundingClientRect().bottom
+        && search.bottom <= innerHeight;
+    })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "longChat", "document.querySelector('#view').scrollTop > 1000"),
+            ("eval", "add", "document.querySelector('#code-tab-add').click(); true"),
+            ("wait", "document.querySelectorAll('#code-tab-menu li[data-chat]').length === 60"),
+            ("eval", "top", top),
+            *code_tab_click(CODE_CHAT_A),
+            ("eval", "chatBottom", """(() => { const view = document.querySelector('#view');
+              return view.scrollHeight - view.clientHeight - view.scrollTop < 2; })()"""),
+            ("eval", "addAgain", "document.querySelector('#code-tab-add').click(); true"),
+            ("wait", "document.querySelector('#code-chats')?.getAttribute('aria-busy') === 'false'"),
+            ("eval", "topAgain", top)],
+            width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    assert all(result["values"][key] for key in ("longChat", "top", "topAgain", "chatBottom")), result["values"]
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_file_tree_details_expand_and_refresh_after_saving(browser, live, width, tmp_path):
+    from fake_bridge import FakeMachine, T0
+    from test_ui_browser import code_item, code_tab
+
+    login = f"file-details-{width}"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"files": {"src/app.py": b"12345", "src/lib/util.py": b"",
+        "many/one.txt": b"x", "legacy.txt": b"", ".gitignore": b"abc"},
+        "git": {"branch": "main", "upstream": None, "ahead": 0, "behind": 0,
+                "files": [{"path": "src/app.py", "status": " M"}]}}})
+    read_files = machine._op_files
+    save = machine._op_save
+
+    def details(req, events):
+        result = read_files(req, events)
+        for item in result["items"]:
+            item["created"] = T0
+            if item["name"] == "legacy.txt":
+                item.pop("created")  # Совместимость со старым мостом.
+        if req["path"] == "many":
+            result["truncated"] = True
+        return result
+
+    def changed(req, events):
+        result = save(req, events)
+        machine.now = T0 + 3600
+        return result
+
+    machine._op_files = details
+    machine._op_save = changed
+    aid, server = code_online(live, login, machine)
+    cells = lambda path: f"""Object.fromEntries([...document.querySelectorAll('#code-files li[data-path="{path}"] > button [data-column]')]
+      .map(cell => [cell.dataset.column, cell.textContent]))"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            ("wait", "document.querySelector('#code-files li[data-path=\"src\"]')"),
+            ("eval", "unopened", cells("src")), ("eval", "legacy", cells("legacy.txt")),
+            ("eval", "dotfile", cells(".gitignore")),
+            ("click", code_item("src")), ("wait", "document.querySelector('#code-files li[data-path=\"src/app.py\"]')"),
+            ("eval", "directory", cells("src")), ("eval", "file", cells("src/app.py")),
+            ("eval", "date", f"new Date({T0} * 1000).toLocaleString('ru-RU', {{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}})"),
+            ("click", code_item("many")),
+            ("wait", "document.querySelector('#code-files li[data-path=\"many/one.txt\"]')"),
+            ("eval", "limited", cells("many")),
+            ("eval", "table", """(() => { const table = document.querySelector('.code-file-table');
+              const overflow = table.scrollWidth > table.clientWidth;
+              table.scrollLeft = table.scrollWidth;
+              const scrolled = table.scrollLeft > 0;
+              table.scrollLeft = 0;
+              return { overflow, scrolled, fits: document.documentElement.scrollWidth <= innerWidth };
+            })()"""),
+            ("screenshot", str(tmp_path / f"file-details-{width}.png")),
+            ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
+            set_value("#code-editor", "print('changed')\n"), ("click", "#code-save"),
+            ("wait", "document.querySelector('#code-file-status').textContent === 'Сохранено'"),
+            ("wait", "document.querySelector('#code-files li[data-path=\"src/app.py\"] .code-file-size').textContent === '17'"),
+            ("eval", "saved", cells("src/app.py")),
+            ("eval", "expanded", "document.querySelector('#code-files li[data-path=\"src\"]').getAttribute('aria-expanded')"),
+            ("eval", "editor", "document.querySelector('#code-editor').value")], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["unopened"]["files"] == values["unopened"]["folders"] == '—'
+    assert values["directory"]["files"] == values["directory"]["folders"] == '1'
+    assert values["directory"]["size"] == 'Папка' and values["directory"]["ext"] == '—'
+    assert values["file"] == {"ext": "py", "size": "5", "files": "—", "folders": "—",
+                               "created": values["date"], "modified": values["date"]}
+    assert values["legacy"]["created"] == '—' and values["legacy"]["size"] == '0'
+    assert values["dotfile"]["ext"] == '—'
+    assert values["limited"]["files"] == '≥1' and values["limited"]["folders"] == '≥0'
+    assert values["table"]["fits"] and (width != 320 or values["table"]["overflow"] and values["table"]["scrolled"])
+    assert values["saved"]["size"] == '17' and values["saved"]["modified"] != values["date"]
+    assert values["saved"]["created"] == values["date"]
+    assert values["expanded"] == 'true' and values["editor"] == "print('changed')\n"
+    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('changed')\n"
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live, width, tmp_path):
     from fake_bridge import T0
 

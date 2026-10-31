@@ -37,10 +37,12 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
       ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные']]
       .map(([value, label]) => el('option', { value }, label)));
+  const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
+  const sortBox = el('label', { class: 'input code-project-sort' }, sortText, sort);
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
     title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, '↻'));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
-  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sort, refresh, updated);
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sortBox, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
@@ -209,7 +211,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     }
   }
 
-  sort.addEventListener('change', sortProjects);
+  sort.addEventListener('change', () => {
+    sortText.textContent = sort.selectedOptions[0].textContent;
+    sortProjects();
+  });
   refresh.addEventListener('click', async () => {
     if (refresh.disabled || mode !== 'projects') return;
     const mine = ++gen;

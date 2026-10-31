@@ -121,6 +121,8 @@ UUID нового чата задаёт студия, настоящий thread 
   `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
   (`version` — sha256 байтов, запись через `store.write_atomic`; «только чтение» — `read_only` «файл только для
   чтения» до записи, прочие атрибуты прежнего файла — новому `SetFileAttributesW`).
+  С 0.7.5 `list_dir` добавляет необязательный `created`: секунды Unix из `st_birthtime`, в Python 3.11 на
+  Windows — из `st_ctime` (создание); без даты создания — `null`. Рекурсивного обхода нет.
 - `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
   `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
   `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).

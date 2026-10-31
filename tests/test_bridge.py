@@ -561,9 +561,10 @@ def test_fake_machine_follows_the_protocol():
     _, evs = ok("stop", project=p, chat=new)
     assert evs == [{"k": "asked", "request_id": "r1"}, {"k": "done", "status": "stopped"}]
     assert ok("files", project=p, path="")[0]["items"] == [
-        {"name": "bin", "dir": True, "size": 0, "modified": m.now}, {"name": "src", "dir": True, "size": 0, "modified": m.now},
-        {"name": "README.md", "dir": False, "size": 4, "modified": m.now},
-        {"name": "big.txt", "dir": False, "size": 2 * 1024 * 1024 + 1, "modified": m.now}]
+        {"name": "bin", "dir": True, "size": 0, "created": m.now, "modified": m.now},
+        {"name": "src", "dir": True, "size": 0, "created": m.now, "modified": m.now},
+        {"name": "README.md", "dir": False, "size": 4, "created": m.now, "modified": m.now},
+        {"name": "big.txt", "dir": False, "size": 2 * 1024 * 1024 + 1, "created": m.now, "modified": m.now}]
     assert [i["name"] for i in ok("files", project=p, path="src")[0]["items"]] == ["a.py"]
     assert refused("files", project=p, path="../x")["code"] == "outside"
     data, _ = ok("read", project=p, path="src/a.py")

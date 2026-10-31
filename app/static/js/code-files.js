@@ -59,6 +59,16 @@ function join(dir, name) {
   return dir ? `${dir}/${name}` : name;
 }
 
+function fileDate(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? new Date(value * 1000).toLocaleString('ru-RU',
+    { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+const FILE_COLUMNS = [
+  ['name', 'Имя'], ['ext', 'Расш.'], ['size', 'Размер'], ['files', 'Файлы'], ['folders', 'Папки'],
+  ['created', 'Создан'], ['modified', 'Изменён'],
+];
+
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
 const edits = new Map();
 
@@ -79,10 +89,13 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
 
   const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
   const list = el('ul', { id: 'code-files', class: 'code-files', role: 'tree', 'aria-label': 'Файлы проекта' });
+  const table = el('div', { class: 'code-file-table', tabindex: '0', role: 'region', 'aria-label': 'Сведения о файлах' },
+    el('div', { class: 'code-file-columns', 'aria-hidden': 'true' },
+      ...FILE_COLUMNS.map(([key, label]) => el('span', { class: `code-file-${key}-column` }, label))), list);
   directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', hidden: true });
-  const view = el('div', { class: 'code-files-view' }, crumbs, listError, list, file);
+  const view = el('div', { class: 'code-files-view' }, crumbs, listError, table, file);
   host.replaceChildren(view);
 
   function refuse(err, box, path) {
@@ -161,7 +174,19 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     row.dataset.git = mark?.kind || '';
     badge.textContent = mark ? item.dir ? '•' : mark.label : '';
     badge.title = mark ? item.dir ? `Изменений в папке: ${changes.length}` : mark.title : '';
-    row.title = `${path}${badge.title ? ` — ${badge.title}` : ''}`;
+    const ext = item.dir || item.name.lastIndexOf('.') <= 0 ? '' : item.name.slice(item.name.lastIndexOf('.') + 1);
+    const count = (key) => node.counts ? `${node.counts.truncated ? '≥' : ''}${node.counts[key].toLocaleString('ru-RU')}` : '—';
+    const values = { ext: ext || '—', size: item.dir ? 'Папка' : Number.isFinite(item.size) ? item.size.toLocaleString('ru-RU') : '—',
+      files: item.dir ? count('files') : '—', folders: item.dir ? count('folders') : '—',
+      created: fileDate(item.created), modified: fileDate(item.modified) };
+    for (const [key, cell] of Object.entries(node.cells)) {
+      cell.textContent = values[key];
+      const label = FILE_COLUMNS.find(([column]) => column === key)[1];
+      cell.title = `${label}: ${values[key]}${key === 'size' && !item.dir ? ' Б' : ''}`;
+      if (key === 'files' || key === 'folders') cell.title += ' — непосредственно в папке, без вложенных папок; после раскрытия';
+    }
+    row.title = [path, ...Object.values(node.cells).map((cell) => cell.title), badge.title].filter(Boolean).join('\n');
+    li.setAttribute('aria-label', `${item.name}\n${row.title}`);
     li.setAttribute('aria-selected', String(path === selected));
   }
 
@@ -196,12 +221,14 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const path = join(parent, item.name);
     const chevron = el('span', { class: 'code-file-chevron', 'aria-hidden': 'true' }, item.dir ? '›' : '');
     const badge = el('span', { class: 'code-file-git', 'aria-hidden': 'true' });
+    const cells = Object.fromEntries(FILE_COLUMNS.slice(1).map(([key]) => [key,
+      el('span', { class: `code-file-meta code-file-${key}`, 'data-column': key })]));
     const row = el('button', { type: 'button', class: `code-file-item${item.dir ? ' dir' : ''}`,
-      style: `--tree-depth: ${path.split('/').length - 1}` }, chevron,
-    icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name), badge);
+      style: `--tree-depth: ${path.split('/').length - 1}` }, el('span', { class: 'code-file-label' }, chevron,
+      icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name), badge), ...Object.values(cells));
     const li = el('li', { 'data-name': item.name, 'data-path': path, role: 'treeitem',
       'aria-label': item.name, class: item.dir ? 'dir' : null }, row);
-    const node = { path, item, row, badge, li };
+    const node = { path, item, row, badge, li, cells };
     nodes.set(path, node);
     if (item.dir) {
       const group = el('ul', { role: 'group', hidden: true });
@@ -254,7 +281,12 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         const children = items.map((item) => {
           const old = nodes.get(join(path, item.name));
           if (old && old.item.dir !== item.dir) dropNode(old.path);
-          return old && old.item.dir === item.dir ? old.li : treeRow(item, path);
+          if (old && old.item.dir === item.dir) {
+            old.item = item;
+            decorate(old);
+            return old.li;
+          }
+          return treeRow(item, path);
         });
         const kept = new Set(items.map((item) => join(path, item.name)));
         for (const child of group.children) {
@@ -263,6 +295,12 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
           dropNode(removed);
         }
         group.replaceChildren(...children);
+        const parent = nodes.get(path);
+        if (parent) {
+          parent.counts = { files: items.filter((item) => !item.dir).length,
+            folders: items.filter((item) => item.dir).length, truncated: !!truncated };
+          decorate(parent);
+        }
         if (active?.isConnected) active.focus({ preventScroll: true });
         if (truncated) group.append(el('li', { class: 'muted code-tree-note' }, 'Показаны первые 5000 записей'));
         if (!items.length) group.append(el('li', { class: 'muted code-tree-note' }, 'Папка пуста'));
@@ -386,7 +424,10 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
         mark.base = sent;
         if (alive && mine === fileGen) say(status, SAVED, false);
-        if (alive) git.refresh(true);
+        if (alive) {
+          loadDir(parentOf(path), true);
+          git.refresh(true);
+        }
       } catch (err) {
         if (!alive || mine !== fileGen) return;
         if (err.code === 'conflict') say(status, CONFLICT, true);
