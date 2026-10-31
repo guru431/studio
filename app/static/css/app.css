@@ -1432,6 +1432,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-files-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 .code-files-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .code-files-toolbar .code-path { min-width: 0; }
+.code-files-create { display: flex; flex-wrap: wrap; gap: 6px; }
+.code-files-create[hidden] { display: none; }
+.code-files-create .btn { font-size: calc(11px * var(--font-scale, 1)); }
+.code-file-actions { display: flex; flex-direction: column; gap: 8px; }
+.code-operation-source { overflow-wrap: anywhere; font-family: var(--mono); }
 #code-files-calculate { flex: none; font-size: calc(11px * var(--font-scale, 1)); }
 #code-files-stats { margin: 0; overflow-wrap: anywhere; }
 #code-files-stats:empty { display: none; }
@@ -1451,6 +1456,15 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-file-item { width: 100%; border: 0;
   background: none; color: var(--text); font: 13px/22px var(--mono); text-align: left; cursor: pointer; }
 .code-file-table .code-files { min-width: 900px; }
+.code-files li.has-actions { display: grid; grid-template-columns: var(--file-columns); column-gap: 10px; }
+.code-files li.has-actions > .code-file-item { grid-column: 1 / -1; grid-row: 1; }
+.code-files li.has-actions > [role="group"] { grid-column: 1 / -1; }
+.code-files li.has-actions > .code-file-item .code-file-label { padding-right: 36px; }
+.code-file-menu { grid-column: 1; grid-row: 1; justify-self: end; align-self: center; z-index: 1;
+  margin-right: 2px; width: 32px; min-height: 28px; border: 0; border-radius: 4px;
+  background: var(--panel-2); color: var(--text); font: 18px/1 var(--font); cursor: pointer; }
+.code-file-menu:hover, .code-file-menu:focus-visible { color: var(--accent); outline: 1px solid var(--accent); }
+@media (pointer: coarse) { .code-file-menu { min-height: 36px; } }
 .code-file-label { display: flex; align-items: center; gap: 5px; min-width: 0;
   padding-left: min(calc(var(--tree-depth, 0) * 16px), 50%); }
 .code-file-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

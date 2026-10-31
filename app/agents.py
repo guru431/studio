@@ -125,6 +125,7 @@ async def list_agents(request: Request):
                       "project_activity": hello.get("project_activity", False),
                       "project_summary": hello.get("project_summary", False),
                       "file_stats": hello.get("file_stats", False),
+                      "file_operations": hello.get("file_operations", False),
                       "file_suggestions": hello.get("file_suggestions", False),
                       "chat_search": hello.get("chat_search", False),
                       "queue_edit": hello.get("queue_edit", False),

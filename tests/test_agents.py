@@ -92,7 +92,7 @@ def test_agents_belong_to_their_user(studio):
                       "projects_root": None, "created": items[0]["created"], "last_seen": None,
                           "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}, "chat_control": False,
                           "attachments": False, "project_activity": False, "subscription_usage": False,
-                              "project_summary": False, "file_stats": False, "file_suggestions": False,
+                              "project_summary": False, "file_stats": False, "file_operations": False, "file_suggestions": False,
                               "chat_search": False, "queue_edit": False, "chat_fork": False,
                               "subagents": False, "worktrees": False}]
 

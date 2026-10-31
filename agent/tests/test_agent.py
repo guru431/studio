@@ -116,7 +116,7 @@ def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "project_activity": True,
-                             "subscription_usage": True, "project_summary": True, "file_stats": True,
+                             "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])

@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import stat
 from pathlib import Path
 
@@ -66,6 +67,69 @@ def resolve(project: Path, path: str) -> Path:
 
 def version(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _mutation_path(project: Path, path: str) -> Path:
+    """Изменения — только ниже корня и без переходов через ссылки/junction."""
+    parts = _parts(path)
+    if not parts:
+        raise Refused("invalid", "корень проекта изменять нельзя")
+    root = Path(os.path.realpath(project))
+    target = root
+    for index, part in enumerate(parts):
+        target = target / part
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            if index != len(parts) - 1:
+                raise Refused("not_found", NO_DIR) from None
+            break
+        if stat.S_ISLNK(info.st_mode) or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise Refused("outside", "операции через ссылки и junction запрещены")
+    # Повторная проверка настоящего абсолютного пути непосредственно перед изменением.
+    if not inside(str(root), os.path.realpath(target)):
+        raise Refused("outside")
+    return target
+
+
+def operate(project: Path, operation: str, path: str, destination: str | None = None) -> dict:
+    """Создание, перенос/переименование и удаление; существующее назначение не затирается."""
+    if operation not in ("create_file", "create_dir", "move", "delete"):
+        raise Refused("invalid")
+    if (operation == "move") != (destination is not None):
+        raise Refused("invalid")
+    try:
+        source = _mutation_path(project, path)
+        if operation == "create_file":
+            with source.open("xb"):
+                pass
+        elif operation == "create_dir":
+            source.mkdir()
+        elif operation == "move":
+            target = _mutation_path(project, destination)
+            if not source.exists():
+                raise Refused("not_found", NO_FILE)
+            old, new = os.path.normcase(str(source)), os.path.normcase(str(target))
+            if source.is_dir() and new.startswith(old + os.sep):
+                raise Refused("invalid", "нельзя переместить папку внутрь самой себя")
+            if target.exists() and (old != new or str(source) == str(target)):
+                raise Refused("exists", "файл или папка с таким именем уже существует")
+            # На Windows rename атомарно отказывает, если назначение появилось после проверки.
+            source.rename(target)
+        elif source.is_dir():
+            # Python на Windows не обходит вложенные junction при rmtree.
+            shutil.rmtree(source)
+        else:
+            source.unlink()
+    except FileExistsError:
+        raise Refused("exists", "файл или папка с таким именем уже существует") from None
+    except (FileNotFoundError, NotADirectoryError):
+        raise Refused("not_found", "файл или папка не найдены") from None
+    except PermissionError:
+        raise Refused("read_only", "нет доступа: файл занят или доступен только для чтения") from None
+    except OSError:
+        raise Refused("busy", "операция не завершена — проверьте доступ к файлам и обновите дерево") from None
+    return {}
 
 
 def list_dir(project: Path, path: str) -> dict:
