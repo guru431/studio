@@ -2438,13 +2438,21 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     2026-10-28-studio-claude-code, 6.5); все восемь подписей целиком и на 320 px, страница
     без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
     «В работе», профиль), место прежней кнопки темы отдано заголовку."""
-    fits = """[...document.querySelectorAll('#rail .tab span')].map(s => { const t = s.closest('.tab').getBoundingClientRect();
-      const b = s.getBoundingClientRect(); return [s.textContent, b.left >= t.left - 0.5 && b.right <= t.right + 0.5,
+    fits = """[...document.querySelectorAll('#rail .tab span')].map(s => {
+      const b = s.getBoundingClientRect(); return [s.textContent, b.left >= 0 && b.right <= innerWidth,
       s.scrollWidth <= s.clientWidth]; })"""
+    spacing = """(() => {
+      const boxes = [...document.querySelectorAll('#rail .tab .ico')].map(n => n.getBoundingClientRect());
+      const centers = boxes.map(b => b.left + b.width / 2);
+      const gaps = centers.slice(1).map((x, i) => x - centers[i]);
+      const labels = [...document.querySelectorAll('#rail .tab span')].map(n => n.getBoundingClientRect());
+      return [Math.max(...gaps) - Math.min(...gaps), labels.every((b, i) => !i || b.left >= labels[i - 1].right)];
+    })()"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
       - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#search-open').getBoundingClientRect().left - end; })()"""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
-                                       ("eval", "fits", fits), ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
+                                       ("eval", "fits", fits), ("eval", "spacing", spacing),
+                                       ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
                       width=width, mobile=width < 760)
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
@@ -2453,6 +2461,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
                                                             "Агенты"]
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
+        assert r["values"]["spacing"][0] < 1 and r["values"]["spacing"][1], r["values"]["spacing"]
         assert 0 <= r["values"]["room"] <= 16, r["values"]["room"]
 
 

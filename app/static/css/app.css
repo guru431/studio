@@ -146,9 +146,10 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0;
     padding: 4px 0 env(safe-area-inset-bottom, 0px); background: var(--side); border-right: 0; border-top: 1px solid var(--border); }
   #rail .logo, #rail .spacer { display: none; }
-  /* восемь вкладок: ширина по подписи, чтобы «Разговоры» помещались и на 320 px */
-  #rail .tab { flex: 1 1 auto; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size:calc(10px * var(--font-scale, 1));
+  /* равные ячейки для значков; длинная подпись может выходить за границы своей ячейки */
+  #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size:calc(10px * var(--font-scale, 1));
     letter-spacing: -0.02em; }
+  #rail .tab span { max-width: none; }
   #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .jobs-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
