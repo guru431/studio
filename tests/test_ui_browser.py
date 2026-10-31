@@ -657,9 +657,9 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
-    assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["transcribe", "Записи"],
-                        ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"], ["other", "Прочее"]]
-    assert v["records"] == "Записи" and v["scans"] == "Сканы"
+    assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Речь"],
+                        ["transcribe", "Разговоры"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"], ["other", "Прочее"]]
+    assert v["records"] == "Разговоры" and v["scans"] == "Сканы"
     assert v["code"] and v["other"] and v["codeFits"] and v["otherFits"]
     assert v["draft"] == "unsaved-password" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
@@ -903,7 +903,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
                                               "translate", "code", "agents")]
     assert v["labels"] == ["Агенты: чаты", "Агенты: подключения"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
@@ -2433,7 +2433,7 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """Вкладки по порядку (спека 2026-10-27-studio-ui-tidy, 4.1): вместо «Расшифровки» — «Записи», «Перевод»
+    """Вкладки по порядку: «Речь», затем «Разговоры»; «Перевод»
     после «Сканов» (спека 2026-10-28-studio-translator, 6.1), «Код» — после «Перевода» (спека
     2026-10-28-studio-claude-code, 6.5); все восемь подписей целиком и на 320 px, страница
     без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
@@ -2449,7 +2449,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Записи", "Озвучка", "Сканы", "Перевод",
+    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Речь", "Разговоры", "Сканы", "Перевод",
                                                             "Агенты"]
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
@@ -6132,7 +6132,7 @@ def search_ready(rows):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, live, width):
     """Лупа → «Поиск»; «кот» находит картинку (промпт «кот 0») и расшифровку («Кот в сапогах») с выделенным
-    словом; чип «Расшифровка» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
+    словом; чип «Разговоры» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
     картинку открывает её просмотр в «Фото»."""
     login = f"searcher{width}"
     uid = live.add_user(login)
@@ -7157,7 +7157,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["tabs"] == ["chat", "photo", "video", "transcribe", "speech", "ocr", "translate", "code"]
+    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
     assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)

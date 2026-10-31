@@ -75,8 +75,7 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 #rail .logo { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 10px; }
 #rail .tab { width: 76px; padding: 7px 0 5px; border-radius: 10px; display: flex; flex-direction: column; align-items: center;
   gap: 2px; color: var(--muted); font-size:calc(11px * var(--font-scale, 1)); text-decoration: none; }
-/* подпись — в ширину вкладки: подписи короткие («Озвучка» — самая длинная) и влезают целиком и на 320 px;
- * многоточие — страховка от чужого шрифта */
+/* подпись — в ширину вкладки; многоточие — страховка от чужого шрифта */
 #rail .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
@@ -147,8 +146,8 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0;
     padding: 4px 0 env(safe-area-inset-bottom, 0px); background: var(--side); border-right: 0; border-top: 1px solid var(--border); }
   #rail .logo, #rail .spacer { display: none; }
-  /* семь вкладок: на 320 px — по 45 px, поэтому без боковых отступов и чуть плотнее */
-  #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size:calc(10px * var(--font-scale, 1));
+  /* восемь вкладок: ширина по подписи, чтобы «Разговоры» помещались и на 320 px */
+  #rail .tab { flex: 1 1 auto; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size:calc(10px * var(--font-scale, 1));
     letter-spacing: -0.02em; }
   #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
