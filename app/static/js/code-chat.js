@@ -392,7 +392,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const { before, after } = messageNeighbours();
     navigation.hidden = !feed.querySelector('.code-msg.user') && start <= 0;
     previous.disabled = more.disabled || (!before && start <= 0);
-    next.disabled = !after;
+    next.disabled = !after && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+    const nextLabel = after ? 'Следующее моё сообщение' : 'В конец чата';
+    next.setAttribute('aria-label', nextLabel);
+    next.title = nextLabel;
   }
 
   async function jumpMessage(direction) {
@@ -404,7 +407,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const users = [...feed.querySelectorAll('.code-msg.user')];
       target = first ? users[users.indexOf(first) - 1] : users.at(-1);
     }
-    if (!target || !scroller) return;
+    if (!scroller) return;
+    if (!target) {
+      if (direction > 0) {
+        messageTarget = null;
+        scroller.scrollTop = scroller.scrollHeight;
+        paintNavigation();
+      }
+      return;
+    }
     messageTarget = target;
     const scale = scroller.getBoundingClientRect().height / scroller.offsetHeight;
     scroller.scrollTop += (target.getBoundingClientRect().top - messageTop()) / scale;

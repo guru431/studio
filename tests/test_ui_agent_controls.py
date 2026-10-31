@@ -48,6 +48,12 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
             arrow("up"), ("eval", "last", at_top),
             arrow("up"), ("eval", "previous", at_top),
             arrow("down"), ("eval", "next", at_top),
+            ("eval", "tailAvailable", "!document.querySelector('#code-message-down').disabled"),
+            arrow("down"),
+            ("eval", "end", """(() => { const view = document.querySelector('#view');
+              return view.scrollHeight - view.clientHeight - view.scrollTop < 2
+                && document.querySelector('#code-message-down').disabled; })()"""),
+            arrow("up"), ("eval", "afterEnd", at_top),
             ("eval", "manual", "document.querySelector('#view').scrollTop = 0"),
             ("wait", "document.querySelector('#view').scrollTop === 0"),
             arrow("up"),
@@ -71,8 +77,9 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
     assert not result.get("failed"), {"failed": result.get("failed"), "values": result["values"]}
     values = result["values"]
     assert values["placement"] and values["bottom"] and values["away"] and values["returned"], values
-    assert [values[key] for key in ("last", "previous", "next", "older", "first", "afterFirst", "afterManual")] == [
-        "Запрос 104", "Запрос 102", "Запрос 104", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 104"]
+    assert values["tailAvailable"] and values["end"], values
+    assert [values[key] for key in ("last", "previous", "next", "afterEnd", "older", "first", "afterFirst", "afterManual")] == [
+        "Запрос 104", "Запрос 102", "Запрос 104", "Запрос 104", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 104"]
     assert values["start"]
     assert [r["before"] for r in code_requests(machine, "history")][:2] == [None, 6]
     assert not problems(result), problems(result)

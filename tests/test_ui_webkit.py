@@ -89,7 +89,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
     page.locator('#appearance-scale').select_option(str(scale))
     page.locator('#avatar').tap()
     page.evaluate("document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight")
-    for direction, number in [('up', 4), ('up', 2), ('up', 0), ('down', 2)]:
+    for direction, number in [('up', 4), ('up', 2), ('up', 0), ('down', 2), ('down', 4)]:
         button = page.locator(f'#code-message-{direction}')
         assert button.evaluate("""e => {
           const r = e.getBoundingClientRect();
@@ -106,6 +106,12 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
         }""", arg=number)
         if number == 0:
             pw.expect(page.locator('#code-message-up')).to_be_disabled()
+    pw.expect(page.locator('#code-message-down')).to_be_enabled()
+    pw.expect(page.locator('#code-message-down')).to_have_attribute('aria-label', 'В конец чата')
+    page.locator('#code-message-down').tap()
+    page.wait_for_function("""() => { const view = document.querySelector('#view');
+      return view.scrollHeight - view.clientHeight - view.scrollTop < 2; }""")
+    pw.expect(page.locator('#code-message-down')).to_be_disabled()
     fits(page)
     page.screenshot(path=str(tmp_path / f'message-arrows-{scale}.png'))
 
