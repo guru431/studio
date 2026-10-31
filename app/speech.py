@@ -87,7 +87,17 @@ def _text(r: httpx.Response) -> str:
 
 async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
     """Расшифровка сжатой записи (audio.compress) — сегменты по порядку."""
-    data = await asyncio.to_thread(audio.read_bytes)
+    reading = asyncio.create_task(asyncio.to_thread(audio.read_bytes))
+    try:
+        data = await asyncio.shield(reading)
+    finally:
+        # Отмена ожидания не закрывает файл в потоке. Уборка MP3 должна дождаться close,
+        # иначе Windows откажет в unlink; повторная отмена тоже не обрывает ожидание.
+        while not reading.done():
+            try:
+                await asyncio.shield(reading)
+            except asyncio.CancelledError:
+                pass
     if conn.kind == "srvllm":
         r = await _post(conn, f"{conn.base_url}/speech/asr?{urlencode(ASR_QUERY)}", ASR_TIMEOUT_SEC,
                         files={"audio_file": ("audio.mp3", data, mime)})

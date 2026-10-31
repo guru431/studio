@@ -73,6 +73,34 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("iphone", [(852, 393)], indirect=True)
+def test_landscape_navigation_reaches_every_section_and_profile(iphone, tmp_path):
+    page, _ = iphone
+    page.locator('#rail').evaluate('rail => { rail.scrollTop = rail.scrollHeight; }')
+    avatar = page.locator('#avatar').bounding_box()
+    assert avatar['y'] >= 0 and avatar['y'] + avatar['height'] <= 393
+    sections = page.locator('#rail .tab').evaluate_all('tabs => tabs.map(t => t.dataset.section)')
+    for section in sections:
+        tab = page.locator(f'#rail [data-section="{section}"]')
+        tab.tap()
+        pw.expect(tab).to_have_attribute('aria-current', 'page')
+        pw.expect(page.locator('#view')).not_to_be_empty()
+        fits(page)
+    page.locator('#search-open').tap()
+    page.locator('#search-q').wait_for()
+    page.locator('#jobs').tap()
+    pw.expect(page.locator('#jobs-panel')).to_be_visible()
+    page.locator('#jobs-close').tap()
+    page.locator('#avatar').tap()
+    menu = page.locator('#menu')
+    pw.expect(menu).to_be_visible()
+    box = menu.bounding_box()
+    assert box['y'] >= 0 and box['y'] + box['height'] <= 393
+    page.screenshot(path=str(tmp_path / 'landscape-navigation.png'))
+    page.locator('#menu a[href="#/settings"]').tap()
+    pw.expect(page).to_have_url(page.url.split('/#')[0] + '/#/settings')
+
+
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
 def test_project_opens_by_tapping_empty_area_of_either_line(iphone):
     page, aid = iphone
@@ -144,12 +172,24 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
             && e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))];} """)
 
     before = position()
+    controls = page.locator('.code-panel-footer').evaluate("""footer => {
+      const sort=footer.querySelector('select').getBoundingClientRect();
+      const button=footer.querySelector('button'), refresh=button.getBoundingClientRect();
+      const updated=footer.querySelector('p').getBoundingClientRect();
+      return {sameLine:Math.abs(sort.top-refresh.top)<1 && sort.right<refresh.left,
+        compact:sort.height<=34 && refresh.height<=34 && refresh.width<=34 && button.scrollWidth<=button.clientWidth,
+        dateBelow:updated.top>=Math.max(sort.bottom, refresh.bottom),
+        heights:[sort.height,refresh.height], widths:[sort.width,refresh.width],
+        tops:[sort.top,refresh.top,updated.top]};
+    }""")
+    assert controls['sameLine'] and controls['compact'] and controls['dateBelow'], controls
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
     page.locator('#code-project-sort').select_option('findings')
     button.tap()
     pw.expect(button).to_be_enabled()
+    assert button.evaluate('e => e.scrollWidth <= e.clientWidth')
     pw.expect(page.locator('#code-project-updated')).to_contain_text('Обновлено:')
     page.screenshot(path=str(tmp_path / f'projects-webkit-{page.viewport_size["width"]}.png'))
     fits(page)

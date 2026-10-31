@@ -37,7 +37,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
       ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные']]
       .map(([value, label]) => el('option', { value }, label)));
-  const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button' }, 'Обновить сведения');
+  const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
+    title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, '↻'));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
   const footer = el('div', { class: 'code-panel-footer', hidden: true }, sort, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
@@ -166,7 +167,6 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const own = {};
     refreshing = own;
     refresh.disabled = true;
-    refresh.textContent = 'Обновление…';
     footer.setAttribute('aria-busy', 'true');
     const queue = [...projectItems];
     const results = new Map(summaries.get(agent.id));
@@ -204,7 +204,6 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       if (refreshing === own) {
         refreshing = null;
         refresh.disabled = false;
-        refresh.textContent = 'Обновить сведения';
         footer.setAttribute('aria-busy', 'false');
       }
     }

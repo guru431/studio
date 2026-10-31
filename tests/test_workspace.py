@@ -124,9 +124,13 @@ def test_place_and_panel(studio):
 
 def test_hundred_and_first_project_drops_the_oldest(studio):
     aid = owner(studio)
-    for i in range(101):
-        studio.clock[0] += 1
-        doc = done(act(studio, "open", aid=aid, pid=pid(f"p{i}"), chat=A))
+    uid = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
+    # Предусловие — 100 уже открытых проектов; сам переход через предел проверяется API.
+    state.DB.executemany("INSERT INTO code_tabs(user_id, agent_id, project, tabs, active, touched)"
+                         " VALUES (?, ?, ?, ?, ?, ?)",
+                         [(uid, aid, pid(f"p{i}"), json.dumps([A]), A, studio.clock[0] + i) for i in range(100)])
+    studio.clock[0] += 100
+    doc = done(act(studio, "open", aid=aid, pid=pid("p100"), chat=A))
     assert len(doc["projects"]) == 100
     assert [p["pid"] for p in doc["projects"]] == [pid(f"p{i}") for i in range(100, 0, -1)]
     assert state.DB.execute("SELECT count(*) FROM code_tabs").fetchone()[0] == 100

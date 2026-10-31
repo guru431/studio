@@ -231,9 +231,15 @@ async def run(job: Job) -> None:
         outcome = ("cancelled", "отменено", {})
         log.info("расшифровка %s: отменена", job.id[:8])
     finally:
+        cleanup = asyncio.create_task(asyncio.to_thread(tmp.unlink, missing_ok=True))
         try:
-            await asyncio.to_thread(tmp.unlink, missing_ok=True)
-        finally:                                     # и вторая отмена посреди уборки итог не теряет
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    pass                             # поток удаления ещё идёт: итог ждёт его
+            cleanup.result()
+        finally:
             state_, detail_, extra = outcome
             _finish(job, state_, detail_, **extra)
             JOBS.pop(job.id, None)

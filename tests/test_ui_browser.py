@@ -8712,6 +8712,7 @@ def test_code_compact_header_and_git_file_tree(browser, live, width):
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            ("wait", "!!document.querySelector('#code-files > li[data-name=\"README.md\"]')"),
             ("wait", "document.querySelector('#code-repo-status')?.textContent.includes('stage-5g')"),
             ("eval", "header", "document.querySelector('#code-repo-status').textContent"),
             ("eval", "duplicates", "document.querySelectorAll('#code-chats .code-new-chat').length"),
