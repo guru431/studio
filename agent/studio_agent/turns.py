@@ -84,6 +84,12 @@ class _Turn:
     finishing: bool = False  # _finish() идёт: stop() задачу не отменяет
     held: list | None = None  # watch() готовит снимок: события хода — сюда, за снимок
     watch_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    owner: str | None = None
+    accepted: bool = False
+    input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending: int = 1
+    followups: list = field(default_factory=list)
+    queued: list = field(default_factory=list)
 
 
 class Runner:
@@ -106,7 +112,7 @@ class Runner:
     # --- просьбы студии ---
 
     def start(self, project: Path, pid: str, chat: str, text: str, model: str | None, effort: str | None,
-              *, images: list[dict] | None = None, access: str | None = None) -> str:
+              *, images: list[dict] | None = None, access: str | None = None, owner: str | None = None) -> str:
         """Ход в чате: запись и задача; всё блокирующее — уже в задаче."""
         if chat in self._turns:
             raise Refused("running")
@@ -114,11 +120,56 @@ class Runner:
             raise Refused("busy", CLOSING)
         if len(self._turns) >= self.max_turns:
             raise Refused("busy")
-        t = _Turn(project, pid, chat, secrets.token_hex(8), access=access)
+        t = _Turn(project, pid, chat, secrets.token_hex(8), access=access, owner=owner)
         self._turns[chat] = t
         t.task = asyncio.create_task(self._run(t, text, model, effort, images or []))
         log.info("ход %s: начат", t.turn)
         return t.turn
+
+    def check_owner(self, pid, chat, owner):
+        t = self._turn(pid, chat)
+        if t is not None and t.owner is not None and t.owner != owner:
+            raise Refused("owned", "Задание выполняется в другом окне — сначала перенесите управление сюда")
+
+    def claim(self, pid, chat, owner):
+        t = self._turn(pid, chat)
+        if t is not None:
+            t.owner = owner
+            self._send(t, {"k": "ownership", "owner": owner})
+        return {}
+
+    async def steer(self, pid, chat, text, images, *, owner=None):
+        t = self._turn(pid, chat)
+        if t is None:
+            raise Refused("idle")
+        async with t.input_lock:
+            self.check_owner(pid, chat, owner)
+            if t.finishing or t.stopped or t.closing:
+                raise Refused("idle")
+            if not t.accepted:
+                raise Refused("busy", "Задание ещё запускается — отправьте уточнение через несколько секунд")
+            if len(t.followups) >= 20:
+                raise Refused("busy", "В одном ходе можно отправить до 20 уточнений")
+            if len(json.dumps(t.followups, ensure_ascii=True)) + len(json.dumps(text, ensure_ascii=True)) > limits.HISTORY_BUDGET // 4:
+                raise Refused("busy", "Уточнения заполнили текущий ход — дождитесь ответа")
+            message_id = secrets.token_hex(8)
+            mode = await self._steer_input(t, text, images, message_id)
+            # В снимке нет повторных мегабайт картинок; оригиналы уже принял CLI.
+            item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else ""),
+                    "mode": mode}
+            t.followups.append(item)
+            self._send(t, {"k": "followup", **item})
+            return {"mode": mode, "id": message_id}
+
+    async def _steer_input(self, t, text, images, message_id):
+        await t.client.query(image_input.prompt(text, images) if images else text)
+        t.pending += 1
+        return "steer"
+
+    def _accepted(self, t):
+        t.accepted = True
+        if t.owner is not None:
+            self._send(t, {"k": "input_accepted"})
 
     async def state(self, project, chat, model=None, effort=None, access=None):
         """Настройки и контекст без генерации: SDK продолжает сессию только для чтения состояния."""
@@ -176,12 +227,14 @@ class Runner:
     @classmethod
     def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict]) -> events.Ready:
         """В потоке: снимок в пределах `HISTORY_BUDGET` и его ASCII-JSON."""
-        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True))
+        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(t.followups, ensure_ascii=True))
         body = sessions.fit([{"text": text, "steps": steps}], room)[0]
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
                                            "asks": asks, **({"context": t.context} if t.context else {}),
                                            **({"settings": t.settings} if t.settings else {}),
-                                           **({"activity": t.activity} if t.activity else {})}))
+                                           **({"activity": t.activity} if t.activity else {}),
+                                           **({"owner": t.owner, "accepted": t.accepted} if t.owner else {}),
+                                           **({"followups": list(t.followups)} if t.followups else {})}))
 
     def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
         """Ответ на карточку; неверные поля — `invalid`, карточки нет (или ход другого проекта) — `gone`."""
@@ -277,13 +330,24 @@ class Runner:
             if not (t.stopped or t.closing):
                 sent = True  # дальше файл сессии может появиться
                 await t.client.query(image_input.prompt(text, images) if images else text)
-                async for message in t.client.receive_response():
-                    for e in t.feed.events(message):
-                        self._send(t, e)
-                    if isinstance(message, ResultMessage) and message.is_error:
-                        failure = _words(message.errors, message.result, message.subtype)
-                    if isinstance(message, ResultMessage):
-                        await self._usage(t, model, effort)
+                self._accepted(t)
+                while t.pending:
+                    received_result = False
+                    async for message in t.client.receive_response():
+                        for e in t.feed.events(message):
+                            self._send(t, e)
+                        if isinstance(message, ResultMessage):
+                            received_result = True
+                            async with t.input_lock:
+                                t.pending -= 1
+                                if message.is_error:
+                                    failure = _words(message.errors, message.result, message.subtype)
+                                    t.pending = 0
+                                if not t.pending:
+                                    t.finishing = True
+                            await self._usage(t, model, effort)
+                    if not received_result:
+                        break
         except asyncio.CancelledError:
             cancelled = True
         except CLINotFoundError:
@@ -356,6 +420,8 @@ class Runner:
             done = {"k": "done", "status": "error", "message": failure}
         else:
             done = {"k": "done", "status": "done"}
+        if t.queued:
+            done["unsent"] = [{"id": message_id, "text": text} for message_id, text, _ in t.queued]
         log.info("ход %s: %s", t.turn, done["status"])
         return done
 

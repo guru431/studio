@@ -74,7 +74,8 @@ async def opened(a: Agent, session=SESSION, pin=None) -> None:
 
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
-                             "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True}
+                             "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
+                             "chat_control": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -261,7 +262,7 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
                               history=AsyncMock(return_value={"messages": []}),
                               state=AsyncMock(return_value={"settings": {"model": model}}),
                               live=Mock(return_value={}), start=Mock(return_value="turn-id"),
-                              watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock())
+                              watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock(), check_owner=Mock())
     agent.opencode = backend
     await opened(agent)
     assert agent.hello()["opencode"] == backend.catalog
@@ -286,7 +287,7 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
     agent.codex = None
     res = (await agent.handle(req("turn", **frame, text="тест", model=model, effort="high", access="default")))[0]
     assert res["ok"]
-    backend.start.assert_called_once_with(project, pid, CHAT, "тест", model, "high", images=[], access="default")
+    backend.start.assert_called_once_with(project, pid, CHAT, "тест", model, "high", images=[], access="default", owner=None)
     assert (await agent.handle(req("watch", **frame)))[0]["data"] == {"running": False}
     backend.watch.assert_awaited_once_with(pid, CHAT)
     assert (await agent.handle(req("answer", **frame, request_id="1" * 16, decision="allow")))[0]["ok"]

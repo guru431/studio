@@ -1,8 +1,8 @@
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
- * chatView(host, { aid, pid, chat, agent, project, origin, fresh, closed, closedChat, gone, openFile }) → { unmount() }:
- * - «Закрыть чат» — PATCH {state: "closed"}, затем closedChat() (code.js убирает вкладку); история отвечает 404
+ * chatView(host, { aid, pid, chat, agent, project, origin, fresh, closed, gone, openFile }) → { unmount() }:
+ * - закрытие — крестик вкладки; история отвечает 404
  *   not_found (сессии на машине нет, студия её не заводила) — gone() вместо слов (вкладка уходит сама);
  * - лента #code-feed — страница истории (GET …/chats/<chat>, по 100), «Показать раньше» (#code-more) —
  *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
@@ -14,7 +14,8 @@
  * - хода нет и страница видна — live раз в IDLE_POLL_SEC: ход, начатый в другой вкладке, на другом устройстве
  *   или в VS Code, страница увидит; не дольше IDLE_POLL_FOR_SEC после действия владельца в чате — опрос
  *   продлевает открытость компьютера (протокол §3), и забытая вкладка держала бы его открытым вечно;
- * - отказ «Отправить» 409 running (ход уже идёт) и 504 timeout (ход, может быть, начат) — слова и live;
+ * - во время хода — steer; чужое окно сначала забирает управление через claim. Codex/Claude получают
+ *   уточнение в текущем клиенте, OpenCode — очередь до конца ответа. Отказ turn 409 running и 504 timeout — live;
  * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
  *   пока страница видна; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
  *   PIN — снова сюда; ответ, пришедший после ухода с чата, никуда не уводит;
@@ -26,7 +27,7 @@
  * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
-import { api, me } from './api.js';
+import { api as request, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown } from './markdown.js';
@@ -57,6 +58,9 @@ const IMAGE_COUNT = 4;
 /** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
 const drafts = new Map();
 const imageDrafts = new Map();  // картинки черновика — только память, как текст
+const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
+const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
+const WINDOW = crypto.randomUUID().replaceAll('-', '');
 
 /** Начало ввода шага: первая строка-значение (команда, путь, шаблон), иначе JSON. */
 function preview(input) {
@@ -80,8 +84,10 @@ function tailOf(filePath, agent, project) {
   return parts.some((p) => p === '' || p === '.' || p === '..') ? null : parts.join('/');
 }
 
-export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, closedChat, gone,
+export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
   openFile }) {
+  const api = (method, path, body, options = {}) => request(method, path, body,
+    { ...options, headers: { 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
   const assistant = ENGINE_NAMES[engine];
@@ -101,8 +107,21 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let start = 0;                 // номер первого показанного сообщения истории
   let paintTimer = null;
   let acted = Date.now();        // последнее действие владельца в чате (открыл, вернулся, ввёл, ответил)
+  let foreign = false;
+  let external = false;
+  let waitingForRelease = false;
+  let claimTimer = null;
+  let claiming = false;
+  const followups = new Map();
+  const sentFollowups = new Set();
+  const unsentFollowups = new Set();
 
   const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
+  function showStatus(message, error = true) {
+    status.classList.toggle('error', error);
+    status.classList.toggle('muted', !error);
+    status.textContent = message;
+  }
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
@@ -131,7 +150,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
     if (ACCESS[engine][saved.access]) access.value = saved.access;
     if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
-      status.textContent = 'Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате';
+      showStatus('Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате');
     }
   }
 
@@ -142,7 +161,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-label': 'Остановить', title: 'Остановить' }, el('span', { class: 'code-go-label' }, 'Остановить'));
   send.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>');
   stop.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>');
-  const closeChat = el('button', { type: 'button', id: 'code-close-chat', class: 'btn btn-sm' }, 'Закрыть чат');
   const activityText = el('span', {}, 'Нет активной задачи');
   const activity = el('div', { id: 'code-activity', class: 'code-activity', role: 'status',
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
@@ -157,7 +175,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       : 'Обновите мост на компьютере для отправки изображений', disabled: !agent?.images });
   attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 16 5-4 4 4 4-6 5 6"/></svg>';
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
-  field.box.querySelector('.field-tools').insertBefore(activity, attach);
+  const sessionText = el('p');
+  const waitSession = el('button', { type: 'button', id: 'code-wait-session', class: 'btn btn-sm' }, 'Дождаться завершения');
+  const takeSession = el('button', { type: 'button', id: 'code-take-session', class: 'btn btn-sm' }, 'Продолжить здесь');
+  const sessionNotice = el('div', { id: 'code-session-notice', class: 'code-session-notice', hidden: true, role: 'status' },
+    sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   const pick = (label, select) => {
     select.setAttribute('aria-label', label);
     return el('label', { class: 'code-pick' }, el('span', { class: 'code-pick-name' }, label), select);
@@ -165,11 +187,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access), contextBox),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
       stop, send));
-  host.append(el('div', { class: 'code-chat-bar' }, el('span', { class: 'tag code-engine' }, assistant), closeChat),
+  host.dataset.engine = engine;
+  host.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, status, form);
+    more, feed, status, el('div', { class: 'code-compose-area' }, sessionNotice,
+      el('div', { class: 'code-compose-status' }, activity, contextBox), form));
   if (drafts.has(draftKey)) {
     text.value = drafts.get(draftKey);     // после fieldBox: «очистить» видит текст
     autosize();
@@ -211,12 +235,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!alive || own.signal.aborted) return;
       paintSettings({});
       if (err.code === 'closed') closed();
-      else status.textContent = words(err);
+      else showStatus(words(err));
     } finally {
       resolving = false;
       stateRequest = null;
       model.disabled = effort.disabled = access.disabled = false;
-      send.disabled = running || sending || adding;
+      updateControls();
     }
   }
 
@@ -243,13 +267,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function addImages(files) {
     if (!files.length || sending || adding) return;
     if (!agent?.images) {
-      status.textContent = 'Обновите мост на компьютере для отправки изображений';
+      showStatus('Обновите мост на компьютере для отправки изображений');
       return;
     }
     adding = true;
     send.disabled = true;
     attach.disabled = true;
-    status.textContent = '';
+    showStatus('');
     try {
       if (images.length + files.length > IMAGE_COUNT) throw new Error('Можно прикрепить до 4 изображений');
       if (files.some((f) => !IMAGE_TYPES.has(f.type))) throw new Error('Нужен PNG, JPEG, WebP или GIF');
@@ -268,10 +292,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       images = [...images, ...selected];
       keepImages();
     } catch (err) {
-      if (alive) status.textContent = words(err);
+      if (alive) showStatus(words(err));
     } finally {
       adding = false;
-      send.disabled = running || sending || resolving;
+      updateControls();
       attach.disabled = sending || !agent?.images;
     }
   }
@@ -365,8 +389,98 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function setRunning(value) {
     running = value;
     stop.hidden = !value;
-    send.disabled = value || sending || adding || resolving;
     host.dataset.running = value ? '1' : '0';
+    updateControls();
+  }
+
+  function updateControls() {
+    send.disabled = sending || adding || resolving || foreign || external || (running && !agent?.chat_control);
+    stop.disabled = foreign || external;
+    model.disabled = effort.disabled = access.disabled = resolving || running;
+    const label = running ? (engine === 'opencode' ? 'Отправить после ответа' : 'Отправить уточнение') : 'Отправить';
+    send.title = label;
+    send.setAttribute('aria-label', label);
+    send.querySelector('.code-go-label').textContent = label;
+    text.placeholder = running ? 'Уточнение…' : 'Задание…';
+    for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
+    sessionNotice.hidden = !foreign && !external;
+    if (external) {
+      sessionText.textContent = waitingForRelease
+        ? 'Жду освобождения сессии в Codex Desktop или другом приложении. Текст и вложения сохранены.'
+        : 'Сессия занята в Codex Desktop или другом приложении. Дождитесь её освобождения или продолжите копию с той же историей. Копия и исходная сессия смогут работать независимо.';
+      takeSession.textContent = 'Продолжить копией';
+      waitSession.textContent = 'Дождаться освобождения';
+    } else if (foreign) {
+      sessionText.textContent = waitingForRelease ? 'Жду завершения задания в другом окне. Результат появится здесь.'
+        : 'Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.';
+      takeSession.textContent = 'Продолжить здесь';
+      waitSession.textContent = 'Дождаться завершения';
+    }
+    waitSession.disabled = waitingForRelease || claiming;
+    takeSession.disabled = claiming;
+  }
+
+  function acknowledgeInput() {
+    const pending = pendingInputs.get(draftKey);
+    if (!pending) return;
+    if (drafts.get(draftKey) === pending.value) drafts.delete(draftKey);
+    if (imageDrafts.get(draftKey) === pending.images) imageDrafts.delete(draftKey);
+    pendingInputs.delete(draftKey);
+    if (text.value === pending.value) { text.value = ''; autosize(); }
+    images = images.filter((i) => !pending.images.includes(i));
+    paintImages();
+  }
+
+  function restoreInput() {
+    const pending = pendingInputs.get(draftKey);
+    if (!pending) return;
+    pendingInputs.delete(draftKey);
+    pending.mine?.remove();
+    text.value = text.value && text.value !== pending.value ? `${pending.value}\n\n${text.value}` : pending.value;
+    if (text.value) drafts.set(draftKey, text.value);
+    images = [...pending.images, ...images.filter((i) => !pending.images.includes(i))];
+    keepImages();
+    autosize();
+  }
+
+  function showFollowup(data) {
+    if (data.sent) { sentFollowups.add(data.id); queuedInputs.get(draftKey)?.delete(data.id); }
+    if (typeof data.id !== 'string' || followups.has(data.id)) return;
+    const node = messageNode({ role: 'user', text: data.text });
+    node.dataset.followup = data.id;
+    followups.set(data.id, node);
+    grow(() => feed.append(node));
+  }
+
+  async function claimSession(fork = false) {
+    if (!alive || claiming || document.visibilityState === 'hidden') return;
+    claiming = true;
+    updateControls();
+    try {
+      const result = await api('POST', endpoint('/claim'), { fork });
+      if (!alive) return;
+      if (result.available === false) {
+        external = true;
+        if (waitingForRelease) claimTimer = setTimeout(() => claimSession(), RETRY_MS);
+      } else {
+        const wasExternal = external;
+        foreign = external = waitingForRelease = false;
+        clearTimeout(claimTimer);
+        if (wasExternal) {
+          showStatus(result.forked ? 'Открыта копия с историей сессии. Задание можно отправить.'
+            : 'Сессия свободна. Задание можно отправить.', false);
+          await loadHistory(true);
+        }
+      }
+    } catch (err) {
+      if (!alive) return;
+      if (err.code === 'closed') closed();
+      else showStatus(words(err));
+      waitingForRelease = false;
+    } finally {
+      claiming = false;
+      if (alive) updateControls();
+    }
   }
 
   function paintActivity(state, tool) {
@@ -477,6 +591,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /* ---- события хода ------------------------------------------------------------- */
 
   function finish(data) {
+    for (const item of Array.isArray(data.unsent) ? data.unsent : []) {
+      unsentFollowups.add(item.id);
+      const queued = queuedInputs.get(draftKey)?.get(item.id);
+      const value = queued?.value ?? item.text;
+      if (value && text.value !== value) text.value = text.value ? `${text.value}\n\n${value}` : value;
+      if (queued) images = [...images, ...queued.images.filter((i) => !images.includes(i))];
+      queuedInputs.get(draftKey)?.delete(item.id);
+    }
+    if (data.unsent?.length) {
+      if (text.value) drafts.set(draftKey, text.value);
+      keepImages();
+      autosize();
+      showStatus('Очередь не выполнена — уточнения возвращены в поле', false);
+    }
+    if (data.not_started) restoreInput();
+    else acknowledgeInput();
+    if (data.code === 'writer_active') external = true;
+    foreign = false;
+    if (!external) waitingForRelease = false;
     paintText();
     if (turn) {
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
@@ -501,12 +634,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function handle(event, data) {
     switch (event) {
       case 'turn':
+        foreign = false;
         setRunning(true);
         activeTools.clear();
         paintActivity('thinking');
         current();
         return false;
       case 'idle':
+        foreign = false;
         setRunning(false);
         if (!['done', 'stopped', 'error'].includes(activity.dataset.state)) paintActivity('idle');
         if (turn) {                // ход кончился, пока страница не смотрела: история его уже знает
@@ -516,6 +651,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         idlePoll();
         return true;
       case 'snapshot': {
+        foreign = !!data.owner && data.owner !== WINDOW;
+        if (data.owner === WINDOW && data.accepted) acknowledgeInput();
         setRunning(true);
         activeTools.clear();
         const t = current();
@@ -529,8 +666,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         });
         if (data.activity) paintActivity(data.activity.state, data.activity.tool);
         else continueActivity();
+        for (const item of Array.isArray(data.followups) ? data.followups : []) showFollowup(item);
+        updateControls();
         return false;
       }
+      case 'input_accepted':
+        acknowledgeInput();
+        return false;
+      case 'followup':
+        showFollowup(data);
+        return false;
+      case 'followup_sent':
+        sentFollowups.add(data.id);
+        queuedInputs.get(draftKey)?.delete(data.id);
+        return false;
+      case 'ownership':
+        foreign = !!data.owner && data.owner !== WINDOW;
+        waitingForRelease = false;
+        updateControls();
+        return false;
       case 'activity':
         if (turn?.asks.querySelector('.code-ask')) paintActivity('waiting');
         else paintActivity(data.state, data.tool);
@@ -569,6 +723,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         dropAsk(data.request_id);
         grow(() => t.asks.append(askNode(data)));
         paintActivity('waiting');
+        updateControls();
         return false;
       }
       case 'asked':
@@ -617,7 +772,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function waitForComputer() {
     setRunning(false);
     paintActivity('offline');
-    status.textContent = WAITING;
+    showStatus(WAITING);
     later(RETRY_MS);
   }
 
@@ -648,12 +803,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (err.code === 'closed') closed();
       else if (err.code === 'offline') waitForComputer();
       else {
-        status.textContent = words(err);
+        showStatus(words(err));
         if (err.code === 'network' || err.status >= 500) later(RETRY_MS);
       }
       return;
     }
-    if (status.textContent === WAITING) status.textContent = '';
+    if (status.textContent === WAITING) showStatus('');
     await follow(response, own);
   }
 
@@ -665,12 +820,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!alive) return;
       if (err.code === 'closed') closed();
       else if (err.status === 404 && err.code === 'not_found') gone();
-      else status.textContent = words(err);
+      else showStatus(words(err));
       return;
     }
     if (!alive) return;
     if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     feed.replaceChildren(...messages(page.items));
+    followups.clear();
+    const pending = pendingInputs.get(draftKey);
+    const lastUser = page.items?.findLast((m) => m.role === 'user');
+    if (pending && page.total > pending.beforeTotal && lastUser?.text === pending.value) acknowledgeInput();
     turn = null;
     start = Number.isInteger(page.start) ? page.start : 0;
     more.hidden = start <= 0;
@@ -685,7 +844,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function autosize() {
     text.style.height = 'auto';
-    if (text.value) text.style.height = `${text.scrollHeight}px`;
+    if (text.value) text.style.height = `${Math.min(text.scrollHeight, innerHeight * .25)}px`;
   }
 
   /** Выбор здесь действует в этом чате; умолчания учётки меняются в настройках. */
@@ -695,21 +854,62 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function submit() {
     const value = text.value;
-    if ((!value.trim() && !images.length) || running || sending || adding || resolving) return;
+    if ((!value.trim() && !images.length) || sending || adding || resolving || foreign || external) return;
+    if (running) {
+      if (!agent?.chat_control) {
+        showStatus('Обновите мост для отправки уточнений во время работы');
+        return;
+      }
+      const sentImages = images;
+      sending = true;
+      updateControls();
+      try {
+        const result = await api('POST', endpoint('/steer'), { text: value,
+          ...(sentImages.length ? { images: sentImages.map(({ mime, data }) => ({ mime, data })) } : {}) });
+        if (unsentFollowups.has(result.id)) return;
+        if (result.mode === 'queue' && !sentFollowups.has(result.id)) {
+          if (!queuedInputs.has(draftKey)) queuedInputs.set(draftKey, new Map());
+          queuedInputs.get(draftKey).set(result.id, { value, images: sentImages });
+        }
+        if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
+        images = images.filter((i) => !sentImages.includes(i));
+        keepImages();
+        if (alive) showStatus(result.mode === 'queue' ? 'Уточнение принято — будет выполнено после текущего ответа'
+          : 'Уточнение отправлено в текущее задание', false);
+      } catch (err) {
+        if (alive) {
+          if (err.code === 'closed') closed();
+          else {
+            if (err.code === 'owned') foreign = true;
+            showStatus(words(err));
+            if (err.code === 'idle' || err.code === 'conflict') openLive();
+          }
+        }
+      } finally {
+        sending = false;
+        if (alive) updateControls();
+      }
+      return;
+    }
     const sentImages = images;
     acted = Date.now();
     sending = true;
     attach.disabled = true;
     paintImages();
     send.disabled = true;
-    status.textContent = '';
+    showStatus('');
     const mine = messageNode({ role: 'user', text: value, images: sentImages });
+    pendingInputs.set(draftKey, { value, images: sentImages, mine });
     grow(() => feed.append(mine));
     text.value = '';             // черновик (drafts) остаётся до ответа: отказ и уход к PIN его не теряют
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
     try {
+      // Старое сообщение с таким же текстом не подтверждает принятие нового задания.
+      const before = await api('GET', endpoint(), undefined, { signal: own.signal });
+      const pending = pendingInputs.get(draftKey);
+      if (pending) pending.beforeTotal = before.total;
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null,
         ...(access.value ? { access: access.value } : {}),
@@ -717,28 +917,23 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
-      mine.remove();
-      if (!text.value) {
-        text.value = value;
-        autosize();
-      }
+      restoreInput();
       if (err.code === 'closed') closed();
       else if (err.code === 'offline') waitForComputer();
       else {
-        status.textContent = words(err);
+        showStatus(words(err));
         // ход уже идёт (другая вкладка, VS Code) или, может быть, начат (компьютер не ответил вовремя) — смотреть его
         if (err.code === 'running' || err.code === 'timeout') openLive();
       }
       return;
     } finally {
       sending = false;
-      send.disabled = running || adding || resolving;
+      updateControls();
       attach.disabled = adding || !agent?.images;
       paintImages();
     }
     // ход принят (ответ — поток, первое его событие — turn); набранное после — остаётся
-    if (drafts.get(draftKey) === value) drafts.delete(draftKey);
-    if (imageDrafts.get(draftKey) === sentImages) imageDrafts.delete(draftKey);
+    if (!agent?.chat_control) acknowledgeInput();
     images = images.filter((i) => !sentImages.includes(i));
     paintImages();
     if (!alive || document.visibilityState === 'hidden') {     // ушли, пока ход принимали: поток не читать
@@ -761,7 +956,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       more.hidden = start <= 0;
     } catch (err) {
       if (err.code === 'closed') closed();
-      else status.textContent = words(err);
+      else showStatus(words(err));
     } finally {
       more.disabled = false;
     }
@@ -773,23 +968,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       await api('POST', endpoint('/stop'));
     } catch (err) {
       if (err.code === 'closed') closed();
-      else if (err.code !== 'idle') status.textContent = words(err);     // idle — ход уже кончился
+      else if (err.code !== 'idle') showStatus(words(err));     // idle — ход уже кончился
     } finally {
-      stop.disabled = false;
+      updateControls();
     }
   });
 
-  closeChat.addEventListener('click', async () => {
-    closeChat.disabled = true;
-    try {
-      await api('PATCH', endpoint(), { state: 'closed' });
-      if (alive) closedChat();
-    } catch (err) {
-      closeChat.disabled = false;
-      if (err.code === 'closed') closed();
-      else status.textContent = words(err);
-    }
+  waitSession.addEventListener('click', () => {
+    waitingForRelease = true;
+    updateControls();
+    if (external) claimSession();
   });
+  takeSession.addEventListener('click', () => claimSession(external));
 
   model.addEventListener('change', remember);
   effort.addEventListener('change', remember);
@@ -814,11 +1004,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /* Ушли с экрана — поток долой: пока его нет, сервер шлёт push. Вернулись — live, снимок догонит. */
   function onVisibility() {
     if (document.visibilityState === 'hidden') {
+      clearTimeout(claimTimer);
       clearTimeout(retry);
       retry = null;
       if (!sending) drop();      // идущий «Отправить» обрывает сам, узнав, принят ли ход
     } else if (!sending) {
       acted = Date.now();
+      if (external && waitingForRelease) claimSession();
       openLive();
     }
   }
@@ -835,6 +1027,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);
       clearTimeout(paintTimer);
+      clearTimeout(claimTimer);
     },
   };
 }

@@ -29,6 +29,8 @@ OPS = {
     "history": ("project", "chat", "before", "limit"),
     "state": ("project", "chat", "model", "effort", "access"),
     "turn": ("project", "chat", "text", "model", "effort", "access"),
+    "steer": ("project", "chat", "text"),
+    "claim": ("project", "chat"),
     "watch": ("project", "chat"),
     "answer": ("project", "chat", "request_id"),
     "stop": ("project", "chat"),
@@ -77,7 +79,8 @@ class Agent:
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True, "chat_state": True}
+                 "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
+                 "chat_state": True, "chat_control": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -149,6 +152,9 @@ class Agent:
         if not self.open.touch(session):
             raise Refused("closed")
         if op not in OPS:
+            raise Refused("invalid")
+        if frame.get("window") is not None and not (
+                isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode"):
@@ -282,7 +288,26 @@ class Agent:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
                                      frame.get("model"), frame.get("effort"), images=images,
-                                     access=frame.get("access"))}
+                                     access=frame.get("access"), owner=frame.get("window"))}
+
+    async def _op_steer(self, frame, after):
+        images = frame.get("images", [])
+        await asyncio.to_thread(image_input.validate, images)
+        if not frame["text"].strip() and not images:
+            raise Refused("invalid", "уточнение пустое")
+        await self._project(frame)
+        return await self._runner(frame).steer(frame["project"], frame["chat"], frame["text"], images,
+                                               owner=frame.get("window"))
+
+    async def _op_claim(self, frame, after):
+        if frame.get("window") is None or type(frame.get("fork", False)) is not bool:
+            raise Refused("invalid")
+        project = await self._project(frame)
+        runner = self._runner(frame)
+        if frame.get("engine") == "codex":
+            return await runner.takeover(project, frame["project"], frame["chat"], frame["window"],
+                                         fork=frame.get("fork", False))
+        return runner.claim(frame["project"], frame["chat"], frame["window"])
 
     async def _op_watch(self, frame, after):
         """Хода нет (или он другого проекта) — `{"running": false}` без проверки чата (протокол §4); идёт — снимок
@@ -292,11 +317,13 @@ class Agent:
         return {"running": running}
 
     async def _op_answer(self, frame, after):
+        self._runner(frame).check_owner(frame["project"], frame["chat"], frame.get("window"))
         self._runner(frame).answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
                                    frame.get("message"), frame.get("answers"))
         return {}
 
     async def _op_stop(self, frame, after):
+        self._runner(frame).check_owner(frame["project"], frame["chat"], frame.get("window"))
         await self._runner(frame).stop(frame["project"], frame["chat"])
         return {}
 

@@ -19,6 +19,16 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.6.0 `hello.chat_control` объявляет `steer` и `claim`. `window` (32 hex) — id страницы:
+`_Turn.owner`, snapshot.owner и ownership; чужие steer/answer/stop получают `owned`, явный claim
+передаёт управление без прерывания. Codex использует `turn/steer` с threadId/expectedTurnId,
+Claude — query того же SDK-клиента и счёт результатов под input_lock; OpenCode ACP хранит ограниченную
+очередь и выполняет её последовательными session/prompt. Неисполненная очередь возвращается в done.unsent.
+Уточнения видны всем наблюдателям через followup и snapshot.followups; картинки в снимке не дублируются.
+Codex при отказе до отправки turn/start возвращает done.not_started, внешний writer — также code=writer_active.
+`takeover` на простое только проверяет resume/unsubscribe без генерации, writer освобождается в finally;
+явный fork копирует полную историю, сохраняет новый alias и оставляет внешний процесс работать.
+
 С 0.5.0 третий помощник — OpenCode (`engine: opencode`, необязательный `hello.opencode`).
 `opencode_rpc.py` находит настоящий exe, включая npm `@opencode/cli`, и запускает `opencode acp`
 по JSON-RPC/stdio без TCP. Используются установленные провайдеры и настройки CLI. `opencode.py` —

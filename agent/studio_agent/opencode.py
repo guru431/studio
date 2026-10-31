@@ -156,6 +156,13 @@ class _TurnClient:
 
 
 class OpenCodeRunner(Runner):
+    async def _steer_input(self, t, text, images, message_id):
+        size = sum(len(image["data"]) for _, _, shots in [*t.queued, (message_id, text, images)] for image in shots)
+        if size > limits.FRAME_MAX // 2:
+            raise Refused("busy", "Очередь изображений заполнена — дождитесь ответа")
+        t.queued.append((message_id, text, images))
+        return "queue"
+
     def __init__(self, emit, *, home, choices=None, find_cli=None, factory=opencode_rpc.Client):
         (home / "opencode").mkdir(parents=True, exist_ok=True)
         super().__init__(emit, choices=choices or store.Choices(home / "opencode"), cli_path=None)
@@ -356,6 +363,7 @@ class OpenCodeRunner(Runner):
             if text.strip():
                 content.insert(0, {"type": "text", "text": text})
             prompt = asyncio.create_task(rpc.request("session/prompt", {"sessionId": target, "prompt": content}, timeout=None))
+            self._accepted(t)
             marker = object()
             prompt.add_done_callback(lambda _: rpc.inbox.put_nowait(marker))
             while True:
@@ -364,7 +372,20 @@ class OpenCodeRunner(Runner):
                     result = await prompt
                     if result.get("stopReason") == "cancelled":
                         t.stopped = True
-                    break
+                    async with t.input_lock:
+                        if not t.queued or t.stopped or t.closing:
+                            t.finishing = True
+                            break
+                        message_id, extra_text, extra_images = t.queued.pop(0)
+                        content = [{"type": "text", "text": extra_text}] if extra_text.strip() else []
+                        content += [{"type": "image", "mimeType": i["mime"], "data": i["data"]} for i in extra_images]
+                        prompt = asyncio.create_task(rpc.request("session/prompt", {"sessionId": target, "prompt": content}, timeout=None))
+                        prompt.add_done_callback(lambda _: rpc.inbox.put_nowait(marker))
+                        for item in t.followups:
+                            if item["id"] == message_id:
+                                item["sent"] = True
+                        self._send(t, {"k": "followup_sent", "id": message_id})
+                    continue
                 if frame is None:
                     raise opencode_rpc.RpcError()
                 if "id" in frame:

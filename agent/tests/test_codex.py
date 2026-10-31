@@ -12,6 +12,7 @@ from studio_agent.turns import _Turn
 CHAT = "11111111-2222-4333-8444-555555555555"
 THREAD = "01999999-2222-7333-8444-555555555555"
 EPHEMERAL = "01999999-2222-7333-8444-666666666666"
+FORK = "01999999-2222-7333-8444-777777777777"
 
 
 class FakeRpc:
@@ -38,7 +39,7 @@ class FakeRpc:
             return {"thread": {"id": THREAD, "cwd": str(self.factory.project), "turns": self.factory.turns}}
         if method in ("thread/start", "thread/resume", "thread/fork"):
             ephemeral = params.get("ephemeral", False)
-            target = EPHEMERAL if ephemeral else THREAD
+            target = EPHEMERAL if ephemeral else FORK if method == "thread/fork" else THREAD
             if (writer := self.factory.writers.get(target)) is not None and writer is not self:
                 raise codex_rpc.RpcError(writer_active=True, method=method, code=-32600)
             self.factory.writers[target] = self
@@ -55,6 +56,8 @@ class FakeRpc:
                                   "params": {"threadId": THREAD, "turnId": "turn1", "itemId": "step1",
                                              "command": "git status", **self.factory.ask_params}})
             return {"turn": {"id": "turn1"}}
+        if method == "turn/steer":
+            return {"turnId": "turn1"}
         if method == "turn/interrupt":
             self.done("interrupted")
             return {}
@@ -326,7 +329,7 @@ async def test_missing_codex_finishes_without_using_claude(runner):
     runner.find_codex = lambda: None
     runner.start(runner.project, "a" * 16, CHAT, "Задание", None, None)
     await runner._turns[CHAT].task
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "error", "message": "Codex не найден на компьютере"}
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "error", "message": "Codex не найден на компьютере", "not_started": True}
     assert not runner.fake.calls
 
 

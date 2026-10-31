@@ -75,7 +75,7 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409}
+          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 IMAGE_MAX = 5 * 1024 * 1024
@@ -204,6 +204,11 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
     if "chat" in args:
+        window = request.headers.get("x-studio-window")
+        if window is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", window):
+                raise _refuse(422, "invalid", "неверный идентификатор окна")
+            args["window"] = window
         selected = chat_engine(request, aid, args["chat"])
         if selected != "claude":
             require_engine(aid, selected)
@@ -493,6 +498,15 @@ async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: boo
 
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/turn")
 async def turn(aid: int, pid: str, chat: str, request: Request):
+    return await _turn_input(aid, pid, chat, request, "turn")
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/steer")
+async def steer(aid: int, pid: str, chat: str, request: Request):
+    return await _turn_input(aid, pid, chat, request, "steer")
+
+
+async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
     сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
     own_agent(request, aid)
@@ -509,6 +523,8 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
         raise _refuse(422, "text", NO_TEXT)
     images = await asyncio.to_thread(_turn_images, body.images)
     link = bridge.LINKS.get(aid)
+    if op == "steer" and link is not None and not link.hello.get("chat_control"):
+        raise _refuse(409, "unsupported", "Обновите мост для отправки уточнений во время работы")
     engine = chat_engine(request, aid, chat)
     if engine != "claude":
         require_engine(aid, engine)
@@ -524,6 +540,9 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
             raise _refuse(422, "model", NO_MODEL)
         if body.effort is not None and body.effort not in catalog.get("efforts", ()):
             raise _refuse(422, "effort", NO_EFFORT)
+    if op == "steer":
+        return _relay(await ask(request, aid, "steer", project=pid, chat=chat, text=body.text,
+                                **({"images": images} if images else {})))
     q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
                              effort=body.effort, **({"access": body.access} if body.access is not None else {}),
                              **({"images": images} if images else {}))
@@ -531,6 +550,21 @@ async def turn(aid: int, pid: str, chat: str, request: Request):
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,
                   first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}))
+
+
+class Claim(BaseModel):
+    fork: bool = False
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/claim")
+async def claim(aid: int, pid: str, chat: str, body: Claim, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    link = bridge.LINKS.get(aid)
+    if link is not None and not link.hello.get("chat_control"):
+        raise _refuse(409, "unsupported", "Обновите мост для переноса управления сессией")
+    return _relay(await ask(request, aid, "claim", project=pid, chat=chat, fork=body.fork))
 
 
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}/live")
