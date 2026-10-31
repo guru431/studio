@@ -7,9 +7,10 @@ import logging
 import os
 import secrets
 import threading
+import uuid
 from pathlib import Path
 
-from . import codex_rpc, events, limits, permissions, sessions, store
+from . import codex_rpc, diffs, events, limits, permissions, sessions, store
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -101,19 +102,24 @@ def step_of(item):
         tool, data, text = item.get("tool", "Agent"), {"prompt": item.get("prompt", "")}, ""
     else:
         return None
-    return events.bound({"id": item["id"], "tool": tool, "input": events.clip(data),
-                         "text": events.clip(text), "error": item.get("status") in ("failed", "declined")})
+    step = {"id": item["id"], "tool": tool, "input": events.clip(data),
+            "text": events.clip(text), "error": item.get("status") in ("failed", "declined")}
+    if kind == "fileChange" and item.get("status") == "completed":
+        if changes := diffs.codex(item.get("changes")):
+            step["changes"] = changes
+    return events.bound(step)
 
 
 def normalize(turns):
     out = []
     for turn in turns:
         answer = None
-        for item in turn.get("items", []):
+        for item_index, item in enumerate(turn.get("items", [])):
             if item.get("type") == "userMessage":
                 text = "\n".join(c.get("text", "[изображение]") for c in item.get("content", [])
                                  if isinstance(c, dict) and c.get("type") in ("text", "image", "localImage"))
-                out.append({"id": item["id"], "role": "user", "text": text, "steps": [], "time": None})
+                out.append({"id": item["id"], "role": "user", "text": text, "steps": [], "time": None,
+                            **({"forkable": False} if item_index else {})})
                 answer = None
                 continue
             step = step_of(item)
@@ -334,6 +340,75 @@ class CodexRunner(Runner):
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end])
         return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
 
+    async def fork_chat(self, project, chat, before=None):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
+        if not same_project(source.get("cwd"), project):
+            raise Refused("not_found")
+        turns = source.get("turns", [])
+        if any(turn.get("status") == "inProgress" for turn in turns):
+            raise Refused("running", "Дождитесь завершения исходной сессии")
+        draft, last_turn = "", None
+        if before is not None:
+            selected = next(((index, item_index, item) for index, turn in enumerate(turns)
+                             for item_index, item in enumerate(turn.get("items", []))
+                             if item.get("type") == "userMessage" and item.get("id") == before), None)
+            if selected is None:
+                raise Refused("invalid", "Точка ветвления отсутствует в истории")
+            index, item_index, item = selected
+            if item_index:
+                raise Refused("unsupported", "Codex поддерживает ветвление по началу хода; выберите его первое сообщение")
+            draft = "\n".join(block.get("text", "") for block in item.get("content", []) if block.get("type") == "text")[:100_000]
+            if index == 0:
+                return {"chat": str(uuid.uuid4()), "draft": draft}
+            last_turn = turns[index - 1]["id"]
+        result = await self._metadata(project, "thread/fork", {"threadId": target, "cwd": str(project),
+                                      **({"lastTurnId": last_turn} if last_turn is not None else {})})
+        fork = result.get("thread", {})
+        tid = fork.get("id")
+        try:
+            if not isinstance(tid, str) or not limits.CHAT_ID.fullmatch(tid) or tid == target or not same_project(fork.get("cwd"), project):
+                raise Refused("unsupported", "Codex не создал независимую ветку")
+            # Старый CLI может проигнорировать неизвестный lastTurnId: проверяем реальный результат.
+            if last_turn is not None:
+                copied = (await self._metadata(project, "thread/read", {"threadId": tid, "includeTurns": True})).get("thread", {})
+                if [turn.get("id") for turn in copied.get("turns", [])] != [turn.get("id") for turn in turns[:index]]:
+                    raise Refused("unsupported", "Обновите Codex: ветвление до выбранного сообщения не поддерживается")
+            chat_id = str(uuid.uuid4())
+            await asyncio.to_thread(self.aliases.put, project, chat_id, tid)
+            return {"chat": chat_id, "draft": draft}
+        finally:
+            if isinstance(tid, str) and tid != target:
+                with contextlib.suppress(Exception):
+                    await self._metadata(project, "thread/unsubscribe", {"threadId": tid})
+
+    async def subagents(self, project, chat):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
+        if not same_project(source.get("cwd"), project):
+            raise Refused("not_found")
+        children = {}
+        for turn in source.get("turns", []):
+            for item in turn.get("items", []):
+                if item.get("type") != "collabAgentToolCall":
+                    continue
+                for child in item.get("receiverThreadIds", []):
+                    if isinstance(child, str) and limits.CHAT_ID.fullmatch(child) and child != target:
+                        state = item.get("agentsStates", {}).get(child, {})
+                        children[child] = {"id": child, "title": f"Агент {child[:8]}",
+                                           "status": str(state.get("status", "unknown"))[:40]}
+        return {"items": list(children.values())[:50]}
+
+    async def subagent_history(self, project, chat, child):
+        if child not in {row["id"] for row in (await self.subagents(project, chat))["items"]}:
+            raise Refused("not_found", "Подзадача не принадлежит этому чату")
+        data = (await self._metadata(project, "thread/read", {"threadId": child, "includeTurns": True})).get("thread", {})
+        if not same_project(data.get("cwd"), project):
+            raise Refused("not_found")
+        items = await asyncio.to_thread(normalize, data.get("turns", []))
+        page = await asyncio.to_thread(sessions.fit, items)
+        return {"items": page, "complete": len(page) == len(items)}
+
     async def state(self, project, chat, model=None, effort=None, access=None):
         saved = await asyncio.to_thread(self.choices.details, chat)
         model, effort, access = model or saved.get("model"), effort or saved.get("effort"), access or saved.get("access")
@@ -459,11 +534,23 @@ class CodexRunner(Runner):
                 if p.get("threadId") != target:
                     continue
                 if frame.get("method") == "turn/completed":
+                    if p.get("turn", {}).get("id") != client.turn:
+                        continue
+                    if p.get("turn", {}).get("status") == "completed":
+                        await self._wait_queue(t)
                     async with t.input_lock:
-                        t.finishing = True
                         result = p.get("turn", {})
                         if result.get("status") == "failed":
                             failure = "Codex: " + events.clip((result.get("error") or {}).get("message", "ошибка хода"), 280)
+                        if t.queued and result.get("status") == "completed" and not (t.stopped or t.closing):
+                            message_id, extra_text, extra_images = t.queued[0]
+                            content = [{"type": "text", "text": extra_text}] if extra_text.strip() else []
+                            content += [{"type": "image", "url": f"data:{i['mime']};base64,{i['data']}"} for i in extra_images]
+                            next_turn = await rpc.request("turn/start", {**params, "input": content})
+                            client.turn = next_turn["turn"]["id"]
+                            self._queued_sent(t, message_id)
+                            continue
+                        t.finishing = True
                     break
                 self._notification(t, frame["method"], p)
         except asyncio.CancelledError:
@@ -523,7 +610,8 @@ class CodexRunner(Runner):
             else:
                 old.update(step)
             if method == "item/completed":
-                self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"]})
+                self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"],
+                               **({"changes": step["changes"]} if step.get("changes") else {})})
                 self._activity(t, "thinking")
             else:
                 self._activity(t, "tool", step["tool"])

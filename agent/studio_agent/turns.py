@@ -92,6 +92,9 @@ class _Turn:
     pending: int = 1
     followups: list = field(default_factory=list)
     queued: list = field(default_factory=list)
+    queue_meta: dict = field(default_factory=dict)
+    queue_paused: bool = False
+    queue_wake: asyncio.Event = field(default_factory=asyncio.Event)
     attachments: list = field(default_factory=list)
     files: attachment_input.Files = field(default_factory=attachment_input.Files)
 
@@ -144,7 +147,7 @@ class Runner:
             self._send(t, {"k": "ownership", "owner": owner})
         return {}
 
-    async def steer(self, pid, chat, text, images, *, owner=None, attachments=None):
+    async def steer(self, pid, chat, text, images, *, owner=None, attachments=None, mode="steer"):
         t = self._turn(pid, chat)
         if t is None:
             raise Refused("idle")
@@ -152,6 +155,8 @@ class Runner:
             self.check_owner(pid, chat, owner)
             if t.finishing or t.stopped or t.closing:
                 raise Refused("idle")
+            if t.queue_paused:
+                raise Refused("busy", "Сначала завершите редактирование очереди")
             if not t.accepted:
                 raise Refused("busy", "Задание ещё запускается — отправьте уточнение через несколько секунд")
             if len(t.followups) >= 20:
@@ -160,14 +165,98 @@ class Runner:
                 raise Refused("busy", "Уточнения заполнили текущий ход — дождитесь ответа")
             message_id = secrets.token_hex(8)
             prompt = await self._attachment_text(t, text, attachments or [])
-            mode = await self._steer_input(t, prompt, images, message_id)
+            if mode not in ("steer", "queue"):
+                raise Refused("invalid")
+            mode = self._queue_input(t, prompt, images, message_id) if mode == "queue" else await self._steer_input(t, prompt, images, message_id)
+            if mode == "queue":
+                t.queue_meta[message_id] = {"suffix": prompt[len(text):], "version": 1,
+                                           "text": text, "images": len(images), "attachments": len(attachments or [])}
             # В снимке нет повторных мегабайт картинок; оригиналы уже принял CLI.
             item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else "") +
                     (f"\n[Вложений: {len(attachments)}]" if attachments else ""),
                     "mode": mode}
             t.followups.append(item)
-            self._send(t, {"k": "followup", **item})
+            self._send(t, {"k": "followup", **item,
+                           **({"version": 1, "input_text": text} if mode == "queue" else {})})
             return {"mode": mode, "id": message_id}
+
+    def _queue_input(self, t, text, images, message_id):
+        size = sum(len(image["data"]) * 3 // 4 - (2 if image["data"].endswith("==") else 1 if image["data"].endswith("=") else 0)
+                   for _, _, shots in [*t.queued, (message_id, text, images)] for image in shots)
+        if size > limits.IMAGES_MAX:
+            raise Refused("too_large", "Вложения заполнили очередь — дождитесь выполнения заданий")
+        t.queued.append((message_id, text, images))
+        return "queue"
+
+    @staticmethod
+    def _queue_state(t):
+        pending = {row[0] for row in t.queued}
+        return [{**item, "version": t.queue_meta.get(item["id"], {}).get("version", 1),
+                 "input_text": t.queue_meta.get(item["id"], {}).get("text", item["text"])}
+                for item in t.followups if item["id"] in pending]
+
+    def _queued_sent(self, t, message_id):
+        t.queued = [row for row in t.queued if row[0] != message_id]
+        t.queue_meta.pop(message_id, None)
+        for item in t.followups:
+            if item["id"] == message_id:
+                item["sent"] = True
+        self._send(t, {"k": "followup_sent", "id": message_id})
+
+    async def pause_queue(self, pid, chat, paused, *, owner=None):
+        t = self._turn(pid, chat)
+        if t is None:
+            raise Refused("gone", "Очередь уже выполнена")
+        async with t.input_lock:
+            self.check_owner(pid, chat, owner)
+            if not t.queued or t.stopped or t.closing or t.finishing:
+                raise Refused("gone", "Очередь уже выполнена")
+            t.queue_paused = paused
+            if not paused:
+                t.queue_wake.set()
+            result = {"items": self._queue_state(t), "paused": paused}
+            self._send(t, {"k": "queue", **result})
+            return result
+
+    async def _wait_queue(self, t):
+        while t.queue_paused and t.queued and not (t.stopped or t.closing):
+            t.queue_wake.clear()
+            await t.queue_wake.wait()
+
+    async def edit_queue(self, pid, chat, message_id, version, text, *, owner=None):
+        t = self._turn(pid, chat)
+        if t is None:
+            raise Refused("gone", "Сообщение уже передано помощнику или задание завершилось")
+        async with t.input_lock:
+            self.check_owner(pid, chat, owner)
+            queued = next((row for row in t.queued if row[0] == message_id), None)
+            if queued is None or t.finishing or t.stopped or t.closing:
+                raise Refused("gone", "Сообщение уже передано помощнику или задание завершилось")
+            meta = t.queue_meta.get(message_id, {"version": 1, "suffix": ""})
+            if version != meta["version"]:
+                raise Refused("conflict", "Очередь изменена в другом окне — обновите её")
+            item = next(row for row in t.followups if row["id"] == message_id)
+            if text is None:
+                t.queued.remove(queued)
+                t.followups.remove(item)
+                t.queue_meta.pop(message_id, None)
+                if not t.queued:
+                    t.queue_wake.set()
+                self._send(t, {"k": "followup_removed", "id": message_id})
+            else:
+                if not text.strip() and not meta.get("images") and not meta.get("attachments"):
+                    raise Refused("invalid", "Задание пустое; используйте удаление сообщения")
+                if len(json.dumps(t.followups, ensure_ascii=True)) - len(json.dumps(item["text"], ensure_ascii=True)) + len(json.dumps(text, ensure_ascii=True)) > limits.HISTORY_BUDGET // 4:
+                    raise Refused("too_large", "Текст заполнил очередь — сократите сообщение")
+                t.queued[t.queued.index(queued)] = (message_id, text + meta["suffix"], queued[2])
+                meta["version"] += 1
+                meta["text"] = text
+                t.queue_meta[message_id] = meta
+                item["text"] = text + (f"\n[Изображений: {meta['images']}]" if meta.get("images") else "") + (
+                    f"\n[Вложений: {meta['attachments']}]" if meta.get("attachments") else "")
+            current = self._queue_state(t)
+            self._send(t, {"k": "queue", "items": current, "paused": t.queue_paused})
+            return {"items": current, "paused": t.queue_paused}
 
     async def _steer_input(self, t, text, images, message_id):
         await t.client.query(image_input.prompt(text, images) if images else text)
@@ -236,13 +325,15 @@ class Runner:
     @classmethod
     def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict]) -> events.Ready:
         """В потоке: снимок в пределах `HISTORY_BUDGET` и его ASCII-JSON."""
-        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(t.followups, ensure_ascii=True))
+        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(t.followups, ensure_ascii=True)) - len(json.dumps(cls._queue_state(t), ensure_ascii=True))
         body = sessions.fit([{"text": text, "steps": steps}], room)[0]
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
                                            "asks": asks, **({"context": t.context} if t.context else {}),
                                            **({"settings": t.settings} if t.settings else {}),
                                            **({"activity": t.activity} if t.activity else {}),
                                            **({"owner": t.owner, "accepted": t.accepted} if t.owner else {}),
+                                           **({"queue": cls._queue_state(t)} if t.queued else {}),
+                                           **({"queue_paused": True} if t.queue_paused else {}),
                                            **({"followups": list(t.followups)} if t.followups else {})}))
 
     def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
@@ -372,6 +463,13 @@ class Runner:
                                 if message.is_error:
                                     failure = _words(message.errors, message.result, message.subtype)
                                     t.pending = 0
+                            if not t.pending and failure is None:
+                                await self._wait_queue(t)
+                            async with t.input_lock:
+                                if not t.pending and t.queued and failure is None and not (t.stopped or t.closing):
+                                    message_id, extra_text, extra_images = t.queued[0]
+                                    await self._steer_input(t, extra_text, extra_images, message_id)
+                                    self._queued_sent(t, message_id)
                                 if not t.pending:
                                     t.finishing = True
                             await self._usage(t, model, effort)
@@ -467,6 +565,7 @@ class Runner:
     async def _halt(self, t: _Turn) -> bool:
         """Карточки — отказ, клиенту — `interrupt()`; `False` — interrupt упал или не успел за `INTERRUPT_SEC`."""
         self._deny_all(t)
+        t.queue_wake.set()
         if t.client is None:
             return True  # клиента ещё нет: ход сверит `stopped` до запуска
         try:

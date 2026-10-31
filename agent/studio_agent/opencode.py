@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import events, limits, opencode_rpc, permissions, sessions, store
+from . import diffs, events, limits, opencode_rpc, permissions, sessions, store
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
@@ -95,6 +95,8 @@ def step_of(update, previous=None):
         step["input"] = events.clip(update["rawInput"])
     if "content" in update:
         chunks = []
+        if changes := diffs.acp(update["content"]):
+            step["changes"] = changes
         for item in update.get("content", []):
             if item.get("type") == "content":
                 chunks.append(text_of(item.get("content")))
@@ -157,11 +159,7 @@ class _TurnClient:
 
 class OpenCodeRunner(Runner):
     async def _steer_input(self, t, text, images, message_id):
-        size = sum(len(image["data"]) for _, _, shots in [*t.queued, (message_id, text, images)] for image in shots)
-        if size > limits.FRAME_MAX // 2:
-            raise Refused("busy", "Очередь изображений заполнена — дождитесь ответа")
-        t.queued.append((message_id, text, images))
-        return "queue"
+        return self._queue_input(t, text, images, message_id)
 
     def __init__(self, emit, *, home, choices=None, find_cli=None, factory=opencode_rpc.Client):
         (home / "opencode").mkdir(parents=True, exist_ok=True)
@@ -375,19 +373,18 @@ class OpenCodeRunner(Runner):
                     result = await prompt
                     if result.get("stopReason") == "cancelled":
                         t.stopped = True
+                    if not t.stopped:
+                        await self._wait_queue(t)
                     async with t.input_lock:
                         if not t.queued or t.stopped or t.closing:
                             t.finishing = True
                             break
-                        message_id, extra_text, extra_images = t.queued.pop(0)
+                        message_id, extra_text, extra_images = t.queued[0]
                         content = [{"type": "text", "text": extra_text}] if extra_text.strip() else []
                         content += [{"type": "image", "mimeType": i["mime"], "data": i["data"]} for i in extra_images]
                         prompt = asyncio.create_task(rpc.request("session/prompt", {"sessionId": target, "prompt": content}, timeout=None))
                         prompt.add_done_callback(lambda _: rpc.inbox.put_nowait(marker))
-                        for item in t.followups:
-                            if item["id"] == message_id:
-                                item["sent"] = True
-                        self._send(t, {"k": "followup_sent", "id": message_id})
+                        self._queued_sent(t, message_id)
                     continue
                 if frame is None:
                     raise opencode_rpc.RpcError()
@@ -435,7 +432,8 @@ class OpenCodeRunner(Runner):
             else:
                 old.update(step)
             if update.get("status") in ("completed", "failed"):
-                self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"]})
+                self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"],
+                               **({"changes": step["changes"]} if step.get("changes") and not step["error"] else {})})
                 self._activity(t, "thinking")
             else:
                 self._activity(t, "tool", step["tool"])

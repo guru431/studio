@@ -114,6 +114,47 @@ def runner(home):
     return runner
 
 
+async def test_native_fork_releases_only_its_own_writer(runner):
+    runner.fake.exists = True
+    result = await runner.fork_chat(runner.project, THREAD)
+    assert result["chat"] != THREAD and result["draft"] == ""
+    assert runner.aliases.target(runner.project, result["chat"]) == FORK
+    assert FORK not in runner.fake.writers
+    assert ("thread/unsubscribe", {"threadId": FORK}) in runner.fake.calls
+    assert not any(method == "thread/resume" for method, _ in runner.fake.calls)
+
+
+async def test_fork_before_selected_user_turn_verifies_cutoff(runner, monkeypatch):
+    runner.fake.exists = True
+    runner.fake.turns = [
+        {"id": "turn-one", "status": "completed", "items": [{"id": "user-one", "type": "userMessage", "content": [{"type": "text", "text": "one"}]}]},
+        {"id": "turn-two", "status": "completed", "items": [{"id": "user-two", "type": "userMessage", "content": [{"type": "text", "text": "two"}]}]}]
+    original = FakeRpc.request
+
+    async def request(self, method, params):
+        if method == "thread/read" and params["threadId"] == FORK:
+            return {"thread": {"cwd": str(runner.project), "turns": runner.fake.turns[:1]}}
+        return await original(self, method, params)
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    result = await runner.fork_chat(runner.project, THREAD, "user-two")
+    assert result["draft"] == "two"
+    assert any(method == "thread/fork" and params.get("lastTurnId") == "turn-one" for method, params in runner.fake.calls)
+    assert FORK not in runner.fake.writers
+    assert len(runner.fake.turns) == 2
+
+
+async def test_codex_cannot_silently_drop_messages_before_a_mid_turn_fork(runner):
+    runner.fake.exists = True
+    runner.fake.turns = [{"id": "turn-one", "items": [
+        {"id": "first", "type": "userMessage", "content": [{"type": "text", "text": "first"}]},
+        {"id": "steered", "type": "userMessage", "content": [{"type": "text", "text": "steered"}]}]}]
+    with pytest.raises(Refused, match="unsupported"):
+        await runner.fork_chat(runner.project, THREAD, "steered")
+    assert not any(method == "thread/fork" for method, _ in runner.fake.calls)
+    assert codex.normalize(runner.fake.turns)[1]["forkable"] is False
+
+
 async def asking(runner):
     if not any(t.asks for t in runner._turns.values()):
         ready, previous = asyncio.Event(), runner.emit
@@ -129,6 +170,33 @@ async def asking(runner):
         finally:
             runner.emit = previous
     return next(iter(next(iter(runner._turns.values())).asks))
+
+
+async def test_codex_queue_starts_a_new_turn_after_completion(runner):
+    pid = projects.pid(runner.project.name)
+    delivered = asyncio.Event()
+    original_emit = runner.emit
+
+    def emit(frame):
+        original_emit(frame)
+        if frame["e"]["k"] == "followup_sent":
+            delivered.set()
+
+    runner.emit = emit
+    runner.start(runner.project, pid, CHAT, "first", None, None)
+    task = runner._turns[CHAT].task
+    first = await asking(runner)
+    queued = await runner.steer(pid, CHAT, "second", [], mode="queue")
+    await runner.edit_queue(pid, CHAT, queued["id"], 1, "corrected")
+    assert len([1 for method, _ in runner.fake.calls if method == "turn/start"]) == 1
+    runner.answer(pid, CHAT, first, "allow", None, None)
+    await asyncio.wait_for(delivered.wait(), 2)
+    second = await asking(runner)
+    runner.answer(pid, CHAT, second, "allow", None, None)
+    await task
+    starts = [params for method, params in runner.fake.calls if method == "turn/start"]
+    assert len(starts) == 2 and starts[1]["input"] == [{"type": "text", "text": "corrected"}]
+    assert runner.sent[-1]["e"]["status"] == "done"
 
 
 async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):

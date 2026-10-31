@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, cli, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subscription
+from . import attachments, branches, cli, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -33,12 +33,21 @@ OPS = {
     "state": ("project", "chat", "model", "effort", "access"),
     "turn": ("project", "chat", "text", "model", "effort", "access"),
     "steer": ("project", "chat", "text"),
+    "queue_edit": ("project", "chat", "request_id", "version"),
+    "queue_pause": ("project", "chat"),
     "claim": ("project", "chat"),
     "watch": ("project", "chat"),
     "answer": ("project", "chat", "request_id"),
     "stop": ("project", "chat"),
     "files": ("project", "path"),
     "file_stats": ("project", "path"),
+    "file_suggestions": ("project", "query"),
+    "chat_search": ("project", "query"),
+    "chat_fork": ("project", "chat", "message_id"),
+    "subagents": ("project", "chat"),
+    "subagent_history": ("project", "chat", "request_id"),
+    "worktrees": ("project",),
+    "worktree_create": ("project", "query"),
     "read": ("project", "path"),
     "raw": ("project", "path"),
     "save": ("project", "path", "text", "version"),
@@ -80,6 +89,8 @@ class Agent:
         self._open_lock = asyncio.Lock()
         self._usage = subscription.UsageCache(now=now)
         self._file_stats_lock = asyncio.Lock()
+        self._search_lock = asyncio.Lock()
+        self._file_index = discovery.FileIndex()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
     def hello(self) -> dict:
@@ -87,7 +98,9 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
-                 "subscription_usage": True, "project_summary": True, "file_stats": True}
+                 "subscription_usage": True, "project_summary": True, "file_stats": True,
+                 "file_suggestions": True, "chat_search": True, "queue_edit": True,
+                 "chat_fork": True, "subagents": True, "worktrees": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -188,6 +201,10 @@ class Agent:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
         if name == "refresh":
             return value is None or type(value) is bool
+        if name == "query":
+            return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
+        if name == "message_id":
+            return value is None or isinstance(value, str) and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value)
         if name == "project":
             return isinstance(value, str) and ID.fullmatch(value) is not None
         if name == "chat":
@@ -206,6 +223,8 @@ class Agent:
             return value is None or isinstance(value, str) and value in (
                 *permissions.CLAUDE, *permissions.CODEX, *permissions.OPENCODE)
         if name == "version":
+            if op == "queue_edit":
+                return type(value) is int and value >= 1
             return isinstance(value, str) and VERSION.fullmatch(value) is not None
         if name == "request_id":
             return isinstance(value, str) and REQUEST_ID.fullmatch(value) is not None
@@ -262,6 +281,84 @@ class Agent:
 
     async def _op_project_summary(self, frame, after):
         return await asyncio.to_thread(project_summary.read, await self._project(frame))
+
+    async def _op_file_suggestions(self, frame, after):
+        return await self._file_index.read(await self._project(frame), frame["query"])
+
+    async def _op_worktrees(self, frame, after):
+        return await asyncio.to_thread(worktrees.list_worktrees, await self._project(frame), self.cfg.projects_root)
+
+    async def _op_worktree_create(self, frame, after):
+        return await asyncio.to_thread(worktrees.create, await self._project(frame), self.cfg.projects_root, frame["query"])
+
+    async def _op_chat_fork(self, frame, after):
+        project = await self._project(frame)
+        runner = self._runner(frame)
+        if runner._turn(frame["project"], frame["chat"]) is not None:
+            raise Refused("running", "Дождитесь завершения задания перед ветвлением")
+        engine = frame.get("engine", "claude")
+        if engine == "opencode":
+            raise Refused("unsupported", "OpenCode ACP не предоставляет ветвление истории")
+        if engine == "codex":
+            result = await runner.fork_chat(project, frame["chat"], frame.get("message_id"))
+        else:
+            result = await asyncio.to_thread(branches.claude, project, frame["chat"], frame.get("message_id"))
+        saved = await asyncio.to_thread(runner.choices.details, frame["chat"])
+        copied = {key: value for key, value in saved.items() if key in ("model", "effort", "access")}
+        if engine == "claude" and not copied.get("model"):
+            copied["model"] = await asyncio.to_thread(sessions.last_model, project, frame["chat"])
+        await asyncio.to_thread(runner.choices.update, result["chat"], **copied)
+        return {**result, "engine": engine}
+
+    async def _op_subagents(self, frame, after):
+        project = await self._project(frame)
+        if frame.get("engine") == "codex":
+            return await self.codex.subagents(project, frame["chat"])
+        if frame.get("engine") == "opencode":
+            raise Refused("unsupported", "OpenCode ACP не предоставляет историю дочерних агентов")
+        return await asyncio.to_thread(subagents.list_children, project, frame["chat"])
+
+    async def _op_subagent_history(self, frame, after):
+        project = await self._project(frame)
+        if frame.get("engine") == "codex":
+            return await self.codex.subagent_history(project, frame["chat"], frame["request_id"])
+        if frame.get("engine") == "opencode":
+            raise Refused("unsupported")
+        return await asyncio.to_thread(subagents.history, project, frame["chat"], frame["request_id"])
+
+    async def _op_chat_search(self, frame, after):
+        project = await self._project(frame)
+        if not frame["query"].strip():
+            return {"items": [], "complete": True, "scanned": 0}
+        if self._search_lock.locked():
+            raise Refused("busy", "Предыдущий поиск ещё выполняется")
+        async with self._search_lock:
+            try:
+                async with asyncio.timeout(discovery.SEARCH_SECONDS + 1):
+                    deadline = time.monotonic() + discovery.SEARCH_SECONDS
+                    catalog, complete = [], True
+                    try:
+                        catalog += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()), 4)
+                    except Exception:
+                        complete = False
+                    for name in ("codex", "opencode"):
+                        backend = getattr(self, name)
+                        if backend is not None and backend.catalog is not None:
+                            try:
+                                catalog += await asyncio.wait_for(backend.chats(project), min(4, max(.1, deadline - time.monotonic())))
+                            except Exception:
+                                complete = False
+
+                    async def history(row, before):
+                        return await self._op_history({**frame, "chat": row["chat"],
+                            "engine": row.get("engine", "claude"), "before": before, "limit": 100}, [])
+
+                    result = await discovery.search(frame["query"], catalog, history,
+                                                    timeout=max(.1, deadline - time.monotonic()))
+                    result["complete"] = result["complete"] and complete
+                    return result
+            except TimeoutError:
+                return {"items": [], "complete": False, "scanned": 0}
 
     async def _op_activity(self, frame, after):
         items = []
@@ -326,7 +423,23 @@ class Agent:
         await self._project(frame)
         return await self._runner(frame).steer(frame["project"], frame["chat"], frame["text"], images,
                                                **({"attachments": items} if items else {}),
+                                               **({"mode": frame["mode"]} if "mode" in frame else {}),
                                                owner=frame.get("window"))
+
+    async def _op_queue_edit(self, frame, after):
+        text = frame.get("text")
+        if "text" not in frame or text is not None and (not isinstance(text, str) or len(text) > TURN_TEXT_MAX):
+            raise Refused("invalid")
+        await self._project(frame)
+        return await self._runner(frame).edit_queue(frame["project"], frame["chat"], frame["request_id"],
+                                                     frame["version"], text, owner=frame.get("window"))
+
+    async def _op_queue_pause(self, frame, after):
+        if type(frame.get("paused")) is not bool:
+            raise Refused("invalid")
+        await self._project(frame)
+        return await self._runner(frame).pause_queue(frame["project"], frame["chat"], frame["paused"],
+                                                      owner=frame.get("window"))
 
     async def _op_claim(self, frame, after):
         if frame.get("window") is None or type(frame.get("fork", False)) is not bool:

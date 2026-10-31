@@ -532,7 +532,10 @@ function sessions(mine, p, status) {
   const listing = chatsOf(p, true);
   view = sessionList(picker, { aid: p.aid, pid: p.pid, items: p.loaded ? p.items : listing,
     refresh: p.loaded ? listing : null, exclude: new Set(tabsOf(p.aid, p.pid).tabs),
-    picked: (chat) => toChat(p, chat),
+    picked: (chat, row) => { if (row) p.info.set(chat, row); toChat(p, chat); },
+    contentSearch: !!p.chatSearch,
+    worktrees: !!p.worktrees,
+    worktreeOpened: async () => { lists.delete(String(p.aid)); await panel.select(p.aid); },
     created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
@@ -561,6 +564,11 @@ async function chat(mine, p, id, agent, section, status) {
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
     git: p.repo, gitAction,
     taskDone: () => { p.repo.refresh(true); panel.updateSummary(p.aid, p.pid); },
+    forked: (data) => {
+      p.info.set(data.chat, { chat: data.chat, engine: data.engine, origin: 'studio' });
+      p.listing = null;
+      toChat(p, data.chat);
+    },
     closed: () => failed({ code: 'closed' }, p.aid, null),
     gone: () => closeTab(p, id),
     openFile: (path) => {
@@ -614,6 +622,8 @@ async function project(mine, aid, pid, id, key, path, status) {
   const agent = await agentOf(aid);
   if (mine !== gen) return;
   p.codex = agent?.codex || null;
+  p.chatSearch = !!agent?.chat_search;
+  p.worktrees = !!agent?.worktrees;
   p.opencode = agent?.opencode || null;
   p.canStart = false;
   if (agent && id) {
