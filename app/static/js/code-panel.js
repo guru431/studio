@@ -2,8 +2,9 @@
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
  *
  * panelView(host, { selected, opened, chose, list, openJournal }) → { select, pin, here, refresh, agents, unmount }:
- * - компьютеры — GET /api/agents (без моста): точка «на связи» (слова — для чтения с экрана), имя, «PIN»; версия Claude
- *   Code — подсказкой; agents() — последний список (обещание, пока показан раздел; не прочитался — null);
+ * - компьютеры — GET /api/agents (без моста): точка «на связи» (слова — для чтения с экрана), имя, версия моста,
+ *   обновление, сведения и рабочий стол; версия Claude Code — подсказкой; agents() — последний список
+ *   (обещание, пока показан раздел; не прочитался — null);
  * - показ компьютера (вход в раздел — selected, иначе первый; нажатие на имя): не на связи — p#code-offline, запросов
  *   нет; на связи — GET …/projects, только closed ведёт к POST …/open {pin: null}: 204 — его проекты,
  *   409 pin_needed — поле PIN (#code-pin: не <form> и не password — менеджеры паролей не предложат
@@ -393,9 +394,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
         el('span', { class: 'sr' }, agent.online ? 'на связи' : 'не на связи')),
       el('span', { class: 'code-agent-name' }, agent.name),
+      agent.has_pin ? el('span', { class: 'sr' }, 'защищён PIN') : null,
       el('span', { class: 'code-agent-version', title: agent.agent_version
-        ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'),
-      agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null);
+        ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'));
       row.addEventListener('click', () => { infoIntent = null; select(agent.id); });
       const info = el('button', { type: 'button', class: 'btn code-agent-info',
         title: 'Сведения о компьютере', 'aria-label': `Сведения о компьютере · ${agent.name}`, 'aria-haspopup': 'dialog' },
@@ -407,26 +408,22 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const automatic = agent.online && agent.agent_update && available;
       const button = automatic || busy
         ? el('button', { type: 'button', class: 'btn code-agent-update', title: `Обновить агент до ${agent.latest_version}`,
-          'aria-label': `Обновить агент · ${agent.name}`, disabled: busy }, el('span', { 'aria-hidden': 'true' }, '↥'))
+          'aria-label': `Обновить агент · ${agent.name}`, disabled: busy })
         : el('a', { class: 'btn code-agent-update', href: '/api/agent/download', download: 'studio-agent-setup.exe',
           title: `Скачать установщик Studio Agent${agent.latest_version ? ' ' + agent.latest_version : ''} для Windows`,
-          'aria-label': `Скачать установщик агента · ${agent.name}` }, el('span', { 'aria-hidden': 'true' }, '↓'));
+          'aria-label': `Скачать установщик агента · ${agent.name}` });
+      button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9"/></svg>';
+      if (available) button.classList.add('has-update');
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
       const note = update && update.state !== 'complete'
         ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
         role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
-      const releaseText = !agent.latest_version ? 'Версия обновления пока неизвестна'
-        : available ? `Доступно обновление до ${agent.latest_version}`
-          : !agent.agent_version ? `Доступна версия ${agent.latest_version}` : '';
-      const releaseNote = releaseText || !agent.agent_update
-        ? el('span', { class: 'code-agent-update-status', role: 'status' }, releaseText,
-          ...(!agent.agent_update ? [releaseText ? ' · ' : '', el('a', { href: '/api/agent/download', download: 'studio-agent-setup.exe',
-            title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент')] : [])) : null;
       const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
-        title: 'Рабочий стол', 'aria-label': `Рабочий стол · ${agent.name}` },
-        el('span', { 'aria-hidden': 'true' }, '▣'));
+        title: 'Подключиться к рабочему столу', 'aria-label': `Подключиться к рабочему столу · ${agent.name}`,
+        'aria-haspopup': 'dialog' });
+      remote.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2m9 4v3m-4 0h8M2 9h11m-4-4 4 4-4 4"/></svg>';
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, info, remote, button, note || releaseNote);
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, info, remote, note);
     }));
   }
 
