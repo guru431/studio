@@ -33,6 +33,21 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+С 0.12.0 `hello.desktop: true` объявляет пульт рабочего стола, `app/desktop.py` и
+`code-desktop.js/css`. Разрешение `Config.desktop_enabled` по умолчанию false; только локальный
+Checkbutton окна вызывает `Controller.set_desktop_enabled`, атомарно сохраняет bool и применяет без
+переподключения. Выбор сохраняется при перезапуске. У HTTP/протокола/CLI нет изменения разрешения.
+Все операции требуют своей сессии, обычного PIN и CSRF для POST; токен одного сеанса только в памяти.
+`desktop_status/start/frame/input/clipboard/stop` — §14 протокола; отдельные HTTP-запросы с одним
+кадром в полёте, без очереди изображений. Сервер фильтрует ответы и повторно проверяет сессию после
+ожидания моста; данные не сохраняются. Блокировка шлёт `desktop_close` без сброса обычного PIN.
+Мост отзывает управление при локальном выключении/обрыве/10 с без запросов; `desktop_native.py`
+в одном рабочем потоке проверяет WTSActive/Default input desktop, захватывает JPEG, посылает SendInput,
+обменивается текстом CF_UNICODETEXT; своим окнам ввод запрещает. Активный пульт удерживает обновление.
+Проверки: оба `test_desktop.py`, `agent/tests/test_desktop_native.py`, `tests/test_ui_desktop.py`,
+`agent/tests/test_window_integration.py`. Настоящие экран/ввод/буфер требуют ручной приёмки после
+локального включения владельцем; синтетические и браузерные тесты этого не подтверждают.
+
 С 0.11.0 необязательный `hello.computer_info` объявляет `GET /api/code/agents/<aid>/info` →
 op `computer_info`, только свой компьютер с открытым PIN. `agent/studio_agent/computer_info.py`
 считывает CIM Windows в потоке (10 с): ОС, память, локальные/съёмные диски, IP интерфейсов;

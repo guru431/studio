@@ -76,7 +76,8 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409}
+          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409,
+          "desktop_disabled": 409, "desktop_unavailable": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 IMAGE_MAX = 5 * 1024 * 1024

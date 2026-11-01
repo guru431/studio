@@ -30,6 +30,7 @@ class Config:
     login: str = ""  # логин учётки студии: из ответа привязки и `welcome`; только для окна и трея
     theme: str = "auto"  # прежние настройки следуют Windows, явный выбор окна — light или dark
     max_turns: int = limits.MAX_TURNS  # общий предел одновременных заданий всех помощников
+    desktop_enabled: bool = False  # меняется только в локальном окне; сохраняется между запусками
 
     def __post_init__(self) -> None:
         if not self.projects_roots and self.projects_root:
@@ -97,6 +98,7 @@ _KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, s
           "login": lambda v: isinstance(v, str),
           "theme": lambda v: isinstance(v, str) and v in ("auto", "light", "dark"),
           "max_turns": lambda v: type(v) is int and v >= 1,
+          "desktop_enabled": lambda v: type(v) is bool,
           "agent_id": lambda v: v is None or (type(v) is int)}
 
 

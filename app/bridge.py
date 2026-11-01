@@ -203,7 +203,7 @@ def parse_hello(frame: dict) -> dict:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "file_stats", "file_operations",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info"):
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info", "desktop"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -446,11 +446,12 @@ def forget(user_id: int, digest: str, *, close_computers: bool = True) -> None:
             if q.session == session:
                 unwatch(aid, chat, q)
                 q.put_nowait(("closed", None))
-    if not close_computers:
-        return
-    frame = {"t": "close", "session": session}
     for link in [x for x in LINKS.values() if x.user_id == user_id]:
-        async def send(link=link):
+        frame = ({"t": "close", "session": session} if close_computers else
+                 {"t": "desktop_close", "session": session} if link.hello.get("desktop") else None)
+        if frame is None:
+            continue
+        async def send(link=link, frame=frame):
             try:
                 await link.send(frame)
             except Exception as e:

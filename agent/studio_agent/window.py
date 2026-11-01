@@ -681,13 +681,39 @@ class MainWindow:
                                    style="Card.TCheckbutton")
         box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
         self.buttons.append(box_auto)
+        self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
-        self.pin_line.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.pin_line.grid(row=7, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
         ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
-            row=7, column=0, columnspan=2, sticky="w")
+            row=8, column=0, columnspan=2, sticky="w")
         self.settings_problem = problem
         self.show_pin()
+
+    def desktop_control(self, box, *, row: int, enabled: bool, problem) -> None:
+        selected = self.tk.BooleanVar(value=enabled)
+
+        def toggle():
+            proposed = selected.get()
+            problem.set("")
+
+            def done(_, failed):
+                if failed:
+                    selected.set(self.ctrl.config().desktop_enabled)
+                    problem.set(FAILED)
+
+            self.work(lambda: self.ctrl.set_desktop_enabled(proposed), done)
+
+        area = self.ttk.Frame(box, style="Card.TFrame")
+        area.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, self.px(12)))
+        button = self.ttk.Checkbutton(area, text="Разрешить удалённый рабочий стол", variable=selected,
+                                     command=toggle, style="Card.TCheckbutton")
+        button.grid(row=0, column=0, sticky="w")
+        self.ttk.Label(area, text="Экран, мышь, клавиатура и буфер. Выбор сохраняется после перезапуска.\n"
+                       "Изменить разрешение можно только здесь, на компьютере.",
+                       style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
+            row=1, column=0, sticky="w", pady=(self.px(4), 0))
+        self.buttons.append(button)
 
     def turn_limit_control(self, box, *, row: int, value: int, problem) -> None:
         tk, ttk = self.tk, self.ttk

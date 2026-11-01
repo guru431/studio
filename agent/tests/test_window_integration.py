@@ -50,3 +50,41 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state):
         assert main.viewport.yview()[1] == 1.0
     finally:
         root.destroy()
+
+
+@pytest.mark.integration
+def test_local_desktop_checkbox_persists_without_restarting_or_contacting_studio(home, monkeypatch):
+    import tkinter as tk
+    from tkinter import ttk
+    from studio_agent.app import Controller
+
+    store.save_config(home, store.Config(projects_root='C:/work/projects'))
+    ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
+    ctrl.state = 'online'
+    root = tk.Tk()
+    root.withdraw()
+    monkeypatch.setattr(window.MainWindow, 'lift', lambda self: None)
+    monkeypatch.setattr(window.MainWindow, 'work', lambda self, fn, done, **kwargs: done(fn(), False))
+
+    def checkbox(main):
+        return next(widget for widget in main.buttons if isinstance(widget, ttk.Checkbutton)
+                    and widget.cget('text') == 'Разрешить удалённый рабочий стол')
+
+    try:
+        main = window.MainWindow(root, ctrl)
+        root.update()
+        assert not checkbox(main).instate(['selected'])
+        checkbox(main).invoke()
+        root.update()
+        assert store.load_config(home).desktop_enabled is True
+        main.close()
+        another = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
+        another.state = 'online'
+        restarted = window.MainWindow(root, another)
+        root.update()
+        assert checkbox(restarted).instate(['selected'])
+        restarted.ctrl.set_desktop_enabled(False)
+        assert not store.load_config(home).desktop_enabled
+        assert ctrl.agent is None and ctrl._link is None
+    finally:
+        root.destroy()

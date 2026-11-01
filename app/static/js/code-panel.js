@@ -27,6 +27,7 @@ import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { setCodeActivity } from './code-activity.js';
 import { computerView } from './code-computer.js';
+import { desktopView } from './code-desktop.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -75,18 +76,22 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   host.append(root);
 
   let infoIntent = null; // Только явное нажатие: автоматический выбор компьютера окно не открывает.
+  let infoKind = 'info';
   const computer = computerView(root, { locked(aid) { infoIntent = aid; pin(aid); } });
+  const desktop = desktopView(root, { locked(aid) { infoKind = 'desktop'; infoIntent = aid; pin(aid); } });
+  const selectedViewer = () => infoKind === 'desktop' ? desktop : computer;
   function showComputer() {
     if (infoIntent !== selected || mode !== 'projects') return;
     infoIntent = null;
-    computer.show(items.find((a) => a.id === selected));
+    selectedViewer().show(items.find((a) => a.id === selected));
   }
-  async function computerClicked(aid) {
+  async function computerClicked(aid, kind = 'info') {
+    infoKind = kind;
     infoIntent = aid;
     await select(aid);
     if (!alive || infoIntent !== aid) return;
     const agent = items.find((a) => a.id === aid);
-    if (agent && !agent.online) { infoIntent = null; computer.show(agent); }
+    if (agent && !agent.online) { infoIntent = null; selectedViewer().show(agent); }
     else showComputer();
   }
 
@@ -413,7 +418,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         ? el('span', { class: 'code-agent-update-status', role: 'status' }, releaseText,
           ...(!agent.agent_update ? [releaseText ? ' · ' : '', el('a', { href: '/api/agent/download', download: 'studio-agent-setup.exe',
             title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент')] : [])) : null;
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || releaseNote);
+      const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
+        title: 'Рабочий стол', 'aria-label': `Рабочий стол · ${agent.name}` },
+        el('span', { 'aria-hidden': 'true' }, '▣'));
+      remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, remote, button, note || releaseNote);
     }));
   }
 
@@ -726,6 +735,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       gen += 1;
       unsubscribe();
       computer.unmount();
+      desktop.unmount();
       root.remove();
     },
   };

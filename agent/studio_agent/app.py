@@ -273,6 +273,30 @@ class Controller:
             cfg.theme = choice
             store.save_config(self.h, cfg)
 
+    def set_desktop_enabled(self, enabled: bool) -> None:
+        """Локальное окно: сохранить выключатель. Ни настройки протокола, ни команды CLI для него нет."""
+        if type(enabled) is not bool:
+            raise ValueError("desktop_enabled")
+        # Выключение действует до записи на диск, даже если диск недоступен.
+        if not enabled and self.agent is not None:
+            self.agent.desktop.set_enabled(False)
+        with self._cfg_lock:
+            cfg = store.load_config(self.h)
+            cfg.desktop_enabled = enabled
+            store.save_config(self.h, cfg)
+        if self._loop is not None and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._refresh_desktop_enabled(), self._loop).result()
+        elif self.agent is not None:
+            self.agent.desktop.set_enabled(enabled)
+            self.agent.cfg.desktop_enabled = enabled
+        log.info("рабочий стол: %s", "включён локально" if enabled else "выключен локально")
+
+    async def _refresh_desktop_enabled(self):
+        await self._built.wait()
+        cfg = await asyncio.to_thread(self.config)
+        self.agent.desktop.set_enabled(cfg.desktop_enabled)
+        self.agent.cfg.desktop_enabled = cfg.desktop_enabled
+
     def set_max_turns(self, value: int) -> None:
         """Сохранить общий предел и применить в цикле ядра без переподключения и остановки заданий."""
         if type(value) is not int or value < 1:
@@ -454,11 +478,13 @@ class Controller:
         await asyncio.gather(prober, first, *self._relinks, return_exceptions=True)
         await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
+        await agent.desktop.close()
         await asyncio.gather(*self._background, return_exceptions=True)  # welcome: потоки — до закрытия цикла
         log.info("мост: выход")
 
     def _update_active(self) -> bool:
-        return (any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
+        return (self.agent is not None and self.agent.desktop.status()["active"]
+                or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
                 or any(not task.done() for task in getattr(self._link, '_requests', ())))
 
     async def _relink_task(self, *, reset_access: bool = False) -> None:

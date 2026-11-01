@@ -73,6 +73,11 @@ class FakeMachine:
         self.project_summary = False
         self.computer_info = False
         self.computer_data = {}
+        self.desktop = False
+        self.desktop_enabled = False
+        self.desktop_active = None
+        self.desktop_owner = None
+        self.desktop_clipboard = ''
         self.file_stats = False
         self.file_operations = False
         self.file_suggestions = False
@@ -98,7 +103,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "file_stats", "file_operations",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "desktop", "file_stats", "file_operations",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
@@ -152,6 +157,49 @@ class FakeMachine:
 
     def _op_computer_info(self, req, events):
         return self.computer_data
+
+    def _op_desktop_status(self, req, events):
+        return {'enabled': self.desktop_enabled, 'active': self.desktop_active is not None}
+
+    def _op_desktop_start(self, req, events):
+        if not self.desktop_enabled:
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в агенте на компьютере')
+        if self.desktop_active:
+            raise Refused('busy', 'Рабочий стол уже открыт')
+        self.desktop_active = uuid.uuid4().hex
+        self.desktop_owner = req['session']
+        return {'control': self.desktop_active, 'monitors': [{'id': 0, 'width': 160, 'height': 90, 'primary': True}],
+                'monitor': 0}
+
+    def _desktop_check(self, req):
+        if not self.desktop_enabled:
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в агенте на компьютере')
+        if not self.desktop_active or req.get('control') != self.desktop_active or req['session'] != self.desktop_owner:
+            raise Refused('owned', 'Сеанс принадлежит другому окну')
+
+    def _op_desktop_frame(self, req, events):
+        import io
+        from PIL import Image
+        self._desktop_check(req)
+        with io.BytesIO() as buf:
+            Image.new('RGB', (160, 90), '#366e93').save(buf, 'JPEG')
+            image = base64.b64encode(buf.getvalue()).decode('ascii')
+        return {'image': image, 'width': 160, 'height': 90, 'screen_width': 160, 'screen_height': 90, 'monitor': 0}
+
+    def _op_desktop_input(self, req, events):
+        self._desktop_check(req)
+        return {}
+
+    def _op_desktop_clipboard(self, req, events):
+        self._desktop_check(req)
+        if req.get('text') is not None:
+            self.desktop_clipboard = req['text']
+        return {'text': self.desktop_clipboard}
+
+    def _op_desktop_stop(self, req, events):
+        self._desktop_check(req)
+        self.desktop_active = self.desktop_owner = None
+        return {}
 
     def _op_agent_update_status(self, req, events):
         return {'state': self.update_state, 'version': self.update_version}
@@ -609,6 +657,11 @@ class InProcessBridge(bridge.Link):
                 loop.call_soon(bridge.deliver, self, f)
         elif frame["t"] == "close":
             self.machine.open_sessions.discard(frame["session"])
+            if self.machine.desktop_owner == frame["session"]:
+                self.machine.desktop_active = self.machine.desktop_owner = None
+        elif frame["t"] == "desktop_close":
+            if self.machine.desktop_owner == frame["session"]:
+                self.machine.desktop_active = self.machine.desktop_owner = None
 
     async def close(self, code: int) -> None:
         self.closed_with = code
@@ -686,6 +739,11 @@ class SocketBridge:
                         self._send(f)
                 elif frame.get("t") == "close":
                     self.machine.open_sessions.discard(frame.get("session"))
+                    if self.machine.desktop_owner == frame.get("session"):
+                        self.machine.desktop_active = self.machine.desktop_owner = None
+                elif frame.get("t") == "desktop_close":
+                    if self.machine.desktop_owner == frame.get("session"):
+                        self.machine.desktop_active = self.machine.desktop_owner = None
         except ConnectionClosed:
             pass
         finally:
