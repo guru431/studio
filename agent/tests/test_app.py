@@ -140,6 +140,24 @@ def form(root, **kw):
             "projects_root": str(root), "pin": "", "pin2": "", "no_pin": False, "autostart": True, **kw}
 
 
+def test_local_desktop_permission_is_applied_live_and_restored_on_restart(make, configured, home):
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == 'online')
+    assert not ctrl.agent.desktop.status()['enabled']
+    links = len(ctrl.links)
+    ctrl.set_desktop_enabled(True)
+    assert ctrl.agent.desktop.status()['enabled'] and store.load_config(home).desktop_enabled
+    assert len(ctrl.links) == links
+    ctrl.quit()
+    restarted = make()
+    restarted.start()
+    until(lambda: restarted.state == 'online')
+    assert restarted.agent.desktop.status()['enabled']
+    restarted.set_desktop_enabled(False)
+    assert not restarted.agent.desktop.status()['enabled'] and not store.load_config(home).desktop_enabled
+
+
 def test_update_waits_for_each_backend_and_pending_machine_requests(make, home):
     import concurrent.futures
     from types import SimpleNamespace

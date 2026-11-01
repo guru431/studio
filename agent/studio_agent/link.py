@@ -181,6 +181,7 @@ class Link:
             log.info("канал: нет welcome")
             return None, welcomed
         finally:
+            self.agent.desktop.revoke()
             if self._queue is queue:
                 self._queue = None
             if writer is not None and self._stop.is_set():  # выход: дослать, что уже в очереди (`done` ходов)
@@ -199,10 +200,13 @@ class Link:
             task = asyncio.create_task(self._answer(frame, queue))
             self._requests.add(task)
             task.add_done_callback(self._requests.discard)
-        elif t == "close":
+        elif t in ("close", "desktop_close"):
             session = frame.get("session")
             if isinstance(session, str):
-                self.agent.close_session(session)
+                if t == "close":
+                    self.agent.close_session(session)
+                else:
+                    self.agent.desktop.revoke(session)
         else:
             log.info("канал: кадр пропущен")
 

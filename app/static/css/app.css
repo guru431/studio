@@ -1145,6 +1145,9 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-update { flex: none; display: grid; place-items: center; width: 28px; min-height: 30px; padding: 2px;
   font-size: calc(18px * var(--font-scale, 1)); text-decoration: none; }
 .code-agent-update-status { flex-basis: 100%; padding: 0 8px 5px; font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.code-agent-desktop { flex:none; display:grid; place-items:center; width:28px; min-height:30px; padding:2px;
+  border:0; background:transparent; color:var(--muted); }
+.code-agent-desktop:hover { color:var(--text); background:var(--panel-2); }
 .code-project { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
   color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); cursor: pointer; }
 .code-project:hover { background: var(--panel-2); }

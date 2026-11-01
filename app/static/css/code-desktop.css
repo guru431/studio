@@ -1,0 +1,56 @@
+/* Рабочий стол остаётся внутри видимой области, включая телефон 320 px. */
+.code-desktop-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  width: calc(100vw - 16px);
+  max-width: 1400px;
+  height: calc(100dvh - 16px);
+  max-height: 980px;
+  box-sizing: border-box;
+  margin: auto;
+  padding: 1rem;
+  overflow: hidden;
+}
+.code-desktop-dialog * { box-sizing: border-box; }
+.code-desktop-heading { display: flex; gap: .5rem; align-items: flex-start; }
+.code-desktop-heading h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; margin: 0; }
+.code-desktop-heading > button { flex: 0 0 auto; }
+.code-desktop-status { margin: 0; overflow-wrap: anywhere; }
+.code-desktop-actions, .code-desktop-keys { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.code-desktop-monitor-label { display: flex; gap: .35rem; align-items: center; min-width: 0; max-width: 100%; }
+.code-desktop-monitor-label select { min-width: 0; max-width: 100%; flex: 1; }
+.code-desktop-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.code-desktop-stage {
+  height: clamp(160px, 48dvh, 600px);
+  width: 100%;
+  background: #111;
+  border: 1px solid var(--border, #777);
+  border-radius: .4rem;
+  overflow: hidden;
+}
+.code-desktop-dialog [hidden] { display: none !important; }
+#code-desktop-screen {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  touch-action: none;
+  cursor: crosshair;
+  outline-offset: -3px;
+}
+.code-desktop-tools { display: grid; gap: .7rem; padding-top: .6rem; }
+.code-desktop-tools p { margin: 0; }
+.code-desktop-keys .btn[aria-pressed="true"] { background: var(--accent, #a74f28); color: white; }
+.code-desktop-entry { display: flex; align-items: stretch; gap: .4rem; }
+.code-desktop-entry textarea { flex: 1; min-width: 0; }
+.code-desktop-clipboard { display: grid; gap: .4rem; }
+.code-desktop-tools textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 3.4rem; font-size: 16px; }
+.code-desktop-dialog button { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .code-desktop-dialog[open] { padding: .65rem; gap: .45rem; }
+  .code-desktop-heading h2 { font-size: 1.12rem; }
+  .code-desktop-entry { flex-direction: column; }
+  .code-desktop-stage { height: 34dvh; min-height: 160px; }
+  .code-desktop-monitor-label { width: 100%; }
+}

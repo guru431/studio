@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, branches, cli, computer_info, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -24,6 +24,8 @@ PIN_FIELD_MAX = 64
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
+    "desktop_status": (), "desktop_start": (), "desktop_frame": (), "desktop_input": (),
+    "desktop_clipboard": (), "desktop_stop": (),
     "computer_info": (),
     "agent_update": (),
     "agent_update_status": (),
@@ -84,6 +86,7 @@ class Agent:
         self.codex = codex
         self.opencode = opencode
         self.updater = None
+        self.desktop = desktop.Desktop(cfg.desktop_enabled, now=now)
         self.set_max_turns(cfg.max_turns)
         self.cc_version = cc_version
         self.models = models
@@ -118,7 +121,7 @@ class Agent:
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                 "computer_info": True}
+                 "computer_info": True, "desktop": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -136,11 +139,13 @@ class Agent:
 
     def close_session(self, session: str) -> None:
         self.open.close(session)
+        self.desktop.revoke(session)
 
     def new_link(self, *, reconnect: bool = False) -> None:
         """Сменить поколение канала; переподключение сохраняет отметки PIN без продления срока.
         Явная настройка сбрасывает доступ, незавершённые проверки прежнего канала всегда отменяются."""
         self._link += 1
+        self.desktop.revoke()
         if not reconnect:
             self.open.clear()
 
@@ -197,7 +202,7 @@ class Agent:
         if op not in OPS:
             raise Refused("invalid")
         if self.updater is not None and self.updater.busy and op in (
-                "turn", "save", "file_operation", "worktree_create", "chat_fork"):
+                "turn", "save", "file_operation", "worktree_create", "chat_fork", "desktop_start"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
@@ -219,7 +224,35 @@ class Agent:
                     raise Refused("invalid")
             elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
+        if op.startswith("desktop_"):
+            return await self._desktop_request(op, frame)
         return await getattr(self, "_op_" + op)(frame, after)
+
+    async def _desktop_request(self, op, frame):
+        fields = {"desktop_status": set(), "desktop_start": set(), "desktop_stop": {"control"},
+                  "desktop_frame": {"control", "monitor"}, "desktop_input": {"control", "events"},
+                  "desktop_clipboard": {"control", "text"}}[op]
+        common = {"t", "id", "op", "session", "idle_sec"}
+        if set(frame) - common != fields:
+            raise Refused("invalid")
+        control = frame.get("control")
+        if "control" in fields and not (isinstance(control, str) and desktop.CONTROL.fullmatch(control)):
+            raise Refused("invalid")
+        session = frame["session"]
+        if op == "desktop_status":
+            return self.desktop.status()
+        if op == "desktop_start":
+            return await self.desktop.start(session)
+        if op == "desktop_stop":
+            return self.desktop.stop(session, control)
+        if op == "desktop_frame":
+            monitor = frame["monitor"]
+            if type(monitor) is not int or not 0 <= monitor < 32:
+                raise Refused("invalid")
+            return await self.desktop.frame(session, control, monitor)
+        if op == "desktop_input":
+            return await self.desktop.input(session, control, frame["events"])
+        return await self.desktop.clipboard(session, control, frame["text"])
 
     async def _op_agent_update(self, frame, after):
         if self.updater is None:

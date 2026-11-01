@@ -34,6 +34,7 @@ import code_activity
 import config
 import connections
 import db
+import desktop
 import dictation
 import images
 import jobs
@@ -153,6 +154,7 @@ app.include_router(agents.router)
 app.include_router(bridge.router)
 app.include_router(workspace.router)
 app.include_router(claude_code.router)
+app.include_router(desktop.router)
 app.include_router(code_usage.router)
 app.include_router(code_activity.router)
 app.include_router(push.router)

@@ -28,6 +28,12 @@ ALPHA, BETA = pid("alpha"), pid("beta")
 #: (тела: {"text": "x"}, {"request_id": "r1", "decision": "allow"}, {"path": ""},
 #: {"path": "a", "text": "", "version": "v"}, {"path": "a.pdf", "page": 1}).
 BODIES = {
+    ("GET", "/api/code/agents/1/desktop"): None,
+    ("POST", "/api/code/agents/1/desktop/start"): {},
+    ("POST", "/api/code/agents/1/desktop/frame"): {"control": "0" * 32, "monitor": 0},
+    ("POST", "/api/code/agents/1/desktop/input"): {"control": "0" * 32, "events": [{"type": "text", "text": "x"}]},
+    ("POST", "/api/code/agents/1/desktop/clipboard"): {"control": "0" * 32, "text": None},
+    ("POST", "/api/code/agents/1/desktop/stop"): {"control": "0" * 32},
     ("GET", "/api/code/agents/1/info"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/queue/pause"): {"paused": False},
     ("GET", "/api/code/agents/1/projects/1/worktrees"): None,
