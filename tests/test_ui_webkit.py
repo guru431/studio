@@ -270,11 +270,17 @@ def test_project_opens_by_tapping_empty_area_of_either_line(iphone):
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
-def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, tmp_path):
+def test_git_popup_fits_and_respects_busy_chat(iphone, tmp_path):
     page, aid = iphone
     machine = page.studio_machine
     base = page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}"
     page.goto(base + '?tab=git')
+    page.locator('#code-git .code-git-branch').wait_for()
+    pw.expect(page.locator('.code-git-actions')).to_have_count(0)
+    assert page.locator('.code-project-tools button').evaluate_all('buttons=>buttons.map(b=>b.id)') == [
+        'code-repo-status', 'code-tab-git', 'code-tab-files', 'code-tab-chat']
+    page.locator('#code-repo-status').tap()
+    pw.expect(page.locator('#code-git-dialog')).to_be_visible()
     buttons = page.locator('.code-git-actions button')
     pw.expect(buttons).to_have_count(4)
     for button in buttons.all():
@@ -297,9 +303,9 @@ def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, 
     page.locator('#code-git-commit').evaluate('b=>b.click()')
     assert len([r for r in machine.requests if r['op'] == 'turn']) == 2
     geometry = page.locator('.code-git-actions').evaluate("""toolbar => {
-      const r=toolbar.getBoundingClientRect(), buttons=[...toolbar.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
-      return buttons.every(b=>Math.abs(b.top-buttons[0].top)<1 && b.left>=r.left && b.right<=r.right+1)
-        && toolbar.scrollWidth<=toolbar.clientWidth;
+      const r=toolbar.closest('dialog').getBoundingClientRect(), buttons=[...toolbar.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
+      return buttons.every(b=>b.left>=r.left && b.right<=r.right+1 && b.top>=r.top && b.bottom<=r.bottom)
+        && toolbar.scrollWidth<=toolbar.clientWidth && r.left>=0 && r.right<=innerWidth;
     }""")
     assert geometry
     fits(page)

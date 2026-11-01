@@ -8888,7 +8888,7 @@ def test_code_git_refresh_updates_tree_without_losing_the_editor(browser, live):
             ("click", "#code-save"),
             ("wait", "document.querySelector('#code-repo-status').textContent.includes('main*')"
                      " && document.querySelector(\"li[data-path='src/app.py'] > button\").dataset.git === 'modified'"),
-            ("click", "#code-repo-status"),
+            ("click", "#code-tab-git"),
             ("wait", "document.querySelector('#code-git .code-git-branch')?.textContent === 'release'"
                      " && document.querySelector(\"li[data-path='src/new.py']\")"),
             ("eval", "header", "document.querySelector('#code-repo-status').textContent"),
