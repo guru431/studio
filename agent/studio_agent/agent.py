@@ -24,6 +24,8 @@ PIN_FIELD_MAX = 64
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
+    "agent_update": (),
+    "agent_update_status": (),
     "usage": ("refresh",),
     "projects": (),
     "project_summary": ("project",),
@@ -80,6 +82,7 @@ class Agent:
         self.runner = runner
         self.codex = codex
         self.opencode = opencode
+        self.updater = None
         self.set_max_turns(cfg.max_turns)
         self.cc_version = cc_version
         self.models = models
@@ -105,7 +108,10 @@ class Agent:
 
     def hello(self) -> dict:
         """Знакомство; к диску не обращается."""
+        from . import VERSION as agent_version
+
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
+                 "agent_version": agent_version, "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
@@ -188,6 +194,9 @@ class Agent:
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
+        if self.updater is not None and self.updater.busy and op in (
+                "turn", "save", "file_operation", "worktree_create", "chat_fork"):
+            raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")
@@ -209,6 +218,16 @@ class Agent:
             elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
         return await getattr(self, "_op_" + op)(frame, after)
+
+    async def _op_agent_update(self, frame, after):
+        if self.updater is None:
+            raise Refused("unsupported")
+        return self.updater.start(frame)
+
+    async def _op_agent_update_status(self, frame, after):
+        if self.updater is None:
+            raise Refused("unsupported")
+        return self.updater.status()
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""

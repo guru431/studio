@@ -140,6 +140,25 @@ def form(root, **kw):
             "projects_root": str(root), "pin": "", "pin2": "", "no_pin": False, "autostart": True, **kw}
 
 
+def test_update_waits_for_each_backend_and_pending_machine_requests(make, home):
+    import concurrent.futures
+    from types import SimpleNamespace
+
+    ctrl = make()
+    backends = [turns.Runner(lambda event: None, choices=store.Choices(home), cli_path=None) for _ in range(3)]
+    ctrl.runner, ctrl.codex, ctrl.opencode = backends
+    assert ctrl._update_active() is False
+    for backend in backends:
+        backend._turns['chat'] = SimpleNamespace(asks={})
+        assert ctrl._update_active() is True
+        backend._turns.clear()
+    pending = concurrent.futures.Future()
+    ctrl._link = SimpleNamespace(_requests={pending})
+    assert ctrl._update_active() is True
+    pending.set_result(None)
+    assert ctrl._update_active() is False
+
+
 def test_not_configured_does_not_link(make):
     ctrl = make()
     assert ctrl.state == "setup" and not ctrl.enrolled

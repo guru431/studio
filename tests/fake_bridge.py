@@ -81,6 +81,10 @@ class FakeMachine:
         self.worktrees = False
         self.subscription_usage = False
         self.usage_data = None
+        self.agent_version = None
+        self.agent_update = False
+        self.update_state = 'idle'
+        self.update_version = None
         self.context = None
 
     @property
@@ -90,6 +94,8 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
+                **({'agent_version': self.agent_version} if self.agent_version else {}),
+                **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats", "file_operations",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
@@ -136,6 +142,14 @@ class FakeMachine:
         if self.pin_fails >= PIN_TRIES:
             raise Refused("pin_locked", "PIN заблокирован")
         raise Refused("pin", "неверный PIN", left=PIN_TRIES - self.pin_fails)
+
+    def _op_agent_update(self, req, events):
+        self.update_state = 'preparing'
+        self.update_version = req['version']
+        return self._op_agent_update_status(req, events)
+
+    def _op_agent_update_status(self, req, events):
+        return {'state': self.update_state, 'version': self.update_version}
 
     def _project(self, req) -> tuple[str, dict]:
         for name, project in self.projects.items():

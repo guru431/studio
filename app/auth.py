@@ -53,8 +53,8 @@ STALE_SEC = lock_policy.DEFAULT_TIMEOUT + lock_policy.HEARTBEAT_GRACE
 #: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
 SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
                                "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
-#: /api/* без сессии и CSRF: привязка моста Claude Code (agents.py) входит логином и паролем сама
-OPEN_API = frozenset({"/api/agent/enroll"})
+#: Без cookie/CSRF: привязка проверяет логин/пароль, пакет обновления — действующий ключ устройства (agents.py).
+OPEN_API = frozenset({"/api/agent/enroll", "/api/agent/package"})
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
