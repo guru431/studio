@@ -597,19 +597,44 @@ async function files(mine, p, path, status) {
 function gitControls(p) {
   const { active } = tabsOf(p.aid, p.pid);
   const busy = p.info.get(active)?.running || p.info.get(active)?.asking;
-  return { enabled: !!active && p.canStart && !busy,
-    message: !active ? 'Откройте чат проекта для выполнения действий Git'
+  return { enabled: p.canStart && !busy && !p.gitStarting,
+    message: p.gitStarting ? 'Подготавливаю действие Git…'
       : busy ? 'Дождитесь завершения задания в выбранном чате' : '' };
 }
 
 function git(p) {
   if (p.git) p.git.unmount();
   p.git = gitView(p.gitBox, { git: p.repo, controls: gitControls(p),
-    action: (prompt) => {
+    action: async (prompt) => {
       if (!gitControls(p).enabled) return;
-      const { active } = tabsOf(p.aid, p.pid);
-      p.gitAction = { chat: active, prompt };
-      toChat(p, active);
+      const mine = gen;
+      const current = () => proj === p && mine === gen;
+      p.gitStarting = true;
+      p.git.controls(gitControls(p));
+      const status = p.gitBox.querySelector('#code-git-error');
+      status.textContent = '';
+      try {
+        await chatsOf(p, true);
+        if (!current() || !p.canStart) return;
+        const { active } = tabsOf(p.aid, p.pid);
+        const row = p.info.get(active);
+        if (row?.running || row?.asking) return;
+        if (active) {
+          p.gitAction = { chat: active, prompt };
+          toChat(p, active);
+        } else {
+          const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats`);
+          p.listing = null;
+          if (!current() || !p.canStart) return;
+          p.gitAction = { chat, prompt };
+          created(p, chat);
+        }
+      } catch (err) {
+        if (current()) failed(err, p.aid, status);
+      } finally {
+        p.gitStarting = false;
+        if (proj === p) p.git?.controls(gitControls(p));
+      }
     },
     failed: (err, box) => {
       if (proj === p) failed(err, p.aid, box);

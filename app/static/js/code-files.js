@@ -723,12 +723,12 @@ export function gitView(host, { git, failed, controls: initial = {}, action }) {
   const buttons = GIT_ACTIONS.map(({ id, label, prompt }) => {
     const compact = id === 'push-all' ? 'Все Git' : id === 'deploy' ? 'Деплой' : label;
     const button = el('button', { type: 'button', id: `code-git-${id}`, class: 'btn btn-sm',
-      title: `${label} · выполнить в выбранном чате`, 'aria-label': label, disabled: true },
+      title: `${label} · выполнить в чате проекта (создаётся автоматически, если не выбран)`, 'aria-label': label, disabled: true },
     el('span', { class: 'code-git-label-full' }, label), el('span', { class: 'code-git-label-compact' }, compact));
     button.addEventListener('click', () => { if (hasGit && allowed.enabled) action(prompt); });
     return button;
   });
-  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': 'Действия Git в выбранном чате' }, ...buttons);
+  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': 'Действия Git в чате проекта' }, ...buttons);
   const hint = el('p', { class: 'muted small code-git-hint' });
   function controls(next) {
     allowed = next;

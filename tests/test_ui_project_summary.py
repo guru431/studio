@@ -102,6 +102,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     machine.projects["alpha"]["summary"]["remotes"] = [
         {"name": "origin", "state": "current", "behind": 0, "ahead": 0},
         {"name": "github", "state": "current", "behind": 0, "ahead": 0},
+        {"name": "upstream", "state": "behind", "behind": 10, "ahead": 0},
         {"name": "cld", "state": "behind", "behind": 2, "ahead": 0}]
     machine.projects["project-00"]["summary"] = {"github": {"state": "missing"}}
     machine.project_summary = True

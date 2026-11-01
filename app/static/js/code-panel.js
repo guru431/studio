@@ -257,7 +257,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const gh = data?.github;
     const github = gh ? remoteBadge(gh, 'GitHub') : null;
     const githubTitle = github ? `${github[2]}. Проверено: ${dateText(data.checked_at)}${data.stale ? '. Не удалось обновить' : ''}` : '';
-    const remotes = (data?.remotes || []).filter((remote) => remote.name !== 'origin' && !(remote.name === 'github' && gh))
+    const remotes = (data?.remotes || []).filter((remote) => remote.name !== 'origin' && remote.name !== 'upstream'
+      && !(remote.name === 'github' && gh))
       .map((remote) => {
         const [mark, level, description] = remoteBadge(remote, remote.name);
         const title = `${description}. По локальным данным Git, без fetch; состояние сервера может отличаться.`

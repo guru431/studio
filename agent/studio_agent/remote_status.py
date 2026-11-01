@@ -27,7 +27,7 @@ def read(project: Path, branch: str | None, head: str | None, *, now=time.monoto
         names = configured.stdout.decode("utf-8").splitlines()
     except (OSError, UnicodeError, subprocess.TimeoutExpired):
         return []
-    items = [{"name": name, **UNKNOWN} for name in names]
+    items = [{"name": name, **UNKNOWN} for name in names if name != "upstream"]
     if not items or not branch or not head:
         return items
     try:

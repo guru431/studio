@@ -365,7 +365,7 @@ UUID нового чата задаёт студия, настоящий thread 
 Проверки — `tests/test_github_status.py`, включая настоящий Git без сетевых запросов.
 
 С 0.10.1 `project_summary.remotes` — необязательный список `{name, state, behind, ahead}` всех
-настроенных Git remote, включая `cld`. `remote_status.py` читает только имена (`git remote`),
+настроенных Git remote, кроме `upstream`, включая `cld`. `remote_status.py` читает только имена (`git remote`),
 сравнивает `refs/remotes/<name>/<branch>` с текущим HEAD через `rev-list --left-right --count`.
 `behind/ahead` — отставание/опережение remote относительно HEAD, по локальным данным последнего
 fetch/push; сервер мог измениться. Нет сети, GCM, fetch или изменения refs. Общий бюджет 5 с,
