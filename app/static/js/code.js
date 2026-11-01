@@ -2,7 +2,7 @@
  * место) поверх 2026-10-28-studio-claude-code-design (мост, PIN, чат, файлы).
  *
  * Раскладка строится один раз на показ раздела (mount) и живёт до unmount: слева — панель компьютеров и проектов
- * (code-panel.js), справа — строка пути и переключатели «Чат · Файлы · Git», под ними тело; update(ctx) перерисовывает
+ * (code-panel.js), справа — строка пути, статус Git и переключатели «Git · Файлы · Чат», под ними тело; update(ctx) перерисовывает
  * только правую часть. Компьютеров нет — панели нет, справа «Компьютеров пока нет.» и «Скачать мост» (ui.js
  * agentDownload). Прокручивается #view: панель и верх правой части к нему прилипают (лента чата — code-chat.js — по
  * #view, как прежде). Телефон (≤ 760 px): панель выезжает по ☰ (#code-panel-toggle), прячется после выбора проекта,
@@ -44,13 +44,13 @@
 import { api, me } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
-import { projectGit, gitLevel } from './code-git.js';
+import { projectGit, gitLevel, GIT_ACTIONS } from './code-git.js';
 import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
-import { agentDownload, el, words } from './ui.js';
+import { agentDownload, el, openDialog, words } from './ui.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const NONE = 'Компьютеров пока нет.';
@@ -62,7 +62,7 @@ const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CODE_ICON = '<path d="M4 6l5 5-5 5M11 18h9"/>';
 const MENU_ICON = '<path d="M4 6h16M4 12h16M4 18h16"/>';
 const BRANCH_ICON = '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10M18 7v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/>';
-const VIEWS = [['chat', 'Чат'], ['files', 'Файлы'], ['git', 'Git']];
+const VIEWS = [['git', 'Git'], ['files', 'Файлы'], ['chat', 'Чат']];
 const IDLE_POLL_SEC = 20;        // метки вкладок: GET …/chats открытого проекта (тесты подменяют паузу setTimeout)
 const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в разделе (как опрос live чата)
 
@@ -182,8 +182,9 @@ function layout() {
   });
   const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': 'Вид проекта', hidden: true }, ...switches);
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
-  const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status', hidden: true });
-  repoStatus.addEventListener('click', () => switchTo('git'));
+  const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status',
+    'aria-haspopup': 'dialog', 'aria-controls': 'code-git-dialog', hidden: true });
+  repoStatus.addEventListener('click', openGitActions);
   const top = el('div', { class: 'code-top' },
     el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place),
       el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
@@ -283,7 +284,7 @@ function paintTabs() {
   ui.tabsHost.hidden = blocked === String(p.aid) || !tabs.length;
   p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded,
     choosing: shownKey === 'chat' && !shownChat });
-  p.git?.controls(gitControls(p));
+  p.gitActions?.controls();
   ensurePoll();
 }
 
@@ -386,7 +387,7 @@ function enter(aid, pid) {
     ui.repoStatus.hidden = !data && !error;
     if (!data) {
       ui.repoStatus.textContent = error?.code === 'not_git' ? 'Без Git' : error ? 'Git недоступен' : '';
-      ui.repoStatus.title = error?.code === 'not_git' ? 'Не репозиторий git' : 'Открыть Git и повторить проверку';
+      ui.repoStatus.title = error?.code === 'not_git' ? 'Не репозиторий git' : 'Действия Git и повторная проверка';
       ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
       return;
     }
@@ -401,7 +402,7 @@ function enter(aid, pid) {
     if (ahead) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↑${ahead}`));
     ui.repoStatus.title = [`Ветка ${branch}`, files.length ? `Незакоммиченных файлов: ${files.length}` : 'Изменений нет',
       data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Не запушено: ${ahead}` : '',
-      'По локальным данным Git, без fetch'].filter(Boolean).join(' · ');
+      'По локальным данным Git, без fetch', 'Действия Git'].filter(Boolean).join(' · ');
     ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
   });
   p.bar = tabBar(ui.tabsHost, {
@@ -418,6 +419,7 @@ function enter(aid, pid) {
 
 function closeProject() {
   if (!proj) return;
+  proj.gitActions?.unmount();
   stopPoll();
   if (proj.bar) proj.bar.unmount();
   if (proj.files) proj.files.unmount();
@@ -458,6 +460,7 @@ function failed(err, aid, status, file = null) {
   if (err && err.code === 'closed') {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;
+      proj.gitActions?.unmount();
       proj.repo.clear();
       chatLists.delete(cacheKey(proj));
       proj.listing = null;
@@ -603,42 +606,94 @@ function gitControls(p) {
       : busy ? 'Дождитесь завершения задания в выбранном чате' : '' };
 }
 
+function openGitActions() {
+  const p = proj;
+  if (!p || p.gitActions) return;
+  let hasGit = false;
+  const status = el('p', { id: 'code-git-action-error', class: 'error', 'aria-live': 'polite' });
+  const hint = el('p', { class: 'muted small code-git-hint', 'aria-live': 'polite' });
+  const buttons = GIT_ACTIONS.map(({ id, label, prompt }) => {
+    const button = el('button', { type: 'button', id: `code-git-${id}`, class: 'btn', disabled: true }, label);
+    button.addEventListener('click', () => {
+      if (!hasGit || !gitControls(p).enabled) return;
+      if (p.files?.dirty()) {
+        const mine = gen;
+        p.gitActions.unmount();
+        p.files.leave(() => {
+          if (proj !== p || mine !== gen) return;
+          openGitActions();
+          runGitAction(p, prompt);
+        });
+      } else runGitAction(p, prompt);
+    });
+    return button;
+  });
+  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': 'Действия Git в чате проекта' }, ...buttons);
+  const dialog = openDialog(ui.root, { id: 'code-git-dialog', title: 'Действия Git',
+    body: [actions, hint, status], cancelText: 'Закрыть' });
+  function controls() {
+    const allowed = gitControls(p);
+    for (const button of buttons) button.disabled = !hasGit || !allowed.enabled;
+    hint.textContent = allowed.message || '';
+    hint.hidden = !hint.textContent;
+  }
+  const unsubscribe = p.repo.subscribe(({ data, error, loading }) => {
+    hasGit = !!data;
+    controls();
+    if (error && !loading) status.textContent = error.code === 'not_git' ? 'Не репозиторий git' : words(error);
+  });
+  function unmount() {
+    unsubscribe();
+    dialog.close();
+    dialog.remove();
+    if (p.gitActions?.dialog === dialog) p.gitActions = null;
+  }
+  p.gitActions = { dialog, controls, unmount, status };
+  dialog.addEventListener('close', unmount, { once: true });
+  p.repo.refresh(true);
+  chatsOf(p, true).catch((err) => { if (p.gitActions?.dialog === dialog) failed(err, p.aid, status); });
+}
+
+async function runGitAction(p, prompt) {
+  if (!gitControls(p).enabled || !p.gitActions) return;
+  const popup = p.gitActions;
+  const mine = gen;
+  const current = () => proj === p && mine === gen && p.gitActions === popup;
+  p.gitStarting = true;
+  popup.controls();
+  popup.status.textContent = '';
+  try {
+    await chatsOf(p, true);
+    if (!current() || !p.canStart) return;
+    const { active } = tabsOf(p.aid, p.pid);
+    const row = p.info.get(active);
+    if (row?.running || row?.asking) return;
+    if (active) {
+      p.gitAction = { chat: active, prompt };
+      popup.unmount();
+      if (shownKey === 'chat' && shownChat === active) render();
+      else toChat(p, active);
+    } else {
+      const engine = engineOrder(me.code_defaults).find((name) => name === 'claude' || p[name]);
+      const suffix = engine === 'claude' ? '' : `?engine=${engine}`;
+      const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${suffix}`);
+      p.listing = null;
+      if (!current() || !p.canStart) return;
+      p.gitAction = { chat, prompt };
+      popup.unmount();
+      created(p, chat, engine);
+    }
+  } catch (err) {
+    if (current()) failed(err, p.aid, popup.status);
+  } finally {
+    p.gitStarting = false;
+    if (proj === p) p.gitActions?.controls();
+  }
+}
+
 function git(p) {
   if (p.git) p.git.unmount();
-  p.git = gitView(p.gitBox, { git: p.repo, controls: gitControls(p),
-    action: async (prompt) => {
-      if (!gitControls(p).enabled) return;
-      const mine = gen;
-      const current = () => proj === p && mine === gen;
-      p.gitStarting = true;
-      p.git.controls(gitControls(p));
-      const status = p.gitBox.querySelector('#code-git-error');
-      status.textContent = '';
-      try {
-        await chatsOf(p, true);
-        if (!current() || !p.canStart) return;
-        const { active } = tabsOf(p.aid, p.pid);
-        const row = p.info.get(active);
-        if (row?.running || row?.asking) return;
-        if (active) {
-          p.gitAction = { chat: active, prompt };
-          toChat(p, active);
-        } else {
-          const engine = engineOrder(me.code_defaults).find((name) => name === 'claude' || p[name]);
-          const suffix = engine === 'claude' ? '' : `?engine=${engine}`;
-          const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${suffix}`);
-          p.listing = null;
-          if (!current() || !p.canStart) return;
-          p.gitAction = { chat, prompt };
-          created(p, chat, engine);
-        }
-      } catch (err) {
-        if (current()) failed(err, p.aid, status);
-      } finally {
-        p.gitStarting = false;
-        if (proj === p) p.git?.controls(gitControls(p));
-      }
-    },
+  p.git = gitView(p.gitBox, { git: p.repo,
     failed: (err, box) => {
       if (proj === p) failed(err, p.aid, box);
     } });
@@ -685,6 +740,7 @@ async function project(mine, aid, pid, id, key, path, status) {
 
 function render() {
   const mine = ++gen;
+  proj?.gitActions?.unmount();
   if (view) view.unmount();
   view = null;
   shownHash = location.hash;

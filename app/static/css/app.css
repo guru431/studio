@@ -1169,15 +1169,9 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-project-remote[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
 .code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-project-remote[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
 .code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-project-remote[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
-.code-git-actions { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px;
-  width:100%; min-width:0; padding-bottom:8px; container-type:inline-size; }
-.code-git-actions .btn { min-width:0; padding-inline:4px; white-space:nowrap; }
-.code-git-actions .btn span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-.code-git-label-compact { display:none; }
-@container (max-width:720px) {
-  .code-git-label-full { display:none; }
-  .code-git-label-compact { display:block; }
-}
+#code-git-dialog { width:min(440px, calc(100vw - 32px)); }
+.code-git-actions { display:grid; gap:8px; margin-bottom:12px; }
+.code-git-actions .btn { min-width:0; white-space:normal; }
 .code-git-hint { margin:0 0 10px; }
 .code-offline { margin: 4px; font-size:calc(14px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 #code-panel-status { margin: 0; padding: 0 12px 10px; font-size:calc(13px * var(--font-scale, 1)); overflow-wrap: anywhere; }
@@ -1196,7 +1190,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .agent-download { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
 .agent-download p { margin: 0; overflow-wrap: anywhere; }
 .empty .agent-download { align-items: center; }
-/* верх правой части: плашка пути — одна строка (сжимается сначала имя компьютера), справа «Чат · Файлы · Git» */
+/* верх правой части: плашка пути — одна строка (сжимается сначала имя компьютера), справа статус Git и «Git · Файлы · Чат» */
 .code-top { position: sticky; top: 0; z-index: 3; background: var(--bg); border-bottom: 1px solid var(--border); }
 .code-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; min-height: 48px; padding: 8px 16px; }
 .code-location { display: contents; }

@@ -35,7 +35,8 @@ def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browse
               return buttons.every(b => Math.abs(b.top-buttons[0].top)<1 && b.left>=r.left && b.right<=r.right+1)
                 && row.scrollWidth<=row.clientWidth && document.documentElement.scrollWidth<=innerWidth;
             })()"""), ('screenshot', str(tmp_path / f'new-sessions-{width}.png')),
-            ('click', '#code-tab-git'), ('wait', "!document.querySelector('#code-git-commit')?.disabled"),
+            ('wait', "document.querySelector('#code-repo-status')?.textContent"), ('click', '#code-repo-status'),
+            ('wait', "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
             ('click', '#code-git-commit'),
             ('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),
             ('eval', 'engine', "document.querySelector('#code-chat').dataset.engine")], width=width, mobile=width == 320)
@@ -64,6 +65,7 @@ def test_auto_chat_skips_agents_missing_from_the_computer(browser, live, availab
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "document.querySelector('#code-projects li[data-pid]')"),
             *go(f"code/{aid}/{pid('alpha')}?tab=git"),
+            ('wait', "document.querySelector('#code-git .code-git-branch')"), ('click', '#code-repo-status'),
             ('wait', "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
             ('click', '#code-git-commit'),
             ('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),

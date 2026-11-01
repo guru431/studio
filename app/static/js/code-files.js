@@ -27,7 +27,7 @@
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
-import { fileMark, GIT_ACTIONS } from './code-git.js';
+import { fileMark } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
@@ -717,31 +717,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   };
 }
 
-export function gitView(host, { git, failed, controls: initial = {}, action }) {
-  let allowed = initial;
-  let hasGit = false;
-  const buttons = GIT_ACTIONS.map(({ id, label, prompt }) => {
-    const compact = id === 'push-all' ? 'Все Git' : id === 'deploy' ? 'Деплой' : label;
-    const button = el('button', { type: 'button', id: `code-git-${id}`, class: 'btn btn-sm',
-      title: `${label} · выполнить в чате проекта (создаётся автоматически, если не выбран)`, 'aria-label': label, disabled: true },
-    el('span', { class: 'code-git-label-full' }, label), el('span', { class: 'code-git-label-compact' }, compact));
-    button.addEventListener('click', () => { if (hasGit && allowed.enabled) action(prompt); });
-    return button;
-  });
-  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': 'Действия Git в чате проекта' }, ...buttons);
-  const hint = el('p', { class: 'muted small code-git-hint' });
-  function controls(next) {
-    allowed = next;
-    for (const button of buttons) button.disabled = !hasGit || !allowed.enabled;
-    hint.textContent = allowed.message || '';
-    hint.hidden = !hint.textContent;
-  }
+export function gitView(host, { git, failed }) {
   const box = el('div', { id: 'code-git', class: 'code-git', 'aria-busy': 'true' });
   const status = el('p', { id: 'code-git-error', class: 'error', 'aria-live': 'polite' });
-  host.replaceChildren(actions, hint, box, status);
+  host.replaceChildren(box, status);
   const unsubscribe = git.subscribe(({ data: git, error, loading }) => {
-    hasGit = !!git;
-    controls(allowed);
     if (loading) box.setAttribute('aria-busy', 'true');
     else box.removeAttribute('aria-busy');
     status.textContent = '';
@@ -770,7 +750,6 @@ export function gitView(host, { git, failed, controls: initial = {}, action }) {
       : el('p', { class: 'muted code-git-empty' }, NO_CHANGES));
   });
   return {
-    controls,
     unmount() {
       unsubscribe();
     },
