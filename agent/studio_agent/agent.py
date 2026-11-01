@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, branches, cli, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
+from . import attachments, branches, cli, computer_info, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -24,6 +24,7 @@ PIN_FIELD_MAX = 64
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
+    "computer_info": (),
     "agent_update": (),
     "agent_update_status": (),
     "usage": ("refresh",),
@@ -116,7 +117,8 @@ class Agent:
                  "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                 "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True}
+                 "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
+                 "computer_info": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -223,6 +225,9 @@ class Agent:
         if self.updater is None:
             raise Refused("unsupported")
         return self.updater.start(frame)
+
+    async def _op_computer_info(self, frame, after):
+        return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))
 
     async def _op_agent_update_status(self, frame, after):
         if self.updater is None:

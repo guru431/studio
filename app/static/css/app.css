@@ -1134,6 +1134,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-state.on { background: var(--ok); }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-agent-pin { flex: none; }
+.code-computer-dialog { overflow-wrap: anywhere; }
+.code-computer-details { margin: 0 0 16px; }
+.code-computer-details dt { color: var(--muted); margin-top: 12px; font-size: calc(12px * var(--font-scale, 1)); }
+.code-computer-details dd { margin: 3px 0 0; white-space: pre-wrap; }
+.code-computer-details dd > div + div { margin-top: 4px; }
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
 .code-agent-version { flex: none; color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); font-weight: 400; }

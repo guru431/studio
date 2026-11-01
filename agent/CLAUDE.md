@@ -22,6 +22,13 @@ Claude Code (`tests/test_live_studio.py`). Как ставить и пользо
 
 ## Устройство
 
+С 0.11.0 `hello.computer_info: true`, op `computer_info` после обычной проверки открытой PIN-сессии.
+`computer_info.py` возвращает имя/пользователя Windows, ОС, память, локальные и съёмные диски,
+адреса интерфейсов, все настроенные корни проектов и время снимка. CIM читается скрытым PowerShell
+с пределом 10 с, публичный адрес IPv4/IPv6 — фиксированным HTTPS-запросом api64.ipify.org (3 с, без redirect,
+без сведений компьютера или секретов). Всё — в `to_thread`, без журнала и записи снимка на диск.
+Недоступные поля — null/пустые списки, не нули. Проверки — `tests/test_computer_info.py`.
+
 С 0.10.0 `hello.agent_version` — версия моста, `hello.agent_update` — поддержка удалённого обновления
 в GUI (в консольном Controller без обработчика штатного выхода capability выключена).
 `updater.py` готовит отдельную версию/venv в `%LOCALAPPDATA%\Programs\studio-agent\releases`, не меняя

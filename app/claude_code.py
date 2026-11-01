@@ -391,6 +391,18 @@ def require_capability(aid: int, capability: str):
         raise _refuse(409, "unsupported", "Обновите мост на компьютере для этой возможности")
 
 
+@router.get("/agents/{aid}/info")
+async def computer_info(aid: int, request: Request):
+    from computer_info import clean
+
+    own_agent(request, aid)
+    require_capability(aid, "computer_info")
+    data = await ask(request, aid, "computer_info")
+    link = bridge.LINKS.get(aid)
+    return _BridgeJSON(clean(data, connection_ip=link.ip if link is not None else None),
+                       headers={"Cache-Control": "no-store"})
+
+
 @router.post("/agents/{aid}/update")
 async def update_agent(aid: int, request: Request):
     import agents
