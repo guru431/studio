@@ -247,7 +247,7 @@ def test_connection_out_carries_only_a_hint(studio):
     items = studio.c.get("/api/connections").json()["items"]
     assert items == [{"id": cid, "name": "Облако", "kind": "openai", "base_url": "https://cloud.test/v1",
                       "sections": ["chat"], "proxied": False, "dropped": False, "token_hint": "…4567",
-                      "passport": None}]
+                      "passport": None, "cleaner": False}]
     cid = add_gateway(studio)
     gw = studio.c.get("/api/connections").json()["items"][1]
     assert gw["id"] == cid and gw["proxied"] and gw["sections"] == list(sections.SECTIONS)

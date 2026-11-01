@@ -39,7 +39,11 @@ if [ "$SECRET" = 1 ]; then
         echo "ОШИБКА: первая строка stdin — не STUDIO_DATA_KEY=<ключ Fernet, 44 знака base64url> — $ENV_FILE не тронут" >&2
         exit 1
     fi
-    (umask 077; printf '%s\n' "$line" > "$ENV_FILE.part")
+    (umask 077
+     printf '%s\n' "$line" > "$ENV_FILE.part"
+     if [ -f "$ENV_FILE" ]; then
+         grep -m1 '^STUDIO_CLEANER_CA=' "$ENV_FILE" >> "$ENV_FILE.part" || true
+     fi)
     mv -f "$ENV_FILE.part" "$ENV_FILE"
     unset line
 fi
@@ -48,9 +52,13 @@ if [ "$ADMIN" = 1 ]; then
     admin_lines=$(cat)
     [ -n "$admin_lines" ] || { echo "ОШИБКА: --admin-stdin без строк на stdin" >&2; exit 1; }
 fi
-# studio.env целиком — окружение службы: только ключ данных
-if ! grep -qE '^STUDIO_DATA_KEY=.+$' "$ENV_FILE" 2>/dev/null || grep -qvE '^STUDIO_DATA_KEY=' "$ENV_FILE"; then
-    echo "ОШИБКА: в $ENV_FILE должна быть одна строка STUDIO_DATA_KEY=… — deploy.sh --new-secret кладёт её из vault" >&2
+# Only the data key and an optional absolute path to the public Cleaner certificate are accepted.
+# The CA file lives outside /etc/studio: that secrets directory is intentionally root-only.
+if ! grep -qE '^STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=$' "$ENV_FILE" 2>/dev/null \
+        || [ "$(grep -c '^STUDIO_DATA_KEY=' "$ENV_FILE")" -ne 1 ] \
+        || [ "$(grep -c '^STUDIO_CLEANER_CA=' "$ENV_FILE" || true)" -gt 1 ] \
+        || grep -qvE '^STUDIO_DATA_KEY=[A-Za-z0-9_-]{43}=$|^STUDIO_CLEANER_CA=/[A-Za-z0-9_./-]+$' "$ENV_FILE"; then
+    echo "ОШИБКА: $ENV_FILE — одна STUDIO_DATA_KEY=… и необязательная STUDIO_CLEANER_CA=/путь/к/сертификату" >&2
     exit 1
 fi
 # Файлы истории — на шаре storage. Не смонтирована или нет прав — до подмены кода, прежний работает.

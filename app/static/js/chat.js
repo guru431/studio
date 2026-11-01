@@ -206,6 +206,11 @@ async function readServer(job, response) {
     for await (const { event, data } of readSSE(response)) {
       if (event === 'turn') adoptIds(job, data);
       else if (event === 'delta' && data && typeof data.text === 'string') append(job, data.text);
+      else if (event === 'replace' && data && typeof data.text === 'string') {
+        job.message.content = data.text;
+        job.first = true;
+        notify(job, false);
+      } else if (event === 'cleaner' && data && typeof data.raw === 'string') job.message.cleaner_raw = data.raw;
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
         job.scan = data;                           // ответ ждёт распознавания скана — плашка до первого текста
         notify(job, false);
@@ -625,6 +630,7 @@ function build(view, ctx) {
    * ключа Exa, кнопка выключена с подсказкой; 'ready' — ход даст модели все инструменты. Путь — `proxied`
    * открытого диалога или подключения из чипа нового, ключ — профиль (перечитывается при возвращении) */
   function webState() {
+    if (chat?.chat.cleaner || links.find((l) => l.connection.id === chosen().connection_id)?.connection.cleaner) return 'hidden';
     let proxied;
     if (chat) proxied = !!chat.chat.proxied;
     else {
@@ -1003,9 +1009,10 @@ function build(view, ctx) {
     const job = reading(m);
     paintBadge(p, m, job);
     paintThought(p, m, job);
-    if (p.shown !== m.content) {
-      p.md.replaceChildren(renderMarkdown(m.content));
-      p.shown = m.content;
+    const displayed = m.cleaner_show_raw ? m.cleaner_raw : m.content;
+    if (p.shown !== displayed) {
+      p.md.replaceChildren(renderMarkdown(displayed));
+      p.shown = displayed;
     }
     let text = '';
     let kind = '';
@@ -1026,7 +1033,7 @@ function build(view, ctx) {
     if (m.content) {
       const copy = button('Копировать', { class: 'btn btn-sm msg-copy' }, async () => {
         try {
-          await navigator.clipboard.writeText(m.content);
+          await navigator.clipboard.writeText(displayed);
           copy.textContent = 'Скопировано';
         } catch {
           copy.textContent = 'Не вышло';
@@ -1035,6 +1042,25 @@ function build(view, ctx) {
       });
       p.actions.append(copy);
     }
+    if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? 'Восстановленный ответ' : 'Ответ модели',
+      { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
+    if (chat?.chat.cleaner && m.content) p.actions.append(button('Очищенная копия',
+      { class: 'btn btn-sm msg-cleaner-copy' }, async () => {
+        try {
+          const result = await api('POST', `/api/chats/${chatId}/cleaner-copy`, { message_id: m.id });
+          const area = el('textarea', { class: 'input cleaner-copy-text', readonly: true, rows: '12' });
+          area.value = result.text;
+          const copy = button('Копировать', { class: 'btn btn-accent' }, async () => {
+            try {
+              await navigator.clipboard.writeText(result.text);
+              copy.textContent = 'Скопировано';
+            } catch { copy.textContent = 'Не вышло'; }
+          });
+          openDialog(root, { id: 'cleaner-copy-dialog', title: 'Очищенная копия', body: [area,
+            el('p', { class: 'muted small' }, 'Проверьте текст: распознавание может пропустить чувствительные данные.')],
+          actions: [copy], cancelText: 'Закрыть' });
+        } catch (err) { notice.textContent = words(err); }
+      }));
     if (p.last) p.actions.append(button('Ответить заново', { class: 'btn btn-sm msg-retry' }, () => submit(true)));
   }
 
@@ -1302,6 +1328,58 @@ function build(view, ctx) {
       if (!(await upload(a))) return;              // отказ — словами у чипа
     }
     if (chatId !== id) return;
+    let cleanerTicket;
+    if (chat.chat.cleaner) {
+      let retry;
+      const rules = [];
+      do {
+        retry = false;
+        notice.textContent = 'Проверяю данные в Cleaner…';
+        const shown = await api('POST', `/api/chats/${id}/cleaner-preview`,
+          { ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
+            cleaner_rules: rules });
+        notice.textContent = '';
+        if (chatId !== id) return;
+        cleanerTicket = await new Promise((resolve) => {
+          const confirm = button('Отправить проверенный текст', { class: 'btn btn-accent', id: 'cleaner-confirm',
+            disabled: !shown.deliverable });
+          const content = el('div', { class: 'cleaner-preview-text' }, ...shown.messages.map((m) =>
+            m.role === 'system' ? el('details', {}, el('summary', {}, 'Инструкция модели'), el('pre', {}, m.content))
+              : el('section', {}, el('b', {}, m.role === 'user' ? 'Пользователь' : 'Помощник'), el('pre', {}, m.content))));
+          const typeNames = { PERSON: 'Люди', ORG: 'Организации', ADDRESS: 'Адреса', EMAIL: 'Почта', PHONE: 'Телефоны',
+            BIRTHDATE: 'Даты рождения', PASSPORT: 'Паспорта', INN: 'ИНН', SNILS: 'СНИЛС', OGRN: 'ОГРН', KPP: 'КПП',
+            OMS: 'Полисы', CARD: 'Карты', BANK_ACCOUNT: 'Счета', SECRET: 'Секреты', ACCOUNT: 'Учётные записи',
+            IP: 'IP', MAC: 'MAC', HOST: 'Узлы', DOMAIN: 'Домены', SID: 'SID', DN: 'LDAP', TERM: 'Термины' };
+          const counts = Object.entries(shown.counts || {}).map(([type, count]) => `${typeNames[type] || type}: ${count}`).join(' · ');
+          const fragment = el('input', { class: 'input', id: 'cleaner-fragment', maxlength: '2000',
+            placeholder: 'Фрагмент исходного текста', autocomplete: 'off' });
+          const type = el('select', { class: 'input', id: 'cleaner-type' }, ...Object.entries({
+            TERM: 'Термин', PERSON: 'Человек', ORG: 'Организация', SECRET: 'Секрет', EMAIL: 'Почта',
+            PHONE: 'Телефон', ADDRESS: 'Адрес', HOST: 'Узел', ACCOUNT: 'Учётная запись',
+          }).map(([value, name]) => el('option', { value }, name)));
+          const edit = el('details', { id: 'cleaner-edit' }, el('summary', {}, 'Исправить замены'),
+            field('Фрагмент', fragment, 'fragment'), field('Тип', type, 'type'));
+          let accepted = false;
+          for (const [action, label] of [['mask', 'Скрыть и перепроверить'], ['unmask', 'Показать и перепроверить']]) {
+            edit.append(button(label, { class: 'btn btn-sm', id: `cleaner-${action}` }, () => {
+              if (!fragment.value.trim()) { fragment.focus(); return; }
+              rules.push({ action, value: fragment.value, type: type.value });
+              retry = true;
+              dialog.close();
+            }));
+          }
+          const dialog = openDialog(root, { id: 'cleaner-preview-dialog', title: 'Что получит модель', body: [
+            el('p', {}, counts ? `Замены: ${counts}` : 'Автоматических замен нет.'), content, edit,
+            el('p', { class: 'muted small' }, 'Проверьте текст: распознавание может что-то пропустить. '
+              + 'Правки замен действуют только в этом диалоге. Изображения через Cleaner не передаются.'),
+            !shown.deliverable ? el('p', { class: 'error' }, 'Отправка заблокирована политикой Cleaner.') : null,
+          ].filter(Boolean), actions: [confirm], cancelText: 'Вернуться' });
+          confirm.addEventListener('click', () => { accepted = true; dialog.close(); });
+          dialog.addEventListener('close', () => resolve(accepted ? shown.ticket : null), { once: true });
+        });
+      } while (retry && chatId === id);
+      if (!cleanerTicket || chatId !== id || (!regenerate && input.value !== text)) return;
+    }
     const before = chat.messages;
     const user = regenerate ? null : { id: null, role: 'user', content: text, status: 'done',
       attachments: sent.map((a) => (a.transcript ? { ...a.meta, source: { transcript_id: a.transcript, exists: true } } : a.meta)) };
@@ -1318,7 +1396,8 @@ function build(view, ctx) {
     try {
       reply = await api('POST', `/api/chats/${id}/turns`, {
         ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
-        ...(externalOk ? { external_ok: true } : {}), ...(webOk ? { web_ok: true } : {}) });
+        ...(externalOk ? { external_ok: true } : {}), ...(webOk ? { web_ok: true } : {}),
+        ...(cleanerTicket ? { cleaner_ticket: cleanerTicket } : {}) });
     } catch (err) {
       jobs.delete(id);
       if (chatId === id) {

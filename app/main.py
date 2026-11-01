@@ -26,6 +26,7 @@ import audio
 import auth
 import bridge
 import chat
+import cleaner_client as cleaner
 import checks
 import claude_code
 import code_usage
@@ -86,7 +87,9 @@ async def lifespan(_app):
     translate.recover()
     speeches.recover()
     state.HTTP = state.make_http()
-    loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill()]
+    state.CLEANER_HTTP = state.make_cleaner_http()
+    loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
+              asyncio.create_task(cleaner.sweep())]
              if state.WATCHER else [])
     try:
         yield
@@ -102,6 +105,10 @@ async def lifespan(_app):
         await chat.stop_all()
         await bridge.stop()
         await push.stop()
+        cleaner.TICKETS.clear()
+        cleaner.LOCKS.clear()
+        if state.CLEANER_HTTP is not state.HTTP:
+            await state.CLEANER_HTTP.aclose()
         await state.HTTP.aclose()
         state.DB.close()
 

@@ -273,6 +273,19 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
     while True:
         job.live = head
         try:
+            if job.conn.cleaner:
+                import cleaner_client as cleaner
+
+                def on_text(value):
+                    _check(job)
+                    if not blocks:
+                        job.live = head + value
+
+                try:
+                    return await cleaner.translate(job.conn, job.id, job.model,
+                                                   translate_text.system_prompt(origin, lang, blocks), text, on_text)
+                except HTTPException as exc:
+                    raise translate_text.TranslateError(exc.detail["message"]) from None
             return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks)
         except translate_text.Busy:
             waited = await _busy(job, waited)
@@ -296,7 +309,9 @@ async def _languages(job: Job, row) -> tuple[str, str]:
     if origin == translate_text.AUTO:
         origin = row["detected_lang"]
         if origin is None and row["result_lang"] is None:
-            origin = await translate_text.detect(job.conn, job.model, row["source"])
+            # Cleaner receives every model-bound text through its checked request API, including language detection.
+            # The translation prompt already supports AUTO; do not send a separate unreviewed request.
+            origin = (None if job.conn.cleaner else await translate_text.detect(job.conn, job.model, row["source"]))
             state.DB.execute("UPDATE translations SET detected_lang = ? WHERE id = ?", (origin, job.id))
         origin = origin or translate_text.AUTO
     lang = row["result_lang"]

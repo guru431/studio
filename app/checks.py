@@ -235,6 +235,8 @@ async def probe(conn, model: str) -> dict:
     У srvllm её нет: роль local-gemma-abl заняла бы карту арендой, а release проверка не делает."""
     if conn.kind == "srvllm":
         raise HTTPException(409, {"code": "srvllm", "message": "у шлюза srvllm пробного ответа нет: он занял бы карту"})
+    if conn.cleaner:
+        raise HTTPException(409, {"code": "cleaner", "message": "Пробный ответ Cleaner — через предпросмотр в чате"})
     if connections.dropped(conn):
         raise connections.refused(conn, upstream.UpstreamRefused("убран"))
     if not conn.proxied:

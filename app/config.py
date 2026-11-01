@@ -15,6 +15,7 @@ class Config:
     media_dir: Path
     origin: str
     hairpin_ip: str = "10.77.1.1"
+    cleaner_ca: Path | None = None
 
     @property
     def tmp_dir(self) -> Path:
@@ -31,4 +32,5 @@ def load() -> Config:
     except (ValueError, TypeError):
         raise RuntimeError("STUDIO_DATA_KEY — не ключ Fernet (32 байта в base64url)") from None
     return Config(data_key=os.environ["STUDIO_DATA_KEY"], db_path=Path(os.environ["STUDIO_DB"]),
-                  media_dir=Path(os.environ["STUDIO_MEDIA_DIR"]), origin=os.environ["STUDIO_ORIGIN"])
+                  media_dir=Path(os.environ["STUDIO_MEDIA_DIR"]), origin=os.environ["STUDIO_ORIGIN"],
+                  cleaner_ca=Path(os.environ["STUDIO_CLEANER_CA"]) if os.environ.get("STUDIO_CLEANER_CA") else None)
