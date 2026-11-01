@@ -65,7 +65,7 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
             ('wait', f"document.querySelector('{row} .code-agent-update-status')?.textContent.includes('Ждём')"),
             ('eval', 'disabled', f"document.querySelector('{row} .code-agent-update').disabled"),
             ('wait', f"document.querySelector('{row} .code-agent-version').textContent === '0.10.1'"),
-            ('eval', 'complete', f"document.querySelector('{row} .code-agent-update-status').textContent"),
+            ('eval', 'complete', f"document.querySelector('{row} .code-agent-update-status') === null"),
             ('eval', 'installer', f"document.querySelector('{row} .code-agent-update').getAttribute('download')")],
             width=width, mobile=width == 320)
     finally:
@@ -73,7 +73,7 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
     assert not result.get('failed'), result
     assert result['values'] == {'go': '#/code', 'before': '0.10.0', 'geometry': True, 'disabled': True,
                                 'available': 'Доступно обновление до 0.10.1',
-                                'complete': 'Агент обновлён', 'installer': 'studio-agent-setup.exe'}
+                                'complete': True, 'installer': 'studio-agent-setup.exe'}
     assert [req['op'] for req in machine.requests].count('agent_update') == 1
     assert not problems(result), problems(result)
 
