@@ -12,7 +12,7 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeSDKClient
 
-from . import autostart, cli, enroll, setup, store, theme
+from . import autostart, cli, enroll, setup, store, theme, updater
 from .codex import CodexRunner
 from .opencode import OpenCodeRunner
 from .agent import Agent, read_has_pin
@@ -91,6 +91,7 @@ class Controller:
         self._cfg_lock = threading.Lock()  # config.json — прочесть, поправить, записать: welcome, окно, отвязка
         self.fresh = False  # новая привязка: первый `online` — уведомление трея
         self.on_pin_changed = None  # блок PIN из студии, снятие блока, новый PIN — меню трея и окно (любой поток)
+        self.on_update_quit = None  # штатный выход Tk после подготовки обновления и завершения заданий
 
     # --- из любого потока ---
 
@@ -435,12 +436,18 @@ class Controller:
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
                                    models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode)
+        if self.on_update_quit is not None:
+            agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit)
         agent.on_pin_locked = self._pin_changed
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
         first = asyncio.create_task(self._relink_task())
         await self._quit.wait()
+        update_task = agent.updater.task if agent.updater is not None else None
+        if update_task is not None and not update_task.done():
+            update_task.cancel()
+            await asyncio.gather(update_task, return_exceptions=True)
         prober.cancel()
         for task in [first, *self._relinks]:
             task.cancel()
@@ -449,6 +456,10 @@ class Controller:
         await self._drop_link()
         await asyncio.gather(*self._background, return_exceptions=True)  # welcome: потоки — до закрытия цикла
         log.info("мост: выход")
+
+    def _update_active(self) -> bool:
+        return (any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
+                or any(not task.done() for task in getattr(self._link, '_requests', ())))
 
     async def _relink_task(self, *, reset_access: bool = False) -> None:
         task = asyncio.current_task()
@@ -608,8 +619,16 @@ def main(argv: list[str]) -> int:
     ctrl.on_login(lambda login: commands.put(("login", login)))
     ctrl.on_backends(lambda status: commands.put(("backends", status)))
     ctrl.on_pin_changed = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
+    ctrl.on_update_quit = lambda: commands.put("quit")
+    ready_file = os.environ.pop('STUDIO_AGENT_UPDATE_READY', '')
 
     def poll() -> None:
+        nonlocal ready_file
+        if ready_file and ctrl._built.is_set():
+            candidate = Path(ready_file)
+            if candidate == Path(__file__).resolve().parent.parent / '_update_ready':
+                candidate.touch()
+            ready_file = ''
         while True:
             try:
                 cmd = commands.get_nowait()

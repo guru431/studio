@@ -192,12 +192,18 @@ def parse_hello(frame: dict) -> dict:
     result = {"cc_version": _string(frame.get("cc_version"), 64),
               "projects_root": _string(frame.get("projects_root"), 1024),
               "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
+    if "agent_version" in frame:
+        from agent_release import VERSION
+        value = frame["agent_version"]
+        if not isinstance(value, str) or not VERSION.fullmatch(value):
+            raise ProtocolError("hello")
+        result["agent_version"] = value
     if "images" in frame:
         if type(frame["images"]) is not bool:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "file_stats", "file_operations",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout"):
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")

@@ -374,6 +374,29 @@ def require_capability(aid: int, capability: str):
         raise _refuse(409, "unsupported", "Обновите мост на компьютере для этой возможности")
 
 
+@router.post("/agents/{aid}/update")
+async def update_agent(aid: int, request: Request):
+    import agents
+    import agent_release
+
+    own_agent(request, aid)
+    require_capability(aid, "agent_update")
+    release = await asyncio.to_thread(agent_release.release, agents.AGENT_ZIP)
+    if release is None:
+        raise _refuse(409, "no_agent", "архива агента нет на сервере — требуется выкладка")
+    return await ask(request, aid, "agent_update", **release)
+
+
+@router.get("/agents/{aid}/update")
+async def agent_update_status(aid: int, request: Request):
+    own_agent(request, aid)
+    require_capability(aid, "agent_update")
+    data = await ask(request, aid, "agent_update_status")
+    return {"state": data.get("state") if data.get("state") in
+            ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
+            "version": data.get("version") if isinstance(data.get("version"), str) else None}
+
+
 @router.post("/agents/{aid}/projects/{pid}/files/suggest")
 async def file_suggestions(aid: int, pid: str, body: DiscoveryQuery, request: Request):
     own_agent(request, aid)

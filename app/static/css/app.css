@@ -1130,6 +1130,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-state.on { background: var(--ok); }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-agent-pin { flex: none; }
+.code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
+.code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
+.code-agent-version { flex: none; color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); font-weight: 400; }
+.code-agent-update { flex: none; width: 28px; min-height: 30px; padding: 2px; font-size: calc(18px * var(--font-scale, 1)); }
+.code-agent-update-status { flex-basis: 100%; padding: 0 8px 5px; font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 .code-project { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
   color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); cursor: pointer; }
 .code-project:hover { background: var(--panel-2); }

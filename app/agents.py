@@ -9,10 +9,12 @@
   моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
 - Архив моста — `GET /api/agent/download` (только вошедшим): `AGENT_ZIP` рядом с кодом кладёт выкладка
   (`deploy/deploy.sh` собирает его из закоммиченного HEAD `studio-agent`); секретов в нём нет.
+  `GET /api/agent/package` — тот же ZIP самому мосту по действующему ключу устройства активной учётки.
 - Компьютеры и история подключений — только свои: чужой id — 404. История только добавляется (`bridge.record`)
   и только читается: ни DELETE, ни «Удалить всю историю».
 - Журнал — id и коды: ни ключа, ни логина и пароля, ни имени компьютера.
 """
+import asyncio
 import json
 import logging
 import unicodedata
@@ -22,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 import auth
+import agent_release
 import bridge
 import clock
 import security
@@ -109,6 +112,7 @@ async def download(request: Request):
 
 @router.get("/api/agents")
 async def list_agents(request: Request):
+    release = await asyncio.to_thread(agent_release.release, AGENT_ZIP)
     rows = state.DB.execute("SELECT id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
                             " WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
     items = []
@@ -116,6 +120,8 @@ async def list_agents(request: Request):
         link = bridge.LINKS.get(r["id"])
         hello = link.hello if link is not None else {}
         items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
+                      "agent_version": hello.get("agent_version"), "agent_update": hello.get("agent_update", False),
+                      "latest_version": release["version"] if release else None,
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
                       "efforts": hello.get("efforts", []), "images": hello.get("images", False),
@@ -135,6 +141,22 @@ async def list_agents(request: Request):
                       "subscription_usage": hello.get("subscription_usage", False),
                       **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
     return {"items": items}
+
+
+@router.get("/api/agent/package")
+async def update_package(request: Request):
+    """Загрузка самим мостом: только действующий ключ устройства активной учётки."""
+    header = request.headers.get("authorization", "")
+    row = state.DB.execute("SELECT a.id FROM agents a JOIN users u ON u.id = a.user_id"
+                           " WHERE a.key_hash = ? AND u.disabled = 0",
+                           (security.digest(header[7:]),)).fetchone() if header.startswith("Bearer ") else None
+    if row is None:
+        raise HTTPException(401, {"code": "key", "message": "ключ компьютера не принят"})
+    if auth.foreign_origin(request):
+        raise HTTPException(403, {"code": "origin", "message": FOREIGN})
+    if not AGENT_ZIP.is_file():
+        raise HTTPException(404, {"code": "no_agent", "message": "архива агента нет на сервере"})
+    return FileResponse(AGENT_ZIP, media_type="application/zip", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/agents/events")

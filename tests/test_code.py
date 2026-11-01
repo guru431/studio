@@ -60,6 +60,8 @@ BODIES = {
     ("PUT", "/api/code/agents/1/projects/1/file"): {"path": "a", "text": "", "version": "v"},
     ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},
     ("GET", "/api/code/agents/1/projects/1/git"): None,
+    ("POST", "/api/code/agents/1/update"): None,
+    ("GET", "/api/code/agents/1/update"): None,
 }
 
 

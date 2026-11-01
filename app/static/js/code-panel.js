@@ -29,6 +29,16 @@ import { setCodeActivity } from './code-activity.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
+const UPDATE_WORDS = { preparing: 'Скачивание и установка…', waiting: 'Ждём завершения заданий…',
+  restarting: 'Перезапуск агента…', pin: 'Введите PIN для обновления агента',
+  failed: 'Не удалось обновить агент. Повторите попытку.', complete: 'Агент обновлён' };
+const versionParts = (value) => /^\d+\.\d+\.\d+$/.test(value || '') ? value.split('.').map(Number) : null;
+function newer(latest, current) {
+  const a = versionParts(latest), b = versionParts(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) { if (a[i] !== b[i]) return a[i] > b[i]; }
+  return false;
+}
 
 export function panelView(host, { selected: first = null, opened, chose, list, openJournal }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
@@ -56,6 +66,72 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let alive = true;
   let gen = 0;             // номер показа компьютера: ответ прежнего показ не трогает
   let items = [];          // последний GET /api/agents
+  const updates = new Map(); // Только память панели: версия и стадия запрошенного обновления.
+  let updateTimer = null;
+  let updatePolling = false;
+  const updating = (item) => item && ['preparing', 'waiting', 'restarting'].includes(item.state);
+  function scheduleUpdates() {
+    clearTimeout(updateTimer);
+    if (!alive || document.visibilityState === 'hidden') return;
+    updateTimer = setTimeout(pollUpdates, [...updates.values()].some(updating) ? 2000 : 30000);
+  }
+  async function pollUpdates() {
+    if (updatePolling || !alive) return;
+    updatePolling = true;
+    try {
+      const got = await readAgents();
+      if (!got || !alive) return;
+      for (const [aid, update] of updates) {
+        if (!updating(update)) continue;
+        const agent = got.find((a) => a.id === aid);
+        if (agent?.online && agent.agent_version && !newer(update.version, agent.agent_version)) {
+          update.state = 'complete';
+          continue;
+        }
+        if (!agent?.online) {
+          update.offlineSince ||= Date.now();
+          update.state = Date.now() - update.offlineSince > 120000 ? 'failed' : 'restarting';
+          if (update.state === 'failed') update.message = 'Агент не подключился после обновления — проверьте компьютер';
+          continue;
+        }
+        delete update.offlineSince;
+        try {
+          const data = await api('GET', `/api/code/agents/${aid}/update`);
+          if (data.state === 'idle') update.state = 'failed';
+          else Object.assign(update, data);
+        } catch (err) {
+          if (['closed', 'offline'].includes(err.code)) update.state = 'restarting';
+          else { update.state = 'failed'; update.message = words(err); }
+        }
+      }
+      if (alive) paintAgents();
+    } finally { updatePolling = false; scheduleUpdates(); }
+  }
+  async function updateAgent(agent) {
+    if (updating(updates.get(agent.id))) return;
+    const update = { state: 'preparing', version: agent.latest_version };
+    updates.set(agent.id, update);
+    paintAgents();
+    try {
+      // PIN остаётся обычным входом на компьютер; обновление его не обходит.
+      await api('POST', `/api/code/agents/${agent.id}/open`, { pin: null });
+      if (!alive) return;
+      Object.assign(update, await api('POST', `/api/code/agents/${agent.id}/update`));
+      if (update.state === 'idle') update.state = 'complete';
+    } catch (err) {
+      update.state = 'failed';
+      update.message = words(err);
+      if (err.code === 'pin_needed' || err.code === 'closed') {
+        update.state = 'pin';
+        update.message = '';
+        pin(agent.id);
+      }
+    }
+    if (alive) { paintAgents(); scheduleUpdates(); }
+  }
+  function resumeUpdate(aid) {
+    if (updates.get(aid)?.state === 'pin') updateAgent(items.find((a) => a.id === aid));
+  }
   let selected = null;     // id показанного компьютера
   let activityTimer = null;
   let activityRequested = false;
@@ -95,8 +171,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
   function onAction() { lastAction = Date.now(); if (!activityTimer) scheduleActivity(); }
   function onVisibility() {
-    if (document.visibilityState === 'visible') { lastAction = Date.now(); refreshActivity(); }
-    else clearTimeout(activityTimer);
+    if (document.visibilityState === 'visible') { lastAction = Date.now(); refreshActivity(); pollUpdates(); }
+    else { clearTimeout(activityTimer); clearTimeout(updateTimer); }
   }
   document.addEventListener('studio-code-activity', onActivity);
   document.addEventListener('visibilitychange', onVisibility);
@@ -260,6 +336,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const unsubscribe = subscribe(() => paintCounts());   // числа вкладок — после каждого действия и ответа сервера
   let loaded = readAgents();
   loaded.then((got) => {
+    scheduleUpdates();
     if (!alive || pending || !got || !got.length) return;
     show(got.some((a) => a.id === first) ? first : got[0].id, 'open');
   });
@@ -271,9 +348,25 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
         el('span', { class: 'sr' }, agent.online ? 'на связи' : 'не на связи')),
       el('span', { class: 'code-agent-name' }, agent.name),
+      el('span', { class: 'code-agent-version', title: agent.agent_version
+        ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'),
       agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null);
       row.addEventListener('click', () => select(agent.id));
-      return el('li', { 'data-id': agent.id }, row);
+      const update = updates.get(agent.id);
+      const available = agent.agent_update && newer(agent.latest_version, agent.agent_version);
+      const title = !agent.agent_update ? 'Для автообновления один раз установите новый агент на компьютере'
+        : !agent.online ? 'Компьютер не на связи' : !agent.latest_version ? 'Архива агента нет на сервере'
+          : available ? `Обновить агент до ${agent.latest_version}` : 'Установлена последняя версия агента';
+      const button = el('button', { type: 'button', class: 'btn code-agent-update', title,
+        'aria-label': `Обновить агент · ${agent.name}`, disabled: !agent.online || !available || updating(update) || update?.state === 'pin' },
+      el('span', { 'aria-hidden': 'true' }, '↥'));
+      button.addEventListener('click', () => updateAgent(agent));
+      const note = update ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
+        role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
+      const bootstrap = !agent.agent_update && agent.online
+        ? el('a', { class: 'code-agent-update-status', href: '/api/agent/download', download: 'studio-agent.zip',
+          title: 'Один раз установите архив на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент') : null;
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || bootstrap);
     }));
   }
 
@@ -379,6 +472,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     }
     if (!alive || mine !== gen) return;
     opened(agent.id);
+    resumeUpdate(agent.id);
     projects(mine, agent, found);
   }
 
@@ -464,6 +558,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         mode = 'loading';
         body.replaceChildren();
         opened(agent.id);
+        resumeUpdate(agent.id);
         projects(mine, agent);
         return;
       } catch (err) {
@@ -573,6 +668,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     unmount() {
       alive = false;
       clearTimeout(activityTimer);
+      clearTimeout(updateTimer);
       document.removeEventListener('studio-code-activity', onActivity);
       document.removeEventListener('visibilitychange', onVisibility);
       host.removeEventListener('pointerdown', onAction);

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from fake_sdk import HOLD, FakeFactory, delta, result_ok
-from studio_agent import files, projects, sessions, store
+from studio_agent import VERSION, files, projects, sessions, store
 from studio_agent.agent import Agent
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
@@ -169,6 +169,7 @@ async def test_file_stats_checks_pin_project_and_serializes_scans(agent, root, m
 
 def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
+                             "agent_version": VERSION, "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "project_activity": True,
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
@@ -200,6 +201,22 @@ async def test_everything_but_open_is_closed_until_opened(agent):
     assert (await agent.handle(req("projects")))[0]["code"] == "closed"
     assert (await agent.handle(req("open", pin=None)))[0]["ok"] is True
     assert (await agent.handle(req("projects")))[0]["data"]["items"] == [{"pid": projects.pid("demo"), "name": "demo"}]
+
+
+async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existing(agent_with_pin):
+    agent = agent_with_pin
+    agent.updater = SimpleNamespace(busy=False, start=Mock(return_value={'state': 'preparing'}),
+                                    status=lambda: {'state': 'waiting'})
+    assert agent.hello()['agent_update'] is True
+    assert (await agent.handle(req('agent_update')))[0]['code'] == 'closed'
+    agent.updater.start.assert_not_called()
+    await opened(agent, pin='2468')
+    assert (await agent.handle(req('agent_update', version='99.0.0')))[0]['data']['state'] == 'preparing'
+    agent.updater.busy = True
+    assert (await agent.handle(req('turn')))[0]['code'] == 'busy'
+    assert (await agent.handle(req('save')))[0]['code'] == 'busy'
+    assert (await agent.handle(req('agent_update_status')))[0]['data']['state'] == 'waiting'
+    assert (await agent.handle(req('projects')))[0]['ok']
 
 
 async def test_subscription_usage_requires_open_session_and_valid_refresh(agent):

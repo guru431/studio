@@ -33,6 +33,18 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+С 0.10.0 `hello.agent_version` сообщает версию самого моста, `hello.agent_update` объявляет обновление.
+`GET /api/agents` добавляет `agent_version`, `agent_update`, `latest_version` (последняя — из опубликованного ZIP).
+В дереве компьютеров версия и кнопка ↥; `POST /api/code/agents/<aid>/update` передаёт только серверные
+version/sha256/size, `GET` того же адреса — стадию. Обе команды требуют своей сессии, CSRF для POST и открытия PIN.
+`GET /api/agent/package` без браузерной сессии проверяет Bearer действующего устройства активной учётки.
+`agent/studio_agent/updater.py` скачивает только с настроенного HTTPS-сервера без redirect, проверяет ZIP,
+готовит отдельную копию/venv и ждёт `live()` всех Runner и окончания просьб канала. Новые изменения/ходы
+блокируются; работающие задания продолжаются. Самостоятельный `update_helper.py` ждёт штатного выхода,
+запускает новую копию, сохраняет настройку автозапуска; ранний сбой запуска возвращает прежнюю копию.
+Ключи/PIN/переписки не входят в пакет или план. Старые версии требуют однократной ручной установки 0.10.0.
+Проверки: `test_agent_update.py`, `test_ui_agent_update.py`, `agent/tests/test_updater.py`.
+
 studio-agent 0.8.0: `file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`, `subagents`, `worktrees` —
 необязательные возможности `hello`, §11 [протокола](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md).
 Поиск/пути только на компьютере; сервер ретранслирует POST body. `code-autocomplete.js`, `code-diff.js`,
