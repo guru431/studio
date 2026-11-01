@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import files, gitinfo
+from . import files, github_status, gitinfo
 from .errors import Refused
 
 JOURNAL_MAX = 2 * 1024 * 1024
@@ -61,7 +61,7 @@ def journal_count(project: Path, name: str, status: str) -> int | None:
 def read(project: Path, *, now=time.time) -> dict:
     result = {"findings": journal_count(project, "FINDINGS.md", "open"),
               "ideas": journal_count(project, "IDEAS.md", "proposed"),
-              "changed": None, "unpushed": None, "modified": None, "git": "error"}
+              "changed": None, "unpushed": None, "modified": None, "git": "error", "github": None}
     try:
         result["modified"] = project.stat().st_mtime
         # Наличие своего .git проверяется до запуска: чужой родительский репозиторий не учитывается.
@@ -95,4 +95,7 @@ def read(project: Path, *, now=time.time) -> dict:
                 result["unpushed"] = int(unpublished.stdout.strip())
     except (OSError, ValueError, subprocess.TimeoutExpired):
         pass  # Неизвестное значение остаётся null, а не превращается в ноль.
+    if result["git"] == "ok":
+        oid = re.search(rb"(?:^|\0)# branch.oid ([0-9a-f]{40}|[0-9a-f]{64})\0", out.stdout)
+        result["github"] = github_status.read(project, state["branch"], oid[1].decode("ascii") if oid else None)
     return {**result, "checked_at": now()}

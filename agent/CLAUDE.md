@@ -320,6 +320,15 @@ UUID нового чата задаёт студия, настоящий thread 
 журнала — 0; в ответе только числа, даты и `git: ok|not_git|error`, без текстов и путей.
 Проверки — `tests/test_project_summary.py`, настоящий Git — его `integration`-сценарий.
 
+С 0.9.2 `project_summary.github` — необязательная сводка публичной копии текущей ветки:
+`{state: current|behind|ahead|diverged|missing|unknown, behind, ahead}` или `null` (нет публичного remote).
+`github_status.py` читает remote `github` либо GitHub `origin`, анонимно получает smart-HTTP advertisement
+через HTTPS github.com (до 2 МиБ/5 с), без GitHub API, Git credentials и fetch. PAT из URL не передаётся.
+`behind/ahead` относятся к GitHub относительно локального HEAD. Расчёт — локальный rev-list; неизвестный
+объект, shallow history, detached HEAD и ошибки дают unknown. HTTP 401/404 скрывают приватный/отсутствующий
+репозиторий. Нет новых ключей, записей refs или журналирования; команды Git ограничены 3 с.
+Проверки — `tests/test_github_status.py`, включая настоящий Git без сетевых запросов.
+
 Плана (`Решения плана`) и контролёра (`progress.md` плана, «Rulings»), где они задают поведение:
 
 - **Клиент SDK — на ход** (спека §6.6): поднимается в `Runner._run` и гаснет в `_finish`; новая сессия —

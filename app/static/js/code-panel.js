@@ -135,9 +135,20 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         'aria-label': `Идеи: ${value('ideas')}` }, `И: ${value('ideas')}`), ')');
     const git = data?.git === 'not_git' ? 'Без Git'
       : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
+    const gh = data?.github;
+    const github = gh ? {
+      current: ['✓', 'green', 'GitHub синхронизирован с текущей веткой'],
+      behind: [`↓${gh.behind}`, 'red', `GitHub отстаёт на ${gh.behind} комм. от текущей ветки`],
+      ahead: [`↑${gh.ahead}`, 'yellow', `GitHub опережает текущую ветку на ${gh.ahead} комм.`],
+      diverged: ['↕', 'red', `Истории разошлись: GitHub отстаёт на ${gh.behind} и опережает на ${gh.ahead} комм.`],
+      missing: ['∅', 'red', 'Текущая ветка ещё не опубликована на GitHub'],
+    }[gh.state] || ['?', 'unknown', 'Не удалось проверить GitHub или сравнить историю коммитов'] : null;
+    const githubTitle = github ? `${github[2]}. Проверено: ${dateText(data.checked_at)}${data.stale ? '. Не удалось обновить' : ''}` : '';
     summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
+    ...(github ? [el('a', { class: 'code-project-github', href: `${href}?tab=git`,
+      'data-git-level': data.stale ? 'unknown' : github[1], title: githubTitle, 'aria-label': githubTitle }, `GitHub ${github[0]}`)] : []),
     el('span', { 'aria-hidden': 'true' }, ' · '),
     el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
     ...(data?.stale ? [el('span', { class: 'error', title: 'Не удалось обновить', 'aria-label': 'Не удалось обновить' }, ' ⚠')] : []));
@@ -148,7 +159,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       }
       chose();
     });
-    summary.querySelector('a').addEventListener('click', chose);
+    for (const link of summary.querySelectorAll('a')) link.addEventListener('click', chose);
     li.classList.toggle('has-unpushed', data?.unpushed > 0);
     if (data?.checked_at) summary.title = `Проверено: ${dateText(data.checked_at)}`;
   }

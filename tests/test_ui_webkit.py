@@ -227,12 +227,20 @@ def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
 def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path):
     import bridge
+    from fake_bridge import T0
 
     page, aid = iphone
     bridge.LINKS[aid].hello["project_summary"] = True
+    page.studio_machine.projects['alpha']['summary'] = {"git": "ok", "changed": 0, "unpushed": 0,
+        "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0}}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-refresh')
+    gh = page.locator('.code-project-github')
+    pw.expect(gh).to_have_text('GitHub ↓12')
+    assert gh.evaluate("""e => {const r=e.getBoundingClientRect(), row=e.parentElement.getBoundingClientRect();
+      return r.left>=row.left && r.right<=row.right && e.title.includes('отстаёт на 12');}""")
+    page.screenshot(path=str(tmp_path / f'github-webkit-{page.viewport_size["width"]}.png'))
 
     def position():
         return button.evaluate("""e => {const r=e.getBoundingClientRect();

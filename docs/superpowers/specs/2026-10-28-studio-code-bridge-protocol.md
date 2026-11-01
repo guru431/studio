@@ -368,6 +368,17 @@ HTTP — `GET /api/code/agents/<aid>/projects/<pid>/summary`, только вл�
 и дата полного обновления закреплены вне прокрутки; ошибка сохраняет прежние значения с отметкой.
 Сводка живёт только в памяти панели и не записывается на сервере или в хранилище браузера.
 
+С 0.9.2 необязательное поле `github`: `null` (нет публичной копии) либо
+`{state: current|behind|ahead|diverged|missing|unknown, behind: int|null, ahead: int|null}`.
+Счётчики показывают отставание/опережение GitHub относительно текущей локальной ветки и HEAD.
+`missing` — текущая ветка не опубликована; `unknown` — сеть/неизвестный объект/shallow/detached HEAD;
+для обоих счётчики `null`. Прежние мосты поле не присылают, индикатор скрыт.
+Мост читает remote `github` либо GitHub `origin`, проверяет публичность анонимным smart-HTTP discovery
+на `https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack` (5 с, до 2 МиБ),
+без ключей, cookie, Git credentials, fetch и обновления refs. HTTP 401/404 скрывают репозиторий;
+остальные ошибки — `unknown`. Редиректы только внутри HTTPS github.com. Разница считается локально,
+команды Git ограничены 3 с. В ответе нет URL, веток, hash, содержимого и путей.
+
 ## 11. Инструменты рабочего места (studio-agent 0.8.0)
 
 Возможности `hello.file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`, `subagents`, `worktrees` —

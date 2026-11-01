@@ -1,4 +1,5 @@
 from test_code import ALPHA, setup
+import pytest
 
 
 def test_project_summary_capability_pin_ownership_and_filtered_response(studio):
@@ -25,3 +26,19 @@ def test_project_summary_unknown_values_do_not_turn_into_zero(studio):
     assert studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/summary").json() == {
         "findings": None, "ideas": None, "changed": None, "unpushed": None,
         "modified": None, "checked_at": None, "git": "error"}
+
+
+@pytest.mark.parametrize("gh, expected", [
+    (None, None),
+    ({"state": "behind", "behind": 4, "ahead": 0, "url": "secret"}, {"state": "behind", "behind": 4, "ahead": 0}),
+    ({"state": "current", "behind": 0, "ahead": 0}, {"state": "current", "behind": 0, "ahead": 0}),
+    ({"state": "missing"}, {"state": "missing", "behind": None, "ahead": None}),
+    ({"state": "current", "behind": True, "ahead": 0}, {"state": "unknown", "behind": None, "ahead": None}),
+    ({"state": "behind", "behind": -2, "ahead": "0"}, {"state": "unknown", "behind": None, "ahead": None}),
+    ({"state": ["current"]}, {"state": "unknown", "behind": None, "ahead": None}),
+])
+def test_project_summary_github_counts_are_filtered_and_validated(studio, gh, expected):
+    aid, machine, link = setup(studio)
+    link.hello["project_summary"] = True
+    machine.projects["alpha"]["summary"] = {"github": gh}
+    assert studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/summary").json()["github"] == expected
