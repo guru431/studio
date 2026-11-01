@@ -7629,6 +7629,8 @@ def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
             ("wait", "document.querySelector('#code-projects li[data-pid]')"),
             ("eval", "first", CODE_PANEL_OPEN), ("eval", "shown", settled(visible, 400)),
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("eval", "kept", settled(CODE_PANEL_OPEN)),
+            ("wait", "document.querySelector('#code-computer-dialog').open"),
+            ("eval", "closeInfo", "document.querySelector('#code-computer-dialog').close();true"),
             *code_project(aid, "alpha"), ("eval", "chosen", CODE_PANEL_OPEN),
             ("eval", "toggle", "getComputedStyle(document.querySelector('#code-panel-toggle')).display !== 'none'"),
             ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
@@ -10092,6 +10094,8 @@ def test_code_selected_computer_click_rereads_its_projects(browser, live):
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 1"), ("wait", named("С гаммой")),
             ("click", agent), ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2"),
+            ("wait", "document.querySelector('#code-computer-dialog').open"),
+            ("eval", "closeInfo", "document.querySelector('#code-computer-dialog').close();true"),
             ("eval", "two", CODE_PROJECTS), ("wait", named("Закрытый")),
             ("eval", "list", "!!(window.oldList = document.querySelector('#code-projects'))"),
             ("click", agent), ("wait", "document.querySelector('#code-projects') !== window.oldList"

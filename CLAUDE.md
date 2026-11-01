@@ -33,6 +33,17 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+С 0.11.0 необязательный `hello.computer_info` объявляет `GET /api/code/agents/<aid>/info` →
+op `computer_info`, только свой компьютер с открытым PIN. `agent/studio_agent/computer_info.py`
+считывает CIM Windows в потоке (10 с): ОС, память, локальные/съёмные диски, IP интерфейсов;
+имя/пользователь и все `Config.projects_roots`, публичный адрес — фиксированный HTTPS api64.ipify.org
+(3 с, без redirect и данных компьютера). `app/computer_info.py` фильтрует поля и проверяет числа/IP,
+ответ `no-store`, неизвестное — null. `code-computer.js` открывает карточку по явному нажатию
+на компьютер в `code-panel.js`, после PIN; автоматический выбор окно не открывает. Снимок только
+в DOM окна, закрытие/уход очищают его и отменяют запрос. Старый/offline мост — пояснение без запроса.
+Проверки: `test_computer_info.py` обоих наборов и `test_ui_computer_info.py` (320/1280 и WebKit).
+При недоступности ipify внешний IP берётся из `link.ip`, только если адрес публичный.
+
 Cleaner: [docs/cleaner-integration.md](docs/cleaner-integration.md), клиент `app/cleaner_client.py`,
 схема 26. Флаг подключения `cleaner` — только серверные чат и перевод; ключ провайдера остаётся в Cleaner.
 Предпросмотр обязателен для хода чата, квитанция одноразовая; текст SSE заменяется целиком (`replace`).

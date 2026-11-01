@@ -174,7 +174,8 @@ def test_hello(agent):
                              "chat_control": True, "attachments": True, "project_activity": True,
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                             "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True}
+                             "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
+                             "computer_info": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

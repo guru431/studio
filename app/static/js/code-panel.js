@@ -26,6 +26,7 @@ import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { setCodeActivity } from './code-activity.js';
+import { computerView } from './code-computer.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -72,6 +73,22 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
+
+  let infoIntent = null; // Только явное нажатие: автоматический выбор компьютера окно не открывает.
+  const computer = computerView(root, { locked(aid) { infoIntent = aid; pin(aid); } });
+  function showComputer() {
+    if (infoIntent !== selected || mode !== 'projects') return;
+    infoIntent = null;
+    computer.show(items.find((a) => a.id === selected));
+  }
+  async function computerClicked(aid) {
+    infoIntent = aid;
+    await select(aid);
+    if (!alive || infoIntent !== aid) return;
+    const agent = items.find((a) => a.id === aid);
+    if (agent && !agent.online) { infoIntent = null; computer.show(agent); }
+    else showComputer();
+  }
 
   let alive = true;
   let gen = 0;             // номер показа компьютера: ответ прежнего показ не трогает
@@ -373,7 +390,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('span', { class: 'code-agent-version', title: agent.agent_version
         ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'),
       agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null);
-      row.addEventListener('click', () => select(agent.id));
+      row.setAttribute('aria-haspopup', 'dialog');
+      row.addEventListener('click', () => computerClicked(agent.id));
       const update = updates.get(agent.id);
       const available = newer(agent.latest_version, agent.agent_version);
       const busy = updating(update) || update?.state === 'pin';
@@ -438,6 +456,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   /** Компьютер в панели: kind — open (вход, нажатие) или pin (отказ closed справа). */
   function show(aid, kind) {
     const mine = ++gen;
+    if (infoIntent !== aid) infoIntent = null;
     selected = aid;
     paintSelected();
     status.textContent = '';
@@ -553,6 +572,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     paintCounts();
     paintHere();
     footer.hidden = false;
+    showComputer();
     sortProjects();
     refreshActivity();
     await refreshSummaries(mine, agent);
@@ -705,6 +725,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       host.removeEventListener('keydown', onAction);
       gen += 1;
       unsubscribe();
+      computer.unmount();
       root.remove();
     },
   };

@@ -71,6 +71,8 @@ class FakeMachine:
         self.attachments = False
         self.project_activity = False
         self.project_summary = False
+        self.computer_info = False
+        self.computer_data = {}
         self.file_stats = False
         self.file_operations = False
         self.file_suggestions = False
@@ -96,7 +98,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "file_stats", "file_operations",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "file_stats", "file_operations",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
@@ -147,6 +149,9 @@ class FakeMachine:
         self.update_state = 'preparing'
         self.update_version = req['version']
         return self._op_agent_update_status(req, events)
+
+    def _op_computer_info(self, req, events):
+        return self.computer_data
 
     def _op_agent_update_status(self, req, events):
         return {'state': self.update_state, 'version': self.update_version}
