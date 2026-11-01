@@ -4,4 +4,6 @@
 # Клиенты Windows: PowerShell 5.1 (UTF-8 с BOM, CRLF)
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
+# Файлы выкладки — LF, в том числе Windows-сборщик (BOM сохранён для PowerShell 5.1).
+deploy/*.ps1 text eol=lf
 *.png binary

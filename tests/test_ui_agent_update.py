@@ -130,6 +130,7 @@ def test_agent_update_geometry_and_old_agent_in_webkit(webkit, live, update_zip,
             assert old_row.locator('.code-agent-version').inner_text() == '—'
             assert old_row.locator('.code-agent-update').is_disabled()
             assert old_row.get_by_text('Установить новый агент').get_attribute('href') == '/api/agent/download'
+            assert old_row.get_by_text('Установить новый агент').get_attribute('download') == 'studio-agent-setup.exe'
             row.locator('.code-agent-update').tap()
             page.wait_for_function("document.querySelector('.code-agent-update-status')?.textContent.includes('Скачивание')")
             assert row.locator('.code-agent-update').is_disabled()

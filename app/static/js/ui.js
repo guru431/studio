@@ -52,15 +52,17 @@ export function button(text, attrs = {}, onClick) {
   return node;
 }
 
-/** «Скачать мост для Windows» (спека 2026-10-28-studio-agent-download-and-window-design, 4.2): ссылка на ZIP моста
- * Claude Code, что нужно и шаги установки. Один источник — «Агенты» без компьютеров и «Настройки» → «Агенты». */
+/** «Скачать мост для Windows»: ссылка на установщик моста
+ * Claude Code, что нужно и шаги установки. Один источник — «Агенты» без компьютеров и корень настроек. */
 export function agentDownload() {
   return el('div', { class: 'agent-download' },
-    el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: true },
-      'Скачать мост для Windows'),
-    el('p', { class: 'muted small agent-download-needs' }, 'ZIP, нужны Python 3.11+ и Claude Code, Codex или OpenCode'),
-    el('p', { class: 'agent-download-steps' }, 'Распакуйте архив и запустите install.cmd. В окне моста войдите логином'
-      + ' и паролем студии — компьютер появится здесь.'));
+    el('p', { class: 'agent-install-note', role: 'note' },
+      'Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.'),
+    el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: 'studio-agent-setup.exe' },
+      'Скачать агент для Windows (.exe)'),
+    el('p', { class: 'muted small agent-download-needs' }, 'Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode'),
+    el('p', { class: 'agent-download-steps' }, 'Запустите studio-agent-setup.exe. В окне моста войдите логином'
+      + ' и паролем студии — компьютер появится в разделе «Агенты».'));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

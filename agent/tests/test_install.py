@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import winreg
+import zipfile
 
 import pytest
 
@@ -180,3 +181,61 @@ def test_install_from_studio_checkout_keeps_the_component_in_place(tmp_path):
     finally:
         running.terminate()
         running.wait(timeout=10)
+
+
+def build_exe(tmp_path, *, unsafe=False):
+    """Настоящий компилятор Windows и пакет из рабочего дерева, без сети."""
+    src = archive(tmp_path / "source")
+    package = tmp_path / "studio-agent.zip"
+    with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in src.rglob("*"):
+            if path.is_file():
+                z.write(path, "studio-agent/" + path.relative_to(src).as_posix())
+        if unsafe:
+            z.writestr("studio-agent/../../escaped.txt", "must not escape")
+    exe = tmp_path / "Загрузки с пробелами & знаком" / "studio-agent-setup.exe"
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                             "-File", str(REPO.parent / "deploy" / "build-agent-installer.ps1"),
+                             "-Archive", str(package), "-Output", str(exe)], capture_output=True, timeout=30)
+    assert result.returncode == 0, (result.stdout + result.stderr).decode("utf-8", "replace")
+    assert exe.read_bytes().startswith(b"MZ")
+    return exe
+
+
+def run_exe(exe, local, temp):
+    temp.mkdir(exist_ok=True)
+    return subprocess.run([str(exe), "-NoVenv", "-NoStart", "-RunKey", "HKCU:\\" + RUN_KEY],
+                          env={**os.environ, "LOCALAPPDATA": str(local), "TEMP": str(temp), "TMP": str(temp)},
+                          input=b"", capture_output=True, timeout=30)
+
+
+def test_single_exe_installs_and_refuses_a_running_bridge(tmp_path):
+    exe = build_exe(tmp_path)
+    local, temp = tmp_path / "Local с пробелами", tmp_path / "Временные & файлы"
+    result = run_exe(exe, local, temp)
+    assert result.returncode == 0, (result.stdout + result.stderr).decode("utf-8", "replace")
+    target = local / "Programs" / "studio-agent"
+    assert all((target / f).is_file() for f in SHIPPED)
+    assert not list(temp.glob("studio-agent-setup-*"))
+    previous = (target / "README.md").read_bytes()
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",
+                                str(target / "studio_agent.pyw")])
+    try:
+        result = run_exe(exe, local, temp)
+        assert result.returncode != 0
+        assert running.poll() is None
+        assert (target / "README.md").read_bytes() == previous
+        assert not list(temp.glob("studio-agent-setup-*"))
+    finally:
+        running.terminate()
+        running.wait(timeout=10)
+
+
+def test_single_exe_rejects_paths_outside_its_temporary_directory(tmp_path):
+    exe = build_exe(tmp_path, unsafe=True)
+    local, temp = tmp_path / "Local", tmp_path / "Temp"
+    result = run_exe(exe, local, temp)
+    assert result.returncode != 0
+    assert not (temp / "escaped.txt").exists()
+    assert not (local / "Programs").exists()
+    assert not list(temp.glob("studio-agent-setup-*"))

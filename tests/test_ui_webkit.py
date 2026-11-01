@@ -268,8 +268,25 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
     page.locator('#code-project-sort').select_option('findings')
     pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
+    page.evaluate("""() => {
+      const real = window.fetch;
+      window.refreshGate = new Promise(resolve => window.releaseRefresh = resolve);
+      window.fetch = async (...args) => {
+        if (String(args[0]).endsWith('/summary') && window.refreshGate) await window.refreshGate;
+        return real(...args);
+      };
+    }""")
     button.tap()
+    pw.expect(button).to_have_attribute('aria-busy', 'true')
+    pw.expect(page.locator('#code-project-updated')).to_have_text('Обновляю сведения…')
+    assert button.locator('span').evaluate("e => getComputedStyle(e).animationName") == 'spin'
+    page.emulate_media(reduced_motion='reduce')
+    assert button.locator('span').evaluate("e => getComputedStyle(e).animationName") == 'none'
+    pw.expect(page.locator('#code-project-updated')).to_have_text('Обновляю сведения…')
+    page.screenshot(path=str(tmp_path / f'refresh-webkit-{page.viewport_size["width"]}.png'))
+    page.evaluate('() => { window.refreshGate = null; window.releaseRefresh(); }')
     pw.expect(button).to_be_enabled()
+    pw.expect(button).to_have_attribute('aria-busy', 'false')
     assert button.evaluate('e => e.scrollWidth <= e.clientWidth')
     pw.expect(page.locator('#code-project-updated')).to_contain_text('Обновлено:')
     page.screenshot(path=str(tmp_path / f'projects-webkit-{page.viewport_size["width"]}.png'))

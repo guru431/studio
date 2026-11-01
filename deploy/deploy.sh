@@ -13,8 +13,8 @@
 # argv. Откат — выложить прежний коммит. Vhost (deploy/apache-vhost.conf) подключён в
 # /opt/services/apache/apache2.conf строкой IncludeOptional: install.sh проверяет его apache2ctl -t
 # (отказ — прежний код на место) и после ответа службы всегда сам делает reload Apache.
-# Архив моста Claude Code (GET /api/agent/download) — agent/ того же HEAD студии
-# → agent/studio-agent.zip рядом с кодом; нет компонента или он грязный — отказ до копирования кода.
+# EXE установки и ZIP обновления моста — agent/ того же HEAD студии.
+# EXE собирается на Windows до первого SSH; оба файла откатываются вместе с кодом.
 set -euo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
@@ -41,13 +41,26 @@ git -C "$D" cat-file -e HEAD:agent/install.cmd 2>/dev/null \
 [ -z "$(git -C "$D" status --porcelain -- "${PARTS[@]}" agent)" ] \
     || die "незакоммиченные изменения в ${PARTS[*]} agent — выкладывается только закоммиченный HEAD"
 
+package=$(mktemp -d)
+trap 'rm -rf -- "$package"' EXIT
+git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent > "$package/studio-agent.zip"
+git -C "$D" show HEAD:deploy/build-agent-installer.ps1 > "$package/build-agent-installer.ps1"
+git -C "$D" show HEAD:deploy/agent-installer.cs > "$package/agent-installer.cs"
+echo "==> сборка установщика Windows"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$(cygpath -w "$package/build-agent-installer.ps1")" \
+    -Archive "$(cygpath -w "$package/studio-agent.zip")" \
+    -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
+
 echo "==> код $(git -C "$D" rev-parse --short HEAD) → $HOST:$R"
 "${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming && sudo install -d -o root -g root -m 0700 $R/.incoming"
 git -C "$D" -c core.autocrlf=false archive --format=tar HEAD "${PARTS[@]}" \
     | "${SSH[@]}" "sudo tar -xf - -C $R/.incoming"
-echo "==> мост $(git -C "$D" rev-parse --short HEAD) → agent/studio-agent.zip"
-git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent \
-    | "${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent && sudo sh -c 'cat > $R/.incoming/agent/studio-agent.zip'"
+echo "==> мост $(git -C "$D" rev-parse --short HEAD) → ZIP и установщик EXE"
+"${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent"
+for file in studio-agent.zip studio-agent-setup.exe; do
+    "${SSH[@]}" "sudo sh -c 'cat > $R/.incoming/agent/$file'" < "$package/$file"
+done
 
 if [ "$NEW_SECRET" = 0 ] && ! "${SSH[@]}" "sudo grep -qs '^STUDIO_DATA_KEY=' /etc/studio/studio.env"; then
     NEW_SECRET=1        # первая установка или studio.env прежней студии (подпись сессии)

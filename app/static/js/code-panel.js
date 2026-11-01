@@ -199,6 +199,17 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       : checked.has(selected) ? `Обновлено: ${dateText(checked.get(selected))}` : 'Ещё не обновлено';
   }
 
+  function refreshBusy(busy) {
+    refresh.disabled = busy;
+    refresh.setAttribute('aria-busy', String(busy));
+    footer.setAttribute('aria-busy', String(busy));
+    const label = busy ? 'Обновляю сведения…' : 'Обновить сведения';
+    refresh.title = label;
+    refresh.setAttribute('aria-label', label);
+    if (busy) updated.textContent = label;
+    else paintUpdated();
+  }
+
   function paintSummary(li, data) {
     const summary = li.querySelector('.code-project-summary');
     const metrics = li.querySelector('.code-project-metrics');
@@ -263,8 +274,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (!agent.project_summary) return;
     const own = {};
     refreshing = own;
-    refresh.disabled = true;
-    footer.setAttribute('aria-busy', 'true');
+    refreshBusy(true);
     const queue = [...projectItems];
     const results = new Map(summaries.get(agent.id));
     let failures = 0;
@@ -300,8 +310,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     } finally {
       if (refreshing === own) {
         refreshing = null;
-        refresh.disabled = false;
-        footer.setAttribute('aria-busy', 'false');
+        if (alive && mine === gen) refreshBusy(false);
       }
     }
   }
@@ -315,10 +324,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (refresh.disabled || mode !== 'projects') return;
     const mine = ++gen;
     const agent = items.find((a) => a.id === selected);
-    refresh.disabled = true;
+    refreshBusy(true);
     status.textContent = '';
     try { await projects(mine, agent, null, true); }
-    finally { if (alive && mine === gen && !refreshing) refresh.disabled = false; }
+    finally { if (alive && mine === gen && !refreshing) refreshBusy(false); }
   });
 
   /** Список компьютеров; не прочитался — null (прежний список остаётся, «компьютеров нет» не сказать). */
@@ -364,8 +373,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const note = update ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
         role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
       const bootstrap = !agent.agent_update && agent.online
-        ? el('a', { class: 'code-agent-update-status', href: '/api/agent/download', download: 'studio-agent.zip',
-          title: 'Один раз установите архив на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент') : null;
+        ? el('a', { class: 'code-agent-update-status', href: '/api/agent/download', download: 'studio-agent-setup.exe',
+          title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент') : null;
       return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || bootstrap);
     }));
   }
@@ -413,7 +422,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     paintSelected();
     status.textContent = '';
     footer.hidden = true;
-    refresh.disabled = false;
+    refreshing = null;
+    refreshBusy(false);
     const agent = items.find((a) => a.id === aid);
     if (!agent) {
       mode = 'idle';
