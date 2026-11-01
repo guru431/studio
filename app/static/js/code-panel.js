@@ -31,7 +31,7 @@ const OFFLINE = 'Компьютер не на связи — включите е
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
 const UPDATE_WORDS = { preparing: 'Скачивание и установка…', waiting: 'Ждём завершения заданий…',
   restarting: 'Перезапуск агента…', pin: 'Введите PIN для обновления агента',
-  failed: 'Не удалось обновить агент. Повторите попытку.', complete: 'Агент обновлён' };
+  failed: 'Не удалось обновить агент. Повторите попытку.' };
 const versionParts = (value) => /^\d+\.\d+\.\d+$/.test(value || '') ? value.split('.').map(Number) : null;
 function newer(latest, current) {
   const a = versionParts(latest), b = versionParts(current);
@@ -385,15 +385,16 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           title: `Скачать установщик Studio Agent${agent.latest_version ? ' ' + agent.latest_version : ''} для Windows`,
           'aria-label': `Скачать установщик агента · ${agent.name}` }, el('span', { 'aria-hidden': 'true' }, '↓'));
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
-      const note = update && !(update.state === 'complete' && available)
+      const note = update && update.state !== 'complete'
         ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
         role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
       const releaseText = !agent.latest_version ? 'Версия обновления пока неизвестна'
         : available ? `Доступно обновление до ${agent.latest_version}`
-          : !agent.agent_version ? `Доступна версия ${agent.latest_version}` : 'Версия актуальна';
-      const releaseNote = el('span', { class: 'code-agent-update-status', role: 'status' }, releaseText,
-        ...(!agent.agent_update ? [' · ', el('a', { href: '/api/agent/download', download: 'studio-agent-setup.exe',
-          title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент')] : []));
+          : !agent.agent_version ? `Доступна версия ${agent.latest_version}` : '';
+      const releaseNote = releaseText || !agent.agent_update
+        ? el('span', { class: 'code-agent-update-status', role: 'status' }, releaseText,
+          ...(!agent.agent_update ? [releaseText ? ' · ' : '', el('a', { href: '/api/agent/download', download: 'studio-agent-setup.exe',
+            title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент')] : [])) : null;
       return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || releaseNote);
     }));
   }
