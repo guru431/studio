@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import files, github_status, gitinfo
+from . import files, github_status, gitinfo, remote_status
 from .errors import Refused
 
 JOURNAL_MAX = 2 * 1024 * 1024
@@ -61,7 +61,8 @@ def journal_count(project: Path, name: str, status: str) -> int | None:
 def read(project: Path, *, now=time.time) -> dict:
     result = {"findings": journal_count(project, "FINDINGS.md", "open"),
               "ideas": journal_count(project, "IDEAS.md", "proposed"),
-              "changed": None, "unpushed": None, "modified": None, "git": "error", "github": None}
+              "changed": None, "unpushed": None, "modified": None, "git": "error", "github": None,
+              "remotes": []}
     try:
         result["modified"] = project.stat().st_mtime
         # Наличие своего .git проверяется до запуска: чужой родительский репозиторий не учитывается.
@@ -97,5 +98,7 @@ def read(project: Path, *, now=time.time) -> dict:
         pass  # Неизвестное значение остаётся null, а не превращается в ноль.
     if result["git"] == "ok":
         oid = re.search(rb"(?:^|\0)# branch.oid ([0-9a-f]{40}|[0-9a-f]{64})\0", out.stdout)
-        result["github"] = github_status.read(project, state["branch"], oid[1].decode("ascii") if oid else None)
+        head = oid[1].decode("ascii") if oid else None
+        result["github"] = github_status.read(project, state["branch"], head)
+        result["remotes"] = remote_status.read(project, state["branch"], head)
     return {**result, "checked_at": now()}

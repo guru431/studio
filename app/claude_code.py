@@ -339,6 +339,22 @@ def _time(value) -> float | None:
     return value if ok else None
 
 
+def _remote_status(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    counts = {key: count if type(count := value.get(key)) is int and count >= 0 else None
+              for key in ("behind", "ahead")}
+    state = value.get("state")
+    valid = {"current": counts == {"behind": 0, "ahead": 0},
+             "behind": counts["behind"] is not None and counts["behind"] > 0 and counts["ahead"] == 0,
+             "ahead": counts["ahead"] is not None and counts["ahead"] > 0 and counts["behind"] == 0,
+             "diverged": all(count is not None and count > 0 for count in counts.values())}
+    if not isinstance(state, str) or not valid.get(state, state in ("missing", "unknown")):
+        state = "unknown"
+    return {"state": state, **(counts if state not in ("missing", "unknown")
+                              else {"behind": None, "ahead": None})}
+
+
 @router.get("/agents/{aid}/projects/{pid}/summary")
 async def project_summary(aid: int, pid: str, request: Request):
     own_agent(request, aid)
@@ -350,20 +366,21 @@ async def project_summary(aid: int, pid: str, request: Request):
     result = {key: value if type(value := data.get(key)) is int and value >= 0 else None
               for key in ("findings", "ideas", "changed", "unpushed")}
     if "github" in data:
-        gh = data["github"]
-        result["github"] = None
-        if isinstance(gh, dict):
-            counts = {key: value if type(value := gh.get(key)) is int and value >= 0 else None
-                      for key in ("behind", "ahead")}
-            state = gh.get("state")
-            valid = {"current": counts == {"behind": 0, "ahead": 0},
-                     "behind": counts["behind"] is not None and counts["behind"] > 0 and counts["ahead"] == 0,
-                     "ahead": counts["ahead"] is not None and counts["ahead"] > 0 and counts["behind"] == 0,
-                     "diverged": all(value is not None and value > 0 for value in counts.values())}
-            if not isinstance(state, str) or not valid.get(state, state in ("missing", "unknown")):
-                state = "unknown"
-            result["github"] = {"state": state, **(counts if state not in ("missing", "unknown")
-                                                 else {"behind": None, "ahead": None})}
+        result["github"] = _remote_status(data["github"])
+    if "remotes" in data:
+        result["remotes"] = []
+        seen = set()
+        remotes = data["remotes"]
+        for item in remotes[:64] if isinstance(remotes, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not 1 <= len(name) <= 128 or name in seen:
+                continue
+            if any(ord(char) < 32 or ord(char) == 127 for char in name):
+                continue
+            seen.add(name)
+            result["remotes"].append({"name": name, **_remote_status(item)})
     return {**result, "modified": _time(data.get("modified")), "checked_at": _time(data.get("checked_at")),
             "git": data.get("git") if data.get("git") in ("ok", "not_git", "error") else "error"}
 

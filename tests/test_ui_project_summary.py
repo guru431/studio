@@ -99,6 +99,10 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
                 {"state": "ahead", "behind": 0, "ahead": 1},
                 {"state": "diverged", "behind": 2, "ahead": 1}][index]}
     machine.projects.update({f"project-{n:02}": {} for n in range(35)})
+    machine.projects["alpha"]["summary"]["remotes"] = [
+        {"name": "origin", "state": "current", "behind": 0, "ahead": 0},
+        {"name": "github", "state": "current", "behind": 0, "ahead": 0},
+        {"name": "cld", "state": "behind", "behind": 2, "ahead": 0}]
     machine.projects["project-00"]["summary"] = {"github": {"state": "missing"}}
     machine.project_summary = True
     aid, server = code_online(live, login, machine)
@@ -154,14 +158,18 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
               const summary = row.querySelector('.code-project-summary').getBoundingClientRect();
               const git = row.querySelector('.code-project-git').getBoundingClientRect();
               const gh = row.querySelector('.code-project-github')?.getBoundingClientRect();
+              const remotes = [...row.querySelectorAll('.code-project-remote')].map(e => e.getBoundingClientRect());
               const date = row.querySelector('.code-project-modified').getBoundingClientRect();
               const lineHeight = parseFloat(getComputedStyle(row.querySelector('.code-project-summary')).lineHeight);
               return metrics.left >= name.right && metrics.top < heading.bottom
                 && summary.top >= heading.bottom && Math.abs(git.top - date.top) < 1
                 && (!gh || gh.left >= git.right && gh.right <= summary.right && Math.abs(gh.top - git.top) < 1)
+                && remotes.every(r => r.right <= summary.right && Math.abs(r.top - git.top) < 1)
                 && summary.height <= lineHeight + 1 && row.children.length === 2;
             })"""),
             ("eval", "github", """[...document.querySelectorAll('.code-project-github')].map(e =>
+              [e.textContent, e.dataset.gitLevel, e.title])"""),
+            ("eval", "remotes", """[...document.querySelectorAll('.code-project-remote')].map(e =>
               [e.textContent, e.dataset.gitLevel, e.title])"""),
             ("screenshot", str(tmp_path / f"github-{width}.png")),
             order("findings"), order("ideas"), order("modified"), order("unpushed"),
@@ -208,6 +216,8 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
         ["GitHub ↓3", "red"], ["GitHub ✓", "green"], ["GitHub ↕", "red"],
         ["GitHub ↑1", "yellow"], ["GitHub ∅", "red"]]
     assert "отстаёт на 3" in values["github"][0][2] and "GitHub ?" in values["fresh"]
+    assert [entry[:2] for entry in values["remotes"]] == [["cld ↓2", "red"]]
+    assert "По локальным данным Git, без fetch" in values["remotes"][0][2]
     assert "null" not in values["counts"] and "undefined" not in values["counts"]
     assert not values["overflow"] and not problems(result), problems(result)
 
@@ -220,6 +230,8 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     other = FakeMachine({"beta": {"summary": {"findings": 7, "ideas": 3, "changed": 2, "unpushed": 1,
         "modified": T0, "checked_at": T0, "git": "ok"}}})
     machine.project_summary = other.project_summary = True
+    machine.projects["alpha"]["summary"]["remotes"] = [
+        {"name": "cld", "state": "behind", "behind": 2, "ahead": 0}]
     aid, server = code_online(live, login, machine)
     bid, second = code_online(live, login, other, name="Второй ПК")
     gate = f"""(() => {{const real = window.fetch; window.heldSummaries = 0;
@@ -247,6 +259,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
             ("eval", "retained", count),
             ("eval", "errorFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
             ("eval", "staleGithub", "[document.querySelector('.code-project-github').textContent, document.querySelector('.code-project-github').dataset.gitLevel]"),
+            ("eval", "staleRemote", "[document.querySelector('.code-project-remote').textContent, document.querySelector('.code-project-remote').dataset.gitLevel]"),
             ("eval", "unchanged", "window.lastUpdated === document.querySelector('#code-project-updated').textContent"),
             ("eval", "failList", "window.failSummary=false;window.failList=true;true"),
             ("click", "#code-project-refresh"), ("wait", ready), ("eval", "afterListFailure", count),
@@ -268,6 +281,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     assert values["unchanged"] and values["stillOther"]
     assert values["errorFinished"] and values["listErrorFinished"] and values["otherFinished"]
     assert values["staleGithub"] == ["GitHub ↓4", "unknown"]
+    assert values["staleRemote"] == ["cld ↓2", "unknown"]
     assert values["other"] == values["keptOther"] == "П: 7"
     assert not problems(result), problems(result)
 
@@ -279,6 +293,7 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
     machine = FakeMachine({"alpha": {"files": {"FINDINGS.md": b"# Findings\nProblem document\n",
         "IDEAS.md": b"# Ideas\nIdea document\n"}}, "beta": {}})
     machine.projects["beta"]["summary"] = {"github": {"state": "behind", "behind": 3, "ahead": 0}}
+    machine.projects["beta"]["summary"]["remotes"] = [{"name": "cld", "state": "unknown"}]
     machine.project_summary = True
     aid, server = code_online(live, login, machine)
     alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
@@ -311,6 +326,9 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
             *panel, blank('beta', 'summary'), ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"),
             *panel, ("click", beta + " .code-project-github"),
+            ("wait", "document.querySelector('#code-unsaved')?.open"),
+            ("press", "Escape"),
+            *panel, ("click", beta + " .code-project-remote"),
             ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"), ("eval", "retained", "document.querySelector('#code-editor').value"),
             *panel, ("click", beta + " .code-project-git"),

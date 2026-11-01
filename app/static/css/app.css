@@ -1137,7 +1137,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
 .code-agent-version { flex: none; color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); font-weight: 400; }
-.code-agent-update { flex: none; width: 28px; min-height: 30px; padding: 2px; font-size: calc(18px * var(--font-scale, 1)); }
+.code-agent-update { flex: none; display: grid; place-items: center; width: 28px; min-height: 30px; padding: 2px;
+  font-size: calc(18px * var(--font-scale, 1)); text-decoration: none; }
 .code-agent-update-status { flex-basis: 100%; padding: 0 8px 5px; font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 .code-project { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px; border-radius: 8px;
   color: var(--text); text-decoration: none; font-size:calc(14px * var(--font-scale, 1)); cursor: pointer; }
@@ -1154,11 +1155,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; color: var(--muted); }
 .code-project-metrics { flex: none; white-space: nowrap; }
 .code-project-summary { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; }
-.code-project-git, .code-project-github, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
+.code-project-git, .code-project-github, .code-project-remote, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
 .code-project-modified { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
-.code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
-.code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
+.code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-project-remote[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
+.code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-project-remote[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
+.code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-project-remote[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
 .code-git-actions { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px;
   width:100%; min-width:0; padding-bottom:8px; container-type:inline-size; }
 .code-git-actions .btn { min-width:0; padding-inline:4px; white-space:nowrap; }

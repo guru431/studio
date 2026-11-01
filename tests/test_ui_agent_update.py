@@ -19,6 +19,9 @@ def update_zip(tmp_path, monkeypatch):
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr('studio_agent/__init__.py', 'VERSION = "0.10.1"\n')
     monkeypatch.setattr(agents, 'AGENT_ZIP', path)
+    setup = tmp_path / 'studio-agent-setup.exe'
+    setup.write_bytes(b'MZ-test-installer')
+    monkeypatch.setattr(agents, 'AGENT_SETUP', setup)
 
 
 def machine_for_update():
@@ -57,18 +60,20 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-projects li')"),
             ('eval', 'before', f"document.querySelector('{row} .code-agent-version').textContent"),
+            ('eval', 'available', f"document.querySelector('{row} .code-agent-update-status').textContent"),
             ('eval', 'geometry', geometry), ('click', row + ' .code-agent-update'),
             ('wait', f"document.querySelector('{row} .code-agent-update-status')?.textContent.includes('Ждём')"),
             ('eval', 'disabled', f"document.querySelector('{row} .code-agent-update').disabled"),
             ('wait', f"document.querySelector('{row} .code-agent-version').textContent === '0.10.1'"),
             ('eval', 'complete', f"document.querySelector('{row} .code-agent-update-status').textContent"),
-            ('eval', 'latestDisabled', f"document.querySelector('{row} .code-agent-update').disabled")],
+            ('eval', 'installer', f"document.querySelector('{row} .code-agent-update').getAttribute('download')")],
             width=width, mobile=width == 320)
     finally:
         server.stop()
     assert not result.get('failed'), result
     assert result['values'] == {'go': '#/code', 'before': '0.10.0', 'geometry': True, 'disabled': True,
-                                'complete': 'Агент обновлён', 'latestDisabled': True}
+                                'available': 'Доступно обновление до 0.10.1',
+                                'complete': 'Агент обновлён', 'installer': 'studio-agent-setup.exe'}
     assert [req['op'] for req in machine.requests].count('agent_update') == 1
     assert not problems(result), problems(result)
 
@@ -128,9 +133,14 @@ def test_agent_update_geometry_and_old_agent_in_webkit(webkit, live, update_zip,
             assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
             old_row = page.locator(f'#code-agents li[data-id="{old_aid}"]')
             assert old_row.locator('.code-agent-version').inner_text() == '—'
-            assert old_row.locator('.code-agent-update').is_disabled()
+            assert old_row.locator('.code-agent-update').evaluate('e => e.tagName') == 'A'
+            assert 'Доступна версия 0.10.1' in old_row.inner_text()
             assert old_row.get_by_text('Установить новый агент').get_attribute('href') == '/api/agent/download'
             assert old_row.get_by_text('Установить новый агент').get_attribute('download') == 'studio-agent-setup.exe'
+            with page.expect_download() as downloaded:
+                old_row.locator('.code-agent-update').tap()
+            assert downloaded.value.suggested_filename == 'studio-agent-setup.exe'
+            assert downloaded.value.failure() is None
             row.locator('.code-agent-update').tap()
             page.wait_for_function("document.querySelector('.code-agent-update-status')?.textContent.includes('Скачивание')")
             assert row.locator('.code-agent-update').is_disabled()

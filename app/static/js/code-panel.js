@@ -40,6 +40,16 @@ function newer(latest, current) {
   return false;
 }
 
+function remoteBadge(remote, name) {
+  return {
+    current: ['✓', 'green', `${name} синхронизирован с текущей веткой`],
+    behind: [`↓${remote.behind}`, 'red', `${name} отстаёт на ${remote.behind} комм. от текущей ветки`],
+    ahead: [`↑${remote.ahead}`, 'yellow', `${name} опережает текущую ветку на ${remote.ahead} комм.`],
+    diverged: ['↕', 'red', `Истории разошлись: ${name} отстаёт на ${remote.behind} и опережает на ${remote.ahead} комм.`],
+    missing: ['∅', 'red', `Текущая ветка ещё не опубликована на ${name}`],
+  }[remote.state] || ['?', 'unknown', `Не удалось проверить ${name} или сравнить историю коммитов`];
+}
+
 export function panelView(host, { selected: first = null, opened, chose, list, openJournal }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
@@ -223,19 +233,22 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const git = data?.git === 'not_git' ? 'Без Git'
       : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
     const gh = data?.github;
-    const github = gh ? {
-      current: ['✓', 'green', 'GitHub синхронизирован с текущей веткой'],
-      behind: [`↓${gh.behind}`, 'red', `GitHub отстаёт на ${gh.behind} комм. от текущей ветки`],
-      ahead: [`↑${gh.ahead}`, 'yellow', `GitHub опережает текущую ветку на ${gh.ahead} комм.`],
-      diverged: ['↕', 'red', `Истории разошлись: GitHub отстаёт на ${gh.behind} и опережает на ${gh.ahead} комм.`],
-      missing: ['∅', 'red', 'Текущая ветка ещё не опубликована на GitHub'],
-    }[gh.state] || ['?', 'unknown', 'Не удалось проверить GitHub или сравнить историю коммитов'] : null;
+    const github = gh ? remoteBadge(gh, 'GitHub') : null;
     const githubTitle = github ? `${github[2]}. Проверено: ${dateText(data.checked_at)}${data.stale ? '. Не удалось обновить' : ''}` : '';
+    const remotes = (data?.remotes || []).filter((remote) => remote.name !== 'origin' && !(remote.name === 'github' && gh))
+      .map((remote) => {
+        const [mark, level, description] = remoteBadge(remote, remote.name);
+        const title = `${description}. По локальным данным Git, без fetch; состояние сервера может отличаться.`
+          + `${data.stale ? ' Не удалось обновить.' : ''}`;
+        return el('a', { class: 'code-project-remote', href: `${href}?tab=git`,
+          'data-git-level': data.stale ? 'unknown' : level, title, 'aria-label': title }, `${remote.name} ${mark}`);
+      });
     summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
     ...(github ? [el('a', { class: 'code-project-github', href: `${href}?tab=git`,
       'data-git-level': data.stale ? 'unknown' : github[1], title: githubTitle, 'aria-label': githubTitle }, `GitHub ${github[0]}`)] : []),
+    ...remotes,
     el('span', { 'aria-hidden': 'true' }, ' · '),
     el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
     ...(data?.stale ? [el('span', { class: 'error', title: 'Не удалось обновить', 'aria-label': 'Не удалось обновить' }, ' ⚠')] : []));
@@ -362,20 +375,26 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null);
       row.addEventListener('click', () => select(agent.id));
       const update = updates.get(agent.id);
-      const available = agent.agent_update && newer(agent.latest_version, agent.agent_version);
-      const title = !agent.agent_update ? 'Для автообновления один раз установите новый агент на компьютере'
-        : !agent.online ? 'Компьютер не на связи' : !agent.latest_version ? 'Архива агента нет на сервере'
-          : available ? `Обновить агент до ${agent.latest_version}` : 'Установлена последняя версия агента';
-      const button = el('button', { type: 'button', class: 'btn code-agent-update', title,
-        'aria-label': `Обновить агент · ${agent.name}`, disabled: !agent.online || !available || updating(update) || update?.state === 'pin' },
-      el('span', { 'aria-hidden': 'true' }, '↥'));
-      button.addEventListener('click', () => updateAgent(agent));
-      const note = update ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
+      const available = newer(agent.latest_version, agent.agent_version);
+      const busy = updating(update) || update?.state === 'pin';
+      const automatic = agent.online && agent.agent_update && available;
+      const button = automatic || busy
+        ? el('button', { type: 'button', class: 'btn code-agent-update', title: `Обновить агент до ${agent.latest_version}`,
+          'aria-label': `Обновить агент · ${agent.name}`, disabled: busy }, el('span', { 'aria-hidden': 'true' }, '↥'))
+        : el('a', { class: 'btn code-agent-update', href: '/api/agent/download', download: 'studio-agent-setup.exe',
+          title: `Скачать установщик Studio Agent${agent.latest_version ? ' ' + agent.latest_version : ''} для Windows`,
+          'aria-label': `Скачать установщик агента · ${agent.name}` }, el('span', { 'aria-hidden': 'true' }, '↓'));
+      if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
+      const note = update && !(update.state === 'complete' && available)
+        ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
         role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
-      const bootstrap = !agent.agent_update && agent.online
-        ? el('a', { class: 'code-agent-update-status', href: '/api/agent/download', download: 'studio-agent-setup.exe',
-          title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент') : null;
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || bootstrap);
+      const releaseText = !agent.latest_version ? 'Версия обновления пока неизвестна'
+        : available ? `Доступно обновление до ${agent.latest_version}`
+          : !agent.agent_version ? `Доступна версия ${agent.latest_version}` : 'Версия актуальна';
+      const releaseNote = el('span', { class: 'code-agent-update-status', role: 'status' }, releaseText,
+        ...(!agent.agent_update ? [' · ', el('a', { href: '/api/agent/download', download: 'studio-agent-setup.exe',
+          title: 'Один раз запустите установщик на компьютере; затем обновление будет автоматическим' }, 'Установить новый агент')] : []));
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, note || releaseNote);
     }));
   }
 
