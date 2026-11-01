@@ -75,7 +75,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
 
-  let infoIntent = null; // Только явное нажатие: автоматический выбор компьютера окно не открывает.
+  let infoIntent = null; // Окна открываются только отдельными кнопками сведений и рабочего стола.
   let infoKind = 'info';
   const computer = computerView(root, { locked(aid) { infoIntent = aid; pin(aid); } });
   const desktop = desktopView(root, { locked(aid) { infoKind = 'desktop'; infoIntent = aid; pin(aid); } });
@@ -396,8 +396,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('span', { class: 'code-agent-version', title: agent.agent_version
         ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'),
       agent.has_pin ? el('span', { class: 'tag code-agent-pin' }, 'PIN') : null);
-      row.setAttribute('aria-haspopup', 'dialog');
-      row.addEventListener('click', () => computerClicked(agent.id));
+      row.addEventListener('click', () => { infoIntent = null; select(agent.id); });
+      const info = el('button', { type: 'button', class: 'btn code-agent-info',
+        title: 'Сведения о компьютере', 'aria-label': `Сведения о компьютере · ${agent.name}`, 'aria-haspopup': 'dialog' },
+        el('span', { 'aria-hidden': 'true' }, 'ⓘ'));
+      info.addEventListener('click', () => computerClicked(agent.id));
       const update = updates.get(agent.id);
       const available = newer(agent.latest_version, agent.agent_version);
       const busy = updating(update) || update?.state === 'pin';
@@ -423,7 +426,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         title: 'Рабочий стол', 'aria-label': `Рабочий стол · ${agent.name}` },
         el('span', { 'aria-hidden': 'true' }, '▣'));
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, remote, button, note || releaseNote);
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, info, remote, button, note || releaseNote);
     }));
   }
 

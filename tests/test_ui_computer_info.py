@@ -1,4 +1,4 @@
-"""Сведения по нажатию на компьютер: телефон, рабочий стол, PIN и старый мост."""
+"""Выбор компьютера и отдельная кнопка сведений: телефон, рабочий стол, PIN и старый мост."""
 import httpx
 import pytest
 
@@ -33,7 +33,34 @@ FITS = """(() => {
 
 
 @pytest.mark.parametrize('width', [320, 1280])
-def test_computer_click_shows_snapshot_refreshes_and_keeps_project(browser, live, width):
+def test_computer_name_switches_projects_without_opening_info(browser, live, width):
+    login = f'computer-select-{width}'
+    live.add_user(login)
+    first = computer()
+    second = computer()
+    second.projects = {'beta': {}}
+    _, first_server = code_online(live, login, first)
+    aid, second_server = code_online(live, login, second, name='Другой компьютер')
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', "document.querySelector('.code-project-name')?.textContent === 'alpha'"),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent'),
+            ('wait', "document.querySelector('.code-project-name')?.textContent === 'beta'"),
+            ('eval', 'closed', "!document.querySelector('#code-computer-dialog').open"),
+            ('eval', 'selected', f"document.querySelector('#code-agents li[data-id=\"{aid}\"] .code-agent').getAttribute('aria-current')")],
+            width=width, mobile=width == 320)
+    finally:
+        second_server.stop()
+        first_server.stop()
+    assert not result.get('failed'), result
+    assert result['values']['closed']
+    assert result['values']['selected'] == 'true'
+    assert not any(req['op'] == 'computer_info' for machine in (first, second) for req in machine.requests)
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_computer_info_button_shows_snapshot_refreshes_and_keeps_project(browser, live, width):
     login = f'computer-info-{width}'
     live.add_user(login)
     machine = computer()
@@ -49,7 +76,7 @@ def test_computer_click_shows_snapshot_refreshes_and_keeps_project(browser, live
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-projects li')"),
             ('eval', 'initiallyClosed', "!document.querySelector('#code-computer-dialog').open"),
-            ('eval', 'before', 'location.hash'), ('click', f'#code-agents li[data-id="{aid}"] .code-agent'),
+            ('eval', 'before', 'location.hash'), ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('wait', SHOWN), ('eval', 'details', "document.querySelector('.code-computer-details').textContent"),
             ('eval', 'fits', FITS), ('click', '#code-computer-refresh'),
             ('wait', "document.querySelector('.code-computer-details')?.textContent.includes('after-refresh')"),
@@ -86,7 +113,7 @@ def test_computer_info_waits_for_pin_and_reopens_after_expiration(browser, live)
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-pin-input')"),
-            ('click', f'#code-agents li[data-id="{aid}"] .code-agent'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('eval', 'closed', "!document.querySelector('#code-computer-dialog').open"),
             ('type', '#code-pin-input', '2468'), ('click', '#code-pin-open'), ('wait', SHOWN),
             ('click', '#code-computer-refresh'),
@@ -109,12 +136,12 @@ def test_old_and_offline_computers_explain_why_snapshot_is_unavailable(browser, 
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-projects li')"),
-            ('click', f'#code-agents li[data-id="{aid}"] .code-agent'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('wait', "document.querySelector('#code-computer-dialog').open"),
             ('eval', 'old', "document.querySelector('.code-computer-content').textContent"),
             ('eval', 'disabled', "document.querySelector('#code-computer-refresh').disabled"),
             ('eval', 'close', "document.querySelector('#code-computer-dialog').close();true"),
-            ('click', f'#code-agents li[data-id="{offline}"] .code-agent'),
+            ('click', f'#code-agents li[data-id="{offline}"] .code-agent-info'),
             ('wait', "document.querySelector('#code-computer-dialog').open"),
             ('eval', 'offline', "document.querySelector('.code-computer-content').textContent")])
     finally:
@@ -141,7 +168,17 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
             page.set_default_timeout(10000)
             page.goto(live.url + '/#/code')
             page.wait_for_selector('#code-projects li')
-            page.locator(f'#code-agents li[data-id="{aid}"] .code-agent').tap()
+            row = page.locator(f'#code-agents li[data-id="{aid}"]')
+            row.locator('.code-agent').tap()
+            page.wait_for_selector('#code-projects li')
+            assert not page.locator('#code-computer-dialog').evaluate('e => e.open')
+            controls = [row.locator(selector).bounding_box() for selector in
+                        ('.code-agent', '.code-agent-info', '.code-agent-desktop', '.code-agent-update')]
+            assert all(bounds['width'] > 0 and bounds['height'] >= 30 for bounds in controls)
+            assert all(left['x'] + left['width'] <= right['x'] + 1 for left, right in zip(controls, controls[1:]))
+            assert controls[-1]['x'] + controls[-1]['width'] <= width
+            page.screenshot(path=str(tmp_path / f'computer-buttons-{width}.png'))
+            row.get_by_role('button', name='Сведения о компьютере · Компьютер с длинным именем', exact=True).tap()
             page.wait_for_function('() => ' + SHOWN)
             assert page.evaluate(FITS)
             assert 'WORKSTATION' in page.locator('.code-computer-details').inner_text()

@@ -7629,8 +7629,7 @@ def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
             ("wait", "document.querySelector('#code-projects li[data-pid]')"),
             ("eval", "first", CODE_PANEL_OPEN), ("eval", "shown", settled(visible, 400)),
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("eval", "kept", settled(CODE_PANEL_OPEN)),
-            ("wait", "document.querySelector('#code-computer-dialog').open"),
-            ("eval", "closeInfo", "document.querySelector('#code-computer-dialog').close();true"),
+            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog').open"),
             *code_project(aid, "alpha"), ("eval", "chosen", CODE_PANEL_OPEN),
             ("eval", "toggle", "getComputedStyle(document.querySelector('#code-panel-toggle')).display !== 'none'"),
             ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
@@ -7643,7 +7642,7 @@ def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["first"] is True and v["shown"] is True and v["kept"] is True and v["chosen"] is False
-    assert v["toggle"] is True
+    assert v["toggle"] is True and v["infoClosed"] is True
     assert v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -10094,8 +10093,7 @@ def test_code_selected_computer_click_rereads_its_projects(browser, live):
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 1"), ("wait", named("С гаммой")),
             ("click", agent), ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2"),
-            ("wait", "document.querySelector('#code-computer-dialog').open"),
-            ("eval", "closeInfo", "document.querySelector('#code-computer-dialog').close();true"),
+            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog').open"),
             ("eval", "two", CODE_PROJECTS), ("wait", named("Закрытый")),
             ("eval", "list", "!!(window.oldList = document.querySelector('#code-projects'))"),
             ("click", agent), ("wait", "document.querySelector('#code-projects') !== window.oldList"
@@ -10107,6 +10105,7 @@ def test_code_selected_computer_click_rereads_its_projects(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert [name for _, name in v["two"]] == ["alpha", "gamma"] and v["status"] == ""
+    assert v["infoClosed"] is True
     assert len(code_requests(machine, "open")) == 2 and len(code_requests(machine, "projects")) == 5
     assert not known_refusals(problems(r), 409), problems(r)
 
