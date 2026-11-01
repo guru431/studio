@@ -232,7 +232,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     page, aid = iphone
     bridge.LINKS[aid].hello["project_summary"] = True
     page.studio_machine.projects['alpha']['summary'] = {"git": "ok", "changed": 0, "unpushed": 0,
-        "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0}}
+        "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0},
+        "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0}]}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-refresh')
@@ -240,6 +241,10 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     pw.expect(gh).to_have_text('GitHub ↓12')
     assert gh.evaluate("""e => {const r=e.getBoundingClientRect(), row=e.parentElement.getBoundingClientRect();
       return r.left>=row.left && r.right<=row.right && e.title.includes('отстаёт на 12');}""")
+    remote = page.locator('.code-project-remote')
+    pw.expect(remote).to_have_text('cld ↓3')
+    assert remote.evaluate("""e => {const r=e.getBoundingClientRect(), row=e.parentElement.getBoundingClientRect();
+      return r.left>=row.left && r.right<=row.right && e.title.includes('без fetch');}""")
     page.screenshot(path=str(tmp_path / f'github-webkit-{page.viewport_size["width"]}.png'))
 
     def position():

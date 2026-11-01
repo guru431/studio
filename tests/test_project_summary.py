@@ -42,3 +42,19 @@ def test_project_summary_github_counts_are_filtered_and_validated(studio, gh, ex
     link.hello["project_summary"] = True
     machine.projects["alpha"]["summary"] = {"github": gh}
     assert studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/summary").json()["github"] == expected
+
+
+def test_project_summary_remotes_filter_names_counts_and_private_fields(studio):
+    aid, machine, link = setup(studio)
+    link.hello["project_summary"] = True
+    machine.projects["alpha"]["summary"] = {"remotes": [
+        {"name": "cld", "state": "behind", "behind": 3, "ahead": 0, "url": "secret", "token": "secret"},
+        {"name": "backup", "state": "current", "behind": True, "ahead": 0},
+        {"name": "new", "state": "unknown"},
+        {"name": "cld", "state": "current", "behind": 0, "ahead": 0},
+        {"name": "bad\nname"}, {"name": ""}, {"name": "a" * 129}, {"name": ["invalid"]}, "invalid"]}
+    result = studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/summary").json()
+    assert result["remotes"] == [
+        {"name": "cld", "state": "behind", "behind": 3, "ahead": 0},
+        {"name": "backup", "state": "unknown", "behind": None, "ahead": None},
+        {"name": "new", "state": "unknown", "behind": None, "ahead": None}]
