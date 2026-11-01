@@ -23,7 +23,7 @@
  * переключаются на месте, в «Прочем» — только голосовой ввод; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
-import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
+import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
@@ -90,6 +90,46 @@ function status(id) {
   return el('p', { class: 'status', id, 'aria-live': 'polite' });
 }
 
+function enginePriorityBlock(defaults) {
+  const order = engineOrder(defaults);
+  const rows = el('ol', { id: 'code-engine-order', class: 'code-engine-order' });
+  const note = status('code-engine-order-status');
+  function paint() {
+    rows.replaceChildren(...order.map((engine, index) => {
+      const move = (step) => {
+        [order[index], order[index + step]] = [order[index + step], order[index]];
+        note.textContent = '';
+        paint();
+      };
+      const up = button('↑', { class: 'btn btn-sm code-engine-up', disabled: index === 0,
+        'aria-label': `Поднять ${ENGINE_NAMES[engine]}` }, () => move(-1));
+      const down = button('↓', { class: 'btn btn-sm code-engine-down', disabled: index === order.length - 1,
+        'aria-label': `Опустить ${ENGINE_NAMES[engine]}` }, () => move(1));
+      return el('li', { 'data-engine': engine }, el('span', { class: 'code-engine-name' }, `${index + 1}. ${ENGINE_NAMES[engine]}`),
+        el('div', { class: 'code-engine-order-controls' }, up, down));
+    }));
+  }
+  const save = button('Сохранить приоритет', { id: 'code-engine-order-save', class: 'btn' }, async () => {
+    save.disabled = true;
+    for (const control of rows.querySelectorAll('button')) control.disabled = true;
+    try {
+      const code_defaults = Object.fromEntries(order.map((engine, index) => [engine, { priority: index + 1 }]));
+      const answer = await api('PATCH', '/api/me', { code_defaults });
+      me.code_defaults = answer.code_defaults;
+      say(note, 'Приоритет агентов сохранён', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = false;
+      paint();
+    }
+  });
+  paint();
+  return el('section', { class: 'block code-engine-priority' }, el('h3', {}, 'Приоритет агентов'),
+    el('p', { class: 'muted small' }, 'Порядок кнопок нового чата. Для автоматического создания чата выбирается первый доступный агент. '
+      + 'Сохраняется для всех ваших устройств.'), rows, save, note);
+}
+
 function codeDefaultsBlock() {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
@@ -145,7 +185,7 @@ function codeDefaultsBlock() {
           save.disabled = false;
         }
       });
-      rows.replaceChildren(...forms.map((f) => f.node),
+      rows.replaceChildren(enginePriorityBlock(profile.code_defaults), ...forms.map((f) => f.node),
         ...(!items.some((a) => a.online) ? [el('p', { class: 'muted small' }, 'Подключите компьютер, чтобы выбрать его модели и усилия.')] : []),
         el('div', { class: 'row' }, save));
     } catch (err) {

@@ -7714,7 +7714,7 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
     v = r["values"]
     assert v["engine"] == "Codex" and v["models"] == ["", "codex-test"]
     assert v["nullText"] is False
-    assert v["starters"] == ['Новый чат Claude Code', 'Новый чат Codex'] and v["engines"] == ['Codex', 'Claude Code']
+    assert v["starters"] == ['Claude', 'Codex'] and v["engines"] == ['Codex', 'Claude Code']
     assert v["card"] == "Codex просит разрешения" and v["always"] == "Да, для этой сессии"
     assert v["claude"] == ["", "opus", "sonnet"] and v["choice"] == "" and v["fits"]
     [turn] = code_requests(machine, "turn")
@@ -9501,7 +9501,7 @@ def test_code_tabs_open_from_the_menu_and_switch(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hashA"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
-    assert v["menu"] == ["Новый чат Claude Code", [CODE_CHAT_B, CODE_CHAT_C]] and v["menuGone"] is True
+    assert v["menu"] == ["Claude", [CODE_CHAT_B, CODE_CHAT_C]] and v["menuGone"] is True
     assert v["tabs"] == [[CODE_CHAT_A, "Чат A", "false"], [CODE_CHAT_B, "Чат B", "true"]]
     assert v["msgs"] == [["user", "про A"]] and v["hash"] == f"#/code/{aid}/{alpha}/{CODE_CHAT_A}"
     assert v["len1"] == v["len0"] and v["fits"] is True
@@ -10235,8 +10235,7 @@ def test_code_reentry_does_not_record_another_open(browser, live):
 
 
 def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
-    """Ревью: «+» читает сессии проекта заново: сессия, начатая на машине после прочтения списка, — в меню; до ответа —
-    «Новый чат» и «Загружаю…»."""
+    """«+» сразу показывает сохранённые сессии и добавляет новую с компьютера после обновления."""
     login = "code-menu-fresh"
     live.add_user(login)
     machine = code_three()
@@ -10252,7 +10251,9 @@ def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
     player.start()
     named = "fetch('/api/agents').then((r) => r.json()).then((j) => j.items.some((a) => a.name === 'С новой сессией'))"
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => /\\/chats$/.test(String(u)) && !(o && o.method
-      && o.method !== 'GET') ? real(u, o).then((r) => new Promise((ok) => setTimeout(() => ok(r), 800))) : real(u, o);
+      && o.method !== 'GET') ? real(u, o).then((r) => new Promise((ok) => {
+        window.releaseSessions = () => { window.fetch = real; ok(r); };
+      })) : real(u, o);
       return true; })()"""
     rows = "[...document.querySelectorAll('#code-tab-menu li[data-chat]')].map((li) => li.dataset.chat)"
     try:
@@ -10261,6 +10262,8 @@ def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
             ("wait", "!!document.querySelector('#code-tab-menu #code-new-chat')"),
             ("eval", "early", "[document.querySelector('#code-tab-menu #code-new-chat')?.textContent,"
                               " document.querySelector('#code-tab-menu .code-chats-wait')?.textContent]"),
+            ("eval", "earlyRows", rows), ("wait", "typeof window.releaseSessions === 'function'"),
+            ("eval", "release", "window.releaseSessions(); true"),
             ("wait", f"document.querySelector(\"#code-tab-menu li[data-chat='{chat_d}']\")"), ("eval", "rows", rows),
             ("eval", "wait", "!document.querySelector('#code-tab-menu .code-chats-wait')")], width=1280)
         player.join(5)
@@ -10268,7 +10271,8 @@ def test_code_tab_menu_reads_the_sessions_afresh(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["early"] == ["Новый чат Claude Code", "Загружаю…"] and v["rows"] == [CODE_CHAT_B, CODE_CHAT_C, chat_d] and v["wait"] is True
+    assert v["early"] == ["Claude", None] and v["earlyRows"] == [CODE_CHAT_B, CODE_CHAT_C]
+    assert v["rows"] == [CODE_CHAT_B, CODE_CHAT_C, chat_d] and v["wait"] is True
     assert not problems(r), problems(r)
 
 

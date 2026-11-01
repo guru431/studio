@@ -81,6 +81,30 @@ def test_code_defaults_are_separate_per_user_engine_and_partial_patch(studio):
     assert studio.c.get("/api/me").json()["code_defaults"] == {}
 
 
+def test_engine_priority_preserves_choices_and_is_separate_per_user(studio):
+    make_user(studio, "owner"); signin(studio, "owner")
+    studio.c.patch('/api/me', json={'code_defaults': {'codex': {'model': 'gpt-6.1-sol'}}})
+    order = {'codex': {'priority': 1}, 'opencode': {'priority': 2}, 'claude': {'priority': 3}}
+    response = studio.c.patch('/api/me', json={'code_defaults': order})
+    expected = {**order, 'codex': {'priority': 1, 'model': 'gpt-6.1-sol'}}
+    assert response.status_code == 200 and response.json()['code_defaults'] == expected
+    response = studio.c.patch('/api/me', json={'code_defaults': {'codex': {'effort': 'high'}}})
+    assert response.json()['code_defaults']['codex'] == {**expected['codex'], 'effort': 'high'}
+    make_user(studio, 'friend'); signin(studio, 'friend')
+    assert studio.c.get('/api/me').json()['code_defaults'] == {}
+    signin(studio, 'owner')
+    assert studio.c.get('/api/me').json()['code_defaults']['opencode']['priority'] == 2
+
+
+@pytest.mark.parametrize('priorities', [(1, 1, 3), (True, 2, 3), (0, 2, 3), (1, 2, 4), (1, None, 3)])
+def test_invalid_engine_priority_leaves_the_profile_unchanged(studio, priorities):
+    make_user(studio, 'owner'); signin(studio, 'owner')
+    value = {engine: {'priority': priority} for engine, priority in
+             zip(('codex', 'claude', 'opencode'), priorities)}
+    assert studio.c.patch('/api/me', json={'code_defaults': value}).status_code == 422
+    assert studio.c.get('/api/me').json()['code_defaults'] == {}
+
+
 @pytest.mark.parametrize("value", [None, {"other": {}}, {"codex": {"model": "bad/path"}},
                                   {"claude": {"effort": "ultra"}}, {"codex": {"effort": "invalid"}}])
 def test_bad_code_defaults_do_not_change_the_profile(studio, value):

@@ -45,6 +45,7 @@ import { api, me } from './api.js';
 import { chatView } from './code-chat.js';
 import { filesView, gitView } from './code-files.js';
 import { projectGit, gitLevel } from './code-git.js';
+import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
@@ -623,11 +624,13 @@ function git(p) {
           p.gitAction = { chat: active, prompt };
           toChat(p, active);
         } else {
-          const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats`);
+          const engine = engineOrder(me.code_defaults).find((name) => name === 'claude' || p[name]);
+          const suffix = engine === 'claude' ? '' : `?engine=${engine}`;
+          const { chat } = await api('POST', `${base(p.aid, p.pid)}/chats${suffix}`);
           p.listing = null;
           if (!current() || !p.canStart) return;
           p.gitAction = { chat, prompt };
-          created(p, chat);
+          created(p, chat, engine);
         }
       } catch (err) {
         if (current()) failed(err, p.aid, status);

@@ -9,8 +9,8 @@
  * - «Новый чат» (#code-new-chat) — POST …/chats, затем created(chat);
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
  * Кнопок «Закрыть» / «Открыть снова» нет: закрывают из самого чата. Текст машины — только textContent. */
-import { api } from './api.js';
-import { ENGINE_NAMES } from './code-options.js';
+import { api, me } from './api.js';
+import { ENGINE_NAMES, engineOrder } from './code-options.js';
 import { el } from './ui.js';
 import { worktreeView } from './code-worktrees.js';
 
@@ -38,24 +38,6 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
     }
   }
 
-  const add = el('button', { type: 'button', id: 'code-new-chat', class: 'code-chat-link code-new-chat' }, 'Новый чат Claude Code');
-  add.addEventListener('click', () => busy(add, async () => {
-    const { chat } = await api('POST', base);
-    if (alive) created(chat, 'claude');
-  }));
-  const addCodex = codex ? el('button', { type: 'button', id: 'code-new-codex', class: 'code-chat-link code-new-chat' },
-    'Новый чат Codex') : null;
-  if (addCodex) addCodex.addEventListener('click', () => busy(addCodex, async () => {
-    const { chat } = await api('POST', `${base}?engine=codex`);
-    if (alive) created(chat, 'codex');
-  }));
-  const addOpenCode = opencode ? el('button', { type: 'button', id: 'code-new-opencode', class: 'code-chat-link code-new-chat' },
-    'Новый чат OpenCode') : null;
-  if (addOpenCode) addOpenCode.addEventListener('click', () => busy(addOpenCode, async () => {
-    const { chat } = await api('POST', `${base}?engine=opencode`);
-    if (alive) created(chat, 'opencode');
-  }));
-
   function row(chat) {
     const closed = chat.state === 'closed';
     const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
@@ -78,19 +60,33 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   const list = el('ul', { id: 'code-chats', class: 'code-chats' });
   const search = el('input', { id: 'code-chat-search', class: 'input code-chat-search', type: 'search',
     placeholder: 'Поиск по названиям чатов', 'aria-label': 'Поиск чатов', autocomplete: 'off', maxlength: '200' });
-  const scope = el('button', { type: 'button', id: 'code-search-content', class: 'btn btn-sm',
-    'aria-pressed': 'false', hidden: !contentSearch }, 'По переписке');
+  const scopeLabel = el('span', {}, 'По заголовкам');
+  const scope = el('button', { type: 'button', id: 'code-search-content', class: 'btn btn-sm code-search-scope',
+    role: 'switch', 'aria-checked': 'false', 'aria-label': 'Поиск по содержимому', hidden: !contentSearch },
+    el('span', { class: 'code-search-switch', 'aria-hidden': 'true' }), scopeLabel);
+  const searchRow = el('div', { class: 'code-session-search' }, search, scope);
   const note = el('p', { class: 'small muted', role: 'status', id: 'code-search-status' });
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   const startsRows = [];
   if (starts) {
-    startsRows.push(el('li', { class: 'code-chats-new' }, add));
-    if (addCodex) startsRows.push(el('li', { class: 'code-chats-new' }, addCodex));
-    if (addOpenCode) startsRows.push(el('li', { class: 'code-chats-new' }, addOpenCode));
+    const starters = engineOrder(me?.code_defaults).filter((engine) => engine === 'claude'
+      || (engine === 'codex' ? codex : opencode)).map((engine) => {
+      const id = engine === 'claude' ? 'code-new-chat' : `code-new-${engine}`;
+      const label = `Новый чат ${ENGINE_NAMES[engine]}`;
+      const add = el('button', { type: 'button', id, class: 'code-chat-link code-new-chat', title: label,
+        'aria-label': label }, engine === 'claude' ? 'Claude' : ENGINE_NAMES[engine]);
+      add.addEventListener('click', () => busy(add, async () => {
+        const { chat } = await api('POST', engine === 'claude' ? base : `${base}?engine=${engine}`);
+        if (alive) created(chat, engine);
+      }));
+      return add;
+    });
+    startsRows.push(el('li', { class: 'code-chats-new' },
+      el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': 'Новый чат' }, ...starters)));
   }
   function paint() {
     const terms = normalize(search.value).trim().split(/\s+/).filter(Boolean);
-    const content = scope.getAttribute('aria-pressed') === 'true' && search.value.trim();
+    const content = scope.getAttribute('aria-checked') === 'true' && search.value.trim();
     const matches = content ? remote || [] : (found || []).filter((c) => !exclude.has(c.chat)
       && terms.every((term) => normalize(c.title || UNTITLED).includes(term)));
     const empty = loadError ? 'Не удалось загрузить чаты' : found === null ? 'Загружаю…'
@@ -110,7 +106,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
     note.textContent = '';
     remote = null;
     paint();
-    if (scope.getAttribute('aria-pressed') !== 'true' || !search.value.trim()) return;
+    if (scope.getAttribute('aria-checked') !== 'true' || !search.value.trim()) return;
     note.textContent = 'Ищу на компьютере…';
     timer = setTimeout(async () => {
       const own = new AbortController();
@@ -131,8 +127,9 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   }
   search.addEventListener('input', query);
   scope.addEventListener('click', () => {
-    const active = scope.getAttribute('aria-pressed') !== 'true';
-    scope.setAttribute('aria-pressed', String(active));
+    const active = scope.getAttribute('aria-checked') !== 'true';
+    scope.setAttribute('aria-checked', String(active));
+    scopeLabel.textContent = active ? 'По содержимому' : 'По заголовкам';
     search.placeholder = active ? 'Слова из переписки на компьютере' : 'Поиск по названиям чатов';
     query();
   });
@@ -150,15 +147,14 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       failed(err);
     }).finally(() => { if (alive) list.setAttribute('aria-busy', 'false'); });
   }
-  host.append(search, scope, note, list);
+  host.append(searchRow, note, list);
   const copies = worktrees ? worktreeView(host, { aid, pid, opened: worktreeOpened }) : null;
   return {
     unmount() {
       alive = false;
       clearTimeout(timer);
       request?.abort();
-      search.remove();
-      scope.remove();
+      searchRow.remove();
       note.remove();
       copies?.unmount();
       list.remove();
