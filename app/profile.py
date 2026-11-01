@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api")
 
 
 class CodeChoice(BaseModel):
+    priority: StrictInt | None = Field(None, ge=1, le=3)
     model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]/@+-]{1,300}$")
     effort: str | None = Field(None, pattern=r"^[A-Za-z0-9._-]{1,64}$")
     access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
@@ -136,6 +137,9 @@ async def patch_me(body: MePatch, request: Request):
         stored = json.loads(state.DB.execute("SELECT code_defaults FROM users WHERE id = ?", (uid,)).fetchone()[0])
         for engine, choice in body.code_defaults.items():
             stored[engine] = {**stored.get(engine, {}), **choice.model_dump(exclude_unset=True)}
+        priorities = [stored.get(engine, {}).get("priority") for engine in ("claude", "codex", "opencode")]
+        if any(value is not None for value in priorities) and set(priorities) != {1, 2, 3}:
+            raise HTTPException(422, {"code": "priority", "message": "укажите разный приоритет от 1 до 3 для каждого агента"})
         changes["code_defaults"] = json.dumps(stored)
     if "code_quick_actions" in sent:
         changes["code_quick_actions"] = json.dumps([action.model_dump() for action in body.code_quick_actions])

@@ -73,6 +73,46 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize('iphone', [(320, 740), (393, 852), (852, 393)], indirect=True)
+def test_session_starters_and_search_switch_fit_in_rows(iphone, tmp_path):
+    import bridge
+    from test_ui_opencode import CATALOG as OPENCODE
+
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.codex, machine.opencode, machine.chat_search = CATALOG, OPENCODE, True
+    bridge.LINKS[aid].hello.update(codex=CATALOG, opencode=OPENCODE, chat_search=True)
+    page.evaluate("""async () => {
+      const {api} = await import('/static/js/api.js');
+      await api('PATCH', '/api/me', {code_defaults: {
+        opencode: {priority: 1}, codex: {priority: 2}, claude: {priority: 3}}});
+    }""")
+    page.reload()
+    page.locator('#code-projects li[data-pid]').first.wait_for()
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}?tab=new")
+    page.locator('#code-new-opencode').wait_for()
+    assert page.locator('.code-new-chat').evaluate_all('buttons => buttons.map(b => b.id)') == [
+        'code-new-opencode', 'code-new-codex', 'code-new-chat']
+    assert page.locator('.code-chat-starters').evaluate("""row => {
+      const r = row.getBoundingClientRect(), buttons = [...row.children].map(b => b.getBoundingClientRect());
+      return buttons.every(b => Math.abs(b.top-buttons[0].top)<1 && b.left>=r.left && b.right<=r.right+1)
+        && row.scrollWidth<=row.clientWidth;
+    }""")
+    switch = page.get_by_role('switch', name='Поиск по содержимому')
+    pw.expect(switch).not_to_be_checked()
+    for label in ['По заголовкам', 'По содержимому']:
+        pw.expect(switch).to_have_text(label)
+        assert page.locator('.code-session-search').evaluate("""row => {
+          const input = row.querySelector('input').getBoundingClientRect(), mode = row.querySelector('button').getBoundingClientRect();
+          return mode.left>=input.right && Math.abs(mode.top+mode.height/2-input.top-input.height/2)<1
+            && input.width>=60 && row.scrollWidth<=row.clientWidth;
+        }""")
+        fits(page)
+        if label == 'По заголовкам':
+            switch.tap()
+    page.screenshot(path=str(tmp_path / f'session-picker-webkit-{page.viewport_size["width"]}.png'))
+
+
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 @pytest.mark.parametrize("resume", ["warm", "cold", "locked"])
 def test_push_target_opens_its_project_over_the_saved_workspace(iphone, resume):
