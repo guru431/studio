@@ -105,6 +105,13 @@ studio-agent 0.8.0: `file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`
 самостоятельные ссылки журналов и Git, а также выделение текста не перехватываются.
 Проверки — `tests/test_project_summary.py`, `tests/test_ui_project_summary.py`, `tests/test_ui_webkit.py`
 и `agent/tests/test_project_summary.py`; активному мосту обновление из его задания не применять.
+С мостом 0.9.2 необязательное `summary.github` добавляет статус публичной копии текущей ветки:
+`{state: current|behind|ahead|diverged|missing|unknown, behind, ahead}`, `null` — нет публичного remote.
+`agent/studio_agent/github_status.py` читает `remote.github.url` (либо GitHub origin), анонимно получает
+smart-HTTP refs без GitHub API, ключей, fetch и записи refs; считает разницу по локальному графу.
+Неизвестный объект/shallow/ошибка — unknown. `code-panel.js` оставляет две строки; GitHub ↓N красный,
+✓ зелёный, ↑N жёлтый, устаревшие сведения нейтральные. Проверки — `agent/tests/test_github_status.py`
+и перечисленные браузерные сценарии, нажатие GitHub проходит обычную защиту несохранённых файлов.
 `lock-start.js` запускает блокировку до модулей оболочки; `lock.js` объединяет одновременные чтения состояния
 и использует уже полученное состояние при показе PIN. Ранний старт отдельно проверяет `tests/test_ui_webkit.py`.
 

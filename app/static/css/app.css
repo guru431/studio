@@ -1145,11 +1145,11 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; color: var(--muted); }
 .code-project-metrics { flex: none; white-space: nowrap; }
 .code-project-summary { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; }
-.code-project-git, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
+.code-project-git, .code-project-github, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
 .code-project-modified { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.code-project-git[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
-.code-project-git[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
-.code-project-git[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
+.code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--ok); }
+.code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--git-modified); }
+.code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
 .code-git-actions { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px;
   width:100%; min-width:0; padding-bottom:8px; container-type:inline-size; }
 .code-git-actions .btn { min-width:0; padding-inline:4px; white-space:nowrap; }

@@ -93,8 +93,13 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     for index, (name, project) in enumerate(machine.projects.items()):
         project["summary"] = {"findings": [1, 9, 2, 0][index], "ideas": [0, 1, 8, 2][index],
             "changed": index, "unpushed": [0, 0, 0, 3][index], "modified": T0 + index,
-            "checked_at": T0, "git": "ok"}
+            "checked_at": T0, "git": "ok", "github": [
+                {"state": "behind", "behind": 3, "ahead": 0},
+                {"state": "current", "behind": 0, "ahead": 0},
+                {"state": "ahead", "behind": 0, "ahead": 1},
+                {"state": "diverged", "behind": 2, "ahead": 1}][index]}
     machine.projects.update({f"project-{n:02}": {} for n in range(35)})
+    machine.projects["project-00"]["summary"] = {"github": {"state": "missing"}}
     machine.project_summary = True
     aid, server = code_online(live, login, machine)
     first = "document.querySelector('#code-projects li').dataset.pid"
@@ -115,7 +120,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
           if (window.projectGate) await window.projectGate;
           if (window.overrideSummary && String(url).includes('/{pid('alpha')}/'))
             return new Response(JSON.stringify({{findings:20,ideas:0,changed:7,unpushed:4,
-              modified:{T0 + 10},checked_at:{T0 + 10},git:'ok'}}),
+              modified:{T0 + 10},checked_at:{T0 + 10},git:'ok',github:{{state:'unknown'}}}}),
               {{status:200,headers:{{'content-type':'application/json'}}}});
         }}
         return real(url, options);
@@ -142,12 +147,17 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
               const metrics = row.querySelector('.code-project-metrics').getBoundingClientRect();
               const summary = row.querySelector('.code-project-summary').getBoundingClientRect();
               const git = row.querySelector('.code-project-git').getBoundingClientRect();
+              const gh = row.querySelector('.code-project-github')?.getBoundingClientRect();
               const date = row.querySelector('.code-project-modified').getBoundingClientRect();
               const lineHeight = parseFloat(getComputedStyle(row.querySelector('.code-project-summary')).lineHeight);
               return metrics.left >= name.right && metrics.top < heading.bottom
                 && summary.top >= heading.bottom && Math.abs(git.top - date.top) < 1
+                && (!gh || gh.left >= git.right && gh.right <= summary.right && Math.abs(gh.top - git.top) < 1)
                 && summary.height <= lineHeight + 1 && row.children.length === 2;
             })"""),
+            ("eval", "github", """[...document.querySelectorAll('.code-project-github')].map(e =>
+              [e.textContent, e.dataset.gitLevel, e.title])"""),
+            ("screenshot", str(tmp_path / f"github-{width}.png")),
             order("findings"), order("ideas"), order("modified"), order("unpushed"),
             ("eval", "initial-unpushed", first), order("name"),
             ("eval", "before", geometry),
@@ -179,6 +189,10 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
     assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == 78
     assert values["twoLines"] and values["compactControls"]
+    assert [entry[:2] for entry in values["github"]] == [
+        ["GitHub ↓3", "red"], ["GitHub ✓", "green"], ["GitHub ↕", "red"],
+        ["GitHub ↑1", "yellow"], ["GitHub ∅", "red"]]
+    assert "отстаёт на 3" in values["github"][0][2] and "GitHub ?" in values["fresh"]
     assert "null" not in values["counts"] and "undefined" not in values["counts"]
     assert not values["overflow"] and not problems(result), problems(result)
 
@@ -187,7 +201,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     login = "project-summary-errors"
     live.add_user(login)
     machine = FakeMachine({"alpha": {"summary": {"findings": 5, "ideas": 2, "changed": 1, "unpushed": 0,
-        "modified": T0, "checked_at": T0, "git": "ok"}}})
+        "modified": T0, "checked_at": T0, "git": "ok", "github": {"state": "behind", "behind": 4, "ahead": 0}}}})
     other = FakeMachine({"beta": {"summary": {"findings": 7, "ideas": 3, "changed": 2, "unpushed": 1,
         "modified": T0, "checked_at": T0, "git": "ok"}}})
     machine.project_summary = other.project_summary = True
@@ -216,6 +230,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
             ("eval", "fail", "window.failSummary=true"), ("click", "#code-project-refresh"),
             ("wait", "document.querySelector('#code-panel-status').textContent.includes('Не удалось')"),
             ("eval", "retained", count),
+            ("eval", "staleGithub", "[document.querySelector('.code-project-github').textContent, document.querySelector('.code-project-github').dataset.gitLevel]"),
             ("eval", "unchanged", "window.lastUpdated === document.querySelector('#code-project-updated').textContent"),
             ("eval", "failList", "window.failSummary=false;window.failList=true;true"),
             ("click", "#code-project-refresh"), ("wait", ready), ("eval", "afterListFailure", count),
@@ -233,6 +248,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     values = result["values"]
     assert values["initial"] == values["retained"] == values["afterListFailure"] == "П: 5"
     assert values["unchanged"] and values["stillOther"]
+    assert values["staleGithub"] == ["GitHub ↓4", "unknown"]
     assert values["other"] == values["keptOther"] == "П: 7"
     assert not problems(result), problems(result)
 
@@ -243,6 +259,7 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
     live.add_user(login)
     machine = FakeMachine({"alpha": {"files": {"FINDINGS.md": b"# Findings\nProblem document\n",
         "IDEAS.md": b"# Ideas\nIdea document\n"}}, "beta": {}})
+    machine.projects["beta"]["summary"] = {"github": {"state": "behind", "behind": 3, "ahead": 0}}
     machine.project_summary = True
     aid, server = code_online(live, login, machine)
     alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
@@ -274,7 +291,7 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
             set_value("#code-editor", "Unsaved journal draft"),
             *panel, blank('beta', 'summary'), ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"),
-            *panel, ("click", beta + " .code-project-git"),
+            *panel, ("click", beta + " .code-project-github"),
             ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"), ("eval", "retained", "document.querySelector('#code-editor').value"),
             *panel, ("click", beta + " .code-project-git"),

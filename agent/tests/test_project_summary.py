@@ -70,6 +70,8 @@ def test_summary_counts_all_files_and_uses_commit_and_local_modification_times(t
 
     def run(project, args, **kwargs):
         seen.append(args)
+        if args[0] == "config":
+            return subprocess.CompletedProcess(args, 1, b"")
         assert kwargs["timeout"] == 5
         out = (b"# branch.head main\0# branch.upstream origin/main\0# branch.ab +3 -1\0? a\0? b\0"
                if args[0] == "status" else b"100\n")
@@ -78,7 +80,8 @@ def test_summary_counts_all_files_and_uses_commit_and_local_modification_times(t
     monkeypatch.setattr(gitinfo, "run", run)
     result = project_summary.read(tmp_path, now=lambda: 300)
     assert (result["changed"], result["unpushed"], result["modified"], result["git"]) == (2, 3, 200, "ok")
-    assert "--untracked-files=all" in seen[0] and len(seen) == 2
+    assert "--untracked-files=all" in seen[0] and len(seen) == 3
+    assert result["github"] is None
 
 
 def test_git_failure_preserves_journal_counts_and_does_not_report_clean(tmp_path, monkeypatch):
