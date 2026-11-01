@@ -31,7 +31,7 @@ def machine_for_update():
 
 
 @pytest.mark.parametrize('width', [320, 1280])
-def test_update_shows_running_version_waits_and_observes_new_version(browser, live, update_zip, width):
+def test_update_shows_running_version_waits_and_observes_new_version(browser, live, update_zip, width, tmp_path):
     login = f'agent-update-{width}'
     live.add_user(login)
     machine = machine_for_update()
@@ -51,17 +51,21 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
 
     machine._op_agent_update_status = progress
     geometry = f'''(() => {{
-      const row = document.querySelector('{row}'), version = row.querySelector('.code-agent-version').getBoundingClientRect(),
-        button = row.querySelector('.code-agent-update').getBoundingClientRect(), panel = row.getBoundingClientRect();
-      return version.right <= button.left && button.right <= panel.right + 1 && version.width > 0
+      const row = document.querySelector('{row}'), panel = row.getBoundingClientRect(),
+        controls = ['.code-agent-version', '.code-agent-update', '.code-agent-info', '.code-agent-desktop']
+          .map(selector => row.querySelector(selector).getBoundingClientRect());
+      return controls.every((bounds, i) => bounds.width > 0 && bounds.right <= panel.right + 1
+          && (!i || controls[i - 1].right <= bounds.left && Math.abs(controls[0].y + controls[0].height / 2 - bounds.y - bounds.height / 2) < 1))
         && document.documentElement.scrollWidth <= innerWidth;
     }})()'''
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-projects li')"),
             ('eval', 'before', f"document.querySelector('{row} .code-agent-version').textContent"),
-            ('eval', 'available', f"document.querySelector('{row} .code-agent-update-status').textContent"),
-            ('eval', 'geometry', geometry), ('click', row + ' .code-agent-update'),
+            ('eval', 'available', f"document.querySelector('{row} .code-agent-update').title"),
+            ('eval', 'noNote', f"document.querySelector('{row} .code-agent-update-status') === null"),
+            ('eval', 'geometry', geometry), ('screenshot', str(tmp_path / f'computer-row-{width}.png')),
+            ('click', row + ' .code-agent-update'),
             ('wait', f"document.querySelector('{row} .code-agent-update-status')?.textContent.includes('Ждём')"),
             ('eval', 'disabled', f"document.querySelector('{row} .code-agent-update').disabled"),
             ('wait', f"document.querySelector('{row} .code-agent-version').textContent === '0.10.1'"),
@@ -72,7 +76,7 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
         server.stop()
     assert not result.get('failed'), result
     assert result['values'] == {'go': '#/code', 'before': '0.10.0', 'geometry': True, 'disabled': True,
-                                'available': 'Доступно обновление до 0.10.1',
+                                'available': 'Обновить агент до 0.10.1', 'noNote': True,
                                 'complete': True, 'installer': 'studio-agent-setup.exe'}
     assert [req['op'] for req in machine.requests].count('agent_update') == 1
     assert not problems(result), problems(result)
@@ -134,9 +138,10 @@ def test_agent_update_geometry_and_old_agent_in_webkit(webkit, live, update_zip,
             old_row = page.locator(f'#code-agents li[data-id="{old_aid}"]')
             assert old_row.locator('.code-agent-version').inner_text() == '—'
             assert old_row.locator('.code-agent-update').evaluate('e => e.tagName') == 'A'
-            assert 'Доступна версия 0.10.1' in old_row.inner_text()
-            assert old_row.get_by_text('Установить новый агент').get_attribute('href') == '/api/agent/download'
-            assert old_row.get_by_text('Установить новый агент').get_attribute('download') == 'studio-agent-setup.exe'
+            assert old_row.locator('.code-agent-update-status').count() == 0
+            assert '0.10.1' in old_row.locator('.code-agent-update').get_attribute('title')
+            assert old_row.locator('.code-agent-update').get_attribute('href') == '/api/agent/download'
+            assert old_row.locator('.code-agent-update').get_attribute('download') == 'studio-agent-setup.exe'
             with page.expect_download() as downloaded:
                 old_row.locator('.code-agent-update').tap()
             assert downloaded.value.suggested_filename == 'studio-agent-setup.exe'

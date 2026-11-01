@@ -1133,7 +1133,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-state { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--border); }
 .code-agent-state.on { background: var(--ok); }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.code-agent-pin { flex: none; }
 .code-computer-dialog { overflow-wrap: anywhere; }
 .code-computer-details { margin: 0 0 16px; }
 .code-computer-details dt { color: var(--muted); margin-top: 12px; font-size: calc(12px * var(--font-scale, 1)); }
@@ -1142,8 +1141,10 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
 .code-agent-version { flex: none; color: var(--muted); font-size: calc(11px * var(--font-scale, 1)); font-weight: 400; }
-.code-agent-update { flex: none; display: grid; place-items: center; width: 28px; min-height: 30px; padding: 2px;
-  font-size: calc(18px * var(--font-scale, 1)); text-decoration: none; }
+.code-agent-update { flex: none; display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 2px;
+  border-radius: 50%; text-decoration: none; }
+.code-agent-update.has-update { color: var(--accent); border-color: currentColor; }
+.code-agent-update .ico, .code-agent-desktop .ico { width: 18px; height: 18px; }
 .code-agent-update-status { flex-basis: 100%; padding: 0 8px 5px; font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 .code-agent-info, .code-agent-desktop { flex:none; display:grid; place-items:center; width:28px; min-height:30px; padding:2px;
   border:0; background:transparent; color:var(--muted); }

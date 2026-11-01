@@ -173,7 +173,7 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
             page.wait_for_selector('#code-projects li')
             assert not page.locator('#code-computer-dialog').evaluate('e => e.open')
             controls = [row.locator(selector).bounding_box() for selector in
-                        ('.code-agent', '.code-agent-info', '.code-agent-desktop', '.code-agent-update')]
+                        ('.code-agent', '.code-agent-update', '.code-agent-info', '.code-agent-desktop')]
             assert all(bounds['width'] > 0 and bounds['height'] >= 30 for bounds in controls)
             assert all(left['x'] + left['width'] <= right['x'] + 1 for left, right in zip(controls, controls[1:]))
             assert controls[-1]['x'] + controls[-1]['width'] <= width

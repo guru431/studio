@@ -7200,10 +7200,9 @@ def test_push_checkbox_gives_up_without_service_worker(browser, live):
 # раздел «Код» (code.js, code-panel.js, code-sessions.js): панель компьютеров и проектов, PIN, сессии проекта
 
 CODE_PIN = "2580"
-#: строки компьютеров: id, имя, «на связи» / «не на связи», значок «PIN» или None
+#: строки компьютеров: id, имя, «на связи» / «не на связи»
 CODE_AGENTS = """[...document.querySelectorAll('#code-agents li[data-id]')].map((li) => [Number(li.dataset.id),
-  li.querySelector('.code-agent-name').textContent, li.querySelector('.code-agent-state').textContent,
-  li.querySelector('.code-agent-pin') ? li.querySelector('.code-agent-pin').textContent : null])"""
+  li.querySelector('.code-agent-name').textContent, li.querySelector('.code-agent-state').textContent])"""
 CODE_PROJECTS = """[...document.querySelectorAll('#code-projects li[data-pid]')].map((li) => [li.dataset.pid,
   li.querySelector('.code-project-name').textContent])"""
 #: строки сессий проекта: id, название, время есть, пометки (.tag по порядку)
@@ -7256,7 +7255,7 @@ def code_project(aid, project):
 @pytest.mark.parametrize("width", [320, 1280])
 def test_code_section_lists_computers_and_says_when_there_are_none(browser, live, width):
     """Вкладка «Код» после «Перевода», шапки раздела нет; без компьютеров — панели нет, справа подсказка, как
-    подключить; с ними — строки в панели: имя, «на связи» / «не на связи», значок «PIN» только у компьютера с PIN;
+    подключить; с ними — строки в панели: имя и «на связи» / «не на связи»;
     на широком экране панель и правая часть — рядом."""
     login = f"code-list-{width}"
     live.add_user(login)
@@ -7292,8 +7291,8 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["rows"] == [[home, "Домашний-компьютер-с-очень-длинным-именем-без-единого-пробела", "не на связи", None],
-                         [work, "Рабочий ПК", "на связи", "PIN"]]
+    assert v["rows"] == [[home, "Домашний-компьютер-с-очень-длинным-именем-без-единого-пробела", "не на связи"],
+                         [work, "Рабочий ПК", "на связи"]]
     assert v["gone"] is True and v["head"] is False and v["fits"] is True
     if width > 760:
         assert v["side"] == [True, True]
