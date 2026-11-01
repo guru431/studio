@@ -167,13 +167,15 @@ async def request(conn, method: str, url: str, *, keyless: bool = False, **kw) -
     """keyless — без заголовка `Authorization` (проверка: отдаёт ли сервис список без ключа); правила
     списка и имени — те же."""
     parsed, kw = await _prepare(conn, url, kw, keyless)
-    return await state.HTTP.request(method, parsed, **kw)
+    client = state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
+    return await client.request(method, parsed, **kw)
 
 
 @asynccontextmanager
 async def stream(conn, method: str, url: str, **kw):
     parsed, kw = await _prepare(conn, url, kw)
-    async with state.HTTP.stream(method, parsed, **kw) as response:
+    client = state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
+    async with client.stream(method, parsed, **kw) as response:
         yield response
 
 

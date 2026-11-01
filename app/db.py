@@ -5,7 +5,36 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 25
+VERSION = 26
+
+#: Cleaner contexts survive restarts. Deletion queues retain only an encrypted credential snapshot
+#: bound to the original address, so deleting a user or connection cannot strand remote originals.
+CLEANER_26 = """
+ALTER TABLE connections ADD COLUMN cleaner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN cleaner_raw TEXT;
+CREATE TABLE cleaner_contexts(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, resource TEXT NOT NULL,
+       item_id TEXT NOT NULL, connection_id INTEGER NOT NULL, remote_id TEXT NOT NULL,
+       base_url TEXT NOT NULL, token_enc BLOB NOT NULL, created REAL NOT NULL,
+       UNIQUE(resource, item_id, connection_id));
+CREATE TABLE cleaner_deletions(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, remote_id TEXT NOT NULL,
+       base_url TEXT NOT NULL, token_enc BLOB NOT NULL, queued REAL NOT NULL, retry_at REAL NOT NULL DEFAULT 0);
+CREATE TRIGGER cleaner_context_delete BEFORE DELETE ON cleaner_contexts BEGIN
+  INSERT OR IGNORE INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued)
+     VALUES(old.id, old.user_id, old.remote_id, old.base_url, old.token_enc, old.created);
+END;
+CREATE TRIGGER cleaner_chat_delete AFTER DELETE ON chats BEGIN
+  DELETE FROM cleaner_contexts WHERE resource = 'chat' AND item_id = old.id;
+END;
+CREATE TRIGGER cleaner_translation_delete AFTER DELETE ON translations BEGIN
+  DELETE FROM cleaner_contexts WHERE resource = 'translate' AND item_id = old.id;
+END;
+CREATE TRIGGER cleaner_user_delete AFTER DELETE ON users BEGIN
+  DELETE FROM cleaner_contexts WHERE user_id = old.id;
+END;
+CREATE TRIGGER cleaner_connection_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM cleaner_contexts WHERE connection_id = old.id;
+END;
+"""
 
 #: разделы пользователя (sections.py): подключения раздела с отмеченными моделями (JSON) и умолчание
 SECTION_TABLES = """
@@ -373,7 +402,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -449,6 +478,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     23: CODE_23,
     24: LOCK_24,
     25: CODE_25,
+    26: CLEANER_26,
 }
 
 

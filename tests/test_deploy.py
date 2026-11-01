@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import shutil
+import shlex
 import sqlite3
 import subprocess
 import zipfile
@@ -370,6 +371,46 @@ def test_scripts_parse(script):
 def _function(name: str) -> str:
     """Тело функции install.sh — для запуска в bash с подменёнными командами хоста."""
     return re.search(rf"^{name}\(\) \{{[^\n]*\n.*?^\}}\n", INSTALL, re.S | re.M).group(0)
+
+
+def _install_environment(tmp_path, contents, replacement=None):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    path = tmp_path / "studio.env"
+    path.write_text(contents, encoding="utf-8", newline="\n")
+    block = INSTALL[INSTALL.index('if [ "$SECRET" = 1 ]; then'):INSTALL.index('# Файлы истории')]
+    script = (f"set -euo pipefail\nENV_FILE={shlex.quote(path.as_posix())}\n"
+              f"SECRET={int(replacement is not None)}\nADMIN=0\n" + block)
+    # deploy.sh strips CR before SSH. Bytes keep that LF-only stdin on Windows as well.
+    result = subprocess.run([bash, "-c", script], input=(replacement or "").encode("utf-8"),
+                            capture_output=True, timeout=20)
+    result.stdout = result.stdout.decode("utf-8")
+    result.stderr = result.stderr.decode("utf-8")
+    return result, path
+
+
+@pytest.mark.parametrize("extra,valid", [
+    ("", True), ("STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n", True),
+    ("STUDIO_CLEANER_CA=/one.pem\nSTUDIO_CLEANER_CA=/two.pem\n", False),
+    ("UNKNOWN_SETTING=1\n", False), ("STUDIO_CLEANER_CA=$(touch unsafe)\n", False),
+])
+def test_install_accepts_only_the_optional_public_ca_setting(tmp_path, extra, valid):
+    from cryptography.fernet import Fernet
+    key = Fernet.generate_key().decode()
+    result, _ = _install_environment(tmp_path, f"STUDIO_DATA_KEY={key}\n" + extra)
+    assert (result.returncode == 0) == valid, result.stderr
+    assert key not in result.stdout + result.stderr
+
+
+def test_data_key_rotation_preserves_the_public_cleaner_ca(tmp_path):
+    from cryptography.fernet import Fernet
+    old, new = Fernet.generate_key().decode(), Fernet.generate_key().decode()
+    ca = "STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n"
+    result, path = _install_environment(tmp_path, f"STUDIO_DATA_KEY={old}\n" + ca, f"STUDIO_DATA_KEY={new}\n")
+    assert result.returncode == 0, result.stderr
+    assert path.read_text() == f"STUDIO_DATA_KEY={new}\n" + ca
+    assert old not in result.stdout + result.stderr and new not in result.stdout + result.stderr
 
 
 def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():

@@ -1550,3 +1550,6 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 /* заперто или под шторкой: содержимое скрыто и в миг, когда окно закрыли силой, а lock.js ещё не открыл его снова */
 html.shrouded #view, html.shrouded #rail, html.shrouded #menu,
 html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
+.cleaner-preview-text { max-height: 50vh; overflow-y: auto; min-width: 0; }
+.cleaner-preview-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.cleaner-copy-text { width: 100%; resize: vertical; }

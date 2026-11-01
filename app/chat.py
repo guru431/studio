@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 
 import clock
 import connections
+import cleaner_client as cleaner
 import documents
 import manage
 import media
@@ -166,18 +167,30 @@ class ChatPatch(BaseModel):
     thinking: bool | None = None         # кнопка «Рассуждение»; null — не трогать
 
 
+class CleanerRule(BaseModel):
+    action: Literal["mask", "unmask"]
+    value: str = Field(min_length=1, max_length=2000)
+    type: str | None = Field(None, max_length=32)
+
+
 class TurnIn(BaseModel):
     text: str = Field("", max_length=TEXT_MAX)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     regenerate: bool = False
     external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
     web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
+    cleaner_ticket: str | None = Field(None, max_length=64)
+    cleaner_rules: list[CleanerRule] = Field(default_factory=list, max_length=100)
 
 
 class AnswerIn(BaseModel):
     # как у ответа через сервер: до ANSWER_MAX знаков и пометка обрезки (длиннейшая — CUT_SIZE)
     content: str = Field(max_length=ANSWER_MAX + len(CUT_SIZE))
     status: Literal["done", "stopped", "error"]
+
+
+class CleanerCopyIn(BaseModel):
+    message_id: str = Field(min_length=1, max_length=64)
 
 
 # ---- строки --------------------------------------------------------------------
@@ -242,11 +255,12 @@ def _chat_view(user_id: int, row) -> dict:
             pass
     model = row["model"] or manage.DEFAULT_MODEL
     out["local"] = conn is not None and sections.is_local(conn, model)
-    out["external"] = conn is not None and not out["local"] and _needs_consent(
+    out["cleaner"] = conn is not None and conn.cleaner
+    out["external"] = conn is not None and not conn.cleaner and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
     out["proxied"] = conn is not None and conn.proxied
-    out["web_tools"] = web.tools_for(conn, web.has_exa_key(user_id))
+    out["web_tools"] = [] if out["cleaner"] else web.tools_for(conn, web.has_exa_key(user_id))
     out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
         row["id"], row["web_consent"])
     out["thinking"] = bool(row["thinking"])
@@ -304,6 +318,7 @@ def _message_out(row, atts: list, views: dict | None = None) -> dict:
     if not live and row["status"] == "error" and row["role"] == "assistant" and row["content"].startswith(SCAN_FAILED):
         error = row["content"]
     return {"id": row["id"], "role": row["role"], "content": "" if error else live.content if live else row["content"],
+            "cleaner_raw": row["cleaner_raw"],
             "error": error,
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
@@ -590,6 +605,7 @@ class StreamTask:
     scans: list[str] = field(default_factory=list)
     user_message_id: str | None = None
     scan_state: dict | None = None   # ход распознавания для страницы ({page, pages}), пока ждём
+    cleaner_preview: object = field(default=None, repr=False)
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -823,6 +839,33 @@ class StreamTask:
         (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после TOOL_ROUNDS кругов
         запрос без tools. Срок — один на весь ответ: проверяется и перед каждым кругом и вызовом. Последний
         круг кончился вызовами, которые уже не исполнялись, без текста — ошибка NO_ANSWER, а не пустой ответ."""
+        if self.conn.cleaner:
+            try:
+                async with asyncio.timeout(STREAM_TOTAL_SEC):
+                    async for kind, data in cleaner.events(self.cleaner_preview):
+                        if isinstance(data.get("text"), str):
+                            self.content = data["text"]
+                            if len(self.content) > ANSWER_MAX:
+                                self.content = self.content[:ANSWER_MAX] + CUT_SIZE
+                                return "Ответ слишком длинный"
+                            self.fresh = True
+                            self.put("replace", {"text": self.content})
+                            self._save()
+                        if kind == "done":
+                            raw = data.get("raw")
+                            if isinstance(raw, str) and len(raw) <= ANSWER_MAX:
+                                state.DB.execute("UPDATE messages SET cleaner_raw = ? WHERE id = ?",
+                                                 (raw, self.message_id))
+                                self.put("cleaner", {"raw": raw})
+                            if data.get("status") != "done":
+                                return data.get("error") or "Ответ Cleaner оборвался"
+                return None
+            except HTTPException as exc:
+                return exc.detail["message"]
+            except (httpx.HTTPError, upstream.UpstreamRefused):
+                return "Связь с Cleaner оборвалась: сохранена полученная часть"
+            except TimeoutError:
+                return self._cut_time()
         self.deadline, rounds = clock.NOW() + STREAM_TOTAL_SEC, 0
         while True:
             if clock.NOW() > self.deadline:
@@ -963,6 +1006,7 @@ async def stop_user(user_id: int) -> None:
     """Стирание истории, удаление или отключение учётки: идущие ответы пользователя останавливаются —
     модель не держит карту ради ответа, который уже некуда сохранить. Потоки — по user_id, а не по
     диалогам: поток диалога, который уже удалён, тоже его."""
+    cleaner.forget(user_id)
     chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ?", (user_id,))}
     _stop_unstarted(chats)
     await _cancel([st for st in STREAMS.values() if st.user_id == user_id])
@@ -1001,6 +1045,8 @@ async def _events(st: StreamTask, user_message_id: str):
             yield _sse("tool", data)
         elif kind == "ocr":
             yield _sse("ocr", data)
+        elif kind in ("replace", "cleaner"):
+            yield _sse(kind, data)
         elif kind == "done":
             yield _sse("done", data)
             return
@@ -1091,6 +1137,9 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         conn, model = _chat_pair(uid, conn_id, body.model if (body.model or "").strip() else row["model"])
         changes["connection_id"], changes["model"] = conn.id, model
     if body.web is not None:
+        row = _chat_row(uid, chat_id)
+        if body.web and row["connection_id"] is not None and connections.get(uid, row["connection_id"]).cleaner:
+            raise cleaner.refused("Интернет недоступен в подключении Cleaner: поисковые запросы уходят отдельно")
         if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
         changes["web"] = int(body.web)
@@ -1112,6 +1161,7 @@ async def delete_chat(chat_id: str, request: Request):
     """Диалог, его сообщения и вложения; файл, на который ссылается другая запись истории, остаётся."""
     uid = request.state.user.id
     _chat_row(uid, chat_id)
+    cleaner.forget(uid, chat_id)
     await _cancel(_chat_streams(chat_id))
     media_ids = {r["media_id"] for r in state.DB.execute(
         "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?", (chat_id,))}
@@ -1324,6 +1374,66 @@ def _title(text: str) -> str | None:
     return lines[0].strip()[:TITLE_CHARS].rstrip() or None
 
 
+def _cleaner_messages(uid, chat_id, body, atts):
+    if _pending_scans(uid, chat_id, atts):
+        raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
+    if any(a["kind"] == "document" and a["text"] is None for a in atts):
+        raise cleaner.refused("Документ ещё не распознан")
+    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ?" +
+                            (" AND role = 'user'" if body.regenerate else "") +
+                            " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
+    if body.regenerate and last is None:
+        raise cleaner.refused("Нечего переспрашивать")
+    messages = compose(chat_id, last["id"]) if last else []
+    if not body.regenerate:
+        content = _content(body.text, atts)
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] = _merge(messages[-1]["content"], content)
+        else:
+            messages.append({"role": "user", "content": content})
+    return with_date(messages)
+
+
+@router.post("/chats/{chat_id}/cleaner-preview")
+async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
+    uid = request.state.user.id
+    row = _chat_row(uid, chat_id)
+    _busy(chat_id)
+    if row["connection_id"] is None:
+        raise cleaner.refused("Выберите подключение Cleaner")
+    conn = connections.get(uid, row["connection_id"])
+    atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
+    if not body.regenerate and not body.text.strip() and not atts:
+        raise cleaner.refused("Пустое сообщение", 422)
+    messages = _cleaner_messages(uid, chat_id, body, atts)
+    preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
+                                          [rule.model_dump() for rule in body.cleaner_rules])
+    _chat_row(uid, chat_id)                        # deleted while Cleaner was preparing: no send ticket
+    return {"ticket": cleaner.remember(preview), **shown}
+
+
+@router.post("/chats/{chat_id}/cleaner-copy")
+async def cleaner_copy(chat_id: str, body: CleanerCopyIn, request: Request):
+    uid = request.state.user.id
+    row = _chat_row(uid, chat_id)
+    if row["connection_id"] is None:
+        raise cleaner.refused("Выберите подключение Cleaner")
+    conn = connections.get(uid, row["connection_id"])
+    if not conn.cleaner:
+        raise cleaner.refused("Выберите подключение Cleaner")
+    message = state.DB.execute("SELECT * FROM messages WHERE id = ? AND chat_id = ?",
+                               (body.message_id, chat_id)).fetchone()
+    if message is None:
+        raise _gone()
+    atts = _attachments(chat_id).get(body.message_id, [])
+    if any(a["kind"] == "document" and a["text"] is None for a in atts):
+        raise cleaner.refused("Документ ещё не распознан")
+    text = _content(message["content"], [a for a in atts if a["kind"] == "document"])
+    result = await cleaner.redact(conn, "chat", chat_id, text)
+    _chat_row(uid, chat_id)
+    return {"text": result}
+
+
 @router.post("/chats/{chat_id}/turns")
 async def create_turn(chat_id: str, body: TurnIn, request: Request):
     uid = request.state.user.id
@@ -1338,12 +1448,19 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     limit = await _limit(conn, model)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
+    preview = None
+    if conn.cleaner:
+        fresh = _chat_row(uid, chat_id)
+        if fresh["connection_id"] != conn.id or fresh["model"] != model:
+            raise cleaner.refused("Модель диалога изменилась: проверьте запрос ещё раз")
+        messages = _cleaner_messages(uid, chat_id, body, atts)
+        preview = cleaner.take(body.cleaner_ticket, conn, chat_id, model, messages)
     via = "server" if conn.proxied else "browser"
     # скан ещё распознаётся: ход через сервер подождёт его в StreamTask, прямой — ждёт страница
     scans = _pending_scans(uid, chat_id, atts)
     if scans and via == "browser":
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
-    free = body.external_ok or sections.is_local(conn, model)
+    free = body.external_ok or sections.is_local(conn, model) or conn.cleaner
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -1353,7 +1470,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         fresh = state.DB.execute("SELECT web, thinking FROM chats WHERE id = ?", (chat_id,)).fetchone()
         if fresh is None:
             raise _gone()
-        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] else []
+        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] and not conn.cleaner else []
         try:
             exa_key = web.exa_key(uid) if "search" in kinds else None
         except web.ToolError:
@@ -1439,7 +1556,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
                     tools=kinds, exa_key=exa_key, limit=limit, known=known,
                     thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
-                    scans=scans, user_message_id=user_mid)
+                    scans=scans, user_message_id=user_mid, cleaner_preview=preview)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid)

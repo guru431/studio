@@ -568,12 +568,13 @@ function storageBlock(host) {
 
   async function reload() {
     try {
-      const { kinds, total, pending } = await api('GET', '/api/me/storage');
+      const { kinds, total, pending, cleaner_pending } = await api('GET', '/api/me/storage');
       const line = (key, name, n) => [el('dt', {}, name),
         el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
       list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
         ...line('total', 'Всего', total));
       say(queue, ...queueText(pending));
+      if (cleaner_pending) queue.textContent += ` Контекстов Cleaner в очереди удаления: ${cleaner_pending}.`;
     } catch (err) {
       say(queue, words(err), 'error');
     }
@@ -880,11 +881,12 @@ function wipeBlock(host, onWiped) {
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
-        const { pending_files: left } = await api('DELETE', '/api/history');
+        const { pending_files: left, cleaner_pending } = await api('DELETE', '/api/history');
         dialog.close();
         // хранилище было недоступно: файлы ждут в очереди удаления — сказать как есть
         say(note, left ? `История удалена, но файлов на хранилище ещё ${left}: удалятся, когда оно станет доступно`
           : 'История удалена', 'ok');
+        if (cleaner_pending) note.textContent += ` Контекстов Cleaner в очереди удаления: ${cleaner_pending}.`;
         onWiped();
       } catch (err) {
         fail.textContent = words(err);
@@ -1188,6 +1190,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('b', { class: 'link-name' }, conn.name),
           el('span', { class: 'link-url' }, conn.base_url),
           el('span', { class: 'link-hint' },
+            conn.cleaner ? el('span', { class: 'tag' }, 'Cleaner · защита данных') : null,
             el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? 'через сервер' : 'из браузера'),
             ` ключ ${conn.token_hint}`)),
         el('div', { class: 'link-buttons' }, checkButton,

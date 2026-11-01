@@ -201,10 +201,19 @@ async def get_storage(request: Request):
     времени) — из базы, без путей и имён; шару не трогает. Квот и автоудаления нет."""
     uid = request.state.user.id
     files, since = media.waiting(uid)
-    return {**media.usage(uid), "pending": {"files": files, "since": since}}
+    result = {**media.usage(uid), "pending": {"files": files, "since": since}}
+    pending = state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions WHERE user_id = ?", (uid,)).fetchone()[0]
+    if pending:
+        result["cleaner_pending"] = pending
+    return result
 
 
 @router.delete("/history")
 async def delete_history(request: Request):
     """pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница так и скажет."""
-    return {"pending_files": await history.delete_all(request.state.user.id)}
+    result = {"pending_files": await history.delete_all(request.state.user.id)}
+    pending = state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions WHERE user_id = ?",
+                               (request.state.user.id,)).fetchone()[0]
+    if pending:
+        result["cleaner_pending"] = pending
+    return result

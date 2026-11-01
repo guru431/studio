@@ -33,6 +33,12 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+Cleaner: [docs/cleaner-integration.md](docs/cleaner-integration.md), клиент `app/cleaner_client.py`,
+схема 26. Флаг подключения `cleaner` — только серверные чат и перевод; ключ провайдера остаётся в Cleaner.
+Предпросмотр обязателен для хода чата, квитанция одноразовая; текст SSE заменяется целиком (`replace`).
+`STUDIO_CLEANER_CA` — дополнительный доверенный сертификат только клиента Cleaner, TLS не отключать.
+Удаление контекстов — через устойчивую очередь `cleaner_deletions`; 401/403/429 откладывают повтор на час.
+
 С 0.10.0 `hello.agent_version` сообщает версию самого моста, `hello.agent_update` объявляет обновление.
 `GET /api/agents` добавляет `agent_version`, `agent_update`, `latest_version` (последняя — из опубликованного ZIP).
 В дереве компьютеров версия и кнопка ↥; `POST /api/code/agents/<aid>/update` передаёт только серверные
@@ -844,6 +850,10 @@ SQL — как у шага 16 ниже.
 подключения и 500 поиска); стирание истории и вложения без текста зависят от устройства того раздела.
 
 ## Тесты
+
+Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py`; сквозной контракт двух
+приложений и браузер 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py`.
+Нужен соседний `cleaner/.venv` или `CLEANER_TEST_REPO`; провайдер синтетический, внешней сети нет.
 
 Контракт — `local-config/cron/project-registry.json::studio.tests`: `main` (корень, среда `.venv`) и `agent`
 (`agent/`, своя `.venv`, [подробности](agent/CLAUDE.md#тесты)). Быстрый и полный уровни запускают оба набора;
