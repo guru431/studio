@@ -238,10 +238,13 @@ def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, 
     buttons = page.locator('.code-git-actions button')
     pw.expect(buttons).to_have_count(4)
     for button in buttons.all():
-        pw.expect(button).to_be_disabled()
-    pw.expect(page.locator('.code-git-hint')).to_contain_text('Откройте чат')
-    page.goto(base + '/' + CODE_CHAT_A)
-    page.locator('#code-chat[data-loaded="1"]').wait_for()
+        pw.expect(button).to_be_enabled()
+    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    page.locator('#code-git-commit').tap()
+    page.locator('#code-chat[data-loaded="1"][data-running="0"]').wait_for()
+    pw.expect(page.locator('#code-feed .code-msg.user')).to_have_count(1)
+    [first] = [r for r in machine.requests if r['op'] == 'turn']
+    assert first['chat'] not in (CODE_CHAT_A, CODE_CHAT_B) and first['project'] == pid('alpha')
     machine.script = [{"k": "text", "text": "В работе"}]
     page.locator('#code-text').fill('Продолжай работу')
     page.locator('#code-send').tap()
@@ -252,7 +255,7 @@ def test_git_toolbar_fits_one_row_without_scroll_and_respects_busy_chat(iphone, 
     for button in buttons.all():
         pw.expect(button).to_be_disabled()
     page.locator('#code-git-commit').evaluate('b=>b.click()')
-    assert len([r for r in machine.requests if r['op'] == 'turn']) == 1
+    assert len([r for r in machine.requests if r['op'] == 'turn']) == 2
     geometry = page.locator('.code-git-actions').evaluate("""toolbar => {
       const r=toolbar.getBoundingClientRect(), buttons=[...toolbar.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
       return buttons.every(b=>Math.abs(b.top-buttons[0].top)<1 && b.left>=r.left && b.right<=r.right+1)
@@ -272,7 +275,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     bridge.LINKS[aid].hello["project_summary"] = True
     page.studio_machine.projects['alpha']['summary'] = {"git": "ok", "changed": 0, "unpushed": 0,
         "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0},
-        "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0}]}
+        "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0},
+                    {"name": "upstream", "state": "behind", "behind": 10, "ahead": 0}]}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-refresh')

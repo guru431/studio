@@ -3,9 +3,106 @@ import pytest
 
 from fake_bridge import T0, pid
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_online,
-                             code_requests, code_session, code_tab_click, live, problems, set_value, signin)
+                             code_requests, code_session, code_tab_click, go, live, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+
+@pytest.mark.parametrize("action, prefix", [("commit", "Закоммить"), ("push", "Запушь"),
+                                           ("push-all", "Запушь"), ("deploy", "Запушь")])
+@pytest.mark.parametrize("width", [320, 1280])
+def test_git_action_creates_chat_once_without_an_active_tab(browser, live, action, prefix, width):
+    login = f"git-new-{action}-{width}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_B: code_session('Прошлый чат')})
+    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    aid, server = code_online(live, login, machine)
+    gate = """(() => { const real = fetch; window.newChats = 0;
+      window.fetch = async (url, options) => {
+        if (options?.method === 'POST' && String(url).endsWith('/chats')) {
+          window.newChats++;
+          await new Promise(resolve => window.releaseNewChat = resolve);
+        }
+        return real(url, options);
+      }; return true; })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go('code'),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"),
+            *go(f"code/{aid}/{pid('alpha')}?tab=git"),
+            ("wait", "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
+            ("eval", "gate", gate), ("click", f"#code-git-{action}"),
+            ("wait", "typeof window.releaseNewChat === 'function'"),
+            ("eval", "pending", "[...document.querySelectorAll('.code-git-actions button')].every(b => b.disabled)"),
+            ("eval", "doubleClick", f"document.querySelector('#code-git-{action}').click(); window.newChats"),
+            ("eval", "release", "window.releaseNewChat(); true"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),
+            ("eval", "chat", "document.querySelector('#code-chat').dataset.chat"),
+            ("eval", "tabs", "document.querySelectorAll('.code-tab').length"),
+            ("eval", "created", "window.newChats")], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["pending"] and values["doubleClick"] == values["created"] == values["tabs"] == 1
+    [turn] = code_requests(machine, "turn")
+    assert turn["chat"] == values["chat"] and turn["project"] == pid("alpha")
+    assert turn["text"].startswith(prefix)
+    assert ("затем задеплой" in turn["text"]) == (action == "deploy")
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize('outcome', ['retry', 'leave'])
+def test_git_chat_creation_handles_failure_and_leaving_the_project(browser, live, outcome):
+    login = f'git-new-{outcome}'
+    live.add_user(login)
+    machine = code_free_machine()
+    machine.projects['beta'] = {}
+    machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
+    aid, server = code_online(live, login, machine)
+    gate = """(() => { const real = fetch; window.newChats = 0;
+      window.fetch = async (url, options) => {
+        if (options?.method === 'POST' && String(url).endsWith('/chats')) {
+          window.newChats++;
+          if (window.failNewChat) throw new Error('test network failure');
+          await new Promise(resolve => window.releaseNewChat = resolve);
+          const response = await real(url, options);
+          window.chatCreated = true;
+          return response;
+        }
+        return real(url, options);
+      }; return true; })()"""
+    try:
+        actions = [*signin(login), ('wait', READY), *go('code'),
+            ('wait', "document.querySelector('#code-projects li[data-pid]')"),
+            *go(f"code/{aid}/{pid('alpha')}?tab=git"),
+            ('wait', "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
+            ('eval', 'gate', gate)]
+        if outcome == 'retry':
+            actions += [('eval', 'fail', 'window.failNewChat = true'), ('click', '#code-git-commit'),
+                ('wait', "document.querySelector('#code-git-error')?.textContent.includes('Нет связи') && !document.querySelector('#code-git-commit').disabled"),
+                ('eval', 'stillGit', "location.hash.endsWith('?tab=git') && !document.querySelector('#code-chat')"),
+                ('eval', 'allow', 'window.failNewChat = false')]
+        actions += [('click', '#code-git-commit'), ('wait', "typeof window.releaseNewChat === 'function'")]
+        if outcome == 'leave':
+            actions += [*go(f"code/{aid}/{pid('beta')}"),
+                ('wait', "document.querySelector('.code-place-project')?.textContent === 'beta'")]
+        actions += [('eval', 'release', 'window.releaseNewChat(); true'), ('wait', 'window.chatCreated')]
+        if outcome == 'retry':
+            actions += [('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')")]
+        actions += [('eval', 'path', 'location.hash'), ('eval', 'created', 'window.newChats')]
+        result = browser.drive(live.url + '/', actions)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    values = result['values']
+    if outcome == 'retry':
+        assert values['stillGit'] and values['created'] == 2
+        [turn] = code_requests(machine, 'turn')
+        assert turn['project'] == pid('alpha') and turn['chat'] in values['path']
+    else:
+        assert values['created'] == 1 and values['path'].endswith(pid('beta'))
+        assert not code_requests(machine, 'turn')
+    assert not problems(result), problems(result)
 
 
 @pytest.mark.parametrize("width", [320, 1280])

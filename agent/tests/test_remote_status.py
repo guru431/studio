@@ -20,7 +20,7 @@ def test_configured_remote_names_and_local_comparison_without_network(tmp_path, 
         commands.append(args)
         assert 0 < kwargs["timeout"] <= 3
         if args == ["remote"]:
-            raw = b"cld\norigin\nbackup\n"
+            raw = b"cld\norigin\nupstream\nbackup\n"
         elif args == ["rev-parse", "--is-shallow-repository"]:
             raw = b"false\n"
         else:
@@ -33,6 +33,7 @@ def test_configured_remote_names_and_local_comparison_without_network(tmp_path, 
     assert remote_status.read(tmp_path, "feature/name", HEAD, now=lambda: 10) == [
         {"name": name, **expected} for name in ("cld", "origin", "backup")]
     assert all(args[0] in ("remote", "rev-parse", "rev-list") for args in commands)
+    assert not any("refs/remotes/upstream/" in arg for args in commands for arg in args)
 
 
 @pytest.mark.parametrize("failure", ["detached", "initial", "missing", "shallow", "timeout", "malformed"])
@@ -83,6 +84,8 @@ def test_real_git_cld_tracking_refs_and_unfetched_remote_are_reported(tmp_path, 
     git("commit", "--allow-empty", "-qm", "first")
     git("remote", "add", "cld", "https://cld.example.invalid/RD/project.git")
     git("remote", "add", "backup", "https://backup.example.invalid/project.git")
+    git("remote", "add", "upstream", "https://upstream.example.invalid/project.git")
+    git("update-ref", "refs/remotes/upstream/main", "HEAD")
     git("update-ref", "refs/remotes/cld/main", "HEAD")
     git("commit", "--allow-empty", "-qm", "second")
     result = remote_status.read(repo, "main", git("rev-parse", "HEAD"))
