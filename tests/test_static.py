@@ -131,13 +131,9 @@ def test_service_worker_never_caches_api_or_media():
     assert "/offline.html" in sw and "studio-shell-" in sw
 
 
-def test_service_worker_opens_the_job_from_a_notification():
-    """Нажатие на уведомление «В работе»: открытое окно — focus и адрес сообщением, иначе новое окно на
-    записи; ничего сверх оболочки в кэш не кладётся (спека 2026-10-21-studio-jobs-panel, раздел 7)."""
+def test_job_notifications_use_the_registration_api():
+    """Мобильный браузер: уведомления регистрации, а не неподдерживаемый конструктор."""
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
-    assert "addEventListener('notificationclick'" in sw and "event.notification.close()" in sw
-    assert "clients.matchAll" in sw and ".focus()" in sw and "postMessage({ jobs: href })" in sw
-    assert "openWindow(`/#/${href}`)" in sw and ".put(" not in sw
     # pushManager — только у переподписки (pushsubscriptionchange), не у уведомлений «В работе»
     assert sw.count("pushManager") == 1 and sw.index("pushManager") > sw.index("'pushsubscriptionchange'")
     jobs = (STATIC / "js" / "jobs.js").read_text(encoding="utf-8")

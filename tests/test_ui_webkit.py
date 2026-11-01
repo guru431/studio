@@ -73,6 +73,45 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+@pytest.mark.parametrize("resume", ["warm", "cold", "locked"])
+def test_push_target_opens_its_project_over_the_saved_workspace(iphone, resume):
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.projects["beta"]["chats"][CODE_CHAT_B] = machine.projects["alpha"]["chats"].pop(CODE_CHAT_B)
+    root = page.url.split('/#')[0]
+    page.goto(root + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-loaded', '1')
+    page.wait_for_function("""pid => fetch('/api/code/workspace').then(r => r.json())
+        .then(ws => ws.place?.pid === pid)""", arg=pid('alpha'))
+    target = root + f'/#/code/{aid}/{pid("beta")}/{CODE_CHAT_B}'
+    if resume == 'locked':
+        page.evaluate("""async () => {
+          const {api} = await import('/static/js/api.js');
+          await api('POST', '/api/me/screen-lock', {enabled: true});
+          await api('PUT', '/api/me/pin', {password: 'password-123', pin: '2580'});
+          await api('POST', '/api/lock/alive', {touch: true});
+          await api('POST', '/api/lock/now');
+        }""")
+    if resume == 'warm':
+        page.evaluate('url => location.assign(url)', target)
+    else:
+        page.goto(target)
+    if resume == 'locked':
+        pw.expect(page.locator('#lock-pin')).to_be_visible()
+        assert page.url == target
+        for digit in '2580':
+            page.locator(f'#lock-pin [data-digit="{digit}"]').tap()
+        page.locator('#lock-pin-ok').tap()
+        pw.expect(page.locator('#lock')).not_to_be_visible()
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-loaded', '1')
+    pw.expect(page.locator('#code-chat')).to_have_attribute('data-chat', CODE_CHAT_B)
+    pw.expect(page.locator('#code-place .code-place-project')).to_have_text('beta')
+    pw.expect(page.locator('.code-tab[aria-selected="true"]')).to_have_attribute('data-chat', CODE_CHAT_B)
+    assert page.url == target
+    fits(page)
+
+
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852)], indirect=True)
 def test_file_operations_accept_phone_taps(iphone, tmp_path):
     import bridge

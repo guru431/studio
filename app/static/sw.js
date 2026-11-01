@@ -30,16 +30,30 @@ self.addEventListener('activate', (event) => {
     .then(() => self.clients.claim()));
 });
 
-/* Нажатие на уведомление «В работе» (jobs.js): открытое окно студии — на передний план и адрес записи
- * ему сообщением (оболочка переходит сама), окна нет — новое прямо на записи. */
+/* Адрес push должен попасть в URL до focus: на iPhone просыпающаяся страница может ещё не слушать
+ * postMessage. Переход не зависит от готовности оболочки и переживает экран блокировки.
+ * При холодном запуске Safari может вернуть окно на стартовой странице — направляем и его. */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const href = (event.notification.data && event.notification.data.href) || '';
-  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
-    const studio = windows.find((w) => new URL(w.url).pathname === '/');
-    if (!studio) return self.clients.openWindow(`/#/${href}`);
-    return studio.focus().catch(() => studio).then(() => studio.postMessage({ jobs: href }));
-  }));
+  const value = event.notification.data && event.notification.data.href;
+  const href = typeof value === 'string' ? value : '';
+  const target = new URL(`/#/${href}`, self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    let studio = windows.find((w) => {
+      const url = new URL(w.url);
+      return url.origin === self.location.origin && url.pathname === '/';
+    });
+    if (studio) studio = await studio.navigate(target).catch(() => null);
+    if (!studio) {
+      studio = await self.clients.openWindow(target);
+      if (studio && studio.url !== target) studio = await studio.navigate(target).catch(() => studio);
+    }
+    if (studio) {
+      await studio.focus().catch(() => null);
+      studio.postMessage({ jobs: href });       // запасной переход и обновление уже открытой записи
+    }
+  })());
 });
 
 /* Push заданий и «Кода» (push.py): заголовок, тело, tag и адрес —
