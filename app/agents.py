@@ -7,9 +7,9 @@
   только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` из
   студии или `DELETE /api/agent/enroll` самим мостом (ключ — заголовком `Authorization`; «Отключиться» в окне
   моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
-- Архив моста — `GET /api/agent/download` (только вошедшим): `AGENT_ZIP` рядом с кодом кладёт выкладка
-  (`deploy/deploy.sh` собирает его из закоммиченного HEAD `studio-agent`); секретов в нём нет.
-  `GET /api/agent/package` — тот же ZIP самому мосту по действующему ключу устройства активной учётки.
+- Установщик моста — `GET /api/agent/download` (только вошедшим): `AGENT_SETUP` рядом с кодом кладёт выкладка
+  (`deploy/deploy.sh` собирает EXE и ZIP из одного HEAD); секретов в них нет.
+  `GET /api/agent/package` — ZIP самому мосту по действующему ключу устройства активной учётки.
 - Компьютеры и история подключений — только свои: чужой id — 404. История только добавляется (`bridge.record`)
   и только читается: ни DELETE, ни «Удалить всю историю».
 - Журнал — id и коды: ни ключа, ни логина и пароля, ни имени компьютера.
@@ -37,6 +37,7 @@ NAME_MAX = 64
 EVENTS_PAGE = 50
 #: архив моста — `<корень кода>/agent/studio-agent.zip`, рядом с `app/` (кладёт выкладка; тесты подменяют)
 AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip"
+AGENT_SETUP = AGENT_ZIP.with_name("studio-agent-setup.exe")
 FOREIGN = "запрос пришёл с чужого сайта"
 
 
@@ -101,12 +102,12 @@ async def unenroll(request: Request):
 
 @router.get("/api/agent/download")
 async def download(request: Request):
-    """Архив моста для Windows — только вошедшим (любая учётка: секретов в мосте нет)."""
-    if not AGENT_ZIP.is_file():
+    """Один установочный EXE для Windows — только вошедшим."""
+    if not AGENT_SETUP.is_file():
         raise HTTPException(404, {"code": "no_agent",
-                                  "message": "архива моста нет на сервере — его кладёт выкладка студии"})
+                                  "message": "установщика моста нет на сервере — его кладёт выкладка студии"})
     log.info("пользователь %d: скачан мост", request.state.user.id)
-    return FileResponse(AGENT_ZIP, media_type="application/zip", filename="studio-agent.zip",
+    return FileResponse(AGENT_SETUP, media_type="application/octet-stream", filename="studio-agent-setup.exe",
                         headers={"Cache-Control": "private, no-cache"})
 
 

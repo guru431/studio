@@ -69,10 +69,14 @@ command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get insta
 # Субтитры YouTube в чате — общий yt-dlp debian (root обновляет его ночью из /etc/crontab): своей копии нет,
 # поэтому без него только предупреждение, выкладка идёт дальше
 command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — чтение YouTube в чате недоступно" >&2
-# Архив моста Claude Code (GET /api/agent/download) кладёт deploy.sh; без него подмена agent/ оборвалась бы
+# ZIP обновления моста и установщик EXE (GET /api/agent/download) кладёт deploy.sh; без них подмена agent/ оборвалась бы
 # посреди переезда кода — проверка до неё
 [ -s "$NEW/agent/studio-agent.zip" ] || {
     echo "ОШИБКА: нет $NEW/agent/studio-agent.zip — deploy.sh собирает его из agent/ студии" >&2
+    exit 1
+}
+[ -s "$NEW/agent/studio-agent-setup.exe" ] || {
+    echo "ОШИБКА: нет $NEW/agent/studio-agent-setup.exe — deploy.sh собирает его на Windows" >&2
     exit 1
 }
 

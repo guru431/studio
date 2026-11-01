@@ -249,12 +249,16 @@ def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
     assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent' in code
-    assert "$R/.incoming/agent/studio-agent.zip" in code
+    assert "for file in studio-agent.zip studio-agent-setup.exe" in code
+    assert "$R/.incoming/agent/$file" in code
     first_ssh = code.index('"${SSH[@]}"')
     assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
     assert code.index('cat-file -e HEAD:agent/install.cmd') < first_ssh
     archive = code.index("archive --format=zip")
-    assert code.index('"${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming') < archive
+    build = code.index('powershell.exe -NoProfile -NonInteractive')
+    assert archive < build < first_ssh
+    assert 'show HEAD:deploy/build-agent-installer.ps1' in code
+    assert 'show HEAD:deploy/agent-installer.cs' in code
 
 
 def test_install_swaps_the_bridge_archive_with_the_code():
@@ -263,6 +267,8 @@ def test_install_swaps_the_bridge_archive_with_the_code():
     assert 'SWAP=("${PARTS[@]}" agent)' in code
     check = code.index('[ -s "$NEW/agent/studio-agent.zip" ]')
     assert check < code.index('for p in "${SWAP[@]}"; do') and check < code.index('chown -R root:root "$NEW"')
+    setup = code.index('[ -s "$NEW/agent/studio-agent-setup.exe" ]')
+    assert setup < code.index('for p in "${SWAP[@]}"; do') and setup < code.index('chown -R root:root "$NEW"')
 
 
 def test_requirements_are_exact_pins():
@@ -602,6 +608,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     repo = tmp_path / "studio"
     (repo / "deploy").mkdir(parents=True)
     (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
+    for name in ("build-agent-installer.ps1", "agent-installer.cs"):
+        shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
@@ -615,6 +623,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
            "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix()}
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
+               '*"cat > "*"studio-agent-setup.exe"*) cat > "$PROBE/setup.exe" ;; '
                '*) cat >/dev/null ;; esac; }; '
                'curl() { printf 200; }; source "$0"')
 
@@ -637,6 +646,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     r = deploy()
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "ssh-calls").is_file()
+    assert (tmp_path / "setup.exe").read_bytes().startswith(b"MZ")
     with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names

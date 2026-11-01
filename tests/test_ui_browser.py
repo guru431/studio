@@ -7031,32 +7031,43 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     assert not problems(r), problems(r)
 
 
-AGENTS_DOWNLOAD = """(() => { const h = document.querySelector('.agents-block h2'); const a = document.querySelector('#agent-download');
-  return [h.nextElementSibling.classList.contains('agent-download') && h.nextElementSibling.contains(a),
-    a.getAttribute('href'), a.hasAttribute('download'), a.textContent]; })()"""
+AGENTS_DOWNLOAD = """(() => { const root = document.querySelector('.settings'), a = document.querySelector('#agent-download');
+  const box = a.closest('.agent-download'), nav = root.querySelector('.settings-nav');
+  return [root.firstElementChild === box && box.getBoundingClientRect().bottom <= nav.getBoundingClientRect().top,
+    a.getAttribute('href'), a.getAttribute('download'), a.textContent, document.querySelectorAll('#agent-download').length]; })()"""
 
 
-def test_settings_agents_block_has_download(browser, live):
-    """«Компьютеры (Claude Code)»: «Скачать мост для Windows» сразу под заголовком — и без компьютеров (строка списка —
-    «Компьютеров пока нет.», без прежней подсказки), и с ними (второй ставят тем же архивом); спека
-    2026-10-28-studio-agent-download-and-window-design, 4.2."""
+def test_settings_root_has_agent_installer(browser, live, tmp_path):
+    """Установщик EXE и подсказка видны над разделами в корне, вложенные настройки сохраняют свои блоки."""
     login = "agents-download"
     live.add_user(login)
     agents_loaded = "document.querySelector('#agents li')"
-    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"), ("wait", agents_loaded),
-        ("eval", "link", AGENTS_DOWNLOAD), ("eval", "empty", "document.querySelector('#agents li').textContent"),
-        ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings"),
+        ("eval", "link", AGENTS_DOWNLOAD),
+        ("eval", "notice", "document.querySelector('.settings .agent-install-note').textContent"),
+        ("eval", "fits", NO_OVERFLOW), ("screenshot", str(tmp_path / "installer-settings-320.png")),
+        *go("settings/code"), ("wait", agents_loaded),
+        ("eval", "empty", "document.querySelector('#agents li').textContent"),
+        ("eval", "nested", "document.querySelector('.settings > .agent-download').hidden && !document.querySelector('.agents-block .agent-download')"),
+        *go("settings/other"), ("wait", "document.querySelector('#password-save')"),
+        ("eval", "other", "document.querySelector('.settings > .agent-download').hidden"),
+        *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == [True, "/api/agent/download", True, "Скачать мост для Windows"]
+    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert v["nested"] and v["other"]
+    assert v["notice"] == "Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
     enroll_live(live, login, "Рабочий ПК")
-    r = browser.drive(live.url + "/#/settings/code", [("wait", READY), ("wait", "document.querySelector('#agents li[data-id]')"),
-        ("eval", "link", AGENTS_DOWNLOAD)], width=1280)
+    r = browser.drive(live.url + "/#/settings", [("wait", READY),
+        ("wait", "document.querySelector('.settings > .agent-download')"),
+        ("eval", "link", AGENTS_DOWNLOAD), ("eval", "fits", NO_OVERFLOW),
+        ("screenshot", str(tmp_path / "installer-settings-1280.png"))], width=1280)
     assert not r.get("failed"), r
-    assert r["values"]["link"] == [True, "/api/agent/download", True, "Скачать мост для Windows"]
+    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
 
@@ -7290,7 +7301,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
 
 
 def test_code_empty_offers_agent_download(browser, live):
-    """Компьютеров нет: значок, «Компьютеров пока нет.», ссылка «Скачать мост для Windows» на /api/agent/download
+    """Компьютеров нет: значок, «Компьютеров пока нет.», ссылка на EXE на /api/agent/download
     (download), что нужно и шаги установки (спека 2026-10-28-studio-agent-download-and-window-design, 4.2)."""
     login = "code-download"
     live.add_user(login)
@@ -7304,10 +7315,11 @@ def test_code_empty_offers_agent_download(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows", 1]
-    assert v["texts"] == ["ZIP, нужны Python 3.11+ и Claude Code, Codex или OpenCode",
-                          "Распакуйте архив и запустите install.cmd. В окне моста войдите логином и паролем студии —"
-                          " компьютер появится здесь."]
+    assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
+    assert v["texts"] == ["Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.",
+                          "Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode",
+                          "Запустите studio-agent-setup.exe. В окне моста войдите логином и паролем студии —"
+                          " компьютер появится в разделе «Агенты»."]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
 

@@ -783,8 +783,8 @@ function notifyBlock() {
     ...pushBox());
 }
 
-/* «Компьютеры (Claude Code)»: под заголовком всегда «Скачать мост» (ui.js agentDownload — второй компьютер ставят
- * тем же архивом); мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
+/* «Компьютеры (Claude Code)»: установщик находится наверху корня настроек (ui.js agentDownload).
+ * Мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
  * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
 const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
@@ -855,7 +855,7 @@ function agentsBlock(host) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code, Codex и OpenCode)'), agentDownload(),
+  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code, Codex и OpenCode)'),
     list, note,
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
@@ -1006,7 +1006,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['code'] : []), 'other'];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
-  const root = el('div', { class: 'settings' }, nav, panel);
+  const download = other ? agentDownload() : null;
+  const root = el('div', { class: 'settings' }, ...(download ? [download] : []), nav, panel);
   const note = el('p', { class: 'status section-status', 'aria-live': 'polite' });
   const found = new Map();        // `<раздел>:<подключение>` → найденные модели после «Обновить модели»
   const checkErrors = new Map();  // подключение → отказ последней проверки (в блоке паспорта)
@@ -1247,6 +1248,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   function render() {
     const shown = current || ids[0];
     root.dataset.view = current ? 'panel' : 'nav';
+    if (download) download.hidden = !!current;
     for (const a of nav.children) {
       if (a.dataset.section === shown) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');

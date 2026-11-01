@@ -147,37 +147,38 @@ def test_enroll_answers_login(studio):
     assert set(r.json()) == {"agent_id", "device_key", "login"} and r.json()["login"] == "owner"
 
 
-def test_download_gives_the_archive(studio, monkeypatch, tmp_path, caplog):
+def test_download_gives_the_installer(studio, monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
-    archive = tmp_path / "studio-agent.zip"
-    archive.write_bytes(b"PK\x05\x06" + b"\0" * 18)
-    monkeypatch.setattr(agents, "AGENT_ZIP", archive)
+    installer = tmp_path / "studio-agent-setup.exe"
+    installer.write_bytes(b"MZ-installer")
+    monkeypatch.setattr(agents, "AGENT_SETUP", installer)
     uid = make_user(studio, "owner")
     signin(studio, "owner")
     r = studio.c.get("/api/agent/download")
-    assert r.status_code == 200 and r.content == archive.read_bytes()
-    assert r.headers["content-type"] == "application/zip"
-    assert "studio-agent.zip" in r.headers["content-disposition"]
+    assert r.status_code == 200 and r.content == installer.read_bytes()
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert "studio-agent-setup.exe" in r.headers["content-disposition"]
     assert r.headers["cache-control"] == "private, no-cache"
     assert f"пользователь {uid}: скачан мост" in caplog.text
 
 
-def test_download_without_archive_is_404(studio, monkeypatch, tmp_path):
-    monkeypatch.setattr(agents, "AGENT_ZIP", tmp_path / "studio-agent.zip")
+def test_download_without_installer_is_404(studio, monkeypatch, tmp_path):
+    monkeypatch.setattr(agents, "AGENT_SETUP", tmp_path / "studio-agent-setup.exe")
     make_user(studio, "owner")
     signin(studio, "owner")
     r = studio.c.get("/api/agent/download")
     assert r.status_code == 404 and r.json()["detail"] == {
-        "code": "no_agent", "message": "архива моста нет на сервере — его кладёт выкладка студии"}
+        "code": "no_agent", "message": "установщика моста нет на сервере — его кладёт выкладка студии"}
 
 
 def test_download_needs_a_session(studio, monkeypatch, tmp_path):
-    archive = tmp_path / "studio-agent.zip"
-    archive.write_bytes(b"PK")
-    monkeypatch.setattr(agents, "AGENT_ZIP", archive)
+    installer = tmp_path / "studio-agent-setup.exe"
+    installer.write_bytes(b"MZ")
+    monkeypatch.setattr(agents, "AGENT_SETUP", installer)
     r = studio.c.get("/api/agent/download")
     assert r.status_code == 401 and r.json()["detail"]["code"] == "login"
     assert agents.AGENT_ZIP.name == "studio-agent.zip"
+    assert agents.AGENT_SETUP.name == "studio-agent-setup.exe"
 
 
 def test_agent_zip_lies_next_to_the_code():
@@ -185,6 +186,7 @@ def test_agent_zip_lies_next_to_the_code():
     import pathlib
     app_dir = pathlib.Path(agents.__file__).resolve().parent
     assert agents.AGENT_ZIP == app_dir.parent / "agent" / "studio-agent.zip"
+    assert agents.AGENT_SETUP == app_dir.parent / "agent" / "studio-agent-setup.exe"
 
 
 def test_unenroll_by_key_drops_the_computer(studio):

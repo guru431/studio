@@ -115,6 +115,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
     gate = f"""(() => {{ const real = window.fetch; window.projectReads = 0;
       window.fetch = async (url, options) => {{
+        if (String(url).endsWith('/projects') && window.projectListGate) await window.projectListGate;
         if (String(url).endsWith('/summary')) {{
           window.projectReads++;
           if (window.projectGate) await window.projectGate;
@@ -125,6 +126,11 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
         }}
         return real(url, options);
       }}; return true; }})()"""
+    loading = """(() => {
+      const button = document.querySelector('#code-project-refresh'), footer = button.closest('.code-panel-footer');
+      return [button.disabled, button.getAttribute('aria-busy'), footer.getAttribute('aria-busy'),
+        getComputedStyle(button.firstElementChild).animationName, document.querySelector('#code-project-updated').textContent];
+    })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             *go("code"), ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
@@ -164,12 +170,18 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
             ("eval", "scroll", "(() => {const b=document.querySelector('.code-panel-body');b.scrollTop=b.scrollHeight;return true;})()"),
             ("eval", "after", geometry),
             ("screenshot", str(tmp_path / f"projects-{width}.png")),
-            ("eval", "hold", "window.projectGate = new Promise(resolve=>window.releaseProjects=resolve); true"),
+            ("eval", "hold", "window.projectGate = new Promise(resolve=>window.releaseProjects=resolve); window.projectListGate = new Promise(resolve=>window.releaseProjectList=resolve); true"),
             ("click", "#code-project-refresh"),
+            ("wait", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'true'"),
+            ("eval", "loadingList", loading),
+            ("eval", "releaseList", "window.projectListGate=null; window.releaseProjectList(); true"),
             ("wait", "document.querySelector('#code-project-refresh').disabled && window.projectReads > 39"),
+            ("eval", "loadingSummary", loading),
+            ("screenshot", str(tmp_path / f"projects-refresh-{width}.png")),
             ("eval", "previous", f"document.querySelector(\"{alpha} .code-project-findings\").textContent"),
             ("eval", "release", "window.overrideSummary=true; window.projectGate=null; window.releaseProjects(); true"),
             ("wait", "!document.querySelector('#code-project-refresh').disabled"),
+            ("eval", "finished", loading),
             ("eval", "fresh", f"document.querySelector(\"{alpha}\").textContent"), order("unpushed"),
             ("eval", "final-unpushed", first),
             ("eval", "reads", "window.projectReads"),
@@ -189,6 +201,9 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
     assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == 78
     assert values["twoLines"] and values["compactControls"]
+    assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', 'spin', 'Обновляю сведения…']
+    assert values["finished"][:4] == [False, 'false', 'false', 'none']
+    assert values["finished"][4].startswith('Обновлено:')
     assert [entry[:2] for entry in values["github"]] == [
         ["GitHub ↓3", "red"], ["GitHub ✓", "green"], ["GitHub ↕", "red"],
         ["GitHub ↑1", "yellow"], ["GitHub ∅", "red"]]
@@ -230,16 +245,19 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
             ("eval", "fail", "window.failSummary=true"), ("click", "#code-project-refresh"),
             ("wait", "document.querySelector('#code-panel-status').textContent.includes('Не удалось')"),
             ("eval", "retained", count),
+            ("eval", "errorFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
             ("eval", "staleGithub", "[document.querySelector('.code-project-github').textContent, document.querySelector('.code-project-github').dataset.gitLevel]"),
             ("eval", "unchanged", "window.lastUpdated === document.querySelector('#code-project-updated').textContent"),
             ("eval", "failList", "window.failSummary=false;window.failList=true;true"),
             ("click", "#code-project-refresh"), ("wait", ready), ("eval", "afterListFailure", count),
+            ("eval", "listErrorFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
             ("eval", "retry", "window.failList=false;window.holdSummary=true;true"),
             ("click", "#code-project-refresh"), ("wait", "window.heldSummaries === 1"),
             ("click", f"#code-agents li[data-id='{bid}'] button"), ("wait", ready),
             ("eval", "other", count),
             ("eval", "release", "window.holdSummary=false;window.releaseSummary();true"),
             ("wait", "window.heldSummaries === 0"), ("eval", "keptOther", count),
+            ("eval", "otherFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
             ("eval", "stillOther", f"!!document.querySelector('#code-projects li[data-pid=\"{pid('beta')}\"]')")])
     finally:
         second.stop()
@@ -248,6 +266,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     values = result["values"]
     assert values["initial"] == values["retained"] == values["afterListFailure"] == "П: 5"
     assert values["unchanged"] and values["stillOther"]
+    assert values["errorFinished"] and values["listErrorFinished"] and values["otherFinished"]
     assert values["staleGithub"] == ["GitHub ↓4", "unknown"]
     assert values["other"] == values["keptOther"] == "П: 7"
     assert not problems(result), problems(result)

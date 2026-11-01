@@ -12,5 +12,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# Собранные установщики Windows
+/dist/
 # Макеты визуального брейншторма
 .superpowers/
