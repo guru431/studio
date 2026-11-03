@@ -585,7 +585,7 @@ async function chat(mine, p, id, agent, section, status) {
   const fresh = freshChat === id;
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
-    origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
+    origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title,
     git: p.repo, gitAction,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
     verify: cached ? listing.then(() => {

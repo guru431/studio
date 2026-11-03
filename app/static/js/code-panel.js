@@ -27,7 +27,7 @@ import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
-import { codeActivity, refreshCodeActivity } from './code-activity.js';
+import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -193,19 +193,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     activity.set(detail.aid, new Map(detail.items.map((item) => [item.chat, item])));
     paintCounts();
   }
-  function onActivity(event) {
-    const item = event.detail;
-    if (!activity.has(item.aid)) activity.set(item.aid, new Map());
-    if (item.running) activity.get(item.aid).set(item.chat, { ...item, project: item.pid });
-    else activity.get(item.aid).delete(item.chat);
-    paintCounts();
-  }
   function onVisibility() {
     if (document.visibilityState === 'visible') pollUpdates();
     else clearTimeout(updateTimer);
   }
   document.addEventListener('studio-code-snapshot', onSnapshot);
-  document.addEventListener('studio-code-activity', onActivity);
   document.addEventListener('visibilitychange', onVisibility);
   let mode = 'idle';       // idle | loading | projects | pin | offline | error
   let shown = null;        // { aid, pid } — проект справа
@@ -508,15 +500,36 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       li.querySelector('.code-project-count').textContent = n ? String(n) : '';
       li.querySelector('.code-project-count').title = `Открыто вкладок: ${n}`;
       const tasks = [...(activity.get(selected)?.values() || [])].filter((item) => item.project === li.dataset.pid);
-      for (const kind of ['running', 'asking']) {
+      for (const kind of ['running', 'asking', 'unread']) {
         const badge = li.querySelector(`.code-project-state.${kind}`);
-        const total = tasks.filter((item) => kind === 'asking' ? item.asking : item.running && !item.asking).length;
+        const total = tasks.filter((item) => codeActivityState(item) === kind).length;
         badge.hidden = !total;
         badge.textContent = String(total);
-        const label = kind === 'asking' ? `Требуют вашего ответа: ${total}` : `В работе: ${total}`;
+        const label = kind === 'asking' ? `Требуют вашего ответа: ${total}`
+          : kind === 'unread' ? `Завершены, не прочитаны: ${total}` : `В работе: ${total}`;
         badge.title = label;
         badge.setAttribute('aria-label', label);
       }
+      const list = li.querySelector('.code-project-sessions');
+      const old = new Map([...list.children].map((node) => [node.dataset.chat, node]));
+      for (const item of tasks) {
+        let link = old.get(item.chat);
+        if (!link) {
+          link = el('a', { 'data-chat': item.chat, href: `#/code/${selected}/${item.project}/${item.chat}` });
+          link.addEventListener('click', chose);
+          list.append(link);
+        }
+        old.delete(item.chat);
+        const kind = codeActivityState(item);
+        link.dataset.state = kind;
+        const title = item.title || 'Сессия';
+        link.title = `${title} · ${CODE_ACTIVITY_LABELS[kind]}`;
+        link.setAttribute('aria-label', link.title);
+        link.replaceChildren(el('span', { class: 'code-session-name' }, title),
+          el('span', { class: 'code-session-state' }, CODE_ACTIVITY_LABELS[kind]));
+      }
+      for (const link of old.values()) link.remove();
+      list.hidden = !tasks.length;
     }
   }
 
@@ -620,6 +633,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
             el('span', { class: 'code-project-metrics' })),
           el('span', { class: 'code-project-state running', hidden: true }),
           el('span', { class: 'code-project-state asking', hidden: true }),
+          el('span', { class: 'code-project-state unread', hidden: true }),
           el('span', { class: 'code-project-count' })),
         el('span', { class: 'code-project-summary' }));
       link.addEventListener('click', (event) => {
@@ -633,7 +647,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window,
           ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }));
       });
-      const li = el('li', { 'data-pid': p.pid }, row);
+      const li = el('li', { 'data-pid': p.pid }, row, el('div', { class: 'code-project-sessions', hidden: true }));
       paintSummary(li, summaries.get(agent.id)?.get(p.pid));
       return li;
     });
@@ -796,7 +810,6 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       for (const controller of requests) controller.abort();
       clearTimeout(updateTimer);
       document.removeEventListener('studio-code-snapshot', onSnapshot);
-      document.removeEventListener('studio-code-activity', onActivity);
       document.removeEventListener('visibilitychange', onVisibility);
       gen += 1;
       unsubscribe();

@@ -22,6 +22,8 @@
 import { api } from './api.js';
 import { timeOnly } from './time.js';
 import { el } from './ui.js';
+import { allCodeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
+import { ENGINE_NAMES } from './code-options.js';
 
 export const JOBS_POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
@@ -43,6 +45,7 @@ const NOTICES = {
 export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
 /** Значки разделов (и у строк «Поиска», search.js). */
 export const ICONS = {
+  code: '<rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4M8 8l3 2-3 2M13 12h3"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
   photo: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
   video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
@@ -105,6 +108,7 @@ function icon(section) {
 }
 
 function detailText(item) {
+  if (item.section === 'code') return [ENGINE_NAMES[item.engine], CODE_ACTIVITY_LABELS[item.state]].filter(Boolean).join(' · ');
   const when = item.finished === null
     ? [item.detail, item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
     : [item.detail, timeOnly(item.finished)];
@@ -124,7 +128,7 @@ function row(item, fresh) {
   open.addEventListener('click', () => openHref(item.href));
   return el('li', { class: `jobs-row${fresh ? ' new' : ''}`, 'data-id': item.id, 'data-section': item.section,
     'data-state': item.state }, icon(item.section),
-  el('div', { class: 'jobs-text' }, el('b', { class: 'jobs-title' }, item.title),
+  el('div', { class: 'jobs-text' }, el('b', { class: 'jobs-title', title: item.title }, item.title),
     el('span', { class: `jobs-detail${item.state === 'error' ? ' error' : ''}` }, detailText(item))),
   open);
 }
@@ -133,6 +137,7 @@ function row(item, fresh) {
 function refresh(node, item) {
   node.dataset.state = item.state;
   node.querySelector('.jobs-title').textContent = item.title;
+  node.querySelector('.jobs-title').title = item.title;
   const detail = node.querySelector('.jobs-detail');
   detail.textContent = detailText(item);
   detail.classList.toggle('error', item.state === 'error');
@@ -162,19 +167,30 @@ function fill(list, items, fresh, empty) {
 }
 
 function renderPanel() {
+  for (const kind of ['running', 'asking', 'unread']) {
+    const group = document.getElementById(`jobs-code-${kind}`);
+    const items = allCodeActivity().filter((item) => codeActivityState(item) === kind).map((item) => ({
+      ...item, id: `code-${item.aid}-${item.chat}`, section: 'code', state: kind, title: item.title || 'Сессия',
+      href: `code/${item.aid}/${item.project}/${item.chat}`,
+    }));
+    group.hidden = !items.length;
+    fill(group.querySelector('ul'), items, () => kind === 'unread', '');
+  }
   fill(runningList, running, () => false, 'Сейчас ничего не идёт');
   fill(finishedList, finished, (i) => i.finished > shownMark, 'За час ничего не закончилось');
 }
 
 function paint() {
-  const fresh = finished.some((f) => f.finished > readSeen());
-  badge.dataset.running = String(running.length);
+  const agents = allCodeActivity();
+  const fresh = finished.some((f) => f.finished > readSeen()) || agents.some((item) => item.unread && !item.running);
+  const total = running.length + agents.filter((item) => item.running).length;
+  badge.dataset.running = String(total);
   if (fresh) badge.dataset.new = '1';
   else delete badge.dataset.new;
-  count.textContent = running.length ? String(running.length) : '';
-  count.hidden = !running.length;
+  count.textContent = total ? String(total) : '';
+  count.hidden = !total;
   dot.hidden = !fresh;
-  const label = `В работе${running.length ? `: ${running.length}` : ''}${fresh ? ', есть готовое' : ''}`;
+  const label = `В работе${total ? `: ${total}` : ''}${agents.some((item) => item.asking) ? ', требуется ваше действие' : ''}${fresh ? ', есть готовое' : ''}`;
   badge.setAttribute('aria-label', label);
   badge.title = label;
   if (panel.open) renderPanel();
@@ -247,6 +263,7 @@ function openPanel() {
   clearInterval(ticker);
   ticker = setInterval(tick, 1000);
   poll();
+  refreshCodeActivity();
 }
 
 /* ---- уведомления ------------------------------------------------------------------ */
@@ -323,6 +340,7 @@ export function setupJobs({ navigate }) {
     else schedule();
   });
   document.addEventListener('studio-me', paint);
+  document.addEventListener('studio-code-snapshot', paint);
   // нажатие на уведомление при открытом окне студии: sw.js шлёт адрес записи
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {

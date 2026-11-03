@@ -5,11 +5,12 @@ import sqlite3
 import pytest
 
 import bridge
+import code_attention
 import db
 import state
 from conftest import make_user, signin
 from test_chat import events_of
-from test_code import A, ASK, CARD, DONE, chat_url, detail, project_url, sent, setup, until
+from test_code import A, ALPHA, ASK, CARD, DONE, chat_url, detail, project_url, sent, setup, until
 
 MODEL = "opencode-go/" + "model-" * 20
 CATALOG = {"version": "opencode v2.2.4", "models": [{"id": MODEL, "label": "OpenCode Model"}],
@@ -69,7 +70,7 @@ def test_opencode_chat_routes_state_history_turn_and_permission_cards(studio):
         assert until(stream, "ask")[-1] == ("ask", CARD)
         assert studio.c.post(endpoint + "/answer", json={"request_id": "r1", "decision": "allow"}).status_code == 204
         assert list(stream) == [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}),
-                                ("done", {"status": "done"})]
+                                ("done", {"status": "done", "attention": code_attention.revision(aid, ALPHA, chat)})]
     assert studio.c.get(endpoint).json()["items"][-1]["text"] == "Готово"
     assert all(req["engine"] == "opencode" for req in machine.requests if req.get("chat") == chat)
     assert sent(machine, "turn")[-1]["model"] == MODEL
@@ -91,7 +92,7 @@ def test_external_opencode_chat_keeps_engine_in_marks_and_stop(studio):
         stream = events_of(response.iter_lines())
         until(stream, "ask")
         assert studio.c.post(endpoint + "/stop").status_code == 204
-        assert list(stream)[-1] == ("done", {"status": "stopped"})
+        assert list(stream)[-1] == ("done", {"status": "stopped", "attention": code_attention.revision(aid, ALPHA, A)})
     assert sent(machine, "stop")[-1]["engine"] == "opencode"
 
 
@@ -111,7 +112,7 @@ def test_opencode_profile_defaults_preserve_legacy_models_and_efforts(studio):
 
 def test_step_23_preserves_old_chat_ids_engines_constraints_and_cascades(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
+    conn.executescript(db.SCHEMA.removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
                        + "\nPRAGMA user_version = 22;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'h1', 0)")

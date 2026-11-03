@@ -99,7 +99,7 @@ function tailOf(filePath, agent, project) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null }) {
+  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -134,6 +134,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const stepData = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
+  let attention = null;
+  let markingRead = false;
   let interactions = 0;
   const interacted = () => { interactions += 1; };
   for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.addEventListener(event, interacted, { passive: true });
@@ -706,7 +708,24 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
   }
 
-  function paintActivity(state, tool) {
+  async function markRead() {
+    if (!attention || markingRead || !alive || historyLoading || !stuck()
+        || document.visibilityState !== 'visible' || document.documentElement.classList.contains('shrouded')) return;
+    const value = attention;
+    markingRead = true;
+    try {
+      await api('POST', endpoint('/seen'), { attention: value });
+      document.dispatchEvent(new CustomEvent('studio-code-seen', { detail: { aid: Number(aid), chat, attention: value } }));
+      if (attention === value) attention = null;
+    } catch {
+      // Сбой сети оставляет результат непрочитанным до следующего просмотра.
+    } finally {
+      markingRead = false;
+      if (attention && attention !== value) markRead();
+    }
+  }
+
+  function paintActivity(state, tool, completed = null) {
     const labels = { idle: 'Нет активной задачи', thinking: 'Думает…', responding: 'Пишет ответ…',
       waiting: 'Ждёт вашего ответа', done: 'Задача завершена', stopped: 'Ход остановлен',
       error: 'Ошибка выполнения', offline: 'Нет связи с компьютером' };
@@ -716,7 +735,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     activityText.textContent = text;
     activity.title = text;
     document.dispatchEvent(new CustomEvent('studio-code-activity', { detail: { aid: Number(aid), pid, chat,
-      running: ['thinking', 'responding', 'tool', 'waiting'].includes(state), asking: state === 'waiting' } }));
+      engine, ...(title ? { title } : {}),
+      running: ['thinking', 'responding', 'tool', 'waiting'].includes(state), asking: state === 'waiting',
+      ...(completed ? { attention: completed, unread: true } : {}) } }));
   }
 
   function continueActivity() {
@@ -839,6 +860,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!external) waitingForRelease = false;
     paintText(true);
     if (turn) {
+      attention = data.attention || null;
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
@@ -852,7 +874,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     turn = null;
     activeTools.clear();
-    paintActivity(data.status === 'error' ? 'error' : data.status === 'stopped' ? 'stopped' : 'done');
+    paintActivity(data.status === 'error' ? 'error' : data.status === 'stopped' ? 'stopped' : 'done', null, data.attention);
+    Promise.all([...pendingPaints]).then(markRead);
     setRunning(false);
     taskDone?.();
     usage.refresh();
@@ -1074,7 +1097,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     await follow(response, own);
   }
 
-  async function loadHistory(thenLive) {
+  async function loadHistory(thenLive, preserveScroll = false) {
+    const previousScroll = scroller?.scrollTop;
+    const followed = stuck();
     const revision = ++historyRevision;
     const snapshot = thenLive && historyCache.get(historyKey);
     const cached = snapshot?.page;
@@ -1130,12 +1155,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     await Promise.all([...pendingPaints]);
     if (!alive || revision !== historyRevision) return;
+    attention = page.attention || null;
     historyLoading = false;
     updateControls();
     host.dataset.loaded = '1';
     onReady?.();
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller) scroller.scrollTop = preserveScroll && !followed ? previousScroll : scroller.scrollHeight;
     paintNavigation();
+    markRead();
     const initialScroll = scroller?.scrollTop;
     if (thenLive) requestAnimationFrame(() => {
       if (alive && revision === historyRevision && scroller && !messageTarget
@@ -1343,7 +1370,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   });
 
   /* Ушли с экрана — поток долой: пока его нет, сервер шлёт push. Вернулись — live, снимок догонит. */
-  function onVisibility() {
+  async function onVisibility() {
     if (document.visibilityState === 'hidden') {
       clearTimeout(claimTimer);
       clearTimeout(retry);
@@ -1352,10 +1379,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } else if (!sending) {
       acted = Date.now();
       if (external && waitingForRelease) claimSession();
+      await loadHistory(false, true);
       openLive();
     }
   }
   document.addEventListener('visibilitychange', onVisibility);
+  scroller?.addEventListener('scroll', markRead, { passive: true });
 
   setRunning(false);
   loadHistory(true);
@@ -1372,6 +1401,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       scroller?.removeEventListener('scroll', paintNavigation);
+      scroller?.removeEventListener('scroll', markRead);
       window.removeEventListener('resize', paintNavigation);
       for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.removeEventListener(event, interacted);
       feedObserver.disconnect();

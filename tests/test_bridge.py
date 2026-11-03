@@ -399,7 +399,9 @@ def test_in_process_bridge_answers_and_streams(studio):
     assert data == {"turn": "t-1"}
     emit(studio, link, pid("studio"), CHAT, {"k": "text", "text": "вет"})
     got = [studio.c.portal.call(q.get_nowait) for _ in range(3)]
-    assert got == [("ev", {"k": "text", "text": "При"}), ("ev", {"k": "done", "status": "done"}),
+    import code_attention
+    assert got == [("ev", {"k": "text", "text": "При"}), ("ev", {"k": "done", "status": "done",
+                   "attention": code_attention.revision(aid, pid("studio"), CHAT)}),
                    ("ev", {"k": "text", "text": "вет"})]
     drop(studio, link)
     assert studio.c.portal.call(q.get_nowait) == ("offline", None)
