@@ -278,8 +278,10 @@ def _forget(key: tuple, attempt: float) -> None:
 
 def page(name: str, error: str = "") -> str:
     template = _PAGES[name].replace("{{v}}", STATIC_VERSION)
-    template = re.sub(r'((?:src|href)=")/static/(?!v/)',
-                      lambda match: match[1] + f'/static/v/{STATIC_VERSION}/', template)
+    # Офлайн-оболочка использует точные адреса SHELL из sw.js, уже сохранённые при установке.
+    if name != 'offline.html':
+        template = re.sub(r'((?:src|href)=")/static/(?!v/)',
+                          lambda match: match[1] + f'/static/v/{STATIC_VERSION}/', template)
     return template.replace("{{error}}", html.escape(error)).replace("{{imports}}", MODULE_IMPORTS)
 
 

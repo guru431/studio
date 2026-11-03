@@ -14,6 +14,26 @@ def session(title):
         {'id': 'm', 'role': 'assistant', 'text': title, 'steps': [], 'time': T0}]}
 
 
+def test_offline_shell_references_only_precached_assets(browser, live):
+    check = """(async () => {
+      await navigator.serviceWorker.ready;
+      const name = (await caches.keys()).find(name => name.startsWith('studio-shell-'));
+      const cache = await caches.open(name);
+      const response = await cache.match('/offline.html');
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const missing = [];
+      for (const node of doc.querySelectorAll('[src],link[href]')) {
+        const path = node.getAttribute('src') || node.getAttribute('href');
+        if (path.startsWith('/static/') && !await cache.match(path)) missing.push(path);
+      }
+      return missing;
+    })()"""
+    result = browser.drive(live.url+'/', [*signin(), ('wait', READY), ('eval', 'missing', check)])
+    assert not result.get('failed'), result
+    assert result['values']['missing'] == []
+    assert not problems(result), problems(result)
+
+
 def test_cross_project_cached_text_does_not_wait_for_catalog_but_sending_does(browser, live):
     login = 'perf-cross-project'
     live.add_user(login)
