@@ -23,7 +23,7 @@ def test_capability_pin_and_ownership_are_checked_before_desktop_access(studio):
     assert studio.c.get(path).json()['detail']['code'] == 'closed'
     assert studio.c.post(f'/api/code/agents/{aid}/open', json={'pin': '2468'}).status_code == 204
     response = studio.c.get(path)
-    assert response.json() == {'enabled': False, 'active': False}
+    assert response.json() == {'enabled': False, 'active': False, 'resolutions': [1600]}
     assert response.headers['cache-control'] == 'no-store'
     assert studio.c.post(path + '/start', json={}).json()['detail']['code'] == 'desktop_disabled'
     make_user(studio, 'other')
@@ -79,6 +79,30 @@ def test_invalid_events_and_malformed_frames_are_bounded(studio):
     assert len(machine.requests) == before
     machine._op_desktop_frame = lambda req, events: {'image': '/9j/xxxxx', 'width': 1, 'height': 1}
     assert studio.c.post(path + '/frame', json={**body, 'monitor': 0}).status_code == 502
+
+
+def test_resolution_negotiation_limits_and_legacy_default(studio):
+    _, machine, _, path = ready(studio)
+    control = studio.c.post(path + '/start', json={}).json()['control']
+    body = {'control': control, 'monitor': 0}
+    assert studio.c.get(path).json()['resolutions'] == [1600]
+    assert studio.c.post(path + '/frame', json={**body, 'max_edge': 1600}).status_code == 200
+    assert 'max_edge' not in machine.requests[-1]
+    machine._op_desktop_status = lambda req, events: {
+        'enabled': True, 'active': True, 'resolutions': [640, 1280, 2560]}
+    assert studio.c.get(path).json()['resolutions'] == [640, 1280, 2560]
+    assert studio.c.post(path + '/frame', json={**body, 'max_edge': 2560}).status_code == 200
+    assert machine.requests[-1]['max_edge'] == 2560
+    before = len(machine.requests)
+    for edge in (True, 639, 2561, '1280'):
+        assert studio.c.post(path + '/frame', json={**body, 'max_edge': edge}).status_code == 422
+    assert len(machine.requests) == before
+    original = machine._op_desktop_frame
+    machine._op_desktop_frame = lambda req, events: {**original(req, events), 'width': 641}
+    assert studio.c.post(path + '/frame', json={**body, 'max_edge': 640}).status_code == 502
+    machine._op_desktop_status = lambda req, events: {
+        'enabled': True, 'active': True, 'resolutions': [True]}
+    assert studio.c.get(path).status_code == 502
 
 
 def test_locked_or_expired_session_discards_inflight_frame(studio):

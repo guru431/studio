@@ -16,11 +16,13 @@ class Native:
         self.releases = 0
         self.text = ''
         self.enter = self.leave = None
+        self.resolutions = []
 
     def monitors(self):
         return [{'id': 0, 'width': 1920, 'height': 1080, 'primary': True}]
 
-    def frame(self, monitor):
+    def frame(self, monitor, *, max_edge=1600):
+        self.resolutions.append(max_edge)
         if self.enter is not None:
             self.enter.set()
             self.leave.wait(2)
@@ -69,7 +71,7 @@ def test_local_choice_defaults_off_and_survives_controller_and_config_restart(ho
 
 async def test_disabled_permission_never_constructs_native_backend(service):
     desk, native, clock, made = service
-    assert desk.status() == {'enabled': False, 'active': False}
+    assert desk.status() == {'enabled': False, 'active': False, 'resolutions': list(desktop.RESOLUTIONS)}
     with pytest.raises(Refused, match='desktop_disabled'):
         await desk.start('owner')
     with pytest.raises(Refused, match='desktop_disabled'):
@@ -95,7 +97,8 @@ async def test_one_control_bound_to_browser_session_and_disable_revokes_every_op
     assert await desk.clipboard('owner', control, None) == {'text': 'текст'}
     desk.set_enabled(False)
     await asyncio.wrap_future(desk._pool.submit(lambda: None))
-    assert native.releases and desk.status() == {'enabled': False, 'active': False}
+    assert native.releases and desk.status() == {'enabled': False, 'active': False,
+                                               'resolutions': list(desktop.RESOLUTIONS)}
     with pytest.raises(Refused, match='desktop_disabled'):
         await desk.frame('owner', control, 0)
     desk.set_enabled(True)
@@ -156,7 +159,8 @@ async def test_rpc_cannot_change_permission_and_pin_is_checked_before_desktop(ho
     try:
         assert (await agent.handle(req('desktop_start')))[0]['code'] == 'closed'
         assert (await agent.handle(req('open')))[0]['ok']
-        assert (await agent.handle(req('desktop_status')))[0]['data'] == {'enabled': False, 'active': False}
+        assert (await agent.handle(req('desktop_status')))[0]['data'] == {
+            'enabled': False, 'active': False, 'resolutions': list(desktop.RESOLUTIONS)}
         for op, values in [('desktop_enable', {}), ('desktop_status', {'enabled': True}),
                            ('desktop_start', {'enabled': True}), ('desktop_start', {})]:
             assert not (await agent.handle(req(op, **values)))[0]['ok']
@@ -164,6 +168,12 @@ async def test_rpc_cannot_change_permission_and_pin_is_checked_before_desktop(ho
         agent.desktop.set_enabled(True)
         agent.desktop._factory = Native
         token = (await agent.handle(req('desktop_start')))[0]['data']['control']
+        for edge in desktop.RESOLUTIONS:
+            assert (await agent.handle(req('desktop_frame', control=token, monitor=0, max_edge=edge)))[0]['ok']
+        assert agent.desktop._native.resolutions == list(desktop.RESOLUTIONS)
+        for edge in (True, 639, 2561, '1280'):
+            assert (await agent.handle(req('desktop_frame', control=token, monitor=0, max_edge=edge)))[0]['code'] == 'invalid'
+        assert agent.desktop._native.resolutions == list(desktop.RESOLUTIONS)
         agent.new_link(reconnect=True)
         assert not agent.desktop.status()['active'] and agent.desktop.status()['enabled']
         assert (await agent.handle(req('desktop_frame', control=token, monitor=0)))[0]['code'] == 'owned'

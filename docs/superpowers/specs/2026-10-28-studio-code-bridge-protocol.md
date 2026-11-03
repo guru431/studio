@@ -530,16 +530,20 @@ HTTP-префикс `/api/code/agents/<aid>/desktop`; в ответах толь
 
 | HTTP | op | Поля | Ответ |
 | --- | --- | --- | --- |
-| GET префикса | `desktop_status` | — | `{enabled:bool,active:bool}` |
+| GET префикса | `desktop_status` | — | `{enabled:bool,active:bool,resolutions?:[int]}` |
 | POST `/start` | `desktop_start` | `{}` | `{control:32hex,monitors:[{id,width,height,primary}],monitor}` |
-| POST `/frame` | `desktop_frame` | `{control,monitor}` | `{image:base64JPEG,width,height,screen_width,screen_height,monitor}` |
+| POST `/frame` | `desktop_frame` | `{control,monitor,max_edge?:int}` | `{image:base64JPEG,width,height,screen_width,screen_height,monitor}` |
 | POST `/input` | `desktop_input` | `{control,events}` | `{}` / HTTP 204 |
 | POST `/clipboard` | `desktop_clipboard` | `{control,text:string|null}` | `{text:string}` |
 | POST `/stop` | `desktop_stop` | `{control}` | `{}` / HTTP 204 |
 
 Токен случайный, один активный на компьютер, привязан к `session`; второе подключение — `busy`,
 чужой/старый токен — `owned`/`gone`. Мониторы нумеруются агентом; абсолютные координаты не передаются.
-Кадр — ≤1600 px по длинной стороне и ≤700 КиБ строки base64. Клиент запрашивает следующий после
+С 0.13.1 `resolutions` объявляет варианты длинной стороны 640, 800, 1024, 1280, 1600, 1920, 2560 px.
+`max_edge` — целое 640–2560, по умолчанию 1600; физическое разрешение монитора не меняется.
+Без `resolutions` сервер сообщает браузеру только 1600; при 1600 поле `max_edge` мосту не отправляется,
+чтобы прежние версии принимали запрос. Кадр — ≤`max_edge` по длинной стороне и ≤700 КиБ строки base64;
+при превышении объёма JPEG разрешение дополнительно уменьшается. Клиент запрашивает следующий после
 окончания предыдущего, с паузой 250 мс; данные не попадают в историю, БД, журналы и browser storage.
 Буфер только по кнопкам: null читает, строка пишет (пустая очищает), ≤65 536 UTF-16 единиц.
 

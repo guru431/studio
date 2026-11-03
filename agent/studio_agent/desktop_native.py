@@ -401,7 +401,9 @@ class NativeDesktop:
             return [{"id": i, "width": m.width, "height": m.height, "primary": m.primary}
                     for i, m in enumerate(monitors)]
 
-    def frame(self, monitor):
+    def frame(self, monitor, *, max_edge=MAX_EDGE):
+        if type(max_edge) is not int or not 640 <= max_edge <= 2560:
+            raise Refused("invalid")
         api = self._ready()
         with api.physical_pixels():
             monitors = api.monitors()
@@ -416,7 +418,7 @@ class NativeDesktop:
                         raise Refused("desktop_unavailable", _UNAVAILABLE)
                     image = captured.convert("RGB")
                     try:
-                        image.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)
+                        image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
                         while True:
                             with io.BytesIO() as output:
                                 image.save(output, format="JPEG", quality=65)
