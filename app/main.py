@@ -41,6 +41,7 @@ import images
 import jobs
 import media
 import ocr
+import ntfy
 import presets
 import profile
 import push
@@ -162,6 +163,7 @@ app.include_router(desktop.router)
 app.include_router(code_usage.router)
 app.include_router(code_activity.router)
 app.include_router(push.router)
+app.include_router(ntfy.router)
 
 
 @app.exception_handler(RequestValidationError)

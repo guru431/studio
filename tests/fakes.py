@@ -145,8 +145,16 @@ class FakeGateway:
         self.push_requests: list[httpx.Request] = []   # запросы к службам push (`push.HOSTS`)
         self.push_status = 201           # код ответа службы push
         self.push_raise = None           # класс исключения httpx вместо ответа службы push
+        self.ntfy_requests: list[httpx.Request] = []
+        self.ntfy_status = 200
+        self.ntfy_raise = None
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.headers.get("host") in ("psh.example.net", "other-ntfy.example.com"):
+            self.ntfy_requests.append(request)
+            if self.ntfy_raise is not None:
+                raise self.ntfy_raise("private-server-error", request=request)
+            return httpx.Response(self.ntfy_status, text="private-server-response")
         if request.url.host == EXA_HOST:
             return self._exa(request)
         if push.allowed(str(request.url)):
