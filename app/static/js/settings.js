@@ -1071,8 +1071,8 @@ function voicesBlock(host) {
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, code: 'Агенты', other: 'Прочее' };
-  const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['code'] : []), 'other'];
+  const names = { ...SECTION_NAMES, cleaner: 'Защита данных', code: 'Агенты', other: 'Прочее' };
+  const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['cleaner', 'code'] : []), 'other'];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
   const download = other ? agentDownload() : null;
@@ -1211,8 +1211,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         checked: !!s.default && s.default.connection_id === conn.id && s.default.model === m });
       check.addEventListener('change', () => saveModels(s, conn, names, box));
       radio.addEventListener('change', () => saveDefault(s, conn, m));
-      // пробный ответ тратит запрос: только по кнопке, только у отмеченной модели чата и не у srvllm (занял бы карту)
-      const tryable = direct && checked && s.id === 'chat' && conn.kind !== 'srvllm';
+      // Cleaner отправляет пробу через предпросмотр чата; srvllm занял бы карту.
+      const tryable = direct && checked && s.id === 'chat' && conn.kind !== 'srvllm' && !conn.cleaner;
       box.append(el('li', { class: 'model', 'data-model': m },
         el('label', { class: 'check model-name' }, check, modelLabel(m)),
         known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, 'не найдена') : null,
@@ -1266,10 +1266,10 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       names.length ? box : el('p', { class: 'muted small' }, 'Нажмите «Обновить модели» и отметьте нужные'));
   }
 
-  async function addLink(s) {
+  async function addLink(s, cleaner = false) {
     let conns = [];
     try {
-      conns = (await api('GET', connBase)).items.filter((c) => !c.sections.includes(s.id));
+      conns = (await api('GET', connBase)).items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner));
     } catch (err) {
       say(note, words(err), 'error');
       return;
@@ -1278,7 +1278,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
       el('option', { value: 'new' }, 'Новый адрес…'));
     select.value = conns.length ? String(conns[0].id) : 'new';
-    const form = connectionForm(null);
+    const form = connectionForm(null, { cleaner });
     form.el.hidden = select.value !== 'new';
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
     const box = el('div', {}, field('Подключение', select, 'existing'), form.el);
@@ -1301,13 +1301,15 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     });
   }
 
-  function sectionBlock(s) {
+  function sectionBlock(s, cleaner = false) {
+    if (cleaner) s = { ...s, links: s.links.filter((l) => l.connection.cleaner) };
     const list = el('ul', { class: 'links' }, ...(s.links.length ? s.links.map((l) => linkCard(s, l))
       : [el('li', { class: 'muted' }, 'В разделе пока нет подключений')]));
     return el('section', { class: 'block section-panel', 'data-section': s.id },
       el('h2', {}, names[s.id]), list,
-      el('div', { class: 'row' }, button('+ Адрес для раздела', { class: 'btn', id: 'link-add' }, () => addLink(s))),
-      note);
+      el('div', { class: 'row' }, button(cleaner ? '+ Подключить Cleaner' : '+ Адрес для раздела',
+        { class: 'btn', id: cleaner ? `cleaner-add-${s.id}` : 'link-add' }, () => addLink(s, cleaner))),
+      cleaner ? el('a', { class: 'small', href: `#/settings/${s.id}` }, 'Все модели раздела') : note);
   }
 
   function renderDictation() {
@@ -1330,6 +1332,19 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     dictationHost = null;
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
+    if (shown === 'cleaner') {
+      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'cleaner' },
+        el('section', { class: 'block' }, el('h2', {}, 'Защита данных · Cleaner'),
+          el('p', {}, 'Личные подключения и модели по умолчанию для чата и перевода.'),
+          el('details', { class: 'small' }, el('summary', {}, 'Как подключить и использовать'),
+          el('p', { class: 'muted' }, 'В Cleaner откройте «Ключи» и создайте ключ с доступом к облачному подключению и его моделям. '
+            + 'У каждого пользователя должна быть своя учётная запись Cleaner. Адрес сервиса разрешает администратор Studio.'),
+          el('p', { class: 'muted' }, '«Проверить» проверяет связь и доступ к моделям. Перед отправкой из чата вы увидите очищенный текст; '
+            + 'в переводе очистка выполняется автоматически. Настройки по умолчанию действуют для новых диалогов и переводов. '
+            + 'Адрес и ключ можно изменить через меню «⋯» подключения.'))),
+        ...['chat', 'translate'].map((id) => sectionOf(id)).filter(Boolean).map((s) => sectionBlock(s, true)), note));
+      return;
+    }
     if (shown === 'code') {
       let pendingAgents = null;
       const agents = () => pendingAgents ||= api('GET', '/api/agents').finally(() => { pendingAgents = null; });

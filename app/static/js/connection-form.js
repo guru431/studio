@@ -23,10 +23,11 @@ export function sectionsText(sections) {
   return Object.keys(SECTION_NAMES).filter((s) => sections.includes(s)).map((s) => SECTION_NAMES[s]).join(', ');
 }
 
-export function connectionForm(initial) {
+export function connectionForm(initial, { cleaner = false } = {}) {
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', required: true });
   const kind = el('select', { class: 'input', name: 'kind' },
-    ...Object.entries(KINDS).map(([value, k]) => el('option', { value }, k.label)));
+    ...Object.entries(KINDS).filter(([value]) => !cleaner || value === 'cleaner')
+      .map(([value, k]) => el('option', { value }, k.label)));
   const url = el('input', { class: 'input', name: 'base_url', maxlength: '2048', autocomplete: 'off',
     inputmode: 'url', spellcheck: 'false', autocapitalize: 'none' });
   const token = el('input', { class: 'input', name: 'token', type: 'password', maxlength: '512',
@@ -42,8 +43,8 @@ export function connectionForm(initial) {
     field('Токен', token, 'token'), cleanerNote);
   box.addEventListener('submit', (event) => event.preventDefault());
 
-  kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.kind) : 'openai';
-  name.value = initial ? initial.name : '';
+  kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
+  name.value = initial ? initial.name : (cleaner ? 'Cleaner' : '');
   url.value = initial ? initial.base_url : '';
   url.placeholder = KINDS[kind.value].placeholder;
   cleanerNote.hidden = kind.value !== 'cleaner';

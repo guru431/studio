@@ -218,8 +218,8 @@ async function render() {
   // Проверка идёт до update/mount: старые узлы и кэш защищённого раздела не мелькают при переходе.
   view.style.visibility = 'hidden';
   view.inert = true;
-  const guardedSection = route.section === 'settings' && route.id in SECTIONS && route.id !== 'other'
-    ? route.id : route.section;
+  const guardedSection = route.section === 'settings' && route.id === 'cleaner' ? 'security'
+    : route.section === 'settings' && route.id in SECTIONS && route.id !== 'other' ? route.id : route.section;
   try {
     await ensureSectionOpen(guardedSection);
   } catch (err) {
