@@ -89,6 +89,7 @@ FILE_BODY_MAX = 3 * 1024 * 1024
 RAW_MAX = 10 * 1024 * 1024
 PATH_MAX = 1024
 HISTORY_PAGE = 30
+HISTORY_TAIL = 12
 PING_SEC = 15
 CHECK_SEC = 1                    # поток сверяет свою сессию на событиях не чаще
 PDF_TTL_SEC = 300
@@ -645,7 +646,7 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
     attention = code_attention.revision(aid, pid, chat) if before is None else None
     try:
         data = await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
-                         limit=HISTORY_PAGE)
+                         limit=HISTORY_TAIL if before is None else HISTORY_PAGE)
         return _relay({**data, **({"attention": attention} if attention else {})})
     except HTTPException as e:
         if _new_chat(request, aid, pid, chat, e):

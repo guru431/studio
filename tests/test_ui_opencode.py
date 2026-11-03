@@ -227,7 +227,9 @@ def test_opencode_session_reopens_and_pages_its_own_history(browser, live):
             ("eval", "badge", "document.querySelector('#code-chats .code-engine').textContent"),
             ("click", f"#code-chats li[data-chat=\"{chat}\"] .code-chat-link"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
-            ("eval", "n", count), ("click", "#code-more"), ("wait", f"{count} === 110"),
+            ("eval", "n", count),
+            *[step for total in (42, 72, 102, 110) for step in
+              (("click", "#code-more"), ("wait", f"{count} === {total}"))],
             ("eval", "first", "document.querySelector('#code-feed .code-msg').textContent.trim()"),
             ("eval", "reopened", f"(async () => (await {API}.api('GET', '{path.rsplit('/', 1)[0]}')).items.find(c => c.chat === '{chat}').state)()")],
             width=1280)
@@ -235,7 +237,9 @@ def test_opencode_session_reopens_and_pages_its_own_history(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["badge"] == "OpenCode" and v["n"] == 100 and v["first"] == "сообщение 0" and v["reopened"] == "open"
+    assert v["badge"] == "OpenCode" and v["n"] == 12 and v["first"] == "сообщение 0" and v["reopened"] == "open"
     history = code_requests(machine, "history")
-    assert all(q["engine"] == "opencode" for q in history) and history[-1]["before"] == 10
+    assert all(q["engine"] == "opencode" for q in history)
+    assert [q['before'] for q in history if q['before'] is not None] == [98, 68, 38, 8]
+    assert any(q['before'] is None and q['limit'] == 12 for q in history)
     assert not known_refusals(problems(r), 409), problems(r)

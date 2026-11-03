@@ -8366,7 +8366,7 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
     first = "document.querySelector('#code-feed .code-msg').textContent.trim()"
     count = "document.querySelectorAll('#code-feed .code-msg').length"
     remaining = []
-    for expected in (90, 120, 150, 180, 210, 240, 250):
+    for expected in (72, 102, 132, 162, 192, 222, 250):
         remaining.extend([("click", "#code-more"), ("wait", f"{count} === {expected}")])
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
@@ -8375,7 +8375,7 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
               const rail = document.querySelector('#rail').getBoundingClientRect();
               return c.bottom <= rail.top + 1 && c.top >= 0; })()"""),
             ("eval", "fits", NO_OVERFLOW),
-            ("click", "#code-more"), ("wait", f"{count} === 60"), ("eval", "first2", first),
+            ("click", "#code-more"), ("wait", f"{count} === 42"), ("eval", "first2", first),
             ("eval", "shown2", "!document.querySelector('#code-more').hidden"),
             *remaining, ("eval", "first3", first),
             ("eval", "shown3", "!document.querySelector('#code-more').hidden")], width=320, mobile=True)
@@ -8383,10 +8383,10 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert (v["n1"], v["first1"], v["more1"]) == (30, "сообщение 220", "Показать раньше")
+    assert (v["n1"], v["first1"], v["more1"]) == (12, "сообщение 238", "Показать раньше")
     assert v["composer"] is True and v["fits"] is True
-    assert (v["first2"], v["shown2"], v["first3"], v["shown3"]) == ("сообщение 190", True, "сообщение 0", False)
-    assert [q["before"] for q in code_requests(machine, "history")] == [None, 220, 190, 160, 130, 100, 70, 40, 10]
+    assert (v["first2"], v["shown2"], v["first3"], v["shown3"]) == ("сообщение 208", True, "сообщение 0", False)
+    assert [q["before"] for q in code_requests(machine, "history")] == [None, 238, 208, 178, 148, 118, 88, 58, 28]
     assert not known_refusals(problems(r), 409), problems(r)
 
 

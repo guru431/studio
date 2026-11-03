@@ -451,7 +451,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintNavigation() {
-    if (!scroller) return;
+    if (!scroller || historyLoading) return;
     const { before, after } = messageNeighbours();
     navigation.hidden = !feed.querySelector('.code-msg.user') && start <= 0;
     previous.disabled = more.disabled || (!before && start <= 0);
@@ -1098,8 +1098,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   async function loadHistory(thenLive, preserveScroll = false) {
-    const previousScroll = scroller?.scrollTop;
-    const followed = stuck();
+    const previousScroll = preserveScroll ? scroller?.scrollTop : 0;
+    const followed = !preserveScroll || stuck();
     const revision = ++historyRevision;
     const snapshot = thenLive && historyCache.get(historyKey);
     const cached = snapshot?.page;

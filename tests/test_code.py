@@ -299,6 +299,7 @@ def test_history_pages_from_the_end(studio):
         data = studio.c.get(url(aid, "projects", ALPHA, "chats", A),
                             params={} if before is None else {"before": before}).json()
         assert data["total"] == 250 and len(data["items"]) <= 30
+        assert m.requests[-1]["limit"] == (claude_code.HISTORY_TAIL if before is None else claude_code.HISTORY_PAGE)
         seen[0:0] = [item["id"] for item in data["items"]]
         if data["start"] == 0:
             break

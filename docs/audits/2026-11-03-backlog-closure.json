@@ -1,0 +1,55 @@
+{
+  "viewport": [
+    393,
+    852
+  ],
+  "cpu_rate": 4,
+  "source_messages": 100,
+  "source_steps": 1000,
+  "sources": {
+    "app/claude_code.py": "32603bdbb2ed13693f8e04ce71d6b0f9e8dc57f0491bf9ab7e1f332fc3dfc170",
+    "app/static/css/app.css": "add08a2685efb62dbbed038bbd193b7510df958000abe64ccaee8bb3814cce00",
+    "app/static/js/app.js": "aa924341df7a5609376cfbb2bf8815637f16fa8d476e13df6a0ee8abc9a19448",
+    "app/static/js/code-chat.js": "e05713f44acb3d146b1dde2344f4345a78754515ed38d4c085e15c59f4b8ab5d",
+    "app/static/js/markdown.js": "6c19a6e79596c3e6526514be0b2bd3364b373ee831d424d3c13428882be0d5d7",
+    "app/static/js/markdown-worker.js": "9e86e864e7d5cea012e437f28ce13c5e3ad7d1829bd7ae63374cbc0761cc42e8"
+  },
+  "history": [
+    {
+      "ready_ms": 283.8,
+      "messages": 12,
+      "steps": 120,
+      "longtasks": [
+        {
+          "start": 570.5,
+          "ms": 50
+        }
+      ]
+    },
+    {
+      "ready_ms": 261.1,
+      "messages": 12,
+      "steps": 120,
+      "longtasks": []
+    },
+    {
+      "ready_ms": 219.9,
+      "messages": 12,
+      "steps": 120,
+      "longtasks": []
+    }
+  ],
+  "markdown": [
+    {
+      "characters": 42688,
+      "total_ms": 1972.4000000059605,
+      "longtasks": []
+    },
+    {
+      "characters": 85376,
+      "total_ms": 4066,
+      "longtasks": []
+    }
+  ],
+  "browser": "156.0.4314.58"
+}
