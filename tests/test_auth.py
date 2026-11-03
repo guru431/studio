@@ -282,7 +282,8 @@ def guarded_routes() -> list[tuple[str, str]]:
     routes = []
     for prefix, route in walk(main.app.routes):
         if isinstance(route, Mount):
-            assert prefix + route.path == "/static", route.path            # статика — открыта, больше ничего
+            assert prefix + route.path in ("/static", f"/static/v/{main.STATIC_VERSION}"), route.path
+            assert route.app.directory == auth.STATIC  # Только тот же публичный каталог, не данные пользователей.
             continue
         if isinstance(route, WebSocketRoute):
             # канал моста: http-заслон его не видит, вход — ключом устройства (test_bridge.py)

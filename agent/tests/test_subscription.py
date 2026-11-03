@@ -142,5 +142,5 @@ async def test_codex_old_cli_keeps_limits_when_usage_rpc_is_unsupported(home):
     runner = codex.CodexRunner(lambda f: None, home=home, find_cli=lambda: home / "codex.exe", factory=Rpc)
     raw = await runner.subscription_usage(home)
     assert list(raw) == ["account", "limits"]
-    assert runner._meta.calls == ["account/read", "account/rateLimits/read", "account/usage/read"]
+    assert runner._usage_meta.calls == ["account/read", "account/rateLimits/read", "account/usage/read"]
     assert subscription.codex_usage(raw, 1000)["available"]

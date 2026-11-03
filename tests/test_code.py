@@ -35,6 +35,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/desktop/clipboard"): {"control": "0" * 32, "text": None},
     ("POST", "/api/code/agents/1/desktop/stop"): {"control": "0" * 32},
     ("GET", "/api/code/agents/1/info"): None,
+    ("GET", "/api/code/agents/1/access"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/queue/pause"): {"paused": False},
     ("GET", "/api/code/agents/1/projects/1/worktrees"): None,
     ("POST", "/api/code/agents/1/projects/1/worktrees"): {"name": "task"},
@@ -291,14 +292,30 @@ def test_closed_foreign_session_does_not_come_back_as_ghost(studio):
 
 def test_history_pages_from_the_end(studio):
     aid, m, _ = setup(studio)
-    data = studio.c.get(url(aid, "projects", ALPHA, "chats", A)).json()
-    assert ([i["id"] for i in data["items"]], data["start"], data["total"]) == (
-        [f"m{i}" for i in range(150, 250)], 150, 250)
-    data = studio.c.get(url(aid, "projects", ALPHA, "chats", A), params={"before": 150}).json()
-    assert ([i["id"] for i in data["items"]], data["start"]) == ([f"m{i}" for i in range(50, 150)], 50)
-    assert m.requests[-1]["limit"] == claude_code.HISTORY_PAGE == 100
+    before, seen = None, []
+    while True:
+        data = studio.c.get(url(aid, "projects", ALPHA, "chats", A),
+                            params={} if before is None else {"before": before}).json()
+        assert data["total"] == 250 and len(data["items"]) <= 30
+        seen[0:0] = [item["id"] for item in data["items"]]
+        if data["start"] == 0:
+            break
+        assert before is None or data["start"] < before
+        before = data["start"]
+    assert seen == [f"m{i}" for i in range(250)]
+    assert m.requests[-1]["limit"] == claude_code.HISTORY_PAGE == 30
     r = studio.c.get(url(aid, "projects", ALPHA, "chats", "22222222-2222-4222-8222-222222222222"))
     assert (r.status_code, detail(r)["code"]) == (404, "not_found")
+
+
+def test_cached_preview_access_probe_checks_computer_pin(studio):
+    aid, machine, _ = setup(studio, opened=False)
+    path = url(aid, "access")
+    result = studio.c.get(path)
+    assert result.status_code == 409 and detail(result)["code"] == "closed"
+    assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
+    assert studio.c.get(path).status_code == 204
+    assert all(row["op"] in ("projects", "open") for row in machine.requests)
 
 
 def test_bad_ids_are_422(studio):

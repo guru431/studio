@@ -46,7 +46,7 @@ def test_computer_name_switches_projects_without_opening_info(browser, live, wid
             ('wait', "document.querySelector('.code-project-name')?.textContent === 'alpha'"),
             ('click', f'#code-agents li[data-id="{aid}"] .code-agent'),
             ('wait', "document.querySelector('.code-project-name')?.textContent === 'beta'"),
-            ('eval', 'closed', "!document.querySelector('#code-computer-dialog').open"),
+            ('eval', 'closed', "!document.querySelector('#code-computer-dialog')?.open"),
             ('eval', 'selected', f"document.querySelector('#code-agents li[data-id=\"{aid}\"] .code-agent').getAttribute('aria-current')")],
             width=width, mobile=width == 320)
     finally:
@@ -75,7 +75,7 @@ def test_computer_info_button_shows_snapshot_refreshes_and_keeps_project(browser
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-projects li')"),
-            ('eval', 'initiallyClosed', "!document.querySelector('#code-computer-dialog').open"),
+            ('eval', 'initiallyClosed', "!document.querySelector('#code-computer-dialog')?.open"),
             ('eval', 'before', 'location.hash'), ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('wait', SHOWN), ('eval', 'details', "document.querySelector('.code-computer-details').textContent"),
             ('eval', 'fits', FITS), ('click', '#code-computer-refresh'),
@@ -114,7 +114,7 @@ def test_computer_info_waits_for_pin_and_reopens_after_expiration(browser, live)
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', "!!document.querySelector('#code-pin-input')"),
             ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
-            ('eval', 'closed', "!document.querySelector('#code-computer-dialog').open"),
+            ('eval', 'closed', "!document.querySelector('#code-computer-dialog')?.open"),
             ('type', '#code-pin-input', '2468'), ('click', '#code-pin-open'), ('wait', SHOWN),
             ('click', '#code-computer-refresh'),
             ('wait', "!document.querySelector('#code-computer-dialog').open && !!document.querySelector('#code-pin-input')"),
@@ -171,7 +171,7 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
             row = page.locator(f'#code-agents li[data-id="{aid}"]')
             row.locator('.code-agent').tap()
             page.wait_for_selector('#code-projects li')
-            assert not page.locator('#code-computer-dialog').evaluate('e => e.open')
+            assert page.locator('#code-computer-dialog[open]').count() == 0
             controls = [row.locator(selector).bounding_box() for selector in
                         ('.code-agent', '.code-agent-update', '.code-agent-info', '.code-agent-desktop')]
             assert all(bounds['width'] > 0 and bounds['height'] >= 30 for bounds in controls)

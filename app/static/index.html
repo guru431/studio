@@ -17,11 +17,12 @@
 <link rel="stylesheet" id="hl-paper" href="/static/vendor/hl-paper.css?v={{v}}" media="(prefers-color-scheme: light)">
 <link rel="stylesheet" id="hl-graphite" href="/static/vendor/hl-graphite.css?v={{v}}" media="(prefers-color-scheme: dark)">
 <script src="/static/theme.js?v={{v}}"></script>
-<script type="module" src="/static/js/lock-start.js?v={{v}}"></script>
+<script type="importmap">{{imports}}</script>
+<script type="module" src="/static/v/{{v}}/js/lock-start.js"></script>
 <script src="/static/vendor/marked.min.js?v={{v}}" defer></script>
 <script src="/static/vendor/purify.min.js?v={{v}}" defer></script>
 <script src="/static/vendor/highlight.min.js?v={{v}}" defer></script>
-<script type="module" src="/static/js/app.js?v={{v}}"></script>
+<script type="module" src="/static/v/{{v}}/js/app.js"></script>
 </head>
 <body class="shell">
 <nav id="rail" aria-label="Разделы">

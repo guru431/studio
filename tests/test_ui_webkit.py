@@ -473,7 +473,7 @@ def test_pin_starts_before_the_app_shell_loads(iphone, tmp_path):
     with page.context.browser.new_context(viewport=page.viewport_size, is_mobile=True, has_touch=True,
             extra_http_headers={'Cookie': page.studio_cookie}, service_workers='block') as context:
         early = context.new_page()
-        early.route('**/static/js/app.js?*', lambda route: route.fulfill(
+        early.route('**/js/app.js*', lambda route: route.fulfill(
             status=200, content_type='text/javascript', body='window.shellBlocked = true;'))
         early.goto(page.url)
         pw.expect(early.locator('#lock-pin')).to_be_visible()

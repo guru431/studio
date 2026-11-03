@@ -296,6 +296,8 @@ function setupMenu() {
 }
 
 async function start() {
+  // Публичный код выбранного раздела можно получать параллельно с профилем, до показа любых данных.
+  if (parse(location.hash).section === 'code') SECTIONS.code.load().catch(() => {});
   const worker = 'serviceWorker' in navigator
     ? navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => null) : null;
   installLock();             // до профиля: запертая студия покажет экран блокировки раньше раздела

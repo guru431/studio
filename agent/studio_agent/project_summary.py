@@ -58,7 +58,7 @@ def journal_count(project: Path, name: str, status: str) -> int | None:
         return None
 
 
-def read(project: Path, *, now=time.time) -> dict:
+def read(project: Path, *, now=time.time, local=False) -> dict:
     result = {"findings": journal_count(project, "FINDINGS.md", "open"),
               "ideas": journal_count(project, "IDEAS.md", "proposed"),
               "changed": None, "unpushed": None, "modified": None, "git": "error", "github": None,
@@ -99,6 +99,13 @@ def read(project: Path, *, now=time.time) -> dict:
     if result["git"] == "ok":
         oid = re.search(rb"(?:^|\0)# branch.oid ([0-9a-f]{40}|[0-9a-f]{64})\0", out.stdout)
         head = oid[1].decode("ascii") if oid else None
-        result["github"] = github_status.read(project, state["branch"], head)
+        if local:
+            try:
+                repo = github_status.repository(project)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                repo = None
+            result["_github"] = (state["branch"], head, repo) if repo else None
+        else:
+            result["github"] = github_status.read(project, state["branch"], head)
         result["remotes"] = remote_status.read(project, state["branch"], head)
     return {**result, "checked_at": now()}

@@ -23,10 +23,12 @@
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся.
 """
 import asyncio
+import base64
 import hashlib
 import hmac
 import html
 import logging
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +73,10 @@ def _static_version(root: Path) -> str:
 
 #: версия статики при старте — `?v=` в ссылках страниц (`{{v}}`) и VERSION служебного работника
 STATIC_VERSION = _static_version(STATIC)
+MODULE_IMPORTS = json.dumps({"imports": {"/static/js/": f"/static/v/{STATIC_VERSION}/js/",
+                                       "/static/vendor/": f"/static/v/{STATIC_VERSION}/vendor/"}}, separators=(",", ":"))
+MODULE_IMPORTS_HASH = base64.b64encode(hashlib.sha256(MODULE_IMPORTS.encode()).digest()).decode("ascii")
+_PAGES = {name: (STATIC / name).read_text(encoding='utf-8') for name in ('index.html', 'login.html', 'offline.html')}
 
 #: ("pair", логин, адрес) и ("ip", адрес) → моменты неудач за последние LOCK_SEC.
 FAILS: dict[tuple, list[float]] = {}
@@ -271,8 +277,10 @@ def _forget(key: tuple, attempt: float) -> None:
 # ---- страницы --------------------------------------------------------------
 
 def page(name: str, error: str = "") -> str:
-    return ((STATIC / name).read_text(encoding="utf-8")
-            .replace("{{error}}", html.escape(error)).replace("{{v}}", STATIC_VERSION))
+    template = _PAGES[name].replace("{{v}}", STATIC_VERSION)
+    template = re.sub(r'((?:src|href)=")/static/(?!v/)',
+                      lambda match: match[1] + f'/static/v/{STATIC_VERSION}/', template)
+    return template.replace("{{error}}", html.escape(error)).replace("{{imports}}", MODULE_IMPORTS)
 
 
 def _login_page(error: str = "", status: int = 200) -> HTMLResponse:

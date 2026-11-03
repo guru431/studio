@@ -131,7 +131,7 @@ function enginePriorityBlock(defaults) {
       + 'Сохраняется для всех ваших устройств.'), rows, save, note);
 }
 
-function codeDefaultsBlock() {
+function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
   const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Claude Code, Codex и OpenCode'),
@@ -141,7 +141,7 @@ function codeDefaultsBlock() {
 
   async function load() {
     try {
-      const [{ items }, profile] = await Promise.all([api('GET', '/api/agents'), loadMe()]);
+      const [{ items }, profile] = await Promise.all([agents(), loadMe()]);
       const forms = ['codex', 'claude', 'opencode'].map((engine) => {
         const catalogs = items.filter((a) => a.online).map((a) => engine === 'claude' ? a : a[engine]).filter(Boolean);
         const models = new Map();
@@ -858,7 +858,7 @@ function notifyBlock() {
 const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
   open: 'открыт', pin_ok: 'открыт PIN', pin_fail: 'неверный PIN', session_start: 'новый чат' };
 
-function agentsBlock(host) {
+function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   const list = el('ul', { class: 'agents', id: 'agents' });
   const events = el('ul', { class: 'agent-events', id: 'agent-events' });
   const note = status('agents-status');
@@ -887,7 +887,7 @@ function agentsBlock(host) {
 
   async function loadAgents() {
     try {
-      const { items } = await api('GET', '/api/agents');
+      const { items } = await agents();
       list.replaceChildren(...(items.length ? items.map((a) => el('li', { class: 'agent', 'data-id': String(a.id) },
         el('b', { class: 'agent-name' }, a.name),
         el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? 'на связи' : 'не на связи'),
@@ -1331,8 +1331,10 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
     if (shown === 'code') {
+      let pendingAgents = null;
+      const agents = () => pendingAgents ||= api('GET', '/api/agents').finally(() => { pendingAgents = null; });
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(), quickActionsBlock(), computerPinBlock(), agentsBlock(host)));
+        codeDefaultsBlock(agents), quickActionsBlock(), computerPinBlock(), agentsBlock(host, agents)));
       return;
     }
     if (shown === 'other') {

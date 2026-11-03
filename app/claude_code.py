@@ -87,7 +87,7 @@ FILE_MAX = 2 * 1024 * 1024
 FILE_BODY_MAX = 3 * 1024 * 1024
 RAW_MAX = 10 * 1024 * 1024
 PATH_MAX = 1024
-HISTORY_PAGE = 100
+HISTORY_PAGE = 30
 PING_SEC = 15
 CHECK_SEC = 1                    # поток сверяет свою сессию на событиях не чаще
 PDF_TTL_SEC = 300
@@ -328,10 +328,19 @@ async def open_agent(aid: int, body: Open, request: Request):
 @router.get("/agents/{aid}/projects")
 async def projects(aid: int, request: Request):
     own_agent(request, aid)
-    items = (await ask(request, aid, "projects")).get("items")
+    items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
     return {"items": [{"pid": i["pid"], "name": i["name"]} for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
                       and isinstance(i.get("name"), str)]}
+
+
+@router.get("/agents/{aid}/access", status_code=204)
+async def agent_access(aid: int, request: Request):
+    """Свежая проверка PIN перед показом снимка; не читает каталоги сессий или файлы."""
+    own_agent(request, aid)
+    link = bridge.LINKS.get(aid)
+    await ask(request, aid, "activity" if link and link.hello.get("project_activity") else "projects", quiet=True)
+    return Response(status_code=204)
 
 
 def _time(value) -> float | None:
@@ -363,11 +372,15 @@ async def project_summary(aid: int, pid: str, request: Request):
     link = bridge.LINKS.get(aid)
     if link is not None and not link.hello.get("project_summary"):
         raise _refuse(409, "unsupported", "обновите мост на компьютере для сведений о проектах")
-    data = await ask(request, aid, "project_summary", project=pid)
+    data = await ask(request, aid, "project_summary", project=pid,
+                     refresh=request.query_params.get("refresh") == "true",
+                     remote=request.query_params.get("remote") == "true")
     result = {key: value if type(value := data.get(key)) is int and value >= 0 else None
               for key in ("findings", "ideas", "changed", "unpushed")}
     if "github" in data:
         result["github"] = _remote_status(data["github"])
+    if 'github_checked_at' in data:
+        result['github_checked_at'] = _time(data['github_checked_at'])
     if "remotes" in data:
         result["remotes"] = []
         seen = set()
@@ -382,7 +395,8 @@ async def project_summary(aid: int, pid: str, request: Request):
                 continue
             seen.add(name)
             result["remotes"].append({"name": name, **_remote_status(item)})
-    return {**result, "modified": _time(data.get("modified")), "checked_at": _time(data.get("checked_at")),
+    return {**result, **({"github_pending": True} if data.get("github_pending") is True else {}),
+            "modified": _time(data.get("modified")), "checked_at": _time(data.get("checked_at")),
             "git": data.get("git") if data.get("git") in ("ok", "not_git", "error") else "error"}
 
 
@@ -534,7 +548,9 @@ async def chats(aid: int, pid: str, request: Request):
     чатом». Открытые, затем закрытые, внутри — новые сверху."""
     own_agent(request, aid)
     check_pid(pid)
-    found = (await ask(request, aid, "chats", project=pid)).get("items")
+    refresh = request.query_params.get("refresh") == "true" or request.headers.get('x-studio-refresh') == 'true'
+    data = await ask(request, aid, "chats", project=pid, refresh=refresh)
+    found = data.get("items")
     marks = {r["session_id"]: r for r in state.DB.execute(
         "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ?",
         (aid, request.state.user.id))}
@@ -561,7 +577,7 @@ async def chats(aid: int, pid: str, request: Request):
             items.append({"chat": chat, "engine": mark["engine"], "title": None, "created": mark["created"], "modified": mark["updated"],
                           "origin": "studio", "state": mark["state"], "running": False, "asking": False})
     items.sort(key=lambda i: (i["state"] == "closed", -(i["modified"] or 0)))
-    return {"items": items}
+    return {"items": items, **({"complete": False} if data.get("complete") is False else {})}
 
 
 @router.post("/agents/{aid}/projects/{pid}/chats")

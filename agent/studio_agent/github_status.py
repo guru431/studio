@@ -55,19 +55,23 @@ def _refs(raw: bytes) -> dict[str, str]:
     raise ValueError("incomplete advertisement")
 
 
-def read(project: Path, branch: str | None, head: str | None) -> dict | None:
+def repository(project: Path) -> str | None:
+    """Только локальная конфигурация; адреса и credentials не покидают компьютер."""
+    config = gitinfo.run(project, ["config", "--get-regexp", r"^remote\.(github|origin)\.url$"], timeout=GIT_SEC)
+    if config.returncode != 0:
+        return None
+    remotes = dict(line.split(None, 1) for line in config.stdout.decode("utf-8").splitlines())
+    return _repository(remotes.get("remote.github.url", "")) or _repository(remotes.get("remote.origin.url", ""))
+
+
+def read(project: Path, branch: str | None, head: str | None, *, repo=None) -> dict | None:
     """behind/ahead — сколько коммитов отстаёт/опережает GitHub относительно текущего HEAD.
 
     Успешное анонимное чтение подтверждает публичность; приватный/отсутствующий remote скрыт.
     Незнакомый объект, shallow history, сеть или ошибка — unknown, никогда не ложный current.
     """
-    repo = None
     try:
-        config = gitinfo.run(project, ["config", "--get-regexp", r"^remote\.(github|origin)\.url$"], timeout=GIT_SEC)
-        if config.returncode != 0:
-            return None
-        remotes = dict(line.split(None, 1) for line in config.stdout.decode("utf-8").splitlines())
-        repo = _repository(remotes.get("remote.github.url", "")) or _repository(remotes.get("remote.origin.url", ""))
+        repo = repo or repository(project)
         if not repo:
             return None
         req = Request(f"https://github.com/{repo}.git/info/refs?service=git-upload-pack",

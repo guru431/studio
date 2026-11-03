@@ -6,9 +6,10 @@
 `/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
 Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
 
-У HTML-ответов — CSP без inline-скриптов (`CSP`); у всех — nosniff и Referrer-Policy. Статика
-по ссылке с `?v=` (версия — `STATIC_VERSION`) хранится в браузере год, без неё — сверяется
-каждый раз: модули `js/*` грузят друг друга без версии.
+У HTML-ответов — CSP с хешем единственной доверенной importmap (`CSP`); у всех — nosniff и Referrer-Policy.
+Версия `STATIC_VERSION` фиксирует шаблоны и снимок `/static/v/<hash>/` на время процесса.
+Importmap сохраняет один экземпляр API-модуля; неизменяемая статика хранится в браузере год.
+Обычные ссылки `/static/*` без версии по-прежнему проверяются через сеть.
 """
 import asyncio
 import logging
@@ -48,6 +49,7 @@ import search
 import sections
 import speeches
 import state
+import static_assets
 import takeout
 import transcripts
 import translate
@@ -57,7 +59,7 @@ import workspace
 
 log = logging.getLogger("studio")
 
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; "
+CSP = (f"default-src 'self'; script-src 'self' 'sha256-{auth.MODULE_IMPORTS_HASH}'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; "
        "media-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 VERSIONED = "public, max-age=31536000, immutable"
@@ -121,13 +123,15 @@ async def headers(request: Request, call_next):
     if response.headers.get("content-type", "").startswith("text/html"):
         response.headers["Content-Security-Policy"] = CSP
     if request.url.path.startswith("/static/"):
-        response.headers["Cache-Control"] = VERSIONED if "v" in request.query_params else "no-cache"
+        versioned = "v" in request.query_params or request.url.path.startswith(f"/static/v/{STATIC_VERSION}/")
+        response.headers["Cache-Control"] = (VERSIONED if response.status_code in (200, 304) else 'no-store') if versioned else "no-cache"
     return response
 
 
 app = FastAPI(title="studio", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.middleware("http")(auth.guard)
 app.middleware("http")(headers)
+app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), name="static-versioned")
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
 app.include_router(profile.router)

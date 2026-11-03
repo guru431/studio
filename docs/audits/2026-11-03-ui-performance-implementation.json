@@ -1,0 +1,464 @@
+{
+  "date": "2026-11-03",
+  "baseline_head": "893ddc1fbed3807394c48aaf7da16f937dc2c309",
+  "bridge_version": "0.13.0",
+  "environment": {
+    "browser": "Playwright Chromium via Microsoft Edge on Windows",
+    "data": "synthetic sessions; real local project metadata without turns",
+    "network": "local HTTP/1.1 without gzip; 4 Mbit/s; additional latency 0 or 80 ms",
+    "history": "393x852; CPU 1x/4x; 100 source messages, 1000 tool steps; initial tail 30",
+    "switch_delays_ms": {
+      "catalog": 2200,
+      "history": 200,
+      "state": 600
+    }
+  },
+  "ui": {
+    "summaries": [
+      {
+        "scenario": "cold visible summaries, 60 projects",
+        "list_ms": 92.9,
+        "first_metric_ms": 266.8,
+        "visible_metrics_ms": 767.7,
+        "api_requests": 17,
+        "summary_requests": 13
+      },
+      {
+        "scenario": "cached return to Agents",
+        "list_ms": 37.7,
+        "first_metric_ms": 42.5,
+        "visible_metrics_ms": 46.1,
+        "api_requests": 4,
+        "summary_requests": 0
+      }
+    ],
+    "history": [
+      {
+        "source_messages": 2,
+        "cpu_slowdown": 1,
+        "ready_ms": 114.9,
+        "rendered_messages": 2,
+        "dom_nodes": 1269,
+        "steps": 20,
+        "longtasks": []
+      },
+      {
+        "source_messages": 100,
+        "cpu_slowdown": 1,
+        "ready_ms": 95.1,
+        "rendered_messages": 30,
+        "dom_nodes": 3905,
+        "steps": 300,
+        "longtasks": []
+      },
+      {
+        "source_messages": 100,
+        "cpu_slowdown": 4,
+        "ready_ms": 577.7,
+        "rendered_messages": 30,
+        "dom_nodes": 3909,
+        "steps": 300,
+        "longtasks": [
+          {
+            "start": 2049.5999999940395,
+            "ms": 122
+          },
+          {
+            "start": 2552,
+            "ms": 63
+          }
+        ]
+      }
+    ],
+    "markdown": [
+      {
+        "characters": 8576,
+        "cpu_slowdown": 4,
+        "total_ms": 428,
+        "longtasks": [
+          {
+            "start": 2737.7999999970198,
+            "ms": 69
+          }
+        ]
+      },
+      {
+        "characters": 42688,
+        "cpu_slowdown": 4,
+        "total_ms": 1955.1000000089407,
+        "longtasks": [
+          {
+            "start": 3216.9000000059605,
+            "ms": 50
+          }
+        ]
+      },
+      {
+        "characters": 85376,
+        "cpu_slowdown": 4,
+        "total_ms": 5160.4000000059605,
+        "longtasks": [
+          {
+            "start": 5248.5,
+            "ms": 51
+          },
+          {
+            "start": 8454.59999999404,
+            "ms": 55
+          },
+          {
+            "start": 9231.59999999404,
+            "ms": 50
+          },
+          {
+            "start": 9460.59999999404,
+            "ms": 53
+          },
+          {
+            "start": 9793.40000000596,
+            "ms": 50
+          },
+          {
+            "start": 10283.90000000596,
+            "ms": 57
+          },
+          {
+            "start": 10341.09999999404,
+            "ms": 58
+          }
+        ]
+      }
+    ],
+    "hidden_panel": {
+      "session_list_ms": 102.6,
+      "api_requests": 7,
+      "summary_requests": 0
+    }
+  },
+  "network": {
+    "scenarios": [
+      {
+        "latency_ms": 0,
+        "warm": false,
+        "list_ms": 1337.7,
+        "metrics_ms": 1394.6,
+        "navigation_type": "navigate",
+        "api_requests": 19,
+        "summary_requests": 10,
+        "javascript": {
+          "resources": 22,
+          "decoded_bytes": 421090,
+          "transfer_bytes": 427690
+        }
+      },
+      {
+        "latency_ms": 0,
+        "warm": true,
+        "list_ms": 118.7,
+        "metrics_ms": 172.5,
+        "navigation_type": "navigate",
+        "api_requests": 19,
+        "summary_requests": 10,
+        "javascript": {
+          "resources": 22,
+          "decoded_bytes": 421090,
+          "transfer_bytes": 0
+        }
+      },
+      {
+        "latency_ms": 80,
+        "warm": false,
+        "list_ms": 1897.3,
+        "metrics_ms": 2227.5,
+        "navigation_type": "navigate",
+        "api_requests": 19,
+        "summary_requests": 10,
+        "javascript": {
+          "resources": 22,
+          "decoded_bytes": 421090,
+          "transfer_bytes": 427690
+        }
+      },
+      {
+        "latency_ms": 80,
+        "warm": true,
+        "list_ms": 369.7,
+        "metrics_ms": 702.6,
+        "navigation_type": "navigate",
+        "api_requests": 19,
+        "summary_requests": 10,
+        "javascript": {
+          "resources": 22,
+          "decoded_bytes": 421090,
+          "transfer_bytes": 0
+        }
+      }
+    ]
+  },
+  "session_switches": [
+    {
+      "scenario": "initial chat",
+      "text_ms": 2502.9,
+      "ready_ms": 3099.8,
+      "api_requests": 6,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "another session in same project",
+      "text_ms": 265.9,
+      "ready_ms": 865.3,
+      "api_requests": 4,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "cached session in same project",
+      "text_ms": 49.3,
+      "ready_ms": 649.8,
+      "api_requests": 6,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "session in another project",
+      "text_ms": 2466.5,
+      "ready_ms": 3050.1,
+      "api_requests": 5,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "return to cached session in first project",
+      "text_ms": 50.3,
+      "ready_ms": 2849.5,
+      "api_requests": 8,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "same-project cached session during visibility refresh",
+      "text_ms": 32.8,
+      "ready_ms": 634.5,
+      "api_requests": 5,
+      "summary_requests": 0
+    }
+  ],
+  "real_project_summaries": {
+    "projects": 40,
+    "rounds": [
+      {
+        "label": "cold local summaries, GitHub in background",
+        "ms": 4285.56,
+        "github_pending": 6
+      },
+      {
+        "label": "warm shared snapshots",
+        "ms": 24.59,
+        "github_pending": 1
+      }
+    ]
+  },
+  "validation": {
+    "server_fast": {
+      "passed": 1426
+    },
+    "bridge_fast": {
+      "passed": 604,
+      "skipped": 1
+    },
+    "browser_batches": [
+      {
+        "passed": 143,
+        "seconds": 489.67
+      },
+      {
+        "passed": 19,
+        "seconds": 60.98
+      },
+      {
+        "passed": 16,
+        "seconds": 56.69
+      },
+      {
+        "passed": 10,
+        "seconds": 91.91
+      }
+    ],
+    "note": "Batches overlap. The last batch follows the final history scroll adjustment."
+  },
+  "limits": [
+    "Authorized production UI was not timed: no logged-in browser; canonical admin password is known stale.",
+    "New bridge behavior requires activation of 0.13.0; the active executor is not restarted.",
+    "First unknown session still waits for a fresh engine catalog.",
+    "CPU x4 stress still has tasks over 50 ms; layout and Markdown parsing are bounded but not preemptible."
+  ],
+  "runtime_sha256": {
+    "app/admin.py": "92e3417c2c96d1ebea69c5e20c179d045956a13d0d72fb9a2e061f7c9fc92a06",
+    "app/agents.py": "dc683cc554c027ac993351a3155445787ffc7879b99e8dd24d2a8546a99ea291",
+    "app/agent_release.py": "c6517cc1bad22a63f0bfebf046581f5f1855a6084a3d93b1c3baa732e20bb4f4",
+    "app/audio.py": "ed9847bd1fd9bd2746eee8ff257950c8514bbd11b7a3d8db6a1ea641091c7238",
+    "app/auth.py": "593e79e1a81e75b9200bd3360c91db5cc7ed1e43d831da9bfd18f6117eb116e3",
+    "app/bridge.py": "a1d60c11bc33f9fc16f78b9a4fbe84e3be8079a616d187256537ee8050697dc6",
+    "app/capabilities.py": "95a38df514411fec560fbfaf883b2d1fd8adac3196c34445c7e81b64cc63e328",
+    "app/chains.py": "630eb4fc747634f708f41f3f34ab99bd3d051514035b249aed83d6d14d3eee9f",
+    "app/chat.py": "da21acb6ce624aa5b41a7474d17f9baa7bb6b9caddd5ea3e6dfecca0717b28e4",
+    "app/checks.py": "b364f2e41d970c60bc875f1e69bedef4760458c3fa5b185c4c1b6882cc62e4e9",
+    "app/claude_code.py": "24dc3b5466bc6d3861b4fe4afa218e67368fa7d32b541f716a303b9bff6bb875",
+    "app/cleaner_client.py": "97c2701e42305b866212227199bac2444c1ad5782ee14b41d8486f564a1ffbaa",
+    "app/clock.py": "d20e9a0c68be19dca8404a33afcdbe65f6662974956c5906fc435f708cc50d5c",
+    "app/code_actions.py": "997962f9018053b0d746c8b04c6a196dd72977f15fb0659dd383c5ac7341c293",
+    "app/code_activity.py": "487866e06fc38d4318fd333bea1d3b7e68416a853afd3e6629f4e2981c70b4d5",
+    "app/code_usage.py": "440d19d0196a454f951b86d34559d2b087d549cdad07d477b03896b78b26b716",
+    "app/computer_info.py": "5323b8718e79691d7cb869dc91b69d5b2ba5c8709bd9d1c23a6546765a4d81f7",
+    "app/config.py": "3b4ab58ffa0e0d03c9fbf8cd1b9ef2b1fea0587e6d1c1a0d42f9d17e51915ea7",
+    "app/connections.py": "a6d315acc297595239399b7a35245fac891d6b84229fab5f8ef9197e103bd519",
+    "app/db.py": "bf4eb66af7a86bbdc8bee75e867a69e9cdde35d9d0ff69934644ee60c54c5b74",
+    "app/desktop.py": "504bfe315aebc77768dfdbdf32c54854d0c809fab8c7f6dabbb074b2a066577a",
+    "app/dictation.py": "26a1207c242dc94069217d3740312e373d88acd8b62299674c71377c367bbd5c",
+    "app/documents.py": "26355fdb02512e2a8f819caf1dc32ae4c9febedb35ce26967f10327d44be2fac",
+    "app/exports.py": "52086719edea747e359af310bc49f44b7f7ec0aa63231403fab306115d028ab8",
+    "app/forms.py": "1c760ca1d0163071bad00cb891a6c43ad83645ea82776e5753a945d333d7377c",
+    "app/history.py": "13577be3cd6696ecc64304f2d842efa286591986adc546f82c29d9fb967efa8e",
+    "app/images.py": "5d8c3ca80e1d210ae84e6e03ce707b277c1194ac9c8bc76fa89aa90fdf7a1815",
+    "app/image_upload.py": "c9e347f37cd2c48b34a308286adc34a3679d4ad540b81ebe9c355b4c47d75fea",
+    "app/jobs.py": "8ee9e41e015fd49c0c2c9a1e471b2eb88f274f0bf1ef967875259c1dac1432eb",
+    "app/lock_policy.py": "083bac5872618d0f95eec592ac90c341d249f2997f6b508a0ec4ee2150da54c4",
+    "app/main.py": "e2b7dd13ef573f222da2a36ad9c795c4b5bff189bb3dfec703a9f1830d22fb56",
+    "app/manage.py": "99e180d4de36718510e23853463e4d8a6172c8de4fd01cb5eab312385591503f",
+    "app/media.py": "2851266a9fa0ea4af594416d9d87a9cf5f79638783fbc904015888a529f49b8a",
+    "app/ocr.py": "5dd77c12aa92dd1927871addd90e35d2ef89606487b2718c5984b3443cc256a8",
+    "app/ocr_render.py": "da42cbc96556d59a4ae52ee3b1e65b0ff3bacdd21f4982521f91d0fb2fee035a",
+    "app/presets.py": "f855dd29adf64172d9f9067e426456cd4b354251e94c7e03063771eff80d78a0",
+    "app/profile.py": "a0bc1edc8c4a38a3cf52377b72b4e91658374e98fe96b827bf47f588e5cdbba8",
+    "app/push.py": "1999f789c381c95d53dfacc036f87773b3b6935d0c98118cd00830a18bac147b",
+    "app/screenlock.py": "7844735aacacb2a6fad4c968f1d9c88740ac5bcd3c5a1e0deabe7225ab5dd1dd",
+    "app/search.py": "daf9065da4eb093fe42050d48fe72cf7d49fd56162b1c71242a904c656bbd84c",
+    "app/sections.py": "1000626bb221ee96c5bcd7d1f38324abd9f2239b7650d88f08c36dec8add00bc",
+    "app/security.py": "01d8746964d339c7d7d6c68a52189bbbf83d8cb96ec4b49dd5e7a21a05497770",
+    "app/speech.py": "6b5ad88baed1351e239860cacd1266f178c6b32e99528d18b13bd4adfd1dee56",
+    "app/speeches.py": "50ab8caef9f58ecb2bc8527c60420a5b8014b069f13de6a0ae5ab1e8c9fb8d9b",
+    "app/state.py": "86369dd17dd2643c9ba66da0cf59077dedb03f6287bbf6138ca90c300100df1d",
+    "app/static_assets.py": "8b992300a46c2f0b871a41ac7d1aebfe93af90941971ac4834ffd1e1929951c3",
+    "app/takeout.py": "cb18034726dcaffe3ccf0f9d7ce698dd840b6cefbd20e5fbb12c699cb5eb5cc2",
+    "app/transcripts.py": "4ad959fa658d2ccfb8db9c3a4c473ab71ba4fe5e876cc2e1734f567069507314",
+    "app/translate.py": "2441d10638bbcd1fa30ebc4b29a0fa51986ecadbe5356c510f3fbd8961a0d947",
+    "app/translate_spot.py": "8c9addff1e6abea9208ba1e3606367ac7b8959ed9671bb8e673984f7002d7489",
+    "app/translate_text.py": "4f49b09f0ec4f45493b9d39686714cf31c55c6b3ee03f779254fdc0ee33bdbd1",
+    "app/upstream.py": "9a0e4fdb9e25ba877c4c05f8ee7d08bc3f681d7e0161dd129fed4716d6af7076",
+    "app/videos.py": "f571d13031aacf8e85de52716dc7173d22dadb320d2e73671aeb27cd0c45b04b",
+    "app/voices.py": "a9196b194c2b98fa7c16705dab370534a82e396f5e10ae781394d0a9a20aff14",
+    "app/web.py": "c30be39edb56151785e26daeede1b14fdcc00c3bed7090ce70abc7802cf9331e",
+    "app/workspace.py": "99419818b4d986d0299e202ba3d09d814799738dd0071a3f0b5a888c97be86aa",
+    "app/static/index.html": "4e9e145cdfa5ae59ae1d72e086ee81e280f955a52728f999a71fecbb47fcc421",
+    "app/static/login.html": "ede7b0b3ec6410b39fac85f12c8b51e16b827b2dd79e5965d0eba84c750678bf",
+    "app/static/offline.html": "2dd2276b09717796578a0c80e1cbc53cc15b23f069e0df1d06cce1e57b3614e8",
+    "app/static/sw.js": "357c7e7d2afd0fde38303937db49681ca35bd508f3de455c06b273533c186166",
+    "app/static/theme.js": "984d6493daa4df60a14ec36d1c456bb229d7cbb06a2f27371706d24252dfefba",
+    "app/static/css/app.css": "3e1588215086f0ed0524bc2b32ff2cc00881be416729ff4236d20be4b7ca4c69",
+    "app/static/css/code-desktop.css": "9aed5b74325b2e02437c94c325c04830d8c215718b7f0e91249bc51e9619ee5e",
+    "app/static/js/admin.js": "3d70a6a0ca9cbd4bf760f46ce07a8d7a3477d2689d3f96cf56197e63b0e6345a",
+    "app/static/js/api.js": "13d624b28f041d4943141058afcafe7d79852c3c719d219edacb53dde80cd2bc",
+    "app/static/js/app.js": "233c9308e0a42ca4aed6f41638512b28732ec5e62004d0f8eddc2644647527a8",
+    "app/static/js/appearance.js": "dd76253d0a183cfd54cc4179418ba7843c60b5502d09d082c80c9f7156b1f416",
+    "app/static/js/chain.js": "2ce6e4725014e1d701609fc335c7ca87be419040c8478a7d5abf42dc708144cb",
+    "app/static/js/chat.js": "471be58b680db1f2a26d20c96aba7782b2f55bda9fbeb0535ac38a364f52e925",
+    "app/static/js/code-activity.js": "5590504fb667b81d745185894d5462a14ddfc40ec6018331bd90c6beb8db30d0",
+    "app/static/js/code-autocomplete.js": "c642a06a8afe1bb548efd632f9b87a1730a6c34b4f2417f072567b0e03b4952b",
+    "app/static/js/code-chat.js": "2ee57df0c516c93610b865be4b1c4c7af8023d0e7d0f3a80095a3fb5bd55ebb2",
+    "app/static/js/code-computer.js": "ed42d346404b9b77e468d9057d5cc44d9b50313082ce72698d02e6cf33e61854",
+    "app/static/js/code-context.js": "e1356455e1cd995f103556ba912adfe0b74a57d7f16614e49777dff2f091366e",
+    "app/static/js/code-desktop.js": "ef81fe4474577688543054c85bcc489b4f8d8002ae40360921b4b6a34f8def0a",
+    "app/static/js/code-diff.js": "8a5243a24b0d5dc22fa3ba17421ca4dec86a407588116464cdb918d0e73f8ddd",
+    "app/static/js/code-files.js": "bc5b0dea6a806846b1b864b5bd16929ed046c3af5ae441f4b5a49db82da2ba09",
+    "app/static/js/code-git.js": "887405bb43cd064256bca5dd828416cdda4a75f74e54f4fd66087574ac75bec8",
+    "app/static/js/code-options.js": "144ea30a106c5c48972416f82c92e63c83780c6b5f9a38233a822a648da2dd15",
+    "app/static/js/code-panel.js": "071df0391affb89bb5b1d5eba44fea98bc5c923a224bf695edeead3852c4c350",
+    "app/static/js/code-queue.js": "0f974068838455e4bc19b58f8b58be7c267c581605307dbb17df8b44092a8b5a",
+    "app/static/js/code-quick-actions.js": "8b8db4050f633001ba87f1ca24cdf751483a3ec31282ce325d21515b3970ffda",
+    "app/static/js/code-sessions.js": "9a69fc52249c2355628100d42b2bb7b7ec8448dcccbab7dd6ba35d6fa2d9e17b",
+    "app/static/js/code-subagents.js": "59a5cce182a1fd0146d0cfb91dd7b291b695ae77d8b426cd739048cba514d33c",
+    "app/static/js/code-tabs.js": "def615d7c009d31639e2116002c38845036c757bc957c64e8b1b5e46484c755e",
+    "app/static/js/code-usage.js": "e90a05dc179c385c9ef0dfab2b90f19fb7c6a0430ba95905ec6abc38eaa4ef49",
+    "app/static/js/code-workspace.js": "181df334b8886cd58e0db5f61d94e6e35d99e91a5a1185703b33146927e652e7",
+    "app/static/js/code-worktrees.js": "017363cd7b548ae27e4b8890c1e576c3012ca5e7a191f942c94e1c4af6bffdfd",
+    "app/static/js/code.js": "ad61a8fe4f05dd62bcb195151ff06752fd688ba8cb83101f7108ecd3de728a2a",
+    "app/static/js/compare.js": "3593769a929dd531486076a6b7cfc5a6c7052f19a055844c79438315814db45e",
+    "app/static/js/connection-form.js": "7b8c2dd5585025c74a49414a2501b6f0d6616cdeb5f8d4d3e224d4564610326b",
+    "app/static/js/editor.js": "4693e0774a301a6a56a92140585cb974c0e22bedacddfde8ab06dbff83d6af04",
+    "app/static/js/feed.js": "b9370a010f65a93569ee8d3d42d1f521bcc08fe7f690082281082704da6158dd",
+    "app/static/js/field.js": "ce60febf74549165bf98c7547990f586b0690b59e7719dd8b0388b148c56fab6",
+    "app/static/js/jobs.js": "bb0d57c3a627156d28208f9d98546015218ddfbaaa04584e8c23151458dba073",
+    "app/static/js/lock-start.js": "f9c18449b068d9dfbaef41a633b2aabc6e33347475eca42630f77ee20d453f31",
+    "app/static/js/lock.js": "5b479efacc5075ff99bc4a4cb55de921efaf82f57cbcf93b7104b891c0fb2857",
+    "app/static/js/markdown.js": "dcfa914685dc955cff3bcd1154779f1c76ec0a63d2dad80d3c0abbc061a9b914",
+    "app/static/js/mic.js": "340c563f092120bf845a9478ea823f8d58b609945b939f74c8417862c93173e4",
+    "app/static/js/ocr.js": "c25a75042a5bd9ca0378ed71129209a560a2bdd1a3212f79144f90577273eeab",
+    "app/static/js/passport.js": "01e2fe8495018ae5e444c5a71f55a1c3f39bbdcf8e014fdcc4df641e2117301c",
+    "app/static/js/photo.js": "d1658c7be162d7f25da9a69898b0397a110a976f662ab2f60fef94a06aa35f36",
+    "app/static/js/presets.js": "1a4de6abb1da1dec500904f57f3f7210ac8136d22a14dc3c5f83bf3ac75df79b",
+    "app/static/js/save.js": "665546ae7d78443fe12a8dcce9ce49aa48b1f9a48c1cabe613c757030df653f1",
+    "app/static/js/search.js": "1c5a4c1edf520c219b40bc4d2fe2ee99bcbe0f881c92c3629a3070877ecf204d",
+    "app/static/js/select.js": "c6fc114a8b1ae3f81b42eeb53884566d37f2c534b8cca76a64a044de2b9693db",
+    "app/static/js/series.js": "6f7b0184645b6b74562f0976496e02814757765110f95be3c5a1fd49dea29300",
+    "app/static/js/settings.js": "417ffe8692e0d6dd0ecebbdc06cc02ad3e480ccb5c2ed859e9a9b9158f4a53dd",
+    "app/static/js/speech.js": "0a90cafafe807ed6bfec5fba2aba4d1e08a9a8acdfc42210e737179b69429207",
+    "app/static/js/sse.js": "3a65acf6f0dbab589d77635b0975b7158c1b07c6367d42b2987d6c13bc75a461",
+    "app/static/js/time.js": "46e015623f9495197279643d17b99291e70e13ca4ee97ec944a4527c09a15b2b",
+    "app/static/js/transcribe.js": "03c18c61caeb3ff83670bff79ddb6059033399f4f8e4a2a791fd34ad28cbabcc",
+    "app/static/js/translate-photo.js": "4ade47caebc0279ba67b81642c970c1cee80c6939d076753dbb48be6fd6b5f16",
+    "app/static/js/translate.js": "cde4c237415b7ea144cf53ac07127b5d4dd309ca485bc82285609ea31ed55f81",
+    "app/static/js/ui.js": "c2f326eb2a6ebb09c9cff7d557b047c034b15cd660c8d8230126c0d6bcb36e9f",
+    "app/static/js/video.js": "32840ae875678a4f97348c1146ab29f2a4503ef1efba806b00d3c9ac9cdcdb8e",
+    "app/static/js/views.js": "1163b13a49d3a2a6b56b638b50d945086cdec939ca151be8b0d3442fdf0ee328",
+    "app/static/vendor/highlight.min.js": "32563dc23ebc76eb0fb1a18b37c88da7c95d9090fca196ba5ddfa1738e50262a",
+    "app/static/vendor/hl-graphite.css": "1c9bbc50ae280b974a90d2fa54ffbd3c69113e96dcd41ca7b0a055acb3b4db76",
+    "app/static/vendor/hl-paper.css": "c759c13ef204a0175f48b0b1215adfce106759129b6263ab6228442a1aac9cc8",
+    "app/static/vendor/marked.min.js": "1569082c0708f331eb83033493e64ecb19e2ad9c63c06fdd699c0846e1bb9212",
+    "app/static/vendor/purify.min.js": "dd8f0a99c7965cef96e73a277a2efa53e894b649d0ad4436537d4cd761be884c",
+    "agent/studio_agent/agent.py": "69b6cdb244b0deb526914d6af4d131f64bd9c91aeb4d92a37f4cbb847b9e26f8",
+    "agent/studio_agent/app.py": "b541ee7912a70ba61a3b41f741a51bc9ba5658f40f05e8993bbf674522bdc878",
+    "agent/studio_agent/attachments.py": "56dd4d948f29fb67e0164abd65290a2e1598996896e81feb81bbc9e2832f49da",
+    "agent/studio_agent/autostart.py": "561390d62cb8e30534e481839ab47e0cff52a1cfb89f0aabd68b98eaad3401a1",
+    "agent/studio_agent/branches.py": "726dc1ec09b9f895c2cfe119c5ba61bcb4ae6e8123a857090063a5ef1a3944d3",
+    "agent/studio_agent/chrome.py": "761bf6ac8bce1261c47342f566609470e237c251a34374a4a3e24f7b579cc164",
+    "agent/studio_agent/cli.py": "91e6b2de7223e91f958d11fac51353d9aee7de451f3583bd2b2a3e6750556681",
+    "agent/studio_agent/codex.py": "83c5bba9a6ee802e6a3615668e274aa9928b86a35895e34df760259dca5dd6c0",
+    "agent/studio_agent/codex_rpc.py": "3f42e1abdbcfb22bc74f078300079a63341cc75b11f58c7d05b3e94af119ceb3",
+    "agent/studio_agent/computer_info.py": "8a71874535ac8684dc9ba0125926852323b66359301290ac3007d7f3e06e0df9",
+    "agent/studio_agent/desktop.py": "7efdb96c4167ae016eb3e0e323c57b8f92c29ff314b3d4df00ad8f9621491aa6",
+    "agent/studio_agent/desktop_native.py": "4086735cc04faee1af07373fcf11d4441dc83b85e897bcd562c8f9adbdecc6e7",
+    "agent/studio_agent/diffs.py": "c63bde7f2efea569a0fa3ab0d465d5eb6a30b2d16acb728b288bf01cc78ce6c6",
+    "agent/studio_agent/discovery.py": "ea473f1e4ffac2bb5feee29077364e6921fae6ba85a2db9c558473311f0a53ae",
+    "agent/studio_agent/dpapi.py": "2e62ae759ceab7694ea51f421b9a9437f2afbb4adc594a86ce836765548724c1",
+    "agent/studio_agent/enroll.py": "faeedb39f751290bd213f7329b059cea0d52d4ec7206811e0a2dc4562991a324",
+    "agent/studio_agent/errors.py": "f3a87a73fca216ac1108afcd05595332d4d8aa5bec9ed204de75c4750b69dffa",
+    "agent/studio_agent/events.py": "db7d443e919e0863faadabaaa6bd13973e8b85223617251c32faf014c9fd3b57",
+    "agent/studio_agent/files.py": "ec68f5ea8d5a256ca4066315a22a443bb7186d819ab69360902bfe4739211d49",
+    "agent/studio_agent/file_stats.py": "536836776be455caaeb48aaa99a13c4c1fa8d9685523036bb1e011041a092797",
+    "agent/studio_agent/github_status.py": "58a5d818146acd61f5d5d7c8ad2ddb0d185b1283d35b5d68a5eb1c8e26e45259",
+    "agent/studio_agent/gitinfo.py": "f07b154e85123d0afe00b5f8d3258c4989d377f7bc324b9f0ff3600fa57675db",
+    "agent/studio_agent/image_input.py": "a78f668c1bf4135cf651fa62ed34f0a28a5df8a3c032048174a99caeb5341b30",
+    "agent/studio_agent/journal.py": "02439e4ced4b536a151ac17ab301541f8b54386ec780a100026c00651b776d3e",
+    "agent/studio_agent/limits.py": "3c2ea9a2d97ac77e37c2a3104acec5bb0ab9f1118edda9876ef1fe52e6c81b77",
+    "agent/studio_agent/link.py": "7ed89ab23fe0e3d61ef72f2c0e181aeb0b4dc2964303cc6d0af188248772671a",
+    "agent/studio_agent/metadata.py": "8ba3957b1b3a5ca0d38aabfa7d341ba645f9d5b4505c6a6aebcb7cebd2f12793",
+    "agent/studio_agent/opencode.py": "bc592fd7dc3faadcef3a554f96668557ffca4dd1590499b1fb0f3ba5e0384c60",
+    "agent/studio_agent/opencode_rpc.py": "ef0decb1d48a12c80a57de899fe9b3da56c8c083f149cd91b25e46ffaf47c175",
+    "agent/studio_agent/permissions.py": "5e0450de89a351463747d0c00abb05ae272e689fcd42e8788700bd061aebdb70",
+    "agent/studio_agent/pin.py": "e141d0f50e4288220baa8c4f108ba75deed98492b8482af54fbc9d05e067a6ed",
+    "agent/studio_agent/projects.py": "6d0e3f25a793f49a363ce58e72000c2f6fe6e39aee8d7f954b6de3517d701a20",
+    "agent/studio_agent/project_summary.py": "2af2668936b934fae5ca9d11d86b5a19895560bd2afe6573d6420532b82b02c6",
+    "agent/studio_agent/remote_status.py": "ca8df9febbdcb63819d5b929fd68938285d374ae7a9bad196e4ee89a1ea86b02",
+    "agent/studio_agent/sessions.py": "ecd119a26eedaf2a9f0f1f7b695b6ae5ccc387cce2035d6b1b5d28b82eed4c04",
+    "agent/studio_agent/setup.py": "f1e72a7b6030c96415f00f10611a1764bd5ee70ca1cccb870124bc9d145a881e",
+    "agent/studio_agent/single.py": "dde41bb873be089449a01dce3e9284f434b1af4757858b576bd287ff240b2dbf",
+    "agent/studio_agent/store.py": "827d4d73d499b7d21a43b0c47c6988805feab9d260113a1516676e04a45ccdbd",
+    "agent/studio_agent/subagents.py": "a55dc93048893b94cb0166f924ddc696b1836a9db39a226a15c1c7f40da92d5b",
+    "agent/studio_agent/subscription.py": "d7ebece52c7a49eb80e72d43deeed567478b57083bd2725fcf7f496ecf935850",
+    "agent/studio_agent/theme.py": "03e1f4bf113fe1e4886802cd40a71e34d80c13033bcdf197e70d7e3f098e7048",
+    "agent/studio_agent/tray.py": "a250f4a58e95b3e11a33ef893d1a645ecf6cea71e7807c6cf0605c415f87a685",
+    "agent/studio_agent/turns.py": "d267d2901ca94f04a6b64c45c640066f52126d275c4f39a4d206393043602625",
+    "agent/studio_agent/updater.py": "429b010dd67fea287d511b709f9e4de53cbeb6f55f08b2d0f68c0aff97203d57",
+    "agent/studio_agent/update_helper.py": "bd3ca70b578f65d8e96ed17f665c22e16043dd07f6c0811c6bc4642df97b6288",
+    "agent/studio_agent/window.py": "af947bd34eb473881a78934849c1ba7f0af6bbd9020f518804411cd130ec1565",
+    "agent/studio_agent/worktrees.py": "fc35a7c66f9dd3c55e835bbd59359531b6fb3bd2f3e98e8cd9a950665e9964db",
+    "agent/studio_agent/__init__.py": "aacf87e8734844a18ad887ca61f57f07562f3495eba57032d907f4a4af654b60",
+    "agent/studio_agent/__main__.py": "415f01f53c6a522786af03b68f77d3fec1909f947c5719f37d0fc57b003afca9"
+  }
+}

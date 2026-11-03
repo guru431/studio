@@ -196,11 +196,11 @@ def test_pages_carry_the_static_version(studio):
     import main
     assert re.fullmatch(r"[0-9a-f]{12}", main.STATIC_VERSION)
     page = studio.c.get("/login").text
-    assert f"/static/css/app.css?v={main.STATIC_VERSION}" in page and "{{" not in page
+    assert f"/static/v/{main.STATIC_VERSION}/css/app.css?v={main.STATIC_VERSION}" in page and "{{" not in page
     make_user(studio, "owner")
     signin(studio, "owner")
     page = studio.c.get("/").text
-    assert f"/static/js/app.js?v={main.STATIC_VERSION}" in page and "{{" not in page
+    assert f"/static/v/{main.STATIC_VERSION}/js/app.js" in page and "{{" not in page
     assert 'rel="manifest"' in page and 'rel="apple-touch-icon"' in page
     assert page.count('name="theme-color"') == 2
 

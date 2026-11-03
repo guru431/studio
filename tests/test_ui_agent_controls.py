@@ -276,7 +276,7 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
     live.add_user(login)
     messages = [{"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant",
                  "text": f"Запрос {i}" if i % 2 == 0 else ("Длинный ответ.\n\n" * 20),
-                 "steps": [], "time": T0 + i} for i in range(106)]
+                 "steps": [], "time": T0 + i} for i in range(36)]
     machine = code_free_machine({CODE_CHAT_A: code_session("История", messages=messages)})
     aid, server = code_online(live, login, machine)
     def arrow(direction):
@@ -314,7 +314,7 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
             ("eval", "manual", "document.querySelector('#view').scrollTop = 0"),
             ("wait", "document.querySelector('#view').scrollTop === 0"),
             arrow("up"),
-            ("wait", "document.querySelectorAll('#code-feed .code-msg').length === 106"),
+            ("wait", "document.querySelectorAll('#code-feed .code-msg').length === 36 && !document.querySelector('#code-more').disabled"),
             ("eval", "older", at_top), arrow("up"),
             arrow("up"), ("eval", "first", at_top),
             ("eval", "start", "document.querySelector('#code-message-up').disabled"),
@@ -336,7 +336,7 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
     assert values["placement"] and values["bottom"] and values["away"] and values["returned"], values
     assert values["tailAvailable"] and values["end"], values
     assert [values[key] for key in ("last", "previous", "next", "afterEnd", "older", "first", "afterFirst", "afterManual")] == [
-        "Запрос 104", "Запрос 102", "Запрос 104", "Запрос 104", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 104"]
+        "Запрос 34", "Запрос 32", "Запрос 34", "Запрос 34", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 34"]
     assert values["start"]
     assert [r["before"] for r in code_requests(machine, "history")][:2] == [None, 6]
     assert not problems(result), problems(result)
@@ -398,16 +398,17 @@ def test_locked_reload_needs_only_one_lock_state_request(browser, live):
 
     login = "pin-start-once"
     live.add_user(login)
-    gate = """(() => { const real = window.fetch; window.lockReads = 0;
+    gate = """(() => { const real = window.fetch; window.lockReads = 0; window.blockLockReads=true;
       window.fetch = (url, options) => {
-        if (String(url) === '/api/lock' && ++window.lockReads > 1
+        if (new URL(String(url),location.href).pathname === '/api/lock' && ++window.lockReads > 1 && window.blockLockReads
           && performance.getEntriesByType('navigation')[0]?.type === 'reload') return new Promise(() => {});
         return real(url, options);
       }; return true; })()"""
     result = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(),
         ("eval", "reload", "location.reload(); true"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN} && {PIN_SHOWN}"),
-        ("eval", "reads", "window.lockReads"), *tap("2580"), ("click", "#lock-pin-ok"),
+        ("eval", "reads", "window.lockReads"), ("eval", "allowUnlockedPolicy", "window.blockLockReads=false;true"),
+        *tap("2580"), ("click", "#lock-pin-ok"),
         ("wait", f"!{LOCK_OPEN} && {READY}")], init=gate, **PHONE)
     assert not result.get("failed"), result
     assert result["values"]["reads"] == 1
@@ -480,7 +481,7 @@ def test_font_size_and_zoom_persist_without_losing_form(browser, live, width, tm
         ("wait", "performance.getEntriesByType('navigation')[0].type === 'reload' && " + READY),
         ("eval", "saved", "[document.querySelector('#appearance-font').value, document.querySelector('#appearance-scale').value]"),
         *go("settings/code"), ("wait", "!!document.querySelector('[data-settings=code]') || !!document.querySelector('.code-defaults-block')"),
-        ("eval", "names", "[document.querySelector('#rail [data-section=code]').textContent.trim(), document.querySelector('a[href=\"#/settings/code\"]').textContent]"),
+        ("eval", "names", "[document.querySelector('#rail [data-section=code] > span:last-child').textContent.trim(), document.querySelector('a[href=\"#/settings/code\"]').textContent]"),
         ("click", "#avatar"),
         ("eval", "largest", """(() => { const f = document.querySelector('#appearance-font'); f.value='150';
           f.dispatchEvent(new Event('input')); const s = document.querySelector('#appearance-scale'); s.value='100';
