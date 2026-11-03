@@ -14,6 +14,64 @@ def session(title):
         {'id': 'm', 'role': 'assistant', 'text': title, 'steps': [], 'time': T0}]}
 
 
+def test_background_markdown_preserves_sanitization_references_code_and_selection(browser, live):
+    check = r'''(async () => {
+      const {renderMarkdown, renderMarkdownInto} = await import('/static/js/markdown.js');
+      const NativeWorker = window.Worker; let workers = 0;
+      window.Worker = class extends NativeWorker { constructor(...args) { super(...args); workers++; } };
+      const host = document.createElement('div'); host.className = 'md'; document.querySelector('#view').append(host);
+      const block = '## Heading\n\n[Reference][ref]\n\n```python\nprint("ok")\n```\n\n'
+        + '| a | b |\n|---|---|\n| one<br>two | three |\n\n<img src=x onerror="window.__pwned=1">\n\n';
+      const text = block.repeat(80) + '[ref]: https://example.org/test\n';
+      let frames = 0, watching = true;
+      const tick = () => { frames++; if (watching) requestAnimationFrame(tick); }; requestAnimationFrame(tick);
+      const rendered = await renderMarkdownInto(host, text); watching = false;
+      const expected = document.createElement('div'); expected.append(renderMarkdown(text));
+      const range = document.createRange(); range.selectNodeContents(host);
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      const result = { rendered, workers, frames, sameText: host.textContent === expected.textContent,
+        references: host.querySelectorAll('a[href="https://example.org/test"][target="_blank"]').length,
+        tables: host.querySelectorAll('td br').length, code: host.querySelectorAll('pre code .hljs-string').length,
+        copies: host.querySelectorAll('pre .copy').length,
+        safe: !host.querySelector('img,script,[onerror]') && !window.__pwned,
+        selectable: selection.toString().includes('Reference') && selection.toString().includes('print("ok")') };
+      selection.removeAllRanges(); host.remove(); window.Worker = NativeWorker; return result;
+    })()'''
+    result = browser.drive(live.url+'/', [*signin(), ('wait', READY), ('eval', 'markdown', check)])
+    assert not result.get('failed'), result
+    value = result['values']['markdown']
+    assert value['rendered'] and value['workers'] == 1 and value['frames'] > 1, value
+    assert value['sameText'] and value['safe'] and value['selectable'], value
+    assert [value[key] for key in ('references', 'tables', 'code', 'copies')] == [80] * 4, value
+    assert not problems(result), problems(result)
+
+
+def test_background_markdown_cancels_replaced_work_and_falls_back_safely(browser, live):
+    check = r'''(async () => {
+      const {renderMarkdownInto} = await import('/static/js/markdown.js');
+      const host = document.createElement('div'); document.querySelector('#view').append(host);
+      const text = 'Old **answer**\n\n'.repeat(600);
+      const old = renderMarkdownInto(host, text), latest = renderMarkdownInto(host, 'New answer');
+      const results = await Promise.all([old, latest]);
+      const replaced = !results[0] && results[1] && host.textContent.trim() === 'New answer';
+      const NativeWorker = window.Worker; let terminated = false;
+      document.dispatchEvent(new Event('studio-code-clear'));
+      window.Worker = class { postMessage() {} terminate() { terminated = true; } };
+      const pending = renderMarkdownInto(host, text);
+      document.dispatchEvent(new Event('studio-code-clear'));
+      const cancelled = !await pending && terminated;
+      window.Worker = class { constructor() { throw new Error('Unavailable'); } };
+      const raw = '<img src=x onerror="window.__pwned=1">'.repeat(300);
+      const fallback = !await renderMarkdownInto(host, raw) && host.textContent === raw
+        && !host.querySelector('img') && !window.__pwned;
+      window.Worker = NativeWorker; host.remove(); return { replaced, cancelled, fallback };
+    })()'''
+    result = browser.drive(live.url+'/', [*signin(), ('wait', READY), ('eval', 'markdown', check)])
+    assert not result.get('failed'), result
+    assert all(result['values']['markdown'].values()), result['values']
+    assert not problems(result), problems(result)
+
+
 def test_offline_shell_references_only_precached_assets(browser, live):
     check = """(async () => {
       await navigator.serviceWorker.ready;

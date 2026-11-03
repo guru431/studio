@@ -316,7 +316,7 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
             arrow("up"),
             ("wait", "document.querySelectorAll('#code-feed .code-msg').length === 36 && !document.querySelector('#code-more').disabled"),
             ("eval", "older", at_top), arrow("up"),
-            arrow("up"), ("eval", "first", at_top),
+            arrow("up"), *[arrow("up") for _ in range(9)], ("eval", "first", at_top),
             ("eval", "start", "document.querySelector('#code-message-up').disabled"),
             arrow("down"), ("eval", "afterFirst", at_top),
             ("eval", "bottomAgain", "document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight"),
@@ -336,9 +336,9 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
     assert values["placement"] and values["bottom"] and values["away"] and values["returned"], values
     assert values["tailAvailable"] and values["end"], values
     assert [values[key] for key in ("last", "previous", "next", "afterEnd", "older", "first", "afterFirst", "afterManual")] == [
-        "Запрос 34", "Запрос 32", "Запрос 34", "Запрос 34", "Запрос 4", "Запрос 0", "Запрос 2", "Запрос 34"]
+        "Запрос 34", "Запрос 32", "Запрос 34", "Запрос 34", "Запрос 22", "Запрос 0", "Запрос 2", "Запрос 34"]
     assert values["start"]
-    assert [r["before"] for r in code_requests(machine, "history")][:2] == [None, 6]
+    assert [r["before"] for r in code_requests(machine, "history")][:2] == [None, 24]
     assert not problems(result), problems(result)
 
 

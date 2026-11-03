@@ -91,17 +91,50 @@ export function renderMarkdown(text, options = {}) {
 const renderQueue = [];
 const renderVersions = new WeakMap();
 let renderFrame = null;
+let parserWorker = null;
+let parseId = 0;
+const parses = new Map();
+
+function stopParser() {
+  parserWorker?.terminate();
+  parserWorker = null;
+  for (const { done, timer } of parses.values()) { clearTimeout(timer); done(null); }
+  parses.clear();
+}
+document.addEventListener('studio-code-clear', stopParser);
+
+function tokenize(text) {
+  try {
+    if (!parserWorker) {
+      parserWorker = new Worker(new URL('./markdown-worker.js', import.meta.url), { type: 'module' });
+      parserWorker.onmessage = ({ data }) => {
+        const pending = parses.get(data.id);
+        if (pending) { clearTimeout(pending.timer); pending.done(data.tokens); }
+        parses.delete(data.id);
+      };
+      parserWorker.onerror = (event) => { event.preventDefault(); stopParser(); };
+    }
+    return new Promise((done) => {
+      const id = ++parseId;
+      parses.set(id, { done, timer: setTimeout(stopParser, 10000) });
+      parserWorker.postMessage({ id, text });
+    });
+  } catch {
+    stopParser();
+    return Promise.resolve(null);
+  }
+}
 
 function drain() {
   renderFrame = null;
-  const deadline = performance.now() + 8;
+  const deadline = performance.now() + 6;
   while (renderQueue.length && performance.now() < deadline) {
     const job = renderQueue.shift();
     if (!job.valid() || renderVersions.get(job.host) !== job) { job.done(false); continue; }
     try {
       if (job.nodes) {
         const fragment = document.createDocumentFragment();
-        const end = Math.min(job.index + 4, job.nodes.length);
+        const end = Math.min(job.index + 2, job.nodes.length);
         while (job.index < end) fragment.append(job.build(job.nodes[job.index++]));
         job.update(() => job.host.append(fragment));
         if (job.index < job.nodes.length) renderQueue.push(job);
@@ -118,7 +151,18 @@ function drain() {
       }
       part.links = job.tokens.links;
       const fragment = fragmentOf(markdownParser(false).parser(part));
-      job.update(() => job.host.append(fragment));
+      if (job.text.length > 8000) {
+        if (!job.group || job.groupSize >= 4000) {
+          job.group = document.createElement('div');
+          job.group.className = 'md-part';
+          job.groupSize = 0;
+        }
+        job.groupSize += size;
+        job.update(() => {
+          if (job.group.parentNode !== job.host) job.host.append(job.group);
+          job.group.append(fragment);
+        });
+      } else job.update(() => job.host.append(fragment));
       if (job.index < job.tokens.length) renderQueue.push(job);
       else job.done(true);
     } catch {
@@ -131,14 +175,20 @@ function drain() {
 }
 
 /** Общий бюджет для всех сообщений: несколько историй не создают отдельные тяжёлые RAF. */
-export function renderMarkdownInto(host, text, { valid = () => true, update = (change) => change() } = {}) {
+export async function renderMarkdownInto(host, text, { valid = () => true, update = (change) => change() } = {}) {
   host.replaceChildren();
-  return new Promise((done) => {
-    const job = { host, text: String(text ?? ''), valid, update, done, tokens: null, index: 0 };
-    renderVersions.set(host, job);
-    renderQueue.push(job);
-    if (renderFrame === null) renderFrame = requestAnimationFrame(drain);
-  });
+  let done;
+  const finished = new Promise((resolve) => { done = resolve; });
+  const job = { host, text: String(text ?? ''), valid, update, done, tokens: null, index: 0 };
+  renderVersions.set(host, job);
+  if (job.text.length > 8000) {
+    job.tokens = await tokenize(job.text);
+    if (!valid() || renderVersions.get(host) !== job) return false;
+    if (!job.tokens) { update(() => { host.textContent = job.text; }); return false; }
+  }
+  renderQueue.push(job);
+  if (renderFrame === null) renderFrame = requestAnimationFrame(drain);
+  return finished;
 }
 
 /** Построение больших списков шагов использует тот же бюджет кадра, что Markdown. */

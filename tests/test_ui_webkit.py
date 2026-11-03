@@ -73,6 +73,52 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize('iphone', [(320, 740)], indirect=True)
+def test_settings_direct_link_and_reload_reveal_inherited_visibility(iphone):
+    source, _ = iphone
+    with source.context.new_page() as page:
+        page.goto(source.url.split('/#')[0] + '/#/settings/other')
+        for reload in (False, True):
+            if reload:
+                page.reload()
+            for selector in ('#timezone', '#lock-timeout-unit'):
+                pw.expect(page.locator(selector)).to_be_visible()
+                assert page.locator(selector).evaluate('node => getComputedStyle(node).visibility') == 'visible'
+            page.locator('#timezone').select_option('UTC')
+            fits(page)
+        page.evaluate("""async () => {
+          const {api} = await import('/static/js/api.js');
+          await api('POST', '/api/me/screen-lock', {enabled:true});
+          await api('PUT', '/api/me/pin', {password:'password-123', pin:'2580'});
+          await api('POST', '/api/lock/now');
+        }""")
+        page.reload()
+        pw.expect(page.locator('#lock-pin')).to_be_visible()
+        pw.expect(page.locator('#timezone')).not_to_be_visible()
+        for digit in '2580':
+            page.locator(f'#lock-pin [data-digit="{digit}"]').tap()
+        page.locator('#lock-pin-ok').tap()
+        pw.expect(page.locator('#timezone')).to_be_visible()
+        pw.expect(page.locator('#lock-timeout-unit')).to_be_visible()
+
+
+@pytest.mark.parametrize('iphone', [(320, 740)], indirect=True)
+def test_large_markdown_worker_keeps_mobile_history_and_bottom_position(iphone):
+    page, aid = iphone
+    text = ('Paragraph with [reference][ref].\n\n```python\nprint("safe")\n```\n\n' * 150
+            + '[ref]: https://example.org/reference\n')
+    page.studio_machine.projects['alpha']['chats'][CODE_CHAT_A]['messages'] = [
+        {'id': 'large-answer', 'role': 'assistant', 'text': text, 'steps': [], 'time': 1}]
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    assert page.locator('.md-part').count() > 1
+    assert page.locator('#code-feed pre code .hljs-string').count() == 150
+    assert page.locator('#code-feed a[href="https://example.org/reference"]').count() == 150
+    assert page.locator('#code-feed pre .copy').count() == 150
+    assert page.locator('#view').evaluate('node => node.scrollHeight-node.clientHeight-node.scrollTop < 2')
+    fits(page)
+
+
 @pytest.mark.parametrize('iphone', [(320, 740), (393, 852), (852, 393)], indirect=True)
 def test_session_starters_and_search_switch_fit_in_rows(iphone, tmp_path):
     import bridge
@@ -618,9 +664,27 @@ def test_new_chat_quick_actions_and_bottom_composer_accept_phone_taps(iphone, tm
     }""")
     fits(page)
     page.screenshot(path=str(tmp_path / 'quick-actions-phone.png'))
+    # Управляемая задержка чтения перед turn: текст задания рисуется ещё до принятия мостом.
+    page.evaluate("""() => {
+      const real = window.fetch, chat = document.querySelector('#code-chat').dataset.chat;
+      let held = false;
+      window.fetch = (url, options) => {
+        if (!held && options?.method === 'GET' && new URL(url, location.href).pathname.endsWith('/chats/' + chat)) {
+          held = true;
+          return new Promise(resolve => { window.__releaseQuickHistory = () => {
+            window.fetch = real; resolve(real(url, options));
+          }; });
+        }
+        return real(url, options);
+      };
+    }""")
     page.locator('.code-quick-action').first.tap()
     pw.expect(page.locator('#code-quick-actions')).to_be_hidden()
     pw.expect(page.locator('.code-msg.user').first).to_have_text(code_actions.DEFAULTS[0]['text'])
+    page.wait_for_function("() => typeof window.__releaseQuickHistory === 'function'")
+    assert not [r for r in page.studio_machine.requests if r['op'] == 'turn']
+    page.evaluate('() => window.__releaseQuickHistory()')
+    wait_for(lambda: any(r['op'] == 'turn' for r in page.studio_machine.requests))
     requests = [r for r in page.studio_machine.requests if r['op'] == 'turn']
     assert len(requests) == 1 and requests[0]['text'] == code_actions.DEFAULTS[0]['text']
     fits(page)

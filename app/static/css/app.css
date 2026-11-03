@@ -712,6 +712,7 @@ label { font-size:calc(13px * var(--font-scale, 1)); color: var(--muted); }
 /* ---- текст модели (renderMarkdown) -------------------------------------------- */
 
 .md { overflow-wrap: anywhere; }
+.md-part { contain: inline-size layout style; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol, .md blockquote, .md table, .md pre { margin: 0 0 .75em; }
@@ -1118,7 +1119,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 
 /* раскладка: панель слева, правая часть рядом; прокручивается #view — панель и верх правой части к нему прилипают */
 .code-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
-.code-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.code-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
 .code-panel { width: 220px; flex: none; position: sticky; top: 0; height: 100dvh; align-self: flex-start;
   display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--border); }
 /* компьютеры — без прокрутки, прокручиваются только проекты под ними */
@@ -1323,7 +1324,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 @media (prefers-reduced-motion: reduce) { .code-panel { transition: none !important; } }
 
 /* чат (code-chat.js): лента, шаги, карточки, поле */
-.code-chat { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.code-chat { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; contain: inline-size; }
 .code-quick-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0;
   width: min(100%, 420px); margin: auto; }
 .code-quick-actions h2 { margin: 0 0 4px; font-size: calc(16px * var(--font-scale, 1)); }
@@ -1335,10 +1336,10 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .code-more { align-self: center; }
 .code-feed { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.code-msg { min-width: 0; overflow-wrap: anywhere; }
+.code-msg { min-width: 0; overflow-wrap: anywhere; contain: layout style; }
 .code-msg.user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px; background: var(--panel-2);
   white-space: pre-wrap; }
-.code-msg.assistant { display: flex; flex-direction: column; gap: 8px; }
+.code-msg.assistant { display: flex; flex-direction: column; gap: 8px; contain: inline-size layout style; }
 .code-steps { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .code-step { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); font-size:calc(14px * var(--font-scale, 1)); }
 .code-step.error { border-color: var(--danger); }

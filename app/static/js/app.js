@@ -188,6 +188,17 @@ function allowed({ section, id }) {
     && (id === null || section === 'chat' || section === 'settings' || section === 'code');
 }
 
+function revealView() {
+  view.style.visibility = '';
+  view.inert = false;
+  // WebKit сохраняет hidden у потомков, созданных под шторкой. Явно обновляем наследование.
+  // inherit оставляет их скрытыми, если lock.js всё ещё держит шторку.
+  if (current?.section === 'settings') {
+    getComputedStyle(view).visibility;
+    for (const child of view.children) child.style.visibility = 'inherit';
+  }
+}
+
 async function render() {
   if (current && current.module.hold && current.module.hold()) {
     // Несохранённый файл вернул прежний адрес. Его диалог и сохранённые узлы тоже защищены PIN.
@@ -200,8 +211,7 @@ async function render() {
       return;                // данные остаются скрыты; следующая попытка перехода повторит проверку
     }
     if (held === renders) {
-      view.style.visibility = '';
-      view.inert = false;
+      revealView();
     }
     return;
   }
@@ -229,8 +239,7 @@ async function render() {
     const retry = el('button', { type: 'button', class: 'btn', id: 'section-unlock-retry' }, 'Повторить');
     retry.addEventListener('click', render);
     view.replaceChildren(head(SECTIONS[route.section].title), notice('wait', err.message, 'empty'), retry);
-    view.style.visibility = '';
-    view.inert = false;
+    revealView();
     return;
   }
   if (mine !== renders) return;
@@ -245,8 +254,7 @@ async function render() {
   if (current && current.section === route.section && current.module.update) {
     await current.module.update(ctx);
     if (mine !== renders) return;
-    view.style.visibility = '';
-    view.inert = false;
+    revealView();
     return;
   }
   let module;
@@ -262,8 +270,7 @@ async function render() {
   view.replaceChildren();
   current = { section: route.section, module };
   module.mount(view, ctx);
-  view.style.visibility = '';
-  view.inert = false;
+  revealView();
 }
 
 function openMenu(open) {
