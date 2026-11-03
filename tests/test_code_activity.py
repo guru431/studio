@@ -2,9 +2,10 @@
 import logging
 
 import code_activity
+import code_attention
 import state
 from conftest import make_user, signin
-from fake_bridge import FakeMachine, connect, drop, enroll
+from fake_bridge import FakeMachine, connect, drop, emit, enroll
 from test_code import A, ALPHA, B, BETA, setup
 
 
@@ -44,11 +45,11 @@ def test_activity_summary_combines_own_computers_and_engines_without_history(stu
     assert result.status_code == 200
     assert result.json() == {"items": [
         {"aid": aid, "items": [
-            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "codex"},
-            {"project": BETA, "chat": B, "running": True, "asking": True, "engine": "opencode"}]},
+            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "codex", "title": "Чат студии"},
+            {"project": BETA, "chat": B, "running": True, "asking": True, "engine": "opencode", "title": None}]},
         {"aid": second, "items": [
-            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "claude"}]}]}
-    assert not any(req["op"] in {"history", "chats"} for m in (machine, other) for req in m.requests)
+            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "claude", "title": None}]}]}
+    assert not any(req["op"] == "history" for m in (machine, other) for req in m.requests)
     make_user(studio, "friend")
     signin(studio, "friend")
     before = len(machine.requests), len(other.requests)
@@ -98,5 +99,62 @@ def test_activity_summary_keeps_other_computers_when_one_times_out(studio, monke
 
     monkeypatch.setattr(code_activity, "ask", ask)
     assert studio.c.get("/api/code/activity").json() == {"items": [
-        {"aid": aid, "items": [{"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "claude"}]},
+        {"aid": aid, "items": [{"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "claude", "title": None}]},
         {"aid": second, "items": []}]}
+
+
+def test_completed_session_keeps_title_and_unread_until_that_result_is_viewed(studio):
+    aid, machine, link = setup(studio)
+    link.hello["project_activity"] = True
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}"
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    first = code_attention.revision(aid, ALPHA, A)
+    studio.clock[0] += 7200
+    item = studio.c.get("/api/code/activity").json()["items"][0]["items"][0]
+    assert item == {"project": ALPHA, "chat": A, "running": False, "asking": False, "engine": "claude",
+                    "title": "Чат студии", "unread": True, "attention": first, "finished": studio.clock[0] - 7200}
+    assert studio.c.get(path).json()["attention"] == first
+    assert studio.c.get("/api/code/activity").json()["items"][0]["items"][0]["unread"]
+    # Новое завершение между загрузкой истории и подтверждением просмотра.
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    latest = code_attention.revision(aid, ALPHA, A)
+    assert latest != first
+    assert studio.c.post(path + "/seen", json={"attention": first}).status_code == 204
+    assert studio.c.get("/api/code/activity").json()["items"][0]["items"][0]["attention"] == latest
+    assert studio.c.post(path + "/seen", json={"attention": latest}).status_code == 204
+    assert studio.c.get("/api/code/activity").json() == {"items": [{"aid": aid, "items": []}]}
+    assert [r["name"] for r in state.DB.execute("PRAGMA table_info(code_attention)")] == [
+        "agent_id", "project", "chat", "revision", "finished", "seen"]
+
+
+def test_unread_and_seen_require_own_open_computer(studio):
+    aid, machine, link = setup(studio, pin="2468")
+    link.hello["project_activity"] = True
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "error"})
+    token = code_attention.revision(aid, ALPHA, A)
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/seen"
+    machine.open_sessions.clear()
+    assert studio.c.get("/api/code/activity").json() == {"items": [{"aid": aid, "items": []}]}
+    assert studio.c.post(path, json={"attention": token}).json()["detail"]["code"] == "closed"
+    assert state.DB.execute("SELECT seen FROM code_attention").fetchone()[0] == 0
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    assert studio.c.post(path, json={"attention": token}).status_code == 404
+    assert studio.c.get("/api/code/activity").json() == {"items": []}
+
+
+def test_history_does_not_acknowledge_completion_that_arrived_during_its_read(studio, monkeypatch):
+    aid, machine, link = setup(studio)
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    previous = code_attention.revision(aid, ALPHA, A)
+    original = machine._op_history
+
+    def history(req, events):
+        data = original(req, events)
+        events.append({"t": "ev", "project": ALPHA, "chat": A, "e": {"k": "done", "status": "done"}})
+        return data
+
+    monkeypatch.setattr(machine, "_op_history", history)
+    response = studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}")
+    assert response.json()["attention"] == previous
+    assert code_attention.revision(aid, ALPHA, A) != previous

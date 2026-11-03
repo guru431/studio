@@ -5,7 +5,12 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 27
+VERSION = 28
+
+CODE_28 = """CREATE TABLE code_attention(
+       agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
+       project TEXT NOT NULL, chat TEXT NOT NULL, revision TEXT NOT NULL, finished REAL NOT NULL,
+       seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(agent_id, chat));"""
 
 TIMEZONE_27 = "ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Europe/Moscow';"
 
@@ -404,7 +409,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -482,6 +487,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     25: CODE_25,
     26: CLEANER_26,
     27: TIMEZONE_27,
+    28: CODE_28,
 }
 
 

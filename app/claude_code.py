@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field, StrictInt, field_validator, model_validat
 import auth
 import bridge
 import clock
+import code_attention
 import lock_policy
 import ocr_render
 import state
@@ -112,6 +113,10 @@ class Open(BaseModel):
 
 class ChatState(BaseModel):
     state: Literal["open", "closed"]
+
+
+class ChatSeen(BaseModel):
+    attention: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 class DiscoveryQuery(BaseModel):
@@ -637,14 +642,26 @@ async def history(aid: int, pid: str, chat: str, request: Request, before: int |
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    attention = code_attention.revision(aid, pid, chat) if before is None else None
     try:
-        return _relay(await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
-                                limit=HISTORY_PAGE))
+        data = await ask(request, aid, "history", quiet=True, project=pid, chat=chat, before=before,
+                         limit=HISTORY_PAGE)
+        return _relay({**data, **({"attention": attention} if attention else {})})
     except HTTPException as e:
         if _new_chat(request, aid, pid, chat, e):
             return {"items": [], "start": 0, "total": 0}
         _warn(request, aid, "history", e)
         raise
+
+
+@router.post("/agents/{aid}/projects/{pid}/chats/{chat}/seen", status_code=204)
+async def chat_seen(aid: int, pid: str, chat: str, body: ChatSeen, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    await agent_access(aid, request)
+    code_attention.seen(aid, pid, chat, body.attention)
+    return Response(status_code=204)
 
 
 # ---- ход: поток, наблюдение, карточки, остановка ------------------------------------------

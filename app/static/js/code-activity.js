@@ -15,7 +15,7 @@ let lastAction = Date.now();
 
 function paint() {
   if (!badge) return;
-  const total = [...activity.values()].reduce((sum, items) => sum + items.size, 0);
+  const total = allCodeActivity().filter((item) => item.running).length;
   badge.textContent = String(total);
   badge.hidden = total === 0;
   const label = total ? `Агенты · Запущенных сессий: ${total}` : 'Агенты';
@@ -26,7 +26,9 @@ function paint() {
 export function setCodeActivity(aid, items) {
   aid = Number(aid);
   revisions.set(aid, (revisions.get(aid) || 0) + 1);
-  activity.set(aid, new Map(items.filter((item) => item.running).map((item) => [item.chat, item])));
+  items = items.filter((item) => item.running || item.asking || item.unread)
+    .map((item) => ({ ...item, project: item.project ?? item.pid }));
+  activity.set(aid, new Map(items.map((item) => [item.chat, item])));
   paint();
   document.dispatchEvent(new CustomEvent('studio-code-snapshot', { detail: { aid, items } }));
 }
@@ -34,8 +36,18 @@ export function setCodeActivity(aid, items) {
 export function codeActivity(aid) {
   return [...(activity.get(Number(aid))?.values() || [])].map((item) => ({ ...item, project: item.project ?? item.pid }));
 }
+export function allCodeActivity() {
+  return [...activity].flatMap(([aid, items]) => [...items.values()].map((item) => ({ ...item, aid })));
+}
+export function codeActivityState(item) {
+  return item.asking ? 'asking' : item.running ? 'running' : 'unread';
+}
+export const CODE_ACTIVITY_LABELS = { running: 'Работает', asking: 'Требует вашего действия', unread: 'Завершена · не прочитана' };
 export function refreshCodeActivity() { refresh(); }
-document.addEventListener('studio-code-clear', () => { activity.clear(); revisions.clear(); paint(); });
+function clearActivity() {
+  for (const aid of activity.keys()) setCodeActivity(aid, []);
+}
+document.addEventListener('studio-code-clear', () => { clearActivity(); revisions.clear(); });
 
 function active() {
   return document.visibilityState === 'visible' && !document.documentElement.classList.contains('shrouded')
@@ -50,7 +62,7 @@ async function read(path) {
 
 async function refresh() {
   if (requested) return;
-  if (!active()) { activity.clear(); paint(); return; }
+  if (!active()) { clearActivity(); return; }
   clearTimeout(timer);
   timer = null;
   requested = true;
@@ -79,11 +91,18 @@ export function setupCodeActivity() {
   badge = document.getElementById('code-running-count');
   tab = badge.closest('a');
   document.addEventListener('studio-code-activity', ({ detail: item }) => {
-    revisions.set(item.aid, (revisions.get(item.aid) || 0) + 1);
-    if (!activity.has(item.aid)) activity.set(item.aid, new Map());
-    if (item.running) activity.get(item.aid).set(item.chat, item);
-    else activity.get(item.aid).delete(item.chat);
-    paint();
+    const aid = Number(item.aid);
+    const items = new Map(activity.get(aid));
+    items.set(item.chat, { ...items.get(item.chat), ...item, project: item.project ?? item.pid });
+    setCodeActivity(aid, [...items.values()]);
+  });
+  document.addEventListener('studio-code-seen', ({ detail: item }) => {
+    const aid = Number(item.aid);
+    const items = new Map(activity.get(aid));
+    const current = items.get(item.chat);
+    if (current?.attention !== item.attention) return;
+    items.set(item.chat, { ...current, unread: false });
+    setCodeActivity(aid, [...items.values()]);
   });
   function resume() {
     lastAction = Date.now();

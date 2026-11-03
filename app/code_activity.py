@@ -11,6 +11,46 @@ router = APIRouter(prefix="/api/code")
 SUMMARY_TIMEOUT = 5
 
 
+async def session_activity(request: Request, aid: int, data: dict) -> list:
+    """Названия — из каталога моста; непрочитанные отметки живут до просмотра, без часового лимита."""
+    items = {}
+    for item in data.get("items", []):
+        if (isinstance(item, dict) and isinstance(item.get("project"), str)
+                and bridge.PID.fullmatch(item["project"]) and isinstance(item.get("chat"), str)
+                and bridge.UUID.fullmatch(item["chat"]) and (item.get("running") or item.get("asking"))):
+            items[item["chat"]] = {**item, "running": True, "title": None}
+    for row in state.DB.execute("SELECT project, chat, revision, finished FROM code_attention"
+                                " WHERE agent_id = ? AND seen = 0 ORDER BY finished DESC", (aid,)):
+        item = items.setdefault(row["chat"], {"project": row["project"], "chat": row["chat"],
+                                             "running": False, "asking": False, "engine": "claude", "title": None})
+        item.update(unread=True, attention=row["revision"], finished=row["finished"])
+    limit = asyncio.Semaphore(4)
+
+    async def titles(project):
+        try:
+            async with limit:
+                found = await ask(request, aid, "chats", quiet=True, project=project)
+            for session in found.get("items", []):
+                item = items.get(session.get("chat")) if isinstance(session, dict) else None
+                if item is None or item["project"] != project:
+                    continue
+                title = session.get("title")
+                item["title"] = title[:500] if isinstance(title, str) else None
+                if not item["running"] and session.get("engine") in ("claude", "codex", "opencode"):
+                    item["engine"] = session["engine"]
+        except HTTPException as error:
+            if error.detail.get("code") in ("closed", "offline"):
+                raise
+            # Сбой каталога не должен скрывать работающую сессию.
+
+    try:
+        async with asyncio.timeout(2):
+            await asyncio.gather(*(titles(project) for project in {i["project"] for i in items.values()}))
+    except TimeoutError:
+        pass
+    return list(items.values())
+
+
 @router.get("/activity")
 async def all_activity(request: Request):
     """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем."""
@@ -29,7 +69,8 @@ async def all_activity(request: Request):
                         raise
                     await ask(request, aid, "open", quiet=True, pin=None)
                     data = await ask(request, aid, "activity", quiet=True)
-            return {"aid": aid, "items": data.get("items", [])}
+                items = await session_activity(request, aid, data)
+            return {"aid": aid, "items": items}
         except (HTTPException, TimeoutError):
             return {"aid": aid, "items": []}
 

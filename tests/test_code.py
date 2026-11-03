@@ -9,6 +9,7 @@ import uuid
 import auth
 import bridge
 import claude_code
+import code_attention
 import fake_bridge
 import ocr_render
 import security
@@ -28,6 +29,7 @@ ALPHA, BETA = pid("alpha"), pid("beta")
 #: (тела: {"text": "x"}, {"request_id": "r1", "decision": "allow"}, {"path": ""},
 #: {"path": "a", "text": "", "version": "v"}, {"path": "a.pdf", "page": 1}).
 BODIES = {
+    ("POST", "/api/code/agents/1/projects/1/chats/1/seen"): {"attention": "0" * 32},
     ("GET", "/api/code/agents/1/desktop"): None,
     ("POST", "/api/code/agents/1/desktop/start"): {},
     ("POST", "/api/code/agents/1/desktop/frame"): {"control": "0" * 32, "monitor": 0},
@@ -473,6 +475,10 @@ def chat_url(aid, *rest) -> str:
     return url(aid, "projects", ALPHA, "chats", A, *rest)
 
 
+def done_data(aid, status="done"):
+    return {"status": status, "attention": code_attention.revision(aid, ALPHA, A)}
+
+
 def sent(m: FakeMachine, op: str) -> list[dict]:
     return [r for r in m.requests if r["op"] == op]
 
@@ -504,7 +510,7 @@ def test_turn_streams_until_done(studio):
         got = list(events_of(r.iter_lines()))
     assert got == [("turn", {"turn": "t-1"}), ("text", {"text": "При"}), ("text", {"text": "вет"}),
                    ("step", {"id": "s1", "tool": "Bash", "input": {"command": "ls"}}),
-                   ("result", {"id": "s1", "text": "a.txt", "error": False}), ("done", {"status": "done"})]
+                   ("result", {"id": "s1", "text": "a.txt", "error": False}), ("done", done_data(aid))]
     [req] = sent(m, "turn")
     assert {k: req[k] for k in ("project", "chat", "text", "model", "effort")} == {
         "project": ALPHA, "chat": A, "text": "Привет", "model": None, "effort": None}
@@ -553,7 +559,7 @@ def test_permission_card_round_trip(studio):
         a = studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "always"})
         assert (a.status_code, a.content) == (204, b"")
         rest = list(events)
-    assert rest == [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", {"status": "done"})]
+    assert rest == [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", done_data(aid))]
     [req] = sent(m, "answer")
     assert {k: req[k] for k in ("project", "chat", "request_id", "decision", "message", "answers")} == {
         "project": ALPHA, "chat": A, "request_id": "r1", "decision": "always", "message": None, "answers": None}
@@ -578,7 +584,7 @@ def test_question_answers_reach_the_bridge(studio):
         answers = {"Какой цвет?": "Синий"}
         assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "q1", "decision": "allow",
                                                               "answers": answers}).status_code == 204
-        assert list(events) == [("asked", {"request_id": "q1"}), ("done", {"status": "done"})]
+        assert list(events) == [("asked", {"request_id": "q1"}), ("done", done_data(aid))]
     assert {k: sent(m, "answer")[-1][k] for k in ("decision", "message", "answers")} == {
         "decision": "allow", "message": None, "answers": answers}
     m.script = [ASK, DONE]
@@ -603,7 +609,7 @@ def test_two_watchers_see_the_card_and_its_close(studio):
             second = events_of(r2.iter_lines())
             assert next(second) == ("snapshot", {"text": "Удаляю", "steps": [], "asks": [CARD]})
             assert studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"}).status_code == 204
-            tail = [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", {"status": "done"})]
+            tail = [("asked", {"request_id": "r1"}), ("text", {"text": "Готово"}), ("done", done_data(aid))]
             assert list(second) == tail
             # снимок раздаётся всем наблюдателям чата («вместо прежнего» — потоку хода он не мешает)
             assert list(first) == [("snapshot", {"text": "Удаляю", "steps": [], "asks": [CARD]}), *tail]
@@ -675,10 +681,10 @@ def test_live_skips_events_before_the_first_snapshot(studio, monkeypatch):
         events = events_of(r.iter_lines())
         assert next(events) == ("snapshot", {"text": "Уже", "steps": [], "asks": []})
         fake_bridge.emit(studio, link, ALPHA, A, text("дальше"), DONE)
-        assert list(events) == [("text", {"text": "дальше"}), ("done", {"status": "done"})]
+        assert list(events) == [("text", {"text": "дальше"}), ("done", done_data(aid))]
     before[:] = [text("x"), DONE]
     with studio.c.stream("GET", chat_url(aid, "live")) as r:
-        assert list(events_of(r.iter_lines())) == [("done", {"status": "done"})]
+        assert list(events_of(r.iter_lines())) == [("done", done_data(aid))]
     no_watchers(studio)
 
 
@@ -700,7 +706,7 @@ def test_lock_ends_the_streams_of_the_session_with_closed(studio):
         events = events_of(r.iter_lines())
         assert next(events)[0] == "snapshot"
         fake_bridge.emit(studio, link, ALPHA, A, DONE)
-        assert list(events) == [("done", {"status": "done"})]
+        assert list(events) == [("done", done_data(aid))]
 
 
 def test_streams_end_closed_when_the_session_ends_or_locks_by_time(studio, monkeypatch):
@@ -743,7 +749,7 @@ def test_stop_ends_the_turn_stopped(studio):
         until(events, "ask")
         s = studio.c.post(chat_url(aid, "stop"))
         assert (s.status_code, s.content) == (204, b"")
-        assert list(events) == [("asked", {"request_id": "r1"}), ("done", {"status": "stopped"})]
+        assert list(events) == [("asked", {"request_id": "r1"}), ("done", done_data(aid, "stopped"))]
     assert {k: sent(m, "stop")[0][k] for k in ("project", "chat")} == {"project": ALPHA, "chat": A}
     r = studio.c.post(chat_url(aid, "stop"))
     assert (r.status_code, detail(r)["code"]) == (409, "idle")

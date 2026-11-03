@@ -35,6 +35,7 @@ import clock
 import push
 import security
 import state
+import code_attention
 
 log = logging.getLogger("studio")
 router = APIRouter()
@@ -327,6 +328,9 @@ def deliver(link: Link, frame: dict) -> None:
         if not _event_ok(frame):
             log.warning("агент %d: неверное событие", link.agent_id)
             return
+        if frame["e"]["k"] == "done" and frame["e"].get("status") in ("done", "stopped", "error"):
+            frame = {**frame, "e": {**frame["e"], "attention": code_attention.completed(
+                link.agent_id, frame["project"], frame["chat"])}}
         for q in list(WATCHERS.get((link.agent_id, frame["chat"]), ())):
             _put_event(link.agent_id, frame["chat"], q, frame["e"])
         _push(link, frame)
