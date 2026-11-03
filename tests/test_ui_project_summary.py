@@ -50,13 +50,15 @@ def test_project_times_use_moscow_across_browser_timezones(browser, live, width,
     assert not problems(result), problems(result)
 
 
-@pytest.mark.parametrize("width", [320, 1280])
-def test_project_sort_restores_after_navigation_reload_and_account_switch(browser, live, width):
+@pytest.mark.parametrize("width,visibility", [(320, "public"), (1280, "private")])
+def test_project_sort_restores_after_navigation_reload_and_account_switch(browser, live, width, visibility):
     login, other = f"project-sort-{width}", f"project-sort-other-{width}"
     live.add_user(login)
     live.add_user(other)
     projects = {name: {"summary": {"findings": count, "ideas": count, "changed": 0, "unpushed": 0,
         "modified": T0, "checked_at": T0, "git": "ok"}} for name, count in (("alpha", 1), ("beta", 5))}
+    projects["alpha"]["summary"]["github"] = None
+    projects["beta"]["summary"]["github"] = {"state": "current", "behind": 0, "ahead": 0}
     machine, second = FakeMachine(projects), FakeMachine(projects)
     machine.project_summary = second.project_summary = True
     aid, server = code_online(live, login, machine)
@@ -70,7 +72,7 @@ def test_project_sort_restores_after_navigation_reload_and_account_switch(browse
               ("wait", "location.pathname === '/login' && document.querySelector('#login')")]
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), ("wait", ready),
-            set_value("#code-project-sort", "findings"), ("eval", "chosen", selection),
+            set_value("#code-project-sort", visibility), ("eval", "chosen", selection),
             *go("settings/code"), ("wait", "!!document.querySelector('#code-defaults-save')"),
             *go("code"), ("wait", ready), ("eval", "returned", selection),
             ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", ready),
@@ -83,10 +85,71 @@ def test_project_sort_restores_after_navigation_reload_and_account_switch(browse
         server.stop()
         other_server.stop()
     assert not result.get("failed"), result
+    label = "Сначала публичные" if visibility == "public" else "Сначала приватные"
     for key in ("chosen", "returned", "reloaded", "signedInAgain"):
-        assert result["values"][key] == ["findings", "По количеству проблем", pid("beta")], result["values"]
+        assert result["values"][key] == [visibility, label, pid("beta" if visibility == "public" else "alpha")], result["values"]
     assert result["values"]["other"] == ["name", "По имени", pid("alpha")]
     assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_project_visibility_sort_groups_unknowns_last_and_updates_after_github_check(browser, live, width, tmp_path):
+    login = f"project-visibility-{width}"
+    live.add_user(login)
+    projects = {
+        "alpha-private": {"github": None},
+        "beta-unknown": {"github": {"state": "unknown"}},
+        "delta-public": {"github": {"state": "missing"}},
+        "gamma-public": {"github": {"state": "current", "behind": 0, "ahead": 0}},
+        "legacy": {},
+        "local": {"git": "not_git", "github": None},
+        "offline": {"git": "error", "github": None},
+        "pending": {"github": None, "github_pending": True},
+        "zeta-private": {"github": None},
+    }
+    machine = FakeMachine({name: {"summary": {"git": "ok", "checked_at": T0, **summary}}
+                           for name, summary in projects.items()})
+    machine.project_summary = True
+    _, server = code_online(live, login, machine)
+    gate = f"""(() => {{
+      const real = window.fetch;
+      window.remoteGate = new Promise(resolve => window.releaseRemote = resolve);
+      window.fetch = async (url, options) => {{
+        if (String(url).includes('/{pid('pending')}/summary?remote=true')) {{
+          await window.remoteGate;
+          return new Response(JSON.stringify({{git:'ok',checked_at:{T0},github:{{state:'current',behind:0,ahead:0}}}}),
+            {{status:200,headers:{{'content-type':'application/json'}}}});
+        }}
+        return real(url, options);
+      }};
+      return true;
+    }})()"""
+    order = "[...document.querySelectorAll('#code-projects li')].map(row => row.dataset.pid)"
+    ready = "!document.querySelector('#code-project-refresh')?.disabled && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
+            *go("code"), ("wait", ready), set_value("#code-project-sort", "public"),
+            ("click", "#code-project-refresh"), ("wait", ready), ("eval", "public", order),
+            set_value("#code-project-sort", "private"), ("eval", "private", order),
+            ("eval", "release", "window.releaseRemote(); true"),
+            ("wait", f"document.querySelector(\"li[data-pid='{pid('pending')}'] .code-project-github\")?.textContent === 'GitHub ✓'"),
+            ("eval", "resolvedPrivate", order),
+            set_value("#code-project-sort", "public"), ("eval", "resolvedPublic", order),
+            ("screenshot", str(tmp_path / f"project-visibility-{width}.png")),
+            ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth")],
+            width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    public = ["delta-public", "gamma-public"]
+    private = ["alpha-private", "zeta-private"]
+    unknown = ["beta-unknown", "legacy", "local", "offline"]
+    for key, names in (("public", public + private + unknown + ["pending"]),
+                       ("private", private + public + unknown + ["pending"]),
+                       ("resolvedPrivate", private + public + ["pending"] + unknown),
+                       ("resolvedPublic", public + ["pending"] + private + unknown)):
+        assert result["values"][key] == [pid(name) for name in names], result["values"]
+    assert not result["values"]["overflow"] and not problems(result), problems(result)
 
 
 @pytest.mark.parametrize("storage", ["invalid", "unavailable"])

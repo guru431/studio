@@ -323,6 +323,7 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
         "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0},
         "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0},
                     {"name": "upstream", "state": "behind", "behind": 10, "ahead": 0}]}
+    page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-refresh')
@@ -360,8 +361,14 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
+    for value, label, name in [('private', 'Сначала приватные', 'beta'), ('public', 'Сначала публичные', 'alpha')]:
+        page.locator('#code-project-sort').select_option(value)
+        pw.expect(page.locator('.code-project-sort-text')).to_have_text(label)
+        pw.expect(page.locator('#code-projects li').first).to_have_attribute('data-pid', pid(name))
+    page.screenshot(path=str(tmp_path / f'visibility-webkit-{page.viewport_size["width"]}.png'))
     page.locator('#code-project-sort').select_option('findings')
     pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
+    pw.expect(button).to_be_enabled()
     page.evaluate("""() => {
       const real = window.fetch;
       window.refreshGate = new Promise(resolve => window.releaseRefresh = resolve);
