@@ -656,14 +656,14 @@ def test_a_turn_already_on_its_way_does_not_start_after_unenroll(make, home, roo
     """Просьба `turn`, чей `find_project` ещё идёт, пока идёт отвязка: ход не начат, `claude.exe` не поднят."""
     (root / "demo").mkdir()
     entered, release = threading.Event(), threading.Event()
-    real = projects.find_project
+    real = projects.Catalog.find
 
-    def slow(projects_root, pid):
+    def slow(catalog, config, pid):
         entered.set()
         release.wait(5)
-        return real(projects_root, pid)
+        return real(catalog, config, pid)
 
-    monkeypatch.setattr(projects, "find_project", slow)
+    monkeypatch.setattr(projects.Catalog, "find", slow)
     sdk = FakeFactory([result_ok()])
     ctrl = make(sdk=sdk)
     ctrl.start()

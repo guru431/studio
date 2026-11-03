@@ -169,6 +169,8 @@ class OpenCodeRunner(Runner):
         self.aliases = Aliases(home)
         self.catalog = None
         self.models, self.efforts, self.version = [], [], ""
+        self._catalog_rpc = None
+        self._catalog_lock = asyncio.Lock()
 
     async def _connect(self, project):
         path = await asyncio.to_thread(self.find_opencode)
@@ -226,18 +228,23 @@ class OpenCodeRunner(Runner):
     async def chats(self, project):
         if self.catalog is None:
             return []
-        rpc = await self._connect(project)
-        try:
-            rows, cursor = [], None
-            while len(rows) < limits.CHATS_MAX:
-                data = await rpc.request("session/list", {"cwd": str(project), **({"cursor": cursor} if cursor else {})})
-                rows.extend(data.get("sessions", []))
-                next_cursor = data.get("nextCursor")
-                if not next_cursor or next_cursor == cursor:
-                    break
-                cursor = next_cursor
-        finally:
-            await rpc.disconnect()
+        async with self._catalog_lock:
+            try:
+                if self._catalog_rpc is None:
+                    self._catalog_rpc = await self._connect(project)
+                rows, cursor = [], None
+                while len(rows) < limits.CHATS_MAX:
+                    data = await self._catalog_rpc.request("session/list", {"cwd": str(project), **({"cursor": cursor} if cursor else {})})
+                    rows.extend(data.get("sessions", []))
+                    next_cursor = data.get("nextCursor")
+                    if not next_cursor or next_cursor == cursor:
+                        break
+                    cursor = next_cursor
+            except BaseException:
+                if self._catalog_rpc is not None:
+                    await self._catalog_rpc.disconnect()
+                    self._catalog_rpc = None
+                raise
         saved = await asyncio.to_thread(self.aliases.load)
         reverse = {row.get("session"): chat for chat, row in saved.items()
                    if isinstance(row, dict) and same_project(row.get("project"), project)}
@@ -256,6 +263,13 @@ class OpenCodeRunner(Runner):
         if added:
             await asyncio.to_thread(self.aliases.merge, added)
         return items
+
+    async def close(self, final=False, hold=False):
+        await super().close(final=final, hold=hold)
+        async with self._catalog_lock:
+            if self._catalog_rpc is not None:
+                await self._catalog_rpc.disconnect()
+                self._catalog_rpc = None
 
     async def _load(self, rpc, project, target):
         try:
@@ -286,7 +300,7 @@ class OpenCodeRunner(Runner):
             await rpc.disconnect()
         total = len(items)
         end = min(before, total) if before is not None else total
-        page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end])
+        page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end], budget=512 * 1024)
         return {"items": page, "start": end - len(page), "total": total, "engine": "opencode"}
 
     async def _configure(self, rpc, target, data, model, effort):

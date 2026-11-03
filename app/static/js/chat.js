@@ -61,7 +61,7 @@ import { api, me } from './api.js';
 import { calendarDay } from './time.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
@@ -1006,10 +1006,17 @@ function build(view, ctx) {
     const job = reading(m);
     paintBadge(p, m, job);
     paintThought(p, m, job);
-    const displayed = m.cleaner_show_raw ? m.cleaner_raw : m.content;
-    if (p.shown !== displayed) {
-      p.md.replaceChildren(renderMarkdown(displayed));
+    const displayed = String((m.cleaner_show_raw ? m.cleaner_raw : m.content) ?? '');
+    const final = m.status !== 'streaming';
+    if (p.shown !== displayed || p.final !== final) {
       p.shown = displayed;
+      p.final = final;
+      if (displayed.length <= 2000) p.md.replaceChildren(renderMarkdown(displayed, { highlight: final }));
+      else if (!final) p.md.replaceChildren(el('pre', { class: 'code-stream-text' }, displayed));
+      else renderMarkdownInto(p.md, displayed, {
+        valid: () => p.md.isConnected && parts.get(m) === p && p.shown === displayed && p.final,
+        update: (change) => { change(); scrollDown(false); },
+      });
     }
     let text = '';
     let kind = '';

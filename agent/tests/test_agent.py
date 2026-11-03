@@ -146,7 +146,7 @@ async def test_project_summary_requires_pin_and_resolves_project(agent, root, mo
     assert (await agent.handle(frame))[0]["code"] == "closed"
     await opened(agent)
     seen = []
-    monkeypatch.setattr(project_summary, "read", lambda path: seen.append(path) or {"findings": 2})
+    monkeypatch.setattr(project_summary, "read", lambda path, **kw: seen.append(path) or {"findings": 2})
     assert (await agent.handle(frame))[0]["data"] == {"findings": 2}
     assert seen == [root / "demo"]
     assert (await agent.handle(req("project_summary", project="0" * 16)))[0]["code"] == "not_found"
@@ -175,7 +175,7 @@ def test_hello(agent):
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                             "computer_info": True, "desktop": True}
+                             "computer_info": True, "desktop": True, "metadata_cache": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -486,7 +486,7 @@ async def test_files_read_and_unknown_project(agent, root):
 
 
 async def test_a_crash_in_an_op_is_error_and_the_next_request_works(agent, monkeypatch, caplog):
-    monkeypatch.setattr(sessions, "history", lambda *a: (_ for _ in ()).throw(ValueError("битый JSONL")))
+    monkeypatch.setattr(sessions, "history", lambda *a, **kw: (_ for _ in ()).throw(ValueError("битый JSONL")))
     await opened(agent)
     r = req("history", project=projects.pid("demo"), chat=CHAT, before=None, limit=10)
     with caplog.at_level(logging.INFO, logger="studio_agent"):
@@ -497,7 +497,7 @@ async def test_a_crash_in_an_op_is_error_and_the_next_request_works(agent, monke
 
 
 async def test_oversized_answer_is_refused_too_large(agent, monkeypatch):
-    monkeypatch.setattr(projects, "list_projects", lambda root: [{"pid": "0" * 16, "name": "x" * (17 * 2**20)}])
+    monkeypatch.setattr(agent._catalog, "list", lambda root, **kw: [{"pid": "0" * 16, "name": "x" * (17 * 2**20)}])
     await opened(agent)
     r = req("projects")
     res = (await agent.handle(r))[0]

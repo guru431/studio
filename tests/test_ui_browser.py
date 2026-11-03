@@ -16,6 +16,7 @@ import time
 
 import httpx
 import pytest
+import fake_bridge
 from PIL import Image
 
 from browser import launch
@@ -7262,7 +7263,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
         ("wait", "document.querySelector('#code-empty')"),
         ("eval", "tabs", "[...document.querySelectorAll('#rail .tab')].map((t) => t.dataset.section)"),
-        ("eval", "tab", "document.querySelector('#rail .tab[data-section=code]').textContent"),
+        ("eval", "tab", "document.querySelector('#rail .tab[data-section=code] > span:last-child').textContent"),
         ("eval", "current", "document.querySelector('#rail .tab[aria-current=page]').dataset.section"),
         ("eval", "head", "!!document.querySelector('#view .head')"),
         ("eval", "panel", "!!document.querySelector('#code-panel')"),
@@ -7628,7 +7629,7 @@ def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
             ("wait", "document.querySelector('#code-projects li[data-pid]')"),
             ("eval", "first", CODE_PANEL_OPEN), ("eval", "shown", settled(visible, 400)),
             ("click", f"#code-agents li[data-id='{aid}'] .code-agent"), ("eval", "kept", settled(CODE_PANEL_OPEN)),
-            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog').open"),
+            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog')?.open"),
             *code_project(aid, "alpha"), ("eval", "chosen", CODE_PANEL_OPEN),
             ("eval", "toggle", "getComputedStyle(document.querySelector('#code-panel-toggle')).display !== 'none'"),
             ("click", "#code-panel-toggle"), ("wait", CODE_PANEL_OPEN),
@@ -7800,10 +7801,14 @@ CODE_WAITING = "Компьютер пропал со связи — жду ег�
 CODE_MSGS = """[...document.querySelectorAll('#code-feed .code-msg')].map((m) => [m.classList.contains('user') ? 'user'
   : 'assistant', m.classList.contains('user') ? m.textContent : m.querySelector('.md').textContent.trim()])"""
 #: шаги ленты: инструмент, начало ввода, итог, ошибка, ссылка «Открыть файл»
-CODE_STEPS = """[...document.querySelectorAll('#code-feed details.code-step')].map((d) => [
+CODE_STEPS = """(async () => { const rows = [...document.querySelectorAll('#code-feed details.code-step')];
+  await Promise.all(rows.map((row) => row.open ? Promise.resolve() : new Promise(resolve => {
+    row.addEventListener('toggle', resolve, { once: true }); row.open = true;
+  })));
+  return rows.map((d) => [
   d.querySelector('.code-step-tool').textContent, d.querySelector('.code-step-head').textContent,
   d.querySelector('.code-step-result').textContent, d.classList.contains('error'),
-  d.querySelector('.code-step-file') ? d.querySelector('.code-step-file').textContent : null])"""
+  d.querySelector('.code-step-file') ? d.querySelector('.code-step-file').textContent : null]); })()"""
 CODE_IDLE_AFTER = ("document.querySelector('#code-chat').dataset.running === '0'"
                    " && document.querySelectorAll('#code-feed .code-msg.assistant').length === {n}"
                    " && !document.querySelector('.code-ask')")
@@ -7918,7 +7923,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
             ("eval", "saved", f"localStorage.setItem('studio-code-choice:{aid}',"
                               " JSON.stringify({ model: 'sonnet', effort: 'high' }))"),
             *code_chat(aid, CODE_CHAT_A),
-            ("eval", "labels", "[...document.querySelectorAll('.code-pick')].map((l) => l.firstChild.textContent)"),
+            ("eval", "labels", "[...document.querySelectorAll('.code-pick')].filter(l => !l.hidden).map((l) => l.firstChild.textContent)"),
             ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
                                 ".map((o) => [o.value, o.textContent]))"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
@@ -8131,7 +8136,7 @@ def test_code_turn_error_without_message_says_error(browser, live):
 
 #: опрос live на простое — IDLE_POLL_SEC (20 с) — 300 мс
 CODE_FAST_IDLE = """(() => { const real = window.setTimeout.bind(window);
-  window.setTimeout = (f, ms, ...a) => real(f, ms === 20000 ? 300 : ms, ...a); })();"""
+  window.setTimeout = (f, ms, ...a) => real(f, ms === 20000 || ms === 60000 ? 300 : ms, ...a); })();"""
 
 
 def code_start_elsewhere(machine, chat, text, script):
@@ -8349,7 +8354,7 @@ def test_code_stop_and_offline(browser, live):
 
 
 def test_code_reopened_chat_shows_history_and_more(browser, live):
-    """250 сообщений: открыт — 100 последних; «Показать раньше» — ещё 100 выше, затем остаток, и кнопка уходит.
+    """250 сообщений: открыт короткий хвост; «Показать раньше» догружает всё без потерь и скрывает кнопку.
     Поле — над вкладками телефона."""
     from fake_bridge import T0
     login = "code-history"
@@ -8360,6 +8365,9 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
     aid, sb = code_online(live, login, machine)
     first = "document.querySelector('#code-feed .code-msg').textContent.trim()"
     count = "document.querySelectorAll('#code-feed .code-msg').length"
+    remaining = []
+    for expected in (90, 120, 150, 180, 210, 240, 250):
+        remaining.extend([("click", "#code-more"), ("wait", f"{count} === {expected}")])
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             ("eval", "n1", count), ("eval", "first1", first), ("eval", "more1", "document.querySelector('#code-more').textContent"),
@@ -8367,18 +8375,18 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
               const rail = document.querySelector('#rail').getBoundingClientRect();
               return c.bottom <= rail.top + 1 && c.top >= 0; })()"""),
             ("eval", "fits", NO_OVERFLOW),
-            ("click", "#code-more"), ("wait", f"{count} === 200"), ("eval", "first2", first),
+            ("click", "#code-more"), ("wait", f"{count} === 60"), ("eval", "first2", first),
             ("eval", "shown2", "!document.querySelector('#code-more').hidden"),
-            ("click", "#code-more"), ("wait", f"{count} === 250"), ("eval", "first3", first),
+            *remaining, ("eval", "first3", first),
             ("eval", "shown3", "!document.querySelector('#code-more').hidden")], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert (v["n1"], v["first1"], v["more1"]) == (100, "сообщение 150", "Показать раньше")
+    assert (v["n1"], v["first1"], v["more1"]) == (30, "сообщение 220", "Показать раньше")
     assert v["composer"] is True and v["fits"] is True
-    assert (v["first2"], v["shown2"], v["first3"], v["shown3"]) == ("сообщение 50", True, "сообщение 0", False)
-    assert [q["before"] for q in code_requests(machine, "history")] == [None, 150, 50]
+    assert (v["first2"], v["shown2"], v["first3"], v["shown3"]) == ("сообщение 190", True, "сообщение 0", False)
+    assert [q["before"] for q in code_requests(machine, "history")] == [None, 220, 190, 160, 130, 100, 70, 40, 10]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -8640,6 +8648,15 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
     login = "code-draft"
     live.add_user(login)
     machine = code_machine({CODE_CHAT_A: code_session("Чат A")})
+    history = machine._op_history
+    reads = []
+    def expire_on_send(req, events):
+        reads.append(1)
+        if len(reads) == 2:
+            machine.open_sessions.clear()  # Блокировка телефона сама по себе PIN компьютера сохраняет.
+            raise fake_bridge.Refused('closed', 'компьютер закрыт')
+        return history(req, events)
+    machine._op_history = expire_on_send
     aid, sb = code_online(live, login, machine)
     here = f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
     try:
@@ -8662,7 +8679,7 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["field"] == "Черновик задания" and v["stored"] is False
-    assert len(code_requests(machine, "turn")) == 1 and not machine.running      # отказ closed — хода нет
+    assert not code_requests(machine, "turn") and not machine.running  # Предварительная сверка отказала до отправки хода.
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
 
@@ -9036,7 +9053,7 @@ def test_code_file_conflict_is_said_in_words(browser, live):
 CODE_UNSAVED = is_open("#code-unsaved")
 
 
-def test_code_unsaved_edit_asks_before_leaving(browser, live):
+def test_code_unsaved_edit_asks_before_leaving(browser, live, tmp_path):
     """Правка не сохранена, а уходят на папку (путь) или вкладку — окно студии «Изменения не сохранены»:
     «Остаться» — файл и правка на месте; «Уйти без сохранения» — правка отброшена. Сохранённое — без окна."""
     login = "code-unsaved"
@@ -9060,8 +9077,10 @@ def test_code_unsaved_edit_asks_before_leaving(browser, live):
             ("eval", "gitWaits", "document.querySelector('#code-tab-files').getAttribute('aria-selected')"),
             ("click", "#code-unsaved-leave"),
             ("wait", f"!{CODE_UNSAVED} && document.querySelector('#code-tab-git').getAttribute('aria-selected') === 'true'"),
-            ("click", "#code-tab-files"), ("eval", "reverted", editor),
-            set_value("#code-editor", "print('ещё')\n"), ("click", "#code-save"),
+            ("click", "#code-tab-files"),
+            ("wait", "document.querySelector('#code-tab-files').getAttribute('aria-selected')==='true' && document.querySelector('#code-editor').getBoundingClientRect().width>0"),
+            ("eval", "reverted", editor), set_value("#code-editor", "print('ещё')\n"),
+            ("screenshot", str(tmp_path / 'unsaved-return.png')), ("click", "#code-save"),
             ("wait", f"{CODE_FILE_STATUS} === 'Сохранено'"),
             ("click", "#code-path .code-path-link"), code_root_names(5),
             ("eval", "noDialog", f"!{CODE_UNSAVED}")], width=320, mobile=True)
@@ -9204,8 +9223,12 @@ def test_code_save_on_a_closed_computer_keeps_the_edit_through_the_pin(browser, 
     machine = code_files_machine()
     machine.pin = CODE_PIN
     handle = machine.handle
+    expired = [False]
 
     def claude_then(req):                    # отказ closed «Сохранить» — и Claude правит файл, пока вводят PIN
+        if req.get('op') == 'save' and not expired[0]:
+            expired[0] = True
+            machine.open_sessions.clear()
         out = handle(req)
         if claude_edits and req.get("op") == "save" and not out[0]["ok"]:
             machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
@@ -10092,7 +10115,7 @@ def test_code_selected_computer_click_rereads_its_projects(browser, live):
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
             ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 1"), ("wait", named("С гаммой")),
             ("click", agent), ("wait", "document.querySelectorAll('#code-projects li[data-pid]').length === 2"),
-            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog').open"),
+            ("eval", "infoClosed", "!document.querySelector('#code-computer-dialog')?.open"),
             ("eval", "two", CODE_PROJECTS), ("wait", named("Закрытый")),
             ("eval", "list", "!!(window.oldList = document.querySelector('#code-projects'))"),
             ("click", agent), ("wait", "document.querySelector('#code-projects') !== window.oldList"
@@ -10328,13 +10351,22 @@ def test_code_double_closed_in_files_returns_to_the_latest_place(browser, live):
 
 
 def test_code_lock_then_another_project_leads_to_the_pin(browser, live):
-    """Ревью: студия заперлась, а владелец переходит в другой проект: 423 — отпирание, затем 409 closed (запирание
-    закрыло сессии мостов) — поле PIN в панели, адрес — тот проект; верный PIN — его сессии. Записей в истории —
+    """Студия заперлась и PIN компьютера отдельно истёк: переход в другой проект сначала отпирает телефон,
+    затем показывает поле PIN компьютера; верный PIN — его сессии. Записей в истории —
     только переход в проект."""
     from fake_bridge import pid
     login = "code-lock-project"
     live.add_user(login)
     machine = code_machine()
+    chats = machine._op_chats
+    expired = [False]
+    def expire_on_project(req, events):
+        if req['project'] == pid('beta') and not expired[0]:
+            expired[0] = True
+            machine.open_sessions.clear()
+            raise fake_bridge.Refused('closed', 'компьютер закрыт')
+        return chats(req, events)
+    machine._op_chats = expire_on_project
     aid, sb = code_online(live, login, machine)
     beta = f"#/code/{aid}/{pid('beta')}"
     try:

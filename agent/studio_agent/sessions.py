@@ -131,15 +131,26 @@ def fit(items: list[dict], budget: int = limits.HISTORY_BUDGET) -> list[dict]:
     return out
 
 
-def history(project: Path, chat: str, before: int | None, limit: int) -> dict:
+def history(project: Path, chat: str, before: int | None, limit: int, *, index=None) -> dict:
     """Последние `limit` сообщений перед номером `before` (`None` — до конца), урезанные под бюджет кадра."""
-    messages = get_session_messages(chat, directory=str(project))
-    if not messages:
-        raise Refused("not_found", "нет такого чата")
-    items = normalize(messages)
+    def revision():
+        info = get_session_info(chat, directory=str(project))
+        size = getattr(info, 'file_size', None)
+        return (info.last_modified, size) if info and size is not None else None
+
+    stamp = revision() if index is not None else None
+    key = (str(project.resolve()), chat)
+    items = index.get(key, stamp) if index is not None else None
+    if items is None:
+        messages = get_session_messages(chat, directory=str(project))
+        if not messages:
+            raise Refused("not_found", "нет такого чата")
+        items = normalize(messages)
+        if index is not None:
+            index.put(key, stamp, revision(), items)
     total = len(items)
     end = total if before is None else max(0, min(before, total))
-    page = fit(items[max(0, end - limit):end])
+    page = fit(items[max(0, end - limit):end], budget=512 * 1024)
     return {"items": page, "start": end - len(page), "total": total}
 
 

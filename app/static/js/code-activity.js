@@ -28,7 +28,14 @@ export function setCodeActivity(aid, items) {
   revisions.set(aid, (revisions.get(aid) || 0) + 1);
   activity.set(aid, new Map(items.filter((item) => item.running).map((item) => [item.chat, item])));
   paint();
+  document.dispatchEvent(new CustomEvent('studio-code-snapshot', { detail: { aid, items } }));
 }
+
+export function codeActivity(aid) {
+  return [...(activity.get(Number(aid))?.values() || [])].map((item) => ({ ...item, project: item.project ?? item.pid }));
+}
+export function refreshCodeActivity() { refresh(); }
+document.addEventListener('studio-code-clear', () => { activity.clear(); revisions.clear(); paint(); });
 
 function active() {
   return document.visibilityState === 'visible' && !document.documentElement.classList.contains('shrouded')
@@ -51,14 +58,14 @@ async function refresh() {
   try {
     const { items } = await read('/api/code/activity');
     for (const aid of activity.keys()) {
-      if (!items.some((agent) => agent.aid === aid) && revisions.get(aid) === before.get(aid)) activity.delete(aid);
+      if (!items.some((agent) => agent.aid === aid) && revisions.get(aid) === before.get(aid)) setCodeActivity(aid, []);
     }
     for (const agent of items) {
       if (revisions.get(agent.aid) === before.get(agent.aid)) setCodeActivity(agent.aid, agent.items);
     }
   } catch {
     for (const aid of activity.keys()) {
-      if (revisions.get(aid) === before.get(aid)) activity.delete(aid);
+      if (revisions.get(aid) === before.get(aid)) setCodeActivity(aid, []);
     }
   } finally {
     requested = false;

@@ -26,6 +26,12 @@ export function tabBar(host, { pick, close, add: choose }) {
   const nodes = new Map();
   const signatures = new Map();
 
+  let pendingFocus = null;
+  function closeFocused(chat) {
+    const index = state.tabs.indexOf(chat);
+    pendingFocus = state.tabs[index + 1] || state.tabs[index - 1] || null;
+    close(chat);
+  }
   function tabNode(chat) {
     const known = state.info.get(chat);
     const title = known ? known.title || UNTITLED : state.loaded ? SESSION : '';
@@ -51,14 +57,15 @@ export function tabBar(host, { pick, close, add: choose }) {
         bar.querySelectorAll('.code-tab')[keys[event.key]].focus();
       } else if (event.key === 'Delete') {
         event.preventDefault();
-        close(chat);
+        closeFocused(chat);
       }
       if ((event.key === 'Enter' || event.key === ' ') && event.target === node) {
         event.preventDefault();
+        pendingFocus = chat;
         pick(chat);
       }
     });
-    shut.addEventListener('click', () => close(chat));
+    shut.addEventListener('click', () => closeFocused(chat));
     return node;
   }
 
@@ -74,6 +81,13 @@ export function tabBar(host, { pick, close, add: choose }) {
   add.addEventListener('click', choose);
 
   return {
+    restoreFocus(chat) {
+      const active = document.activeElement;
+      if (pendingFocus === chat && (!active || active === document.body || active === document.documentElement)) {
+        nodes.get(chat)?.focus({ preventScroll: true });
+      }
+      pendingFocus = null;
+    },
     show(next) {
       const focused = document.activeElement?.closest('.code-tab');
       const chat = focused && bar.contains(focused) ? focused.dataset.chat : null;

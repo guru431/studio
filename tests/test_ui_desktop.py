@@ -288,7 +288,7 @@ def test_desktop_touch_screen_and_geometry_in_webkit(webkit, live, tmp_path):
             page.goto(live.url + '/#/code')
             page.wait_for_selector('#code-projects li')
             page.locator(f'#code-agents li[data-id="{aid}"] .code-agent-desktop').tap()
-            page.wait_for_function("() => !document.querySelector('#code-desktop-connect').disabled")
+            page.wait_for_function("() => document.querySelector('#code-desktop-connect')?.disabled === false")
             page.locator('#code-desktop-connect').tap()
             page.wait_for_function('() => ' + CONNECTED)
             assert page.evaluate(FITS)

@@ -1570,3 +1570,4 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .cleaner-preview-text { max-height: 50vh; overflow-y: auto; min-width: 0; }
 .cleaner-preview-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .cleaner-copy-text { width: 100%; resize: vertical; }
+.md .code-stream-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }

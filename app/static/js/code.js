@@ -42,8 +42,6 @@
  * спрашивает окно «Изменения не сохранены» «Файлов»; «Уйти без сохранения» — снова туда (hold — его зовёт роутер
  * app.js до смены адреса или раздела). */
 import { api, me } from './api.js';
-import { chatView } from './code-chat.js';
-import { filesView, gitView } from './code-files.js';
 import { projectGit, gitLevel, GIT_ACTIONS } from './code-git.js';
 import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
@@ -91,6 +89,7 @@ const lists = new Map();
 // Только метаданные списков, в памяти этой страницы; ключ включает учётку, компьютер и проект.
 const chatLists = new Map();
 const CHAT_LISTS_MAX = 20;
+document.addEventListener('studio-code-clear', () => { lists.clear(); chatLists.clear(); });
 
 function cacheKey(p) {
   return `${me.id}/${p.key}`;
@@ -125,10 +124,10 @@ function base(aid, pid) {
   return `/api/code/agents/${aid}${pid ? `/projects/${pid}` : ''}`;
 }
 
-function projectsOf(aid, fresh = false) {
+function projectsOf(aid, fresh = false, force = false) {
   const key = String(aid);
   if (fresh || !lists.has(key)) {
-    const promise = api('GET', `${base(aid)}/projects`).then((out) => out.items);
+    const promise = api('GET', `${base(aid)}/projects${force ? '?refresh=true' : ''}`).then((out) => out.items);
     lists.set(key, promise);
     promise.catch(() => {
       if (lists.get(key) === promise) lists.delete(key);
@@ -159,6 +158,7 @@ function panelOpen(open) {
   ui.root.classList.toggle('panel-open', open);
   ui.backdrop.hidden = !open;
   ui.toggle.setAttribute('aria-expanded', String(open));
+  panel?.visible();
 }
 
 function onKey(event) {
@@ -251,21 +251,30 @@ function toChat(p, chat) {
 function chatsOf(p, fresh = false) {
   if (!p.listing || (fresh && !p.listingPending)) {
     p.listingPending = true;
-    const promise = api('GET', `${base(p.aid, p.pid)}/chats`).then((out) => {
+    const promise = api('GET', `${base(p.aid, p.pid)}/chats`, undefined,
+      fresh ? { headers: { 'x-studio-refresh': 'true' } } : {}).then((out) => {
       if (p.listing === promise) {
-        p.items = out.items;
+        p.items = out.complete === false
+          ? [...out.items, ...p.items.filter((old) => !out.items.some((item) => item.chat === old.chat))] : out.items;
         p.loaded = true;
-        p.info = new Map(out.items.map((c) => [c.chat, c]));
+        p.complete = out.complete !== false;
+        p.info = new Map(p.items.map((c) => [c.chat, c]));
         if (proj === p) {
+          const partial = 'Не все сессии удалось обновить. Показаны последние известные сведения.';
+          if (shownStatus?.isConnected) {
+            if (!p.complete) shownStatus.textContent = partial;
+            else if (shownStatus.textContent === partial) shownStatus.textContent = '';
+          }
           const key = cacheKey(p);
           chatLists.delete(key);
           // При возвращении метки активности ждут свежего ответа компьютера.
-          chatLists.set(key, out.items.map((c) => ({ ...c, running: false, asking: false })));
+          chatLists.set(key, p.items.map((c) => ({ ...c, running: false, asking: false })));
           if (chatLists.size > CHAT_LISTS_MAX) chatLists.delete(chatLists.keys().next().value);
           paintTabs();
+          p.gitActions?.controls();
         }
       }
-      return out.items;
+      return p.items;
     });
     p.listing = promise;
     promise.catch(() => {
@@ -315,7 +324,7 @@ function ensurePoll() {
     } catch {
       // закрыт, не на связи — опрос до следующего действия; скажет о нём показанный чат
     }
-  }, IDLE_POLL_SEC * 1000);
+  }, IDLE_POLL_SEC * (p.items.some((row) => row.running || row.asking) ? 1000 : 3000));
 }
 
 function onAct() {
@@ -457,6 +466,7 @@ function remember(aid, pid, key) {
 /** Отказ запроса: closed — поле PIN этого компьютера в панели (с `file` — после PIN к этому файлу), offline — словами
  * из «Текстов», прочее — словами. */
 function failed(err, aid, status, file = null) {
+  if (['closed', 'not_found'].includes(err?.code)) document.dispatchEvent(new Event('studio-code-clear'));
   if (err && err.code === 'closed') {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;
@@ -553,20 +563,42 @@ async function chat(mine, p, id, agent, section, status) {
   p.gitAction = null;
   let name;
   let row;
+  let chatView;
+  const listing = chatsOf(p);
+  const cached = p.info.get(id);
   try {
-    [name, row] = await Promise.all([projectName(p),
-      chatsOf(p).then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null)]);
+    if (cached) await api('GET', `${base(p.aid)}/access`);
+    if (mine !== gen) return;
+    [name, row, { chatView }] = await Promise.all([projectName(p),
+      cached || listing.then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null),
+      import('./code-chat.js')]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
   }
   if (mine !== gen) return;
+  if (!row && p.complete === false) {
+    failed({ message: 'Не удалось проверить движок сессии. Обновите список и повторите открытие.' }, p.aid, status);
+    return;
+  }
   ui.statusBox.replaceChildren();            // у чата своя строка #code-status
   const fresh = freshChat === id;
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude',
     git: p.repo, gitAction,
+    onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
+    verify: cached ? listing.then(() => {
+      const current = p.info.get(id);
+      if (current && (current.engine || 'claude') !== (row?.engine || 'claude')) {
+        if (mine === gen) {
+          view?.unmount(); view = null;
+          section.replaceChildren(); delete section.dataset.loaded;
+          chat(mine, p, id, agent, section, status);
+        }
+        throw new DOMException('Сведения о сессии изменились', 'AbortError');
+      }
+    }) : null,
     taskDone: () => { p.repo.refresh(true); panel.updateSummary(p.aid, p.pid); },
     forked: (data) => {
       p.info.set(data.chat, { chat: data.chat, engine: data.engine, origin: 'studio' });
@@ -583,8 +615,9 @@ async function chat(mine, p, id, agent, section, status) {
 
 async function files(mine, p, path, status) {
   let name, agent;
+  let filesView;
   try {
-    [name, agent] = await Promise.all([projectName(p), agentOf(p.aid)]);
+    [name, agent, { filesView }] = await Promise.all([projectName(p), agentOf(p.aid), import('./code-files.js')]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -601,8 +634,10 @@ async function files(mine, p, path, status) {
 function gitControls(p) {
   const { active } = tabsOf(p.aid, p.pid);
   const busy = p.info.get(active)?.running || p.info.get(active)?.asking;
-  return { enabled: p.canStart && !busy && !p.gitStarting,
+  const known = !active || p.info.has(active);
+  return { enabled: p.canStart && known && !busy && !p.gitStarting,
     message: p.gitStarting ? 'Подготавливаю действие Git…'
+      : !known ? 'Обновите список, чтобы проверить выбранную сессию'
       : busy ? 'Дождитесь завершения задания в выбранном чате' : '' };
 }
 
@@ -691,12 +726,18 @@ async function runGitAction(p, prompt) {
   }
 }
 
-function git(p) {
-  if (p.git) p.git.unmount();
-  p.git = gitView(p.gitBox, { git: p.repo,
-    failed: (err, box) => {
-      if (proj === p) failed(err, p.aid, box);
-    } });
+async function git(p) {
+  try {
+    const { gitView } = await import('./code-files.js');
+    if (proj !== p || shownKey !== 'git') return;
+    if (p.git) p.git.unmount();
+    p.git = gitView(p.gitBox, { git: p.repo,
+      failed: (err, box) => {
+        if (proj === p) failed(err, p.aid, box);
+      } });
+  } catch {
+    if (proj === p) failed({ message: 'Не удалось загрузить Git. Проверьте связь и обновите страницу.' }, p.aid, shownStatus);
+  }
 }
 
 async function project(mine, aid, pid, id, key, path, status) {
@@ -795,6 +836,8 @@ export function mount(node, context) {
   acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
+  const initialAgents = api('GET', '/api/agents');
+  initialAgents.catch(() => {});
   load().catch(() => null).then(() => {
     if (mine !== gen || !host) return;
     const ws = get();
@@ -802,7 +845,7 @@ export function mount(node, context) {
     const pinFor = ctx.query && ctx.query.get('pin');
     const first = [pinFor, pid ? null : aid, ws.panel, aid, ws.place && ws.place.aid].map(Number)
       .find((n) => Number.isInteger(n) && n > 0);
-    panel = panelView(ui.root, { selected: first ?? null, opened,
+    panel = panelView(ui.root, { selected: first ?? null, opened, initialAgents,
       chose: () => panelOpen(false), list: projectsOf, openJournal: (path) => proj?.files?.open(path) });
     ui.root.prepend(ui.root.querySelector('#code-panel'));
     const shown = panel;

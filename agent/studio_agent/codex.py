@@ -7,10 +7,11 @@ import logging
 import os
 import secrets
 import threading
+import time
 import uuid
 from pathlib import Path
 
-from . import codex_rpc, diffs, events, limits, permissions, sessions, store
+from . import codex_rpc, diffs, events, limits, metadata, permissions, sessions, store
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -160,6 +161,10 @@ class CodexRunner(Runner):
         self.default_efforts = {}
         self._meta = None
         self._meta_lock = asyncio.Lock()
+        self._usage_meta = None
+        self._usage_lock = asyncio.Lock()
+        self._histories = metadata.HistoryIndex()
+        self._history_paths = {}
 
     async def takeover(self, project, pid, chat, owner, *, fork=False):
         if self._turn(pid, chat) is not None:
@@ -225,26 +230,26 @@ class CodexRunner(Runner):
         result = {}
         try:
             async with asyncio.timeout(24):
-                async with self._meta_lock:
+                async with self._usage_lock:
                     try:
-                        if self._meta is None:
+                        if self._usage_meta is None:
                             path = await asyncio.to_thread(self.find_codex)
                             if path is None:
                                 return result
-                            self._meta = self.rpc_factory(path, Path(root))
-                            await self._meta.connect()
+                            self._usage_meta = self.rpc_factory(path, Path(root))
+                            await self._usage_meta.connect()
                         for key, method, params in (("account", "account/read", {"refreshToken": False}),
                                 ("limits", "account/rateLimits/read", {}), ("usage", "account/usage/read", {})):
                             try:
-                                value = await self._meta.request(method, params)
+                                value = await self._usage_meta.request(method, params)
                                 if isinstance(value, dict):
                                     result[key] = value
                             except codex_rpc.RpcError:
                                 continue
                     except BaseException:
-                        if self._meta is not None:
-                            await self._meta.disconnect()
-                            self._meta = None
+                        if self._usage_meta is not None:
+                            await self._usage_meta.disconnect()
+                            self._usage_meta = None
                         raise
         except (TimeoutError, OSError, codex_rpc.RpcError):
             pass
@@ -325,6 +330,28 @@ class CodexRunner(Runner):
 
     async def history(self, project, chat, before, limit):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
+        key = (str(project.resolve()), target)
+        path = self._history_paths.get(key)
+        def revision(path):
+            if not isinstance(path, str):
+                return None
+            try:
+                source = Path(path).resolve()
+                root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve()
+                if not source.is_relative_to(root):
+                    return None
+                stat = source.stat()
+                return stat.st_mtime_ns, stat.st_size
+            except OSError:
+                return None
+        previous = await asyncio.to_thread(revision, path)
+        cached = self._histories.get(key, previous)
+        if cached is not None:
+            total = len(cached)
+            end = min(before, total) if before is not None else total
+            page = await asyncio.to_thread(sessions.fit, cached[max(0, end - limit):end], budget=512 * 1024)
+            return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
+        started = time.time_ns()
         try:
             data = await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})
         except codex_rpc.RpcError as e:
@@ -335,9 +362,17 @@ class CodexRunner(Runner):
         if not same_project(thread.get("cwd"), project):
             raise Refused("not_found")
         items = await asyncio.to_thread(normalize, thread.get("turns", []))
+        path = thread.get("path")
+        current = await asyncio.to_thread(revision, path)
+        self._history_paths[key] = path
+        while len(self._history_paths) > 32:
+            self._history_paths.pop(next(iter(self._history_paths)))
+        if previous is None and current and current[0] <= started:
+            previous = current
+        self._histories.put(key, previous, current, items)
         total = len(items)
         end = min(before, total) if before is not None else total
-        page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end])
+        page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end], budget=512 * 1024)
         return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
 
     async def fork_chat(self, project, chat, before=None):
@@ -720,7 +755,13 @@ class CodexRunner(Runner):
 
     async def close(self, final=False, hold=False):
         await super().close(final=final, hold=hold)
+        self._histories.clear()
+        self._history_paths.clear()
         async with self._meta_lock:
             if self._meta is not None:
                 await self._meta.disconnect()
                 self._meta = None
+        async with self._usage_lock:
+            if self._usage_meta is not None:
+                await self._usage_meta.disconnect()
+                self._usage_meta = None

@@ -27,12 +27,15 @@ import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
-import { setCodeActivity } from './code-activity.js';
-import { computerView } from './code-computer.js';
-import { desktopView } from './code-desktop.js';
+import { codeActivity, refreshCodeActivity } from './code-activity.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
+const snapshots = new Map(); // Только метаданные, отдельно по учётке; переживают переход между разделами.
+const SUMMARY_MS = 20000;
+document.addEventListener('studio-code-clear', () => {
+  for (const scope of snapshots.values()) { scope.summaries.clear(); scope.checked.clear(); }
+});
 const UPDATE_WORDS = { preparing: 'Скачивание и установка…', waiting: 'Ждём завершения заданий…',
   restarting: 'Перезапуск агента…', pin: 'Введите PIN для обновления агента',
   failed: 'Не удалось обновить агент. Повторите попытку.' };
@@ -54,7 +57,7 @@ function remoteBadge(remote, name) {
   }[remote.state] || ['?', 'unknown', `Не удалось проверить ${name} или сравнить историю коммитов`];
 }
 
-export function panelView(host, { selected: first = null, opened, chose, list, openJournal }) {
+export function panelView(host, { selected: first = null, opened, chose, list, openJournal, initialAgents = null }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
@@ -79,13 +82,23 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   let infoIntent = null; // Окна открываются только отдельными кнопками сведений и рабочего стола.
   let infoKind = 'info';
-  const computer = computerView(root, { locked(aid) { infoIntent = aid; pin(aid); } });
-  const desktop = desktopView(root, { locked(aid) { infoKind = 'desktop'; infoIntent = aid; pin(aid); } });
-  const selectedViewer = () => infoKind === 'desktop' ? desktop : computer;
+  const viewers = new Map();
+  async function showViewer(agent, kind) {
+    try {
+      if (!viewers.has(kind)) {
+        const module = await (kind === 'desktop' ? import('./code-desktop.js') : import('./code-computer.js'));
+        if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
+        const create = kind === 'desktop' ? module.desktopView : module.computerView;
+        viewers.set(kind, create(root, { locked(aid) { infoKind = kind; infoIntent = aid; pin(aid); } }));
+      }
+      if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
+      infoIntent = null;
+      viewers.get(kind).show(agent);
+    } catch (err) { if (alive) status.textContent = words(err); }
+  }
   function showComputer() {
     if (infoIntent !== selected || mode !== 'projects') return;
-    infoIntent = null;
-    selectedViewer().show(items.find((a) => a.id === selected));
+    showViewer(items.find((a) => a.id === selected), infoKind);
   }
   async function computerClicked(aid, kind = 'info') {
     infoKind = kind;
@@ -93,7 +106,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     await select(aid);
     if (!alive || infoIntent !== aid) return;
     const agent = items.find((a) => a.id === aid);
-    if (agent && !agent.online) { infoIntent = null; selectedViewer().show(agent); }
+    if (agent && !agent.online) showViewer(agent, kind);
     else showComputer();
   }
 
@@ -167,34 +180,17 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (updates.get(aid)?.state === 'pin') updateAgent(items.find((a) => a.id === aid));
   }
   let selected = null;     // id показанного компьютера
-  let activityTimer = null;
-  let activityRequested = false;
-  let lastAction = Date.now();
   const activity = new Map();
-  function scheduleActivity() {
-    clearTimeout(activityTimer);
-    if (!alive || document.visibilityState === 'hidden' || mode !== 'projects'
-      || Date.now() - lastAction > 1800000) return;
-    activityTimer = setTimeout(() => { activityTimer = null; refreshActivity(); }, 20000);
-  }
-  async function refreshActivity() {
+  function refreshActivity() {
     const aid = selected;
-    if (activityRequested || mode !== 'projects' || !items.find((a) => a.id === aid)?.project_activity) return;
-    activityRequested = true;
-    try {
-      const data = await api('GET', `/api/code/agents/${aid}/activity`);
-      setCodeActivity(aid, data.items || []);
-      if (alive && selected === aid && mode === 'projects') {
-        activity.set(aid, new Map((data.items || []).map((item) => [item.chat, item])));
-        paintCounts();
-      }
-    } catch {
-      setCodeActivity(aid, []);
-      if (alive && selected === aid) { activity.delete(aid); paintCounts(); }
-    } finally {
-      activityRequested = false;
-      scheduleActivity();
-    }
+    if (mode !== 'projects' || !items.find((a) => a.id === aid)?.project_activity) return;
+    activity.set(aid, new Map(codeActivity(aid).map((item) => [item.chat, item])));
+    paintCounts();
+    refreshCodeActivity();
+  }
+  function onSnapshot({ detail }) {
+    activity.set(detail.aid, new Map(detail.items.map((item) => [item.chat, item])));
+    paintCounts();
   }
   function onActivity(event) {
     const item = event.detail;
@@ -203,23 +199,36 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     else activity.get(item.aid).delete(item.chat);
     paintCounts();
   }
-  function onAction() { lastAction = Date.now(); if (!activityTimer) scheduleActivity(); }
   function onVisibility() {
-    if (document.visibilityState === 'visible') { lastAction = Date.now(); refreshActivity(); pollUpdates(); }
-    else { clearTimeout(activityTimer); clearTimeout(updateTimer); }
+    if (document.visibilityState === 'visible') pollUpdates();
+    else clearTimeout(updateTimer);
   }
+  document.addEventListener('studio-code-snapshot', onSnapshot);
   document.addEventListener('studio-code-activity', onActivity);
   document.addEventListener('visibilitychange', onVisibility);
-  host.addEventListener('pointerdown', onAction);
-  host.addEventListener('keydown', onAction);
   let mode = 'idle';       // idle | loading | projects | pin | offline | error
   let shown = null;        // { aid, pid } — проект справа
   let pending = 0;         // select/pin ждут списка: выбор при входе их не перебивает
   let opening = null;      // идущий POST …/open: { aid, done } — done: открылся ли (ready ждёт его)
   let projectItems = [];
   let refreshing = null;
-  const summaries = new Map(); // Только память страницы, отдельно для каждого компьютера.
-  const checked = new Map();
+  if (!snapshots.has(me.id)) snapshots.set(me.id, { summaries: new Map(), checked: new Map() });
+  const { summaries, checked } = snapshots.get(me.id);
+  while (snapshots.size > 4) snapshots.delete(snapshots.keys().next().value);
+  const requests = new Set();
+  let summaryFrame = null;
+  const observer = new IntersectionObserver(() => visible(), { root: body });
+
+  function visible() {
+    if (summaryFrame || !alive || mode !== 'projects' || refresh.disabled) return;
+    summaryFrame = requestAnimationFrame(() => {
+      summaryFrame = null;
+      if (refresh.disabled || !alive || mode !== 'projects') return;
+      const agent = items.find((a) => a.id === selected);
+      if (agent) refreshSummaries(gen, agent);
+    });
+  }
+  body.addEventListener('scroll', visible, { passive: true });
 
   function dateText(stamp, compact = false) {
     if (!Number.isFinite(stamp)) return compact ? '—' : 'нет данных';
@@ -258,7 +267,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
     const gh = data?.github;
     const github = gh ? remoteBadge(gh, 'GitHub') : null;
-    const githubTitle = github ? `${github[2]}. Проверено: ${dateText(data.checked_at)}${data.stale ? '. Не удалось обновить' : ''}` : '';
+    const githubAt = data && 'github_checked_at' in data ? data.github_checked_at : data?.checked_at;
+    const githubTitle = github ? data.github_pending ? 'Проверяю GitHub…'
+      : `${github[2]}. Проверено: ${dateText(githubAt)}${data.stale ? '. Не удалось обновить' : ''}` : '';
     const remotes = (data?.remotes || []).filter((remote) => remote.name !== 'origin' && remote.name !== 'upstream'
       && !(remote.name === 'github' && gh))
       .map((remote) => {
@@ -272,7 +283,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
     ...(github ? [el('a', { class: 'code-project-github', href: `${href}?tab=git`,
-      'data-git-level': data.stale ? 'unknown' : github[1], title: githubTitle, 'aria-label': githubTitle }, `GitHub ${github[0]}`)] : []),
+      'data-git-level': data.stale ? 'unknown' : github[1], title: githubTitle, 'aria-label': githubTitle }, `GitHub ${data.github_pending ? '…' : github[0]}`)] : []),
     ...remotes,
     el('span', { 'aria-hidden': 'true' }, ' · '),
     el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
@@ -307,25 +318,50 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     listBox.append(...rows);
   }
 
-  async function refreshSummaries(mine, agent) {
+  async function refreshSummaries(mine, agent, force = false) {
+    if (refreshing) return;
     paintUpdated();
-    if (!agent.project_summary) return;
-    const own = {};
+    if (!agent.project_summary || mode !== 'projects' || selected !== agent.id) return;
+    const results = summaries.get(agent.id) || new Map();
+    summaries.set(agent.id, results);
+    const bounds = body.getBoundingClientRect();
+    const panelBounds = root.getBoundingClientRect();
+    const onScreen = panelBounds.right > 0 && panelBounds.left < innerWidth;
+    const queue = projectItems.filter((project) => {
+      if (!force && !onScreen) return false;
+      const cached = results.get(project.pid);
+      if (!force && cached && performance.now() - cached.readAt < SUMMARY_MS) return false;
+      if (force || sort.value !== 'name') return true;
+      const row = body.querySelector(`li[data-pid="${project.pid}"]`)?.getBoundingClientRect();
+      return row && row.bottom >= bounds.top && row.top <= bounds.bottom;
+    }).sort((a, b) => Number(b.pid === shown?.pid) - Number(a.pid === shown?.pid));
+    if (!queue.length) return;
+    const own = new AbortController();
+    requests.add(own);
     refreshing = own;
     refreshBusy(true);
-    const queue = [...projectItems];
-    const results = new Map(summaries.get(agent.id));
+    const remoteJobs = [];
     let failures = 0;
     let blocked = false;
+    function publish(project, data) {
+      if (!alive || mine !== gen || own.signal.aborted) return;
+      results.set(project.pid, { ...data, readAt: performance.now() });
+      const row = body.querySelector(`li[data-pid="${project.pid}"]`);
+      if (row) paintSummary(row, data);
+    }
     async function worker() {
       while (alive && mine === gen && queue.length && !blocked) {
         const project = queue.shift();
         try {
-          const data = await api('GET', `/api/code/agents/${agent.id}/projects/${project.pid}/summary`);
-          results.set(project.pid, data);
+          const url = `/api/code/agents/${agent.id}/projects/${project.pid}/summary`;
+          const data = await api('GET', url + (force ? '?refresh=true' : ''), undefined, { signal: own.signal });
+          publish(project, data);
+          if (data.github_pending) remoteJobs.push(api('GET', `${url}?remote=true`, undefined, { signal: own.signal })
+            .then((remote) => publish(project, remote)).catch(() => {}));
         } catch (err) {
+          if (own.signal.aborted || !alive || mine !== gen) return;
           failures += 1;
-          results.set(project.pid, { ...results.get(project.pid), stale: true });
+          publish(project, { ...results.get(project.pid), stale: true });
           if (['closed', 'offline'].includes(err.code)) {
             blocked = true;
             if (alive && mine === gen) {
@@ -339,16 +375,18 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     try {
       await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
       if (!alive || mine !== gen) return;
-      summaries.set(agent.id, results);
       if (!failures) checked.set(agent.id, Date.now() / 1000);
       else status.textContent = `Не удалось обновить сведения: ${failures}. Повторите обновление.`;
       for (const li of body.querySelectorAll('#code-projects li[data-pid]')) paintSummary(li, results.get(li.dataset.pid));
       sortProjects();
       paintUpdated();
     } finally {
+      Promise.allSettled(remoteJobs).then(() => requests.delete(own));
       if (refreshing === own) {
         refreshing = null;
         if (alive && mine === gen) refreshBusy(false);
+        // Прокрутка во время предыдущей пачки могла открыть ещё строки.
+        if (alive && mine === gen) visible();
       }
     }
   }
@@ -356,6 +394,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   sort.addEventListener('change', () => {
     sortText.textContent = sort.selectedOptions[0].textContent;
     sortProjects();
+    visible();
     try { localStorage.setItem(sortKey, sort.value); } catch { /* Выбор действует в открытой панели. */ }
   });
   refresh.addEventListener('click', async () => {
@@ -364,14 +403,19 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const agent = items.find((a) => a.id === selected);
     refreshBusy(true);
     status.textContent = '';
-    try { await projects(mine, agent, null, true); }
+    try { await projects(mine, agent, null, true, true); }
     finally { if (alive && mine === gen && !refreshing) refreshBusy(false); }
   });
 
   /** Список компьютеров; не прочитался — null (прежний список остаётся, «компьютеров нет» не сказать). */
   async function readAgents() {
     try {
-      items = (await api('GET', '/api/agents')).items;
+      const initial = initialAgents;
+      initialAgents = null;
+      items = (await (initial || api('GET', '/api/agents'))).items;
+      if ([...summaries.keys()].some((aid) => !items.some((agent) => agent.id === aid))) {
+        document.dispatchEvent(new Event('studio-code-clear'));
+      }
     } catch (err) {
       if (alive) status.textContent = words(err);
       return null;
@@ -491,6 +535,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function offline() {
+    summaries.delete(selected);
+    checked.delete(selected);
     mode = 'offline';
     body.replaceChildren(el('p', { id: 'code-offline', class: 'muted code-offline' }, OFFLINE));
   }
@@ -536,9 +582,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     projects(mine, agent, found);
   }
 
-  async function projects(mine, agent, found = null, keep = false) {
+  async function projects(mine, agent, found = null, keep = false, force = false) {
     try {
-      if (found === null) found = await list(agent.id, true);
+      if (found === null) found = await list(agent.id, true, force);
     } catch (err) {
       if (err.code === 'closed' && alive && mine === gen) {
         await openIt(mine, agent);
@@ -580,16 +626,20 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       return li;
     });
     body.replaceChildren(el('ul', { id: 'code-projects', class: 'code-projects' }, ...rows));
+    observer.disconnect();
+    for (const row of rows) observer.observe(row);
     paintCounts();
     paintHere();
     footer.hidden = false;
     showComputer();
     sortProjects();
     refreshActivity();
-    await refreshSummaries(mine, agent);
+    await refreshSummaries(mine, agent, force);
   }
 
   function showPin(mine, agent) {
+    summaries.delete(agent.id);
+    checked.delete(agent.id);
     mode = 'pin';
     footer.hidden = true;
     // не <form> и не password: исчезнув после удачного запроса, они дали бы менеджеру паролей сохранить PIN
@@ -704,14 +754,15 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   return {
+    visible,
     async updateSummary(aid, pid) {
       const agent = items.find((a) => a.id === Number(aid));
       if (!agent?.project_summary || selected !== Number(aid)) return;
       const mine = gen;
       try {
-        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary`);
+        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary?refresh=true`);
         if (!alive || mine !== gen) return;
-        summaries.get(selected)?.set(pid, data);
+        summaries.get(selected)?.set(pid, { ...data, readAt: performance.now() });
         const row = body.querySelector(`li[data-pid="${pid}"]`);
         if (row) paintSummary(row, data);
         sortProjects();
@@ -728,16 +779,16 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     agents: () => loaded,
     unmount() {
       alive = false;
-      clearTimeout(activityTimer);
+      observer.disconnect();
+      cancelAnimationFrame(summaryFrame);
+      for (const controller of requests) controller.abort();
       clearTimeout(updateTimer);
+      document.removeEventListener('studio-code-snapshot', onSnapshot);
       document.removeEventListener('studio-code-activity', onActivity);
       document.removeEventListener('visibilitychange', onVisibility);
-      host.removeEventListener('pointerdown', onAction);
-      host.removeEventListener('keydown', onAction);
       gen += 1;
       unsubscribe();
-      computer.unmount();
-      desktop.unmount();
+      for (const viewer of viewers.values()) viewer.unmount();
       root.remove();
     },
   };

@@ -185,6 +185,7 @@ function say(text, kind) {
 /** Пока заперто или под шторкой — <html class="shrouded">: содержимое скрыто (app.css) и в миг между
  * закрытием окна силой и его открытием снова. */
 function shroud() {
+  if (blocking()) document.dispatchEvent(new Event('studio-code-clear'));
   document.documentElement.classList.toggle('shrouded', covering || blocking());
 }
 

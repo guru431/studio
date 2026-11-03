@@ -57,8 +57,7 @@ async function copy(pre, button) {
   setTimeout(() => { button.textContent = 'Копировать'; }, COPIED_MS);
 }
 
-export function renderMarkdown(text, { html = false } = {}) {
-  const out = markdownParser(html).parse(String(text ?? ''));
+function fragmentOf(out, { html = false, highlight = true } = {}) {
   const fragment = window.DOMPurify.sanitize(out, { RETURN_DOM_FRAGMENT: true, ALLOWED_TAGS: TAGS,
     ALLOWED_ATTR: html ? [...ATTRS, 'colspan', 'rowspan'] : ATTRS, ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
   for (const node of fragment.querySelectorAll('[class]')) {
@@ -66,7 +65,8 @@ export function renderMarkdown(text, { html = false } = {}) {
   }
   for (const code of fragment.querySelectorAll('pre code')) {
     const lang = /^language-([\w+#-]+)$/.exec(code.className);
-    if (!lang || window.hljs.getLanguage(lang[1])) window.hljs.highlightElement(code);
+    if (highlight && code.textContent.length <= (lang ? 10000 : 2000)
+        && (!lang || window.hljs.getLanguage(lang[1]))) window.hljs.highlightElement(code);
     else code.classList.add('hljs');                  // язык не из сборки — без подсветки
   }
   for (const pre of fragment.querySelectorAll('pre')) {
@@ -82,4 +82,72 @@ export function renderMarkdown(text, { html = false } = {}) {
     link.rel = 'noopener noreferrer';
   }
   return fragment;
+}
+
+export function renderMarkdown(text, options = {}) {
+  return fragmentOf(markdownParser(!!options.html).parse(String(text ?? '')), options);
+}
+
+const renderQueue = [];
+const renderVersions = new WeakMap();
+let renderFrame = null;
+
+function drain() {
+  renderFrame = null;
+  const deadline = performance.now() + 8;
+  while (renderQueue.length && performance.now() < deadline) {
+    const job = renderQueue.shift();
+    if (!job.valid() || renderVersions.get(job.host) !== job) { job.done(false); continue; }
+    try {
+      if (job.nodes) {
+        const fragment = document.createDocumentFragment();
+        const end = Math.min(job.index + 4, job.nodes.length);
+        while (job.index < end) fragment.append(job.build(job.nodes[job.index++]));
+        job.update(() => job.host.append(fragment));
+        if (job.index < job.nodes.length) renderQueue.push(job);
+        else job.done(true);
+        continue;
+      }
+      job.tokens ||= markdownParser(false).lexer(job.text);
+      const part = [];
+      let size = 0;
+      while (job.index < job.tokens.length && part.length < 8 && size < 1500) {
+        const token = job.tokens[job.index++];
+        part.push(token);
+        size += (token.raw || token.text || '').length;
+      }
+      part.links = job.tokens.links;
+      const fragment = fragmentOf(markdownParser(false).parser(part));
+      job.update(() => job.host.append(fragment));
+      if (job.index < job.tokens.length) renderQueue.push(job);
+      else job.done(true);
+    } catch {
+      // Даже при отказе парсера текст остаётся текстом, никогда не HTML.
+      job.host.textContent = job.text;
+      job.done(false);
+    }
+  }
+  if (renderQueue.length) renderFrame = requestAnimationFrame(drain);
+}
+
+/** Общий бюджет для всех сообщений: несколько историй не создают отдельные тяжёлые RAF. */
+export function renderMarkdownInto(host, text, { valid = () => true, update = (change) => change() } = {}) {
+  host.replaceChildren();
+  return new Promise((done) => {
+    const job = { host, text: String(text ?? ''), valid, update, done, tokens: null, index: 0 };
+    renderVersions.set(host, job);
+    renderQueue.push(job);
+    if (renderFrame === null) renderFrame = requestAnimationFrame(drain);
+  });
+}
+
+/** Построение больших списков шагов использует тот же бюджет кадра, что Markdown. */
+export function renderNodesInto(host, nodes, build, { valid = () => true, update = (change) => change() } = {}) {
+  host.replaceChildren();
+  return new Promise((done) => {
+    const job = { host, nodes, build, valid, update, done, index: 0, text: '' };
+    renderVersions.set(host, job);
+    renderQueue.push(job);
+    if (renderFrame === null) renderFrame = requestAnimationFrame(drain);
+  });
 }

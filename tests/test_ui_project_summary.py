@@ -20,7 +20,7 @@ def test_project_times_use_moscow_across_browser_timezones(browser, live, width,
     _, server = code_online(live, login, machine)
     alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
     unknown = f"#code-projects li[data-pid='{pid('unknown')}']"
-    ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    ready = "document.querySelector('#code-projects li') && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
     dates = f"""(() => {{
       const row = document.querySelector("{alpha}");
       const modified = row.querySelector('.code-project-modified');
@@ -61,7 +61,7 @@ def test_project_sort_restores_after_navigation_reload_and_account_switch(browse
     machine.project_summary = second.project_summary = True
     aid, server = code_online(live, login, machine)
     bid, other_server = code_online(live, other, second)
-    ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    ready = "document.querySelector('#code-projects li') && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
     selection = """[document.querySelector('#code-project-sort').value,
       document.querySelector('.code-project-sort-text').textContent,
       document.querySelector('#code-projects li').dataset.pid]"""
@@ -162,8 +162,9 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
     gate = f"""(() => {{ const real = window.fetch; window.projectReads = 0;
       window.fetch = async (url, options) => {{
-        if (String(url).endsWith('/projects') && window.projectListGate) await window.projectListGate;
-        if (String(url).endsWith('/summary')) {{
+        const path = new URL(String(url), location.href).pathname;
+        if (path.endsWith('/projects') && window.projectListGate) await window.projectListGate;
+        if (path.endsWith('/summary')) {{
           window.projectReads++;
           if (window.projectGate) await window.projectGate;
           if (window.overrideSummary && String(url).includes('/{pid('alpha')}/'))
@@ -181,6 +182,9 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             *go("code"), ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
+            ("click", "#code-project-refresh"),
+            ("wait", "!document.querySelector('#code-project-refresh').disabled && window.projectReads>=39"),
+            ("eval", "initialReadCount", "window.initialProjectReads=window.projectReads"),
             ("eval", "counts", f"document.querySelector(\"{alpha}\").textContent"),
             ("eval", "compactControls", """(() => {
               const select = document.querySelector('#code-project-sort'), sort = select.closest('label').getBoundingClientRect();
@@ -226,7 +230,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
             ("wait", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'true'"),
             ("eval", "loadingList", loading),
             ("eval", "releaseList", "window.projectListGate=null; window.releaseProjectList(); true"),
-            ("wait", "document.querySelector('#code-project-refresh').disabled && window.projectReads > 39"),
+            ("wait", "document.querySelector('#code-project-refresh').disabled && window.projectReads > window.initialProjectReads"),
             ("eval", "loadingSummary", loading),
             ("screenshot", str(tmp_path / f"projects-refresh-{width}.png")),
             ("eval", "previous", f"document.querySelector(\"{alpha} .code-project-findings\").textContent"),
@@ -250,7 +254,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert abs(values["before"][0] - values["after"][0]) < 1
     assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 изм. ↑0" in values["counts"]
     assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
-    assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == 78
+    assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == values["initialReadCount"] + 39
     assert values["twoLines"] and values["compactControls"]
     assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', 'spin', 'Обновляю сведения…']
     assert values["finished"][:4] == [False, 'false', 'false', 'none']
@@ -279,10 +283,11 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     bid, second = code_online(live, login, other, name="Второй ПК")
     gate = f"""(() => {{const real = window.fetch; window.heldSummaries = 0;
       window.fetch = async (url, options) => {{
+        const path = new URL(String(url), location.href).pathname;
         if (String(url).includes('/agents/{aid}/')) {{
-          if ((window.failList && String(url).endsWith('/projects'))
-            || (window.failSummary && String(url).endsWith('/summary'))) throw new Error('test network failure');
-          if (window.holdSummary && String(url).endsWith('/summary')) {{
+          if ((window.failList && path.endsWith('/projects'))
+            || (window.failSummary && path.endsWith('/summary'))) throw new Error('test network failure');
+          if (window.holdSummary && path.endsWith('/summary')) {{
             window.heldSummaries++;
             await new Promise(resolve=>window.releaseSummary=resolve);
             window.heldSummaries--;

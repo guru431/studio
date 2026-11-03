@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, gitinfo, limits, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -30,10 +30,10 @@ OPS = {
     "agent_update": (),
     "agent_update_status": (),
     "usage": ("refresh",),
-    "projects": (),
-    "project_summary": ("project",),
+    "projects": ("refresh",),
+    "project_summary": ("project", "refresh", "remote"),
     "activity": (),
-    "chats": ("project",),
+    "chats": ("project", "refresh"),
     "history": ("project", "chat", "before", "limit"),
     "state": ("project", "chat", "model", "effort", "access"),
     "turn": ("project", "chat", "text", "model", "effort", "access"),
@@ -79,7 +79,7 @@ class Agent:
 
     def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = time.monotonic,
                  cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None,
-                 opencode=None):
+                 opencode=None, wall: Callable[[], float] = time.time):
         self.cfg = cfg
         self.pins = pins
         self.runner = runner
@@ -101,6 +101,10 @@ class Agent:
         self._files_lock = asyncio.Lock()
         self._search_lock = asyncio.Lock()
         self._file_index = discovery.FileIndex()
+        self._catalog = projects.Catalog(now=now)
+        self._metadata = metadata.Cache(now=now)
+        self._wall = wall
+        self._histories = metadata.HistoryIndex()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
 
     def set_max_turns(self, value: int) -> None:
@@ -121,7 +125,7 @@ class Agent:
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                 "computer_info": True, "desktop": True}
+                 "computer_info": True, "desktop": True, "metadata_cache": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -148,9 +152,14 @@ class Agent:
         self.desktop.revoke()
         if not reconnect:
             self.open.clear()
+            self._metadata.invalidate()
+            self._histories.clear()
 
     def emit(self, frame: dict) -> None:
         """Событие хода — в канал, если он есть; иначе пропадает (вернувшись, студия просит `watch`)."""
+        if frame.get("e", {}).get("k") == "done":
+            self._metadata.invalidate(frame.get("project"))
+            self._histories.clear()
         if self.send is not None:
             self.send(frame)
 
@@ -226,7 +235,10 @@ class Agent:
                 raise Refused("invalid")
         if op.startswith("desktop_"):
             return await self._desktop_request(op, frame)
-        return await getattr(self, "_op_" + op)(frame, after)
+        result = await getattr(self, "_op_" + op)(frame, after)
+        if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
+            self._metadata.invalidate(frame.get("project"))
+        return result
 
     async def _desktop_request(self, op, frame):
         fields = {"desktop_status": set(), "desktop_start": set(), "desktop_stop": {"control"},
@@ -273,7 +285,7 @@ class Agent:
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
-        if name == "refresh":
+        if name in ("refresh", "remote"):
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
@@ -346,15 +358,39 @@ class Agent:
         self.open.open(session)
 
     async def _project(self, frame: dict):
-        return await asyncio.to_thread(projects.find_project, self.cfg, frame["project"])
+        return await asyncio.to_thread(self._catalog.find, self.cfg, frame["project"])
 
     # --- op ---
 
     async def _op_projects(self, frame, after):
-        return {"items": await asyncio.to_thread(projects.list_projects, self.cfg)}
+        return {"items": await asyncio.to_thread(self._catalog.list, self.cfg, refresh=bool(frame.get("refresh")))}
 
     async def _op_project_summary(self, frame, after):
-        return await asyncio.to_thread(project_summary.read, await self._project(frame))
+        project = await self._project(frame)
+        pid = frame["project"]
+        data = dict(await self._metadata.get((pid, "summary"),
+            lambda: asyncio.to_thread(project_summary.read, project, local=True, now=self._wall), ttl=20,
+            refresh=bool(frame.get("refresh"))))
+        remote = data.pop("_github", None)
+        if remote:
+            branch, head, repo = remote
+            key = (pid, "github", branch, head, repo)
+
+            async def read_remote():
+                value = await asyncio.to_thread(github_status.read, project, branch, head, repo=repo)
+                return {"value": value, "checked_at": self._wall()}
+
+            if frame.get("remote"):
+                cached = await self._metadata.get(key, read_remote, ttl=300,
+                    refresh=bool(frame.get("refresh")) or key in self._metadata.pending)
+            else:
+                cached = None if frame.get("refresh") else self._metadata.peek(key)
+                if cached is None:
+                    self._metadata.start(key, read_remote, ttl=300)
+            data["github"] = cached["value"] if cached else dict(github_status.UNKNOWN)
+            data["github_pending"] = cached is None
+            data["github_checked_at"] = cached['checked_at'] if cached else None
+        return data
 
     async def _op_file_suggestions(self, frame, after):
         return await self._file_index.read(await self._project(frame), frame["query"])
@@ -443,22 +479,31 @@ class Agent:
 
     async def _op_chats(self, frame, after):
         project = await self._project(frame)
-        items = await asyncio.to_thread(sessions.chats, project, self.runner.live())
-        for name in ("codex", "opencode"):
-            backend = getattr(self, name)
-            if backend is None:
-                continue
+        async def read(name, backend):
+            async def load():
+                async with asyncio.timeout(8):
+                    return (await asyncio.to_thread(sessions.chats, project, {}) if name == "claude"
+                            else await backend.chats(project))
             try:
-                items += await backend.chats(project)
+                rows = await self._metadata.get((frame["project"], "chats", name), load, ttl=20,
+                                                refresh=bool(frame.get("refresh")))
+                live = backend.live()
+                return [{**item, **({"engine": name} if name != "claude" else {}),
+                         "running": item["chat"] in live, "asking": bool(live.get(item["chat"]))} for item in rows], True
             except Exception as e:
-                log.warning("%s: сессии: %s", "Codex" if name == "codex" else "OpenCode", type(e).__name__)
-        return {"items": items}
+                log.warning("%s: сессии: %s", name, type(e).__name__)
+                return [], False
+        backends = [("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode)]
+        parts = await asyncio.gather(*(read(name, backend) for name, backend in backends
+                                      if backend is not None and (name == 'claude' or backend.catalog is not None)))
+        return {"items": [item for rows, _ in parts for item in rows], "complete": all(ok for _, ok in parts)}
 
     async def _op_history(self, frame, after):
         project = await self._project(frame)
         if frame.get("engine", "claude") != "claude":
             return await self._runner(frame).history(project, frame["chat"], frame.get("before"), frame["limit"])
-        return await asyncio.to_thread(sessions.history, project, frame["chat"], frame.get("before"), frame["limit"])
+        return await asyncio.to_thread(sessions.history, project, frame["chat"], frame.get("before"), frame["limit"],
+                                       index=self._histories)
 
     def _runner(self, frame):
         return {"codex": self.codex, "opencode": self.opencode}.get(frame.get("engine"), self.runner)

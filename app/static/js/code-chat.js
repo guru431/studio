@@ -30,7 +30,7 @@
 import { api as request, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { fieldBox } from './field.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
 import { el, words } from './ui.js';
 import { usageView } from './code-usage.js';
@@ -65,6 +65,7 @@ const IMAGE_COUNT = 8;
 const drafts = new Map();
 const imageDrafts = new Map();  // картинки черновика — только память, как текст
 const historyCache = new Map(); // последние 12 историй, только память этой страницы
+document.addEventListener('studio-code-clear', () => historyCache.clear());
 const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
 const WINDOW = crypto.randomUUID().replaceAll('-', '');
@@ -98,13 +99,14 @@ function tailOf(filePath, agent, project) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, git, gitAction = null, taskDone, forked }) {
+  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
   const assistant = ENGINE_NAMES[engine];
   const draftKey = `${aid}/${chat}`;
+  const historyKey = `${me.id}/${aid}/${pid}/${engine}/${chat}`;
   const scroller = document.getElementById('view');
   let alive = true;
   let touched = false;           // выбор модели или усилия меняли в этом чате
@@ -113,6 +115,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let running = false;
   let sending = false;
   let resolving = true;
+  let historyLoading = true;
+  let settingsReady = !agent?.chat_state;
+  let stateError = null;
   let stateRequest = null;
   let adding = false;
   let images = imageDrafts.get(draftKey) || [];
@@ -126,6 +131,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let claimTimer = null;
   let claiming = false;
   let historyEmpty = false;
+  const stepData = new WeakMap();
+  const pendingPaints = new Set();
+  let historyRevision = 0;
+  let interactions = 0;
+  const interacted = () => { interactions += 1; };
+  for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.addEventListener(event, interacted, { passive: true });
   const followups = new Map();
   const sentFollowups = new Set();
   const unsentFollowups = new Set();
@@ -294,6 +305,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     context.update(data);
   }
 
+  function acceptSettings(data) {
+    paintSettings(data);
+    settingsReady = true;
+    if (stateError && status.textContent === stateError) showStatus('');
+    stateError = null;
+    updateControls();
+  }
+
   async function loadState() {
     const own = new AbortController();
     stateRequest = own;
@@ -304,13 +323,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const data = await api('POST', endpoint('/state'), { model: model.value || null, effort: effort.value || null,
         access: access.value || null }, { signal: own.signal });
       if (!alive || own.signal.aborted) return;
-      paintSettings(data.settings || {});
+      acceptSettings(data.settings || {});
       paintContext(data.context);
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       paintSettings({});
+      settingsReady = !agent?.chat_state;
       if (err.code === 'closed') closed();
-      else showStatus(words(err));
+      else { stateError = words(err); showStatus(stateError); }
     } finally {
       resolving = false;
       stateRequest = null;
@@ -440,6 +460,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   async function jumpMessage(direction) {
+    interacted();
     acted = Date.now();
     let target = messageNeighbours()[direction < 0 ? 'before' : 'after'];
     while (!target && direction < 0 && start > 0) {
@@ -482,13 +503,20 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         openFile(tail);
       });
     }
-    const result = el('pre', { class: 'code-step-result' }, typeof s.text === 'string' ? s.text : '');
-    result.hidden = !result.textContent;
-    const changes = !s.error ? changeView(s.changes) : null;
-    return el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
+    const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
       el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')),
-        el('span', { class: 'code-step-head' }, preview(input)), link),
-      el('pre', { class: 'code-step-input', hidden: !!changes }, JSON.stringify(input, null, 2)), changes, result);
+        el('span', { class: 'code-step-head' }, preview(input)), link));
+    stepData.set(details, s);
+    let filled = false;
+    details.addEventListener('toggle', () => {
+      if (!details.open || filled) return;
+      filled = true;
+      const result = el('pre', { class: 'code-step-result' }, typeof s.text === 'string' ? s.text : '');
+      result.hidden = !result.textContent;
+      const changes = !s.error ? changeView(s.changes) : null;
+      details.append(el('pre', { class: 'code-step-input', hidden: !!changes }, JSON.stringify(input, null, 2)), changes || '', result);
+    });
+    return details;
   }
 
   function messageNode(m) {
@@ -503,9 +531,20 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
     }
     const md = el('div', { class: 'md' });
-    if (typeof m.text === 'string' && m.text) md.append(renderMarkdown(m.text));
-    return el('div', { class: 'code-msg assistant' },
-      el('div', { class: 'code-steps' }, ...(Array.isArray(m.steps) ? m.steps : []).map(stepNode)), md);
+    if (typeof m.text === 'string' && m.text) {
+      // История выставляет прокрутку после всей страницы; измерять её после каждого блока дорого.
+      const paint = renderMarkdownInto(md, m.text, { valid: () => alive && feed.contains(md) });
+      pendingPaints.add(paint);
+      paint.then(() => pendingPaints.delete(paint));
+    }
+    const steps = el('div', { class: 'code-steps' });
+    const items = Array.isArray(m.steps) ? m.steps : [];
+    if (items.length > 8) {
+      const paint = renderNodesInto(steps, items, stepNode, { valid: () => alive && feed.contains(steps) });
+      pendingPaints.add(paint);
+      paint.then(() => pendingPaints.delete(paint));
+    } else steps.append(...items.map(stepNode));
+    return el('div', { class: 'code-msg assistant' }, steps, md);
   }
 
   function messages(items) {
@@ -525,10 +564,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return turn;
   }
 
-  function paintText() {
+  function paintText(final = false) {
     clearTimeout(paintTimer);
     paintTimer = null;
-    if (turn) grow(() => turn.md.replaceChildren(renderMarkdown(turn.text)));
+    if (!turn) return;
+    const target = turn.md;
+    if (final) renderMarkdownInto(target, turn.text, { valid: () => alive && feed.contains(target), update: grow });
+    else if (turn.text.length < 2000) grow(() => target.replaceChildren(renderMarkdown(turn.text, { highlight: false })));
+    else grow(() => target.replaceChildren(el('pre', { class: 'code-stream-text' }, turn.text)));
   }
 
   function setRunning(value) {
@@ -539,14 +582,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function updateControls() {
-    send.disabled = sending || adding || resolving || foreign || external || queue.paused() || (running && !agent?.chat_control);
+    send.disabled = sending || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
     deliveryPick.hidden = !running || !agent?.queue_edit || engine === 'opencode';
     delivery.disabled = foreign || sending;
     queue.ownership(foreign || external);
-    for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending;
+    for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending || resolving || historyLoading || !settingsReady;
     paintQuickActions();
-    model.disabled = effort.disabled = access.disabled = resolving || running;
+    model.disabled = effort.disabled = access.disabled = resolving || historyLoading || running;
     const label = running ? (engine === 'opencode' ? 'Отправить после ответа' : 'Отправить уточнение') : 'Отправить';
     send.title = label;
     send.setAttribute('aria-label', label);
@@ -774,7 +817,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /* ---- события хода ------------------------------------------------------------- */
 
   function finish(data) {
-    historyCache.delete(draftKey);
+    historyCache.delete(historyKey);
     for (const item of Array.isArray(data.unsent) ? data.unsent : []) {
       unsentFollowups.add(item.id);
       const queued = queuedInputs.get(draftKey)?.get(item.id);
@@ -794,7 +837,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (data.code === 'writer_active') external = true;
     foreign = false;
     if (!external) waitingForRelease = false;
-    paintText();
+    paintText(true);
     if (turn) {
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
@@ -845,7 +888,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         setRunning(true);
         activeTools.clear();
         const t = current();
-        if (data.settings) paintSettings(data.settings);
+        if (data.settings) acceptSettings(data.settings);
         paintContext(data.context);
         t.text = typeof data.text === 'string' ? data.text : '';
         paintText();
@@ -897,7 +940,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         else paintActivity(data.state, data.tool);
         return false;
       case 'settings':
-        paintSettings(data);
+        acceptSettings(data);
         return false;
       case 'context':
         paintContext(data);
@@ -918,7 +961,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         activeTools.delete(String(data.id));
         for (const step of (turn ? turn.steps : feed).querySelectorAll('details.code-step')) {
           if (step.dataset.id !== String(data.id)) continue;
+          Object.assign(stepData.get(step) || {}, { text: data.text, error: data.error, changes: data.changes });
+          step.classList.toggle('error', !!data.error);
           const result = step.querySelector('.code-step-result');
+          if (!result) continue;
           result.textContent = typeof data.text === 'string' ? data.text : '';
           result.hidden = !result.textContent;
           step.classList.toggle('error', !!data.error);
@@ -1029,13 +1075,26 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   async function loadHistory(thenLive) {
-    const cached = thenLive && historyCache.get(draftKey);
+    const revision = ++historyRevision;
+    const snapshot = thenLive && historyCache.get(historyKey);
+    const cached = snapshot?.page;
     if (cached) {
       feed.replaceChildren(...messages(cached.items));
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      const action = interactions;
+      Promise.all([...pendingPaints]).then(() => {
+        if (alive && revision === historyRevision && action === interactions && historyLoading && scroller) {
+          scroller.scrollTop = scroller.scrollHeight;
+          paintNavigation();
+        }
+      });
     }
     let page;
+    let settings = null;
     try {
+      if (thenLive && verify) await verify;
+      if (!alive) return;
+      if (thenLive && cached?.total > 0) settings = loadState();
       page = await api('GET', endpoint());
     } catch (err) {
       if (!alive) return;
@@ -1044,12 +1103,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       else showStatus(words(err));
       return;
     }
-    if (!alive) return;
-    historyCache.delete(draftKey);
-    historyCache.set(draftKey, page);
-    if (historyCache.size > 12) historyCache.delete(historyCache.keys().next().value);
+    if (!alive || revision !== historyRevision) return;
+    const serial = JSON.stringify(page);
+    historyCache.delete(historyKey);
+    historyCache.set(historyKey, { page, serial, bytes: serial.length * 4 });
+    let cacheBytes = [...historyCache.values()].reduce((total, value) => total + value.bytes, 0);
+    while (historyCache.size > 12 || cacheBytes > 8 * 1024 * 1024) {
+      const key = historyCache.keys().next().value;
+      cacheBytes -= historyCache.get(key).bytes;
+      historyCache.delete(key);
+    }
     if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
-    if (!cached || JSON.stringify(cached) !== JSON.stringify(page)) feed.replaceChildren(...messages(page.items));
+    if (!cached || snapshot.serial !== serial) feed.replaceChildren(...messages(page.items));
     historyEmpty = page.total === 0;
     paintQuickActions();
     followups.clear();
@@ -1059,12 +1124,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     turn = null;
     start = Number.isInteger(page.start) ? page.start : 0;
     more.hidden = start <= 0;
-    if (thenLive) await loadState();
-    if (!alive) return;
+    if (thenLive) {
+      if (settings) await settings;
+      if (!settings || page.total === 0) await loadState();
+    }
+    await Promise.all([...pendingPaints]);
+    if (!alive || revision !== historyRevision) return;
+    historyLoading = false;
+    updateControls();
     host.dataset.loaded = '1';
+    onReady?.();
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    paintNavigation();
+    const initialScroll = scroller?.scrollTop;
     if (thenLive) requestAnimationFrame(() => {
-      if (alive && scroller) scroller.scrollTop = scroller.scrollHeight;
+      if (alive && revision === historyRevision && scroller && !messageTarget
+          && Math.abs(scroller.scrollTop - initialScroll) <= 2) {
+        scroller.scrollTop = scroller.scrollHeight;
+        paintNavigation();
+      }
     });
     if (thenLive && gitAction) {
       const prompt = gitAction;
@@ -1084,9 +1162,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function remember() {
     touched = true;
     paintPicks();
+    if (!settingsReady && !resolving) loadState();
   }
 
   async function submit(quick = null) {
+    if (resolving || historyLoading || !settingsReady) return;
     if (queue.paused()) { showStatus('Сначала завершите редактирование очереди'); return; }
     const value = quick ?? text.value;
     if (quick && (!hasGit || running)) {
@@ -1189,17 +1269,21 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function loadEarlier() {
     if (more.disabled || start <= 0) return false;
     more.disabled = true;
+    const revision = historyRevision;
     paintNavigation();
     try {
       const page = await api('GET', `${endpoint()}${engine !== 'claude' ? '&' : '?'}before=${start}`);
-      if (!alive) return false;
-      const height = scroller ? scroller.scrollHeight : 0;
+      if (!alive || revision !== historyRevision) return false;
+      const anchor = feed.firstElementChild;
+      const top = anchor?.getBoundingClientRect().top;
       feed.prepend(...messages(page.items));
-      if (scroller) scroller.scrollTop += scroller.scrollHeight - height;   // глаза — на прежнем месте
-      if (messageTarget) messageScrollTop = scroller.scrollTop;
+      await Promise.all([...pendingPaints]);
+      if (!alive || revision !== historyRevision) return false;
       const oldStart = start;
       start = Number.isInteger(page.start) ? page.start : 0;
       more.hidden = start <= 0;
+      if (scroller && anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - top;
+      if (messageTarget && scroller) messageScrollTop = scroller.scrollTop;
       return start < oldStart;
     } catch (err) {
       if (err.code === 'closed') closed();
@@ -1289,6 +1373,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       document.removeEventListener('visibilitychange', onVisibility);
       scroller?.removeEventListener('scroll', paintNavigation);
       window.removeEventListener('resize', paintNavigation);
+      for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.removeEventListener(event, interacted);
       feedObserver.disconnect();
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);
