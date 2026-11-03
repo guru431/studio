@@ -18,6 +18,7 @@
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me } from './api.js';
+import { dateTime } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
@@ -46,7 +47,7 @@ function icon(name) {
 }
 
 function when(ts) {
-  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function media(id) {

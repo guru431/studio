@@ -3,6 +3,8 @@
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
 httpx==0.28.1
+# База часовых поясов IANA для проверки настройки профиля, в том числе на Windows.
+tzdata==2026.6
 Pillow==12.1.1
 cryptography==50.0.2
 pypdf==6.21.1

@@ -4,7 +4,7 @@
  * Копия драйвера панели llm_routers (dashboard/tests/cdp_driver.mjs) на 2026-10-19.
  * Зависимостей нет: `fetch` и `WebSocket` встроены в node 22+.
  *
- * Задание: { port, url, width, height, mobile, touch, authenticator, init, timeout, steps, probe, writes }.
+ * Задание: { port, url, width, height, mobile, touch, authenticator, init, timeout, timezone, steps, probe, writes }.
  * `init` — сценарий, который вкладка выполняет до скриптов каждой загруженной страницы (подмена fetch
  * с самого старта, в том числе после перезагрузки).
  * `writes` — пути, куда вкладке можно писать (запрос не GET); остальную запись
@@ -189,6 +189,7 @@ async function run(job) {
       width: job.width || 1280, height: job.height || 900, deviceScaleFactor: 1, mobile: !!job.mobile,
     });
     if (job.touch) await tab.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    if (job.timezone) await tab.send('Emulation.setTimezoneOverride', { timezoneId: job.timezone });
     if (job.authenticator) {
       await tab.send('WebAuthn.enable');
       await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',

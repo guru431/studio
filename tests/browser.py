@@ -54,14 +54,15 @@ class Browser:
 
     def drive(self, url: str, steps=(), *, width: int = 1280, height: int = 900,
               mobile: bool = False, touch: bool = False, authenticator: bool = False, init: str | None = None,
-              timeout: int = 30000) -> dict:
+              timeout: int = 30000, timezone: str | None = None) -> dict:
         """Открыть адрес во вкладке, пройти шаги, вернуть ответ драйвера. touch — касание вместо мыши
         (`pointer: coarse`), authenticator — виртуальный ключ WebAuthn вкладки (Face ID «проходит» сам),
-        init — сценарий до скриптов каждой страницы вкладки. timeout — срок одного шага: 15 с не хватило
+        init — сценарий до скриптов каждой страницы вкладки. timezone — часовой пояс браузера (IANA).
+        timeout — срок одного шага: 15 с не хватило
         входу в длинном прогоне при занятой машине (2026-10-21; под нагрузкой сценарии идут в 3–4 раза
         дольше); отказ шага приносит `where` — где стояла страница."""
         job = {"port": self.port, "url": url, "width": width, "height": height, "mobile": mobile,
-               "touch": touch, "authenticator": authenticator, "init": init,
+               "touch": touch, "authenticator": authenticator, "init": init, "timezone": timezone,
                "timeout": timeout, "steps": [list(step) for step in steps]}
         # весь сценарий — до 180 с: в длинном прогоне отдельный сценарий шёл 76 с (обычно 4 с) — машина
         # на миг тормозит запуск и файлы браузера; шаг ждёт до timeout, сценарий — с запасом на несколько

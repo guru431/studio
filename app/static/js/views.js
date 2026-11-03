@@ -3,6 +3,7 @@
  * /api/me) и одинаков на всех её устройствах. Вид ставится атрибутом data-view ленты, по нему и
  * раскладывает CSS. */
 import { api, me } from './api.js';
+import { timeOnly } from './time.js';
 import { el } from './ui.js';
 
 const VIEWS = [
@@ -82,5 +83,5 @@ export function tableHead(titles) {
 
 /** Время записи «14:05» (день — в заголовке группы ленты). */
 export function timeOf(created) {
-  return new Date(created * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return timeOnly(created);
 }

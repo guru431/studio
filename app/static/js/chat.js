@@ -58,6 +58,7 @@
  * сканов поля ввода и вложений диалога и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки,
  * POST /api/ocr/<id>/attachments, модель — умолчание раздела, без окна внешней модели. */
 import { api, me } from './api.js';
+import { calendarDay } from './time.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
@@ -132,12 +133,8 @@ function elapsed(since) {
 }
 
 function groupOf(updated) {
-  const day = new Date();
-  day.setHours(0, 0, 0, 0);
-  const today = day.getTime();
-  day.setDate(day.getDate() - 1);
-  const t = updated * 1000;
-  return t >= today ? 'Сегодня' : t >= day.getTime() ? 'Вчера' : 'Ранее';
+  const days = calendarDay(Date.now() / 1000).number - calendarDay(updated).number;
+  return days <= 0 ? 'Сегодня' : days === 1 ? 'Вчера' : 'Ранее';
 }
 
 /** Начало text не длиннее max единиц UTF-16 и без половины эмодзи на краю: одиночный старший

@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -53,10 +54,21 @@ class CodeQuickAction(BaseModel):
 
 class MePatch(BaseModel):
     theme: str | None = None
+    timezone: str | None = Field(None, min_length=1, max_length=100)
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
     code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
     code_quick_actions: list[CodeQuickAction] = Field(default_factory=list, max_length=20)
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone(cls, value):
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError("unknown timezone") from None
+        return value
 
     @field_validator("code_defaults")
     @classmethod
@@ -94,13 +106,13 @@ def check_password(password: str) -> None:
 def _me(request: Request) -> dict:
     """Из базы, а не из request.state: после PATCH там прежние значения. Умолчание чата — из раздела."""
     uid = request.state.user.id
-    row = state.DB.execute("SELECT id, login, name, is_admin, theme, views, screen_lock,"
+    row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
                            " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
-            "theme": row["theme"], "views": json.loads(row["views"]),
+            "theme": row["theme"], "timezone": row["timezone"], "views": json.loads(row["views"]),
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
@@ -120,6 +132,10 @@ async def patch_me(body: MePatch, request: Request):
     uid = request.state.user.id
     sent = body.model_fields_set
     changes = {}
+    if "timezone" in sent:
+        if body.timezone is None:
+            raise HTTPException(422, {"code": "timezone", "message": "укажите часовой пояс"})
+        changes["timezone"] = body.timezone
     if "computer_pin_timeout" in sent:
         if body.computer_pin_timeout is None:
             raise HTTPException(422, {"code": "timeout", "message": "укажите таймер PIN компьютера"})

@@ -16,27 +16,25 @@
  * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
  * их список с выбором; dayTitle — и подпись дня этих списков и «Сканов» (год — если не текущий). */
 import { api } from './api.js';
+import { calendarDay, dateOnly } from './time.js';
 import { button, el as make, words } from './ui.js';
 
 const NEAR_PX = 600;             // ближе к низу — подгрузить следующую страницу
 
 export function dayKey(created) {
-  const d = new Date(created * 1000);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const d = calendarDay(created);
+  return `${d.year}-${d.month - 1}-${d.day}`;
 }
 
 export function dayTitle(created) {
-  const d = new Date(created * 1000);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const start = new Date(d);
-  start.setHours(0, 0, 0, 0);
-  const days = Math.round((today - start) / 86400000);
+  const d = calendarDay(created);
+  const today = calendarDay(Date.now() / 1000);
+  const days = today.number - d.number;
   if (days <= 0) return 'Сегодня';
   if (days === 1) return 'Вчера';
   const opts = { day: 'numeric', month: 'long' };
-  if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
-  return d.toLocaleDateString('ru-RU', opts);
+  if (d.year !== today.year) opts.year = 'numeric';
+  return dateOnly(created, opts);
 }
 
 /** Курсор страницы истории после записи last (её created и id): у записей бывает одно время, и по

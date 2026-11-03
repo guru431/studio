@@ -37,6 +37,7 @@
  * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me } from './api.js';
+import { timeOnly } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
@@ -80,7 +81,7 @@ function capital(text) {
 }
 
 function timeOf(ts) {
-  return new Date(ts * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return timeOnly(ts);
 }
 
 function kindLabel(item) {

@@ -11,6 +11,7 @@
  * passportBlock(...) — <details>: строка «Проверено 21.10 17:40 · адрес отвечает · ключ принят», раскрытый —
  * адрес, ключ, профиль, число моделей и возможности моделей раздела с источником. Текст — только textContent. */
 import { api } from './api.js';
+import { dateTime } from './time.js';
 import { el } from './ui.js';
 
 export const NO_ANSWER = 'нет ответа: сервис недоступен или не разрешает запросы из браузера (CORS)';
@@ -153,9 +154,7 @@ export function probe(conn, model, browser) {
 /* ---- блок паспорта ------------------------------------------------------------------- */
 
 function stamp(ts) {
-  const d = new Date(ts * 1000);
-  const two = (n) => String(n).padStart(2, '0');
-  return `${two(d.getDate())}.${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+  return dateTime(ts, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
 }
 
 /** Строки паспорта, которые говорят о разделе; null — у раздела проб нет (речь шлюза). */

@@ -6,6 +6,7 @@
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, me } from './api.js';
+import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
@@ -266,7 +267,7 @@ function count(n) {
 
 function checkText(r) {
   if (!r.backup) return r.problems.join('; ');
-  const at = new Date(r.at * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit',
+  const at = dateTime(r.at, { day: '2-digit', month: '2-digit', hour: '2-digit',
     minute: '2-digit' }).replace(',', '');
   const parts = [];
   if (r.schema_to !== null) parts.push(`схема ${r.schema_from} → ${r.schema_to}`);

@@ -33,6 +33,14 @@ not read Username`. Поэтому с workstation — только `origin`, а 
 
 ## Устройство
 
+Часовой пояс — `users.timezone` (схема 27), по умолчанию `Europe/Moscow` у новых и прежних учёток.
+`GET/PATCH /api/me` читает/сохраняет IANA-пояс с проверкой `zoneinfo` (`tzdata` нужна и на Windows).
+«Настройки → Прочее → Часовой пояс» сохраняет выбор для всех устройств; `app/static/js/time.js`
+форматирует все даты/время интерфейса и считает календарные сутки для «Сегодня»/«Вчера» с учётом
+переходов часов. Метки API/базы остаются секундами Unix, длительности не зависят от пояса.
+Фильтры дней `/api/search` тоже используют пояс учётки, включая сутки на 23/25 часов.
+Проверки — `test_ui_timezone.py`, `test_ui_project_summary.py`, `test_profile_admin.py`, `test_foundation.py`.
+
 С 0.12.0 `hello.desktop: true` объявляет пульт рабочего стола, `app/desktop.py` и
 `code-desktop.js/css`. Разрешение `Config.desktop_enabled` по умолчанию false; только локальный
 Checkbutton окна вызывает `Controller.set_desktop_enabled`, атомарно сохраняет bool и применяет без

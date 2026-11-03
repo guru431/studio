@@ -23,6 +23,7 @@
  * переключаются на месте, в «Прочем» — только голосовой ввод; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
+import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
@@ -196,6 +197,32 @@ function codeDefaultsBlock() {
   return block;
 }
 
+function timezoneBlock(refreshTimes) {
+  const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone,
+    ...(Intl.supportedValuesOf?.('timeZone') || [])].filter(Boolean))].sort();
+  const select = el('select', { class: 'input', id: 'timezone' }, ...zones.map((zone) =>
+    el('option', { value: zone }, zone === DEFAULT_TIMEZONE ? 'Москва (Europe/Moscow)' : zone)));
+  select.value = me.timezone || DEFAULT_TIMEZONE;
+  const note = status('timezone-status');
+  const save = button('Сохранить', { class: 'btn', id: 'timezone-save' }, async () => {
+    save.disabled = select.disabled = true;
+    try {
+      const profile = await api('PATCH', '/api/me', { timezone: select.value });
+      me.timezone = profile.timezone;
+      refreshTimes();
+      document.dispatchEvent(new Event('studio-me'));
+      say(note, 'Часовой пояс сохранён', 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = select.disabled = false;
+    }
+  });
+  return el('section', { class: 'block' }, el('h2', {}, 'Часовой пояс'),
+    el('p', { class: 'muted small' }, 'Для всех дат и времени в Студии на всех ваших устройствах. По умолчанию — Москва.'),
+    field('Часовой пояс', select, select.id), el('div', { class: 'row' }, save, note));
+}
+
 function passwordBlock() {
   const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
   const current = input('pw-current', 'current-password');
@@ -225,7 +252,7 @@ function passwordBlock() {
 }
 
 function day(ts) {
-  return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  return dateOnly(ts, { day: 'numeric', month: 'long' });
 }
 
 const LOCK_SECTIONS = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Разговоры', speech: 'Речь',
@@ -554,7 +581,7 @@ export function filesText(n) {
 }
 
 export function momentText(ts) {
-  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  return dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 }
 
 /** Очередь удаления словами: пуста — kind 'ok'. */
@@ -1313,7 +1340,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       renderDictation();
       const storage = other ? storageBlock(host) : null;
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, dictationHost,
-        ...(other ? [passwordBlock(), lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
+        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
       return;
     }
     const s = sectionOf(shown);

@@ -10,6 +10,7 @@
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
  * Кнопок «Закрыть» / «Открыть снова» нет: закрывают из самого чата. Текст машины — только textContent. */
 import { api, me } from './api.js';
+import { dateTime } from './time.js';
 import { ENGINE_NAMES, engineOrder } from './code-options.js';
 import { el } from './ui.js';
 import { worktreeView } from './code-worktrees.js';
@@ -17,7 +18,7 @@ import { worktreeView } from './code-worktrees.js';
 const UNTITLED = 'Новый чат';
 
 function when(ts) {
-  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 export function sessionList(host, { aid, pid, items, refresh = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
