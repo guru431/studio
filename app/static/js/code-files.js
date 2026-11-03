@@ -27,6 +27,7 @@
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
+import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
@@ -60,7 +61,7 @@ function join(dir, name) {
 }
 
 function fileDate(value) {
-  return typeof value === 'number' && Number.isFinite(value) ? new Date(value * 1000).toLocaleString('ru-RU',
+  return typeof value === 'number' && Number.isFinite(value) ? dateTime(value,
     { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 }
 

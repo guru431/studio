@@ -65,9 +65,30 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
-    assert set(me) == {"id", "login", "name", "is_admin", "theme", "views", "default_connection_id", "default_model",
+    assert me["timezone"] == "Europe/Moscow"
+    assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout"}
+
+
+def test_timezone_is_persisted_per_account_without_changing_other_preferences(studio):
+    make_user(studio, "owner"); signin(studio, "owner")
+    response = studio.c.patch('/api/me', json={'timezone': 'America/New_York', 'theme': 'dark'})
+    assert response.status_code == 200 and response.json()['timezone'] == 'America/New_York'
+    assert studio.c.patch('/api/me', json={'views': {'photo': 'table'}}).json()['timezone'] == 'America/New_York'
+    make_user(studio, 'friend'); signin(studio, 'friend')
+    assert studio.c.get('/api/me').json()['timezone'] == 'Europe/Moscow'
+    signin(studio, 'owner')
+    profile = studio.c.get('/api/me').json()
+    assert (profile['timezone'], profile['theme'], profile['views']) == ('America/New_York', 'dark', {'photo': 'table'})
+
+
+@pytest.mark.parametrize('value', [None, '', 'Mars/Olympus', '../Europe/Moscow', 3, 'x' * 101])
+def test_invalid_timezone_leaves_the_profile_unchanged(studio, value):
+    make_user(studio, 'owner'); signin(studio, 'owner')
+    assert studio.c.patch('/api/me', json={'timezone': value, 'theme': 'dark'}).status_code == 422
+    profile = studio.c.get('/api/me').json()
+    assert (profile['timezone'], profile['theme']) == ('Europe/Moscow', 'auto')
 
 
 def test_code_defaults_are_separate_per_user_engine_and_partial_patch(studio):

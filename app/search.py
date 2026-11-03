@@ -5,7 +5,7 @@
 - `POST /api/search` — телом, а не строкой запроса (её пишет журнал Apache): `{q?, section?, model?,
   since?, until?, before?, limit?}`. Слова — буквы и цифры Unicode (прочее — разделитель, синтаксис
   FTS5 не проходит), до WORDS_MAX, каждое — начало слова, все вместе; «ё» = «е». Ни слов, ни фильтров —
-  400. Дни — по часам хоста, «по» включительно, годы YEARS (иначе 422 словами). Документ чата и текст
+  400. Дни — по часовому поясу учётки, «по» включительно, годы YEARS (иначе 422 словами). Документ чата и текст
   расшифровки — первые db.INDEX_CHARS знаков.
 - Новые сверху (created, затем item по убыванию, у одной записи — позже проиндексированная); диалог —
   один раз, последним по времени совпадением (сообщение, документ или название; при одном времени —
@@ -21,6 +21,7 @@ import re
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -128,12 +129,14 @@ async def find(body: SearchIn, request: Request):
         if value:
             where.append(f"d.{column} = ?")
             args.append(value)
+    if body.since or body.until:
+        zone = ZoneInfo(state.DB.execute('SELECT timezone FROM users WHERE id = ?', (uid,)).fetchone()[0])
     if body.since:
         where.append("d.created >= ?")
-        args.append(_day(body.since).timestamp())
+        args.append(_day(body.since).replace(tzinfo=zone).timestamp())
     if body.until:
         where.append("d.created < ?")
-        args.append((_day(body.until) + timedelta(days=1)).timestamp())
+        args.append((_day(body.until).replace(tzinfo=zone) + timedelta(days=1)).timestamp())
     match = " AND ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
     if terms:
         # CROSS JOIN держит FTS5 внешним циклом и при курсоре, и при фильтрах: иначе планировщик идёт от

@@ -20,6 +20,7 @@
  * push, уведомляет сервер — локальный опрос не дублирует его. Нажатие ведёт sw.js: адрес записи попадает
  * в URL окна до возврата фокуса; запасной postMessage({ jobs: href }) проверяет HREF. */
 import { api } from './api.js';
+import { timeOnly } from './time.js';
 import { el } from './ui.js';
 
 export const JOBS_POLL_MS = 5000;
@@ -106,7 +107,7 @@ function icon(section) {
 function detailText(item) {
   const when = item.finished === null
     ? [item.detail, item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
-    : [item.detail, new Date(item.finished * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })];
+    : [item.detail, timeOnly(item.finished)];
   return when.filter(Boolean).join(' · ');
 }
 
@@ -321,6 +322,7 @@ export function setupJobs({ navigate }) {
     if (document.visibilityState === 'visible') poll();
     else schedule();
   });
+  document.addEventListener('studio-me', paint);
   // нажатие на уведомление при открытом окне студии: sw.js шлёт адрес записи
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {

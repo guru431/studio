@@ -1,10 +1,11 @@
 /* Подписка выбранного помощника на выбранном компьютере. Только чтение, кэш в памяти моста. */
 import { api } from './api.js';
+import { dateTime } from './time.js';
 import { el, words } from './ui.js';
 import { ENGINE_NAMES } from './code-options.js';
 
 const number = (n) => Number.isFinite(n) ? n.toLocaleString('ru-RU') : '—';
-const date = (n) => Number.isFinite(n) ? new Date(n * 1000).toLocaleString('ru-RU') : 'Не сообщается';
+const date = (n) => Number.isFinite(n) ? dateTime(n) : 'Не сообщается';
 
 export function usageView(host, { aid, engine, supported }) {
   let alive = true;

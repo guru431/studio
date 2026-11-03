@@ -1,10 +1,11 @@
 /* Сведения компьютера живут только в открытом окне; PIN проверяет обычный маршрут моста. */
 import { api } from './api.js';
+import { dateTime } from './time.js';
 import { el, words } from './ui.js';
 
 const bytes = (value) => Number.isFinite(value)
   ? `${(value / 1073741824).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГиБ` : 'Нет данных';
-const date = (value) => Number.isFinite(value) ? new Date(value * 1000).toLocaleString('ru-RU') : 'Нет данных';
+const date = (value) => Number.isFinite(value) ? dateTime(value) : 'Нет данных';
 
 export function computerView(host, { locked }) {
   let agent = null;

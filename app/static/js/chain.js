@@ -7,6 +7,7 @@
  * цепочки, карточек и сравнения: сила — только у Lustify (у старых строк FLUX она записана, но FLUX
  * её не получал), seed — не у внешнего сервиса (модель не из перечня шлюза). */
 import { el } from './ui.js';
+import { dateOnly } from './time.js';
 
 const KINDS = { generation: 'Генерация', upload: 'Фото с устройства', edit: 'Правка', brush: 'Правка кистью',
   video: 'Ролик' };
@@ -37,7 +38,7 @@ export function paramParts(step) {
 }
 
 function meta(step, n) {
-  const date = step.created ? new Date(step.created * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
+  const date = step.created ? dateOnly(step.created, { day: 'numeric', month: 'short' }) : '';
   const parts = step.kind === 'video'
     ? [`${step.seconds} с`, RESOLUTION[step.quality] || step.quality]
     : paramParts(step);

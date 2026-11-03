@@ -25,6 +25,7 @@
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
 import { api, hooks, me } from './api.js';
+import { dateTime } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
 import { el, openDialog, words } from './ui.js';
@@ -58,7 +59,7 @@ function clock(sec) {
 }
 
 function when(ts) {
-  return new Date(ts * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 /** Текст расшифровки — как выгрузка .txt. */

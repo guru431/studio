@@ -3,7 +3,10 @@
 import logging
 import pathlib
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+import pytest
 
 import auth
 import chat
@@ -348,9 +351,9 @@ def test_another_users_history_is_never_found(studio):
 
 
 def test_filters_narrow_and_alone_make_a_list(studio):
-    """Раздел, модель, дни (по часам хоста, «по» — включительно); без слов — тоже список, сниппета нет."""
+    """Раздел, модель, дни (по поясу учётки, «по» — включительно); без слов — тоже список, сниппета нет."""
     uid = make_user(studio, "owner"); signin(studio, "owner")
-    day = datetime(2027, 1, 11).timestamp()
+    day = datetime(2027, 1, 11, tzinfo=ZoneInfo('Europe/Moscow')).timestamp()
     for n, at in enumerate((day - 3600, day + 12 * 3600, day + 86400 - 1, day + 86400 + 60)):
         state.DB.execute(IMAGE, (f"i{n}", uid, "flux" if n == 2 else "lustify", f"Кошка {n}", at))
     state.DB.execute(VIDEO, ("v", uid, "Кошка бежит", day + 3600))
@@ -362,6 +365,20 @@ def test_filters_narrow_and_alone_make_a_list(studio):
     assert [(i["id"], i["snippet"], i["title"]) for i in listed] == [("v", "", "Кошка бежит")]
     assert hits(search(studio, since="2027-01-12")) == [("photo", "i3")]
     assert hits(search(studio, model="flux")) == [("photo", "i2")]
+
+
+@pytest.mark.parametrize('zone,day,start,end', [
+    ('Europe/Moscow', '2026-01-01', '2025-12-31T21:00:00', '2026-01-01T21:00:00'),
+    ('America/New_York', '2026-03-08', '2026-03-08T05:00:00', '2026-03-09T04:00:00'),
+    ('America/New_York', '2026-11-01', '2026-11-01T04:00:00', '2026-11-02T05:00:00'),
+])
+def test_date_filters_use_the_account_timezone_and_calendar_day_length(studio, zone, day, start, end):
+    uid = make_user(studio, 'owner'); signin(studio, 'owner')
+    assert studio.c.patch('/api/me', json={'timezone': zone}).status_code == 200
+    first, last = [datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp() for value in (start, end)]
+    for n, at in enumerate((first - 1, first, last - 1, last)):
+        state.DB.execute(IMAGE, (f'i{n}', uid, 'lustify', 'На границе дня', at))
+    assert hits(search(studio, since=day, until=day)) == [('photo', 'i2'), ('photo', 'i1')]
 
 
 def test_pages_follow_the_cursor_without_losing_rows_of_the_same_time(studio):

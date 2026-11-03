@@ -22,6 +22,7 @@
  *   к журналу по уже открытому адресу, через обычную защиту несохранённых правок «Файлов».
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api, me } from './api.js';
+import { dateTime } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
@@ -222,7 +223,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   function dateText(stamp, compact = false) {
     if (!Number.isFinite(stamp)) return compact ? '—' : 'нет данных';
-    return new Date(stamp * 1000).toLocaleString('ru-RU', compact
+    return dateTime(stamp, compact
       ? { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' } : undefined);
   }
 

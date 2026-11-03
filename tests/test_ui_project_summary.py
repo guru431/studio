@@ -8,6 +8,48 @@ from test_ui_browser import READY, browser, code_online, code_requests, go, live
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
+@pytest.mark.parametrize("width,timezone", [(320, "UTC"), (1280, "America/New_York")])
+def test_project_times_use_moscow_across_browser_timezones(browser, live, width, timezone):
+    login = f"project-timezone-{width}"
+    live.add_user(login)
+    stamp = 1_767_216_645  # 2025-12-31 21:30:45 UTC — уже 1 января в Москве.
+    machine = FakeMachine({"alpha": {"summary": {"modified": stamp, "checked_at": stamp,
+        "git": "ok", "github": {"state": "current", "behind": 0, "ahead": 0}}},
+        "unknown": {"summary": {"git": "ok"}}})
+    machine.project_summary = True
+    _, server = code_online(live, login, machine)
+    alpha = f"#code-projects li[data-pid='{pid('alpha')}']"
+    unknown = f"#code-projects li[data-pid='{pid('unknown')}']"
+    ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    dates = f"""(() => {{
+      const row = document.querySelector("{alpha}");
+      const modified = row.querySelector('.code-project-modified');
+      return [modified.textContent, modified.title,
+        row.querySelector('.code-project-summary').title,
+        row.querySelector('.code-project-github').title,
+        document.querySelector('#code-project-updated').textContent,
+        document.querySelector("{unknown} .code-project-modified").textContent];
+    }})()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            ("eval", "timezone", "Intl.DateTimeFormat().resolvedOptions().timeZone"),
+            ("eval", "clock", f"Date.now = () => {stamp * 1000}; true"),
+            *go("code"), ("wait", ready), ("eval", "initial", dates),
+            ("click", "#code-project-refresh"), ("wait", ready), ("eval", "refreshed", dates)],
+            width=width, mobile=width == 320, timezone=timezone)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["timezone"] == timezone
+    expected = ["01.01.26, 00:30", "Изменён: 01.01.2026, 00:30:45",
+        "Проверено: 01.01.2026, 00:30:45",
+        "GitHub синхронизирован с текущей веткой. Проверено: 01.01.2026, 00:30:45",
+        "Обновлено: 01.01.2026, 00:30:45", "—"]
+    assert result["values"]["initial"] == expected
+    assert result["values"]["refreshed"] == expected
+    assert not problems(result), problems(result)
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_project_sort_restores_after_navigation_reload_and_account_switch(browser, live, width):
     login, other = f"project-sort-{width}", f"project-sort-other-{width}"

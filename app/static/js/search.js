@@ -13,6 +13,7 @@
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
  * ready | error (по нему ждут тесты). */
 import { api } from './api.js';
+import { timeOnly } from './time.js';
 import { dayKey, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { HREF, ICONS } from './jobs.js';
@@ -48,7 +49,7 @@ function marked(text) {
 }
 
 function when(created) {
-  return new Date(created * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return timeOnly(created);
 }
 
 function row(item, go) {
