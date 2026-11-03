@@ -13,16 +13,47 @@ export function desktopView(host, { locked }) {
   let session = null;
   let enabled = false;
   let disposed = false;
+  let mode = 'touch';
+  let gesture = null;
+  let pan = null;
+  let pointer = { x: .5, y: .5 };
   const title = el('h2', { id: 'code-desktop-title' });
   const status = el('p', { class: 'code-desktop-status muted', role: 'status' });
   const connect = button('connect', 'Подключиться');
   const refresh = button('refresh', 'Проверить доступ');
-  const disconnect = button('disconnect', 'Отключиться');
-  const close = button('close', 'Закрыть');
+  const disconnect = button('disconnect', '⏻');
+  disconnect.setAttribute('aria-label', 'Отключиться');
+  disconnect.title = 'Отключиться';
+  const close = button('close', '×');
+  close.setAttribute('aria-label', 'Закрыть');
+  close.title = 'Закрыть';
   const monitor = el('select', { id: 'code-desktop-monitor', 'aria-label': 'Монитор' });
+  const resolution = el('select', { id: 'code-desktop-resolution', 'aria-label': 'Разрешение изображения',
+    title: 'Максимальная длинная сторона кадра. Разрешение монитора не меняется.' });
+  const touchMode = button('touch', 'Touch');
+  const mouseMode = button('mouse', 'Мышь');
+  const modes = el('div', { class: 'code-desktop-modes', role: 'group', 'aria-label': 'Режим управления' },
+    touchMode, mouseMode);
+  const hint = el('p', { class: 'muted small code-desktop-hint', id: 'code-desktop-hint' });
   const screen = el('canvas', { id: 'code-desktop-screen', width: 1, height: 1, tabindex: '0',
-    'aria-label': 'Удалённый экран. Нажмите для управления мышью и клавиатурой.' });
-  const stage = el('div', { class: 'code-desktop-stage', hidden: true }, screen);
+    'aria-label': 'Удалённый экран', 'aria-describedby': hint.id });
+  const cursor = el('span', { class: 'code-desktop-cursor', 'aria-hidden': 'true', hidden: true });
+  const stage = el('div', { class: 'code-desktop-stage', hidden: true }, screen, cursor);
+  const left = button('left-click', 'ЛКМ');
+  left.title = 'Левая кнопка мыши';
+  const right = button('right-click', 'ПКМ');
+  right.title = 'Правая кнопка мыши';
+  const drag = button('drag', 'Тянуть');
+  drag.title = 'Удерживать левую кнопку для перетаскивания';
+  drag.setAttribute('aria-pressed', 'false');
+  const scrollUp = button('scroll-up', '↥');
+  scrollUp.setAttribute('aria-label', 'Прокрутить вверх');
+  const scrollDown = button('scroll-down', '↧');
+  scrollDown.setAttribute('aria-label', 'Прокрутить вниз');
+  const mouseTools = el('div', { class: 'code-desktop-mouse-tools', hidden: true },
+    left, right, drag, scrollUp, scrollDown);
+  // Сохраняем фокус экрана; pointerdown не отменяем — WebKit потеряет click от касания.
+  mouseTools.addEventListener('mousedown', (event) => event.preventDefault());
   const text = el('textarea', { id: 'code-desktop-text', rows: 2, maxlength: 4096,
     autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Текст для ввода на компьютере',
     placeholder: 'Текст, включая русский' });
@@ -35,19 +66,20 @@ export function desktopView(host, { locked }) {
   const keys = el('div', { class: 'code-desktop-keys', 'aria-label': 'Клавиши и сочетания' });
   const modifierButtons = new Map();
   const tools = el('div', { class: 'code-desktop-tools', hidden: true },
-    el('p', { class: 'muted small' }, 'Касание — клик, движение с нажатой кнопкой — перетаскивание. '
-      + 'Для клавиатуры нажмите на экран. Сочетания можно набрать кнопками ниже.'), keys,
+    hint, keys,
     el('div', { class: 'code-desktop-entry' }, text, sendText),
     el('div', { class: 'code-desktop-clipboard' }, el('label', { for: clipboard.id }, 'Буфер обмена'),
       clipboard, el('div', { class: 'code-desktop-actions' }, clipboardSend, clipboardGet)),
     el('p', { class: 'muted small' }, 'Обмен буфером выполняется только этими кнопками. '
       + 'Полученный текст можно выделить и скопировать.'));
+  const body = el('div', { class: 'code-desktop-body' }, stage, tools);
   const dialog = el('dialog', { id: 'code-desktop-dialog', class: 'dialog code-desktop-dialog',
     'aria-labelledby': title.id },
-    el('div', { class: 'code-desktop-heading' }, title, close), status,
-    el('div', { class: 'code-desktop-actions' }, connect, refresh, disconnect,
-      el('label', { class: 'code-desktop-monitor-label' }, 'Монитор ', monitor)),
-    el('div', { class: 'code-desktop-body' }, stage, tools));
+    el('div', { class: 'code-desktop-heading' }, title, disconnect, close), status,
+    el('div', { class: 'code-desktop-actions' }, connect, refresh,
+      el('label', { class: 'code-desktop-monitor-label' }, 'Монитор', monitor),
+      el('label', { class: 'code-desktop-resolution-label' }, 'Качество', resolution), modes),
+    body, mouseTools);
   host.append(dialog);
 
   const background = () => document.hidden || document.documentElement.classList.contains('shrouded');
@@ -64,15 +96,22 @@ export function desktopView(host, { locked }) {
   function buttons() {
     const active = !!session;
     connect.disabled = active || !enabled || !!request || background();
+    connect.hidden = active;
     refresh.disabled = active || !!request || !agent?.online || !agent?.desktop;
+    refresh.hidden = active;
     disconnect.hidden = !active;
     monitor.disabled = !active;
     monitor.closest('label').hidden = !active;
+    resolution.disabled = !active || resolution.options.length <= 1;
+    resolution.closest('label').hidden = !active;
     tools.hidden = !active;
-    for (const control of tools.querySelectorAll('button, textarea')) control.disabled = !active;
+    for (const control of [...tools.querySelectorAll('button, textarea'), ...mouseTools.querySelectorAll('button')])
+      control.disabled = !active;
+    mouseTools.hidden = !active || mode !== 'mouse';
   }
 
   function clearScreen() {
+    pan = null;
     screen.width = 1;
     screen.height = 1;
     stage.hidden = true;
@@ -120,6 +159,10 @@ export function desktopView(host, { locked }) {
   }
 
   function releases(value) {
+    const previous = gesture;
+    gesture = null;
+    if (previous && screen.hasPointerCapture(previous.id)) screen.releasePointerCapture(previous.id);
+    drag.setAttribute('aria-pressed', 'false');
     const events = [...value.keys].map((code) => ({ type: 'key', code, down: false }));
     events.push(...[...value.buttons].map((name) => ({ type: 'button', button: name, down: false })));
     value.keys.clear();
@@ -164,24 +207,26 @@ export function desktopView(host, { locked }) {
   async function frame(value) {
     if (!current(value)) return;
     const selected = Number(monitor.value);
+    const edge = Number(resolution.value);
     try {
       const data = await api('POST', path(value.agent, '/frame'),
-        { control: value.control, monitor: selected }, { signal: value.abort.signal });
+        { control: value.control, monitor: selected, max_edge: edge }, { signal: value.abort.signal });
       if (!current(value)) return;
       if (!data || !Number.isInteger(data.width) || !Number.isInteger(data.height)
         || data.width < 1 || data.height < 1 || data.width > 8192 || data.height > 8192
         || typeof data.image !== 'string' || data.image.length > 960000
         || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.image)) throw new Error('Не удалось получить изображение экрана');
-      if (selected === Number(monitor.value) && data.monitor === selected) {
+      if (selected === Number(monitor.value) && edge === Number(resolution.value) && data.monitor === selected) {
         const image = new Image();
         image.src = `data:image/jpeg;base64,${data.image}`;
         await image.decode();
-        if (!current(value) || selected !== Number(monitor.value)) return;
+        if (!current(value) || selected !== Number(monitor.value) || edge !== Number(resolution.value)) return;
         if (image.naturalWidth !== data.width || image.naturalHeight !== data.height)
           throw new Error('Размер изображения экрана не совпадает');
         screen.width = data.width;
         screen.height = data.height;
         screen.getContext('2d').drawImage(image, 0, 0);
+        stage.style.aspectRatio = `${data.width} / ${data.height}`;
         stage.hidden = false;
       }
     } catch (err) {
@@ -211,6 +256,8 @@ export function desktopView(host, { locked }) {
       const data = await api('GET', path(target), undefined, { signal });
       if (mine !== generation || !dialog.open || signal.aborted) return;
       enabled = data.enabled === true;
+      resolution.replaceChildren(...data.resolutions.map((edge) => el('option', { value: edge }, `${edge} px`)));
+      resolution.value = String(data.resolutions.includes(1600) ? 1600 : data.resolutions[0]);
       say(!enabled ? LOCAL : data.active ? 'Рабочий стол уже занят другим подключением.'
         : 'Доступ разрешён на компьютере. Нажмите «Подключиться», чтобы открыть экран.');
       if (data.active) enabled = false;
@@ -247,7 +294,9 @@ export function desktopView(host, { locked }) {
       monitor.value = String(data.monitor);
       session = { control: data.control, agent: target, generation: mine, abort: new AbortController(),
         queue: [], keys: new Set(), buttons: new Set(), sending: false, frameTimer: null, inputTimer: null };
-      say('Соединение открыто. При закрытии окна или уходе с экрана управление отключится.');
+      setPointer({ x: .5, y: .5 });
+      if (mode === 'mouse') enqueue(pointerEvent());
+      say('Подключено · уход с экрана завершит сеанс.');
       void frame(session);
     } catch (err) {
       if (mine === generation && dialog.open) failed(err, target);
@@ -268,36 +317,106 @@ export function desktopView(host, { locked }) {
   }
 
   const mouseButton = (event) => ['left', 'middle', 'right'][event.button];
+  function setPointer(pos) {
+    pointer = { x: Math.max(0, Math.min(1, pos.x)), y: Math.max(0, Math.min(1, pos.y)) };
+    cursor.style.left = `${pointer.x * 100}%`;
+    cursor.style.top = `${pointer.y * 100}%`;
+  }
+  const pointerEvent = () => ({ type: 'move', monitor: Number(monitor.value), ...pointer });
+  function changeMode(value) {
+    releaseHeld();
+    mode = value;
+    touchMode.setAttribute('aria-pressed', String(mode === 'touch'));
+    mouseMode.setAttribute('aria-pressed', String(mode === 'mouse'));
+    cursor.hidden = mode !== 'mouse';
+    mouseTools.hidden = !session || mode !== 'mouse';
+    stage.dataset.mode = mode;
+    hint.textContent = mode === 'touch'
+      ? 'Касание — клик в этой точке, движение — перетаскивание. ПКМ — правый клик. Два пальца прокручивают пульт.'
+      : 'Экран как тачпад: двигайте палец, касайтесь для клика. «Тянуть» удерживает ЛКМ; ↥ ↧ прокручивают компьютер. Два пальца прокручивают пульт.';
+    if (current(session) && mode === 'mouse') enqueue(pointerEvent());
+  }
+  touchMode.addEventListener('click', () => changeMode('touch'));
+  mouseMode.addEventListener('click', () => changeMode('mouse'));
   screen.addEventListener('pointerdown', (event) => {
     const pos = position(event);
     const name = mouseButton(event);
-    if (!current(session) || !pos || !name) return;
+    if (!current(session) || !pos || !name || gesture || pan || !event.isPrimary) return;
     event.preventDefault();
     screen.focus({ preventScroll: true });
     screen.setPointerCapture(event.pointerId);
-    session.buttons.add(name);
-    enqueue(pos, { type: 'button', button: name, down: true });
+    const trackpad = event.pointerType === 'touch' && mode === 'mouse';
+    gesture = { id: event.pointerId, trackpad, name, x: event.clientX, y: event.clientY,
+      startX: event.clientX, startY: event.clientY, moved: false,
+      pending: event.pointerType === 'touch' && !trackpad };
+    if (!trackpad) {
+      setPointer(pos);
+      enqueue(pos);
+      // Второй палец может начать прокрутку пульта; до движения/отпускания не кликаем.
+      if (!gesture.pending) {
+        session.buttons.add(name);
+        enqueue({ type: 'button', button: name, down: true });
+      }
+    }
   });
   screen.addEventListener('pointermove', (event) => {
-    if (!current(session)) return;
+    if (!current(session) || pan) return;
+    if (gesture?.trackpad && gesture.id === event.pointerId) {
+      event.preventDefault();
+      const bounds = screen.getBoundingClientRect();
+      if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6) gesture.moved = true;
+      setPointer({ x: pointer.x + (event.clientX - gesture.x) / bounds.width,
+        y: pointer.y + (event.clientY - gesture.y) / bounds.height });
+      gesture.x = event.clientX;
+      gesture.y = event.clientY;
+      enqueue(pointerEvent());
+      return;
+    }
+    if (event.pointerType === 'touch' && (!gesture || gesture.id !== event.pointerId)) return;
+    if (gesture?.pending && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6) {
+      gesture.pending = false;
+      session.buttons.add(gesture.name);
+      enqueue({ type: 'button', button: gesture.name, down: true });
+    }
     const pos = position(event);
-    if (pos) { event.preventDefault(); enqueue(pos); }
+    if (pos) { event.preventDefault(); setPointer(pos); enqueue(pos); }
   });
   screen.addEventListener('pointerup', (event) => {
-    const name = mouseButton(event);
-    if (!current(session) || !session.buttons.has(name)) return;
+    if (!current(session) || gesture?.id !== event.pointerId) return;
     event.preventDefault();
-    const pos = position(event);
-    session.buttons.delete(name);
-    enqueue(...(pos ? [pos] : []), { type: 'button', button: name, down: false });
+    const previous = gesture;
+    gesture = null;
+    if (previous.trackpad) {
+      if (!previous.moved && !session.buttons.has('left')) clickPointer('left');
+    } else {
+      const pos = position(event);
+      if (pos) setPointer(pos);
+      if (previous.pending) clickPointer(previous.name);
+      else {
+        session.buttons.delete(previous.name);
+        enqueue(...(pos ? [pos] : []), { type: 'button', button: previous.name, down: false });
+      }
+    }
     if (screen.hasPointerCapture(event.pointerId)) screen.releasePointerCapture(event.pointerId);
   });
   screen.addEventListener('pointercancel', releaseHeld);
-  screen.addEventListener('lostpointercapture', () => {
-    if (!current(session) || !session.buttons.size) return;
-    const events = [...session.buttons].map((name) => ({ type: 'button', button: name, down: false }));
-    session.buttons.clear();
-    enqueue(...events);
+  screen.addEventListener('touchstart', (event) => {
+    if (!current(session) || event.touches.length < 2) return;
+    releaseHeld();
+    pan = { y: (event.touches[0].clientY + event.touches[1].clientY) / 2 };
+  }, { passive: true });
+  screen.addEventListener('touchmove', (event) => {
+    if (!current(session) || !pan || event.touches.length < 2) return;
+    event.preventDefault();
+    const y = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+    body.scrollTop += pan.y - y;
+    pan.y = y;
+  }, { passive: false });
+  for (const type of ['touchend', 'touchcancel']) screen.addEventListener(type, (event) => {
+    if (!event.touches.length) pan = null;
+  });
+  screen.addEventListener('lostpointercapture', (event) => {
+    if (gesture?.id === event.pointerId) releaseHeld();
   });
   screen.addEventListener('contextmenu', (event) => { if (current(session)) event.preventDefault(); });
   screen.addEventListener('wheel', (event) => {
@@ -307,7 +426,9 @@ export function desktopView(host, { locked }) {
     const bounded = (value) => Math.max(-1200, Math.min(1200, Math.round(value * factor)));
     enqueue({ type: 'wheel', dx: bounded(event.deltaX), dy: bounded(event.deltaY) });
   }, { passive: false });
-  screen.addEventListener('blur', releaseHeld);
+  screen.addEventListener('blur', (event) => {
+    if (!mouseTools.contains(event.relatedTarget)) releaseHeld();
+  });
 
   function key(code, down) {
     if (!current(session) || !/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(code)) return;
@@ -335,11 +456,32 @@ export function desktopView(host, { locked }) {
     control.addEventListener('click', () => { key(code, true); key(code, false); releaseHeld(); });
     keys.append(control);
   }
-  const right = button('right-click', 'Правая кнопка');
-  right.addEventListener('click', () => enqueue({ type: 'button', button: 'right', down: true },
-    { type: 'button', button: 'right', down: false }));
-  keys.append(right);
-  monitor.addEventListener('change', () => { releaseHeld(); clearScreen(); });
+  function clickPointer(name) {
+    if (current(session) && session.buttons.size) releaseHeld();
+    enqueue(pointerEvent(), { type: 'button', button: name, down: true },
+      { type: 'button', button: name, down: false });
+  }
+  left.addEventListener('click', () => clickPointer('left'));
+  right.addEventListener('click', () => clickPointer('right'));
+  const touchRight = button('touch-right-click', 'ПКМ');
+  touchRight.title = 'Правая кнопка мыши';
+  touchRight.addEventListener('click', () => clickPointer('right'));
+  keys.append(touchRight);
+  drag.addEventListener('click', () => {
+    if (!current(session)) return;
+    const down = !session.buttons.has('left');
+    if (down) session.buttons.add('left');
+    else session.buttons.delete('left');
+    drag.setAttribute('aria-pressed', String(down));
+    enqueue(pointerEvent(), { type: 'button', button: 'left', down });
+  });
+  for (const [control, dy] of [[scrollUp, -120], [scrollDown, 120]])
+    control.addEventListener('click', () => enqueue({ type: 'wheel', dx: 0, dy }));
+  monitor.addEventListener('change', () => {
+    releaseHeld(); clearScreen(); setPointer({ x: .5, y: .5 });
+    if (mode === 'mouse') enqueue(pointerEvent());
+  });
+  resolution.addEventListener('change', releaseHeld);
   sendText.addEventListener('click', () => {
     if (!current(session) || !text.value) return;
     releaseHeld();
@@ -384,6 +526,7 @@ export function desktopView(host, { locked }) {
   document.addEventListener('visibilitychange', hidden);
   window.addEventListener('pagehide', leave);
   window.addEventListener('blur', releaseHeld);
+  changeMode(mode);
   buttons();
   return {
     show(value) {

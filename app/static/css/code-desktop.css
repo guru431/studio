@@ -1,32 +1,72 @@
-/* Рабочий стол остаётся внутри видимой области, включая телефон 320 px. */
+/* Экран на всю доступную ширину; инструменты прокручиваются вместе с ним. */
 .code-desktop-dialog[open] {
   display: flex;
   flex-direction: column;
-  gap: .6rem;
-  width: calc(100vw - 16px);
-  max-width: 1400px;
-  height: calc(100dvh - 16px);
-  max-height: 980px;
+  gap: .35rem;
+  width: 100vw;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
   box-sizing: border-box;
-  margin: auto;
-  padding: 1rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
   overflow: hidden;
 }
 .code-desktop-dialog * { box-sizing: border-box; }
-.code-desktop-heading { display: flex; gap: .5rem; align-items: flex-start; }
-.code-desktop-heading h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; margin: 0; }
+.code-desktop-heading, .code-desktop-status, .code-desktop-dialog > .code-desktop-actions {
+  margin: 0;
+  padding-inline: max(.4rem, env(safe-area-inset-left)) max(.4rem, env(safe-area-inset-right));
+}
+.code-desktop-heading {
+  display: flex;
+  gap: .4rem;
+  align-items: center;
+  padding-top: max(.25rem, env(safe-area-inset-top));
+}
+.code-desktop-dialog .code-desktop-heading h2 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  font-size: 1rem;
+}
 .code-desktop-heading > button { flex: 0 0 auto; }
-.code-desktop-status { margin: 0; overflow-wrap: anywhere; }
-.code-desktop-actions, .code-desktop-keys { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
-.code-desktop-monitor-label { display: flex; gap: .35rem; align-items: center; min-width: 0; max-width: 100%; }
+.code-desktop-status { font-size: .75rem; overflow-wrap: anywhere; }
+.code-desktop-actions, .code-desktop-keys, .code-desktop-mouse-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem;
+}
+.code-desktop-monitor-label, .code-desktop-resolution-label {
+  display: flex;
+  gap: .25rem;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  font-size: .75rem;
+}
+.code-desktop-monitor-label { flex: 1 1 180px; }
 .code-desktop-monitor-label select { min-width: 0; max-width: 100%; flex: 1; }
+.code-desktop-resolution-label { flex: 0 1 auto; }
+.code-desktop-dialog select {
+  min-height: 32px;
+  padding: 3px 4px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.code-desktop-modes { display: flex; gap: .2rem; margin-left: auto; }
 .code-desktop-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
 .code-desktop-stage {
-  height: clamp(160px, 48dvh, 600px);
+  position: relative;
   width: 100%;
+  aspect-ratio: 16 / 9;
   background: #111;
-  border: 1px solid var(--border, #777);
-  border-radius: .4rem;
   overflow: hidden;
 }
 .code-desktop-dialog [hidden] { display: none !important; }
@@ -39,18 +79,51 @@
   cursor: crosshair;
   outline-offset: -3px;
 }
-.code-desktop-tools { display: grid; gap: .7rem; padding-top: .6rem; }
+.code-desktop-stage[data-mode="mouse"] #code-desktop-screen { cursor: default; }
+.code-desktop-cursor {
+  position: absolute;
+  width: 13px;
+  height: 18px;
+  filter: drop-shadow(1px 0 0 #111) drop-shadow(-1px 0 0 #111) drop-shadow(0 1px 0 #111);
+  pointer-events: none;
+}
+.code-desktop-cursor::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: white;
+  clip-path: polygon(0 0, 0 100%, 30% 75%, 50% 100%, 70% 90%, 50% 65%, 100% 65%);
+}
+.code-desktop-tools {
+  display: grid;
+  gap: .45rem;
+  padding: .4rem max(.4rem, env(safe-area-inset-right)) max(.4rem, env(safe-area-inset-bottom)) max(.4rem, env(safe-area-inset-left));
+}
 .code-desktop-tools p { margin: 0; }
-.code-desktop-keys .btn[aria-pressed="true"] { background: var(--accent, #a74f28); color: white; }
-.code-desktop-entry { display: flex; align-items: stretch; gap: .4rem; }
+.code-desktop-dialog .btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px 7px;
+  font-size: .8rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.code-desktop-dialog .btn[aria-pressed="true"]:not(.btn-accent):not(.solid) {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+#code-desktop-close { font-size: 1.3rem; padding: 0; }
+.code-desktop-dialog > .code-desktop-mouse-tools {
+  flex: 0 0 auto;
+  padding: .25rem max(.4rem, env(safe-area-inset-right)) max(.25rem, env(safe-area-inset-bottom)) max(.4rem, env(safe-area-inset-left));
+  border-top: 1px solid var(--border);
+}
+.code-desktop-entry { display: flex; align-items: stretch; gap: .25rem; }
 .code-desktop-entry textarea { flex: 1; min-width: 0; }
-.code-desktop-clipboard { display: grid; gap: .4rem; }
-.code-desktop-tools textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 3.4rem; font-size: 16px; }
-.code-desktop-dialog button { white-space: normal; overflow-wrap: anywhere; }
+.code-desktop-clipboard { display: grid; gap: .25rem; }
+.code-desktop-tools textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 2.5rem; font-size: 16px; }
 @media (max-width: 480px) {
-  .code-desktop-dialog[open] { padding: .65rem; gap: .45rem; }
-  .code-desktop-heading h2 { font-size: 1.12rem; }
-  .code-desktop-entry { flex-direction: column; }
-  .code-desktop-stage { height: 34dvh; min-height: 160px; }
-  .code-desktop-monitor-label { width: 100%; }
+  .code-desktop-monitor-label { flex-basis: calc(100% - 100px); }
+  .code-desktop-resolution-label { flex: 1 1 auto; }
 }

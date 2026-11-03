@@ -245,7 +245,10 @@ class Agent:
                   "desktop_frame": {"control", "monitor"}, "desktop_input": {"control", "events"},
                   "desktop_clipboard": {"control", "text"}}[op]
         common = {"t", "id", "op", "session", "idle_sec"}
-        if set(frame) - common != fields:
+        supplied = set(frame) - common
+        if op == "desktop_frame":
+            supplied.discard("max_edge")
+        if supplied != fields:
             raise Refused("invalid")
         control = frame.get("control")
         if "control" in fields and not (isinstance(control, str) and desktop.CONTROL.fullmatch(control)):
@@ -261,7 +264,7 @@ class Agent:
             monitor = frame["monitor"]
             if type(monitor) is not int or not 0 <= monitor < 32:
                 raise Refused("invalid")
-            return await self.desktop.frame(session, control, monitor)
+            return await self.desktop.frame(session, control, monitor, frame.get("max_edge", 1600))
         if op == "desktop_input":
             return await self.desktop.input(session, control, frame["events"])
         return await self.desktop.clipboard(session, control, frame["text"])

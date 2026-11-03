@@ -19,6 +19,7 @@ OP_SEC = 5
 CLIPBOARD_MAX = 65536
 TEXT_MAX = 4096
 EVENTS_MAX = 32
+RESOLUTIONS = (640, 800, 1024, 1280, 1600, 1920, 2560)
 
 
 def validate_events(events) -> list[dict]:
@@ -123,7 +124,8 @@ class Desktop:
     def status(self) -> dict:
         with self._guard:
             self.expire()
-            return {"enabled": self._enabled, "active": self._control is not None}
+            return {"enabled": self._enabled, "active": self._control is not None,
+                    "resolutions": list(RESOLUTIONS)}
 
     def _check(self, session, control, generation):
         self.expire()
@@ -208,8 +210,10 @@ class Desktop:
             await asyncio.sleep(1)
             self.expire()
 
-    async def frame(self, session, control, monitor):
-        return await self._run(session, control, lambda native, _: native.frame(monitor))
+    async def frame(self, session, control, monitor, max_edge=1600):
+        if type(max_edge) is not int or not 640 <= max_edge <= 2560:
+            raise Refused("invalid")
+        return await self._run(session, control, lambda native, _: native.frame(monitor, max_edge=max_edge))
 
     async def input(self, session, control, events):
         validate_events(events)

@@ -178,7 +178,8 @@ def test_text_budget_covers_entire_packet_and_counts_utf16_units():
     assert caught.value.code == "too_large" and api.sent == []
 
 
-def test_frame_is_rgb_jpeg_and_bounded_without_saving_files():
+@pytest.mark.parametrize('edge', [640, 1600, 2560])
+def test_frame_is_rgb_jpeg_and_bounded_without_saving_files(edge):
     api = FakeWindows()
     calls = []
 
@@ -186,14 +187,15 @@ def test_frame_is_rgb_jpeg_and_bounded_without_saving_files():
         calls.append(kwargs)
         return Image.new("RGBA", (1920, 1080), (0, 100, 200, 255))
 
-    result = desktop.NativeDesktop(_api=api, _grab=grab).frame(0)
+    result = desktop.NativeDesktop(_api=api, _grab=grab).frame(0, max_edge=edge)
     assert calls == [{"bbox": (0, 0, 1920, 1080), "all_screens": True,
                       "include_layered_windows": True}]
     assert result["screen_width"] == 1920 and result["screen_height"] == 1080
-    assert result["width"] == 1600 and result["height"] == 900 and result["monitor"] == 0
+    expected = (min(edge, 1920), min(edge, 1920) * 9 // 16)
+    assert (result["width"], result["height"]) == expected and result["monitor"] == 0
     assert len(result["image"]) <= desktop.MAX_IMAGE_BYTES
     with Image.open(io.BytesIO(base64.b64decode(result["image"], validate=True))) as image:
-        assert image.format == "JPEG" and image.mode == "RGB" and image.size == (1600, 900)
+        assert image.format == "JPEG" and image.mode == "RGB" and image.size == expected
     assert api.checks == 2
 
 

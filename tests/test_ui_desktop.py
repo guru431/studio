@@ -26,12 +26,15 @@ def desktop(enabled=True):
     machine = FakeMachine({'alpha': {}})
     machine.desktop = True
     state = {'enabled': enabled, 'control': None, 'clipboard': 'Буфер компьютера', 'starts': 0}
-    output = io.BytesIO()
-    Image.new('RGB', (160, 90), '#61718a').save(output, format='JPEG')
-    image = base64.b64encode(output.getvalue()).decode()
+    images = {}
+    for ident, size in [(0, (160, 90)), (1, (90, 160))]:
+        output = io.BytesIO()
+        Image.new('RGB', size, '#61718a').save(output, format='JPEG')
+        images[ident] = base64.b64encode(output.getvalue()).decode()
 
     def status(req, events):
-        return {'enabled': state['enabled'], 'active': state['control'] is not None}
+        return {'enabled': state['enabled'], 'active': state['control'] is not None,
+                'resolutions': [640, 800, 1024, 1280, 1600, 1920, 2560]}
 
     def start(req, events):
         if not state['enabled']:
@@ -39,7 +42,8 @@ def desktop(enabled=True):
         state['starts'] += 1
         state['control'] = f"{state['starts']:032x}"
         return {'control': state['control'], 'monitors': [
-            {'id': 0, 'width': 1920, 'height': 1080, 'primary': True}], 'monitor': 0}
+            {'id': 0, 'width': 1920, 'height': 1080, 'primary': True},
+            {'id': 1, 'width': 1080, 'height': 1920, 'primary': False}], 'monitor': 0}
 
     def check(req):
         if not state['enabled']:
@@ -49,8 +53,10 @@ def desktop(enabled=True):
 
     def frame(req, events):
         check(req)
-        return {'image': image, 'width': 160, 'height': 90, 'screen_width': 1920,
-                'screen_height': 1080, 'monitor': 0}
+        portrait = req['monitor'] == 1
+        return {'image': images[req['monitor']], 'width': 90 if portrait else 160,
+                'height': 160 if portrait else 90, 'screen_width': 1080 if portrait else 1920,
+                'screen_height': 1920 if portrait else 1080, 'monitor': req['monitor']}
 
     def input_(req, events):
         check(req)
@@ -129,7 +135,7 @@ def test_desktop_explicit_connect_mouse_keys_unicode_clipboard_and_clear(browser
               screen.dispatchEvent(new WheelEvent('wheel', {deltaY:120, bubbles:true, cancelable:true}));
               return document.activeElement === screen;
             })()"""),
-            ('click', '#code-desktop-right-click'),
+            ('click', '#code-desktop-touch-right-click'),
             ('type', '#code-desktop-text', 'Привет, удалённый компьютер'), ('click', '#code-desktop-send-text'),
             ('click', '#code-desktop-clipboard-get'),
             ('wait', "document.querySelector('#code-desktop-clipboard').value === 'Буфер компьютера'"),
@@ -273,15 +279,16 @@ def test_desktop_late_frame_cannot_repaint_a_new_connection(browser, live):
     assert not problems(result), problems(result)
 
 
-def test_desktop_touch_screen_and_geometry_in_webkit(webkit, live, tmp_path):
-    login = 'desktop-webkit'
+@pytest.mark.parametrize('width,height', [(320, 740), (852, 393)])
+def test_desktop_touch_screen_and_geometry_in_webkit(webkit, live, tmp_path, width, height):
+    login = f'desktop-webkit-{width}'
     live.add_user(login)
     machine, state = desktop()
     aid, server = code_online(live, login, machine)
     signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
     cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
     try:
-        with webkit.new_context(viewport={'width': 320, 'height': 740}, is_mobile=True,
+        with webkit.new_context(viewport={'width': width, 'height': height}, is_mobile=True,
                                 has_touch=True, extra_http_headers={'Cookie': cookie}) as context:
             page = context.new_page()
             page.set_default_timeout(10000)
@@ -292,7 +299,14 @@ def test_desktop_touch_screen_and_geometry_in_webkit(webkit, live, tmp_path):
             page.locator('#code-desktop-connect').tap()
             page.wait_for_function('() => ' + CONNECTED)
             assert page.evaluate(FITS)
-            page.screenshot(path=str(tmp_path / 'desktop-webkit-320.png'))
+            page.screenshot(path=str(tmp_path / f'desktop-webkit-{width}.png'))
+            geometry = page.locator('.code-desktop-stage').evaluate('''stage => {
+              const bounds = stage.getBoundingClientRect();
+              return {width: bounds.width, height: bounds.height};
+            }''')
+            assert geometry['width'] >= width - 4
+            assert abs(geometry['height'] - geometry['width'] * 9 / 16) <= 2
+            assert page.locator('#code-desktop-close').bounding_box()['height'] == 32
             page.locator('#code-desktop-screen').tap()
             page.locator('#code-desktop-text').fill('Привет из Safari')
             with page.expect_response('**/desktop/input'):
@@ -304,3 +318,126 @@ def test_desktop_touch_screen_and_geometry_in_webkit(webkit, live, tmp_path):
     events = [event for req in desktop_requests(machine) if req['op'] == 'desktop_input' for event in req['events']]
     assert {'type': 'text', 'text': 'Привет из Safari'} in events
     assert any(event['type'] == 'button' and event['down'] for event in events)
+
+
+@pytest.mark.parametrize('width,height', [(320, 740), (852, 393)])
+def test_desktop_touch_and_trackpad_gestures_resolution_and_release(webkit, live, tmp_path, width, height):
+    login = f'desktop-trackpad-{width}'
+    live.add_user(login)
+    machine, _ = desktop()
+    aid, server = code_online(live, login, machine)
+    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+    cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
+
+    def events():
+        return [event for req in desktop_requests(machine) if req['op'] == 'desktop_input' for event in req['events']]
+
+    def stroke(page, points, end='pointerup'):
+        # WebKit Playwright умеет настоящий tap; траекторию пальца задаём PointerEvent.
+        # Захват настоящего указателя отдельно проверяется tap в тесте геометрии.
+        with page.expect_response('**/desktop/input'):
+            page.evaluate('''([points, end]) => {
+              const screen = document.querySelector('#code-desktop-screen'), b = screen.getBoundingClientRect();
+              const capture = screen.setPointerCapture;
+              screen.setPointerCapture = () => {};
+              try {
+                const send = (type, point) => screen.dispatchEvent(new PointerEvent(type, {
+                  bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, pointerId: 7,
+                  button: 0, clientX: b.left + point[0] * b.width, clientY: b.top + point[1] * b.height}));
+                send('pointerdown', points[0]);
+                for (const point of points.slice(1)) send('pointermove', point);
+                send(end, points.at(-1));
+              } finally { screen.setPointerCapture = capture; }
+            }''', [points, end])
+
+    try:
+        with webkit.new_context(viewport={'width': width, 'height': height}, is_mobile=True,
+                                has_touch=True, extra_http_headers={'Cookie': cookie}) as context:
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + '/#/code')
+            page.wait_for_selector('#code-projects li')
+            page.locator(f'#code-agents li[data-id="{aid}"] .code-agent-desktop').tap()
+            page.wait_for_function("() => document.querySelector('#code-desktop-connect')?.disabled === false")
+            page.locator('#code-desktop-connect').tap()
+            page.wait_for_function('() => ' + CONNECTED)
+            assert page.locator('#code-desktop-touch').get_attribute('aria-pressed') == 'true'
+            stroke(page, [[.25, .25], [.35, .35]])
+            direct = events()
+            assert direct[0] == {'type': 'move', 'monitor': 0, 'x': .25, 'y': .25}
+            assert direct[1] == {'type': 'button', 'button': 'left', 'down': True}
+            assert direct[-1] == {'type': 'button', 'button': 'left', 'down': False}
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-mouse').tap()
+            footer = page.locator('.code-desktop-mouse-tools').bounding_box()
+            assert 0 <= footer['y'] and footer['y'] + footer['height'] <= height
+            assert page.locator('#code-desktop-mouse').evaluate(
+                "button => getComputedStyle(button).backgroundColor !== getComputedStyle(document.querySelector('#code-desktop-touch')).backgroundColor")
+            before = len(events())
+            stroke(page, [[.1, .8], [.3, .9]])
+            moved = events()[before:]
+            assert all(event['type'] == 'move' for event in moved)
+            assert moved[-1]['x'] == pytest.approx(.55) and moved[-1]['y'] == pytest.approx(.45)
+            before = len(events())
+            stroke(page, [[.9, .1]])
+            assert events()[before:] == [moved[-1], {'type': 'button', 'button': 'left', 'down': True},
+                                        {'type': 'button', 'button': 'left', 'down': False}]
+            for button in ('#code-desktop-right-click', '#code-desktop-scroll-down', '#code-desktop-drag'):
+                with page.expect_response('**/desktop/input'):
+                    page.locator(button).tap()
+            assert page.locator('#code-desktop-drag').get_attribute('aria-pressed') == 'true'
+            stroke(page, [[.2, .2], [.3, .3]])
+            assert page.locator('#code-desktop-drag').get_attribute('aria-pressed') == 'true'
+            assert events()[-1]['type'] == 'move'
+            page.screenshot(path=str(tmp_path / f'desktop-mouse-{width}.png'))
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-drag').tap()
+            assert events()[-1] == {'type': 'button', 'button': 'left', 'down': False}
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-drag').tap()
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-left-click').tap()
+            assert page.locator('#code-desktop-drag').get_attribute('aria-pressed') == 'false'
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-drag').tap()
+            stroke(page, [[.2, .2], [.3, .3]], end='pointercancel')
+            assert events()[-1] == {'type': 'button', 'button': 'left', 'down': False}
+            assert page.locator('#code-desktop-drag').get_attribute('aria-pressed') == 'false'
+            assert page.locator('#code-desktop-resolution option').count() == 7
+            for edge in (640, 2560):
+                with page.expect_response(lambda response: response.url.endswith('/desktop/frame')
+                                          and response.request.post_data_json.get('max_edge') == edge):
+                    page.locator('#code-desktop-resolution').select_option(str(edge))
+                assert any(req.get('max_edge') == edge for req in desktop_requests(machine))
+            page.locator('#code-desktop-monitor').select_option('1')
+            page.wait_for_function("() => document.querySelector('#code-desktop-screen').height === 160")
+            assert page.evaluate(FITS)
+            assert page.locator('.code-desktop-stage').evaluate(
+                'stage => Math.abs(stage.clientHeight / stage.clientWidth - 16 / 9) < .01')
+            with page.expect_response('**/desktop/input'):
+                page.locator('#code-desktop-drag').tap()
+            before = len(events())
+            with page.expect_response('**/desktop/input'):
+                scrolled = page.evaluate('''() => {
+                  const screen = document.querySelector('#code-desktop-screen'), body = document.querySelector('.code-desktop-body');
+                  body.scrollTop = 0;
+                  const send = (type, touches) => {
+                    const event = new Event(type, {cancelable: true});
+                    Object.defineProperty(event, 'touches', {value: touches});
+                    screen.dispatchEvent(event);
+                  };
+                  send('touchstart', [{clientY: 200}, {clientY: 220}]);
+                  send('touchmove', [{clientY: 100}, {clientY: 120}]);
+                  send('touchend', []);
+                  return body.scrollTop;
+                }''')
+            assert scrolled == 100
+            assert events()[before:] == [{'type': 'button', 'button': 'left', 'down': False}]
+            page.locator('#code-desktop-touch').tap()
+            stroke(page, [[.1, .1], [.2, .2]], end='pointercancel')
+            assert events()[-1] == {'type': 'button', 'button': 'left', 'down': False}
+            page.locator('#code-desktop-close').tap()
+    finally:
+        server.stop()
+    assert {'type': 'wheel', 'dx': 0, 'dy': 120} in events()
+    assert {'type': 'button', 'button': 'right', 'down': True} in events()

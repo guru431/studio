@@ -29,6 +29,7 @@ class Control(Empty):
 
 class Frame(Control):
     monitor: StrictInt = Field(ge=0, lt=32)
+    max_edge: StrictInt = Field(default=1600, ge=640, le=2560)
 
 
 class Move(Empty):
@@ -115,7 +116,12 @@ async def status(aid: int, request: Request):
     data = await call(request, aid, "status")
     if any(type(data.get(key)) is not bool for key in ("enabled", "active")):
         bad()
-    return {"enabled": data["enabled"], "active": data["active"]}
+    resolutions = data.get("resolutions", [1600])
+    if (not isinstance(resolutions, list) or not 1 <= len(resolutions) <= 16
+            or any(type(value) is not int or not 640 <= value <= 2560 for value in resolutions)
+            or len(set(resolutions)) != len(resolutions)):
+        bad()
+    return {"enabled": data["enabled"], "active": data["active"], "resolutions": resolutions}
 
 
 @router.post("/start")
@@ -131,7 +137,8 @@ async def start(aid: int, body: Empty, request: Request):
 
 @router.post("/frame")
 async def frame(aid: int, body: Frame, request: Request):
-    data = await call(request, aid, "frame", **body.model_dump())
+    # Старые мосты принимают только control/monitor и сохраняют прежний предел 1600 px.
+    data = await call(request, aid, "frame", **body.model_dump(exclude_defaults=True))
     image = data.get("image")
     if not isinstance(image, str) or not 4 <= len(image) <= IMAGE_MAX:
         bad()
@@ -142,7 +149,7 @@ async def frame(aid: int, body: Frame, request: Request):
     if not raw.startswith(b"\xff\xd8\xff") or not raw.endswith(b"\xff\xd9"):
         bad()
     dimensions = {key: data.get(key) for key in ("width", "height", "screen_width", "screen_height")}
-    if any(type(value) is not int or not 1 <= value <= (1600 if key in ("width", "height") else 32768)
+    if any(type(value) is not int or not 1 <= value <= (body.max_edge if key in ("width", "height") else 32768)
            for key, value in dimensions.items()) or data.get("monitor") != body.monitor:
         bad()
     return {"image": image, **dimensions, "monitor": body.monitor}
