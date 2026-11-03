@@ -146,5 +146,7 @@ async def list_jobs(request: Request, since: "float | None" = None):
     items = [i for i in items if i["section"] not in hidden]
     running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
-    subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ?", (request.state.digest,)).fetchone()
+    subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ? UNION ALL"
+                                  " SELECT 1 FROM ntfy_settings WHERE user_id = ? AND enabled = 1",
+                                  (request.state.digest, uid)).fetchone()
     return {"now": now, "running": running, "finished": finished[:FINISHED_MAX], "push": subscribed is not None}

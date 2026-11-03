@@ -37,6 +37,18 @@ build-host с отдельной копией primary token уже открыт�
 
 ## Устройство
 
+Прямые уведомления ntfy — `app/ntfy.py`, схема 29 (`ntfy_settings`, каскад от учётки).
+«Настройки → Прочее → ntfy» (`ntfy-settings.js`): HTTPS-сервер из административного allowlist,
+тема, необязательный токен, включение, сохранение/проверка/сброс. `GET/PUT/DELETE /api/me/ntfy`,
+`POST /api/me/ntfy/test` — своя сессия, CSRF и блокировка по общим правилам. Токен шифром
+`security.encrypt`, наружу только `has_token`; отсутствующий токен сохраняется лишь у прежнего
+сервера, пустой удаляется. Доставка — JSON POST в корень ntfy через `upstream.request` (DNS pinning,
+публичные адреса имени, TLS, без redirect, 10 с), без переписки, с `click` на свой origin.
+`push.notify_later` отправляет Web Push и ntfy независимо; события мостов и заданий общие.
+`GET /api/jobs.push` учитывает включённый ntfy учётки, чтобы локальные уведомления не дублировались.
+Выход не выключает ntfy; отключённой учётке отправки нет. Тесты: `tests/test_ntfy.py`,
+`tests/test_ui_ntfy.py` (integration, 320/1280).
+
 Часовой пояс — `users.timezone` (схема 27), по умолчанию `Europe/Moscow` у новых и прежних учёток.
 `GET/PATCH /api/me` читает/сохраняет IANA-пояс с проверкой `zoneinfo` (`tzdata` нужна и на Windows).
 «Настройки → Прочее → Часовой пояс» сохраняет выбор для всех устройств; `app/static/js/time.js`

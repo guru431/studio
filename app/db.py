@@ -5,7 +5,11 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 28
+VERSION = 29
+
+NTFY_29 = """CREATE TABLE ntfy_settings(
+       user_id INTEGER PRIMARY KEY REFERENCES users ON DELETE CASCADE,
+       server TEXT NOT NULL, topic TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, token_enc BLOB);"""
 
 CODE_28 = """CREATE TABLE code_attention(
        agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
@@ -409,7 +413,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -488,6 +492,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     26: CLEANER_26,
     27: TIMEZONE_27,
     28: CODE_28,
+    29: NTFY_29,
 }
 
 

@@ -31,6 +31,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import clock
+import ntfy
 import security
 import state
 
@@ -183,10 +184,11 @@ async def notify(user_id: int, body: str, href: str, tag: str, *, title: str = T
 def notify_later(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
     """`notify` фоном: завершение задания и событие моста не ждут службу push."""
     async def run():
-        try:
-            await notify(user_id, body, href, tag, title=title)
-        except Exception as e:           # фон: сбой одной отправки не роняет цикл и не теряется молча
-            log.warning("push: сбой (%s)", type(e).__name__)
+        results = await asyncio.gather(notify(user_id, body, href, tag, title=title),
+                                       ntfy.notify(user_id, body, href, title=title), return_exceptions=True)
+        for channel, result in zip(("push", "ntfy"), results):
+            if isinstance(result, Exception):  # сбой одного канала не мешает другому, без текста/адреса в журнале
+                log.warning("%s: сбой (%s)", channel, type(result).__name__)
     task = asyncio.get_running_loop().create_task(run())
     TASKS.add(task)
     task.add_done_callback(TASKS.discard)
@@ -197,7 +199,8 @@ def job_finished(table: str, item_id: str) -> None:
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
     row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
                             " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
-                            " AND EXISTS (SELECT 1 FROM push_subs p WHERE p.user_id = j.user_id)",
+                            " AND (EXISTS (SELECT 1 FROM push_subs p WHERE p.user_id = j.user_id)"
+                            " OR EXISTS (SELECT 1 FROM ntfy_settings n WHERE n.user_id = j.user_id AND n.enabled = 1))",
                             (item_id,)).fetchone()
     if row is not None:
         notify_later(row["user_id"], done if row["state"] == "done" else error,

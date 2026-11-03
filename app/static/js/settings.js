@@ -26,6 +26,7 @@ import { api, loadMe, me } from './api.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
+import { ntfyBlock } from './ntfy-settings.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
@@ -819,7 +820,7 @@ function pushBox() {
   return [el('label', { class: 'check push-check' }, box, 'Push на этом устройстве'),
     el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '
       + 'разрешения, вопрос и конец хода Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий. '
-      + 'Идут через серверы Apple или Google — содержимое зашифровано, но факт и время '
+      + 'Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано, но факт и время '
       + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
 }
 
@@ -1357,7 +1358,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       renderDictation();
       const storage = other ? storageBlock(host) : null;
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, dictationHost,
-        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), notifyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
+        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), notifyBlock(), ntfyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
       return;
     }
     const s = sectionOf(shown);
