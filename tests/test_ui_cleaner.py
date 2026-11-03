@@ -14,6 +14,70 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_cleaner_personal_settings(browser, live, cleaner_server, monkeypatch, width, tmp_path):
+    url, real, _ = cleaner_server
+    port = httpx.URL(url).port
+    original = live.gw.handler
+
+    def forward(request):
+        if request.url.port != port:
+            return original(request)
+        response = real.request(request.method, str(request.url), headers=request.headers, content=request.content)
+        return httpx.Response(response.status_code, headers=response.headers, content=response.content)
+
+    monkeypatch.setattr(state.HTTP._transport, "handler", forward)
+    login = f"cleaner-settings-{width}"
+    live.add_user(login)
+    connection = db.connect(live.db_path)
+    connection.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",
+                       (json.dumps(["10.77.1.15:4000", f"127.0.0.1:{port}"]),))
+    connection.close()
+    chat = '.settings-panel [data-section="chat"]'
+    translate = '.settings-panel [data-section="translate"]'
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "open", "location.hash = '#/settings/cleaner'"),
+        ("wait", "document.querySelector('#cleaner-add-chat')"), ("click", "#cleaner-add-chat"),
+        ("wait", "document.querySelector('#link-dialog[open]')"),
+        ("eval", "kind", "document.querySelector('#link-dialog [name=kind]').value"),
+        set_value('#link-dialog [name=base_url]', url),
+        set_value('#link-dialog [name=token]', "ck_" + "A" * 43), ("click", "#link-save"),
+        ("wait", f"document.querySelector('{chat} .link-refresh')"), ("click", chat + " .link-check"),
+        ("wait", f"document.querySelector('{chat} .model-check[value=\"protected-model\"]')"),
+        ("click", chat + ' .model-check[value="protected-model"]'),
+        ("wait", f"!document.querySelector('{chat} .model-default').disabled"),
+        ("click", chat + ' .model-default'),
+        ("wait", f"document.querySelector('{chat} .model-default').checked"),
+        ("eval", "noProbe", f"!document.querySelector('{chat} .model-probe')"),
+        ("click", "#cleaner-add-translate"), ("wait", "document.querySelector('#link-dialog[open]')"),
+        ("eval", "reuse", "document.querySelector('#link-dialog [name=existing]').value !== 'new'"),
+        ("click", "#link-save"), ("wait", f"document.querySelector('{translate} .link-refresh')"),
+        ("click", translate + ' .link-refresh'),
+        ("wait", f"document.querySelector('{translate} .model-check')"),
+        ("click", translate + ' .model-check'),
+        ("wait", f"!document.querySelector('{translate} .model-default').disabled"),
+        ("click", translate + ' .model-default'),
+        ("wait", f"document.querySelector('{translate} .model-default').checked"),
+        ("click", chat + ' .link-menu'), ("click", chat + ' .link-edit'),
+        ("wait", "document.querySelector('#conn-dialog[open]')"),
+        ("eval", "secretHidden", "document.querySelector('#conn-dialog [name=token]').value === ''"),
+        set_value('#conn-dialog [name=name]', 'Мой Cleaner'), ("click", "#conn-save"),
+        ("wait", f"document.querySelector('{chat} .link-name')?.textContent === 'Мой Cleaner'"),
+        ("eval", "reload", "location.reload()"), ("wait", READY),
+        ("wait", f"document.querySelector('{translate} .model-default')?.checked"),
+        ("eval", "defaults", f"document.querySelector('{chat} .model-default').checked && document.querySelector('{translate} .model-default').checked"),
+        ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
+        ("screenshot", str(tmp_path / f"cleaner-settings-{width}.png")),
+        ("eval", "connections", "fetch('/api/connections').then(r => r.json()).then(r => r.items.map(c => ({cleaner:c.cleaner, sections:c.sections, token:c.token})))"),
+    ], width=width, mobile=width == 320)
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["kind"] == "cleaner"
+    assert all(values[k] for k in ("reuse", "secretHidden", "defaults", "fits", "noProbe"))
+    assert values["connections"] == [{"cleaner": True, "sections": ["chat", "translate"]}]
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, monkeypatch, width, tmp_path):
     url, real, _ = cleaner_server
     port = httpx.URL(url).port
