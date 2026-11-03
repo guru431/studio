@@ -278,9 +278,13 @@
       {
         "passed": 10,
         "seconds": 91.91
+      },
+      {
+        "passed": 1,
+        "seconds": 3.38
       }
     ],
-    "note": "Batches overlap. The last batch follows the final history scroll adjustment."
+    "note": "Batches overlap. The last batch checks that the offline page references only precached shell assets."
   },
   "limits": [
     "Authorized production UI was not timed: no logged-in browser; canonical admin password is known stale.",
@@ -293,7 +297,7 @@
     "app/agents.py": "dc683cc554c027ac993351a3155445787ffc7879b99e8dd24d2a8546a99ea291",
     "app/agent_release.py": "c6517cc1bad22a63f0bfebf046581f5f1855a6084a3d93b1c3baa732e20bb4f4",
     "app/audio.py": "ed9847bd1fd9bd2746eee8ff257950c8514bbd11b7a3d8db6a1ea641091c7238",
-    "app/auth.py": "593e79e1a81e75b9200bd3360c91db5cc7ed1e43d831da9bfd18f6117eb116e3",
+    "app/auth.py": "d437591355b7b2d250b9e5e4240cf870df8300b904e678b6c0c94268ea0d3899",
     "app/bridge.py": "a1d60c11bc33f9fc16f78b9a4fbe84e3be8079a616d187256537ee8050697dc6",
     "app/capabilities.py": "95a38df514411fec560fbfaf883b2d1fd8adac3196c34445c7e81b64cc63e328",
     "app/chains.py": "630eb4fc747634f708f41f3f34ab99bd3d051514035b249aed83d6d14d3eee9f",
