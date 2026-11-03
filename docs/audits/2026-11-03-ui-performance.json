@@ -1,0 +1,993 @@
+{
+  "date": "2026-11-03",
+  "source_head": "5dec1f6fe6dd2d3cf1608083db793cf54c8745ec",
+  "boundaries": {
+    "browser": "Microsoft Edge headless on Windows",
+    "backend": "isolated test application, synthetic account and conversations",
+    "live_authenticated_ui": false,
+    "live_phone": false,
+    "network_model": "local HTTP/1.1 without compression; production confirmed h2 and gzip",
+    "cpu_model": "CDP 4x CPU slowdown where stated, not an actual phone"
+  },
+  "production_lf_sha256_matched": {
+    "app/static/js/code.js": "b6421211c953294cec086c033fdbdb43503cd9294f1399e7f177789609a2db9b",
+    "app/static/js/code-panel.js": "633d1f3f1dc8493db185444a4c685b2bb820aa1a0ddd658164f9380ee782a102",
+    "app/static/js/code-chat.js": "748e5a17e9b0cd4d281b326efa6742015001797b54b65408c5ea1922c8a0ab4a",
+    "app/static/js/code-activity.js": "7c984b2cf1a3ddc88f40bd3eac90cf0feb83dc5c26902c96baaaf6a62ddd575d",
+    "app/static/js/api.js": "13d624b28f041d4943141058afcafe7d79852c3c719d219edacb53dde80cd2bc",
+    "app/static/js/app.js": "ad4099f440da648fc41709296bfbd57186ffbe375f3d266453e1a20adc47f8f8",
+    "app/claude_code.py": "b020cacaeac846e598ba22e7086360e0cef4dbfb4521b6ef3635027aa95bc83c",
+    "app/code_activity.py": "487866e06fc38d4318fd333bea1d3b7e68416a853afd3e6629f4e2981c70b4d5",
+    "app/profile.py": "a0bc1edc8c4a38a3cf52377b72b4e91658374e98fe96b827bf47f588e5cdbba8"
+  },
+  "ui": [
+    {
+      "route": "photo",
+      "shell_ms": 184.0,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "video",
+      "shell_ms": 99.6,
+      "api_requests": 2,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "speech",
+      "shell_ms": 63.0,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "transcribe",
+      "shell_ms": 57.0,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "ocr",
+      "shell_ms": 39.8,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "translate",
+      "shell_ms": 73.1,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "search",
+      "shell_ms": 103.7,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "settings",
+      "shell_ms": 109.4,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "settings/code",
+      "shell_ms": 70.7,
+      "api_requests": 4,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "settings/other",
+      "shell_ms": 86.0,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "admin",
+      "shell_ms": 85.7,
+      "api_requests": 4,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "chat",
+      "shell_ms": 88.9,
+      "api_requests": 2,
+      "summary_requests": 0,
+      "round": 1
+    },
+    {
+      "route": "photo",
+      "shell_ms": 64.5,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "video",
+      "shell_ms": 54.6,
+      "api_requests": 2,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "speech",
+      "shell_ms": 55.5,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "transcribe",
+      "shell_ms": 44.0,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "ocr",
+      "shell_ms": 36.7,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "translate",
+      "shell_ms": 45.0,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "search",
+      "shell_ms": 49.2,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "settings",
+      "shell_ms": 42.7,
+      "api_requests": 1,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "settings/code",
+      "shell_ms": 54.0,
+      "api_requests": 4,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "settings/other",
+      "shell_ms": 72.9,
+      "api_requests": 3,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "admin",
+      "shell_ms": 60.2,
+      "api_requests": 4,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "route": "chat",
+      "shell_ms": 52.7,
+      "api_requests": 2,
+      "summary_requests": 0,
+      "round": 2
+    },
+    {
+      "label": "60 summaries, 150 ms each, first entrance",
+      "width": 1280,
+      "list_ms": 219.7,
+      "initial_metric": "П: —",
+      "all_metrics_ms": 2941.4,
+      "api_requests": 64,
+      "summary_requests": 60
+    },
+    {
+      "label": "60 summaries, return to Agents",
+      "width": 1280,
+      "list_ms": 72.0,
+      "initial_metric": "П: —",
+      "all_metrics_ms": 2713.1,
+      "api_requests": 64,
+      "summary_requests": 60
+    },
+    {
+      "label": "one slow tail project (4 s), others 150 ms",
+      "width": 1280,
+      "list_ms": 54.2,
+      "initial_metric": "П: —",
+      "all_metrics_ms": 6437.5,
+      "api_requests": 65,
+      "summary_requests": 60
+    },
+    {
+      "label": "60 summaries, narrow screen",
+      "width": 320,
+      "list_ms": 36.4,
+      "initial_metric": "П: —",
+      "all_metrics_ms": 2661.7,
+      "api_requests": 64,
+      "summary_requests": 60
+    },
+    {
+      "label": "direct project with mobile sidebar hidden",
+      "session_list_ms": 107.3,
+      "sidebar_transform": "matrix(1, 0, 0, 1, -272, 0)",
+      "api_requests": 67,
+      "summary_requests": 60
+    },
+    {
+      "label": "existing chat with history=200 ms and state=600 ms",
+      "text_ms": 275.0,
+      "ready_ms": 898.4,
+      "api_requests": 4,
+      "summary_requests": 0
+    }
+  ],
+  "foreground_polling_45s": {
+    "api_requests": 16,
+    "summary_requests": 0,
+    "api_paths": {
+      "POST /api/lock/alive": 3,
+      "GET /api/jobs": 2,
+      "GET /api/code/activity": 2,
+      "GET /api/code/agents/1/projects/d80d97a2daa7f83c/git": 2,
+      "GET /api/code/agents/1/projects/d80d97a2daa7f83c/chats": 2,
+      "GET /api/code/agents/1/activity": 2,
+      "GET /api/code/agents/1/projects/d80d97a2daa7f83c/chats/00000000-0000-0000-0000-000000000001/live": 2,
+      "GET /api/agents": 1
+    }
+  },
+  "page_errors": [],
+  "bridge": {
+    "root": "C:/work/projects",
+    "samples": [
+      {
+        "project": "studio",
+        "round": 1,
+        "ms": 1016.39,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "appshelf",
+        "round": 1,
+        "ms": 1637.25,
+        "git_commands": 7,
+        "git": "ok",
+        "github_state": "current",
+        "remote_count": 2
+      },
+      {
+        "project": "cleaner",
+        "round": 1,
+        "ms": 968.29,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "llm_routers",
+        "round": 1,
+        "ms": 1040.95,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "claude-bundle",
+        "round": 1,
+        "ms": 1930.07,
+        "git_commands": 7,
+        "git": "ok",
+        "github_state": "current",
+        "remote_count": 2
+      },
+      {
+        "project": "local-config",
+        "round": 1,
+        "ms": 1118.81,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "studio",
+        "round": 2,
+        "ms": 1226.33,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "appshelf",
+        "round": 2,
+        "ms": 2131.54,
+        "git_commands": 7,
+        "git": "ok",
+        "github_state": "current",
+        "remote_count": 2
+      },
+      {
+        "project": "cleaner",
+        "round": 2,
+        "ms": 1035.31,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "llm_routers",
+        "round": 2,
+        "ms": 1453.17,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      },
+      {
+        "project": "claude-bundle",
+        "round": 2,
+        "ms": 2234.98,
+        "git_commands": 7,
+        "git": "ok",
+        "github_state": "current",
+        "remote_count": 2
+      },
+      {
+        "project": "local-config",
+        "round": 2,
+        "ms": 1181.59,
+        "git_commands": 6,
+        "git": "ok",
+        "github_state": null,
+        "remote_count": 1
+      }
+    ],
+    "project_count": 40,
+    "catalog_ms": [
+      64.18069999926956,
+      73.2441000000108,
+      55.888800001412164,
+      59.8939000046812
+    ],
+    "resolve_each_project_ms": 2424.5015000051353,
+    "catalog_profile": [
+      {
+        "function": "catalog",
+        "file": "projects.py",
+        "calls": 1,
+        "total_ms": 39.02
+      },
+      {
+        "function": "realpath",
+        "file": "<frozen ntpath>",
+        "calls": 202,
+        "total_ms": 35.26
+      },
+      {
+        "function": "<built-in method nt._getfinalpathname>",
+        "file": "~",
+        "calls": 404,
+        "total_ms": 31.05
+      },
+      {
+        "function": "_key",
+        "file": "projects.py",
+        "calls": 161,
+        "total_ms": 27.51
+      },
+      {
+        "function": "project_id",
+        "file": "projects.py",
+        "calls": 40,
+        "total_ms": 21.33
+      },
+      {
+        "function": "roots",
+        "file": "projects.py",
+        "calls": 41,
+        "total_ms": 7.38
+      },
+      {
+        "function": "normcase",
+        "file": "<frozen ntpath>",
+        "calls": 443,
+        "total_ms": 1.86
+      },
+      {
+        "function": "<built-in method nt._path_normpath>",
+        "file": "~",
+        "calls": 202,
+        "total_ms": 0.91
+      },
+      {
+        "function": "__fspath__",
+        "file": "__init__.py",
+        "calls": 80,
+        "total_ms": 0.83
+      },
+      {
+        "function": "__str__",
+        "file": "__init__.py",
+        "calls": 80,
+        "total_ms": 0.77
+      },
+      {
+        "function": "pid",
+        "file": "projects.py",
+        "calls": 40,
+        "total_ms": 0.39
+      },
+      {
+        "function": "isabs",
+        "file": "<frozen ntpath>",
+        "calls": 202,
+        "total_ms": 0.37
+      },
+      {
+        "function": "drive",
+        "file": "__init__.py",
+        "calls": 40,
+        "total_ms": 0.34
+      },
+      {
+        "function": "inside",
+        "file": "files.py",
+        "calls": 40,
+        "total_ms": 0.25
+      }
+    ],
+    "claude_session_lists": [
+      {
+        "project": "studio",
+        "round": 1,
+        "count": 31,
+        "ms": 76.93
+      },
+      {
+        "project": "studio",
+        "round": 2,
+        "count": 31,
+        "ms": 67.66
+      },
+      {
+        "project": "appshelf",
+        "round": 1,
+        "count": 25,
+        "ms": 61.16
+      },
+      {
+        "project": "appshelf",
+        "round": 2,
+        "count": 25,
+        "ms": 59.77
+      },
+      {
+        "project": "llm_routers",
+        "round": 1,
+        "count": 62,
+        "ms": 146.08
+      },
+      {
+        "project": "llm_routers",
+        "round": 2,
+        "count": 62,
+        "ms": 115.98
+      }
+    ]
+  },
+  "full_real_catalog": {
+    "projects": 40,
+    "workers": 4,
+    "items": [
+      {
+        "name": "_other_ai",
+        "ms": 99.27,
+        "git": "not_git",
+        "github_state": null
+      },
+      {
+        "name": "_head",
+        "ms": 506.38,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "local-config",
+        "ms": 511.25,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "brands",
+        "ms": 418.43,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "cleaner",
+        "ms": 432.06,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "appshelf",
+        "ms": 1112.11,
+        "git": "ok",
+        "github_state": "current"
+      },
+      {
+        "name": "crm",
+        "ms": 342.12,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "digital_me",
+        "ms": 340.76,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "claude-code-telegram",
+        "ms": 947.93,
+        "git": "ok",
+        "github_state": "current"
+      },
+      {
+        "name": "claude-bundle",
+        "ms": 984.13,
+        "git": "ok",
+        "github_state": "current"
+      },
+      {
+        "name": "dogovor",
+        "ms": 396.51,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "egor",
+        "ms": 456.65,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "finance",
+        "ms": 453.19,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "ip_logger",
+        "ms": 444.16,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "linux",
+        "ms": 415.31,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "llm_routers",
+        "ms": 407.26,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "medical",
+        "ms": 412.72,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "monitoring",
+        "ms": 408.61,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "music",
+        "ms": 346.31,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "personal",
+        "ms": 357.79,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "network",
+        "ms": 374.9,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "photos",
+        "ms": 379.0,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "recruiter",
+        "ms": 384.03,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "sms_to_email",
+        "ms": 367.63,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "site",
+        "ms": 473.72,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "radio",
+        "ms": 910.19,
+        "git": "ok",
+        "github_state": "current"
+      },
+      {
+        "name": "studio",
+        "ms": 330.13,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "sub",
+        "ms": 342.35,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "teacher",
+        "ms": 318.11,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "translate",
+        "ms": 378.53,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "translator",
+        "ms": 380.88,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "travel",
+        "ms": 389.88,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "update_fix",
+        "ms": 308.59,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "vLLM",
+        "ms": 336.58,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "voice_to_clipboard",
+        "ms": 310.8,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "traymon",
+        "ms": 889.89,
+        "git": "ok",
+        "github_state": "current"
+      },
+      {
+        "name": "work_helper",
+        "ms": 310.08,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "work_phones",
+        "ms": 296.68,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "workflows",
+        "ms": 296.41,
+        "git": "ok",
+        "github_state": null
+      },
+      {
+        "name": "video",
+        "ms": 919.27,
+        "git": "ok",
+        "github_state": "current"
+      }
+    ],
+    "total_ms": 4700.47
+  },
+  "session_backends": {
+    "live_session_lists": [
+      {
+        "engine": "codex",
+        "round": 1,
+        "ms": 2702.1,
+        "count": 44
+      },
+      {
+        "engine": "codex",
+        "round": 2,
+        "ms": 2201.3,
+        "count": 44
+      },
+      {
+        "engine": "opencode",
+        "round": 1,
+        "ms": 519.2,
+        "count": 0
+      },
+      {
+        "engine": "opencode",
+        "round": 2,
+        "ms": 546.1,
+        "count": 0
+      }
+    ],
+    "controlled_quota_blocks_catalog_ms": 622.3,
+    "controlled_catalog_without_quota_ms": 0.3
+  },
+  "session_switches": [
+    {
+      "scenario": "initial chat",
+      "text_ms": 2503.0,
+      "ready_ms": 3134.5,
+      "api_requests": 6,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "another session in same project",
+      "text_ms": 232.7,
+      "ready_ms": 849.4,
+      "api_requests": 3,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "cached session in same project",
+      "text_ms": 17.7,
+      "ready_ms": 849.0,
+      "api_requests": 5,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "session in another project",
+      "text_ms": 2450.8,
+      "ready_ms": 3068.4,
+      "api_requests": 6,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "return to cached session in first project",
+      "text_ms": 2464.2,
+      "ready_ms": 3065.3,
+      "api_requests": 6,
+      "summary_requests": 0
+    },
+    {
+      "scenario": "same-project cached session during visibility refresh",
+      "text_ms": 14.0,
+      "ready_ms": 852.6,
+      "api_requests": 4,
+      "summary_requests": 0
+    }
+  ],
+  "history_and_markdown": {
+    "chats": [
+      {
+        "messages": 2,
+        "cpu_slowdown": 1,
+        "ready_ms": 70.7,
+        "history_bytes": 23018,
+        "backend_ms": 4.3,
+        "dom_nodes": 471,
+        "steps": 20,
+        "longtasks": []
+      },
+      {
+        "messages": 100,
+        "cpu_slowdown": 1,
+        "ready_ms": 183.5,
+        "history_bytes": 1149383,
+        "backend_ms": 38.0,
+        "dom_nodes": 11647,
+        "steps": 1000,
+        "longtasks": [
+          {
+            "start": 659.2999999970198,
+            "ms": 91
+          }
+        ]
+      },
+      {
+        "messages": 100,
+        "cpu_slowdown": 4,
+        "ready_ms": 971.3,
+        "history_bytes": 1149383,
+        "backend_ms": 18.1,
+        "dom_nodes": 11651,
+        "steps": 1000,
+        "longtasks": [
+          {
+            "start": 910.2999999970198,
+            "ms": 193
+          },
+          {
+            "start": 1157.0999999940395,
+            "ms": 565
+          },
+          {
+            "start": 1722.7999999970198,
+            "ms": 83
+          }
+        ]
+      }
+    ],
+    "markdown": [
+      {
+        "characters": 8576,
+        "cpu_slowdown": 4,
+        "samples_ms": [
+          125.19999999552965,
+          130.70000000298023,
+          123.10000000149012
+        ]
+      },
+      {
+        "characters": 42688,
+        "cpu_slowdown": 4,
+        "samples_ms": [
+          1533.5999999940395,
+          1547.9000000059605,
+          1566.3999999985099
+        ]
+      },
+      {
+        "characters": 85376,
+        "cpu_slowdown": 4,
+        "samples_ms": [
+          6182.60000000149,
+          6237.5,
+          5922.29999999702
+        ]
+      }
+    ]
+  },
+  "incremental_experiment": [
+    {
+      "incremental": false,
+      "list_ms": 35.7,
+      "first_metric_ms": 6468.0,
+      "all_metrics_ms": 6478.2,
+      "summary_requests": 60
+    },
+    {
+      "incremental": true,
+      "list_ms": 35.1,
+      "first_metric_ms": 218.6,
+      "all_metrics_ms": 6436.1,
+      "summary_requests": 60
+    }
+  ],
+  "network": [
+    {
+      "latency_ms": 0,
+      "warm": false,
+      "list_ms": 1465.0,
+      "metrics_ms": 1726.7,
+      "navigation_type": "navigate",
+      "api_requests": 69,
+      "summary_requests": 60,
+      "resources": 111,
+      "js_count": 35,
+      "js_decoded_bytes": 580958,
+      "js_transfer_bytes": 590044,
+      "longtasks": []
+    },
+    {
+      "latency_ms": 0,
+      "warm": true,
+      "list_ms": 269.7,
+      "metrics_ms": 490.7,
+      "navigation_type": "navigate",
+      "api_requests": 69,
+      "summary_requests": 60,
+      "resources": 111,
+      "js_count": 35,
+      "js_decoded_bytes": 580958,
+      "js_transfer_bytes": 8700,
+      "longtasks": []
+    },
+    {
+      "latency_ms": 80,
+      "warm": false,
+      "list_ms": 2208.4,
+      "metrics_ms": 3844.1,
+      "navigation_type": "navigate",
+      "api_requests": 69,
+      "summary_requests": 60,
+      "resources": 111,
+      "js_count": 35,
+      "js_decoded_bytes": 580958,
+      "js_transfer_bytes": 590044,
+      "longtasks": []
+    },
+    {
+      "latency_ms": 80,
+      "warm": true,
+      "list_ms": 1228.7,
+      "metrics_ms": 2841.0,
+      "navigation_type": "navigate",
+      "api_requests": 69,
+      "summary_requests": 60,
+      "resources": 111,
+      "js_count": 35,
+      "js_decoded_bytes": 580958,
+      "js_transfer_bytes": 8700,
+      "longtasks": []
+    }
+  ],
+  "tests": {
+    "main": {
+      "passed": 1424,
+      "seconds": 24.8
+    },
+    "agent": {
+      "passed": 597,
+      "skipped": 1
+    },
+    "browser": {
+      "passed": 16,
+      "seconds": 57.26
+    }
+  }
+}
