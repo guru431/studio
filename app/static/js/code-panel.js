@@ -63,7 +63,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
   const sort = el('select', { id: 'code-project-sort', class: 'input', 'aria-label': 'Сортировка проектов' },
     ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
-      ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные']]
+      ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные'],
+      ['public', 'Сначала публичные'], ['private', 'Сначала приватные']]
       .map(([value, label]) => el('option', { value }, label)));
   const sortKey = `studio-code-project-sort:${me.id}`;
   try {
@@ -305,9 +306,19 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (!listBox) return;
     const details = summaries.get(selected);
     const names = new Map(projectItems.map((p) => [p.pid, p.name]));
+    const byVisibility = sort.value === 'public' || sort.value === 'private';
+    const visibilityRank = (row) => {
+      const data = details?.get(row.dataset.pid);
+      if (data?.git !== 'ok' || !('github' in data) || data.github?.state === 'unknown'
+        || (data.github === null && data.github_pending)) return 2;
+      return (data.github !== null) === (sort.value === 'public') ? 0 : 1;
+    };
     const rows = [...listBox.children];
     rows.sort((a, b) => {
-      if (sort.value !== 'name') {
+      if (byVisibility) {
+        const diff = visibilityRank(a) - visibilityRank(b);
+        if (diff) return diff;
+      } else if (sort.value !== 'name') {
         const av = details?.get(a.dataset.pid)?.[sort.value];
         const bv = details?.get(b.dataset.pid)?.[sort.value];
         const diff = (Number.isFinite(bv) ? bv : -1) - (Number.isFinite(av) ? av : -1);
@@ -348,6 +359,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       results.set(project.pid, { ...data, readAt: performance.now() });
       const row = body.querySelector(`li[data-pid="${project.pid}"]`);
       if (row) paintSummary(row, data);
+      if (sort.value === 'public' || sort.value === 'private') sortProjects();
     }
     async function worker() {
       while (alive && mine === gen && queue.length && !blocked) {
