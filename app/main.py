@@ -12,6 +12,8 @@ Importmap сохраняет один экземпляр API-модуля; не�
 Обычные ссылки `/static/*` без версии по-прежнему проверяются через сеть.
 """
 import asyncio
+import html
+import json
 import logging
 import mimetypes
 from contextlib import asynccontextmanager
@@ -46,6 +48,7 @@ import presets
 import profile
 import push
 import screenlock
+import security
 import search
 import sections
 import speeches
@@ -185,9 +188,15 @@ async def robots():
 @app.api_route("/", methods=PAGE)
 async def index(request: Request):
     # renew=False: страница cookie заново не ставит — продлит первый запрос /api/* вместе с cookie
-    if auth.session_user(request.cookies.get(auth.COOKIE), renew=False) is None:
+    session = auth.session_user(request.cookies.get(auth.COOKIE), renew=False)
+    if session is None:
         return RedirectResponse("/login", status_code=303)
-    return HTMLResponse(auth.page("index.html"), headers={"Cache-Control": "no-store"})
+    user, csrf = session
+    # Hash-маршрут виден только браузеру: security даёт истечение общей сессии,
+    # а lock.js применяет область защиты к открытому разделу до показа панели.
+    lock = screenlock.snapshot(user.id, security.digest(request.cookies[auth.COOKIE]), csrf, "security")
+    page = auth.page("index.html").replace("{{lock_state}}", html.escape(json.dumps(lock)))
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
 
 @app.api_route("/sw.js", methods=PAGE)

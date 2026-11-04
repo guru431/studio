@@ -5525,20 +5525,19 @@ FAIL_LOCK_STATE = """(() => { const real = window.fetch;
 
 @pytest.mark.parametrize("way", ["passkey", "password"])
 def test_cold_start_without_the_lock_state_still_opens(browser, live, way):
-    """Запертый холодный старт, оба GET /api/lock упали: CSRF нет ни из профиля, ни из состояния —
-    «Открыть» и пароль берут его заново, а не получают 403 «обновите страницу» (в PWA обновить нечем)."""
+    """Холодный старт получает состояние и CSRF с HTML: отказ GET /api/lock не мешает
+    passkey и паролю открыть сессию без перезагрузки и 403 «обновите страницу»."""
     login = f"lk-cold-{way}"
     live.add_user(login)
-    opening = ([("click", "#lock-open"), ("wait", PASSKEY_READY), ("click", "#lock-open")] if way == "passkey" else
+    opening = ([("wait", PASSKEY_READY), ("click", "#lock-open")] if way == "passkey" else
                [("click", "#lock-use-password"), ("type", "#lock-password", "password-123"), ("click", "#lock-password-go")])
     r = browser.drive(live.url + "/", [*locked_phone(login), ("eval", "cut", "sessionStorage.setItem('failLock', '2')"),
         ("eval", "reload", "location.reload()"),
-        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN}"
-                 " && document.querySelector('#lock-status').textContent.length > 0"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN}"),
         ("eval", "left", "sessionStorage.getItem('failLock')"),
         *opening, ("wait", f"!{LOCK_OPEN} && {READY}"), ("eval", "me", ME_STATUS)], init=FAIL_LOCK_STATE, **PHONE)
     assert not r.get("failed"), r
-    assert r["values"]["left"] == "0" and r["values"]["me"] == 200
+    assert r["values"]["left"] == "2" and r["values"]["me"] == 200
     assert not known_refusals(problems(r), 423), problems(r)
 
 
@@ -5770,22 +5769,22 @@ def test_physical_keys_type_the_pin(browser, live):
 
 @pytest.mark.parametrize("way", ["return", "open"])
 def test_pin_pad_comes_back_when_the_lock_state_was_lost(browser, live, way):
-    """GET /api/lock при показе экрана не пришёл (нет связи): «Открыть» и «Нет связи». Возвращение на экран
-    или «Открыть» перечитывают состояние — панель PIN, и PIN открывает; подготовки passkey (её no_keys
-    увёл бы учётку без ключей к паролю) нет."""
+    """GET состояния не пришёл: известный PIN остаётся, «Открыть» и возвращение перечитывают
+    состояние. Подготовки passkey, которая увела бы учётку без ключей к паролю, нет."""
     login = f"pin-stale-{way}"
     live.add_user(login)
     retry = [hide(), show()] if way == "return" else [("click", "#lock-open")]
     r = browser.drive(live.url + "/", [*phone_with_pin(login), hide(), ("wait", CURTAIN_OPEN),
         ("eval", "cut", "sessionStorage.setItem('fail', JSON.stringify({'/api/lock': 1}))"),
         later(61000), show(), ("wait", LOCK_OPEN), ("wait", f"{LOCK_NOTE} === 'Нет связи с сервером'"),
-        ("eval", "lost", LOCK_PARTS), *retry, ("wait", PIN_SHOWN), ("eval", "back", LOCK_PARTS),
+        ("eval", "lost", LOCK_PARTS), *retry, ("wait", "document.querySelector('#lock-open').hidden"),
+        ("wait", PIN_SHOWN), ("eval", "back", LOCK_PARTS),
         ("eval", "note", LOCK_NOTE),
         *tap("2580"), ("click", "#lock-pin-ok"), ("wait", f"!{LOCK_OPEN}"), ("eval", "me", ME_STATUS)],
         init=FAIL_GETS, **PHONE)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["lost"] == [False, False, True, True] and v["back"] == [True, False, False, True]
+    assert v["lost"] == [True, False, True, True] and v["back"] == [True, False, False, True]
     assert v["note"] == "" and v["me"] == 200
     assert "POST /api/lock/challenge" not in r["sent"], r["sent"]
     assert not known_refusals(problems(r), 423), problems(r)

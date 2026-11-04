@@ -158,17 +158,20 @@ def _descriptors(uid: int) -> list[PublicKeyCredentialDescriptor]:
 
 # ---- отметки, «заперто», пароль ----------------------------------------------
 
-@router.get("/lock")
-async def lock_state(request: Request, section: str | None = None):
+def snapshot(uid: int, digest: str, csrf: str, section: str | None = None) -> dict:
     """Только «заперто ли», «есть ли ключи», CSRF (без него не отправить отпирание), задан ли PIN и
     сколько попыток PIN осталось — профиля нет."""
-    uid = request.state.user.id
     row = state.DB.execute("SELECT pin_hash IS NOT NULL AS pin, pin_fails FROM users WHERE id = ?", (uid,)).fetchone()
-    policy = lock_policy.session(request.state.digest)
-    return {"locked": lock_policy.locked(request.state.digest, section), "keys": _has_keys(uid), "csrf": request.state.csrf,
+    policy = lock_policy.session(digest)
+    return {"locked": lock_policy.expired(policy) and lock_policy.protected(policy, section), "keys": _has_keys(uid), "csrf": csrf,
             "pin": bool(row["pin"]), "pin_left": max(0, PIN_FAILS - row["pin_fails"]),
             "sections": json.loads(policy["screen_lock_sections"]), "timeout": policy["screen_lock_timeout"],
             "enabled": bool(policy["screen_lock"])}
+
+
+@router.get("/lock")
+async def lock_state(request: Request, section: str | None = None):
+    return snapshot(request.state.user.id, request.state.digest, request.state.csrf, section)
 
 
 @router.post("/lock/alive")

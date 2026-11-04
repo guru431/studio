@@ -141,6 +141,7 @@ let pinOk;
 let pinOn = false;       // у учётки задан PIN и попытки остались — панель вместо пароля
 let digits = '';         // набранные цифры: только здесь, ни в DOM, ни в хранилище
 let pinGoing = false;    // идёт POST /api/lock/pin: нажатия, «OK» и Enter — мимо
+let checking = false;    // можно набирать цифры, но отправка ждёт завершения запирания и чтения состояния
 let stale = false;       // GET /api/lock при показе экрана не пришёл: ключи и PIN неизвестны — перечитать
 let rereading = null;    // идущее перечитывание: возвращение, таймер и «Открыть» его не повторяют
 const readings = new Map(); // один запрос состояния на раздел; переход не использует ответ прежнего раздела
@@ -197,20 +198,30 @@ function cover(on) {
   shroud();
 }
 
+/** Снимок из HTML или API: только состояние и CSRF, доступ по-прежнему проверяет сервер. */
+function useLockState(state) {
+  useCsrf(state.csrf);
+  token = true;
+  pinOn = !!state.pin && state.pin_left > 0;
+  policy = { enabled: state.enabled, sections: state.sections || ['*'], timeout: state.timeout ?? 60 };
+  if (me) {
+    me.screen_lock = policy.enabled;
+    me.screen_lock_sections = policy.sections;
+    me.screen_lock_timeout = policy.timeout;
+  }
+  return state;
+}
+
 /** Состояние блокировки и с ним CSRF сессии. */
 function lockState(section = lockScope()) {
-  if (!readings.has(section)) readings.set(section, api('GET', `/api/lock?section=${encodeURIComponent(section)}`).then((state) => {
-    useCsrf(state.csrf);
-    token = true;
-    policy = { enabled: state.enabled, sections: state.sections || ['*'], timeout: state.timeout ?? 60 };
-    if (me) {
-      me.screen_lock = policy.enabled;
-      me.screen_lock_sections = policy.sections;
-      me.screen_lock_timeout = policy.timeout;
-    }
-    return state;
-  }).finally(() => { readings.delete(section); }));
+  if (!readings.has(section)) readings.set(section, api('GET', `/api/lock?section=${encodeURIComponent(section)}`, undefined,
+    { signal: AbortSignal.timeout(MARK_SEC * 1000) }).then(useLockState).finally(() => { readings.delete(section); }));
   return readings.get(section);
+}
+
+function requestLock() {
+  return api('POST', '/api/lock/now', undefined, { signal: AbortSignal.timeout(MARK_SEC * 1000) })
+    .then(() => true, () => false);
 }
 
 /** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи
@@ -240,7 +251,7 @@ function armIdle() {
   if (!guarded() || waiting || !timeout || document.visibilityState !== 'visible') return;
   const left = Math.max(0, timeout * 1000 - (Date.now() - (activityAt || checkedAt)));
   idleTimer = setTimeout(() => {
-    if (guarded() && !waiting) waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    if (guarded() && !waiting) waitOpen(requestLock());
   }, left);
 }
 
@@ -249,7 +260,7 @@ function activity(event) {
   const p = currentPolicy();
   if (p.enabled && p.timeout > 0 && Date.now() - (activityAt || checkedAt) >= p.timeout * 1000) {
     // Первое нажатие после простоя (в том числе переход из открытого раздела) не продлевает доступ.
-    if (guarded()) waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    if (guarded()) waitOpen(requestLock());
     return;
   }
   activityAt = Date.now();
@@ -269,7 +280,7 @@ export async function ensureSectionOpen(section) {
   }
   const timeout = currentPolicy().timeout;
   if (timeout > 0 && Date.now() - (activityAt || checkedAt) >= timeout * 1000) {
-    await waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    await waitOpen(requestLock());
     armIdle();
     return;
   }
@@ -285,7 +296,7 @@ function fresh() {
 
 /** «Открыть»: «Готовлю…» и выключена, пока готовятся варианты или идёт вызов; data-ready — варианты готовы. */
 function paintOpen() {
-  openButton.disabled = !!preparing || calling;
+  openButton.disabled = checking || !!preparing || calling;
   openButton.textContent = preparing ? 'Готовлю…' : 'Открыть';
   if (options && !preparing && !calling) openButton.dataset.ready = '1';
   else delete openButton.dataset.ready;
@@ -324,7 +335,7 @@ async function load() {
 function paintPin() {
   pinDots.replaceChildren(...Array.from(digits, () => document.createElement('span')));
   for (const key of pinPad.querySelectorAll('button')) key.disabled = pinGoing;
-  pinOk.disabled = pinGoing || digits.length < PIN_MIN;
+  pinOk.disabled = checking || pinGoing || digits.length < PIN_MIN;
 }
 
 function forgetDigits() {
@@ -361,12 +372,16 @@ function pinGone(text) {
 /** Экран блокировки. lockNow — обещание запроса «заперто» (true — сервер согласился): пока он не
  * прошёл, ответу «не заперто» не верить — иначе обрыв связи открыл бы студию без ключа. */
 async function showLock(lockNow, knownState) {
+  const showing = waiting;
+  checking = !knownState || !!lockNow;
+  document.getElementById('lock-password-go').disabled = checking;
   say('');
   cancelRecording();
   for (const player of document.querySelectorAll('video, audio')) player.pause();
   options = null;
   paintOpen();
-  pinOn = false;
+  pinOn = knownState ? !!knownState.pin && knownState.pin_left > 0 : me ? !!me.pin : pinOn;
+  if (knownState) keys = knownState.keys;
   forgetDigits();
   pinPad.hidden = true;
   openButton.hidden = false;
@@ -375,24 +390,33 @@ async function showLock(lockNow, knownState) {
   usePin.hidden = true;
   stale = false;
   elsewhere.hidden = currentPolicy().sections.includes('*');
+  if (pinOn) offerPin();              // известный PIN показывается до ожидания сети; цифры остаются только в памяти
   if (!blocking()) return;
   if (!screen.open) screen.showModal();
-  const trusted = lockNow ? await lockNow : true;
-  let state;
   try {
-    state = knownState || await lockState();
+    const trusted = lockNow ? await lockNow : true;
+    const state = knownState || await lockState();
+    if (waiting !== showing || !blocking()) return;
+    checking = false;
+    if (!state.locked && trusted) {
+      await opened();
+      return;
+    }
+    applyState(state);
   } catch (err) {
+    if (waiting !== showing || !blocking()) return;
     keys = true;                       // неизвестно: «Открыть», возвращение и таймер перечитают состояние
+    openButton.hidden = false;
     stale = true;
     say(words(err), 'error');
-    return;
+  } finally {
+    if (waiting === showing) {
+      checking = false;
+      document.getElementById('lock-password-go').disabled = false;
+      paintPin();
+      paintOpen();
+    }
   }
-  if (!blocking()) return;
-  if (!state.locked && trusted) {
-    await opened();
-    return;
-  }
-  applyState(state);
 }
 
 /** Экран по состоянию блокировки: панель PIN, пароль, «Открыть» (passkey). Поле пароля, выбранное
@@ -404,9 +428,16 @@ function applyState(state) {
   if (!passwordForm.hidden) {
     openButton.hidden = !keys;
     usePin.hidden = !pinOn;
-  } else if (pinOn) offerPin();
-  else if (state.pin) pinGone(EXHAUSTED);
+  } else if (pinOn) {
+    if (pinPad.hidden) offerPin();     // свежий ответ не стирает уже набранные во время проверки цифры
+    openButton.hidden = !keys;
+  } else if (state.pin) pinGone(EXHAUSTED);
   else if (!keys) offerPassword();
+  else {
+    forgetDigits();
+    pinPad.hidden = true;
+    openButton.hidden = false;
+  }
   if (keys) prepare();
 }
 
@@ -474,7 +505,7 @@ async function opened() {
 }
 
 async function openWithPasskey() {
-  if (calling || preparing) return;    // кнопка выключена; на случай нажатия, пришедшего раньше перерисовки
+  if (checking || calling || preparing) return;    // кнопка выключена; на случай нажатия, пришедшего раньше перерисовки
   if (!options) {                      // вариантов нет (не было связи) — готовим, нажать ещё раз
     say('');
     if (stale) refresh();              // сначала состояние: у учётки может не быть ключей, а быть PIN
@@ -503,6 +534,7 @@ async function openWithPasskey() {
 
 async function openWithPassword(event) {
   event.preventDefault();
+  if (checking) return;
   const go = document.getElementById('lock-password-go');
   go.disabled = true;
   try {
@@ -531,7 +563,7 @@ function eraseDigit() {
 
 /** «OK»: одна попытка за раз (повторное касание и Enter, пока идёт запрос, — мимо); цифры стираются сразу. */
 async function openWithPin() {
-  if (pinGoing || digits.length < PIN_MIN) return;
+  if (checking || pinGoing || digits.length < PIN_MIN) return;
   const pin = digits;
   pinGoing = true;
   digits = '';
@@ -578,7 +610,7 @@ async function onVisibility() {
       cover(true);
     }
     if (currentPolicy().enabled && currentPolicy().timeout === 0 && !waiting) {
-      waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+      waitOpen(requestLock());
     }
     return;
   }
@@ -599,7 +631,7 @@ async function onVisibility() {
   }
   const timeout = currentPolicy().timeout;
   if (guarded() && (timeout === 0 || Date.now() - (activityAt || checkedAt) >= timeout * 1000)) {
-    waitOpen(api('POST', '/api/lock/now').then(() => true, () => false));
+    waitOpen(requestLock());
     return;
   }
   const locked = await mark(false);
@@ -608,10 +640,11 @@ async function onVisibility() {
   armIdle();
 }
 
-async function begin() {
+async function begin(knownState) {
   try {
-    const state = await lockState();                  // CSRF до профиля: отметка — запрос POST
-    if (state.locked) waitOpen(null, state);
+    const state = knownState ? useLockState(knownState) : await lockState();
+    // HTML знает истечение сессии, но hash-маршрут и область защиты проверяет браузер.
+    if (state.locked && guarded()) waitOpen(null, state);
     else {
       checkedAt = Date.now();
       mark(false);
@@ -686,5 +719,12 @@ export function installLock() {
     // экран блокировки открыт давно: вызов на сервере истечёт раньше нажатия — готовить заранее, а не по нажатию (Safari)
     else if (waiting && keys && screen.open && options && !fresh()) prepare();
   }, ALIVE_SEC * 1000);
-  begin();
+  let initial;
+  try {
+    initial = JSON.parse(screen.dataset.lockState);
+  } catch {
+    // Статическая оболочка без снимка сессии использует обычный запрос состояния.
+  }
+  delete screen.dataset.lockState;
+  begin(initial);
 }

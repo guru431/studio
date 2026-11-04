@@ -3,7 +3,10 @@
 import asyncio
 import base64
 import hashlib
+import html
+import json
 import logging
+import re
 import time
 
 import httpx
@@ -111,6 +114,26 @@ def locked_owner(s) -> int:
     lock_on(uid); phone(s)
     assert s.c.post("/api/lock/now").status_code == 204
     return uid
+
+
+def test_shell_bootstrap_is_session_bound_and_has_no_account_secrets(studio):
+    uid = locked_owner(studio)
+    set_pin(uid, '0007')
+    state.DB.execute('UPDATE users SET screen_lock_sections = ?, pin_fails = ? WHERE id = ?', ('["photo"]', PIN_FAILS, uid))
+    response = studio.c.get('/')
+    assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
+    snapshot = json.loads(html.unescape(re.search(r'data-lock-state="([^"]+)"', response.text)[1]))
+    assert snapshot == studio.c.get('/api/lock?section=security').json()
+    assert snapshot['locked'] and snapshot['sections'] == ['photo']
+    assert snapshot['pin'] and snapshot['pin_left'] == 0
+    assert pin_hash(uid) not in response.text and studio.c.cookies[auth.COOKIE] not in response.text
+    assert pin_fails(uid) == PIN_FAILS and session_row(studio)['seen'] is None
+    other = make_user(studio, 'other')
+    signin(studio, 'other')
+    another = studio.c.get('/')
+    other_snapshot = json.loads(html.unescape(re.search(r'data-lock-state="([^"]+)"', another.text)[1]))
+    assert not other_snapshot['locked'] and not other_snapshot['pin']
+    assert other_snapshot['csrf'] != snapshot['csrf'] and other != uid
 
 
 def second_session(s, login_name="owner"):
