@@ -1,12 +1,17 @@
 """A local deployment profile must preserve code and reject unsafe SSH paths."""
 import importlib.util
 import io
+import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 import tarfile
 import zipfile
 
 import pytest
 import config
+from test_deploy import _bash
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -78,3 +83,31 @@ def test_agent_package_receives_the_installation_server_and_retains_other_files(
         assert archive.read("studio-agent/studio_agent/store.py") == b'url = "https://studio.example.net"\n'
         assert archive.read("studio-agent/install.cmd") == b"@echo off\r\n"
     assert list(tmp_path.iterdir()) == [archive_path]
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.name != 'nt', reason='Git Bash native environment conversion is Windows-specific')
+def test_git_bash_preserves_remote_profile_paths_for_native_python(tmp_path):
+    bash = _bash()
+    if not bash:
+        pytest.skip('Git Bash is unavailable')
+    root = Path(__file__).parents[1]
+    profile = tmp_path / 'local-profile.sh'
+    profile.write_text('STUDIO_REMOTE_ROOT=/srv/studio\nSTUDIO_MEDIA_DIR=/mnt/media/studio\n'
+                       'STUDIO_CERT_DIR=/etc/certs/studio\n', encoding='utf-8', newline='\n')
+    probe = tmp_path / 'check.py'
+    probe.write_text('import os,runpy,sys\n'
+                     'assert os.environ["STUDIO_TEST_PATH"] == "/srv/keep"\n'
+                     'sys.argv = [sys.argv[1], "--check"]\n'
+                     'runpy.run_path(sys.argv[0], run_name="__main__")\n', encoding='utf-8')
+    script = root / 'deploy/deploy.sh'
+    prefix = script.read_text(encoding='utf-8').split('HOST=${STUDIO_SSH', 1)[0]
+    command = prefix + '\nexec ' + shlex.join([Path(sys.executable).as_posix(), probe.as_posix(),
+                                              (root/'deploy/render-profile.py').as_posix()])
+    env = {key: value for key, value in os.environ.items()
+           if key not in ('STUDIO_REMOTE_ROOT', 'STUDIO_MEDIA_DIR', 'STUDIO_CERT_DIR')}
+    env.update(STUDIO_DEPLOY_PROFILE=profile.as_posix(), STUDIO_TEST_PATH='/srv/keep',
+               MSYS2_ENV_CONV_EXCL='STUDIO_TEST_PATH')
+    result = subprocess.run([bash, '-c', command, script.as_posix()], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
