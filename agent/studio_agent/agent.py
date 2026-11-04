@@ -86,6 +86,7 @@ class Agent:
         self.codex = codex
         self.opencode = opencode
         self.updater = None
+        self.local_exit_pending = False
         self.desktop = desktop.Desktop(cfg.desktop_enabled, now=now)
         self.set_max_turns(cfg.max_turns)
         self.cc_version = cc_version
@@ -213,6 +214,9 @@ class Agent:
         if self.updater is not None and self.updater.busy and op in (
                 "turn", "save", "file_operation", "worktree_create", "chat_fork", "desktop_start"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
+        if self.local_exit_pending and op in (
+                "turn", "save", "file_operation", "worktree_create", "chat_fork", "desktop_start"):
+            raise Refused("busy", "Агент завершает работу по выбору на компьютере")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")

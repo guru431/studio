@@ -159,13 +159,23 @@ def vapid_header(endpoint: str) -> str:
 # ---- отправка ------------------------------------------------------------------
 
 async def notify(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
-    """Уведомление каждой подписке пользователя; 404 и 410 — подписки больше нет."""
-    rows = state.DB.execute("SELECT endpoint, p256dh, auth FROM push_subs WHERE user_id = ?", (user_id,)).fetchall()
+    """Уведомление живым сессиям активной учётки; 404 и 410 — подписки больше нет."""
+    rows = state.DB.execute(
+        "SELECT p.endpoint, p.p256dh, p.auth, p.digest FROM push_subs p"
+        " JOIN sessions s ON s.digest = p.digest AND s.user_id = p.user_id"
+        " JOIN users u ON u.id = p.user_id"
+        " WHERE p.user_id = ? AND s.expires > ? AND u.disabled = 0", (user_id, clock.NOW())).fetchall()
     if not rows:
         return
     payload = json.dumps({"title": title, "body": body, "href": href, "tag": tag}, ensure_ascii=False).encode()
     for row in rows:
         endpoint = row["endpoint"]
+        # A previous network send can yield long enough for another device to be revoked.
+        if state.DB.execute(
+            "SELECT 1 FROM push_subs p JOIN sessions s ON s.digest = p.digest AND s.user_id = p.user_id"
+            " JOIN users u ON u.id = p.user_id WHERE p.endpoint = ? AND p.digest = ?"
+            " AND s.expires > ? AND u.disabled = 0", (endpoint, row["digest"], clock.NOW())).fetchone() is None:
+            continue
         headers = {"TTL": str(TTL_SEC), "Urgency": "high", "Content-Encoding": "aes128gcm",
                    "Content-Type": "application/octet-stream", "Authorization": vapid_header(endpoint)}
         try:
@@ -199,10 +209,12 @@ def job_finished(table: str, item_id: str) -> None:
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
     row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
                             " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
-                            " AND (EXISTS (SELECT 1 FROM push_subs p WHERE p.user_id = j.user_id)"
+                            " AND EXISTS (SELECT 1 FROM users u WHERE u.id = j.user_id AND u.disabled = 0)"
+                            " AND (EXISTS (SELECT 1 FROM push_subs p JOIN sessions s ON s.digest = p.digest"
+                            " WHERE p.user_id = j.user_id AND s.expires > ?)"
                             " OR EXISTS (SELECT 1 FROM ntfy_devices n JOIN sessions s ON s.digest = n.digest"
                             " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
-                            (item_id, clock.NOW())).fetchone()
+                            (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
         notify_later(row["user_id"], done if row["state"] == "done" else error,
                      f"{section}?id={item_id}", item_id, title="Студия")

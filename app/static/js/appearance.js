@@ -9,7 +9,7 @@ export function setupAppearance() {
   const scale = el('select', { id: 'appearance-scale' }, ...[50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].map((n) =>
     el('option', { value: n }, `${n}%`)));
   const fontValue = el('output', { for: 'appearance-font' });
-  const reset = el('button', { type: 'button', class: 'btn-link' }, 'Сбросить');
+  const reset = el('button', { type: 'button', class: 'btn-link' }, 'Сбросить шрифт и масштаб');
   function read(key, fallback) {
     try { return Number(localStorage.getItem(key)) || fallback; } catch { return fallback; }
   }

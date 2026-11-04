@@ -27,6 +27,7 @@ import audio
 import clock
 import db
 import media
+import operations
 import push
 import sections
 import speech
@@ -240,6 +241,7 @@ async def stop() -> None:
 @router.post("", status_code=202)
 async def create(body: SpeechIn, request: Request):
     uid = request.state.user.id
+    operations.check(uid)
     text = body.text.strip()
     if not text or len(text) > TEXT_MAX:
         raise HTTPException(422, {"code": "text", "message": f"текст — от 1 до {TEXT_MAX} знаков"})

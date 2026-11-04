@@ -4,7 +4,6 @@ import builtins
 import dataclasses
 import io
 import logging
-import sqlite3
 import struct
 import threading
 import time
@@ -75,6 +74,16 @@ def test_range_of_an_empty_file_is_unsatisfiable(studio):
     mid = media.save(uid, b"", "text/markdown", "empty.md")
     r = studio.c.get(f"/api/media/{mid}", headers={"Range": "bytes=-5"})
     assert r.status_code == 416 and r.headers["content-range"] == "bytes */0"
+
+
+def test_overlong_range_bounds_are_ignored_without_integer_conversion(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    mid = media.save(uid, DATA, "video/mp4", "clip.mp4")
+    huge = "9" * 5000
+    for spec in (f"bytes={huge}-", f"bytes=0-{huge}", f"bytes=-{huge}"):
+        r = studio.c.get(f"/api/media/{mid}", headers={"Range": spec})
+        assert r.status_code == 200 and r.content == DATA
+        assert "content-range" not in r.headers
 
 
 def test_unsupported_range_gets_the_whole_file(studio):
@@ -246,13 +255,14 @@ def test_attachment_uploaded_during_the_wipe_leaves_no_orphan(studio, env, monke
 
     def racing(rows):                                # поток стирания: цикл свободен
         if not uploads:
-            uploads.append(studio.c.post("/api/attachments",
-                                         files={"file": ("p.png", png(20, 10), "image/png")}).status_code)
+            uploads.append(None)  # mark entry before a rejected upload can trigger its own purge
+            uploads[0] = studio.c.post("/api/attachments",
+                                        files={"file": ("p.png", png(20, 10), "image/png")}).status_code
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
     assert studio.c.delete("/api/history").status_code == 200
-    assert uploads == [201]
+    assert uploads == [409]
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert files(env.media_dir) == []
 
@@ -498,12 +508,13 @@ def test_a_stalled_share_is_a_503_in_words(studio, monkeypatch):
 
 
 def test_a_refused_row_takes_the_files_away_off_the_loop(studio, env, unlinks):
-    """Строка media не встала (учётки уже нет — внешний ключ): файлы удаляются в потоке, не с цикла
+    """Строка media не встала (учётки уже нет): файлы удаляются в потоке, не с цикла
     событий, и путь уходит с очереди (хвост правки очереди удаления)."""
     for save in (lambda: media.save_async(999, png(64, 64), "image/png", "p.png", thumb=True),
                  lambda: media.save_stream(999, chunks(DATA), "video/mp4", "clip.mp4", max_bytes=1000)):
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(HTTPException) as error:
             asyncio.run(save())
+        assert error.value.status_code == 401 and error.value.detail["code"] == "login"
     assert files(env.media_dir) == [] and queued() == []
     assert unlinks and not any(unlinks)
 

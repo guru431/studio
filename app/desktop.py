@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, field_validator
 
-from claude_code import _BridgeJSON, _refuse, _session_open, ask, own_agent, require_capability
+from claude_code import _BridgeJSON, _refuse, ask, own_agent, require_capability
 
 router = APIRouter(prefix="/api/code/agents/{aid}/desktop", default_response_class=_BridgeJSON)
 IMAGE_MAX = 700 * 1024  # символов base64, как в native-модуле; всегда один кадр на запрос
@@ -83,11 +83,7 @@ class Clipboard(Control):
 async def call(request, aid, op, **values):
     own_agent(request, aid)
     require_capability(aid, "desktop")
-    data = await ask(request, aid, "desktop_" + op, **values)
-    # Сессия могла запереться или закончиться, пока Windows снимала кадр.
-    if not _session_open(request.state.digest):
-        raise _refuse(409, "closed", "Сеанс Студии закрыт")
-    return data
+    return await ask(request, aid, "desktop_" + op, **values)
 
 
 def bad():

@@ -41,9 +41,10 @@ import logging
 import math
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -58,6 +59,7 @@ import manage
 import media
 import ocr
 import ocr_render
+import operations
 import sections
 import state
 import upstream
@@ -145,7 +147,6 @@ DROPPED = f"[фото убрано из контекста: модели — н�
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-MSK = timezone(timedelta(hours=3))               # Москва без перехода на летнее время
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
           "октября", "ноября", "декабря")
@@ -482,14 +483,17 @@ async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[
             for m in messages]
 
 
-def today_line(now: float) -> str:
-    d = datetime.fromtimestamp(now, MSK)
-    return f"Сегодня {WEEKDAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]} {d.year} года (Москва)."
+def today_line(now: float, zone: str = "Europe/Moscow") -> str:
+    d = datetime.fromtimestamp(now, ZoneInfo(zone))
+    label = "Москва" if zone == "Europe/Moscow" else zone
+    return f"Сегодня {WEEKDAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]} {d.year} года ({label})."
 
 
-def with_date(messages: list[dict]) -> list[dict]:
+def with_date(messages: list[dict], user_id: int) -> list[dict]:
     """Запрос к модели — с сегодняшней датой первым системным сообщением (модель её не знает)."""
-    return [{"role": "system", "content": today_line(clock.NOW())}, *messages]
+    operations.check(user_id)
+    zone = state.DB.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()[0]
+    return [{"role": "system", "content": today_line(clock.NOW(), zone)}, *messages]
 
 
 def estimate_tokens(messages: list[dict]) -> int:
@@ -942,7 +946,7 @@ class StreamTask:
         if self.tools:
             self.known = _known_links(self.chat_id)
         try:
-            self.messages = with_date(await fill_photos(self.chat_id, self.user_id, composed))
+            self.messages = with_date(await fill_photos(self.chat_id, self.user_id, composed), self.user_id)
         except OSError as e:
             log.warning("чат %s: вложение не прочиталось (%s)", self.chat_id[:8], type(e).__name__)
             return STORAGE
@@ -1091,6 +1095,7 @@ async def list_chats(request: Request):
 
 @router.post("/chats", status_code=201)
 async def create_chat(body: ChatIn, request: Request):
+    operations.check(request.state.user.id)
     user = request.state.user
     conn, model = _chat_pair(user.id, body.connection_id, body.model)
     chat_id, now = uuid.uuid4().hex, clock.NOW()
@@ -1227,6 +1232,7 @@ async def upload_attachment(request: Request):
         raise HTTPException(e.status, {"code": "document", "message": message}) from None
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
+    operations.check(uid)
     try:
         media_id = await media.save_async(uid, body, mime, download, thumb=kind == "image")
     except media.StorageError as e:
@@ -1391,7 +1397,7 @@ def _cleaner_messages(uid, chat_id, body, atts):
             messages[-1]["content"] = _merge(messages[-1]["content"], content)
         else:
             messages.append({"role": "user", "content": content})
-    return with_date(messages)
+    return with_date(messages, uid)
 
 
 @router.post("/chats/{chat_id}/cleaner-preview")
@@ -1408,6 +1414,7 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     messages = _cleaner_messages(uid, chat_id, body, atts)
     preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
                                           [rule.model_dump() for rule in body.cleaner_rules])
+    operations.check(uid)
     _chat_row(uid, chat_id)                        # deleted while Cleaner was preparing: no send ticket
     return {"ticket": cleaner.remember(preview), **shown}
 
@@ -1430,6 +1437,7 @@ async def cleaner_copy(chat_id: str, body: CleanerCopyIn, request: Request):
         raise cleaner.refused("Документ ещё не распознан")
     text = _content(message["content"], [a for a in atts if a["kind"] == "document"])
     result = await cleaner.redact(conn, "chat", chat_id, text)
+    operations.check(uid)
     _chat_row(uid, chat_id)
     return {"text": result}
 
@@ -1447,6 +1455,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if not body.regenerate and not body.text.strip() and not atts:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     limit = await _limit(conn, model)
+    operations.check(uid)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     preview = None
     if conn.cleaner:
@@ -1533,7 +1542,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         raise
     try:
         if not scans:
-            messages = with_date(await fill_photos(chat_id, uid, messages))    # файлы — после COMMIT и в потоке
+            messages = with_date(await fill_photos(chat_id, uid, messages), uid)  # файлы — после COMMIT и в потоке
     except BaseException as e:
         # строка ответа уже в базе: без итога диалог считался бы занятым (см. _busy)
         _finish(answer_id, chat_id, STORAGE if isinstance(e, OSError) else "", "error")

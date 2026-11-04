@@ -5,14 +5,14 @@
 /* ---- токены ---------------------------------------------------------------- */
 
 :root, [data-theme="light"] { --bg:#fbfaf7; --side:#f3f0ea; --rail:#ebe7df; --panel:#ffffff; --panel-2:#efebe4; --bubble:#eeeae3;
-  --text:#1f1d1a; --muted:#7b766d; --border:#e3dfd6; --accent:#c96442; --accent-text:#ffffff; --ok:#2f9e6f; --danger:#b42318; --git-modified:#956800;
+  --text:#1f1d1a; --muted:#625d54; --border:#e3dfd6; --accent:#a4482c; --accent-text:#ffffff; --ok:#237348; --danger:#b42318; --git-modified:#785200;
   --shadow: 0 10px 30px rgba(31, 29, 26, .12); --backdrop: rgba(31, 29, 26, .35); color-scheme: light; }
 [data-theme="dark"] { --bg:#1b1b1b; --side:#131313; --rail:#0d0d0d; --panel:#262626; --panel-2:#303030; --bubble:#2f2f2f;
-  --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
+  --text:#ececec; --muted:#a3a3a3; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
   --shadow: 0 10px 30px rgba(0, 0, 0, .5); --backdrop: rgba(0, 0, 0, .6); color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) { --bg:#1b1b1b; --side:#131313; --rail:#0d0d0d; --panel:#262626; --panel-2:#303030; --bubble:#2f2f2f;
-    --text:#ececec; --muted:#8f8f8f; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
+    --text:#ececec; --muted:#a3a3a3; --border:#2a2a2a; --accent:#ececec; --accent-text:#111111; --ok:#3ecf8e; --danger:#f87171; --git-modified:#d7ba7d;
     --shadow: 0 10px 30px rgba(0, 0, 0, .5); --backdrop: rgba(0, 0, 0, .6); color-scheme: dark; }
 }
 
@@ -88,10 +88,10 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
   padding: 12px 0; background: var(--rail); border-right: 1px solid var(--border); }
 #rail > :not(.spacer) { flex-shrink: 0; }
 #rail .logo { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 10px; }
-#rail .tab { width: 76px; padding: 7px 0 5px; border-radius: 10px; display: flex; flex-direction: column; align-items: center;
+#rail .tab, #rail .mobile-more { width: 76px; padding: 7px 0 5px; border-radius: 10px; display: flex; flex-direction: column; align-items: center;
   gap: 2px; color: var(--muted); font-size:calc(11px * var(--font-scale, 1)); text-decoration: none; }
 /* подпись — в ширину вкладки; многоточие — страховка от чужого шрифта */
-#rail .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rail .tab span, #rail .mobile-more span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rail .tab:hover { color: var(--text); }
 #rail .tab[aria-current="page"] { background: var(--panel); color: var(--text); }
 #rail .tab .tab-icon { position: relative; display: flex; overflow: visible; }
@@ -155,6 +155,31 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 /* тема (app.js): значок того, что включит нажатие, и слово */
 .menu-theme { display: flex; align-items: center; gap: 8px; }
 .menu-theme svg.ico { width: 18px; height: 18px; color: var(--muted); }
+.theme-controls { display:grid; gap:6px; padding:6px 10px; }
+.theme-controls label { max-width:230px; }
+#theme-mode { width:100%; min-width:0; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px; }
+#theme-save-status { margin:0; max-width:230px; font-size:calc(12px * var(--font-scale, 1)); overflow-wrap:anywhere; }
+.menu :is(.menu-item, select, .btn-link, input[type="range"]) { min-height:calc(44px / var(--ui-scale, 1)); }
+.menu .btn-link { white-space:normal; }
+.menu .appearance-controls { width:250px; }
+#rail .mobile-more { display:none; }
+.mobile-sections { width:min(440px, calc(100vw / var(--ui-scale, 1) - 24px));
+  max-height:calc(100dvh / var(--ui-scale, 1) - 24px); }
+.mobile-sections-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.mobile-sections-head h2 { margin:0; }
+.mobile-sections :is(button, a, label) { min-height:calc(44px / var(--ui-scale, 1)); }
+#mobile-section-links { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin:12px 0; }
+#mobile-section-links a { display:flex; gap:8px; align-items:center; padding:8px; border-radius:8px; color:var(--text); text-decoration:none; }
+#mobile-section-links a span { min-width:0; overflow-wrap:anywhere; }
+#mobile-section-links a:hover, #mobile-section-links a[aria-current] { background:var(--panel-2); }
+#mobile-section-links a[aria-current] { outline:2px solid var(--accent); outline-offset:-2px; }
+#mobile-nav-edit { width:100%; white-space:normal; }
+#mobile-nav-editor fieldset { margin:12px 0; padding:0; border:0; }
+#mobile-nav-editor legend { padding:0; }
+#mobile-nav-editor label { display:flex; gap:10px; align-items:center; color:var(--text); }
+#mobile-nav-editor input { width:20px; height:20px; accent-color:var(--accent); }
+#mobile-nav-editor .actions { display:flex; gap:8px; flex-wrap:wrap; }
+#mobile-nav-editor > .btn-link { white-space:normal; margin-top:8px; }
 
 /* шапка раздела */
 .head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 10px 16px;
@@ -165,16 +190,18 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 
 /* телефон: рельс — нижние вкладки, аватар — в шапке раздела */
 @media (max-width: 760px) {
-  :root { --tabs-h: calc(58px + env(safe-area-inset-bottom, 0px)); }
-  #rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; width: auto; height: var(--tabs-h);
+  :root { --tabs-h: calc(74px + env(safe-area-inset-bottom, 0px)); }
+  #rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; width: auto; height: auto;
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; overflow: visible;
     padding: 4px 0 env(safe-area-inset-bottom, 0px); background: var(--side); border-right: 0; border-top: 1px solid var(--border); }
   #rail .logo, #rail .spacer { display: none; }
-  /* равные ячейки для значков; длинная подпись может выходить за границы своей ячейки */
-  #rail .tab { flex: 1; min-width: 0; width: auto; padding: 7px 0 5px; justify-content: center; font-size:calc(10px * var(--font-scale, 1));
-    letter-spacing: -0.02em; }
-  #rail .tab span { max-width: none; }
-  #rail .tab[aria-current="page"] { background: none; color: var(--accent); }
+  #rail .tab, #rail .mobile-more { flex:1; min-width:0; min-height:max(60px, calc(44px / var(--ui-scale, 1))); width:auto; padding:7px 3px 5px; justify-content:center;
+    font-size:calc(11px * var(--font-scale, 1)); text-align:center; line-height:1.25; }
+  #rail .tab > span:last-child, #rail .mobile-more > span:last-child { max-width:100%; overflow-wrap:anywhere; white-space:normal; }
+  #rail .tab.mobile-secondary { display:none; }
+  #rail .mobile-more { display:flex; border:0; background:none; font-weight:inherit; }
+  .mobile-more-icon { height:20px; line-height:14px; letter-spacing:2px; font-size:22px; }
+  #rail .tab[aria-current="page"], #rail .mobile-more[aria-current="page"] { background: none; color: var(--accent); }
   #avatar { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .jobs-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
   .search-toggle { position: fixed; z-index: 21; top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }

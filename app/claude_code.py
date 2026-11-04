@@ -45,6 +45,7 @@ import clock
 import code_attention
 import lock_policy
 import ocr_render
+import operations
 import state
 
 log = logging.getLogger("studio")
@@ -202,14 +203,19 @@ class Answer(BaseModel):
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     decision: Literal["allow", "always", "deny"]
     message: str | None = Field(None, max_length=ANSWER_MAX)
-    answers: dict[str, str] | None = None
+    answers: dict[str, str | list[str]] | None = None
 
     @field_validator("answers")
     @classmethod
     def _answers(cls, value):
-        if value is not None and (len(value) > ANSWERS_MAX
-                                  or any(len(k) > ANSWER_MAX or len(v) > ANSWER_MAX for k, v in value.items())):
-            raise ValueError("answers")
+        if value is not None:
+            if len(value) > ANSWERS_MAX:
+                raise ValueError("answers")
+            for key, answer in value.items():
+                parts = answer if isinstance(answer, list) else [answer]
+                if (len(key) > ANSWER_MAX or len(parts) > 100
+                        or sum(map(len, parts)) > ANSWER_MAX):
+                    raise ValueError("answers")
         return value
 
     @model_validator(mode="after")
@@ -279,7 +285,12 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
             args["idle_sec"] = timeout
         elif timeout != lock_policy.COMPUTER_TIMEOUT:
             raise _refuse(409, "unsupported", "обновите агент на компьютере для настройки таймера PIN")
-        return await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
+        data = await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
+        # The computer may finish its work after logout, expiry, disable or a screen lock.
+        # Keeping that result on the computer does not authorize delivery to this request.
+        if not _session_open(request.state.digest):
+            raise _refuse(409, "closed", "Сеанс Студии закрыт")
+        return data
     except bridge.Offline:
         error = _refuse(409, "offline", "компьютер не на связи")
     except TimeoutError:
@@ -288,6 +299,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
+    if not _session_open(request.state.digest):
+        raise _refuse(409, "closed", "Сеанс Студии закрыт")
     if not quiet:
         _warn(request, aid, op, error)
     raise error
@@ -536,6 +549,7 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
         if not isinstance(child, str) or child == chat:
             raise _refuse(502, "bridge", "Мост не создал независимый чат")
         check_chat(child)
+        operations.check(request.state.user.id)
         state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
                          " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, child, now, now, engine))
     except BaseException:
@@ -591,6 +605,7 @@ async def new_chat(aid: int, pid: str, request: Request):
     """Номер сессии заводит студия (SDK примет заданный `session_id`); мост не зовётся — строка без хода
     безвредна, даже если компьютер уже закрыт. Поэтому открытость их и не сдерживает: строк и событий
     `session_start` (история подключений неудаляема) — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""
+    operations.check(request.state.user.id)
     agent = own_agent(request, aid)
     check_pid(pid)
     engine = chat_engine(request, aid)
@@ -618,10 +633,12 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
     check_pid(pid)
     check_chat(chat)
     uid = request.state.user.id
+    operations.check(uid)
     engine = chat_engine(request, aid, chat)
     if state.DB.execute("UPDATE code_chats SET state = ?, updated = ? WHERE user_id = ? AND agent_id = ?"
                         " AND session_id = ?", (body.state, clock.NOW(), uid, aid, chat)).rowcount == 0:
         await ask(request, aid, "history", project=pid, chat=chat, before=None, limit=1)
+        operations.check(uid)
         now = clock.NOW()
         state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
                          " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, session_id)"
@@ -1130,6 +1147,8 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
     if body.page > pages:
         raise _refuse(404, "page", NO_PAGE)
     png = await _pdfium(ocr_render.render_page, data, body.page - 1)
+    if not _session_open(request.state.digest):
+        raise _refuse(409, "closed", "Сеанс Студии закрыт")
     return Response(png, media_type="image/png", headers={"X-Studio-Pages": str(pages)})
 
 

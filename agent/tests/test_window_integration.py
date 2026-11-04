@@ -19,7 +19,11 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state):
     root.tk.call("tk", "scaling", scale * 96 / 72)
     cfg = store.Config(projects_root="C:/work/projects", max_turns=8)
     ctrl = SimpleNamespace(state=state, config=lambda: cfg, autostart_enabled=lambda: False,
-                           backend_status=lambda: {}, login=lambda: "owner", pin_status=lambda: "set")
+                           backend_status=lambda: {}, login=lambda: "owner", pin_status=lambda: "set",
+                           activity_status=lambda: {"tasks": 0, "waiting": 0, "desktop_active": False,
+                                                    "quit_when_idle": False},
+                           stop_desktop_session=lambda: None, set_quit_when_idle=lambda enabled: None,
+                           request_quit=lambda: None)
     monkeypatch.setattr(window.MainWindow, "lift", lambda self: None)
     monkeypatch.setattr(window.MainWindow, "work", lambda *args, **kwargs: None)
     # Подмена только границ монитора: настоящую геометрию и прокрутку рассчитывает Tk.
@@ -86,5 +90,53 @@ def test_local_desktop_checkbox_persists_without_restarting_or_contacting_studio
         restarted.ctrl.set_desktop_enabled(False)
         assert not store.load_config(home).desktop_enabled
         assert ctrl.agent is None and ctrl._link is None
+    finally:
+        root.destroy()
+
+
+@pytest.mark.integration
+def test_local_activity_buttons_stop_only_desktop_and_wait_for_work_before_exit(home, monkeypatch):
+    import tkinter as tk
+    from studio_agent.app import Controller
+
+    store.save_config(home, store.Config(projects_root='C:/work/projects', desktop_enabled=True))
+    ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
+    ctrl.state = 'online'
+    desktop = {"active": True, "enabled": True}
+    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop),
+        revoke=lambda: desktop.update(active=False)))
+    work = {"task": True}
+    ctrl.codex = SimpleNamespace(live=lambda: dict(work))
+    exits = []
+    ctrl.on_idle_quit = lambda: exits.append(True)
+    ctrl._refresh_activity()
+    root = tk.Tk()
+    root.withdraw()
+    monkeypatch.setattr(window.MainWindow, 'lift', lambda self: None)
+    monkeypatch.setattr(window.MainWindow, 'work', lambda self, fn, done, **kwargs: done(fn(), False))
+    try:
+        main = window.MainWindow(root, ctrl)
+        root.update()
+        tasks, label, stop, idle, immediate = main.activity_widgets
+        assert tasks.cget('text') == 'Заданий: 1 · ждут ответа: 1'
+        assert label.cget('text') == 'Удалённый рабочий стол подключён'
+        stop.invoke()
+        ctrl._refresh_activity()
+        main.show_activity()
+        root.update()
+        assert not desktop['active'] and ctrl.config().desktop_enabled
+        assert stop.instate(['disabled']) and label.cget('text').endswith('не подключён')
+        idle.invoke()
+        main.show_activity()
+        assert not exits and idle.cget('text') == 'Отменить выход после завершения'
+        idle.invoke()
+        work.clear()
+        ctrl._refresh_activity()
+        main.show_activity()
+        assert not exits
+        idle.invoke()
+        assert exits == [True]
+        immediate.invoke()
+        assert exits == [True, True]
     finally:
         root.destroy()

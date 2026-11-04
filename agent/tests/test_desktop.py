@@ -134,6 +134,25 @@ async def test_idle_lease_releases_input_and_never_reactivates_it(service):
         await desk.frame('owner', token, 0)
 
 
+async def test_local_stop_releases_input_without_changing_permanent_permission(service, home):
+    from types import SimpleNamespace
+
+    desk, native, clock, made = service
+    desk.set_enabled(True)
+    ctrl = app.Controller(home)
+    store.save_config(home, store.Config(desktop_enabled=True))
+    ctrl.agent = SimpleNamespace(desktop=desk)
+    token = (await desk.start('owner'))['control']
+    await desk.input('owner', token, [{'type': 'key', 'code': 'ControlLeft', 'down': True}])
+    ctrl.stop_desktop_session()
+    await asyncio.wrap_future(desk._pool.submit(lambda: None))
+    assert native.releases and desk.status()['enabled'] and not desk.status()['active']
+    assert ctrl.config().desktop_enabled
+    with pytest.raises(Refused, match='owned'):
+        await desk.input('owner', token, [{'type': 'text', 'text': 'stale'}])
+    assert (await desk.start('next'))['control'] != token
+
+
 async def test_frame_and_input_are_serialized_without_losing_normal_input(service):
     desk, native, clock, made = service
     desk.set_enabled(True)

@@ -119,13 +119,23 @@ class Tray:
         import pystray
 
         self.state, self.login = state, login
+        self.activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False}
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: status_line(self.state, self.login), None, enabled=False),
+            pystray.MenuItem(lambda item: f"Заданий: {self.activity['tasks']} · ждут ответа: {self.activity['waiting']}",
+                             None, enabled=False),
+            pystray.MenuItem(lambda item: "Удалённый рабочий стол подключён" if self.activity['desktop_active']
+                             else "Удалённый рабочий стол не подключён", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Открыть Studio Agent", lambda: post("open"), default=True),
+            pystray.MenuItem("Завершить этот сеанс", lambda: post("stop_desktop"),
+                             enabled=lambda item: self.activity['desktop_active']),
             pystray.MenuItem("Снять блок PIN", lambda: post("reset_pin"), enabled=lambda item: pin_locked()),
             pystray.MenuItem("Открыть журнал", lambda: post("log")),
-            pystray.MenuItem("Выход", lambda: post("quit")))
+            pystray.MenuItem(lambda item: "Отменить выход после завершения" if self.activity['quit_when_idle']
+                             else f"Выйти после завершения · заданий: {self.activity['tasks']}",
+                             lambda: post("quit_idle")),
+            pystray.MenuItem(lambda item: f"Выход сейчас · заданий: {self.activity['tasks']}", lambda: post("quit")))
         self.icon = pystray.Icon("studio-agent", image(state), title(state, login), menu)
 
     def start(self) -> None:
@@ -134,8 +144,20 @@ class Tray:
     def show(self, state: str, login: str) -> None:
         self.state, self.login = state, login
         self.icon.icon = image(state)
-        self.icon.title = title(state, login)
+        self._title()
         self.refresh()
+
+    def show_activity(self, activity: dict) -> None:
+        self.activity = dict(activity)
+        self._title()
+        self.refresh()
+
+    def _title(self) -> None:
+        base = title(self.state, self.login)
+        suffix = f" · заданий: {self.activity['tasks']} · ждут: {self.activity['waiting']}"
+        if self.activity['desktop_active']:
+            suffix += " · рабочий стол"
+        self.icon.title = base[:TITLE_MAX - len(suffix)] + suffix
 
     def refresh(self) -> None:
         """Меню заново: строка состояния и «Снять блок PIN» (pystray на Windows строит меню заранее); в своём

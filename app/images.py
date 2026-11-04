@@ -65,6 +65,7 @@ import connections
 import db
 import forms
 import media
+import operations
 import push
 import sections
 import state
@@ -250,6 +251,7 @@ def _active(user_id: int) -> "Job | None":
 
 
 def ensure_idle(user_id: int) -> None:
+    operations.check(user_id)
     _prune()
     active = _active(user_id)
     if active is not None:

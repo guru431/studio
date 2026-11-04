@@ -422,6 +422,32 @@ def test_today_line_names_the_moscow_date():
     assert chat.today_line(1_792_616_400) == "Сегодня четверг, 22 октября 2026 года (Москва)."
 
 
+def test_today_line_uses_the_selected_zone_at_midnight_and_dst():
+    from datetime import datetime, timezone
+
+    def at(iso):
+        return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+
+    assert chat.today_line(at("2026-10-21T21:00:00"), "America/New_York") == (
+        "Сегодня среда, 21 октября 2026 года (America/New_York).")
+    assert chat.today_line(at("2026-03-08T04:30:00"), "America/New_York") == (
+        "Сегодня суббота, 7 марта 2026 года (America/New_York).")
+    assert chat.today_line(at("2026-03-08T07:30:00"), "America/New_York") == (
+        "Сегодня воскресенье, 8 марта 2026 года (America/New_York).")
+
+
+def test_chat_date_matches_the_account_zone_for_server_and_direct_connections(studio):
+    studio.clock[0] = 1_792_616_400  # Moscow is already on October 22; New York is still on October 21.
+    add_gateway(studio)
+    assert studio.c.patch("/api/me", json={"timezone": "America/New_York"}).status_code == 200
+    expected = "Сегодня среда, 21 октября 2026 года (America/New_York)."
+    sse(turn(studio, new_chat(studio), "Привет"))
+    assert studio.gw.chat_requests[-1]["messages"][0]["content"] == expected
+    direct = add_connection(studio)
+    body = turn(studio, new_chat(studio, connection_id=direct), "Привет").json()
+    assert body["messages"][0]["content"] == expected
+
+
 def test_every_chat_request_starts_with_today(studio):
     today = {"role": "system", "content": chat.today_line(T0)}
     add_gateway(studio); cid = new_chat(studio)
@@ -606,7 +632,8 @@ def test_chat_deleted_while_the_turn_reads_its_photos_gets_no_model_call(studio,
 def test_history_wipe_while_the_turn_reads_its_photos_gets_no_model_call(studio, monkeypatch):
     """Стирание истории, пока ход читает фото: модели ход уже не зовёт (ревью N2)."""
     _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.delete("/api/history"))
-    assert answers == [200] and r.status_code == 404
+    assert answers == [200] and r.status_code == 409
+    assert r.json()["detail"]["code"] == "history_changed"
     assert not studio.gw.chat_requests and not chat.STREAMS
 
 
@@ -686,31 +713,23 @@ def test_browser_answer_another_tab_still_reads_is_live(studio):
     assert studio.c.post(alive).status_code == 404                # чужой диалог
 
 
-def test_history_wipe_stops_a_turn_started_during_it(studio, monkeypatch):
-    """Ход без фото, начатый из другой вкладки, пока стирание удаляет файлы: его поток
-    останавливается и после удаления диалога, а не держит карту до конца ответа (ревью B2-M7)."""
+def test_history_wipe_refuses_a_turn_started_during_it(studio, monkeypatch):
+    """Ход из другой вкладки во время удаления файлов не запускает модель."""
     import media
     add_gateway(studio); cid = new_chat(studio)
     attach(studio, "a.txt", b"x", "text/plain")                 # файл есть: стирание идёт в поток
-    real, streams = media.remove_files, []
+    real, responses = media.remove_files, []
 
     def racing(rows):                                         # поток стирания: цикл свободен
-        if not streams:
-            with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
-                events = events_of(r.iter_lines())
-                assert next(events)[0] == "turn"
-                assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
-                streams.extend(chat.STREAMS.values())
+        if not responses:
+            responses.append(studio.c.post(f"/api/chats/{cid}/turns", json={"text": "Привет"}))
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    studio.gw.chat_hold = True
-    try:
-        assert studio.c.delete("/api/history").status_code == 200
-        (stream,) = streams
-        assert stream.task.done() and not chat.STREAMS
-    finally:
-        studio.gw.chat_hold = False
+    assert studio.c.delete("/api/history").status_code == 200
+    assert len(responses) == 1 and responses[0].status_code == 409
+    assert responses[0].json()["detail"]["code"] == "history_changed"
+    assert not studio.gw.chat_requests and not chat.STREAMS
     assert studio.c.get("/api/chats").json() == {"items": []}
 
 

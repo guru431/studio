@@ -49,3 +49,41 @@ def test_notice_only_for_first_online_and_studio_closing():
     assert tray.notice("replaced", True) == "Ключ используется другим мостом"
     for state in ("offline", "connecting", "setup"):
         assert tray.notice(state, True) is None
+
+
+def test_local_activity_menu_routes_desktop_and_exit_actions_without_private_details(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    class Menu(tuple):
+        SEPARATOR = object()
+
+        def __new__(cls, *items):
+            return super().__new__(cls, items)
+
+    def item(text, action, **kwargs):
+        return SimpleNamespace(text=text, action=action, enabled=kwargs.get('enabled', True))
+
+    monkeypatch.setitem(sys.modules, 'pystray', SimpleNamespace(Menu=Menu, MenuItem=item,
+        Icon=lambda name, image, title, menu: SimpleNamespace(title=title, menu=menu)))
+    monkeypatch.setattr(tray.Tray, 'refresh', lambda self: None)
+    commands = []
+    icon = tray.Tray('online', commands.append, lambda: False, 'owner')
+    icon.show_activity({'tasks': 3, 'waiting': 1, 'desktop_active': True, 'quit_when_idle': False})
+    items = [entry for entry in icon.icon.menu if entry is not Menu.SEPARATOR]
+
+    def text(entry):
+        return entry.text(entry) if callable(entry.text) else entry.text
+
+    assert 'заданий: 3' in icon.icon.title and 'ждут: 1' in icon.icon.title
+    stop = next(entry for entry in items if text(entry) == 'Завершить этот сеанс')
+    assert stop.enabled(stop)
+    stop.action()
+    next(entry for entry in items if text(entry).startswith('Выйти после')).action()
+    next(entry for entry in items if text(entry).startswith('Выход сейчас')).action()
+    assert commands == ['stop_desktop', 'quit_idle', 'quit']
+    icon.show_activity({'tasks': 0, 'waiting': 0, 'desktop_active': False, 'quit_when_idle': True})
+    assert not stop.enabled(stop)
+    assert any(text(entry) == 'Отменить выход после завершения' for entry in items)
+    icon.show('replaced', 'x' * 200)
+    assert len(icon.icon.title) <= tray.TITLE_MAX

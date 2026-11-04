@@ -48,6 +48,7 @@ import db
 import documents
 import exports
 import media
+import operations
 import ocr_render
 import push
 import sections
@@ -309,6 +310,7 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
            pages: list[dict], attachment_id: "str | None" = None) -> str:
     """Документ в очередь пользователя (раннер — `kick`). `pages`: `{"n", "state": "waiting"|"layer",
     "media_id", "text"}`. Ждущих уже QUEUE_MAX — 409 busy."""
+    operations.check(user_id)
     waiting = state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                                (user_id,)).fetchone()[0]
     if waiting >= QUEUE_MAX:
@@ -700,6 +702,9 @@ async def upload(request: Request):
     except media.StorageError as e:
         await _drop(uid, saved)
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    except HTTPException:
+        await _drop(uid, saved)
+        raise
     if not all(media.alive(uid, m) for m in saved):          # история стёрта, пока шла запись
         await _drop(uid, saved)
         raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})

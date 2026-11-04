@@ -220,6 +220,17 @@ async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existin
     assert (await agent.handle(req('projects')))[0]['ok']
 
 
+async def test_posted_local_idle_exit_refuses_new_work_but_keeps_status_available(agent):
+    await opened(agent)
+    agent.local_exit_pending = True
+    for operation in ('turn', 'save', 'file_operation', 'worktree_create', 'chat_fork', 'desktop_start'):
+        assert (await agent.handle(req(operation)))[0]['code'] == 'busy'
+    assert not agent.runner.live()
+    assert (await agent.handle(req('desktop_status')))[0]['ok']
+    agent.local_exit_pending = False
+    assert (await agent.handle(req('projects')))[0]['ok']
+
+
 async def test_subscription_usage_requires_open_session_and_valid_refresh(agent):
     agent._usage.read = AsyncMock(return_value={"available": False})
     assert (await agent.handle(req("usage")))[0]["code"] == "closed"

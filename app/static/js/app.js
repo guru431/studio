@@ -19,7 +19,9 @@
  *
  * Тема — пунктом #theme-toggle меню аватара (сразу под именем; подпись — что включит нажатие, меню после
  * нажатия остаётся открытым): из «auto» первое нажатие ставит противоположную видимой,
- * дальше «Бумага» ↔ «Графит»; выбор уходит в PATCH /api/me. Тема и вид ленты — в учётке: вернувшись
+ * дальше «Бумага» ↔ «Графит»; соседний выбор режима возвращает «Как на устройстве». Выбор уходит
+ * в PATCH /api/me; отказ виден рядом с повтором, несохранённый выбор сохраняется в открытом окне.
+ * Тема и вид ленты — в учётке: вернувшись
  * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
  * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
@@ -29,6 +31,7 @@ import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
 import { setupAppearance } from './appearance.js';
+import { setupMobileNavigation } from './mobile-navigation.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -80,6 +83,11 @@ const menu = document.getElementById('menu');
 let current = null;      // { section, module }
 let renders = 0;         // номер последнего перехода: медленная загрузка раздела не перебьёт новый
 let entries = 0;         // номера меток записей истории ({ entry: n } в history.state) — для hold() раздела
+let themeMode = null;
+let pendingTheme = null;
+let themeRevision = 0;
+let savingTheme = false;
+let mobileNavigation = null;
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -136,7 +144,8 @@ function applyTheme(theme) {
 }
 
 function visibleTheme() {
-  if (me.theme === 'dark' || me.theme === 'light') return me.theme;
+  const theme = themeMode ?? me.theme;
+  if (theme === 'dark' || theme === 'light') return theme;
   return darkMedia.matches ? 'dark' : 'light';
 }
 
@@ -144,28 +153,67 @@ function paintToggle() {
   const dark = visibleTheme() === 'dark';
   toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${THEME_ICONS[dark ? 'sun' : 'moon']}</svg>`;   // константа
   toggle.append(dark ? 'Светлая тема' : 'Тёмная тема');
+  document.getElementById('theme-mode').value = themeMode ?? me.theme;
+}
+
+async function saveTheme() {
+  if (savingTheme || pendingTheme === null) return;
+  savingTheme = true;
+  const status = document.getElementById('theme-save-status');
+  const retry = document.getElementById('theme-save-retry');
+  retry.hidden = true;
+  status.classList.remove('error');
+  status.textContent = 'Сохраняем тему…';
+  while (pendingTheme !== null) {
+    const choice = pendingTheme;
+    try {
+      // Последовательные запросы: медленный ответ старого выбора не перезапишет новый.
+      await api('PATCH', '/api/me', { theme: choice });
+    } catch {
+      if (pendingTheme !== choice) continue;
+      status.classList.add('error');
+      status.textContent = 'Не удалось сохранить тему. Выбор действует в этом окне.';
+      retry.hidden = false;
+      savingTheme = false;
+      return;
+    }
+    if (pendingTheme === choice) pendingTheme = null;
+  }
+  savingTheme = false;
+  status.textContent = 'Тема сохранена для учётки.';
+}
+
+function chooseTheme(next) {
+  themeMode = me.theme = pendingTheme = next;
+  themeRevision++;
+  applyTheme(next);
+  paintToggle();
+  saveTheme();
 }
 
 function setupTheme() {
   setupAppearance();
+  themeMode = me.theme;
   paintToggle();
   toggle.addEventListener('click', () => {
-    const next = visibleTheme() === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    me.theme = next;
-    paintToggle();
-    // тема уже применена и лежит в localStorage; без сети сохранится при следующем нажатии
-    api('PATCH', '/api/me', { theme: next }).catch(() => {});
+    chooseTheme(visibleTheme() === 'dark' ? 'light' : 'dark');
   });
+  document.getElementById('theme-mode').addEventListener('change', (event) => chooseTheme(event.target.value));
+  document.getElementById('theme-save-retry').addEventListener('click', saveTheme);
+  window.addEventListener('online', saveTheme);
   darkMedia.addEventListener('change', paintToggle);
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
+    const revision = themeRevision;
+    const hadPendingTheme = pendingTheme !== null || savingTheme;
     try {
       await loadMe();
     } catch {
       return;              // нет связи — остаётся прежнее; сессия кончилась — api.js увёл на вход
     }
-    applyTheme(me.theme);
+    if (hadPendingTheme || pendingTheme !== null || revision !== themeRevision) me.theme = themeMode;
+    else themeMode = me.theme;
+    applyTheme(themeMode);
     paintToggle();
     document.dispatchEvent(new Event('studio-me'));   // открытый раздел (чат: ключ Exa) перерисует своё
   });
@@ -250,6 +298,7 @@ async function render() {
     if (tab.dataset.section === route.section) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
+  mobileNavigation?.setActive(route.section);
   const ctx = { me, navigate, id: route.id, query: route.query, hint: hintOf(route.section) };
   if (current && current.section === route.section && current.module.update) {
     await current.module.update(ctx);
@@ -353,6 +402,7 @@ async function enter(worker) {
   setupMenu();
   setupJobs({ navigate });
   setupTheme();
+  mobileNavigation = setupMobileNavigation(me);
   window.addEventListener('hashchange', render);
   await render();
   setupCodeActivity();

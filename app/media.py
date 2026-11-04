@@ -46,6 +46,7 @@ from pydantic import BaseModel
 
 import clock
 import lock_policy
+import operations
 import state
 
 THUMB_SIDE = 384
@@ -138,6 +139,7 @@ def _insert(media_id: str, user_id: int, rel: str, mime: str, size: int, has_thu
     остаётся в очереди (у save — встаёт в неё): файлы удаляет не цикл событий, а проход очереди."""
     state.DB.execute("BEGIN")
     try:
+        operations.check(user_id)
         state.DB.execute("INSERT INTO media(id, user_id, rel_path, mime, size, has_thumb, download_name, created)"
                          " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                          (media_id, user_id, rel, mime, size, int(has_thumb), download_name, clock.NOW()))
@@ -485,6 +487,10 @@ def byte_range(header: str, size: int) -> "tuple[int, int] | str | None":
     if match is None or match.groups() == ("", ""):
         return None
     first, last = match.groups()
+    # Unsupported bounds are ignored, like multi-range requests. Keep integer parsing bounded
+    # even when the header fits the HTTP server's limit but exceeds Python's digit limit.
+    if len(first) > 20 or len(last) > 20:
+        return None
     if first == "":
         if int(last) == 0 or size == 0:          # у пустого файла нет ни байта: (0, -1) — не диапазон
             return UNSATISFIABLE

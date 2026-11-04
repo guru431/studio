@@ -494,11 +494,12 @@ class OpenCodeRunner(Runner):
                 choices = schema.get("oneOf") or [{"const": v, "title": str(v)} for v in schema.get("enum", [])]
                 multi = schema.get("type") == "array"
                 if multi:
-                    choices = schema.get("items", {}).get("oneOf", [])
+                    items = schema.get("items", {})
+                    choices = items.get("oneOf") or [{"const": v, "title": str(v)} for v in items.get("enum", [])]
                 fields[key] = {"label": label, "schema": schema, "choices": choices, "multi": multi}
                 questions.append({"id": key, "question": label, "header": None, "multi": multi,
-                    "options": [{"label": str(o.get("title") or o.get("const")), "description": o.get("description", "")}
-                                for o in choices]})
+                    "options": [{"id": f"option-{i}", "label": str(o.get("title") or o.get("const")),
+                                 "description": o.get("description", "")} for i, o in enumerate(choices)]})
             if not questions:
                 await t.client.rpc.send({"id": frame["id"], "result": {"action": "cancel"}})
                 return
@@ -539,15 +540,38 @@ class OpenCodeRunner(Runner):
                     value = answers.get(key)
                     if value is None and sum(row["label"] == field["label"] for row in frame["_fields"].values()) == 1:
                         value = answers.get(field["label"])  # страницы прежней версии
+                    choices = field["choices"]
+                    if isinstance(value, list):
+                        by_id = {f"option-{i}": o.get("const") for i, o in enumerate(choices)}
+                        if (not value or len(value) > 100 or not field["multi"] and len(value) != 1
+                                or any(not isinstance(v, str) or v not in by_id for v in value)
+                                or len(set(value)) != len(value)):
+                            raise Refused("invalid")
+                        selected = [by_id[v] for v in value]
+                        content[key] = selected if field["multi"] else selected[0]
+                        continue
                     if not isinstance(value, str) or not value or len(value) > 2000:
                         raise Refused("invalid")
-                    choices = {str(o.get("title") or o.get("const")): o.get("const") for o in field["choices"]}
+                    # Старые страницы присылают подписи. Принимаем только однозначный выбор;
+                    # массив ID всегда обозначает выбор, строка ID остаётся свободным текстом.
+                    labels = {}
+                    for option in choices:
+                        labels.setdefault(str(option.get("title") or option.get("const")), []).append(option.get("const"))
                     if field["multi"]:
-                        selected = value.split(", ")
-                        if any(v not in choices for v in selected):
+                        variants = []
+                        if value in labels:
+                            variants.append([value])
+                        split = value.split(", ")
+                        if len(split) > 1 and all(v in labels for v in split):
+                            variants.append(split)
+                        if len(variants) != 1 or any(len(labels[v]) != 1 for v in variants[0]):
                             raise Refused("invalid")
-                        content[key] = [choices[v] for v in selected]
-                    elif choices and value not in choices:
+                        content[key] = [labels[v][0] for v in variants[0]]
+                    elif value in labels:
+                        if len(labels[value]) != 1:
+                            raise Refused("invalid")
+                        content[key] = labels[value][0]
+                    elif choices:
                         custom = key + "_custom"
                         if custom not in frame["params"].get("requestedSchema", {}).get("properties", {}):
                             raise Refused("invalid")
@@ -557,8 +581,7 @@ class OpenCodeRunner(Runner):
                         if not choices and schema.get("type") == "boolean" and value.lower() not in ("true", "false"):
                             raise Refused("invalid")
                         try:
-                            content[key] = (choices[value] if choices else
-                                int(value) if schema.get("type") == "integer" else
+                            content[key] = (int(value) if schema.get("type") == "integer" else
                                 float(value) if schema.get("type") == "number" else
                                 value.lower() == "true" if schema.get("type") == "boolean" else value)
                         except ValueError:

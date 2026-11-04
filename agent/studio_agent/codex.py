@@ -578,8 +578,13 @@ class CodexRunner(Runner):
                         await self._wait_queue(t)
                     async with t.input_lock:
                         result = p.get("turn", {})
-                        if result.get("status") == "failed":
+                        status = result.get("status")
+                        if status == "interrupted":
+                            t.stopped = True
+                        elif status == "failed":
                             failure = "Codex: " + events.clip((result.get("error") or {}).get("message", "ошибка хода"), 280)
+                        elif status != "completed":
+                            failure = "Codex: неизвестное состояние завершения хода"
                         if t.queued and result.get("status") == "completed" and not (t.stopped or t.closing):
                             message_id, extra_text, extra_images = t.queued[0]
                             content = [{"type": "text", "text": extra_text}] if extra_text.strip() else []

@@ -220,7 +220,8 @@ function timezoneBlock(refreshTimes) {
     }
   });
   return el('section', { class: 'block' }, el('h2', {}, 'Часовой пояс'),
-    el('p', { class: 'muted small' }, 'Для всех дат и времени в Студии на всех ваших устройствах. По умолчанию — Москва.'),
+    el('p', { class: 'muted small' }, 'Для дат, времени и поиска на всех ваших устройствах, а также календарной даты'
+      + ' в контексте чата — через сервер, напрямую и через Cleaner. По умолчанию — Москва.'),
     field('Часовой пояс', select, select.id), el('div', { class: 'row' }, save, note));
 }
 
