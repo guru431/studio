@@ -24,6 +24,9 @@ if [ -f "$PROFILE" ]; then
     . "$PROFILE"
     set +a
 fi
+# Keep Debian paths intact when Git Bash starts native Windows helpers. Local
+# file arguments still need normal MSYS conversion; preserve caller exclusions.
+export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR"
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
