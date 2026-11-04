@@ -200,8 +200,9 @@ def job_finished(table: str, item_id: str) -> None:
     row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
                             " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
                             " AND (EXISTS (SELECT 1 FROM push_subs p WHERE p.user_id = j.user_id)"
-                            " OR EXISTS (SELECT 1 FROM ntfy_settings n WHERE n.user_id = j.user_id AND n.enabled = 1))",
-                            (item_id,)).fetchone()
+                            " OR EXISTS (SELECT 1 FROM ntfy_devices n JOIN sessions s ON s.digest = n.digest"
+                            " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
+                            (item_id, clock.NOW())).fetchone()
     if row is not None:
         notify_later(row["user_id"], done if row["state"] == "done" else error,
                      f"{section}?id={item_id}", item_id, title="Студия")
