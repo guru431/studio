@@ -48,6 +48,11 @@ build-host с отдельной копией primary token уже открыт�
 `GET /api/jobs.push` учитывает включённый ntfy учётки, чтобы локальные уведомления не дублировались.
 Выход не выключает ntfy; отключённой учётке отправки нет. Тесты: `tests/test_ntfy.py`,
 `tests/test_ui_ntfy.py` (integration, 320/1280).
+`ntfy` не импортирует `upstream` при загрузке: цепочка main → bridge → push → ntfy иначе
+замыкает connections/upstream до объявления `UpstreamRefused`. На Debian Python 3.13 аннотация
+`connections.refused` вычисляется сразу, а локальный Python 3.14 скрывал этот сбой. Проверка
+холодного импорта — `test_ntfy_import_does_not_start_the_connections_cycle`; после изменения
+цепочки импорта дополнительно проверить `import main` на Python хоста до перезапуска службы.
 
 Часовой пояс — `users.timezone` (схема 27), по умолчанию `Europe/Moscow` у новых и прежних учёток.
 `GET/PATCH /api/me` читает/сохраняет IANA-пояс с проверкой `zoneinfo` (`tzdata` нужна и на Windows).

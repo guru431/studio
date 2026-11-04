@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field, StrictBool
 
 import security
 import state
-import upstream
 
 DEFAULT_SERVER = "https://psh.example.net"
 log = logging.getLogger("studio")
@@ -25,6 +24,9 @@ class Settings(BaseModel):
 
 
 def check_server(value: str) -> str:
+    # push загружается раньше connections: upstream нужен только при обращении, не при импорте.
+    import upstream
+
     try:
         url = httpx.URL(value.strip().rstrip("/"))
         valid = (url.scheme == "https" and url.host and not url.userinfo and not url.query
@@ -60,6 +62,8 @@ def save(user_id: int, body: Settings) -> dict:
 
 
 async def notify(user_id: int, body: str, href: str, *, title: str, test: bool = False) -> None:
+    import upstream
+
     row = state.DB.execute("SELECT n.* FROM ntfy_settings n JOIN users u ON u.id = n.user_id"
                            " WHERE n.user_id = ? AND u.disabled = 0", (user_id,)).fetchone()
     if row is None or (not test and not row["enabled"]):
