@@ -16,3 +16,11 @@ __pycache__/
 /dist/
 # Макеты визуального брейншторма
 .superpowers/
+# Machine-local publication and deployment settings
+.claude/
+.sanitize-patterns*
+.github-push-deny
+/deploy/local-profile.sh
+/docs/private/
+/FINDINGS*.md
+/IDEAS*.md

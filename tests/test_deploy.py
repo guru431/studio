@@ -1,11 +1,13 @@
 """Выкладка на debian (deploy/): юнит, vhost Apache, копия базы и скрипты договорены друг с другом."""
 import hashlib
 import os
+from pathlib import Path
 import re
 import shutil
 import shlex
 import sqlite3
 import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -281,6 +283,8 @@ def test_requirements_are_exact_pins():
 def test_deploy_files_have_lf_endings():
     """\r в юните systemd принял бы за часть пути, bash — за часть команды."""
     for path in DEPLOY.iterdir():
+        if not path.is_file():
+            continue
         assert b"\r\n" not in path.read_bytes(), path.name
 
 
@@ -649,7 +653,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     repo = tmp_path / "studio"
     (repo / "deploy").mkdir(parents=True)
     (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
-    for name in ("build-agent-installer.ps1", "agent-installer.cs"):
+    for name in ("build-agent-installer.ps1", "agent-installer.cs", "render-profile.py"):
         shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
@@ -661,7 +665,9 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     # Функции сильнее PATH: Git Bash добавляет свои /usr/bin и /mingw64/bin перед Windows PATH.
     # Даже при ошибке заглушки адрес зарезервирован для документации, ключа SSH нет.
     env = {**os.environ, "PROBE": tmp_path.as_posix(), "STUDIO_SSH": "nobody@192.0.2.1",
-           "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix()}
+           "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix(),
+           "STUDIO_URL": "https://studio.example.net",
+           "STUDIO_PYTHON": Path(sys.executable).as_posix()}
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
                '*"cat > "*"studio-agent-setup.exe"*) cat > "$PROBE/setup.exe" ;; '
@@ -691,6 +697,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
+        assert b'"https://studio.example.net"' in archive.read("studio-agent/studio_agent/store.py")
         assert not any(n.startswith("studio-agent/tests/") or n.endswith("CLAUDE.md") for n in names)
         assert all(n.startswith("studio-agent/") for n in names)
         cmd = archive.read("studio-agent/install.cmd")
