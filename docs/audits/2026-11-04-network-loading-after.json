@@ -1,0 +1,73 @@
+{
+  "head": "230413a2a8461c4484956aecfa25ecf2169dac0a",
+  "started_at": "2026-11-04T10:40:38.170431+00:00",
+  "script_sha256": "1b9aeea77bac9c29d54c24791703566c2890adaf406408f2487a099d782ab027",
+  "scope": "Local real HTTP app; synthetic gateway and WebSocket agent; mobile viewport",
+  "profiles": [
+    {
+      "profile": {
+        "name": "slow_3g",
+        "download_kbps": 400,
+        "upload_kbps": 100,
+        "latency_ms": 400
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [],
+      "sections": [],
+      "cold": {
+        "useful_ms": 14905.4,
+        "bytes_finished": 399879,
+        "ready_ms": 9645.5,
+        "dom_ms": 7623.4000000059605,
+        "js_count": 20,
+        "static_transfer_bytes": 375472
+      },
+      "warm": {
+        "useful_ms": 3942.8,
+        "bytes_finished": 22755,
+        "ready_ms": 1273.8999999761581,
+        "dom_ms": 663.6999999880791,
+        "js_count": 20,
+        "static_transfer_bytes": 0
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    },
+    {
+      "profile": {
+        "name": "edge",
+        "download_kbps": 128,
+        "upload_kbps": 64,
+        "latency_ms": 1500
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [],
+      "sections": [],
+      "cold": {
+        "useful_ms": 37101.0,
+        "bytes_finished": 399239,
+        "ready_ms": 30157.70000001788,
+        "dom_ms": 22843.70000001788,
+        "js_count": 20,
+        "static_transfer_bytes": 375472
+      },
+      "warm": {
+        "useful_ms": 7643.2,
+        "bytes_finished": 23395,
+        "ready_ms": 4107,
+        "dom_ms": 2324.4000000059605,
+        "js_count": 20,
+        "static_transfer_bytes": 0
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    }
+  ],
+  "browser": "156.0.4314.58"
+}

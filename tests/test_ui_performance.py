@@ -276,3 +276,28 @@ def test_partial_catalog_does_not_guess_engine_of_unknown_session(browser,live):
     assert not result.get('failed'),result
     assert result['values']['noForm']
     assert not [row for row in machine.requests if row['op'] in ('history','state','turn')]
+
+
+def test_agent_catalog_defers_markdown_libraries_and_chat_loads_each_once(browser, live):
+    login = 'perf-lazy-markdown'
+    live.add_user(login)
+    _, bridge = code_online(live, login, FakeMachine({'alpha': {}}))
+    libraries = """performance.getEntriesByType('resource').filter(row =>
+      /\\/vendor\\/(marked|purify|highlight)\\.min\\.js/.test(row.name)).map(row => new URL(row.name).pathname)"""
+    try:
+        signed = browser.drive(live.url+'/', [*signin(login), ('wait', READY)])
+        assert not signed.get('failed'), signed
+        result = browser.drive(live.url+'/#/code', [('wait', READY),
+            ('wait', "!!document.querySelector('#code-projects li[data-pid]')"),
+            ('eval', 'catalog', libraries), *go('chat'), ('wait', "!!document.querySelector('#chat-input')"),
+            ('eval', 'loaded', libraries), *go('photo'), ('wait', "!!document.querySelector('#photo-feed')"),
+            *go('chat'), ('wait', "!!document.querySelector('#chat-input')"), ('eval', 'reused', libraries)], width=320)
+    finally:
+        bridge.stop()
+    assert not result.get('failed'), result
+    assert result['values']['catalog'] == []
+    paths = result['values']['loaded']
+    assert len(paths) == len(set(paths)) == 3
+    assert all(path.startswith('/static/v/') for path in paths)
+    assert result['values']['reused'] == paths
+    assert not problems(result), problems(result)

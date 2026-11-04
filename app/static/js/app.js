@@ -76,6 +76,7 @@ const SECTIONS = {
 };
 
 const view = document.getElementById('view');
+const preloadSection = document.getElementById('theme-start')?.preloadSection || (() => {});
 const avatar = document.getElementById('avatar');
 const toggle = document.getElementById('theme-toggle');
 const darkMedia = matchMedia('(prefers-color-scheme: dark)');
@@ -273,6 +274,7 @@ async function render() {
     history.replaceState(history.state, '', '#/chat');
   }
   const mine = ++renders;
+  preloadSection(route.section);
   // Проверка идёт до update/mount: старые узлы и кэш защищённого раздела не мелькают при переходе.
   view.style.visibility = 'hidden';
   view.inert = true;

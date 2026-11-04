@@ -5,7 +5,14 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 30
+VERSION = 31
+
+# Message ids deliberately remain as tombstones after regeneration removes an answer.
+# The owning chat (including history cleanup) removes the acknowledgement itself.
+CHAT_31 = """CREATE TABLE chat_turn_requests(
+       chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE, request_id TEXT NOT NULL,
+       fingerprint TEXT NOT NULL, user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
+       PRIMARY KEY(chat_id, request_id));"""
 
 NTFY_30 = """CREATE TABLE ntfy_devices(
        digest TEXT PRIMARY KEY REFERENCES sessions ON DELETE CASCADE,
@@ -423,7 +430,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -504,6 +511,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     28: CODE_28,
     29: NTFY_29,
     30: NTFY_30,
+    31: CHAT_31,
 }
 
 

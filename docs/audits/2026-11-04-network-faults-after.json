@@ -1,0 +1,48 @@
+{
+  "head": "230413a2a8461c4484956aecfa25ecf2169dac0a",
+  "started_at": "2026-11-04T10:45:09.209626+00:00",
+  "script_sha256": "1b9aeea77bac9c29d54c24791703566c2890adaf406408f2487a099d782ab027",
+  "scope": "Local real HTTP app; synthetic gateway and WebSocket agent; mobile viewport",
+  "profiles": [],
+  "browser": "156.0.4314.58",
+  "response_loss": {
+    "after_loss": {
+      "model_calls": 1,
+      "visible_messages": 0,
+      "draft": "Synthetic response loss check",
+      "notice": "Нет связи с сервером",
+      "db_messages": 2
+    },
+    "after_retry": {
+      "model_calls": 1,
+      "visible_messages": 2
+    },
+    "after_reload": {
+      "visible_messages": 2,
+      "user_messages": 1
+    }
+  },
+  "outage": {
+    "offline_send": {
+      "draft_preserved": true,
+      "turns": 0,
+      "status": "Нет связи с сервером"
+    },
+    "recovery": {
+      "ms": 1058.8,
+      "turns": 1,
+      "draft_cleared": true
+    },
+    "stream_recovery": {
+      "automatic": true,
+      "ms": 479.9,
+      "model_calls": 1
+    }
+  },
+  "offline_shell": {
+    "title": "Студия — нет связи",
+    "message": true,
+    "overflow": false,
+    "recovers": true
+  }
+}
