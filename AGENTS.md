@@ -9,6 +9,9 @@
 владельца `owner-images`). Модели, карта и маршруты шлюза — проект `llm_routers`; отсюда выделено
 2026-10-19, старая история — там.
 
+Основная ветка и GitHub используют общую очищенную историю. Реальные параметры
+установки — в игнорируемом `deploy/local-profile.sh`; правила — [docs/publication.md](docs/publication.md).
+
 ## Что нельзя ломать
 
 - История — в базе (`/var/lib/studio/studio.db`) и на шаре (`/mnt/storage/SharedData/studio`), в

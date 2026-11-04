@@ -17,12 +17,19 @@
 # EXE собирается на Windows до первого SSH; оба файла откатываются вместе с кодом.
 set -euo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
+PROFILE=${STUDIO_DEPLOY_PROFILE:-$D/deploy/local-profile.sh}
+if [ -f "$PROFILE" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$PROFILE"
+    set +a
+fi
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
 VAULT=${STUDIO_VAULT:-/c/work/projects/local-config/secrets/vault.env}
 URL=${STUDIO_URL:-https://studio.example.com}
-R=/opt/services/studio
+R=${STUDIO_REMOTE_ROOT:-/opt/services/studio}
 PARTS=(app deploy requirements.txt)
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 -p "$PORT" "$HOST")
 
@@ -36,14 +43,22 @@ for arg in "$@"; do
         *) die "неизвестный аргумент: $arg (есть --new-secret и --create-admin)" ;;
     esac
 done
+
 git -C "$D" cat-file -e HEAD:agent/install.cmd 2>/dev/null \
     || die "нет agent/install.cmd в HEAD студии — архив моста едет вместе со студией"
 [ -z "$(git -C "$D" status --porcelain -- "${PARTS[@]}" agent)" ] \
     || die "незакоммиченные изменения в ${PARTS[*]} agent — выкладывается только закоммиченный HEAD"
 
+PYTHON=${STUDIO_PYTHON:-$D/.venv/bin/python}
+if [ ! -x "$PYTHON" ]; then PYTHON=$D/.venv/Scripts/python.exe; fi
+[ -x "$PYTHON" ] || die "нет Python среды проекта; задайте STUDIO_PYTHON"
+# Validate the profile before building an installer or contacting the host.
+"$PYTHON" "$D/deploy/render-profile.py" --check
+
 package=$(mktemp -d)
 trap 'rm -rf -- "$package"' EXIT
 git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent > "$package/studio-agent.zip"
+"$PYTHON" "$D/deploy/render-profile.py" --agent "$package/studio-agent.zip"
 git -C "$D" show HEAD:deploy/build-agent-installer.ps1 > "$package/build-agent-installer.ps1"
 git -C "$D" show HEAD:deploy/agent-installer.cs > "$package/agent-installer.cs"
 echo "==> сборка установщика Windows"
@@ -55,6 +70,7 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
 echo "==> код $(git -C "$D" rev-parse --short HEAD) → $HOST:$R"
 "${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming && sudo install -d -o root -g root -m 0700 $R/.incoming"
 git -C "$D" -c core.autocrlf=false archive --format=tar HEAD "${PARTS[@]}" \
+    | "$PYTHON" "$D/deploy/render-profile.py" \
     | "${SSH[@]}" "sudo tar -xf - -C $R/.incoming"
 echo "==> мост $(git -C "$D" rev-parse --short HEAD) → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent"
