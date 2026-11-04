@@ -139,6 +139,53 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
         assert values['desktop'] == 8 and values['moreHidden']
 
 
+@pytest.mark.parametrize('width', [320, 393])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, width, theme, tmp_path):
+    login = f'all-tabs-{width}-{theme}'
+    uid = live.add_user(login, theme=theme)
+    visible = "[...document.querySelectorAll('#rail a.tab')].filter(t => t.getBoundingClientRect().width).map(t => t.dataset.section)"
+    r = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
+        ('click', '#mobile-more'), ('click', '#mobile-nav-edit'),
+        *[('click', f'#mobile-nav-editor input[value={section}]')
+          for section in ('chat', 'photo', 'speech', 'transcribe', 'ocr')],
+        ('click', '#mobile-nav-save'), ('click', '#mobile-nav-edit'),
+        ('click', '#mobile-nav-mode-all'), ('click', '#mobile-nav-save'), ('idle',),
+        ('eval', 'allTabs', visible),
+        ('eval', 'mode', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')"),
+        ('eval', 'moreHidden', "document.querySelector('#mobile-more').getBoundingClientRect().width === 0"),
+        ('eval', 'largeFont', "document.querySelector('#appearance-font').value = '150';"
+                             "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))"),
+        ('idle',), ('eval', 'geometry', NAV_GEOMETRY),
+        ('eval', 'buttonRow', "[...document.querySelectorAll('#rail a.tab')].map(t => {const b=t.getBoundingClientRect(); return {top:b.top, width:b.width, height:b.height, iconTop:t.querySelector('svg').getBoundingClientRect().top};})"),
+        ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),
+        ('screenshot', str(tmp_path / f'all-tabs-{width}-{theme}.png')),
+        ('click', '#rail a[data-section=translate]'),
+        ('wait', "document.querySelector('#rail a[data-section=translate]').getAttribute('aria-current') === 'page'"),
+        ('eval', 'reload', 'location.reload()'),
+        ('wait', f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ('eval', 'kept', visible),
+        ('click', '#avatar'), ('click', '#mobile-nav-configure'),
+        ('click', '#mobile-nav-mode-compact'), ('click', '#mobile-nav-save'),
+        ('click', '#mobile-sections-close'), ('idle',),
+        ('eval', 'compact', visible),
+        ('eval', 'moreActive', "document.querySelector('#mobile-more-label').textContent"),
+        ('eval', 'compactGeometry', NAV_GEOMETRY),
+        ('eval', 'savedCompact', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')")], width=width, mobile=True)
+    assert not r.get('failed'), (r.get('failed'), list(r.get('values', {})), r.get('log'))
+    values = r['values']
+    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'code']
+    assert values['mode'] == 'all' and values['moreHidden'] and not values['overflow'], values
+    geometry = values['geometry']
+    assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels']), geometry
+    assert len({round(button['top']) for button in values['buttonRow']}) == 1
+    assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
+    assert all(button['width'] >= width / 8 - 1 and button['height'] >= 44 for button in values['buttonRow'])
+    assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
+    assert values['moreActive'] == 'Ещё: Перевод'
+    assert all(label['hit'] for label in values['compactGeometry']['labels'])
+
+
 @pytest.mark.parametrize('width', [320, 1280])
 def test_theme_menu_targets_remain_usable_at_small_scale(browser, live, width):
     r = browser.drive(live.url + '/', [*signin(), ('wait', READY), ('click', '#avatar'),

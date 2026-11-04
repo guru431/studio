@@ -163,6 +163,7 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 .menu .btn-link { white-space:normal; }
 .menu .appearance-controls { width:250px; }
 #rail .mobile-more { display:none; }
+.mobile-nav-configure { display:none; }
 .mobile-sections { width:min(440px, calc(100vw / var(--ui-scale, 1) - 24px));
   max-height:calc(100dvh / var(--ui-scale, 1) - 24px); }
 .mobile-sections-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -190,6 +191,7 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
 
 /* телефон: рельс — нижние вкладки, аватар — в шапке раздела */
 @media (max-width: 760px) {
+  .mobile-nav-configure { display:flex; }
   :root { --tabs-h: calc(74px + env(safe-area-inset-bottom, 0px)); }
   #rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; width: auto; height: auto;
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; overflow: visible;
@@ -199,6 +201,7 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
     font-size:calc(11px * var(--font-scale, 1)); text-align:center; line-height:1.25; }
   #rail .tab > span:last-child, #rail .mobile-more > span:last-child { max-width:100%; overflow-wrap:anywhere; white-space:normal; }
   #rail .tab.mobile-secondary { display:none; }
+  #rail.mobile-all .tab { justify-content:flex-start; }
   #rail .mobile-more { display:flex; border:0; background:none; font-weight:inherit; }
   .mobile-more-icon { height:20px; line-height:14px; letter-spacing:2px; font-size:22px; }
   #rail .tab[aria-current="page"], #rail .mobile-more[aria-current="page"] { background: none; color: var(--accent); }

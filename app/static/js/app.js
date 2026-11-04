@@ -402,7 +402,7 @@ async function enter(worker) {
   setupMenu();
   setupJobs({ navigate });
   setupTheme();
-  mobileNavigation = setupMobileNavigation(me);
+  mobileNavigation = setupMobileNavigation(me, () => openMenu(false));
   window.addEventListener('hashchange', render);
   await render();
   setupCodeActivity();

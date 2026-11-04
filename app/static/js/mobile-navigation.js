@@ -1,20 +1,23 @@
-/* На телефоне — 3–4 личных раздела и «Ещё». Исходный рельс остаётся на компьютере. */
+/* На телефоне — все разделы либо 3–4 личных и «Ещё». На компьютере остаётся исходный рельс. */
 import { el } from './ui.js';
 
 const DEFAULT = ['chat', 'photo', 'code'];
 
-export function setupMobileNavigation(me) {
+export function setupMobileNavigation(me, closeMenu) {
   const rail = document.getElementById('rail');
   const tabs = [...rail.querySelectorAll('a.tab[data-section]')];
   const names = new Map(tabs.map(tab => [tab.dataset.section, tab.lastElementChild.textContent]));
   const key = `studio-mobile-nav:${me.id}`;
+  const modeKey = `studio-mobile-nav-mode:${me.id}`;
   const mobile = matchMedia('(max-width: 760px)');
   let active = '';
   let primary = [...DEFAULT];
+  let mode = 'compact';
   try {
     const saved = JSON.parse(localStorage.getItem(key));
     if (Array.isArray(saved) && saved.length >= 3 && saved.length <= 4
       && new Set(saved).size === saved.length && saved.every(section => names.has(section))) primary = saved;
+    if (localStorage.getItem(modeKey) === 'all') mode = 'all';
   } catch { /* Закрытое или повреждённое хранилище — стандартные разделы. */ }
 
   const label = el('span', { id: 'mobile-more-label' }, 'Ещё');
@@ -26,6 +29,11 @@ export function setupMobileNavigation(me) {
   const links = el('nav', { id: 'mobile-section-links', 'aria-label': 'Остальные разделы' });
   const edit = el('button', { id: 'mobile-nav-edit', class: 'btn', type: 'button' }, 'Настроить нижние вкладки');
   const editor = el('form', { id: 'mobile-nav-editor', hidden: true });
+  const compact = el('input', { id: 'mobile-nav-mode-compact', type: 'radio', name: 'mobile-nav-mode', value: 'compact' });
+  const all = el('input', { id: 'mobile-nav-mode-all', type: 'radio', name: 'mobile-nav-mode', value: 'all' });
+  const modes = el('fieldset', {}, el('legend', {}, 'Нижняя панель'),
+    el('label', {}, compact, '3–4 раздела и «Ещё»'),
+    el('label', {}, all, 'Все разделы · 8 иконок'));
   const choices = el('fieldset', {}, el('legend', {}, 'Выберите 3–4 основных раздела'));
   const count = el('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
   const save = el('button', { id: 'mobile-nav-save', class: 'btn btn-accent', type: 'submit' }, 'Сохранить');
@@ -37,15 +45,21 @@ export function setupMobileNavigation(me) {
     choices.append(el('label', {}, input, names.get(section)));
     return input;
   });
-  editor.append(choices, count, el('div', { class: 'actions' }, save, cancel), reset);
+  editor.append(modes, choices, count, el('div', { class: 'actions' }, save, cancel), reset);
+  const heading = el('h2', { id: 'mobile-sections-title' }, 'Ещё');
   const dialog = el('dialog', { id: 'mobile-sections', class: 'dialog mobile-sections',
     'aria-labelledby': 'mobile-sections-title' },
-    el('div', { class: 'mobile-sections-head' }, el('h2', { id: 'mobile-sections-title' }, 'Ещё'), close), links, edit, editor);
+    el('div', { class: 'mobile-sections-head' }, heading, close), links, edit, editor);
   document.body.append(dialog);
+  const configure = el('button', { id: 'mobile-nav-configure', class: 'menu-item mobile-nav-configure',
+    role: 'menuitem', type: 'button', 'aria-haspopup': 'dialog', 'aria-controls': dialog.id }, 'Нижняя панель');
+  const menu = document.getElementById('menu');
+  menu.insertBefore(configure, menu.querySelector('a[href="#/settings"]'));
+  let returnFocus = more;
 
   function setActive(section) {
     active = section;
-    const secondary = names.has(active) && !primary.includes(active);
+    const secondary = mode !== 'all' && names.has(active) && !primary.includes(active);
     label.textContent = secondary ? `Ещё: ${names.get(active)}` : 'Ещё';
     more.setAttribute('aria-label', secondary ? `Ещё: ${names.get(active)}` : 'Ещё · все разделы');
     if (secondary) more.setAttribute('aria-current', 'page');
@@ -57,7 +71,9 @@ export function setupMobileNavigation(me) {
   }
 
   function paint() {
-    for (const tab of tabs) tab.classList.toggle('mobile-secondary', !primary.includes(tab.dataset.section));
+    rail.classList.toggle('mobile-all', mode === 'all');
+    more.hidden = mode === 'all';
+    for (const tab of tabs) tab.classList.toggle('mobile-secondary', mode !== 'all' && !primary.includes(tab.dataset.section));
     links.replaceChildren(...tabs.filter(tab => !primary.includes(tab.dataset.section)).map(tab => {
       const link = el('a', { href: tab.getAttribute('href'), 'data-section': tab.dataset.section },
         tab.querySelector('svg').cloneNode(true), el('span', {}, names.get(tab.dataset.section)));
@@ -67,12 +83,15 @@ export function setupMobileNavigation(me) {
   }
 
   function showEditor(show) {
+    heading.textContent = show ? 'Нижняя панель' : 'Ещё';
     editor.hidden = !show;
     links.hidden = edit.hidden = show;
     if (show) {
+      compact.checked = mode === 'compact';
+      all.checked = mode === 'all';
       for (const input of inputs) input.checked = primary.includes(input.value);
       updateCount();
-      inputs.find(input => !input.disabled)?.focus();
+      (all.checked ? all : compact).focus();
     } else if (dialog.open) {
       edit.focus();
     }
@@ -80,25 +99,42 @@ export function setupMobileNavigation(me) {
 
   function updateCount() {
     const selected = inputs.filter(input => input.checked).length;
-    count.textContent = `Выбрано ${selected} из 3–4. Настройка только этого браузера и учётки.`;
-    save.disabled = selected < 3 || selected > 4;
-    for (const input of inputs) input.disabled = selected === 4 && !input.checked;
+    choices.hidden = all.checked;
+    count.textContent = (all.checked ? 'Все разделы видны в нижней панели.' : `Выбрано ${selected} из 3–4.`)
+      + ' Настройка только этого браузера и учётки.';
+    save.disabled = !all.checked && (selected < 3 || selected > 4);
+    for (const input of inputs) input.disabled = all.checked || selected === 4 && !input.checked;
   }
 
-  function store(next) {
+  function store(next, nextMode = 'compact') {
     primary = next;
-    try { localStorage.setItem(key, JSON.stringify(primary)); } catch { /* До закрытия окна. */ }
+    mode = nextMode;
+    try {
+      localStorage.setItem(key, JSON.stringify(primary));
+      localStorage.setItem(modeKey, mode);
+    } catch { /* До закрытия окна. */ }
     paint();
     showEditor(false);
+    if (mode === 'all') dialog.close();
   }
 
   more.addEventListener('click', () => {
+    returnFocus = more;
     showEditor(false);
     dialog.showModal();
     more.setAttribute('aria-expanded', 'true');
   });
+  configure.addEventListener('click', () => {
+    returnFocus = document.getElementById('avatar');
+    closeMenu();
+    dialog.showModal();
+    showEditor(true);
+  });
   close.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => more.setAttribute('aria-expanded', 'false'));
+  dialog.addEventListener('close', () => {
+    more.setAttribute('aria-expanded', 'false');
+    (mode === 'all' ? document.getElementById('avatar') : returnFocus).focus();
+  });
   links.addEventListener('click', event => { if (event.target.closest('a')) dialog.close(); });
   edit.addEventListener('click', () => showEditor(true));
   cancel.addEventListener('click', () => showEditor(false));
@@ -107,7 +143,8 @@ export function setupMobileNavigation(me) {
   editor.addEventListener('submit', event => {
     event.preventDefault();
     const selected = inputs.filter(input => input.checked).map(input => input.value);
-    if (selected.length >= 3 && selected.length <= 4) store(selected);
+    if (all.checked) store(primary, 'all');
+    else if (selected.length >= 3 && selected.length <= 4) store(selected);
   });
 
   // Высота следует реальному переносу подписей, включая увеличенный текст.
