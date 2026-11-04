@@ -1,6 +1,10 @@
 """Прямая доставка ntfy: личные настройки, секреты, граница адресов и общие события push."""
 import json
 import logging
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import httpx
 import pytest
@@ -19,6 +23,13 @@ from test_push import A, ALPHA, Device, settle
 SERVER = "https://psh.example.net"
 OTHER = "https://other-ntfy.example.com"
 SETTINGS = {"server": SERVER, "topic": "private-topic", "enabled": True}
+
+
+def test_ntfy_import_does_not_start_the_connections_cycle():
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'app')}
+    result = subprocess.run([sys.executable, '-c', "import ntfy,sys; assert 'upstream' not in sys.modules"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
 
 
 def test_settings_and_test_delivery_require_session_csrf_and_unlocked_phone(studio):
