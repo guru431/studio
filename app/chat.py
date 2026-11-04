@@ -33,6 +33,7 @@
    ответа отсчитывается от готовности. Прямому подключению — 409 `not_ready`: ждёт страница.
 """
 import asyncio
+import hashlib
 from html import escape
 import re
 import base64
@@ -175,6 +176,7 @@ class CleanerRule(BaseModel):
 
 
 class TurnIn(BaseModel):
+    request_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9_-]{16,64}$")
     text: str = Field("", max_length=TEXT_MAX)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     regenerate: bool = False
@@ -1442,10 +1444,41 @@ async def cleaner_copy(chat_id: str, body: CleanerCopyIn, request: Request):
     return {"text": result}
 
 
+def _turn_receipt(chat_id: str, request_id: str | None, body: TurnIn | None = None) -> dict | None:
+    if request_id is None:
+        return None
+    receipt = state.DB.execute("SELECT * FROM chat_turn_requests WHERE chat_id=? AND request_id=?",
+                               (chat_id, request_id)).fetchone()
+    if receipt is None:
+        return None
+    if body is not None and receipt["fingerprint"] != _turn_fingerprint(body):
+        raise HTTPException(409, {"code": "request_conflict", "message": "Эта отправка уже содержит другое сообщение"})
+    if state.DB.execute("SELECT 1 FROM messages WHERE id=? AND chat_id=?",
+                        (receipt["assistant_message_id"], chat_id)).fetchone() is None:
+        raise HTTPException(409, {"code": "request_gone", "message": "Ответ этой отправки уже заменён или удалён"})
+    return {"user_message_id": receipt["user_message_id"], "assistant_message_id": receipt["assistant_message_id"]}
+
+
+def _turn_fingerprint(body: TurnIn) -> str:
+    # Consent/one-use Cleaner tickets may change before acceptance. No copy of the text is stored.
+    raw = json.dumps([body.text, body.attachment_ids, body.regenerate], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+@router.get("/chats/{chat_id}/turns/{request_id}")
+async def turn_receipt(chat_id: str, request_id: str, request: Request):
+    _chat_row(request.state.user.id, chat_id)
+    receipt = _turn_receipt(chat_id, request_id)
+    return {"accepted": receipt is not None, **(receipt or {})}
+
+
 @router.post("/chats/{chat_id}/turns")
 async def create_turn(chat_id: str, body: TurnIn, request: Request):
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
+    receipt = _turn_receipt(chat_id, body.request_id, body)
+    if receipt is not None:
+        return {"replayed": True, **receipt}
     _busy(chat_id)
     if row["connection_id"] is None:
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
@@ -1456,6 +1489,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     limit = await _limit(conn, model)
     operations.check(uid)
+    receipt = _turn_receipt(chat_id, body.request_id, body)
+    if receipt is not None:
+        return {"replayed": True, **receipt}
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
     preview = None
     if conn.cleaner:
@@ -1536,6 +1572,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                          (answer_id, chat_id, via, model, now, now))
         title = row["title"] or (None if body.regenerate else _title(body.text))
         state.DB.execute("UPDATE chats SET title = ?, updated = ? WHERE id = ?", (title, now, chat_id))
+        if body.request_id is not None:
+            state.DB.execute("INSERT INTO chat_turn_requests VALUES (?, ?, ?, ?, ?)",
+                             (chat_id, body.request_id, _turn_fingerprint(body), user_mid, answer_id))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")

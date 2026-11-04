@@ -1,7 +1,7 @@
 /* Текст модели → безопасный DOM: marked (разметка) → DOMPurify (очистка) → highlight.js (код).
  *
  * Библиотеки — обычные скрипты из /static/vendor (глобальные marked, DOMPurify, hljs), их
- * подключает index.html до модулей. У каждого блока кода — кнопка «Копировать»; ссылки
+ * загружаются при первом импорте этого модуля. У каждого блока кода — кнопка «Копировать»; ссылки
  * открываются в новой вкладке без доступа к этой (rel=noopener noreferrer).
  *
  * HTML в ответе модели — текст, а не разметка: иначе ответ (или подсказка в приложенном PDF)
@@ -14,6 +14,24 @@
  * renderMarkdown(text, { html: true }) — текст распознавания («Распознавание», ocr.js): HunyuanOCR пишет
  * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
  * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
+
+await Promise.all([['marked', 'marked.min.js'], ['DOMPurify', 'purify.min.js'], ['hljs', 'highlight.min.js']]
+  .map(([name, file]) => {
+    if (window[name]) return;
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = new URL('../vendor/' + file, import.meta.url).href;
+      script.crossOrigin = 'anonymous';
+      const timer = setTimeout(() => { script.remove(); reject(new Error('Markdown library timeout')); }, 30000);
+      script.onload = () => {
+        clearTimeout(timer);
+        if (window[name]) resolve();
+        else reject(new Error('Markdown library unavailable'));
+      };
+      script.onerror = () => { clearTimeout(timer); reject(new Error('Markdown library unavailable')); };
+      document.head.append(script);
+    });
+  }));
 
 const COPIED_MS = 1500;
 const TAGS = ['a', 'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre',

@@ -1,0 +1,294 @@
+{
+  "head": "230413a2a8461c4484956aecfa25ecf2169dac0a",
+  "started_at": "2026-11-04T10:45:47.067157+00:00",
+  "script_sha256": "1b9aeea77bac9c29d54c24791703566c2890adaf406408f2487a099d782ab027",
+  "scope": "Local real HTTP app; synthetic gateway and WebSocket agent; mobile viewport",
+  "profiles": [
+    {
+      "profile": {
+        "name": "mobile",
+        "download_kbps": 1600,
+        "upload_kbps": 750,
+        "latency_ms": 150
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [
+        {
+          "project": "alpha",
+          "cached": false,
+          "first_text_ms": 2559.6,
+          "send_ready_ms": 2735.5
+        },
+        {
+          "project": "beta",
+          "cached": false,
+          "first_text_ms": 458.3,
+          "send_ready_ms": 631.0
+        },
+        {
+          "project": "alpha",
+          "cached": true,
+          "first_text_ms": 209.5,
+          "send_ready_ms": 417.1
+        }
+      ],
+      "sections": [
+        {
+          "route": "photo",
+          "mounted_ms": 1865.6,
+          "overflow": false
+        },
+        {
+          "route": "video",
+          "mounted_ms": 841.7,
+          "overflow": false
+        },
+        {
+          "route": "speech",
+          "mounted_ms": 337.4,
+          "overflow": false
+        },
+        {
+          "route": "transcribe",
+          "mounted_ms": 826.4,
+          "overflow": false
+        },
+        {
+          "route": "ocr",
+          "mounted_ms": 326.3,
+          "overflow": false
+        },
+        {
+          "route": "translate",
+          "mounted_ms": 871.4,
+          "overflow": false
+        },
+        {
+          "route": "settings/code",
+          "mounted_ms": 46.7,
+          "overflow": false
+        }
+      ],
+      "cold": {
+        "useful_ms": 3438.9,
+        "bytes_finished": 399240,
+        "ready_ms": 2565.800000011921,
+        "dom_ms": 1936.5,
+        "js_count": 20,
+        "static_transfer_bytes": 375472
+      },
+      "warm": {
+        "useful_ms": 1296.5,
+        "bytes_finished": 23395,
+        "ready_ms": 433.89999997615814,
+        "dom_ms": 235.5,
+        "js_count": 20,
+        "static_transfer_bytes": 0
+      },
+      "chat": {
+        "attachment_bytes": 49353,
+        "first_text_ms": 1156.2,
+        "done_ms": 1160.2,
+        "model_calls": 1,
+        "messages": 2,
+        "survives_reload": true
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    },
+    {
+      "profile": {
+        "name": "slow_3g",
+        "download_kbps": 400,
+        "upload_kbps": 100,
+        "latency_ms": 400
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [
+        {
+          "project": "alpha",
+          "cached": false,
+          "first_text_ms": 4325.0,
+          "send_ready_ms": 4852.7
+        },
+        {
+          "project": "beta",
+          "cached": false,
+          "first_text_ms": 1039.2,
+          "send_ready_ms": 1546.7
+        },
+        {
+          "project": "alpha",
+          "cached": true,
+          "first_text_ms": 525.4,
+          "send_ready_ms": 1112.9
+        }
+      ],
+      "sections": [
+        {
+          "route": "photo",
+          "mounted_ms": 6414.1,
+          "overflow": false
+        },
+        {
+          "route": "video",
+          "mounted_ms": 1357.3,
+          "overflow": false
+        },
+        {
+          "route": "speech",
+          "mounted_ms": 1335.0,
+          "overflow": false
+        },
+        {
+          "route": "transcribe",
+          "mounted_ms": 1342.7,
+          "overflow": false
+        },
+        {
+          "route": "ocr",
+          "mounted_ms": 1356.4,
+          "overflow": false
+        },
+        {
+          "route": "translate",
+          "mounted_ms": 2319.2,
+          "overflow": false
+        },
+        {
+          "route": "settings/code",
+          "mounted_ms": 31.4,
+          "overflow": false
+        }
+      ],
+      "cold": {
+        "useful_ms": 11331.1,
+        "bytes_finished": 406031,
+        "ready_ms": 9417.299999982119,
+        "dom_ms": 7596.299999982119,
+        "js_count": 20,
+        "static_transfer_bytes": 376346
+      },
+      "warm": {
+        "useful_ms": 2858.1,
+        "bytes_finished": 48673,
+        "ready_ms": 1472.3999999761581,
+        "dom_ms": 806.5999999940395,
+        "js_count": 30,
+        "static_transfer_bytes": 0
+      },
+      "chat": {
+        "attachment_bytes": 49353,
+        "first_text_ms": 5604.4,
+        "done_ms": 5609.9,
+        "model_calls": 1,
+        "messages": 2,
+        "survives_reload": true
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    },
+    {
+      "profile": {
+        "name": "edge",
+        "download_kbps": 128,
+        "upload_kbps": 64,
+        "latency_ms": 1500
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [
+        {
+          "project": "alpha",
+          "cached": false,
+          "first_text_ms": 9506.2,
+          "send_ready_ms": 11183.2
+        },
+        {
+          "project": "beta",
+          "cached": false,
+          "first_text_ms": 3657.1,
+          "send_ready_ms": 5442.8
+        },
+        {
+          "project": "alpha",
+          "cached": true,
+          "first_text_ms": 1780.4,
+          "send_ready_ms": 3832.3
+        }
+      ],
+      "sections": [
+        {
+          "route": "photo",
+          "mounted_ms": 21116.7,
+          "overflow": false
+        },
+        {
+          "route": "video",
+          "mounted_ms": 3883.6,
+          "overflow": false
+        },
+        {
+          "route": "speech",
+          "mounted_ms": 3351.5,
+          "overflow": false
+        },
+        {
+          "route": "transcribe",
+          "mounted_ms": 3860.0,
+          "overflow": false
+        },
+        {
+          "route": "ocr",
+          "mounted_ms": 3353.9,
+          "overflow": false
+        },
+        {
+          "route": "translate",
+          "mounted_ms": 6891.1,
+          "overflow": false
+        },
+        {
+          "route": "settings/code",
+          "mounted_ms": 26.5,
+          "overflow": false
+        }
+      ],
+      "cold": {
+        "useful_ms": 37111.0,
+        "bytes_finished": 406443,
+        "ready_ms": 30189.69999998808,
+        "dom_ms": 22698,
+        "js_count": 20,
+        "static_transfer_bytes": 376346
+      },
+      "warm": {
+        "useful_ms": 8961.8,
+        "bytes_finished": 121722,
+        "ready_ms": 5030.299999982119,
+        "dom_ms": 2860.0999999940395,
+        "js_count": 31,
+        "static_transfer_bytes": 0
+      },
+      "chat": {
+        "attachment_bytes": 49353,
+        "first_text_ms": 11378.0,
+        "done_ms": 11382.9,
+        "model_calls": 1,
+        "messages": 2,
+        "survives_reload": true
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    }
+  ],
+  "browser": "156.0.4314.58"
+}

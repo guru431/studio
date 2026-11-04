@@ -42,6 +42,7 @@ import lock_policy
 import operations
 import security
 import state
+import static_assets
 
 COOKIE = "__Host-studio_sid"
 SESSION_SEC = 30 * 86400
@@ -77,6 +78,7 @@ STATIC_VERSION = _static_version(STATIC)
 MODULE_IMPORTS = json.dumps({"imports": {"/static/js/": f"/static/v/{STATIC_VERSION}/js/",
                                        "/static/vendor/": f"/static/v/{STATIC_VERSION}/vendor/"}}, separators=(",", ":"))
 MODULE_IMPORTS_HASH = base64.b64encode(hashlib.sha256(MODULE_IMPORTS.encode()).digest()).decode("ascii")
+MODULE_PRELOADS = html.escape(json.dumps(static_assets.module_preloads(STATIC), separators=(",", ":")))
 _PAGES = {name: (STATIC / name).read_text(encoding='utf-8') for name in ('index.html', 'login.html', 'offline.html')}
 
 #: ("pair", логин, адрес) и ("ip", адрес) → моменты неудач за последние LOCK_SEC.
@@ -284,7 +286,8 @@ def page(name: str, error: str = "") -> str:
     if name != 'offline.html':
         template = re.sub(r'((?:src|href)=")/static/(?!v/)',
                           lambda match: match[1] + f'/static/v/{STATIC_VERSION}/', template)
-    return template.replace("{{error}}", html.escape(error)).replace("{{imports}}", MODULE_IMPORTS)
+    return (template.replace("{{error}}", html.escape(error)).replace("{{imports}}", MODULE_IMPORTS)
+            .replace("{{preloads}}", MODULE_PRELOADS))
 
 
 def _login_page(error: str = "", status: int = 200) -> HTMLResponse:

@@ -1,0 +1,42 @@
+{
+  "head": "230413a2a8461c4484956aecfa25ecf2169dac0a",
+  "started_at": "2026-11-04T11:01:32.924648+00:00",
+  "script_sha256": "9ac4292b991b354add2a5689e0c76c7727d2f7887f85c0f189d9fac256c62c26",
+  "scope": "Local real HTTP app; synthetic gateway and WebSocket agent; mobile viewport",
+  "workspace": "empty before each profile; restore is tested separately",
+  "profiles": [
+    {
+      "profile": {
+        "name": "edge",
+        "download_kbps": 128,
+        "upload_kbps": 64,
+        "latency_ms": 1500
+      },
+      "viewport": [
+        393,
+        852
+      ],
+      "switches": [],
+      "sections": [],
+      "cold": {
+        "useful_ms": 37294.8,
+        "bytes_finished": 399773,
+        "ready_ms": 30249.19999998808,
+        "dom_ms": 23320.19999998808,
+        "js_count": 20,
+        "static_transfer_bytes": 375989
+      },
+      "warm": {
+        "useful_ms": 8154.7,
+        "bytes_finished": 23410,
+        "ready_ms": 4242.4000000059605,
+        "dom_ms": 2456.199999988079,
+        "js_count": 20,
+        "static_transfer_bytes": 0
+      },
+      "page_errors": [],
+      "gzip_static_responses": 0
+    }
+  ],
+  "browser": "156.0.4314.58"
+}

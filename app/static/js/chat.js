@@ -70,6 +70,7 @@ const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
 const THINK_TAIL = 600;          // знаков свёрнутого бегущего рассуждения: в три строки помещается меньше
 const POLL_MS = 2000;
+const RECOVERY_DELAYS = [1000, 2000, 4000, 8000, 15000];
 const BEAT_MS = 15000;           // признак жизни ответа из браузера; сервер ждёт его 90 с (ALIVE_SEC)
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
 const COPIED_MS = 1500;
@@ -438,6 +439,11 @@ function build(view, ctx) {
   let paintTimer = null;
   let lastPaint = 0;
   let menuFor = null;          // пункт списка с открытым меню
+  let alive = true;
+  let needsReload = false;
+  let failures = 0;
+  let historyRead = null;
+  let pendingTurn = null;      // request id and unsent draft: this view's memory only
   const parts = new WeakMap(); // сообщение → его узлы в ленте
   const unfolded = new Set();  // id ответов, чьё рассуждение человек раскрыл: лента перестраивается целиком
 
@@ -1108,20 +1114,55 @@ function build(view, ctx) {
 
   function schedulePoll() {
     clearTimeout(poll);
-    poll = (remoteStream() || otherTab()) && !jobs.has(chatId) ? setTimeout(reload, POLL_MS) : null;
+    poll = null;
+    if (!alive || document.visibilityState === 'hidden' || navigator.onLine === false) return;
+    if (needsReload) {
+      if (failures < RECOVERY_DELAYS.length) poll = setTimeout(reload, RECOVERY_DELAYS[failures]);
+    } else if ((remoteStream() || otherTab()) && !jobs.has(chatId)) poll = setTimeout(reload, POLL_MS);
+  }
+
+  function acknowledgeTurn(attempt) {
+    if (pendingTurn !== attempt) return;
+    pendingTurn = null;
+    if (chatId !== attempt.id || attempt.regenerate) return;
+    if (input.value === attempt.text) { input.value = ''; autosize(); }
+    atts = atts.filter((a) => !attempt.sent.includes(a));
+    paintAtts();
   }
 
   async function reload() {
-    if (!chatId) return;
+    if (!alive || !chatId || document.visibilityState === 'hidden') return;
     const id = chatId;
     const mine = opened;
+    if (historyRead && historyRead.mine === mine) return;
+    const own = { mine, controller: new AbortController() };
+    historyRead = own;
+    const timeout = setTimeout(() => own.controller.abort(), 15000);
+    const attempt = pendingTurn?.id === id && pendingTurn.uncertain ? pendingTurn : null;
     try {
-      const data = await api('GET', `/api/chats/${id}`);
-      if (mine !== opened || chatId !== id) return;
+      const options = { signal: own.controller.signal };
+      const [data, receipt] = await Promise.all([
+        api('GET', `/api/chats/${id}`, undefined, options),
+        attempt ? api('GET', `/api/chats/${id}/turns/${attempt.requestId}`, undefined, options) : null,
+      ]);
+      if (!alive || mine !== opened || chatId !== id) return;
       chat = data;
+      if (receipt?.accepted && data.messages.some((message) => message.id === receipt.assistant_message_id)) {
+        acknowledgeTurn(attempt);
+      }
+      needsReload = !!(pendingTurn?.id === id && pendingTurn.uncertain);
+      failures = needsReload ? failures + 1 : 0;
+      notice.textContent = '';
     } catch (err) {
-      if (mine === opened) notice.textContent = words(err);
+      if (!alive || mine !== opened) return;
+      notice.textContent = words(err);
+      needsReload = err.status !== 404 && err.code !== 'request_gone';
+      failures++;
+      schedulePoll();
       return;
+    } finally {
+      clearTimeout(timeout);
+      if (historyRead === own) historyRead = null;
     }
     renderFeed();
     paintChip();
@@ -1137,6 +1178,11 @@ function build(view, ctx) {
     const mine = ++opened;
     chatId = id;
     chat = null;
+    needsReload = false;
+    failures = 0;
+    pendingTurn = null;
+    historyRead?.controller.abort();
+    historyRead = null;
     draftWeb = false;
     draftThink = false;
     clearTimeout(poll);
@@ -1170,6 +1216,8 @@ function build(view, ctx) {
     } catch (err) {
       if (mine !== opened) return;
       feed.replaceChildren(el('p', { class: 'error feed-note' }, words(err)));
+      needsReload = err.status !== 404;
+      schedulePoll();
       return;
     }
     renderFeed();
@@ -1397,27 +1445,37 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(true);
     let reply;
+    const signature = JSON.stringify([id, regenerate, text, sent.map((a) => a.meta.id)]);
+    if (pendingTurn?.signature !== signature) {
+      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent };
+    }
+    const attempt = pendingTurn;
     try {
       reply = await api('POST', `/api/chats/${id}/turns`, {
+        request_id: attempt.requestId,
         ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
         ...(externalOk ? { external_ok: true } : {}), ...(webOk ? { web_ok: true } : {}),
         ...(cleanerTicket ? { cleaner_ticket: cleanerTicket } : {}) });
     } catch (err) {
       jobs.delete(id);
+      const uncertain = err.status === 0 || err.name === 'TimeoutError' || err.status === 503;
+      if (uncertain) attempt.uncertain = true;
+      else if (pendingTurn === attempt) pendingTurn = null;
       if (chatId === id) {
         chat.messages = before;
         renderFeed();
-        if (err.status === 503) reload();          // ход записан, но фото не прочиталось — как на сервере
+        if (uncertain) { needsReload = true; failures = 0; schedulePoll(); }
       }
       throw err;
     }
+    acknowledgeTurn(attempt);
+    if (reply.replayed) {
+      jobs.delete(id);
+      if (chatId === id) { chat.messages = before; needsReload = true; await reload(); }
+      return;
+    }
     if (chatId === id && externalOk) chat.chat.external = false;   // ответ этой модели — след подтверждения
     if (chatId === id && webOk) chat.chat.external_web = false;    // сервер записал время подтверждения
-    if (chatId === id && !regenerate) {
-      input.value = '';
-      autosize();
-      atts = atts.filter((a) => !sent.includes(a));
-    }
     loadList();
     if (reply instanceof Response) {
       kick();                                      // ответ через сервер — в «В работе»
@@ -1469,6 +1527,12 @@ function build(view, ctx) {
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('studio-me', paintWeb);     // профиль перечитан: ключ Exa могли задать или убрать
+  const resume = () => {
+    if (!alive || document.visibilityState === 'hidden') { clearTimeout(poll); return; }
+    if (needsReload || remoteStream() || otherTab()) { failures = 0; reload(); }
+  };
+  window.addEventListener('online', resume);
+  document.addEventListener('visibilitychange', resume);
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
     if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» и «Думает…»
@@ -1537,6 +1601,10 @@ function build(view, ctx) {
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
+      alive = false;
+      historyRead?.controller.abort();
+      window.removeEventListener('online', resume);
+      document.removeEventListener('visibilitychange', resume);
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('studio-me', paintWeb);
