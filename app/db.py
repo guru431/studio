@@ -5,7 +5,17 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 29
+VERSION = 30
+
+NTFY_30 = """CREATE TABLE ntfy_devices(
+       digest TEXT PRIMARY KEY REFERENCES sessions ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       server TEXT NOT NULL, topic TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, token_enc BLOB);
+CREATE INDEX ntfy_devices_user ON ntfy_devices(user_id);
+INSERT INTO ntfy_devices(digest, user_id, server, topic, enabled, token_enc)
+SELECT s.digest, s.user_id, n.server, substr(n.topic, 1, 31) || '-' || lower(hex(randomblob(16))), 0, n.token_enc
+FROM sessions s JOIN ntfy_settings n ON n.user_id = s.user_id;
+UPDATE ntfy_settings SET enabled = 0;"""
 
 NTFY_29 = """CREATE TABLE ntfy_settings(
        user_id INTEGER PRIMARY KEY REFERENCES users ON DELETE CASCADE,
@@ -413,7 +423,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -493,6 +503,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     27: TIMEZONE_27,
     28: CODE_28,
     29: NTFY_29,
+    30: NTFY_30,
 }
 
 
