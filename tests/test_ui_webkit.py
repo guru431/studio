@@ -8,7 +8,7 @@ import pytest
 
 from fake_bridge import pid
 from test_codex import CATALOG
-from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live, wait_for
+from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live, visibility_js, wait_for
 
 pw = pytest.importorskip("playwright.sync_api")
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -538,6 +538,60 @@ def test_pin_starts_before_the_app_shell_loads(iphone, tmp_path):
         early.locator('#lock-pin-ok').tap()
         pw.expect(early.locator('#lock')).not_to_be_visible()
         assert early.evaluate("async () => (await fetch('/api/me')).status") == 200
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+@pytest.mark.parametrize('start', ['reload', 'return'])
+def test_pin_pad_accepts_digits_before_lock_network_returns(iphone, start):
+    page, _ = iphone
+    page.evaluate("""async () => {
+      const {api, loadMe} = await import('/static/js/api.js');
+      await api('POST', '/api/me/screen-lock', {enabled: true});
+      await api('PUT', '/api/me/pin', {password: 'password-123', pin: '2580'});
+      await loadMe();
+    }""")
+    gate = """(() => {
+      const original = window.fetch;
+      const pending = new Promise(resolve => { window.releaseLockNetwork = resolve; });
+      window.pinPosts = 0;
+      window.fetch = async function(url, options) {
+        if (String(url) === '/api/lock/pin') window.pinPosts++;
+        const response = await original.call(this, url, options);
+        if (String(url).startsWith('/api/lock?') || String(url) === '/api/lock/now') await pending;
+        return response;
+      };
+    })()"""
+    if start == 'reload':
+        page.evaluate("""async () => {
+          const {api} = await import('/static/js/api.js');
+          await api('POST', '/api/lock/now');
+        }""")
+        page.add_init_script(gate)
+        page.reload(wait_until='domcontentloaded')
+    else:
+        page.evaluate(gate)
+        page.evaluate(visibility_js('hidden'))
+        page.evaluate('Date.now = () => performance.timeOrigin + performance.now() + 61000')
+        page.evaluate(visibility_js('visible'))
+    pw.expect(page.locator('#lock-pin')).to_be_visible(timeout=2000)
+    fits(page)
+    for digit in '2580':
+        page.locator(f'#lock-pin [data-digit="{digit}"]').tap()
+    pw.expect(page.locator('#lock-pin-dots span')).to_have_count(4)
+    if start == 'return':
+        pw.expect(page.locator('#lock-pin-ok')).to_be_disabled()
+        page.keyboard.press('Enter')
+        assert page.evaluate('window.pinPosts') == 0
+        assert page.evaluate("async () => (await fetch('/api/me')).status") == 423
+    else:
+        pw.expect(page.locator('#lock-pin-ok')).to_be_enabled()
+    page.evaluate('window.releaseLockNetwork()')
+    pw.expect(page.locator('#lock-pin-ok')).to_be_enabled()
+    pw.expect(page.locator('#lock-pin-dots span')).to_have_count(4)
+    page.locator('#lock-pin-ok').tap()
+    pw.expect(page.locator('#lock')).not_to_be_visible()
+    assert page.evaluate("async () => (await fetch('/api/me')).status") == 200
+    assert page.evaluate('window.pinPosts') == 1
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)

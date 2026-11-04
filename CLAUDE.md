@@ -4,17 +4,10 @@
 разделами чат · фото · видео, плюс пакетные скрипты для Windows и Linux — клиенты API картинок и
 видео LLM-шлюза srvllm. Что умеет и как пользоваться — [README.md](README.md); спека —
 [docs/superpowers/specs/2026-10-19-studio-pwa-design.md](docs/superpowers/specs/2026-10-19-studio-pwa-design.md).
-Репозитории — **приватные** (хосты LAN): `origin` — `git.example.net/xadmin/studio`, `cld` —
-`cld.hubtrust.net:8443/RD/studio` (сам не обновляется: push туда вслед за `origin`, перемоткой).
-`cld` виден только с build-host (`D:\vsc\studio`; имя — внутренний DNS RD, `nas05.rd.vvv`): на workstation
-имени нет, а 10.96.10.95:8443 через VPN не отвечает, remote там не заводить. Вход в `cld` хранит GCM
-учётки `Services` и отдаёт его в контексте её интерактивного входа: обычный SSH даже под `Services`
-не получает это хранилище. Проверенный путь с workstation (2026-11-03): скрытый временный Git-процесс на
-build-host с отдельной копией primary token уже открытой сессии Services (`DuplicateTokenEx` →
-`CreateProcessWithTokenW`, окружение `CreateEnvironmentBlock`). Пароли не извлекать; конфиг GCM,
-службы и задачи Windows не менять. Если такой сессии нет — push в `cld` ждёт её появления,
-деплой до успешных обязательных push запрещён. В самой сессии Services обычная последовательность:
-`git -C D:\vsc\studio pull --ff-only origin main; git -C D:\vsc\studio push cld main`.
+Репозиторий — **приватный** (хосты LAN): `origin` — `git.example.net/xadmin/studio`;
+Gitea — серверное pull-зеркало. Публикация и выкладка агента используют только этот контур.
+Решение владельца 2026-11-04: `cld` он обновляет вручную, когда нужно. Агент не проверяет,
+не синхронизирует и не пушит `cld`; его состояние не является условием выкладки.
 
 ## История и граница с llm_routers
 
@@ -243,8 +236,12 @@ remote, кроме `upstream`. `agent/studio_agent/remote_status.py` читае�
 (`cld` и другие); `origin` уже представлен общей меткой Git, живая метка GitHub не дублируется.
 API фильтрует имена и счётчики, URL/ключей нет. Проверки — `agent/tests/test_remote_status.py`
 и существующие API/Chromium/WebKit сценарии сводки, включая stale и защиту несохранённых файлов.
-`lock-start.js` запускает блокировку до модулей оболочки; `lock.js` объединяет одновременные чтения состояния
-и использует уже полученное состояние при показе PIN. Ранний старт отдельно проверяет `tests/test_ui_webkit.py`.
+`lock-start.js` запускает блокировку до модулей оболочки. HTML `/` получает снимок состояния своей сессии
+из `screenlock.snapshot`, без отдельного запроса перед PIN; ответ `no-store`, JSON экранирован в атрибуте
+и удаляется из DOM после чтения. При возврате известная панель PIN принимает цифры сразу; отправка
+ждёт запирания и свежего состояния, которое не стирает введённое. Запросы состояния объединяются,
+состояние и запирание ограничены 8 с. Сервер сохраняет проверку области, CSRF и счётчик попыток.
+Ранний старт и задержку сети проверяют `tests/test_ui_webkit.py` и `tests/test_ui_browser.py`.
 
 OpenCode (2026-10-30, studio-agent ≥ 0.5.0) — третий помощник раздела «Агенты»: `engine: opencode`,
 необязательный каталог `hello.opencode` → `/api/agents.opencode`. Модели — `provider/model` до 300
