@@ -17,6 +17,7 @@ from pydantic import BaseModel, StrictInt, model_validator
 
 import claude_code
 import clock
+import operations
 import state
 
 router = APIRouter(prefix="/api/code")
@@ -110,6 +111,7 @@ async def get_workspace(request: Request):
 @router.patch("/workspace")
 async def patch_workspace(body: Action, request: Request):
     uid = request.state.user.id
+    operations.check(uid)
     claude_code.own_agent(request, body.aid)
     if body.pid is not None:
         claude_code.check_pid(body.pid)

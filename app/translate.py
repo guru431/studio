@@ -63,6 +63,7 @@ import documents
 import exports
 import images
 import media
+import operations
 import ocr
 import ocr_render
 import push
@@ -154,6 +155,7 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
            blocks: "list[dict] | None" = None, ocr_conn=None) -> str:
     """Запись в очередь своей полосы (раннер — `kick`). Куски — `blocks` (`{"source", "box"}`) или нарезка
     `source` (уже `normalize`); исходник ещё не известен (скан) — кусков нет. Ждущих уже QUEUE_MAX — 409 busy."""
+    operations.check(user_id)
     _check_queue(user_id, lane_of(kind))
     if blocks is not None:
         rows = [(b["source"], "\n", json.dumps(b["box"])) for b in blocks]

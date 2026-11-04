@@ -43,6 +43,16 @@
 <div id="menu" class="menu" role="menu" hidden>
   <div class="menu-who"><b id="menu-name"></b><span id="menu-login"></span></div>
   <button id="theme-toggle" class="menu-item menu-theme" role="menuitem" type="button"></button>
+  <div class="theme-controls" role="group" aria-label="Тема учётки">
+    <label for="theme-mode">Тема учётки · на всех устройствах</label>
+    <select id="theme-mode">
+      <option value="auto">Как на устройстве</option>
+      <option value="light">Бумага · светлая</option>
+      <option value="dark">Графит · тёмная</option>
+    </select>
+    <p id="theme-save-status" role="status" aria-live="polite"></p>
+    <button id="theme-save-retry" class="btn-link" type="button" hidden>Повторить сохранение</button>
+  </div>
   <div id="appearance-controls" class="appearance-controls" role="group" aria-label="Шрифт и масштаб"></div>
   <a class="menu-item" role="menuitem" href="#/settings">Настройки</a>
   <a class="menu-item" role="menuitem" href="#/admin" id="menu-admin" hidden>Панель</a>

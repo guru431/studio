@@ -229,6 +229,47 @@ def test_notify_sends_an_encrypted_payload_and_forgets_gone_subscriptions(studio
     assert len(studio.gw.push_requests) == 4
 
 
+@pytest.mark.parametrize("revocation", ["expiry", "disabled"])
+def test_notifications_skip_revoked_sessions_without_a_device_request(studio, revocation):
+    from test_jobs import image
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    aid, _ = enroll(studio)
+    link = connect(studio, aid, FakeMachine({"alpha": {}}))
+    if revocation == "expiry":
+        state.DB.execute("UPDATE sessions SET expires = ?", (studio.clock[0] - 1,))
+    else:
+        state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
+    assert len(subs()) == 1  # no later HTTP request or cascade has removed it
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    image(uid, "finished")
+    state.DB.execute("UPDATE images SET state = 'done', finished = ? WHERE id = 'finished'", (T0,))
+    studio.c.portal.call(push.job_finished, "images", "finished")
+    settle(studio)
+    assert studio.gw.push_requests == []
+
+
+def test_notification_rechecks_eligibility_after_waiting_for_another_device(studio, monkeypatch):
+    uid = make_user(studio, "owner")
+    for suffix in ("first", "second"):
+        studio.c.cookies.clear()
+        signin(studio, "owner")
+        assert studio.c.post("/api/me/push", json=Device(FCM + suffix).body()).status_code == 204
+    original = state.HTTP.post
+
+    async def revoke_after_first(*args, **kwargs):
+        response = await original(*args, **kwargs)
+        state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
+        return response
+
+    monkeypatch.setattr(state.HTTP, "post", revoke_after_first)
+    studio.c.portal.call(push.notify, uid, "done", "code", "t")
+    assert len(studio.gw.push_requests) == 1
+
+
 @pytest.mark.parametrize("table, section, done, error", [
     ("images", "photo", "картинка готова", "картинка не получилась"),
     ("videos", "video", "ролик готов", "ролик не получился"),

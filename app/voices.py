@@ -16,6 +16,7 @@ import audio
 import clock
 import forms
 import media
+import operations
 import state
 from image_upload import UploadError
 
@@ -87,6 +88,7 @@ async def create(request: Request):
         for f in (src, dst):
             await asyncio.to_thread(f.unlink, missing_ok=True)
     vid = uuid.uuid4().hex
+    operations.check(uid)
     try:
         media_id = await media.save_async(uid, wav, "audio/wav", f"voice-{vid[:8]}.wav")
     except media.StorageError as e:

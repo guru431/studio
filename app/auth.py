@@ -39,6 +39,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 import clock
 import lock_policy
+import operations
 import security
 import state
 
@@ -196,7 +197,8 @@ async def guard(request: Request, call_next):
         request.state.locked, request.state.digest = screen, digest
         restriction = lock_policy.RESTRICTED.set(frozenset(lock_policy.hidden(digest)))
         try:
-            response = await call_next(request)
+            with operations.bind(user.id):
+                response = await call_next(request)
         finally:
             lock_policy.RESTRICTED.reset(restriction)
     if renewed:                      # срок в браузере догоняет продлённый на сервере

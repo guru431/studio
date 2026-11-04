@@ -415,6 +415,23 @@ async def test_stop_pending_question_and_close_prevent_new_turns(runner):
         runner.start(runner.project, "a" * 16, CHAT, "Нельзя", None, None)
 
 
+@pytest.mark.parametrize("status, expected", [("interrupted", "stopped"), ("failed", "error"),
+                                              ("unknown", "error"), (None, "error")])
+async def test_remote_terminal_status_never_reports_success_or_runs_queue(runner, status, expected):
+    runner.start(runner.project, "project", CHAT, "Задание", None, None)
+    task = runner._turns[CHAT].task
+    await asking(runner)
+    queued = await runner.steer("project", CHAT, "Дальше", [], mode="queue")
+    runner.fake.clients[-1].done(status)
+    await task
+    done = runner.sent[-1]["e"]
+    assert done["status"] == expected
+    assert done["unsent"] == [{"id": queued["id"], "text": "Дальше"}]
+    assert len([method for method, _ in runner.fake.calls if method == "turn/start"]) == 1
+    assert not runner.live()
+    assert any(frame["e"]["k"] == "asked" for frame in runner.sent)
+
+
 async def test_history_and_lists_cannot_cross_project_and_alias_survives(runner):
     runner.fake.exists = True
     runner.fake.turns = [{"id": "turn1", "items": [

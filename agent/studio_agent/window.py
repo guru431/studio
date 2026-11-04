@@ -160,6 +160,12 @@ def backends_changed() -> None:
         _window.show_backends()
 
 
+def activity_changed() -> None:
+    """Только локальные счётчики и подключение экрана; снимки и тексты задач сюда не передаются."""
+    if _window is not None and _window.alive():
+        _window.show_activity()
+
+
 def prepare(root, dark: bool | None = None) -> dict:
     """Тема корня и значок окон — один раз; итог — палитра."""
     c = getattr(root, "_studio_palette", None)
@@ -356,7 +362,7 @@ class MainWindow:
     def render(self) -> None:
         ttk = self.ttk
         self.buttons = []
-        self.card_widgets = self.pin_line = self.login_value = None
+        self.card_widgets = self.pin_line = self.login_value = self.activity_widgets = None
         self.backend_widgets = {}
         if self.body is not None:
             self.body.destroy()
@@ -596,6 +602,7 @@ class MainWindow:
         self.buttons.append(main)
         self.card_widgets = (dot, oval, words, hint, main)
         self.show_card()
+        self.activity_card()
         self.settings_card(cfg)
         self.sync_buttons()
         self.win.bind("<Return>", lambda e: None)
@@ -656,7 +663,7 @@ class MainWindow:
 
     def settings_card(self, cfg) -> None:
         tk, ttk = self.tk, self.ttk
-        box = self.card(2)
+        box = self.card(3)
         box.columnconfigure(0, weight=1)
         ttk.Label(box, text="Настройки", style="Card.Head.TLabel").grid(row=0, column=0, columnspan=2, sticky="w",
                                                                        pady=(0, self.px(10)))
@@ -689,6 +696,39 @@ class MainWindow:
             row=8, column=0, columnspan=2, sticky="w")
         self.settings_problem = problem
         self.show_pin()
+
+    def activity_card(self) -> None:
+        box = self.card(2)
+        box.columnconfigure(0, weight=1)
+        ttk = self.ttk
+        ttk.Label(box, text="Работа на компьютере", style="Card.Head.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, self.px(8)))
+        tasks = ttk.Label(box, style="Card.TLabel")
+        tasks.grid(row=1, column=0, sticky="w")
+        desktop = ttk.Label(box, style="Card.TLabel", wraplength=self.px(380))
+        desktop.grid(row=2, column=0, sticky="w", pady=(self.px(8), self.px(4)))
+        stop = ttk.Button(box, text="Завершить этот сеанс", command=self.ctrl.stop_desktop_session)
+        stop.grid(row=3, column=0, sticky="w")
+        idle = ttk.Button(box, command=lambda: self.ctrl.set_quit_when_idle(
+            not self.ctrl.activity_status()["quit_when_idle"]))
+        idle.grid(row=4, column=0, sticky="w", pady=(self.px(12), self.px(4)))
+        immediate = ttk.Button(box, command=self.ctrl.request_quit)
+        immediate.grid(row=5, column=0, sticky="w")
+        self.activity_widgets = tasks, desktop, stop, idle, immediate
+        self.show_activity()
+
+    def show_activity(self) -> None:
+        if self.activity_widgets is None:
+            return
+        value = self.ctrl.activity_status()
+        tasks, desktop, stop, idle, immediate = self.activity_widgets
+        tasks.configure(text=f"Заданий: {value['tasks']} · ждут ответа: {value['waiting']}")
+        desktop.configure(text="Удалённый рабочий стол подключён" if value["desktop_active"]
+                          else "Удалённый рабочий стол не подключён")
+        stop.state(["!disabled"] if value["desktop_active"] else ["disabled"])
+        idle.configure(text="Отменить выход после завершения" if value["quit_when_idle"]
+                       else f"Выйти после завершения · заданий: {value['tasks']}")
+        immediate.configure(text=f"Выйти сейчас · заданий: {value['tasks']}")
 
     def desktop_control(self, box, *, row: int, enabled: bool, problem) -> None:
         selected = self.tk.BooleanVar(value=enabled)

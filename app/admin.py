@@ -16,6 +16,7 @@ import re
 import shutil
 import sqlite3
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,7 @@ import history
 import images
 import manage
 import media
+import operations
 import profile
 import sections
 import security
@@ -137,6 +139,11 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     if body.password is not None:
         profile.check_password(body.password)
         changes["pw_hash"] = await asyncio.to_thread(security.hash_password, body.password)
+    with operations.barrier(uid) if body.disabled else nullcontext():
+        return await _apply_user_patch(uid, body, admin, changes)
+
+
+async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes: dict):
     state.DB.execute("BEGIN")
     try:
         if changes:
@@ -160,11 +167,8 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     return _user_out(uid)
 
 
-@router.delete("/users/{uid}")
-async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
+async def _delete_user(uid: int, admin: auth.User):
     """pending_files — сколько файлов учётки ещё ждут удаления на шаре: очередь переживает учётку."""
-    _self(admin, uid)
-    _user_out(uid)
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
@@ -179,6 +183,14 @@ async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)
     return {"pending_files": pending}
+
+
+@router.delete("/users/{uid}")
+async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
+    _self(admin, uid)
+    _user_out(uid)
+    with operations.barrier(uid):
+        return await _delete_user(uid, admin)
 
 
 #: проба шары — не дольше; ответ панели — словами

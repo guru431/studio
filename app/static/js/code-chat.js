@@ -4,7 +4,8 @@
  * chatView(host, { aid, pid, chat, agent, project, origin, fresh, closed, gone, openFile }) → { unmount() }:
  * - закрытие — крестик вкладки; история отвечает 404
  *   not_found (сессии на машине нет, студия её не заводила) — gone() вместо слов (вкладка уходит сама);
- * - лента #code-feed — страница истории (GET …/chats/<chat>, по 100), «Показать раньше» (#code-more) —
+ * - лента #code-feed — хвост 12 сообщений (GET …/chats/<chat>), «Показать раньше» (#code-more) —
+ *   страницы по 30 сообщений;
  *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
  *   details.code-step, затем текст — markdown.js);
  * - сразу за историей — поток live: idle — ничего, snapshot — всё состояние идущего хода вместо прежнего
@@ -786,20 +787,22 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const groups = (Array.isArray(a.questions) ? a.questions : []).map((q, i) => {
         const type = q.multi ? 'checkbox' : 'radio';
         const name = `code-ask-${a.request_id}-${i}`;
-        const options = (Array.isArray(q.options) ? q.options : []).map((o) => el('label', { class: 'code-ask-option' },
-          el('input', { type, name, value: String(o.label ?? '') }), el('span', {}, String(o.label ?? '')),
+        const offered = Array.isArray(q.options) ? q.options : [];
+        const identities = offered.length > 0 && offered.every((o) => typeof o.id === 'string' && o.id);
+        const options = offered.map((o) => el('label', { class: 'code-ask-option' },
+          el('input', { type, name, value: String(identities ? o.id : o.label ?? '') }), el('span', {}, String(o.label ?? '')),
           o.description ? el('span', { class: 'muted small' }, String(o.description)) : null));
         // «Свой ответ» (в Claude Code — «Other»): написан — уходит вместо отмеченного
         const own = el('input', { type: 'text', class: 'input code-ask-own', maxlength: String(OWN_MAX),
           placeholder: OWN, 'aria-label': OWN, autocomplete: 'off' });
-        return { q, own, box: el('fieldset', { class: 'code-ask-question' },
+        return { q, own, identities, box: el('fieldset', { class: 'code-ask-question' },
           q.header ? el('legend', {}, String(q.header)) : null, el('p', {}, String(q.question ?? '')), ...options,
           own) };
       });
       const go = el('button', { type: 'button', class: 'btn btn-accent code-ask-answer' }, 'Ответить');
       go.addEventListener('click', () => {
         const answers = Object.create(null);
-        for (const { q, own, box } of groups) {
+        for (const { q, own, identities, box } of groups) {
           const typed = own.value.trim();
           const inputs = [...box.querySelectorAll('input:not(.code-ask-own)')];
           const picked = inputs.filter((i) => i.checked).map((i) => i.value);
@@ -807,7 +810,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
             (inputs[0] || own).focus();
             return;
           }
-          answers[String(q.id || q.question || '')] = typed || picked.join(', ');
+          answers[String(q.id || q.question || '')] = typed || (identities ? picked : picked.join(', '));
         }
         reply({ decision: 'allow', answers });
       });

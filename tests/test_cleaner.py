@@ -101,6 +101,19 @@ def test_missing_stale_and_reused_ticket_cannot_send(protected):
     assert len(remote.sent) == 1
 
 
+def test_cleaner_preview_and_send_share_the_account_calendar_date(protected):
+    studio, remote = protected
+    studio.clock[0] = 1_792_616_400
+    assert studio.c.patch("/api/me", json={"timezone": "America/New_York"}).status_code == 200
+    cid = new_chat(studio)
+    shown = preview(studio, cid)
+    assert shown.status_code == 200
+    assert remote.prepared[-1]["messages"][0] == {
+        "role": "system", "content": "Сегодня среда, 21 октября 2026 года (America/New_York)."}
+    assert turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown.json()["ticket"]).status_code == 200
+    assert len(remote.sent) == 1
+
+
 def test_image_is_refused_and_text_attachment_including_filename_is_reviewed(protected):
     studio, remote = protected
     cid = new_chat(studio)

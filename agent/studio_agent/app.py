@@ -27,6 +27,7 @@ ALREADY = "Мост уже запущен"
 WORDS = {"setup": "не настроен", "connecting": "подключается…", "online": "на связи", "offline": "нет связи",
          "revoked": "компьютер отозван", "replaced": "ключ используется другим мостом"}
 PROBE_EVERY_SEC = 3600  # модели Claude Code — не чаще раза в час (решение плана 6)
+ACTIVITY_SEC = 0.25  # локальная индикация и штатный выход после завершения работы
 QUIT_SEC = 60  # выход: ходы (turns.CLOSE_SEC × 2) и канал
 UNENROLL_SEC = 120  # «Отключиться»: ходы, канал и запрос к студии (15 с) — не дольше
 ERASE_TRIES, ERASE_PAUSE_SEC = 10, 0.05  # стирание ключа: файл читает другой поток (окно, трей) — WinError 5/32
@@ -76,6 +77,10 @@ class Controller:
         self._subscribers = []
         self._login_subscribers = []
         self._backend_subscribers = []
+        self._activity_subscribers = []
+        self._activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False}
+        self._quit_when_idle = False
+        self._idle_quit_posted = False
         self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex", "opencode")}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -92,6 +97,7 @@ class Controller:
         self.fresh = False  # новая привязка: первый `online` — уведомление трея
         self.on_pin_changed = None  # блок PIN из студии, снятие блока, новый PIN — меню трея и окно (любой поток)
         self.on_update_quit = None  # штатный выход Tk после подготовки обновления и завершения заданий
+        self.on_idle_quit = None  # штатный выход Tk по локальному выбору «Выйти после завершения»
 
     # --- из любого потока ---
 
@@ -111,6 +117,43 @@ class Controller:
     def backend_status(self) -> dict:
         """Снимок последних проверок, без диска и сети: окно читает его из потока Tk."""
         return {name: dict(value) for name, value in self._backends.items()}
+
+    def on_activity(self, callback) -> None:
+        """Локальные счётчики и состояние рабочего стола, без содержимого заданий или экрана."""
+        self._activity_subscribers.append(callback)
+
+    def activity_status(self) -> dict:
+        """Последний снимок ядра; окно и трей не читают изменяемые Runner из своего потока."""
+        return dict(self._activity)
+
+    def set_quit_when_idle(self, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise ValueError("quit_when_idle")
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._set_quit_when_idle, enabled)
+        else:
+            self._set_quit_when_idle(enabled)
+
+    def _set_quit_when_idle(self, enabled):
+        self._quit_when_idle = enabled
+        self._idle_quit_posted = False
+        if self.agent is not None:
+            self.agent.local_exit_pending = False
+        self._refresh_activity()
+
+    def stop_desktop_session(self) -> None:
+        """Локальная остановка отбирает токен и отпускает ввод, сохраняя постоянное разрешение."""
+        if self.agent is not None:
+            self.agent.desktop.revoke()
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._refresh_activity)
+
+    def request_quit(self) -> None:
+        """Команда локального окна: тот же штатный выход, что и меню трея."""
+        if self.on_idle_quit is not None:
+            self.on_idle_quit()
+        elif self._loop is not None:
+            self._loop.call_soon_threadsafe(self._quit.set)
 
     def _set_backend(self, name: str, status: str, models: int = 0) -> None:
         value = {"status": status, "models": models}
@@ -466,6 +509,7 @@ class Controller:
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
+        activity = asyncio.create_task(self._activity_loop())
         first = asyncio.create_task(self._relink_task())
         await self._quit.wait()
         update_task = agent.updater.task if agent.updater is not None else None
@@ -473,9 +517,10 @@ class Controller:
             update_task.cancel()
             await asyncio.gather(update_task, return_exceptions=True)
         prober.cancel()
+        activity.cancel()
         for task in [first, *self._relinks]:
             task.cancel()
-        await asyncio.gather(prober, first, *self._relinks, return_exceptions=True)
+        await asyncio.gather(prober, activity, first, *self._relinks, return_exceptions=True)
         await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
         await agent.desktop.close()
@@ -486,6 +531,32 @@ class Controller:
         return (self.agent is not None and self.agent.desktop.status()["active"]
                 or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
                 or any(not task.done() for task in getattr(self._link, '_requests', ())))
+
+    def _refresh_activity(self):
+        live = [waiting for backend in (self.runner, self.codex, self.opencode) if backend is not None
+                for waiting in backend.live().values()]
+        active = self.agent is not None and self.agent.desktop.status()["active"]
+        value = {"tasks": len(live), "waiting": sum(bool(waiting) for waiting in live),
+                 "desktop_active": bool(active), "quit_when_idle": self._quit_when_idle}
+        if value != self._activity:
+            self._activity = value
+            for callback in list(self._activity_subscribers):
+                try:
+                    callback(self.activity_status())
+                except Exception as error:
+                    log.warning("подписчик активности: %s", type(error).__name__)
+        # Проверка и постановка выхода идут в одном такте ядра. Ожидания карточек — тоже live(),
+        # desktop.status() истекает по lease; запросы канала включены даже без активного Runner.
+        if self._quit_when_idle and not self._idle_quit_posted and not self._update_active():
+            self._idle_quit_posted = True
+            if self.agent is not None:
+                self.agent.local_exit_pending = True
+            self.request_quit()
+
+    async def _activity_loop(self):
+        while True:
+            self._refresh_activity()
+            await asyncio.sleep(ACTIVITY_SEC)
 
     async def _relink_task(self, *, reset_access: bool = False) -> None:
         task = asyncio.current_task()
@@ -644,8 +715,10 @@ def main(argv: list[str]) -> int:
     ctrl.on_state(lambda state: commands.put(("state", state)))
     ctrl.on_login(lambda login: commands.put(("login", login)))
     ctrl.on_backends(lambda status: commands.put(("backends", status)))
+    ctrl.on_activity(lambda status: commands.put(("activity", status)))
     ctrl.on_pin_changed = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
     ctrl.on_update_quit = lambda: commands.put("quit")
+    ctrl.on_idle_quit = lambda: commands.put("quit")
     ready_file = os.environ.pop('STUDIO_AGENT_UPDATE_READY', '')
 
     def poll() -> None:
@@ -665,6 +738,9 @@ def main(argv: list[str]) -> int:
                 window.login_changed(cmd[1])
             elif isinstance(cmd, tuple) and cmd[0] == "backends":
                 window.backends_changed()
+            elif isinstance(cmd, tuple) and cmd[0] == "activity":
+                icon.show_activity(cmd[1])
+                window.activity_changed()
             elif isinstance(cmd, tuple):
                 state = cmd[1]
                 icon.show(state, ctrl.login)
@@ -684,6 +760,10 @@ def main(argv: list[str]) -> int:
             elif cmd == "log":
                 with contextlib.suppress(OSError):
                     os.startfile(h / "agent.log")
+            elif cmd == "stop_desktop":
+                ctrl.stop_desktop_session()
+            elif cmd == "quit_idle":
+                ctrl.set_quit_when_idle(not ctrl.activity_status()["quit_when_idle"])
             elif cmd == "quit":
                 icon.stop()
                 ctrl.quit()

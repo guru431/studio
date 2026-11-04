@@ -826,16 +826,14 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
 
 
 def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypatch):
-    """Задание, начатое из другой вкладки, пока стирание удаляет файлы (forget_user уже прошёл):
-    его картинка не остаётся на шаре без строки images (ревью N1)."""
+    """Создание из другой вкладки во время очистки отклоняется до отправки шлюзу."""
     add_gateway(studio)
     studio.gw.hold = True
-    real, jobs = media.remove_files, []
+    real, replies = media.remove_files, []
 
     def racing(rows):                             # поток стирания: цикл свободен
-        if not jobs:
-            jobs.append(start(studio).json()["id"])
-            wait_for(lambda: studio.gw.generations)
+        if not replies:
+            replies.append(start(studio))
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
@@ -843,8 +841,9 @@ def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypa
                photo(), "image/png", "old.png", thumb=True)
     assert studio.c.delete("/api/history").status_code == 200
     studio.gw.hold = False
-    job = wait_job(jobs[0])
-    assert job.state == "cancelled" and job.media_id is None
+    assert replies[0].status_code == 409
+    assert replies[0].json()["detail"]["code"] == "history_changed"
+    assert studio.gw.generations == []
     assert media_rows() == 0 and share_files(env) == []
 
 

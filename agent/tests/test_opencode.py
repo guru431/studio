@@ -243,6 +243,54 @@ async def test_question_schema_options_map_labels_back_to_values(runner):
     assert runner.fake.replies[-1] == {"id": 92, "result": {"action": "accept", "content": {"pm": "bun"}}}
 
 
+async def test_question_selection_ids_keep_commas_and_duplicate_labels(runner):
+    runner.fake.ask = {"id": 92, "method": "elicitation/create", "params": {"sessionId": SESSION, "mode": "form",
+        "requestedSchema": {"type": "object", "properties": {
+            "city": {"type": "array", "items": {"oneOf": [
+                {"const": "moscow", "title": "Moscow, Russia"},
+                {"const": "first", "title": "Same"}, {"const": "second", "title": "Same"}]}},
+            "single": {"type": "string", "oneOf": [
+                {"const": "first", "title": "Same"}, {"const": "second", "title": "Same"}]},
+            "single_custom": {"type": "string"}}}}}
+    runner.start(runner.project, runner.pid, CHAT, "вопрос", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        questions = runner._turns[CHAT].asks[rid].event["questions"]
+        multi, single = [q["options"] for q in questions]
+        assert len({o["id"] for o in multi}) == 3
+        with pytest.raises(Refused, match="invalid"):
+            runner.answer(runner.pid, CHAT, rid, "allow", None, {"city": "Same", "single": "Same"})
+        runner.answer(runner.pid, CHAT, rid, "allow", None,
+                      {"city": [multi[0]["id"], multi[2]["id"]], "single": [single[0]["id"]]})
+        await task
+        assert runner.fake.replies[-1]["result"] == {"action": "accept", "content": {
+            "city": ["moscow", "second"], "single": "first"}}
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+
+
+async def test_question_custom_text_that_matches_option_id_stays_text(runner):
+    runner.fake.ask = {"id": 92, "method": "elicitation/create", "params": {"sessionId": SESSION, "mode": "form",
+        "requestedSchema": {"type": "object", "properties": {
+            "pick": {"type": "string", "oneOf": [{"const": "real", "title": "Real"}]},
+            "pick_custom": {"type": "string"}}}}}
+    runner.start(runner.project, runner.pid, CHAT, "вопрос", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        identity = runner._turns[CHAT].asks[rid].event["questions"][0]["options"][0]["id"]
+        runner.answer(runner.pid, CHAT, rid, "allow", None, {"pick": identity})
+        await task
+        assert runner.fake.replies[-1]["result"]["content"] == {"pick_custom": identity}
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+
+
 async def test_boolean_question_rejects_unrecognized_values(runner):
     runner.fake.ask = {"id": 92, "method": "elicitation/create", "params": {"sessionId": SESSION, "mode": "form",
         "requestedSchema": {"type": "object", "properties": {"enabled": {"type": "boolean"}}}}}

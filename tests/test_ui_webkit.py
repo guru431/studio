@@ -73,6 +73,26 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize('iphone', [(320, 740), (393, 852)], indirect=True)
+def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
+    from test_ui_mobile_navigation import NAV_GEOMETRY
+
+    page, _ = iphone
+    page.locator('#appearance-font').evaluate("slider => {slider.value = '150'; slider.dispatchEvent(new Event('input'));}")
+    for theme in ('light', 'dark'):
+        page.evaluate('theme => {document.documentElement.dataset.theme = theme;}', theme)
+        for section in ('video', 'speech', 'transcribe', 'ocr', 'translate'):
+            page.locator('#mobile-more').tap()
+            link = page.locator(f'#mobile-section-links a[data-section="{section}"]')
+            name = link.inner_text().strip()
+            link.tap()
+            pw.expect(page.locator('#mobile-more')).to_have_attribute('aria-current', 'page')
+            pw.expect(page.locator('#mobile-more-label')).to_have_text('Ещё: ' + name)
+            geometry = page.evaluate(NAV_GEOMETRY)
+            assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels'])
+            fits(page)
+
+
 @pytest.mark.parametrize('iphone', [(320, 740)], indirect=True)
 def test_settings_direct_link_and_reload_reveal_inherited_visibility(iphone):
     source, _ = iphone
@@ -863,6 +883,51 @@ def test_codex_external_writer_restores_input_and_offers_wait_or_copy(iphone, mo
     pw.expect(page.locator('#code-images .code-image')).to_have_count(1)
     assert len([r for r in machine.requests if r['op'] == 'turn']) == 1
     fits(page)
+
+
+@pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
+def test_opencode_question_choices_send_ids_and_arrays_without_changing_custom_text(iphone):
+    import bridge
+    from test_ui_opencode import CATALOG as OPENCODE
+
+    page, aid = iphone
+    machine = page.studio_machine
+    machine.opencode = OPENCODE
+    machine.projects['alpha']['chats'][CODE_CHAT_A]['engine'] = 'opencode'
+    bridge.LINKS[aid].hello['opencode'] = OPENCODE
+    questions = [
+        {"id": "cities", "question": "Города", "multi": True, "options": [
+            {"id": "option-0", "label": "Moscow, Russia"},
+            {"id": "option-1", "label": "Same"}, {"id": "option-2", "label": "Same"}]},
+        {"id": "single", "question": "Вариант", "multi": False, "options": [
+            {"id": "option-0", "label": "Same"}, {"id": "option-1", "label": "Same"}]},
+    ]
+    machine.script = [{"k": "ask", "kind": "question", "request_id": "choices", "questions": questions},
+                      {"k": "done", "status": "done"}]
+    page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.locator('#code-text').fill('Выбрать варианты')
+    page.locator('#code-send').tap()
+    groups = page.locator('.code-ask-question')
+    groups.nth(0).get_by_role('checkbox').nth(0).check()
+    groups.nth(0).get_by_role('checkbox').nth(2).check()
+    groups.nth(1).get_by_role('radio').nth(1).check()
+    page.locator('.code-ask-answer').tap()
+    pw.expect(page.locator('.code-ask')).to_have_count(0)
+    pw.expect(page.locator('#code-stop')).not_to_be_visible()
+    answer = [f for f in machine.requests if f.get('op') == 'answer'][-1]
+    assert answer['answers'] == {'cities': ['option-0', 'option-2'], 'single': ['option-1']}
+    fits(page)
+
+    machine.script = [{"k": "ask", "kind": "question", "request_id": "custom", "questions": questions[1:]},
+                      {"k": "done", "status": "done"}]
+    page.locator('#code-text').fill('Свой ответ')
+    page.locator('#code-send').tap()
+    page.locator('.code-ask-own').fill('option-0')
+    page.locator('.code-ask-answer').tap()
+    pw.expect(page.locator('.code-ask')).to_have_count(0)
+    answer = [f for f in machine.requests if f.get('op') == 'answer'][-1]
+    assert answer['answers'] == {'single': 'option-0'}
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)

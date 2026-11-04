@@ -45,6 +45,7 @@ import connections
 import db
 import forms
 import media
+import operations
 import push
 import sections
 import state
@@ -271,6 +272,7 @@ async def create_video(request: Request):
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": "проверьте промпт (до 4000 знаков), длительность "
                                   "(целые 1–30 с), качество, дорисовку и seed"}) from None
+    operations.check(uid)
     if upload is not None:
         try:
             source_id = await media.save_async(uid, image, "image/png", "studio-video-source.png", thumb=True)
@@ -313,6 +315,13 @@ async def create_video(request: Request):
         raise failure
     status = answer.get("status")
     video_id, now = uuid.uuid4().hex, clock.NOW()
+    try:
+        operations.check(uid)
+    except HTTPException:
+        await _drop_quietly(conn, answer["id"], video_id)
+        if upload is not None:
+            await _forget(uid, source_id)
+        raise
     if not media.alive(uid, source_id):           # фото удалили, пока шлюз принимал ролик
         await _drop_quietly(conn, answer["id"], video_id)
         raise HTTPException(404, media.GONE)
@@ -457,6 +466,10 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
     except httpx.HTTPError as e:
         log.info("ролик %s: mp4 не скачан (%s) — следующий проход", row["id"][:8], type(e).__name__)
         return
+    except HTTPException:
+        # Очистка/отключение во время скачивания: media уже убрал файл.
+        await _drop_quietly(conn, gateway_id, row["id"])
+        return
     # сначала «готово» в базе, потом снять у шлюза: обрыв между ними не теряет скачанный ролик
     if not _settle(row["id"], "done", "готово", media_id):
         await _forget(uid, media_id)       # пока качали, ролик отменили или удалили
@@ -510,7 +523,9 @@ async def _poll_rows(rows) -> None:
         if _paused(row["connection_id"]):
             return
         try:
-            await _poll(row)
+            with operations.bind(row["user_id"]):
+                operations.check(row["user_id"])
+                await _poll(row)
         except Exception as e:                    # noqa: BLE001 — наблюдатель не должен вставать
             log.warning("ролик %s: сбой прохода (%s)", row["id"][:8], type(e).__name__)
 

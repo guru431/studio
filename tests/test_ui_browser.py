@@ -2434,19 +2434,20 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """Вкладки по порядку: «Речь», затем «Разговоры»; «Перевод»
-    после «Сканов» (спека 2026-10-28-studio-translator, 6.1), «Код» — после «Перевода» (спека
-    2026-10-28-studio-claude-code, 6.5); все восемь подписей целиком и на 320 px, страница
+    """Все разделы остаются в исходном порядке; на телефоне — основные и «Ещё», подписи целиком, страница
     без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
     «В работе», профиль), место прежней кнопки темы отдано заголовку."""
-    fits = """[...document.querySelectorAll('#rail .tab span')].map(s => {
+    fits = """[...document.querySelectorAll('#rail .tab > span:last-child, #mobile-more-label')]
+      .filter(s => s.getBoundingClientRect().width).map(s => {
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= 0 && b.right <= innerWidth,
       s.scrollWidth <= s.clientWidth]; })"""
     spacing = """(() => {
-      const boxes = [...document.querySelectorAll('#rail .tab .ico')].map(n => n.getBoundingClientRect());
+      const boxes = [...document.querySelectorAll('#rail .tab, #mobile-more')]
+        .map(n => n.getBoundingClientRect()).filter(b => b.width);
       const centers = boxes.map(b => b.left + b.width / 2);
       const gaps = centers.slice(1).map((x, i) => x - centers[i]);
-      const labels = [...document.querySelectorAll('#rail .tab span')].map(n => n.getBoundingClientRect());
+      const labels = [...document.querySelectorAll('#rail .tab > span:last-child, #mobile-more-label')]
+        .map(n => n.getBoundingClientRect()).filter(b => b.width);
       return [Math.max(...gaps) - Math.min(...gaps), labels.every((b, i) => !i || b.left >= labels[i - 1].right)];
     })()"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
@@ -2458,8 +2459,9 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    assert [name for name, _, _ in r["values"]["fits"]] == ["Чат", "Фото", "Видео", "Речь", "Разговоры", "Сканы", "Перевод",
-                                                            "Агенты"]
+    expected = (["Чат", "Фото", "Агенты", "Ещё"] if width < 760 else
+                ["Чат", "Фото", "Видео", "Речь", "Разговоры", "Сканы", "Перевод", "Агенты"])
+    assert [name for name, _, _ in r["values"]["fits"]] == expected
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
         assert r["values"]["spacing"][0] < 1 and r["values"]["spacing"][1], r["values"]["spacing"]

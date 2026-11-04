@@ -6,6 +6,8 @@ import json
 import logging
 import uuid
 
+import pytest
+
 import auth
 import bridge
 import claude_code
@@ -103,6 +105,50 @@ def url(aid, *rest) -> str:
 
 def detail(r) -> dict:
     return r.json()["detail"]
+
+
+@pytest.mark.parametrize("operation", ["history", "read"])
+@pytest.mark.parametrize("revocation", ["logout", "expiry", "disabled", "lock"])
+def test_late_bridge_reply_requires_a_live_unlocked_session(studio, operation, revocation):
+    aid, machine, _ = setup(studio)
+    uid = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
+    original = getattr(machine, "_op_" + operation)
+
+    def revoke(req, events):
+        result = original(req, events)
+        if revocation == "logout":
+            auth.end_sessions(uid)
+        elif revocation == "expiry":
+            state.DB.execute("UPDATE sessions SET expires = ?", (studio.clock[0] - 1,))
+        elif revocation == "disabled":
+            state.DB.execute("UPDATE users SET disabled = 1")
+        else:
+            state.DB.execute("UPDATE users SET screen_lock = 1")
+            state.DB.execute("UPDATE sessions SET mobile = 1, seen = NULL")
+        return result
+
+    setattr(machine, "_op_" + operation, revoke)
+    if operation == "history":
+        response = studio.c.get(url(aid, "projects", ALPHA, "chats", A))
+    else:
+        machine.projects["alpha"]["files"]["private.txt"] = b"private file"
+        response = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "private.txt"})
+    assert response.status_code == 409, response.text
+    assert detail(response)["code"] == "closed"
+    assert "private file" not in response.text
+
+
+def test_late_bridge_refusal_does_not_reveal_its_message_to_a_closed_session(studio):
+    aid, machine, _ = setup(studio)
+
+    def revoke(req, events):
+        state.DB.execute("DELETE FROM sessions")
+        raise Refused("invalid", "private refusal")
+
+    machine._op_history = revoke
+    response = studio.c.get(url(aid, "projects", ALPHA, "chats", A))
+    assert response.status_code == 409 and detail(response)["code"] == "closed"
+    assert "private refusal" not in response.text
 
 
 def events():
@@ -564,6 +610,21 @@ def test_permission_card_round_trip(studio):
     [req] = sent(m, "answer")
     assert {k: req[k] for k in ("project", "chat", "request_id", "decision", "message", "answers")} == {
         "project": ALPHA, "chat": A, "request_id": "r1", "decision": "always", "message": None, "answers": None}
+
+
+def test_question_selection_ids_reach_the_bridge_without_string_conversion(studio):
+    aid, machine, _ = setup(studio)
+    for selections in (["option-0"], ["option-0", "option-1"]):
+        machine.running[A] = {"project": ALPHA, "asks": {"q1": QUESTION}, "rest": []}
+        answers = {"city": selections}
+        response = studio.c.post(chat_url(aid, "answer"), json={
+            "request_id": "q1", "decision": "allow", "answers": answers})
+        assert response.status_code == 204, response.text
+        assert sent(machine, "answer")[-1]["answers"] == answers
+    for invalid in (["x"] * 101, ["x" * 2001], [1], [["x"]]):
+        response = studio.c.post(chat_url(aid, "answer"), json={
+            "request_id": "q1", "decision": "allow", "answers": {"city": invalid}})
+        assert response.status_code == 422
 
 
 def test_question_answers_reach_the_bridge(studio):

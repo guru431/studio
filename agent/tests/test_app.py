@@ -177,6 +177,59 @@ def test_update_waits_for_each_backend_and_pending_machine_requests(make, home):
     assert ctrl._update_active() is False
 
 
+def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(make, home):
+    import concurrent.futures
+    from types import SimpleNamespace
+
+    ctrl = make()
+    backends = [turns.Runner(lambda event: None, choices=store.Choices(home), cli_path=None) for _ in range(3)]
+    ctrl.runner, ctrl.codex, ctrl.opencode = backends
+    desktop = {"active": True, "enabled": True}
+    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop)))
+    exits, snapshots = [], []
+    ctrl.on_idle_quit = lambda: exits.append(True)
+    ctrl.on_activity(snapshots.append)
+    for i, backend in enumerate(backends):
+        backend._turns[str(i)] = SimpleNamespace(asks={"private-prompt": True} if i == 1 else {})
+    ctrl._refresh_activity()
+    assert ctrl.activity_status() == {"tasks": 3, "waiting": 1, "desktop_active": True, "quit_when_idle": False}
+    assert "private-prompt" not in str(snapshots)
+    ctrl.set_quit_when_idle(True)
+    assert not exits
+    for backend in backends:
+        backend._turns.clear()
+        ctrl._refresh_activity()
+        assert not exits
+    pending = concurrent.futures.Future()
+    ctrl._link = SimpleNamespace(_requests={pending})
+    desktop["active"] = False
+    ctrl._refresh_activity()
+    assert ctrl.activity_status()["desktop_active"] is False and not exits
+    pending.set_result(None)
+    ctrl._refresh_activity()
+    ctrl._refresh_activity()
+    assert exits == [True]
+    snapshot = ctrl.activity_status()
+    snapshot["tasks"] = 99
+    assert ctrl.activity_status()["tasks"] == 0
+    ctrl.agent = ctrl.runner = ctrl.codex = ctrl.opencode = ctrl._link = None
+
+
+def test_cancel_idle_exit_keeps_bridge_available(make):
+    from types import SimpleNamespace
+
+    ctrl = make()
+    live = {"task": False}
+    ctrl.runner = SimpleNamespace(live=lambda: dict(live))
+    exits = []
+    ctrl.on_idle_quit = lambda: exits.append(True)
+    ctrl.set_quit_when_idle(True)
+    ctrl.set_quit_when_idle(False)
+    live.clear()
+    ctrl._refresh_activity()
+    assert not exits and ctrl.activity_status()["quit_when_idle"] is False
+
+
 def test_not_configured_does_not_link(make):
     ctrl = make()
     assert ctrl.state == "setup" and not ctrl.enrolled
