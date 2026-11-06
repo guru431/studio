@@ -1383,17 +1383,18 @@ function build(view, ctx) {
     let cleanerTicket;
     if (chat.chat.cleaner) {
       let retry;
+      let local = false;
       const rules = [];
       do {
         retry = false;
         notice.textContent = 'Проверяю данные в Cleaner…';
         const shown = await api('POST', `/api/chats/${id}/cleaner-preview`,
           { ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
-            cleaner_rules: rules });
+            cleaner_rules: rules, cleaner_local: local });
         notice.textContent = '';
         if (chatId !== id) return;
         cleanerTicket = await new Promise((resolve) => {
-          const confirm = button('Отправить проверенный текст', { class: 'btn btn-accent', id: 'cleaner-confirm',
+          const confirm = button(local ? 'Отправить оригиналы локальной модели' : 'Отправить проверенный текст', { class: 'btn btn-accent', id: 'cleaner-confirm',
             disabled: !shown.deliverable });
           const content = el('div', { class: 'cleaner-preview-text' }, ...shown.messages.map((m) =>
             m.role === 'system' ? el('details', {}, el('summary', {}, 'Инструкция модели'), el('pre', {}, m.content))
@@ -1420,12 +1421,18 @@ function build(view, ctx) {
               dialog.close();
             }));
           }
-          const dialog = openDialog(root, { id: 'cleaner-preview-dialog', title: 'Что получит модель', body: [
-            el('p', {}, counts ? `Замены: ${counts}` : 'Автоматических замен нет.'), content, edit,
+          const switchRoute = button(local ? 'Вернуться к облачному предпросмотру' : 'Выбрать локальную модель', { class: 'btn', id: 'cleaner-local' }, () => {
+            local = !local;
+            retry = true;
+            dialog.close();
+          });
+          const dialog = openDialog(root, { id: 'cleaner-preview-dialog', title: local ? 'Оригиналы для локальной модели' : 'Что получит модель', body: [
+            local ? el('p', {}, `Оригиналы получит ${shown.destination.model} (${shown.destination.url}). Проверьте состав перед подтверждением.`)
+              : el('p', {}, counts ? `Замены: ${counts}` : 'Автоматических замен нет.'), content, local ? null : edit,
             el('p', { class: 'muted small' }, 'Проверьте текст: распознавание может что-то пропустить. '
               + 'Правки замен действуют только в этом диалоге. Изображения через Cleaner не передаются.'),
             !shown.deliverable ? el('p', { class: 'error' }, 'Отправка заблокирована политикой Cleaner.') : null,
-          ].filter(Boolean), actions: [confirm], cancelText: 'Вернуться' });
+          ].filter(Boolean), actions: [switchRoute, confirm], cancelText: 'Вернуться' });
           confirm.addEventListener('click', () => { accepted = true; dialog.close(); });
           dialog.addEventListener('close', () => resolve(accepted ? shown.ticket : null), { once: true });
         });

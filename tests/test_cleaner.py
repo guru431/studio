@@ -20,7 +20,7 @@ def protected(studio, monkeypatch):
     cleaner.TICKETS.clear()
     cleaner.LOCKS.clear()
     sent, deleted, prepared = [], [], []
-    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, revoked=False)
+    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, revoked=False, local=[])
     original = studio.gw.handler
 
     def handler(request):
@@ -33,6 +33,15 @@ def protected(studio, monkeypatch):
             return httpx.Response(200, json={"data": [{"id": "protected-model"}]})
         if path == "/api/v1/chats":
             return httpx.Response(201, json={"id": "remote" + str(len(prepared))})
+        if path.endswith("/local-requests"):
+            body = json.loads(request.content)
+            prepared.append(body)
+            return httpx.Response(200, json={"receipt": "local-receipt", "messages": body["messages"],
+                "counts": {}, "deliverable": True, "blocked": 0, "leaks": 0, "replacements": [], "route": "local",
+                "destination": {"url": "http://127.0.0.1:30000/v1", "model": "local-model"}})
+        if path.endswith("/local-requests/send"):
+            remote.local.append(json.loads(request.content))
+            return httpx.Response(202, json={"item_id": "localanswer"})
         if path.endswith("/requests"):
             body = json.loads(request.content)
             prepared.append(body)
@@ -87,6 +96,21 @@ def test_reviewed_chat_streams_restored_text_and_preserves_raw_answer(protected)
     assert answer["content"] == f"Ответ {EMAIL}" and answer["cleaner_raw"] == "Ответ <EMAIL_1>"
     assert answer["status"] == "done" and len(remote.sent) == 1
     assert studio.gw.chat_requests == []
+
+
+def test_explicit_local_preview_requires_its_own_confirmation_and_never_sends_cloud(protected):
+    studio, remote = protected
+    cid = new_chat(studio)
+    cloud = preview(studio, cid).json()
+    shown = preview(studio, cid, cleaner_local=True)
+    assert shown.status_code == 200, shown.text
+    assert EMAIL in shown.json()["messages"][-1]["content"] and shown.json()["destination"]["model"] == "local-model"
+    assert remote.local == remote.sent == []
+    assert turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=cloud["ticket"]).status_code == 409
+    result = sse(turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown.json()["ticket"]))
+    assert result[-1] == ("done", {"status": "done"})
+    assert len(remote.local) == 1 and remote.sent == [] and studio.gw.chat_requests == []
+    assert messages(studio, cid)[-1]["model"] == "local-model"
 
 
 def test_missing_stale_and_reused_ticket_cannot_send(protected):
