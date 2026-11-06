@@ -34,6 +34,8 @@ class Preview:
     remote_id: str = ""
     receipt: str = field(default="", repr=False)
     expires: float = 0
+    route: str = "cloud"
+    local_model: str = ""
 
 
 def refused(message: str, status=409):
@@ -92,20 +94,26 @@ async def context(conn, resource: str, item_id: str) -> str:
             LOCKS.pop(key, None)
 
 
-async def prepare(conn, resource, item_id, model, messages, rules=()):
+async def prepare(conn, resource, item_id, model, messages, rules=(), *, local=False):
     if not conn.cleaner or any(not isinstance(m.get("content"), str) for m in messages):
         raise refused("Через Cleaner можно отправить текст и распознанные документы; изображения не передаются")
     remote = await context(conn, resource, item_id)
     snap = connections.snapshot(conn)
-    shown = await call(conn, "POST", f"/chats/{remote}/requests",
-                       json={"model": model, "messages": messages, "rules": list(rules)})
+    path = "local-requests" if local else "requests"
+    payload = {"messages": messages} if local else {"model": model, "messages": messages, "rules": list(rules)}
+    shown = await call(conn, "POST", f"/chats/{remote}/{path}", json=payload)
     if connections.snapshot(conn) != snap:
         raise refused("Подключение изменилось: проверьте запрос ещё раз")
     if not isinstance(shown.get("receipt"), str) or not isinstance(shown.get("messages"), list):
         raise refused("Cleaner вернул неверный предпросмотр", 502)
     preview = Preview(conn.user_id, item_id, conn, snap, model, messages, remote, shown["receipt"],
                       clock.NOW() + TICKET_SECONDS)
-    return preview, {k: shown.get(k) for k in ("messages", "counts", "deliverable", "blocked", "leaks", "replacements")}
+    if local:
+        destination = shown.get("destination")
+        if not isinstance(destination, dict) or not isinstance(destination.get("model"), str) or not isinstance(destination.get("url"), str):
+            raise refused("Cleaner не показал назначение локального запроса", 502)
+        preview.route, preview.local_model = "local", destination["model"]
+    return preview, {k: shown.get(k) for k in ("messages", "counts", "deliverable", "blocked", "leaks", "replacements", "destination", "route")}
 
 
 def remember(preview):
@@ -142,7 +150,8 @@ async def events(preview):
     conn, remote = preview.conn, preview.remote_id
     if connections.snapshot(conn) != preview.snapshot:
         raise refused("Подключение изменилось: проверьте запрос ещё раз")
-    answer = await call(conn, "POST", f"/chats/{remote}/requests/send", json={"receipt": preview.receipt})
+    path = "local-requests" if preview.route == "local" else "requests"
+    answer = await call(conn, "POST", f"/chats/{remote}/{path}/send", json={"receipt": preview.receipt})
     answer_id = answer.get("item_id")
     if not isinstance(answer_id, str) or not answer_id.isalnum():
         raise refused("Cleaner вернул неверный ответ", 502)

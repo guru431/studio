@@ -184,6 +184,7 @@ class TurnIn(BaseModel):
     web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
     cleaner_ticket: str | None = Field(None, max_length=64)
     cleaner_rules: list[CleanerRule] = Field(default_factory=list, max_length=100)
+    cleaner_local: bool = False
 
 
 class AnswerIn(BaseModel):
@@ -1415,7 +1416,7 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
         raise cleaner.refused("Пустое сообщение", 422)
     messages = _cleaner_messages(uid, chat_id, body, atts)
     preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
-                                          [rule.model_dump() for rule in body.cleaner_rules])
+                                          [rule.model_dump() for rule in body.cleaner_rules], local=body.cleaner_local)
     operations.check(uid)
     _chat_row(uid, chat_id)                        # deleted while Cleaner was preparing: no send ticket
     return {"ticket": cleaner.remember(preview), **shown}
@@ -1500,6 +1501,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             raise cleaner.refused("Модель диалога изменилась: проверьте запрос ещё раз")
         messages = _cleaner_messages(uid, chat_id, body, atts)
         preview = cleaner.take(body.cleaner_ticket, conn, chat_id, model, messages)
+        if preview.route == "local":
+            model = preview.local_model
+            limit = CONTEXT.get(model)  # The cloud model's context limit does not describe the local recipient.
     via = "server" if conn.proxied else "browser"
     # скан ещё распознаётся: ход через сервер подождёт его в StreamTask, прямой — ждёт страница
     scans = _pending_scans(uid, chat_id, atts)

@@ -78,7 +78,8 @@ def test_cleaner_personal_settings(browser, live, cleaner_server, monkeypatch, w
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, monkeypatch, width, tmp_path):
+@pytest.mark.parametrize("local", [False, True])
+def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, monkeypatch, width, tmp_path, local):
     url, real, _ = cleaner_server
     port = httpx.URL(url).port
     original = live.gw.handler
@@ -90,7 +91,7 @@ def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, mon
         return httpx.Response(response.status_code, headers=response.headers, content=response.content)
 
     monkeypatch.setattr(state.HTTP._transport, "handler", forward)
-    login = f"cleaner-{width}"
+    login = f"cleaner-{width}-{'local' if local else 'cloud'}"
     uid = live.add_user(login)
     connection = db.connect(live.db_path)
     try:
@@ -113,6 +114,10 @@ def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, mon
         ("click", "#cleaner-mask"),
         ("wait", "document.querySelector('.cleaner-preview-text')?.textContent.includes('<TERM_1>')"),
         ("eval", "fixed", "document.querySelector('.cleaner-preview-text').textContent"),
+        *([("click", "#cleaner-local"),
+           ("wait", "document.querySelector('#cleaner-confirm')?.textContent.includes('оригиналы')"),
+           ("eval", "localPreview", "document.querySelector('#cleaner-preview-dialog').textContent")]
+          if local else []),
         ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth && document.querySelector('#cleaner-preview-dialog').scrollWidth <= document.querySelector('#cleaner-preview-dialog').clientWidth"),
         ("screenshot", str(tmp_path / f"cleaner-review-{width}.png")), ("click", "#cleaner-confirm"),
         ("wait", "document.querySelector('.msg-cleaner-view')"),
@@ -127,7 +132,10 @@ def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, mon
     assert "ivan@contoso.ru" not in values["preview"] and "<EMAIL_1>" in values["preview"]
     assert values["notSent"] and values["fits"]
     assert "Северное сияние" not in values["fixed"] and "<TERM_1>" in values["fixed"]
-    assert "Ответ ivan@contoso.ru" in values["restored"]
-    assert "Ответ <EMAIL_1>" in values["raw"]
+    assert ("Локально: ivan@contoso.ru" if local else "Ответ ivan@contoso.ru") in values["restored"]
+    if local:
+        assert "ivan@contoso.ru" in values["localPreview"] and "127.0.0.1:30000" in values["localPreview"]
+    else:
+        assert "Ответ <EMAIL_1>" in values["raw"]
     assert "ivan@contoso.ru" not in values["copy"]
     assert not problems(result), problems(result)
