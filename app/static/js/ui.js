@@ -14,6 +14,18 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** Фокус ввода на компьютере после снятия шторки раздела, без прокрутки и клавиатуры телефона. */
+export function focusDesktop(input) {
+  if (!matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+  const active = document.activeElement;
+  requestAnimationFrame(() => {
+    if (!input.isConnected || input.closest('[inert], [hidden]') || !input.getClientRects().length
+        || getComputedStyle(input).visibility !== 'visible' || document.activeElement !== active
+        || document.querySelector('dialog[open]')) return;
+    input.focus({ preventScroll: true });
+  });
+}
+
 let fields = 0;
 
 /** Подпись, поле и строка отказа `p.error[data-for=key]` под ним. */
