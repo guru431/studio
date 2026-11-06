@@ -33,7 +33,7 @@ import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.j
 import { fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
-import { el, words } from './ui.js';
+import { el, focusDesktop, words } from './ui.js';
 import { usageView } from './code-usage.js';
 import { contextView } from './code-context.js';
 import { changeView } from './code-diff.js';
@@ -1163,6 +1163,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     updateControls();
     host.dataset.loaded = '1';
     onReady?.();
+    // Навигация вкладок с клавиатуры сохраняет фокус в ряду вкладок.
+    if (thenLive && !interactions && !document.activeElement?.matches('[role="tab"]:focus-visible')) focusDesktop(text);
     if (scroller) scroller.scrollTop = preserveScroll && !followed ? previousScroll : scroller.scrollHeight;
     paintNavigation();
     markRead();

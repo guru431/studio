@@ -64,7 +64,7 @@ import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
-import { button, el, field, openDialog, plural, words } from './ui.js';
+import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
@@ -1174,6 +1174,7 @@ function build(view, ctx) {
   async function open(id) {
     panel(false);
     openModels(false);
+    if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
     chatId = id;
@@ -1205,7 +1206,6 @@ function build(view, ctx) {
     form.hidden = id === null && !!ctx.hint;         // без модели новый диалог не начать; прежний — по правилам сервера
     if (id === null) {
       feed.replaceChildren(ctx.hint ? ctx.hint() : emptyNote());
-      if (!ctx.hint) input.focus();
       return;
     }
     feed.replaceChildren(el('p', { class: 'muted feed-note' }, 'Загружаю диалог…'));
