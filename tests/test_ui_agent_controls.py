@@ -565,6 +565,7 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
     assert result["values"]["sameTab"] and not result["values"]["accept"]
     assert "Осталось 75%" in result["values"]["usage"] and "Нет данных" in result["values"]["usage"]
     assert "null" not in result["values"]["usage"]
+    assert "Доступные сбросы лимита" not in result["values"]["usage"]
     assert "12" in result["values"]["usage"] and "345" in result["values"]["usage"]
     turn = code_requests(machine, "turn")[-1]
     assert turn["text"] == "" and [item["name"] for item in turn["attachments"]] == ["документ.pdf", "archive.zip"]

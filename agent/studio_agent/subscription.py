@@ -102,6 +102,10 @@ def codex_usage(raw, now):
              "longestStreakDays": "longest_streak_days"}
     stats = {names[k]: number(v) for k, v in summary.items() if k in names and number(v) is not None} if (
         isinstance(summary, dict)) else {}
+    credits = limits.get("rateLimitResetCredits")
+    count = credits.get("availableCount") if isinstance(credits, dict) else None
+    if type(count) is int and count >= 0:
+        stats["available_resets"] = count
     rows = usage.get("dailyUsageBuckets")
     daily = [{"date": r["startDate"], "tokens": r["tokens"]} for r in (rows if isinstance(rows, list) else [])[-366:]
              if isinstance(r, dict) and isinstance(r.get("startDate"), str) and len(r["startDate"]) == 10

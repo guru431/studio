@@ -6,6 +6,8 @@ import urllib.error
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from studio_agent import codex, codex_rpc, subscription
 
 
@@ -38,6 +40,26 @@ def test_codex_distinguishes_provider_buckets_and_actual_window_lengths():
     assert rows["other_primary"]["used_percent"] == 20
     assert rows["other_secondary"]["window_minutes"] == 15
     assert not rows["seven_day"]["available"] and not rows["monthly"]["available"]
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_codex_available_resets_are_independent_of_token_statistics(count):
+    raw = {"limits": {"rateLimitResetCredits": {"availableCount": count,
+        "credits": [{"id": "private-credit-id"}]}}}
+    data = subscription.codex_usage(raw, 10)
+    assert not data["available"]  # No quota windows were reported.
+    assert data["statistics"]["available"]
+    assert data["statistics"]["summary"] == {"available_resets": count}
+    assert "private-credit-id" not in json.dumps(data)
+
+
+@pytest.mark.parametrize("credits", [None, {}, {"availableCount": None}, {"availableCount": True},
+    {"availableCount": -1}, {"availableCount": 1.5}, {"availableCount": "2"},
+    {"availableCount": float("nan")}, {"credits": [{"id": "not-a-count"}]}])
+def test_codex_missing_or_invalid_reset_count_stays_unknown(credits):
+    data = subscription.codex_usage({"limits": {"rateLimitResetCredits": credits}}, 10)
+    assert "available_resets" not in data["statistics"]["summary"]
+    assert not data["statistics"]["available"]
 
 
 def credentials(config, **kwargs):

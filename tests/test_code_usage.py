@@ -48,6 +48,26 @@ def test_usage_forwards_engine_refresh_and_preserves_unknown_monthly(studio):
     assert data["links"][0]["url"].startswith("https://chatgpt.com/")
 
 
+@pytest.mark.parametrize("count", [0, 2, None])
+def test_usage_preserves_codex_available_reset_count(studio, count):
+    aid, machine, _ = prepare(studio)
+    data = copy.deepcopy(USAGE)
+    data["statistics"]["summary"]["available_resets"] = count
+    machine._op_usage = lambda req, events: data
+    response = studio.c.get(url(aid, "usage") + "?engine=codex")
+    assert response.status_code == 200
+    assert response.json()["statistics"]["summary"]["available_resets"] == count
+
+
+@pytest.mark.parametrize("count", [-1, 1.5, True, "2"])
+def test_usage_rejects_invalid_reset_count(studio, count):
+    aid, machine, _ = prepare(studio)
+    data = copy.deepcopy(USAGE)
+    data["statistics"]["summary"]["available_resets"] = count
+    machine._op_usage = lambda req, events: data
+    assert studio.c.get(url(aid, "usage") + "?engine=codex").status_code == 502
+
+
 def test_usage_old_bridge_and_invalid_engine_are_rejected_before_request(studio):
     aid, machine, link = prepare(studio)
     before = len(machine.requests)
