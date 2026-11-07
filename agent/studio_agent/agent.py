@@ -488,12 +488,14 @@ class Agent:
         project = await self._project(frame)
         async def read(name, backend):
             async def load():
-                async with asyncio.timeout(8):
+                async with asyncio.timeout(30):
                     return (await asyncio.to_thread(sessions.chats, project, {}) if name == "claude"
                             else await backend.chats(project))
             try:
-                rows = await self._metadata.get((frame["project"], "chats", name), load, ttl=20,
-                                                refresh=bool(frame.get("refresh")))
+                # Срок ответа не отменяет общее чтение и не сбрасывает RPC других проектов.
+                async with asyncio.timeout(8):
+                    rows = await self._metadata.get((frame["project"], "chats", name), load, ttl=20,
+                                                    refresh=bool(frame.get("refresh")))
                 live = backend.live()
                 return [{**item, **({"engine": name} if name != "claude" else {}),
                          "running": item["chat"] in live, "asking": bool(live.get(item["chat"]))} for item in rows], True

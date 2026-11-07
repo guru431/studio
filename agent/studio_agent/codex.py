@@ -310,8 +310,9 @@ class CodexRunner(Runner):
     async def chats(self, project):
         if self.catalog is None:
             return []
+        # Обычный thread/list также сканирует JSONL для восстановления метаданных.
         data = await self._metadata(project, "thread/list", {"cwd": str(project), "limit": limits.CHATS_MAX,
-                                                           "sortKey": "updated_at", "sourceKinds":
+                                                           "useStateDbOnly": True, "sortKey": "updated_at", "sourceKinds":
                                                            ["cli", "vscode", "exec", "appServer"]})
         aliases = await asyncio.to_thread(self.aliases.load)
         reverse = {v["thread"]: k for k, v in aliases.items() if isinstance(v, dict)
