@@ -97,6 +97,53 @@ async def test_catalogs_are_parallel_shared_and_activity_is_not_cached(home, tmp
     assert calls == [2, 2]
 
 
+async def test_catalog_timeout_keeps_shared_read_until_the_next_request(home, tmp_path, monkeypatch):
+    root = tmp_path / 'projects'; (root / 'demo').mkdir(parents=True)
+    agent = make(home, root)
+    pid = projects.pid('demo')
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def chats(project):
+        calls.append(project)
+        entered.set()
+        await release.wait()
+        return [{'chat': CHAT, 'title': 'late catalog'}]
+
+    agent.codex = SimpleNamespace(catalog={}, chats=chats, live=lambda: {})
+    monkeypatch.setattr(sessions, 'chats', lambda *args: [])
+    await opened(agent)
+    original_timeout = asyncio.timeout
+    with monkeypatch.context() as patch:
+        # Срок наступает на следующем обороте цикла, без реального ожидания восьми секунд.
+        patch.setattr(asyncio, 'timeout', lambda seconds: original_timeout(0 if seconds == 8 else seconds))
+        partial = (await agent.handle(req('chats', project=pid)))[0]['data']
+    await entered.wait()
+    assert partial['complete'] is False
+    assert (pid, 'chats', 'codex') in agent._metadata.pending
+    release.set()
+    complete = (await agent.handle(req('chats', project=pid)))[0]['data']
+    assert complete['complete'] and complete['items'][0]['title'] == 'late catalog'
+    assert len(calls) == 1
+
+
+async def test_codex_catalog_uses_state_index_without_repair_scan(home):
+    class Rpc:
+        def __init__(self, *args): pass
+        async def connect(self): pass
+        async def disconnect(self): pass
+        async def request(self, method, params):
+            assert method == 'thread/list' and params['useStateDbOnly'] is True
+            return {'data': []}
+
+    runner = CodexRunner(lambda frame: None, home=home, find_cli=lambda: home / 'codex.exe', factory=Rpc)
+    runner.catalog = {}
+    try:
+        assert await runner.chats(home) == []
+    finally:
+        await runner.close(final=True)
+
+
 async def test_github_does_not_block_local_summary_and_remote_reads_are_shared(home, tmp_path, monkeypatch):
     root = tmp_path / 'projects'; (root / 'demo').mkdir(parents=True)
     agent = make(home, root)

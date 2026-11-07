@@ -5,6 +5,7 @@
  * - путь #code-path (корень — имя проекта, части — к своей папке), дерево #code-files — li[data-path] в порядке
  *   моста (папки сначала); папки раскрываются на месте, Git помечает файлы и их родителей; на узком экране, пока открыт
  *   файл, список папки скрыт (назад ведёт путь), на широком — рядом;
+ *   дерево и содержимое файла прокручиваются независимо в пределах рабочей области;
  * - текстовый — #code-editor и «Сохранить» (#code-save): PUT …/file с version открытого — файл изменился на
  *   машине (его мог поправить Claude) — 409 conflict и слова в #code-file-status, на машине ничего не
  *   затирается; textarea приводит концы строк к \n — у файла с \r\n они возвращаются при сохранении;
@@ -101,12 +102,13 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       ...FILE_COLUMNS.map(([key, label]) => el('span', { class: `code-file-${key}-column` }, label))), list);
   directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
-  const file = el('section', { id: 'code-file', class: 'code-file', hidden: true });
+  const file = el('section', { id: 'code-file', class: 'code-file', tabindex: '0',
+    'aria-label': 'Открытый файл', hidden: true });
   const create = el('div', { class: 'code-files-create', hidden: !operations },
     button('Новый файл', { id: 'code-new-file', class: 'btn btn-sm' }, () => operationDialog('create_file', dir)),
     button('Новая папка', { id: 'code-new-folder', class: 'btn btn-sm' }, () => operationDialog('create_dir', dir)));
   const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, create, calculate),
-    statsStatus, listError, table, file);
+    statsStatus, listError, el('div', { class: 'code-files-workspace' }, table, file));
   host.replaceChildren(view);
 
   const contains = (parent, path) => path != null && (path === parent || path.startsWith(`${parent}/`));
