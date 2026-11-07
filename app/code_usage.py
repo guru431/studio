@@ -28,6 +28,7 @@ class UsageDay(BaseModel):
 
 
 class UsageSummary(BaseModel):
+    available_resets: int | None = Field(None, ge=0, strict=True)
     lifetime_tokens: float | None = Field(None, ge=0, allow_inf_nan=False)
     peak_daily_tokens: float | None = Field(None, ge=0, allow_inf_nan=False)
     longest_running_turn_sec: float | None = Field(None, ge=0, allow_inf_nan=False)

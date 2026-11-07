@@ -43,11 +43,12 @@ export function usageView(host, { aid, engine, supported }) {
     });
     const stats = data.statistics || {};
     const summary = stats.summary || {};
-    const labels = { lifetime_tokens: 'Токенов за всё время', peak_daily_tokens: 'Максимум токенов за день',
+    const labels = { ...(engine === 'codex' ? { available_resets: 'Доступные сбросы лимита' } : {}),
+      lifetime_tokens: 'Токенов за всё время', peak_daily_tokens: 'Максимум токенов за день',
       longest_running_turn_sec: 'Самый долгий ход, секунд', current_streak_days: 'Дней подряд сейчас',
       longest_streak_days: 'Максимум дней подряд', total_sessions: 'Сессий в истории CLI',
       total_messages: 'Сообщений в истории CLI' };
-    const entries = Object.entries(labels).filter(([key]) => Number.isFinite(summary[key]));
+    const entries = Object.entries(labels).filter(([key]) => key === 'available_resets' || Number.isFinite(summary[key]));
     const daily = (Array.isArray(stats.daily) ? stats.daily : []).slice(-31);
     const links = (Array.isArray(data.links) ? data.links : []).filter((link) => {
       try { return new URL(link.url).protocol === 'https:'; } catch { return false; }
@@ -57,7 +58,7 @@ export function usageView(host, { aid, engine, supported }) {
       el('h3', {}, 'Статистика использования'),
       el('p', { class: 'muted small' }, stats.source || data.source || ''),
       entries.length ? el('dl', { class: 'code-usage-summary' }, ...entries.flatMap(([key, label]) =>
-        [el('dt', {}, label), el('dd', {}, number(summary[key]))])) : null,
+        [el('dt', {}, label), el('dd', {}, Number.isFinite(summary[key]) ? number(summary[key]) : 'Не сообщается')])) : null,
       !stats.available ? el('p', { class: 'muted' }, stats.reason || 'Провайдер не сообщает статистику подписки') : null,
       daily.length ? el('details', {}, el('summary', {}, 'Использование по дням'),
         el('table', { class: 'code-usage-days' }, el('thead', {}, el('tr', {}, el('th', {}, 'Дата'), el('th', {}, 'Токены'))),

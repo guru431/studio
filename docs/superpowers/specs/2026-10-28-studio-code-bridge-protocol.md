@@ -349,6 +349,10 @@ app-server, ходы продолжают сессии Codex; авторизац
 `statistics`: `{available, source, summary, daily: [{date: YYYY-MM-DD, tokens}], reason?}`.
 Поля summary Codex: `lifetime_tokens`, `peak_daily_tokens`, `longest_running_turn_sec`,
 `current_streak_days`, `longest_streak_days` — только переданные сервисом числа.
+С моста 0.14.2 необязательное `available_resets` — неотрицательное целое из
+`account/rateLimits/read.rateLimitResetCredits.availableCount`. Ноль — отсутствие доступных сбросов;
+отсутствующее поле/null — неизвестно. Счётчик не вычисляется по длине `credits`: список может быть
+неполным. Он доступен независимо от статистики токенов; интерфейс показывает его только для Codex.
 Локальный агрегат Claude Code может содержать `total_sessions` и `total_messages`; его источник явно
 обозначен как локальная история CLI, а не полная статистика аккаунта.
 
