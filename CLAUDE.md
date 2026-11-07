@@ -1061,6 +1061,10 @@ Chrome уже подключён через расширение; дополни
 перезапусков; под `-n0` итога нет — имя теста в стеках (сторожит `test_suite_timeout.py`). База фикстуры `studio` — копия схемы
 `schema_db` (одна на процесс; SCHEMA на новый файл — ~0,2 с на тест), базы тестов — без fsync
 (autouse `no_fsync`): на нагруженном ночью диске набор выходил за бюджет 60 с.
+Ожидание `bridge.TASKS`/`push.TASKS` в тестовых `settle` после `gather` обязательно отдаёт цикл
+через `asyncio.sleep(0)`: Python 3.14 завершает `gather` готовых задач синхронно, а callback
+`TASKS.discard` ещё стоит в очереди. Без уступки `while TASKS` зацикливается и pytest-timeout
+убивает worker; регрессия с уже готовой задачей и последующей работой — `tests/test_task_settle.py`.
 Клиентские скрипты (`tests/clients.py`): вывод `[ps]`-вариантов декодируется кодовой страницей консоли
 процесса тестов (`clients.ps_encoding`: дочерний powershell пишет в трубу ею, ночной прогон идёт под
 65001); проверка — `cmd /c "chcp 65001 >nul && .venv\Scripts\python.exe -m pytest -q -m integration
