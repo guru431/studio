@@ -49,6 +49,17 @@ export function usageView(host, { aid, engine, supported }) {
       longest_streak_days: 'Максимум дней подряд', total_sessions: 'Сессий в истории CLI',
       total_messages: 'Сообщений в истории CLI' };
     const entries = Object.entries(labels).filter(([key]) => key === 'available_resets' || Number.isFinite(summary[key]));
+    const resetCredits = engine === 'codex' && summary.available_resets !== 0 && Array.isArray(stats.reset_credits)
+      ? stats.reset_credits : [];
+    const resetDetails = engine === 'codex' && (summary.available_resets > 0 || resetCredits.length)
+      ? el('div', { class: 'code-reset-credits' }, el('h4', {}, 'Срок действия сбросов'),
+        resetCredits.length ? el('dl', { class: 'code-usage-summary' }, ...resetCredits.flatMap((credit, index) =>
+          [el('dt', {}, `Сброс ${index + 1}`),
+            el('dd', {}, Number.isFinite(credit.expires_at) ? `До ${date(credit.expires_at)}` : 'Не сообщается')]))
+          : el('p', { class: 'muted small' }, 'Срок действия не сообщается'),
+        resetCredits.length && summary.available_resets > resetCredits.length
+          ? el('p', { class: 'muted small' }, `Сроки указаны для ${resetCredits.length} из ${number(summary.available_resets)} сбросов`)
+          : null) : null;
     const daily = (Array.isArray(stats.daily) ? stats.daily : []).slice(-31);
     const links = (Array.isArray(data.links) ? data.links : []).filter((link) => {
       try { return new URL(link.url).protocol === 'https:'; } catch { return false; }
@@ -59,6 +70,7 @@ export function usageView(host, { aid, engine, supported }) {
       el('p', { class: 'muted small' }, stats.source || data.source || ''),
       entries.length ? el('dl', { class: 'code-usage-summary' }, ...entries.flatMap(([key, label]) =>
         [el('dt', {}, label), el('dd', {}, Number.isFinite(summary[key]) ? number(summary[key]) : 'Не сообщается')])) : null,
+      resetDetails,
       !stats.available ? el('p', { class: 'muted' }, stats.reason || 'Провайдер не сообщает статистику подписки') : null,
       daily.length ? el('details', {}, el('summary', {}, 'Использование по дням'),
         el('table', { class: 'code-usage-days' }, el('thead', {}, el('tr', {}, el('th', {}, 'Дата'), el('th', {}, 'Токены'))),

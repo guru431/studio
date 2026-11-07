@@ -68,6 +68,27 @@ def test_usage_rejects_invalid_reset_count(studio, count):
     assert studio.c.get(url(aid, "usage") + "?engine=codex").status_code == 502
 
 
+def test_usage_preserves_reset_expiry_and_discards_private_credit_fields(studio):
+    aid, machine, _ = prepare(studio)
+    data = copy.deepcopy(USAGE)
+    data["statistics"]["reset_credits"] = [{"expires_at": 2000, "id": "private-id"}, {"expires_at": None}]
+    machine._op_usage = lambda req, events: data
+    response = studio.c.get(url(aid, "usage") + "?engine=codex")
+    assert response.status_code == 200
+    assert response.json()["statistics"]["reset_credits"] == [{"expires_at": 2000}, {"expires_at": None}]
+    assert "private-id" not in response.text
+
+
+@pytest.mark.parametrize("details", [[{"expires_at": -1}], [{"expires_at": True}],
+    [{"expires_at": 253402300800}], [{"expires_at": 0}] * 101])
+def test_usage_rejects_invalid_reset_expiry_or_oversized_details(studio, details):
+    aid, machine, _ = prepare(studio)
+    data = copy.deepcopy(USAGE)
+    data["statistics"]["reset_credits"] = details
+    machine._op_usage = lambda req, events: data
+    assert studio.c.get(url(aid, "usage") + "?engine=codex").status_code == 502
+
+
 def test_usage_old_bridge_and_invalid_engine_are_rejected_before_request(studio):
     aid, machine, link = prepare(studio)
     before = len(machine.requests)

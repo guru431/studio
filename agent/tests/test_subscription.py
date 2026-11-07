@@ -62,6 +62,34 @@ def test_codex_missing_or_invalid_reset_count_stays_unknown(credits):
     assert not data["statistics"]["available"]
 
 
+def test_codex_reset_expiry_preserves_individual_dates_without_private_credit_fields():
+    raw = {"limits": {"rateLimitResetCredits": {"availableCount": 4, "credits": [
+        {"id": "private-credit", "resetType": "codexRateLimits", "status": "available", "expiresAt": 2000,
+         "title": "private-title", "description": "private-description"},
+        {"resetType": "codexRateLimits", "status": "available", "expiresAt": 1000},
+        {"resetType": "codexRateLimits", "status": "available", "expiresAt": None},
+        {"resetType": "codexRateLimits", "status": "redeemed", "expiresAt": 3000},
+        {"resetType": "other", "status": "available", "expiresAt": 4000}, None]}}}
+    stats = subscription.codex_usage(raw, 10)["statistics"]
+    assert stats["summary"]["available_resets"] == 4  # The detail list can be incomplete.
+    assert stats["reset_credits"] == [{"expires_at": 1000}, {"expires_at": 2000}, {"expires_at": None}]
+    assert "private" not in json.dumps(stats)
+
+
+@pytest.mark.parametrize("details", [None, []])
+def test_codex_reset_expiry_keeps_unknown_details_distinct_from_empty_list(details):
+    raw = {"limits": {"rateLimitResetCredits": {"availableCount": 2, "credits": details}}}
+    stats = subscription.codex_usage(raw, 10)["statistics"]
+    assert stats.get("reset_credits") == details
+
+
+@pytest.mark.parametrize("expires", [-1, True, "2000", float("inf"), 253402300800])
+def test_codex_invalid_reset_expiry_stays_unknown(expires):
+    raw = {"limits": {"rateLimitResetCredits": {"availableCount": 1, "credits": [
+        {"resetType": "codexRateLimits", "status": "available", "expiresAt": expires}]}}}
+    assert subscription.codex_usage(raw, 10)["statistics"]["reset_credits"] == [{"expires_at": None}]
+
+
 def credentials(config, **kwargs):
     path = config / ".credentials.json"
     path.write_text(json.dumps({"claudeAiOauth": {"accessToken": "local-secret", "expiresAt": 2000000,

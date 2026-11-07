@@ -38,11 +38,16 @@ class UsageSummary(BaseModel):
     total_messages: float | None = Field(None, ge=0, allow_inf_nan=False)
 
 
+class ResetCredit(BaseModel):
+    expires_at: float | None = Field(None, ge=0, le=253402300799, allow_inf_nan=False, strict=True)
+
+
 class UsageStats(BaseModel):
     available: bool
     source: str = Field(max_length=200)
     summary: UsageSummary
     daily: list[UsageDay] = Field(max_length=366)
+    reset_credits: list[ResetCredit] | None = Field(None, max_length=100)
     reason: str | None = Field(None, max_length=300)
 
 
