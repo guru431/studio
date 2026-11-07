@@ -62,7 +62,7 @@ export function tabBar(host, { pick, close, add: choose }) {
       if ((event.key === 'Enter' || event.key === ' ') && event.target === node) {
         event.preventDefault();
         pendingFocus = chat;
-        pick(chat);
+        pick(chat, true);
       }
     });
     shut.addEventListener('click', () => closeFocused(chat));

@@ -1395,6 +1395,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   loadHistory(true);
 
   return {
+    focus() { if (alive) focusDesktop(text); },
     unmount() {
       alive = false;
       unsubscribeGit?.();
