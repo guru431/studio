@@ -25,6 +25,7 @@ OTHER = "https://other-ntfy.example.com"
 SETTINGS = {"server": SERVER, "topic": "private-topic", "enabled": True}
 
 
+@pytest.mark.integration
 def test_ntfy_import_does_not_start_the_connections_cycle():
     env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'app')}
     result = subprocess.run([sys.executable, '-c', "import ntfy,sys; assert 'upstream' not in sys.modules"],

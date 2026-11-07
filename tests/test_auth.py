@@ -302,8 +302,11 @@ def guarded_routes() -> list[tuple[str, str]]:
     return routes
 
 
-def test_every_route_but_the_anonymous_ones_needs_a_session(studio):
-    for method, path in guarded_routes():
+@pytest.mark.parametrize("method", sorted({method for method, _ in guarded_routes()}))
+def test_every_route_but_the_anonymous_ones_needs_a_session(studio, method):
+    paths = [path for route_method, path in guarded_routes() if route_method == method]
+    assert paths, method
+    for path in paths:
         r = studio.c.request(method, path)
         assert r.status_code == 401 and r.json()["detail"]["code"] == "login", (method, path)
 
