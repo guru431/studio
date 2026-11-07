@@ -106,14 +106,26 @@ def codex_usage(raw, now):
     count = credits.get("availableCount") if isinstance(credits, dict) else None
     if type(count) is int and count >= 0:
         stats["available_resets"] = count
+    reset_credits = None
+    details = credits.get("credits") if isinstance(credits, dict) else None
+    if isinstance(details, list):
+        reset_credits = []
+        for item in details[:100]:
+            if not isinstance(item, dict) or item.get("status") != "available" or item.get("resetType") != "codexRateLimits":
+                continue
+            expires = number(item.get("expiresAt"))
+            reset_credits.append({"expires_at": expires if expires is not None and expires <= 253402300799 else None})
+        reset_credits.sort(key=lambda item: (item["expires_at"] is None, item["expires_at"] or 0))
     rows = usage.get("dailyUsageBuckets")
     daily = [{"date": r["startDate"], "tokens": r["tokens"]} for r in (rows if isinstance(rows, list) else [])[-366:]
              if isinstance(r, dict) and isinstance(r.get("startDate"), str) and len(r["startDate"]) == 10
              and number(r.get("tokens")) is not None]
-    if stats or daily:
+    if stats or daily or reset_credits:
         data["statistics"] = {"available": True, "source": "Аккаунт Codex", "summary": stats, "daily": daily}
     else:
         data["statistics"]["reason"] = "Эта версия Codex или тип аккаунта не сообщает статистику подписки"
+    if reset_credits is not None:
+        data["statistics"]["reset_credits"] = reset_credits
     return _complete(data, windows)
 
 
