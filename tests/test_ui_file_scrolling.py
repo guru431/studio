@@ -62,8 +62,8 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
                         assert tree.is_visible()
                         assert abs(tree.evaluate('(node) => node.scrollTop') - before) <= 1
                     page.locator('#code-files li[data-name="preview.md"] > button').click()
-                    page.locator('#code-editor').wait_for()
-                    page.locator('#code-md-view [data-mode="view"]').click()
+                    pw.expect(page.locator('#code-editor')).to_be_hidden()
+                    pw.expect(page.locator('#code-md-view button')).to_have_text(['Разметка', 'Исходный'])
                     page.locator('#code-md p').first.wait_for()
                     tree_before_preview = tree.evaluate('(node) => node.scrollTop')
                     page.locator('#code-file').evaluate('(node) => { node.scrollTop = 300; }')

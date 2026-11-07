@@ -9,7 +9,7 @@
  * - текстовый — #code-editor и «Сохранить» (#code-save): PUT …/file с version открытого — файл изменился на
  *   машине (его мог поправить Claude) — 409 conflict и слова в #code-file-status, на машине ничего не
  *   затирается; textarea приводит концы строк к \n — у файла с \r\n они возвращаются при сохранении;
- *   .md — «Текст» / «Вид» (#code-md-view, markdown.js); binary и too_large — слова, файл не открывается;
+ *   .md — «Разметка» / «Исходный» (#code-md-view, markdown.js), сначала разметка; binary и too_large — слова, файл не открывается;
  * - .pdf — страница картинкой (#code-pdf img из POST …/pdf, число страниц — X-Studio-Pages), «‹» «›» и
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
  * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата); { dir } — только папка после PIN;
@@ -589,7 +589,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       editor.value = kept.text;
       version = kept.version;                           // правка Claude за это время — conflict, а не затирание
     }
-    let shown = null;                                   // разметка .md («Вид»)
+    let shown = null;                                   // разметка .md
     const mark = { editor, base, keep() { edits.set(key, { text: editor.value, version }); }, reset() {
       edits.delete(key);
       editor.value = mark.base;
@@ -629,10 +629,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     });
     file.append(editor);
     if (/\.md$/i.test(path)) {
-      shown = el('div', { id: 'code-md', class: 'md code-md', hidden: true });
+      editor.hidden = true;
+      shown = el('div', { id: 'code-md', class: 'md code-md' }, renderMarkdown(editor.value));
       const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': 'Показ' });
-      for (const [mode, text] of [['text', 'Текст'], ['view', 'Вид']]) {
-        const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'text') }, text);
+      for (const [mode, text] of [['view', 'Разметка'], ['text', 'Исходный']]) {
+        const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'view') }, text);
         b.addEventListener('click', () => {
           for (const other of modes.children) other.setAttribute('aria-pressed', String(other === b));
           editor.hidden = mode === 'view';

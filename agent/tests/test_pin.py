@@ -6,6 +6,35 @@ import pytest
 from studio_agent import pin
 
 
+@pytest.fixture(autouse=True)
+def fast_scrypt(monkeypatch, request):
+    """Счёт и сохранение PIN проверяем без стоимости рабочего scrypt."""
+    if request.node.get_closest_marker("integration"):
+        return
+    derive = pin.hashlib.scrypt
+    monkeypatch.setattr(pin.hashlib, "scrypt", lambda value, **params: derive(value, **{**params, "n": 16}))
+
+
+@pytest.mark.integration
+def test_real_scrypt_parameters_and_persisted_pin(home, monkeypatch):
+    derive = pin.hashlib.scrypt
+    calls = []
+
+    def hash_pin(value, **params):
+        calls.append(params)
+        return derive(value, **params)
+
+    monkeypatch.setattr(pin.hashlib, "scrypt", hash_pin)
+    pin.PinStore(home).set_pin("2468")
+    assert pin.PinStore(home).check("1111") == ("pin", 4)
+    assert pin.PinStore(home).check("2468") == ("ok", 0)
+    assert pin.PinStore(home).fails == 0
+    assert len(calls) == 3
+    assert all({key: value for key, value in params.items() if key != "salt"} ==
+               {"n": 2**14, "r": 8, "p": 1, "dklen": 32} for params in calls)
+    assert len(calls[0]["salt"]) == 16 and all(params["salt"] == calls[0]["salt"] for params in calls)
+
+
 def test_five_wrong_pins_lock_and_survive_a_restart(home):
     p = pin.PinStore(home); p.set_pin("2468")
     assert [pin.PinStore(home).check("1111") for _ in range(4)] == [("pin", 4), ("pin", 3), ("pin", 2), ("pin", 1)]

@@ -9275,7 +9275,7 @@ def test_code_save_on_a_closed_computer_keeps_the_edit_through_the_pin(browser, 
 
 
 def test_code_markdown_and_pdf_view(browser, live):
-    """README.md: «Текст» / «Вид» — разметка с заголовком h1; a.pdf — страница картинкой, «›» — «Страница 2 из 2»,
+    """README.md: сначала «Разметка» с h1, затем «Исходный»; a.pdf — страница картинкой, «›» — «Страница 2 из 2»,
     прежний blob URL освобождён (и при уходе со страницы файла); двоичный и больше 2 МиБ — слова. Широкий экран:
     список папки рядом с файлом."""
     login = "code-view"
@@ -9294,12 +9294,14 @@ def test_code_markdown_and_pdf_view(browser, live):
             ("eval", "modes", "[...document.querySelectorAll('#code-md-view button')].map((b) => [b.textContent,"
                               " b.getAttribute('aria-pressed')])"),
             ("eval", "listShown", "getComputedStyle(document.querySelector('#code-files')).display !== 'none'"),
-            ("click", "#code-md-view [data-mode='view']"), ("wait", "document.querySelector('#code-md h1')"),
+            ("wait", "document.querySelector('#code-md h1')"),
             ("eval", "md", "[document.querySelector('#code-md h1').textContent,"
                            " document.querySelector('#code-md strong').textContent,"
                            " document.querySelector('#code-editor').hidden]"),
             ("click", "#code-md-view [data-mode='text']"),
             ("eval", "textAgain", "[document.querySelector('#code-editor').hidden, document.querySelector('#code-md').hidden]"),
+            ("click", code_item("README.md")), ("wait", "document.querySelector('#code-md h1')"),
+            ("eval", "reopened", "document.querySelector('#code-editor').hidden && !document.querySelector('#code-md').hidden"),
             ("click", code_item("a.pdf")), ("wait", page_is.format(n=1)),
             ("eval", "first", "[document.querySelector('#code-pdf img').src, document.querySelector('#code-pdf-prev').disabled,"
                               " document.querySelector('#code-pdf-next').disabled,"
@@ -9318,8 +9320,9 @@ def test_code_markdown_and_pdf_view(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["modes"] == [["Текст", "true"], ["Вид", "false"]] and v["listShown"] is True
+    assert v["modes"] == [["Разметка", "true"], ["Исходный", "false"]] and v["listShown"] is True
     assert v["md"] == ["Заголовок", "жирный", True] and v["textAgain"] == [False, True]
+    assert v["reopened"] is True
     first, second = v["first"], v["second"]
     assert first[0].startswith("blob:") and first[1:] == [True, False, "‹", "›"]
     assert second[0].startswith("blob:") and second[0] != first[0] and second[1:3] == [False, True]
