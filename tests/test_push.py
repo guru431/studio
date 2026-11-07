@@ -123,6 +123,7 @@ def settle(s) -> None:
     async def wait():
         while push.TASKS:
             await asyncio.gather(*list(push.TASKS), return_exceptions=True)
+            await asyncio.sleep(0)  # gather(done) can finish before the TASKS.discard callback runs.
     s.c.portal.call(wait)
 
 

@@ -695,6 +695,7 @@ def settle(s) -> None:
     async def wait():
         while bridge.TASKS:
             await asyncio.gather(*list(bridge.TASKS), return_exceptions=True)
+            await asyncio.sleep(0)  # gather(done) can finish before the TASKS.discard callback runs.
     s.c.portal.call(wait)
 
 
