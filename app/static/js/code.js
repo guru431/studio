@@ -240,11 +240,13 @@ function switchTo(key) {
   const tail = key !== 'chat' ? `?tab=${key}` : active ? `/${active}` : '';
   const hash = `#/code/${proj.aid}/${proj.pid}${tail}`;
   if (location.hash !== hash) location.replace(hash);
+  else if (key === 'chat') view?.focus?.();
 }
 
-function toChat(p, chat) {
+function toChat(p, chat, focus = true) {
   const hash = `#/code/${p.aid}/${p.pid}/${chat}`;
   if (location.hash !== hash) location.replace(hash);
+  else if (focus) view?.focus?.();
 }
 
 /** Сессии проекта (GET …/chats): один запрос на открытие проекта; ответ — названия и метки вкладок. */
@@ -416,7 +418,7 @@ function enter(aid, pid) {
   });
   p.bar = tabBar(ui.tabsHost, {
     add: () => location.replace(`#/code/${aid}/${pid}?tab=new`),
-    pick: (chat) => toChat(p, chat),
+    pick: (chat, keyboard = false) => toChat(p, chat, !keyboard),
     close: (chat) => closeTab(p, chat),
   });
   ui.body.replaceChildren(p.chatBox, p.filesBox, p.gitBox);

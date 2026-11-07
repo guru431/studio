@@ -523,13 +523,13 @@ def paths(s) -> list:
 def test_docx_and_pdf_with_a_layer_are_translated_from_their_text(studio, caplog):
     caplog.set_level(logging.DEBUG)
     add_gateway(studio)
-    tid = start_file(studio, "Записка.docx", docx(["Первый", " абзац"], ["Второй"]))
+    source = docx(["Первый", " абзац"], ["Второй"])
+    tid = start_file(studio, "Записка.docx", source)
     row = wait_row(studio, tid)
     assert (row["state"], row["kind"], row["name"], row["source"]) == ("done", "file", "Записка.docx", "Первый абзац\nВторой")
     assert row["scan_id"] is None and row["text"] == "Здравствуйте!"
     uid = on_loop(studio, owner_of_tr, tid)
-    assert on_loop(studio, lambda: media.path(uid, row["source_media_id"]).read_bytes()) == docx(
-        ["Первый", " абзац"], ["Второй"])
+    assert on_loop(studio, lambda: media.path(uid, row["source_media_id"]).read_bytes()) == source
     pid = start_file(studio, "Договор.pdf", pdf("Payment is due in 30 days", "Second page"))
     row = wait_row(studio, pid)
     assert (row["state"], row["name"], row["source"]) == ("done", "Договор.pdf", "Payment is due in 30 days\n\nSecond page")
