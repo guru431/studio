@@ -672,6 +672,44 @@ def test_closing_phone_browser_keeps_job_running_and_result_is_available_on_retu
         assert not any(r['op'] == 'stop' for r in machine.requests)
 
 
+@pytest.mark.parametrize('iphone', [(320, 740), (393, 852)], indirect=True)
+def test_return_reveals_chat_before_lock_network_and_preserves_messages(iphone):
+    from test_ui_resume import DELAY_MARK, ENABLE_LOCK
+
+    page, aid = iphone
+    page.goto(page.url.split('/#')[0] + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+    page.locator('#code-chat[data-loaded="1"]').wait_for()
+    page.evaluate(ENABLE_LOCK)
+    page.locator('#code-text').fill('Unsent draft')
+    page.locator('#code-text').evaluate('node => node.blur()')
+    page.evaluate("""() => {
+      window.resumeMessage = document.querySelector('#code-feed').firstElementChild;
+      const real = window.fetch;
+      window.historyReads = 0;
+      window.fetch = async (url, options) => {
+        const response = await real(url, options);
+        if (new URL(String(url), location.href).pathname.endsWith('/chats/CHAT') && options?.method === 'GET') {
+          window.historyReads++;
+        }
+        return response;
+      };
+    }""".replace('CHAT', CODE_CHAT_A))
+    page.evaluate(DELAY_MARK)
+    page.evaluate(visibility_js('hidden'))
+    pw.expect(page.locator('#curtain')).to_be_visible()
+    page.evaluate(visibility_js('visible'))
+    page.wait_for_function('() => window.markPending && window.historyReads > 0')
+    pw.expect(page.locator('#curtain')).not_to_be_visible()
+    pw.expect(page.locator('#code-feed')).to_be_visible()
+    assert page.evaluate("window.resumeMessage === document.querySelector('#code-feed').firstElementChild")
+    pw.expect(page.locator('#code-text')).to_have_value('Unsent draft')
+    assert page.evaluate("document.activeElement.id !== 'code-text'")
+    page.evaluate('window.resumeMark()')
+    page.wait_for_function('() => window.markFinished')
+    pw.expect(page.locator('#lock')).not_to_be_visible()
+    fits(page)
+
+
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
 @pytest.mark.parametrize("scale,font", [(100, 85), (80, 100), (50, 85)])
 def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone, scale, font, tmp_path):

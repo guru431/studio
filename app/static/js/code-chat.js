@@ -135,6 +135,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const stepData = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
+  let renderedHistory = null;     // снимок и узлы хвоста: неизменившаяся история сохраняет раскрытие и выделение
   let attention = null;
   let markingRead = false;
   let interactions = 0;
@@ -1108,6 +1109,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const cached = snapshot?.page;
     if (cached) {
       feed.replaceChildren(...messages(cached.items));
+      renderedHistory = { serial: snapshot.serial, nodes: [...feed.children] };
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
       const action = interactions;
       Promise.all([...pendingPaints]).then(() => {
@@ -1132,7 +1134,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     if (!alive || revision !== historyRevision) return;
-    const serial = JSON.stringify(page);
+    const serial = JSON.stringify([page.start, page.total, page.items]);
     historyCache.delete(historyKey);
     historyCache.set(historyKey, { page, serial, bytes: serial.length * 4 });
     let cacheBytes = [...historyCache.values()].reduce((total, value) => total + value.bytes, 0);
@@ -1142,7 +1144,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       historyCache.delete(key);
     }
     if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
-    if (!cached || snapshot.serial !== serial) feed.replaceChildren(...messages(page.items));
+    const offset = renderedHistory ? feed.children.length - renderedHistory.nodes.length : -1;
+    const unchanged = renderedHistory?.serial === serial && offset >= 0 && (offset === 0 || start < page.start)
+      && renderedHistory.nodes.every((node, index) => feed.children[offset + index] === node);
+    if (!unchanged) {
+      feed.replaceChildren(...messages(page.items));
+      renderedHistory = { serial, nodes: [...feed.children] };
+    }
     historyEmpty = page.total === 0;
     paintQuickActions();
     followups.clear();
@@ -1150,7 +1158,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const lastUser = page.items?.findLast((m) => m.role === 'user');
     if (pending && page.total > pending.beforeTotal && lastUser?.text === pending.value) acknowledgeInput();
     turn = null;
-    start = Number.isInteger(page.start) ? page.start : 0;
+    if (!unchanged) start = Number.isInteger(page.start) ? page.start : 0;
     more.hidden = start <= 0;
     if (thenLive) {
       if (settings) await settings;
