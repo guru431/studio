@@ -25,6 +25,7 @@
 """
 import asyncio
 import base64
+import io
 import json
 import logging
 import math
@@ -38,6 +39,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
+from PIL import Image, UnidentifiedImageError
 
 import auth
 import bridge
@@ -1094,9 +1096,9 @@ async def save(aid: int, pid: str, request: Request):
     return _strings(data, "version")
 
 
-def _pdf_bytes(data: dict) -> bytes:
+def _raw_bytes(data: dict) -> bytes:
     """Файл из ответа `raw`: не больше RAW_MAX (предел протокола держит и мост) — иначе 413 `too_large`. Зовётся
-    в потоке (`_pdf_load`): раскодировать до 14 МиБ base64 — десятки миллисекунд."""
+    в потоке (`_pdf_load` / `_image_bytes`): раскодировать до 14 МиБ base64 — десятки миллисекунд."""
     text = data.get("data")
     if isinstance(text, str) and len(text) > (RAW_MAX + 2) // 3 * 4:          # не раскодировать заведомо лишнее
         raise _refuse(413, "too_large", TOO_LARGE_RAW)
@@ -1106,9 +1108,41 @@ def _pdf_bytes(data: dict) -> bytes:
         raise _refuse(502, "bridge", ODD) from None
     if len(raw) > RAW_MAX:
         raise _refuse(413, "too_large", TOO_LARGE_RAW)
+    return raw
+
+
+def _pdf_bytes(data: dict) -> bytes:
+    raw = _raw_bytes(data)
     if not raw.startswith(b"%PDF-"):
         raise _refuse(415, "not_pdf", NOT_PDF)
     return raw
+
+
+def _image_bytes(data: dict) -> tuple[bytes, str]:
+    raw = _raw_bytes(data)
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            mime = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp', 'GIF': 'image/gif'}.get(image.format)
+            if not mime:
+                raise _refuse(415, 'not_image', 'Формат изображения не поддерживается')
+            if image.width * image.height > 16_000_000:
+                raise _refuse(413, 'too_large', 'Изображение больше 16 мегапикселей')
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        raise _refuse(415, 'not_image', 'Изображение не читается') from None
+    return raw, mime
+
+
+@router.post('/agents/{aid}/projects/{pid}/image')
+async def file_image(aid: int, pid: str, body: PathBody, request: Request):
+    """A project image, memory only; paths stay in the POST body behind the normal PIN/session guards."""
+    own_agent(request, aid)
+    check_pid(pid)
+    data = await ask(request, aid, 'raw', project=pid, path=check_path(body.path))
+    raw, mime = await asyncio.to_thread(_image_bytes, data)
+    if not _session_open(request.state.digest):
+        raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
+    return Response(raw, media_type=mime)
 
 
 def _pdf_load(data: dict) -> tuple[bytes, int]:

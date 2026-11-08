@@ -693,7 +693,27 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   function openFile(path) {
     dir = parentOf(path);
     if (/\.pdf$/i.test(path)) openPdf(path);
+    else if (/\.(?:png|jpe?g|webp|gif)$/i.test(path)) openImage(path);
     else openText(path);
+  }
+
+  async function openImage(path) {
+    const { mine, status } = fileFrame(path);
+    try {
+      const response = await api('POST', `${url}/image`, { path });
+      const blob = await response.blob();
+      if (!alive || mine !== fileGen) return;
+      dropBlob();
+      blobUrl = URL.createObjectURL(blob);
+      const image = el('img', { id: 'code-file-image', src: blobUrl, alt: nameOf(path) });
+      image.addEventListener('error', () => {
+        if (alive && mine === fileGen) say(status, 'Не удалось показать изображение', true);
+      });
+      file.append(el('div', { class: 'code-pdf' }, image));
+    } catch (err) {
+      if (!alive || mine !== fileGen) return;
+      refuse(err, status, path);
+    }
   }
 
   function open(path) {

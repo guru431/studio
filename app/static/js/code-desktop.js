@@ -17,9 +17,12 @@ export function desktopView(host, { locked }) {
   let gesture = null;
   let pan = null;
   let pointer = { x: .5, y: .5 };
+  let zoom = null;
+  let desktopSize = null;
   const title = el('h2', { id: 'code-desktop-title' });
   const status = el('p', { class: 'code-desktop-status muted', role: 'status' });
   const connect = button('connect', 'Подключиться');
+  connect.classList.add('btn-accent');
   const refresh = button('refresh', 'Проверить доступ');
   const disconnect = button('disconnect', '⏻');
   disconnect.setAttribute('aria-label', 'Отключиться');
@@ -34,6 +37,20 @@ export function desktopView(host, { locked }) {
   const mouseMode = button('mouse', 'Мышь');
   const modes = el('div', { class: 'code-desktop-modes', role: 'group', 'aria-label': 'Режим управления' },
     touchMode, mouseMode);
+  const zoomOut = button('zoom-out', '−');
+  zoomOut.setAttribute('aria-label', 'Уменьшить масштаб');
+  const zoomReset = button('zoom-reset', '100%');
+  zoomReset.title = 'Установить масштаб 100%';
+  const zoomIn = button('zoom-in', '+');
+  zoomIn.setAttribute('aria-label', 'Увеличить масштаб');
+  const fit = button('fit', 'Вписать');
+  fit.title = 'Показать весь рабочий стол';
+  const scaling = el('div', { class: 'code-desktop-scaling', role: 'group', 'aria-label': 'Масштаб экрана' },
+    zoomOut, zoomReset, zoomIn, fit);
+  const toolsToggle = button('tools-toggle', 'Ввод и буфер');
+  toolsToggle.title = 'Клавиатура, ввод текста и буфер обмена';
+  toolsToggle.setAttribute('aria-expanded', 'false');
+  toolsToggle.setAttribute('aria-controls', 'code-desktop-tools');
   const hint = el('p', { class: 'muted small code-desktop-hint', id: 'code-desktop-hint' });
   const screen = el('canvas', { id: 'code-desktop-screen', width: 1, height: 1, tabindex: '0',
     'aria-label': 'Удалённый экран', 'aria-describedby': hint.id });
@@ -65,21 +82,22 @@ export function desktopView(host, { locked }) {
   const clipboardGet = button('clipboard-get', 'Получить буфер');
   const keys = el('div', { class: 'code-desktop-keys', 'aria-label': 'Клавиши и сочетания' });
   const modifierButtons = new Map();
-  const tools = el('div', { class: 'code-desktop-tools', hidden: true },
+  const tools = el('div', { id: 'code-desktop-tools', class: 'code-desktop-tools', hidden: true },
     hint, keys,
     el('div', { class: 'code-desktop-entry' }, text, sendText),
     el('div', { class: 'code-desktop-clipboard' }, el('label', { for: clipboard.id }, 'Буфер обмена'),
       clipboard, el('div', { class: 'code-desktop-actions' }, clipboardSend, clipboardGet)),
     el('p', { class: 'muted small' }, 'Обмен буфером выполняется только этими кнопками. '
       + 'Полученный текст можно выделить и скопировать.'));
-  const body = el('div', { class: 'code-desktop-body' }, stage, tools);
+  const body = el('div', { class: 'code-desktop-body', hidden: true }, stage);
+  const connectActions = el('div', { class: 'code-desktop-actions' }, connect, refresh);
+  const toolbar = el('div', { class: 'code-desktop-actions code-desktop-toolbar', hidden: true },
+    el('label', { class: 'code-desktop-monitor-label' }, 'Монитор', monitor),
+    el('label', { class: 'code-desktop-resolution-label' }, 'Качество', resolution), modes, scaling, toolsToggle);
   const dialog = el('dialog', { id: 'code-desktop-dialog', class: 'dialog code-desktop-dialog',
     'aria-labelledby': title.id },
     el('div', { class: 'code-desktop-heading' }, title, disconnect, close), status,
-    el('div', { class: 'code-desktop-actions' }, connect, refresh,
-      el('label', { class: 'code-desktop-monitor-label' }, 'Монитор', monitor),
-      el('label', { class: 'code-desktop-resolution-label' }, 'Качество', resolution), modes),
-    body, mouseTools);
+    connectActions, toolbar, body, mouseTools, tools);
   host.append(dialog);
 
   const background = () => document.hidden || document.documentElement.classList.contains('shrouded');
@@ -95,6 +113,10 @@ export function desktopView(host, { locked }) {
 
   function buttons() {
     const active = !!session;
+    dialog.classList.toggle('is-connected', active);
+    connectActions.hidden = active;
+    toolbar.hidden = !active;
+    body.hidden = !active;
     connect.disabled = active || !enabled || !!request || background();
     connect.hidden = active;
     refresh.disabled = active || !!request || !agent?.online || !agent?.desktop;
@@ -104,14 +126,47 @@ export function desktopView(host, { locked }) {
     monitor.closest('label').hidden = !active;
     resolution.disabled = !active || resolution.options.length <= 1;
     resolution.closest('label').hidden = !active;
-    tools.hidden = !active;
+    tools.hidden = !active || toolsToggle.getAttribute('aria-expanded') !== 'true';
     for (const control of [...tools.querySelectorAll('button, textarea'), ...mouseTools.querySelectorAll('button')])
       control.disabled = !active;
     mouseTools.hidden = !active || mode !== 'mouse';
   }
 
+  function scaleScreen() {
+    if (!desktopSize || stage.hidden) return;
+    const fitted = Math.min(body.clientWidth / desktopSize.width, body.clientHeight / desktopSize.height);
+    const scale = zoom ?? fitted;
+    stage.style.width = `${desktopSize.width * scale}px`;
+    stage.style.height = `${desktopSize.height * scale}px`;
+    zoomReset.textContent = `${Math.round(scale * 100)}%`;
+    zoomReset.setAttribute('aria-label', `Масштаб ${Math.round(scale * 100)}%. Установить 100%`);
+    fit.setAttribute('aria-pressed', String(zoom === null));
+    zoomOut.disabled = scale <= .1;
+    zoomIn.disabled = scale >= 3;
+    return scale;
+  }
+
+  function setZoom(value) {
+    releaseHeld();
+    zoom = value;
+    body.scrollTop = body.scrollLeft = 0;
+    scaleScreen();
+  }
+  zoomOut.addEventListener('click', () => setZoom(Math.max(.1, (scaleScreen() ?? 1) / 1.25)));
+  zoomIn.addEventListener('click', () => setZoom(Math.min(3, (scaleScreen() ?? 1) * 1.25)));
+  zoomReset.addEventListener('click', () => setZoom(1));
+  fit.addEventListener('click', () => setZoom(null));
+  toolsToggle.addEventListener('click', () => {
+    releaseHeld();
+    toolsToggle.setAttribute('aria-expanded', String(tools.hidden));
+    buttons();
+  });
+  const resize = new ResizeObserver(scaleScreen);
+  resize.observe(body);
+
   function clearScreen() {
     pan = null;
+    desktopSize = null;
     screen.width = 1;
     screen.height = 1;
     stage.hidden = true;
@@ -127,6 +182,8 @@ export function desktopView(host, { locked }) {
     request = null;
     const old = session;
     session = null;
+    zoom = null;
+    toolsToggle.setAttribute('aria-expanded', 'false');
     if (old) {
       clearTimeout(old.frameTimer);
       clearTimeout(old.inputTimer);
@@ -226,8 +283,9 @@ export function desktopView(host, { locked }) {
         screen.width = data.width;
         screen.height = data.height;
         screen.getContext('2d').drawImage(image, 0, 0);
-        stage.style.aspectRatio = `${data.width} / ${data.height}`;
+        desktopSize = { width: data.screen_width, height: data.screen_height };
         stage.hidden = false;
+        scaleScreen();
       }
     } catch (err) {
       if (current(value)) failed(err, value.agent);
@@ -403,13 +461,17 @@ export function desktopView(host, { locked }) {
   screen.addEventListener('touchstart', (event) => {
     if (!current(session) || event.touches.length < 2) return;
     releaseHeld();
-    pan = { y: (event.touches[0].clientY + event.touches[1].clientY) / 2 };
+    pan = { x: (event.touches[0].clientX + event.touches[1].clientX) / 2,
+      y: (event.touches[0].clientY + event.touches[1].clientY) / 2 };
   }, { passive: true });
   screen.addEventListener('touchmove', (event) => {
     if (!current(session) || !pan || event.touches.length < 2) return;
     event.preventDefault();
+    const x = (event.touches[0].clientX + event.touches[1].clientX) / 2;
     const y = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+    body.scrollLeft += pan.x - x;
     body.scrollTop += pan.y - y;
+    pan.x = x;
     pan.y = y;
   }, { passive: false });
   for (const type of ['touchend', 'touchcancel']) screen.addEventListener(type, (event) => {
@@ -478,7 +540,7 @@ export function desktopView(host, { locked }) {
   for (const [control, dy] of [[scrollUp, -120], [scrollDown, 120]])
     control.addEventListener('click', () => enqueue({ type: 'wheel', dx: 0, dy }));
   monitor.addEventListener('change', () => {
-    releaseHeld(); clearScreen(); setPointer({ x: .5, y: .5 });
+    setZoom(null); clearScreen(); setPointer({ x: .5, y: .5 });
     if (mode === 'mouse') enqueue(pointerEvent());
   });
   resolution.addEventListener('change', releaseHeld);
@@ -539,6 +601,7 @@ export function desktopView(host, { locked }) {
     unmount() {
       disposed = true;
       stop();
+      resize.disconnect();
       observer.disconnect();
       document.removeEventListener('visibilitychange', hidden);
       window.removeEventListener('pagehide', leave);
