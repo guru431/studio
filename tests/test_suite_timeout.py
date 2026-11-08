@@ -14,9 +14,15 @@ import time
 import pytest
 
 
+@pytest.fixture
+def hanging_fixture():
+    yield
+    TEARDOWN
+
+
 @pytest.mark.timeout(2)
-def test_hung():
-    time.sleep(1000)
+def test_hung(hanging_fixture):
+    CALL
 
 
 def test_fine():
@@ -24,12 +30,22 @@ def test_fine():
 '''
 
 
-def test_hung_test_crashes_its_worker_once(tmp_path):
-    (tmp_path / "test_hung_case.py").write_text(HUNG, encoding="utf-8")
-    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+@pytest.mark.parametrize("phase", ["call", "teardown"])
+def test_hung_test_crashes_its_worker_once(tmp_path, request, phase):
+    case = HUNG.replace("CALL", "time.sleep(1000)" if phase == "call" else "pass")
+    case = case.replace("TEARDOWN", "time.sleep(1000)" if phase == "teardown" else "pass")
+    (tmp_path / "test_hung_case.py").write_text(case, encoding="utf-8")
+    # Ускоряем тот же диагностический срок, который включает основной набор.
+    diagnostic_timeout = min(1, float(request.config.getini("faulthandler_timeout")))
+    (tmp_path / "pytest.ini").write_text(
+        f"[pytest]\nfaulthandler_timeout = {diagnostic_timeout}\n", encoding="utf-8")
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parent)}     # conftest.py набора — плагином `-p conftest`
     out = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "conftest", "-p", "no:cacheprovider",
                           "-n", "2", "--dist", "loadgroup", "test_hung_case.py"], cwd=tmp_path,
                          capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
-    assert "1 failed, 1 passed" in out.stdout, out.stdout[-2000:]
+    passed = 1 if phase == "call" else 2  # тело уже прошло, если процесс погиб при teardown
+    assert f"1 failed, {passed} passed" in out.stdout, out.stdout[-2000:]
     assert out.stdout.count("crashed while running 'test_hung_case.py::test_hung'") == 1, out.stdout[-2000:]
+    assert 'Timeout (0:00:01)!' in out.stderr, out.stderr[-4000:]
+    frame = "in test_hung" if phase == "call" else "in hanging_fixture"
+    assert 'test_hung_case.py' in out.stderr and frame in out.stderr, out.stderr[-4000:]

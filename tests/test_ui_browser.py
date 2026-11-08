@@ -659,7 +659,8 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
     assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Речь"],
-                        ["transcribe", "Разговоры"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"], ["other", "Прочее"]]
+                        ["transcribe", "Разговоры"], ["ocr", "Сканы"], ["translate", "Перевод"],
+                        ["cleaner", "Защита данных"], ["code", "Агенты"], ["other", "Прочее"]]
     assert v["records"] == "Разговоры" and v["scans"] == "Сканы"
     assert v["code"] and v["other"] and v["codeFits"] and v["otherFits"]
     assert v["draft"] == "unsaved-password" and v["saved"] == "whisperx"
