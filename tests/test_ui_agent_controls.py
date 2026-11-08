@@ -296,7 +296,7 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
       const scroll = document.querySelector('#code-chat-scroll').getBoundingClientRect();
       const button = document.querySelector('#code-message-up'), box = button.getBoundingClientRect();
       return nav.right <= innerWidth && Math.abs(nav.right - input.right) < 2 && nav.bottom < input.top
-        && toolbar.lastElementChild.matches('.code-message-nav') && scroll.bottom <= toolbar.getBoundingClientRect().top
+        && !toolbar.contains(button) && nav.bottom <= scroll.bottom && scroll.bottom <= toolbar.getBoundingClientRect().top
         && button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
     })()"""
     try:

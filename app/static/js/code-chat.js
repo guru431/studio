@@ -224,7 +224,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const activeTools = new Map();
   const actions = el('div', { class: 'code-chat-actions' });
   const statusBar = el('div', { class: 'code-status-bar' }, activity, actions,
-    changedFiles.button, context.cacheButton, contextBox, usage.button, navigation);
+    changedFiles.button, context.cacheButton, contextBox, usage.button);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
   for (const action of me?.code_quick_actions || []) {
@@ -265,7 +265,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   scroller.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
     more, feed, quickActions);
-  host.append(scroller, el('div', { class: 'code-compose-area' }, status, sessionNotice, statusBar, form));
+  host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
+    el('div', { class: 'code-compose-area' }, status, sessionNotice, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {

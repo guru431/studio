@@ -25,7 +25,8 @@ def test_long_completed_timeline_keeps_all_text_and_toggles_commands(desktop_bro
     for index, value in enumerate(expected):
         machine.script.extend([
             {'k': 'text', 'text': value, 'block': f'text-{index}'},
-            {'k': 'step', 'id': f'cmd-{index}', 'tool': 'Shell', 'input': {'command': 'pytest'}},
+            {'k': 'step', 'id': f'cmd-{index}', 'tool': 'Shell',
+             'input': {'command': 'pytest tests/очень_длинное_название_проверки.py ' * 3}},
             {'k': 'result', 'id': f'cmd-{index}', 'text': 'passed', 'status': 'completed'},
         ])
     machine.script.extend([{'k': 'text', 'text': 'Все проверки завершены', 'block': 'final'},
@@ -62,6 +63,19 @@ def test_long_completed_timeline_keeps_all_text_and_toggles_commands(desktop_bro
             assert page.locator('.code-step-input').count() == 0
             assert page.locator('.code-message-nav').evaluate('node => [...node.children].map(child => child.id)') == [
                 'code-message-up', 'code-toggle-steps', 'code-message-down']
+            navigation_fits = """node => {
+              const boxes = [...node.children].map(child => child.getBoundingClientRect());
+              const scroll = document.querySelector('#code-chat-scroll').getBoundingClientRect();
+              const status = document.querySelector('.code-status-bar').getBoundingClientRect();
+              return boxes.every(box => Math.abs(box.left - boxes[0].left) < 1
+                && box.top >= scroll.top && box.bottom <= scroll.bottom && box.right <= scroll.right)
+                && boxes[0].bottom < boxes[1].top && boxes[1].bottom < boxes[2].top
+                && node.getBoundingClientRect().bottom <= status.top;
+            }"""
+            preview_fits = """node =>
+              node.getBoundingClientRect().height <= 2 * parseFloat(getComputedStyle(node).lineHeight) + 1"""
+            assert page.locator('.code-message-nav').evaluate(navigation_fits)
+            assert page.locator('.code-step-head').first.evaluate(preview_fits)
             assert toggle.get_attribute('aria-label') == 'Развернуть все команды'
             if width == 320:
                 toggle.tap()
@@ -80,6 +94,8 @@ def test_long_completed_timeline_keeps_all_text_and_toggles_commands(desktop_bro
             assert page.locator('.code-step[open]').count() == 0
             page.evaluate("document.documentElement.style.setProperty('--font-scale', '1.5')")
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            assert page.locator('.code-message-nav').evaluate(navigation_fits)
+            assert page.locator('.code-step-head').first.evaluate(preview_fits)
             page.screenshot(path=str(tmp_path / f'commands-{desktop_browser.browser_type.name}-{width}.png'))
             toggle.click()
             page.reload()
