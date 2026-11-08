@@ -36,6 +36,8 @@ LEGACY = ("chat", "photo", "video")           # разделы прежнего 
 CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
            "speech": ["qwen3-tts"], "dictation": ["gigaam", "whisperx"]}
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
+S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", "qwen-27b-fast"],
+               "transcribe": ["whisperx"], "ocr": ["ocr-ru"], "dictation": ["whisperx"]}
 LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200
 MODELS_MAX = 200
@@ -165,7 +167,9 @@ def _link_row(user_id: int, section: str, conn_id: int):
 
 def check_link(conn: "connections.Connection", section: str) -> None:
     """Может ли подключение участвовать в разделе: вид и, для раздела только через сервер, список."""
-    if section not in connections.KINDS[conn.kind]:
+    if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
+        if conn.s06:
+            raise _bad("kind", "шлюз s06 поддерживает чат, перевод, разговоры, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")
     if section in SERVER_ONLY and not conn.proxied:
         raise _bad("server", f"раздел «{NAMES[section]}» — только через сервер: попросите администратора"
@@ -179,7 +183,9 @@ def link(user_id: int, section: str, conn_id: int) -> None:
     with transaction():
         if _link_row(user_id, section, conn_id) is not None:
             return
-        models = (CATALOG.get(section) or CHAT_INITIAL) if conn.kind == "srvllm" else []
+        models = catalog(conn, section)
+        if models is None:
+            models = CHAT_INITIAL if conn.kind == "srvllm" else []
         state.DB.execute("INSERT INTO section_links(user_id, section, connection_id, models, created)"
                          " VALUES (?, ?, ?, ?, ?)", (user_id, section, conn_id, json.dumps(models), clock.NOW()))
         _settle(user_id, section)
@@ -207,8 +213,9 @@ def _clean(conn: "connections.Connection", section: str, models: list[str]) -> l
         out.append(model)
     if len(out) > MODELS_MAX:
         raise _bad("model", f"отмечено больше {MODELS_MAX} моделей")
-    if conn.kind == "srvllm" and section in CATALOG and not set(out) <= set(CATALOG[section]):
-        raise _bad("model", "у шлюза srvllm в этом разделе — " + ", ".join(CATALOG[section]))
+    choices = catalog(conn, section)
+    if choices is not None and not set(out) <= set(choices):
+        raise _bad("model", "у этого шлюза в этом разделе — " + ", ".join(choices))
     return out
 
 
@@ -332,12 +339,18 @@ class DefaultIn(BaseModel):
     model: str = Field(max_length=MODEL_MAX)
 
 
+def catalog(conn: "connections.Connection", section: str) -> list[str] | None:
+    if conn.s06:
+        return S06_CATALOG.get(section)
+    return CATALOG.get(section) if conn.kind == "srvllm" else None
+
+
 def section_out(user_id: int, section: str, passport: bool = True) -> dict:
     """passport=False — панель администратора: паспорт подключения туда не идёт."""
     chosen = _default_row(user_id, section)
     return {"id": section, "name": NAMES[section],
             "links": [{"connection": connections.out(l.connection, passport), "models": list(l.models),
-                       "catalog": CATALOG.get(section) if l.connection.kind == "srvllm" else None,
+                       "catalog": catalog(l.connection, section),
                        "local_models": [m for m in l.models if is_local(l.connection, m)]}
                       for l in links(user_id, section)],
             "default": {"connection_id": chosen["connection_id"], "model": chosen["model"]} if chosen else None}
@@ -354,8 +367,9 @@ async def found(user_id: int, section: str, conn_id: int) -> dict:
     conn = connections.get(user_id, conn_id)
     if connections.dropped(conn):
         connections.check_reachable(conn)
-    if conn.kind == "srvllm" and section in CATALOG:
-        return {"items": list(CATALOG[section])}
+    choices = catalog(conn, section)
+    if choices is not None:
+        return {"items": list(choices)}
     return {"items": [m["id"] for m in await connections.fetch_models(conn)]}
 
 

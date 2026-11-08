@@ -71,6 +71,7 @@ PROMPT = (
 )
 MAX_TOKENS = 16384               # у HunyuanOCR на srvllm контекст 32768, страница-картинка — несколько тысяч
 PAGE_TIMEOUT_SEC = 700           # дольше timeout_s маршрута /pages/ocr (660 с)
+S06_PAGE_TIMEOUT_SEC = 1260      # сквозной маршрут s06, задача OCR — до 1200 с
 RELEASE_TIMEOUT_SEC = 30
 RELEASE_RETRIES = 3
 RETRY_SEC = 15
@@ -155,13 +156,20 @@ def _layout_only(text: str) -> bool:
 
 async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
     """Ответ модели на страницу: с PROMPT — Markdown, со своим указанием (`translate_spot`) — его формат."""
-    body = {"model": MODEL, "temperature": 0, "max_tokens": MAX_TOKENS, "messages": [
-        {"role": "system", "content": ""},
-        {"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"}},
-            {"type": "text", "text": prompt}]}]}
+    if conn.s06 and prompt != PROMPT:
+        raise OcrError("сканы через s06 распознаются без координат; для перевода снимка выберите HunyuanOCR")
+    image = base64.b64encode(png).decode("ascii")
+    if conn.s06:
+        body = {"model": "ocr-ru", "image": image}
+    else:
+        body = {"model": MODEL, "temperature": 0, "max_tokens": MAX_TOKENS, "messages": [
+            {"role": "system", "content": ""},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}},
+                {"type": "text", "text": prompt}]}]}
     try:
-        r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr", timeout=PAGE_TIMEOUT_SEC, json=body)
+        r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr",
+                                   timeout=S06_PAGE_TIMEOUT_SEC if conn.s06 else PAGE_TIMEOUT_SEC, json=body)
     except httpx.TimeoutException:
         raise OcrError("распознавание не ответило вовремя") from None
     except httpx.HTTPError as e:
@@ -172,6 +180,11 @@ async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
         raise Busy(upstream.message(r) or "карта занята")
     if r.status_code != 200:
         raise OcrError(upstream.gateway_error(r, conn.name))
+    if conn.s06:
+        content = upstream.json_body(r).get("markdown")
+        if not isinstance(content, str) or not content.strip():
+            raise PageFailed(EMPTY)
+        return content.strip()
     try:
         choice = upstream.json_body(r)["choices"][0]
         content, finish = choice["message"].get("content"), choice.get("finish_reason")

@@ -138,7 +138,9 @@ def found_of(conn, chat: "list[str] | None", slot_ids: "list[str] | None", liste
     фото и видео — короткие имена перечня, которые назвал `/slot/models`; openai — весь список."""
     out = {}
     for section in sections.sections_of(conn.user_id, conn.id):
-        if conn.kind == "srvllm" and section in sections.CATALOG:
+        if conn.s06:
+            out[section] = list(sections.S06_CATALOG.get(section, []))
+        elif conn.kind == "srvllm" and section in sections.CATALOG:
             if slot_ids is not None and section in ("photo", "video"):
                 out[section] = [m for m in sections.CATALOG[section] if capabilities.GATEWAY_IDS.get(m) in slot_ids]
         elif conn.kind == "srvllm":

@@ -98,7 +98,11 @@ async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
                 await asyncio.shield(reading)
             except asyncio.CancelledError:
                 pass
-    if conn.kind == "srvllm":
+    if conn.s06:
+        r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
+                        data={"language": "ru", "diarize": "true"},
+                        files={"file": ("audio.mp3", data, mime)})
+    elif conn.kind == "srvllm":
         r = await _post(conn, f"{conn.base_url}/speech/asr?{urlencode(ASR_QUERY)}", ASR_TIMEOUT_SEC,
                         files={"audio_file": ("audio.mp3", data, mime)})
     else:
@@ -110,7 +114,10 @@ async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
 
 async def dictate(conn, model: str, data: bytes, mime: str, name: str) -> str:
     """Голосовой ввод: запись как есть (m4a iPhone, webm Chrome) — текст."""
-    if conn.kind != "srvllm":
+    if conn.s06:
+        r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
+                        data={"language": "ru", "diarize": "false"}, files={"file": (name, data, mime)})
+    elif conn.kind != "srvllm":
         r = await _post(conn, f"{conn.base_url}/audio/transcriptions", EXTERNAL_TIMEOUT_SEC,
                         data={"model": model, "response_format": "json"}, files={"file": (name, data, mime)})
     elif model == "gigaam":

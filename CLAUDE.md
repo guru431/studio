@@ -527,6 +527,12 @@ push общий для раздела «Агенты».
   srvllm его нет. Адрес, убранный из списка, — `connections.dropped` (не прямое): «Проверить» и
   «Обновить модели» говорят это словами; `UpstreamRefused.reason` различает `unlisted`, `internal`,
   `changed`.
+- Шлюз s06: вид формы «Шлюз s06», в базе `kind=openai, s06=1` (схема 32), адрес без `/v1`,
+  только из списка администратора. Чат и перевод — устойчивые алиасы `qwen-27b` и `qwen-27b-fast`;
+  разговоры и голосовой ввод — `/speech/transcriptions` (WhisperX, `diarize` true/false),
+  сканы — `/pages/ocr` с `image` base64 и `model=ocr-ru`, ответ `markdown`. Освобождение слотов
+  srvllm не вызывается. Озвучки и координат для перевода снимков нет; прежние умолчания разделов
+  при добавлении сохраняются. Флаг профиля входит в снимок подключения и паспорта, смена требует токен.
 - Правка расшифровки — JSON `transcripts.edits` (`texts` по номеру реплики, `names` по метке
   «Собеседник N») поверх файла итога, который не переписывается; показываемые реплики для GET,
   выгрузок и вложения собирает одна `transcripts.view`. Файл итога новых расшифровок несёт ещё `raw` —
@@ -1003,6 +1009,9 @@ SQL — как у шага 16 ниже.
 подключения и 500 поиска); стирание истории и вложения без текста зависят от устройства того раздела.
 
 ## Тесты
+
+s06: `.venv/Scripts/python -m pytest -q -n0 tests/test_s06.py tests/test_foundation.py tests/test_connections.py tests/test_sections.py tests/test_speech.py tests/test_ocr.py`;
+настройки 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_ui_s06.py`.
 
 Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py`; сквозной контракт двух
 приложений и браузер 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py`.
