@@ -79,6 +79,74 @@ def test_existing_codex_context_reads_only_counters_under_the_profile(tmp_path):
                                              "usage": {"total": 800000}}
     assert last_context(str(path), tmp_path / "other") is None
 
+    rows = [
+        {"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}},
+        {"type": "event_msg", "timestamp": "2026-01-01T00:00:00Z", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"total_tokens": 20000}, "model_context_window": 100000}}},
+        {"type": "event_msg", "timestamp": "2026-01-01T00:01:00Z", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"total_tokens": 25000}, "model_context_window": 100000}}},
+        {"type": "turn_context", "payload": {"model": "gpt-6-astra"}},
+        {"type": "event_msg", "timestamp": "2026-01-01T00:02:00Z", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"total_tokens": 25000}, "model_context_window": 100000}}},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    assert last_context(str(path), folder)["cache"] == {"updated_at": 1767225660, "model": "gpt-6.1-sol"}
+    rows[2]["timestamp"] = "invalid"
+    path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    assert "cache" not in last_context(str(path), folder)
+
+
+def test_claude_cache_uses_reported_ttl_and_does_not_refresh_for_duplicate_blocks(home):
+    from claude_agent_sdk import StreamEvent
+    from studio_agent.turns import _Turn
+    r = Runner(lambda _: None, choices=store.Choices(home), cli_path=None, now=lambda: 1800000000)
+    t = _Turn(home, PID, CHAT, "turn", context={"used": 2500, "limit": 100000})
+    def event(mid, creation=None, cached=0, parent=None):
+        return StreamEvent(uuid="event", session_id=CHAT, parent_tool_use_id=parent, event={
+            "type": "message_start", "message": {"id": mid, "model": "claude-test", "usage": {
+                "cache_read_input_tokens": cached, "cache_creation": creation or {}}}})
+    for mid, creation, ttl in [
+        ("five", {"ephemeral_5m_input_tokens": 100}, 300),
+        ("hour", {"ephemeral_1h_input_tokens": 100}, 3600),
+        ("mixed", {"ephemeral_1h_input_tokens": 100, "ephemeral_5m_input_tokens": 10}, 300),
+    ]:
+        r._cache_usage(t, event(mid, creation))
+        assert t.context["cache"]["ttl_seconds"] == ttl
+    r.now = lambda: 1800000060
+    r._cache_usage(t, event("mixed", {"ephemeral_5m_input_tokens": 10}))
+    assert t.context["cache"]["updated_at"] == 1800000000
+    r._cache_usage(t, event("child", {"ephemeral_1h_input_tokens": 10}, parent="tool"))
+    assert t.context["cache"]["message_id"] == "mixed"
+    r._cache_usage(t, event("read", cached=100))
+    assert t.context["cache"]["ttl_seconds"] == 300
+    assert t.context["cache"]["updated_at"] == 1800000060
+    r._cache_usage(t, event("unknown"))
+    assert t.context["cache"]["ttl_seconds"] is None
+    r.now = lambda: 1800000090
+    r._cache_usage(t, event("unknown", {"ephemeral_1h_input_tokens": 100}))
+    assert t.context["cache"]["ttl_seconds"] == 3600
+    assert t.context["cache"]["updated_at"] == 1800000060
+
+
+async def test_claude_cache_survives_state_reads_but_external_replies_invalidate_its_timestamp(home, project, monkeypatch):
+    from claude_agent_sdk import SessionMessage, StreamEvent
+    from studio_agent import sessions
+    usage = {"cache_creation": {"ephemeral_1h_input_tokens": 100}}
+    reply = SessionMessage(type="assistant", uuid="answer", session_id=CHAT,
+        message={"id": "api-answer", "model": "claude-test", "usage": usage})
+    monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **kw: [reply])
+    event = StreamEvent(uuid="event", session_id=CHAT, event={"type": "message_start", "message": reply.message})
+    r = Runner(lambda _: None, choices=store.Choices(home), cli_path=None, now=lambda: 1800000000,
+               factory=lambda options: StateClient(options, [event, result_ok()]))
+    r.start(project, PID, CHAT, "Задание", None, None)
+    await settle(r)
+    assert r.choices.details(CHAT)["context"]["cache"]["updated_at"] == 1800000000
+    r.now = lambda: 1800000060
+    cache = (await r.state(project, CHAT))["context"]["cache"]
+    assert cache["updated_at"] == 1800000000 and cache["ttl_seconds"] == 3600
+    reply.message["id"] = "external-answer"
+    assert "updated_at" not in (await r.state(project, CHAT))["context"]["cache"]
+
 
 def test_usage_distinguishes_cached_input_from_anthropic_cache_and_rejects_bad_counters():
     assert permissions.token_usage({"inputTokens": 100, "outputTokens": 20, "cachedInputTokens": 60,

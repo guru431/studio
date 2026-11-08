@@ -1147,7 +1147,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 
 /* ---- Claude Code (code.js, code-panel.js, code-sessions.js): панель, путь, переключатели, сессии ----------------- */
 
-/* раскладка: панель слева, правая часть рядом; прокручивается #view — панель и верх правой части к нему прилипают */
+/* панель слева, правая часть рядом; у открытого чата и файлов собственная прокрутка */
 .code-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
 .code-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
 .code-panel { width: 220px; flex: none; position: sticky; top: 0; height: 100dvh; align-self: flex-start;
@@ -1265,14 +1265,18 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 #code-status:empty { display: none; }
 .code-body { flex: 1; width: 100%; max-width: 860px; min-width: 0; margin: 0 auto; padding: 16px; display: flex;
   flex-direction: column; gap: 16px; }
-#view:has(.code-pane:not([hidden]) .code-files-view) { overflow: hidden; }
-.code-ws:has(.code-pane:not([hidden]) .code-files-view) { flex: 1; min-height: 0; }
-.code-main:has(.code-pane:not([hidden]) .code-files-view) { min-height: 0; }
-.code-main:has(.code-pane:not([hidden]) .code-files-view) .code-body { max-width: none; min-height: 0; }
+#view:has(.code-pane:not([hidden]) > :is(.code-files-view, .code-chat)) { overflow: hidden; }
+.code-ws:has(.code-pane:not([hidden]) > :is(.code-files-view, .code-chat)) { flex: 1; min-height: 0; }
+.code-main:has(.code-pane:not([hidden]) > :is(.code-files-view, .code-chat)),
+.code-main:has(.code-pane:not([hidden]) > :is(.code-files-view, .code-chat)) .code-body { min-height: 0; }
+.code-main:has(.code-pane:not([hidden]) .code-files-view) .code-body { max-width: none; }
 .code-pane:has(> .code-files-view) { flex: 1; min-height: 0; }
 .code-main:has(.code-pane:not([hidden]) .code-session-picker) .code-body { max-width: none; }
 .code-pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.code-pane:has(> .code-chat) { flex: 1; }
+.code-pane:has(> .code-chat) { flex: 1; min-height: 0; }
+@media (width > 760px) {
+  .code-ws:has(.code-pane:not([hidden]) > .code-chat) > .code-panel { height: auto; align-self: stretch; }
+}
 .code-pick-note { margin: auto; }
 .code-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size:calc(14px * var(--font-scale, 1)); min-width: 0; }
 .code-crumbs > * { overflow-wrap: anywhere; min-width: 0; }
@@ -1359,7 +1363,10 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 @media (prefers-reduced-motion: reduce) { .code-panel { transition: none !important; } }
 
 /* чат (code-chat.js): лента, шаги, карточки, поле */
-.code-chat { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; contain: inline-size; }
+.code-chat { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; contain: inline-size; }
+.code-chat-scroll { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0;
+  overflow: auto; overscroll-behavior: contain; }
+.code-chat-scroll > * { flex: none; }
 .code-quick-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0;
   width: min(100%, 420px); margin: auto; }
 .code-quick-actions h2 { margin: 0 0 4px; font-size: calc(16px * var(--font-scale, 1)); }
@@ -1478,16 +1485,17 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-ask-question p { margin: 0; overflow-wrap: anywhere; }
 .code-ask-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text); font-size:calc(14px * var(--font-scale, 1));
   overflow-wrap: anywhere; }
-.code-compose-area { position: sticky; bottom: 0; z-index: 1; min-width: 0; width: 100%; background: var(--bg);
-  container-type: inline-size; padding-top: 4px; margin-top: auto; }
+.code-compose-area { flex: none; min-width: 0; max-height: 75%; overflow: auto;
+  container-type: inline-size; padding-top: 4px; }
+.code-compose-area > #code-status { margin: 0 0 6px; }
 .code-session-notice { margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel-2); font-size:calc(13px * var(--font-scale, 1)); overflow-wrap: anywhere; }
 .code-session-notice p { margin: 0 0 6px; }
 .code-session-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .code-session-actions .btn { white-space: normal; }
-.code-message-nav { position: absolute; right: 0; bottom: calc(100% + 8px); display: flex; flex-direction: column; gap: 4px; }
-.code-message-nav .icon-btn { width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 50%;
-  background: var(--panel); color: var(--text); box-shadow: 0 2px 8px #0002; }
+.code-message-nav { display: flex; flex: none; gap: 4px; }
+.code-message-nav .icon-btn { width: 30px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); color: var(--text); }
 .code-message-nav .icon-btn:hover { background: var(--panel-2); }
 .code-message-nav .icon-btn:disabled { opacity: .4; cursor: default; }
 .code-composer { --code-meta-font: calc(10px * var(--font-scale, 1)); margin: 0; min-width: 0; width: 100%; }
@@ -1530,6 +1538,12 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-pick:has(#code-effort) { max-width: 80px; }
 .code-pick:has(#code-access) { max-width: 150px; }
 .code-pick:has(#code-delivery) { max-width: 180px; }
+.code-cache { display:inline-flex; flex:none; flex-direction:column; align-items:center; justify-content:center;
+  min-width:52px; min-height:36px; padding:2px; border:0; border-radius:6px; background:transparent;
+  color:var(--text); font-family:inherit; font-size:var(--code-meta-font); cursor:pointer;
+  font-variant-numeric:tabular-nums; white-space:nowrap; }
+.code-cache span { color:var(--muted); }
+.code-cache:hover { background:var(--border); }
 .code-context { --context-color:var(--muted); --context-percent:0%; position:relative; display:inline-grid; flex:none;
   border:0; padding:0; cursor:pointer; font-family:inherit;
   place-items:center; width:42px; height:42px; border-radius:50%; color:var(--text); white-space:nowrap;
@@ -1551,6 +1565,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-usage-summary dd { max-width:250px; }
 .code-session-summary { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); }
 @container (max-width: 550px) {
+  .code-status-bar { gap: 4px; }
   .code-go-label { display: none; }
   .code-go-icon { display: block; }
   .code-composer .composer-go { padding: 6px; min-width: 32px; }

@@ -99,7 +99,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const assistant = ENGINE_NAMES[engine];
   const draftKey = `${aid}/${chat}`;
   const historyKey = `${me.id}/${aid}/${pid}/${engine}/${chat}`;
-  const scroller = document.getElementById('view');
+  const workspace = document.getElementById('view');
+  const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
+    role: 'region', 'aria-label': 'Лента чата' });
   const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile };
   let alive = true;
   let touched = false;           // выбор модели или усилия меняли в этом чате
@@ -134,7 +136,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let markingRead = false;
   let interactions = 0;
   const interacted = () => { interactions += 1; };
-  for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.addEventListener(event, interacted, { passive: true });
+  for (const event of ['pointerdown', 'wheel', 'keydown']) workspace?.addEventListener(event, interacted, { passive: true });
   const followups = new Map();
   const sentFollowups = new Set();
   const unsentFollowups = new Set();
@@ -207,7 +209,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const actions = el('div', { class: 'code-chat-actions' });
-  const statusBar = el('div', { class: 'code-status-bar' }, activity, actions, contextBox, usage.button);
+  const statusBar = el('div', { class: 'code-status-bar' }, activity, navigation, actions,
+    context.cacheButton, contextBox, usage.button);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
   for (const action of me?.code_quick_actions || []) {
@@ -245,9 +248,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
       stop, send));
   host.dataset.engine = engine;
-  host.append(
+  scroller.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, quickActions, status, el('div', { class: 'code-compose-area' }, navigation, sessionNotice, statusBar, form));
+    more, feed, quickActions);
+  host.append(scroller, el('div', { class: 'code-compose-area' }, status, sessionNotice, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -426,7 +430,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return !scroller || scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }
 
-  /** Якорь — верх ленты под прилипшей шапкой. Сохраняем выбранное сообщение даже у конца прокрутки. */
+  /** Якорь — верх ленты. Сохраняем выбранное сообщение даже у конца прокрутки. */
   function messageNeighbours() {
     const users = [...feed.querySelectorAll('.code-msg.user')];
     if (messageTarget && (!feed.contains(messageTarget) || Math.abs(scroller.scrollTop - messageScrollTop) > 2)) {
@@ -441,9 +445,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function messageTop() {
-    const header = host.closest('.code-main')?.querySelector('.code-top');
-    const scale = scroller.getBoundingClientRect().height / scroller.offsetHeight;
-    return Math.max(scroller.getBoundingClientRect().top, header?.getBoundingClientRect().bottom || 0) + 12 * scale;
+    return scroller.getBoundingClientRect().top;
+  }
+
+  function scrollByViewportPixels(delta) {
+    const scale = Number(document.documentElement.style.getPropertyValue('--ui-scale')) || 1;
+    scroller.scrollTop += delta / scale;
   }
 
   function paintNavigation() {
@@ -477,8 +484,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     messageTarget = target;
-    const scale = scroller.getBoundingClientRect().height / scroller.offsetHeight;
-    scroller.scrollTop += (target.getBoundingClientRect().top - messageTop()) / scale;
+    scrollByViewportPixels(target.getBoundingClientRect().top - messageTop());
     messageScrollTop = scroller.scrollTop;
     paintNavigation();
   }
@@ -491,8 +497,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function stepNode(s) {
-    const input = s.input && typeof s.input === 'object' ? s.input : {};
-    const filePath = input.file_path || s.changes?.[0]?.path || input.changes?.[0]?.path;
+    const stepInput = () => s.input && typeof s.input === 'object' ? s.input : null;
+    let input = stepInput();
+    const filePath = input?.file_path || s.changes?.[0]?.path || input?.changes?.[0]?.path;
     const tail = FILE_TOOLS.has(s.tool) ? projectFilePath(filePath, agent, project) : null;
     let link = null;
     if (tail) {
@@ -504,15 +511,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     const state = el('span', { class: 'code-step-state' });
     const timing = el('span', { class: 'code-step-duration' });
+    const head = el('span', { class: 'code-step-head' }, typeof filePath === 'string' ? filePath : preview(input));
     const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
-      el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')),
-        el('span', { class: 'code-step-head' }, typeof filePath === 'string' ? filePath : preview(input)), state, timing, link));
+      el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')), head, state, timing, link));
     stepData.set(details, s);
     let filled = false, touched = false, changeSerial = null;
     let result, inputNode, changeNode;
     const progress = el('p', { class: 'code-step-progress muted small', hidden: true });
     details.querySelector('summary').addEventListener('click', () => { touched = true; });
+    function paintInput() {
+      inputNode.textContent = typeof input?.command === 'string'
+        ? `${input.command}${input.cwd ? `\n${input.cwd}` : ''}` : JSON.stringify(input ?? {}, null, 2);
+    }
     function paint() {
+      const latest = stepInput();
+      if (input !== latest) {
+        input = latest;
+        if (typeof filePath !== 'string') head.textContent = preview(input);
+        if (filled) paintInput();
+      }
       details.classList.toggle('error', !!s.error);
       details.dataset.state = s.error ? 'failed' : s.status || 'completed';
       state.textContent = s.error ? 'Ошибка' : ({ running: 'Выполняется', completed: 'Готово', failed: 'Ошибка',
@@ -543,8 +560,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!details.open || filled) return;
       filled = true;
       result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': 'Вывод инструмента' });
-      inputNode = el('pre', { class: 'code-step-input', tabindex: '0', 'aria-label': 'Ввод инструмента' },
-        typeof input.command === 'string' ? `${input.command}${input.cwd ? `\n${input.cwd}` : ''}` : JSON.stringify(input, null, 2));
+      inputNode = el('pre', { class: 'code-step-input', tabindex: '0', 'aria-label': 'Ввод инструмента' });
+      paintInput();
       details.append(inputNode, result, progress);
       paint();
     });
@@ -1429,7 +1446,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const oldStart = start;
       start = Number.isInteger(page.start) ? page.start : 0;
       more.hidden = start <= 0;
-      if (scroller && anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - top;
+      if (anchor?.isConnected) scrollByViewportPixels(anchor.getBoundingClientRect().top - top);
       if (messageTarget && scroller) messageScrollTop = scroller.scrollTop;
       return start < oldStart;
     } catch (err) {
@@ -1524,7 +1541,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       scroller?.removeEventListener('scroll', paintNavigation);
       scroller?.removeEventListener('scroll', markRead);
       window.removeEventListener('resize', paintNavigation);
-      for (const event of ['pointerdown', 'wheel', 'keydown']) scroller?.removeEventListener(event, interacted);
+      for (const event of ['pointerdown', 'wheel', 'keydown']) workspace?.removeEventListener(event, interacted);
       feedObserver.disconnect();
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода
       clearTimeout(retry);

@@ -7,6 +7,11 @@ const number = (value) => Number.isFinite(value) ? value.toLocaleString('ru-RU')
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;
   let settings = {};
+  let cacheDetail = null;
+  const hasCache = engine === 'codex' || engine === 'claude';
+  const cacheText = el('b', { id: 'code-cache-text' }, '—');
+  const cacheButton = el('button', { type: 'button', id: 'code-cache', class: 'code-cache',
+    hidden: !hasCache, 'aria-haspopup': 'dialog' }, el('span', {}, 'Кэш'), cacheText);
   const text = el('span', { id: 'code-context-text' }, '—');
   const meter = el('meter', { id: 'code-context-meter', class: 'sr', min: '0', max: '100', value: '0', hidden: true });
   const button = el('button', { type: 'button', id: 'code-context', class: 'code-context',
@@ -19,6 +24,32 @@ export function contextView(host, { chat, engine, project, messages }) {
   el('p', { class: 'muted small' }, 'Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.'),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
+  function cacheStatus() {
+    const cache = context?.cache;
+    const model = /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/.exec(settings.model || '');
+    const modern = model && (+model[1] >= 6 || (+model[1] === 5 && +model[2] >= 6));
+    const ttl = engine === 'codex' && modern ? 1800
+      : engine === 'claude' && [300, 3600].includes(cache?.ttl_seconds) ? cache.ttl_seconds : null;
+    const now = Date.now() / 1000;
+    if (!ttl || cache?.model !== settings.model || !Number.isFinite(cache?.updated_at)
+        || cache.updated_at <= 0 || cache.updated_at > now) {
+      return { state: 'unknown', text: '—', title: 'Кэш: время не сообщается. Подробности сессии' };
+    }
+    const seconds = Math.max(0, Math.ceil(ttl - (now - cache.updated_at)));
+    return { state: seconds ? 'estimated' : 'elapsed',
+      text: `≈${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
+      title: seconds ? `Кэш: ориентировочно осталось ${Math.floor(seconds / 60)} мин ${seconds % 60} с`
+        : `Кэш: расчётные ${ttl / 60} минут прошли; состояние серверного кэша неизвестно` };
+  }
+  function paintCache() {
+    if (!hasCache) return;
+    const value = cacheStatus();
+    cacheText.textContent = value.text;
+    cacheButton.dataset.state = value.state;
+    cacheButton.title = value.title;
+    cacheButton.setAttribute('aria-label', value.title);
+    if (dialog.open && cacheDetail) cacheDetail.textContent = value.text;
+  }
   function paint() {
     const usage = context?.usage || {};
     const entries = [
@@ -35,16 +66,27 @@ export function contextView(host, { chat, engine, project, messages }) {
       ['Рассуждения, токенов', number(usage.reasoning)],
     ];
     content.replaceChildren(...entries.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)]));
+    if (hasCache) {
+      cacheDetail = el('dd', { 'aria-live': 'off' }, cacheStatus().text);
+      content.append(el('dt', {}, 'Кэш: оценка оставшегося времени'), cacheDetail);
+    }
   }
-  button.addEventListener('click', () => { paint(); dialog.showModal(); });
+  if (hasCache) dialog.insertBefore(el('p', { class: 'muted small' }, engine === 'codex'
+    ? 'Таймер кэша — оценка 30 минут от последней обработки контекста современной моделью Codex. Сервер не сообщает точное время хранения и не гарантирует попадание в кэш. Открытие чата отсчёт не продлевает.'
+    : 'Таймер кэша — оценка по отчёту Claude: 5 минут или час, при смешанных сроках — короткий. Если срок или время обработки неизвестны, показано «—». Открытие чата отсчёт не продлевает.'), dialog.lastElementChild);
+  for (const control of [button, cacheButton]) control.addEventListener('click', () => { paint(); dialog.showModal(); });
   close.addEventListener('click', () => dialog.close());
+  paintCache();
+  const cacheTimer = hasCache ? setInterval(paintCache, 1000) : null;
+  if (hasCache) document.addEventListener('visibilitychange', paintCache);
   return {
-    button,
-    settings(data) { settings = { ...settings, ...data }; if (dialog.open) paint(); },
+    button, cacheButton,
+    settings(data) { settings = { ...settings, ...data }; paintCache(); if (dialog.open) paint(); },
     update(data) {
       if (!data || !Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) return;
       const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);
       context = { ...data, percent };
+      paintCache();
       meter.value = percent;
       meter.hidden = false;
       text.textContent = `${Math.round(percent)}%`;
@@ -56,6 +98,6 @@ export function contextView(host, { chat, engine, project, messages }) {
       button.dataset.limit = String(data.limit);
       if (dialog.open) paint();
     },
-    unmount() { dialog.remove(); },
+    unmount() { clearInterval(cacheTimer); document.removeEventListener('visibilitychange', paintCache); dialog.remove(); },
   };
 }

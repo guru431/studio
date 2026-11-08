@@ -10,12 +10,13 @@ import json
 import logging
 import re
 import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
-                              PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage)
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
+                              PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent)
 
 from . import attachments as attachment_input
 from . import cli, events, image_input, limits, permissions, sessions, store, timeline
@@ -107,13 +108,14 @@ class Runner:
     `cli_path` сверяется перед каждым ходом (`cli.current`): VS Code обновляет расширение и удаляет прежнюю папку."""
 
     def __init__(self, emit: Callable[[dict], None], *, choices: store.Choices, cli_path: Path | None,
-                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli):
+                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli, now=time.time):
         self.emit = emit
         self.choices = choices
         self.cli_path = cli_path
         self.factory = factory
         self.max_turns = max_turns
         self.find_cli = find_cli
+        self.now = now
         self._turns: dict[str, _Turn] = {}
         self._closing = False  # close() идёт (или прошёл с `final` или `hold`): новых ходов нет
         self._final = False  # close(final=True): выход моста — `reopen` ходы не возвращает
@@ -290,9 +292,11 @@ class Runner:
             info = await client.get_server_info() or {}
             raw = await client.get_context_usage()
             current = await asyncio.to_thread(cli.settings_from, info, project, raw, model=model, effort=effort, access=access)
-            return {"settings": current,
-                    "context": permissions.context(raw.get("totalTokens"), raw.get("maxTokens"),
-                        await asyncio.to_thread(sessions.token_usage, project, chat))}
+            usage, cache = await asyncio.to_thread(sessions.context_stats, project, chat, (saved.get("context") or {}).get("cache"))
+            context = permissions.context(raw.get("totalTokens"), raw.get("maxTokens"), usage)
+            if context and cache:
+                context["cache"] = cache
+            return {"settings": current, "context": context}
         finally:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(client.disconnect(), DISCONNECT_SEC)
@@ -444,6 +448,7 @@ class Runner:
             new, model, effort = await asyncio.to_thread(self._choose, t, model, effort)
             saved = await asyncio.to_thread(self.choices.details, t.chat)
             t.access = t.access or saved.get("access")
+            t.context = saved.get("context")
             if t.access is not None:
                 await asyncio.to_thread(self.choices.update, t.chat, access=t.access)
             if not (t.stopped or t.closing):
@@ -459,6 +464,7 @@ class Runner:
                 while t.pending:
                     received_result = False
                     async for message in t.client.receive_response():
+                        self._cache_usage(t, message)
                         for e in t.feed.events(message):
                             self._send(t, e)
                         if isinstance(message, ResultMessage):
@@ -493,6 +499,34 @@ class Runner:
         if cancelled:
             raise asyncio.CancelledError
 
+    def _cache_usage(self, t, message):
+        """Начало ответа главного агента обновляет оценку; повторные блоки того же ответа — нет."""
+        if getattr(message, "parent_tool_use_id", None) is not None:
+            return
+        if isinstance(message, StreamEvent) and message.event.get("type") == "message_start":
+            raw = message.event.get("message") or {}
+            model, message_id, usage = raw.get("model"), raw.get("id"), raw.get("usage")
+        elif isinstance(message, AssistantMessage):
+            model, message_id, usage = message.model, message.message_id, message.usage
+        else:
+            return
+        if not t.context or not isinstance(model, str) or model == "<synthetic>" or not isinstance(message_id, str):
+            return
+        previous = t.context.get("cache") or {}
+        ttl = permissions.claude_cache_ttl(usage)
+        if (previous.get("message_id") == message_id and previous.get("model") == model
+                and previous.get("updated_at") is not None):
+            if ttl is not None and previous.get("ttl_seconds") != ttl:
+                t.context = {**t.context, "cache": {**previous, "ttl_seconds": ttl}}
+                self._send(t, {"k": "context", **t.context})
+            return
+        cached = (permissions.token_usage(usage) or {}).get("cached", 0)
+        if ttl is None and cached > 0 and previous.get("model") == model:
+            ttl = previous.get("ttl_seconds")
+        t.context = {**t.context, "cache": {"updated_at": self.now(), "model": model,
+                     "message_id": message_id, "ttl_seconds": ttl}}
+        self._send(t, {"k": "context", **t.context})
+
     async def _usage(self, t, model, effort):
         """Числа самого CLI; без подмены приблизительным подсчётом длины текста."""
         if not hasattr(t.client, "get_context_usage"):
@@ -502,9 +536,11 @@ class Runner:
             info = await t.client.get_server_info() or {}
             t.settings = await asyncio.to_thread(cli.settings_from, info, t.project, raw, model=model, effort=effort, access=t.access)
             self._send(t, {"k": "settings", **t.settings})
-            usage = await asyncio.to_thread(sessions.token_usage, t.project, t.chat)
+            usage, cache = await asyncio.to_thread(sessions.context_stats, t.project, t.chat, (t.context or {}).get("cache"))
             current = permissions.context(raw.get("totalTokens"), raw.get("maxTokens"), usage)
             if current:
+                if cache:
+                    current["cache"] = cache
                 t.context = current
                 self._send(t, {"k": "context", **t.context})
         except Exception as e:

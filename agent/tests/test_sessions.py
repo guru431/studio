@@ -37,6 +37,18 @@ def test_session_usage_counts_each_api_message_once_and_ignores_subagents(monkey
     assert sessions.token_usage(tmp_path, CHAT) is None
 
 
+def test_cache_timestamp_is_restored_only_for_the_latest_main_api_response(monkeypatch, tmp_path):
+    reply = A("answer", [])
+    reply.message.update(id="message", usage={"cache_creation": {"ephemeral_1h_input_tokens": 100}})
+    previous = {"model": reply.message["model"], "message_id": "message", "updated_at": 1800000000, "ttl_seconds": 3600}
+    child = A("child", [], parent="tool")
+    monkeypatch.setattr(sessions, "get_session_messages", lambda *a, **kw: [reply, child])
+    assert sessions.context_stats(tmp_path, CHAT, previous)[1] == previous
+    reply.message["id"] = "outside-bridge"
+    cache = sessions.context_stats(tmp_path, CHAT, previous)[1]
+    assert cache["ttl_seconds"] == 3600 and "updated_at" not in cache
+
+
 def tool(tid, name, inp):
     return {"type": "tool_use", "id": tid, "name": name, "input": inp}
 

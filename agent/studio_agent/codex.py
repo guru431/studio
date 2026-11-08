@@ -9,6 +9,7 @@ import secrets
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from . import codex_progress, codex_rpc, diffs, events, limits, metadata, permissions, sessions, store, timeline
@@ -36,19 +37,41 @@ def last_context(path, home=None):
             source.seek(0, 2)
             source.seek(max(0, source.tell() - 512 * 1024))
             lines = source.read().splitlines()
+        result, updated_at, model, collecting = None, None, None, True
         for line in reversed(lines):
             try:
                 row = json.loads(line)
                 payload = row.get("payload", {})
                 if payload.get("type") == "token_count":
                     info = payload.get("info") or {}
-                    result = permissions.context((info.get("last_token_usage") or {}).get("total_tokens"),
-                                                 info.get("model_context_window"),
-                                                 permissions.token_usage(info.get("total_token_usage")))
-                    if result:
-                        return result
+                    current = permissions.context((info.get("last_token_usage") or {}).get("total_tokens"),
+                                                  info.get("model_context_window"),
+                                                  permissions.token_usage(info.get("total_token_usage")))
+                    if current and collecting:
+                        if result is not None and current != result:
+                            if model is not None:
+                                break
+                            collecting = False
+                            continue
+                        result = current
+                        # CLI повторяет счётчики при обновлении лимитов. Они не продлевают кэш:
+                        # берём первую запись последнего изменения, а не последний timestamp.
+                        updated_at, model = None, None
+                        stamp = row.get("timestamp")
+                        if isinstance(stamp, str):
+                            parsed = datetime.fromisoformat(stamp)
+                            if parsed.tzinfo is not None:
+                                updated_at = parsed.timestamp()
+                elif row.get("type") == "turn_context" and result is not None and model is None:
+                    model = payload.get("model")
+                    if not collecting:
+                        break
             except (ValueError, AttributeError):
                 continue
+        if result is not None:
+            if updated_at is not None and updated_at > 0 and isinstance(model, str):
+                result["cache"] = {"updated_at": updated_at, "model": model}
+            return result
     except OSError:
         pass
     return None
@@ -88,6 +111,32 @@ class Aliases:
             store.write_atomic(self.path, json.dumps(data, ensure_ascii=True).encode())
 
 
+def web_search(item):
+    action = item.get("action")
+    action = action if isinstance(action, dict) else {}
+    query = item.get("query")
+    if not isinstance(query, str) or not query:
+        query = action.get("query")
+    fields = {"query": query, "url": action.get("url"), "pattern": action.get("pattern"), "action": action.get("type")}
+    data = {key: value for key, value in fields.items() if isinstance(value, str) and value}
+    if isinstance(queries := action.get("queries"), list):
+        data["queries"] = [query for query in queries[:20] if isinstance(query, str)]
+    if not data:
+        data["query"] = ""
+    results = item.get("results")
+    if not isinstance(results, list):
+        return data, ""
+    rows = []
+    for result in results[:20]:
+        if not isinstance(result, dict):
+            continue
+        lines = [events.clip(value, size) for key, size in (("title", 300), ("url", 2048), ("snippet", 500))
+                 if isinstance(value := result.get(key), str) and value]
+        if lines:
+            rows.append("\n".join(lines))
+    return data, "\n\n".join(rows)
+
+
 def step_of(item):
     kind = item.get("type")
     if kind == "commandExecution":
@@ -100,7 +149,8 @@ def step_of(item):
         tool, data = item.get("tool", kind), item.get("arguments", {})
         text = json.dumps(item.get("result") or item.get("contentItems") or item.get("error") or "", ensure_ascii=False)
     elif kind == "webSearch":
-        tool, data, text = "WebSearch", {"query": item.get("query", "")}, ""
+        tool = "WebSearch"
+        data, text = web_search(item)
     elif kind == "collabAgentToolCall":
         tool, data, text = item.get("tool", "Agent"), {"prompt": item.get("prompt", "")}, ""
     else:
@@ -176,11 +226,12 @@ class _TurnClient:
 
 
 class CodexRunner(Runner):
-    def __init__(self, emit, *, home, choices=None, find_cli=None, factory=codex_rpc.Client):
+    def __init__(self, emit, *, home, choices=None, find_cli=None, factory=codex_rpc.Client, now=time.time):
         self.find_codex = find_cli or codex_rpc.find_cli
         super().__init__(emit, choices=choices or store.Choices(home), cli_path=None)
         self.aliases = Aliases(home)
         self.rpc_factory = factory
+        self.now = now
         self.catalog = None
         self.models, self.efforts, self.version = [], [], ""
         self.default_efforts = {}
@@ -639,6 +690,11 @@ class CodexRunner(Runner):
             current = permissions.context((usage.get("last") or {}).get("totalTokens"), usage.get("modelContextWindow"),
                                           permissions.token_usage(usage.get("total")))
             if current:
+                previous = {key: value for key, value in (t.context or {}).items() if key != "cache"}
+                if current != previous:
+                    current["cache"] = {"updated_at": self.now(), "model": (t.settings or {}).get("model")}
+                elif t.context.get("cache"):
+                    current["cache"] = t.context["cache"]
                 t.context = current
                 self._send(t, {"k": "context", **t.context})
         elif method == "item/agentMessage/delta":

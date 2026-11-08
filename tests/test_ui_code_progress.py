@@ -113,3 +113,60 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             assert not any('src/a.py' in url or 'window.unsafe' in url for url in requests)
     finally:
         channel.stop()
+
+
+@pytest.mark.parametrize('width', [320, 1551])
+def test_web_search_updates_in_place_and_long_chat_scrolls_above_composer(desktop_browser, live, width):
+    login = f'search-scroll-{desktop_browser.browser_type.name}-{width}'
+    live.add_user(login)
+    session = code_session('Поиск', messages=[])
+    session['engine'] = 'codex'
+    machine = FakeMachine({'alpha': {'files': {}, 'chats': {CODE_CHAT_A: session}}})
+    machine.codex = CATALOG
+    aid, channel = code_online(live, login, machine)
+    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+    cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
+    try:
+        with desktop_browser.new_context(viewport={'width': width, 'height': 850},
+                                         extra_http_headers={'Cookie': cookie}) as context:
+            if desktop_browser.browser_type.name == 'firefox':
+                context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                    'httpOnly': True, 'sameSite': 'Lax'} for key, value in signed.cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            machine.script = [{'k': 'step', 'id': 'search', 'tool': 'WebSearch', 'input': {'query': ''}}]
+            page.locator('#code-text').fill('Запрос')
+            page.locator('#code-send').click()
+            search = page.locator('.code-step[data-id="search"]')
+            search.locator('summary').click()
+            run = machine.running[CODE_CHAT_A]
+            run['rest'] = [
+                {'k': 'result', 'id': 'search', 'input': {'query': 'Codex caching'},
+                 'text': 'Prompt caching\nhttps://example.com/caching'},
+                {'k': 'text', 'text': 'Длинный ответ.\n\n' * 55 + 'Конец ответа.', 'block': 'final'},
+                {'k': 'done', 'status': 'done'},
+            ]
+            frames = []
+            machine._play(CODE_CHAT_A, frames)
+            for frame in frames:
+                channel._send(frame)
+            page.get_by_text('Конец ответа.', exact=True).wait_for(state='attached')
+            assert search.locator('.code-step-head').inner_text() == 'Codex caching'
+            assert 'Codex caching' in search.locator('.code-step-input').inner_text()
+            assert 'https://example.com/caching' in search.locator('.code-step-result').inner_text()
+            assert page.evaluate('''() => {
+              const scroll = document.querySelector('#code-chat-scroll');
+              const composer = document.querySelector('.code-compose-area');
+              const bottom = composer.getBoundingClientRect().bottom;
+              scroll.scrollTop = 0;
+              const scrolls = scroll.scrollHeight > scroll.clientHeight;
+              const separated = scroll.getBoundingClientRect().bottom <= composer.getBoundingClientRect().top;
+              scroll.scrollTop = scroll.scrollHeight;
+              const end = document.querySelector('.code-timeline-text p:last-child').getBoundingClientRect();
+              return scrolls && separated && composer.getBoundingClientRect().bottom === bottom
+                && end.bottom <= scroll.getBoundingClientRect().bottom + 1 && bottom <= innerHeight;
+            }''')
+    finally:
+        channel.stop()

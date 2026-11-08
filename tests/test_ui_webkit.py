@@ -497,7 +497,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
     page.locator('#avatar').tap()
     page.locator('#appearance-scale').select_option(str(scale))
     page.locator('#avatar').tap()
-    page.evaluate("document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight")
+    page.locator('#code-chat-scroll').evaluate('node => node.scrollTop = node.scrollHeight')
     for direction, number in [('up', 4), ('up', 2), ('up', 0), ('down', 2), ('down', 4)]:
         button = page.locator(f'#code-message-{direction}')
         assert button.evaluate("""e => {
@@ -506,9 +506,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
         }""")
         button.tap()
         page.wait_for_function("""number => {
-          const view = document.querySelector('#view');
-          const top = document.querySelector('.code-top').getBoundingClientRect().bottom
-            + 12 * view.getBoundingClientRect().height / view.offsetHeight;
+          const top = document.querySelector('#code-chat-scroll').getBoundingClientRect().top;
           const message = [...document.querySelectorAll('#code-feed .code-msg.user')]
             .find(e => e.textContent === `Запрос ${number}`);
           return Math.abs(message.getBoundingClientRect().top - top) < 2;
@@ -518,7 +516,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
     pw.expect(page.locator('#code-message-down')).to_be_enabled()
     pw.expect(page.locator('#code-message-down')).to_have_attribute('aria-label', 'В конец чата')
     page.locator('#code-message-down').tap()
-    page.wait_for_function("""() => { const view = document.querySelector('#view');
+    page.wait_for_function("""() => { const view = document.querySelector('#code-chat-scroll');
       return view.scrollHeight - view.clientHeight - view.scrollTop < 2; }""")
     pw.expect(page.locator('#code-message-down')).to_be_disabled()
     fits(page)
@@ -1036,7 +1034,7 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     pw.expect(page.locator("#code-feed")).to_contain_text("про A")
     page.locator('#code-chat[data-loaded="1"]').wait_for()
     pw.expect(page.locator("#code-feed")).to_be_in_viewport()
-    assert page.locator('#view').evaluate('view => view.scrollTop > 1000')
+    assert page.locator('#code-chat-scroll').evaluate('view => view.scrollTop > 1000')
     page.locator("#code-tab-add").tap()
     pw.expect(page.locator('#code-chat-search')).to_be_in_viewport()
     assert page.locator('#view').evaluate('view => view.scrollTop === 0')
