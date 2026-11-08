@@ -39,6 +39,8 @@ NAME_RULES = (
 
 
 def profile(conn) -> str:
+    if conn.s06:
+        return "s06"
     if conn.kind == "srvllm":
         return "srvllm"
     return PROFILES.get(httpx.URL(conn.base_url).host, "compatible")

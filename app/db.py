@@ -5,7 +5,9 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 31
+VERSION = 32
+
+S06_32 = "ALTER TABLE connections ADD COLUMN s06 INTEGER NOT NULL DEFAULT 0;"
 
 # Message ids deliberately remain as tombstones after regeneration removes an answer.
 # The owning chat (including history cleanup) removes the acknowledgement itself.
@@ -430,7 +432,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -512,6 +514,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     29: NTFY_29,
     30: NTFY_30,
     31: CHAT_31,
+    32: S06_32,
 }
 
 

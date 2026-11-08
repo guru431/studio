@@ -63,6 +63,7 @@ class Connection:
     proxied: bool
     server_only: bool = False
     cleaner: bool = False
+    s06: bool = False
 
 
 def _few_sections(wanted: list[str] | None) -> list[str] | None:
@@ -79,6 +80,7 @@ class ConnIn(BaseModel):
     base_url: str = Field(max_length=URL_MAX)
     token: str = Field(max_length=4096)
     cleaner: bool = False
+    s06: bool = False
     sections: list[str] = Field(default_factory=list)
     _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
@@ -89,6 +91,7 @@ class ConnPatch(BaseModel):
     base_url: str | None = Field(None, max_length=URL_MAX)
     token: str | None = Field(None, max_length=4096)
     cleaner: bool | None = None
+    s06: bool | None = None
     sections: list[str] | None = None
     _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
@@ -104,10 +107,10 @@ def _from_row(row) -> Connection:
     return Connection(id=row["id"], user_id=row["user_id"], name=row["name"], kind=row["kind"],
                       base_url=row["base_url"], sections=linked,
                       proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]),
-                      cleaner=bool(row["cleaner"]))
+                      cleaner=bool(row["cleaner"]), s06=bool(row["s06"]))
 
 
-_COLS = ("id, user_id, name, kind, base_url, server_only, cleaner,"
+_COLS = ("id, user_id, name, kind, base_url, server_only, cleaner, s06,"
          " (SELECT json_group_array(l.section) FROM section_links l WHERE l.connection_id = connections.id) AS linked")
 
 
@@ -128,11 +131,11 @@ def token(conn: Connection) -> str:
     """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
     Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
     ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно."""
-    row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner FROM connections WHERE id = ?",
+    row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06 FROM connections WHERE id = ?",
                            (conn.id,)).fetchone()
     if row is None or row["user_id"] != conn.user_id:
         raise upstream.ConnectionChanged(conn, deleted=True)
-    if (row["kind"] != conn.kind or bool(row["cleaner"]) != conn.cleaner
+    if (row["kind"] != conn.kind or bool(row["cleaner"]) != conn.cleaner or bool(row["s06"]) != conn.s06
             or _address(row["base_url"]) != _address(conn.base_url)):
         raise upstream.ConnectionChanged(conn, deleted=False)
     try:
@@ -144,7 +147,7 @@ def token(conn: Connection) -> str:
 def _api(conn: Connection) -> str:
     if conn.cleaner:
         return conn.base_url + "/api/v1"
-    return conn.base_url + ("/v1" if conn.kind == "srvllm" else "")
+    return conn.base_url + ("/v1" if conn.kind == "srvllm" or conn.s06 else "")
 
 
 def chat_url(conn: Connection) -> str:
@@ -168,7 +171,7 @@ def _direct_ok(base_url: str) -> bool:
 def dropped(conn: Connection) -> bool:
     """Не через сервер, но и не прямое: адрес убрали из списка, а токен вводили для сервера (или это
     srvllm, или адрес без https) — браузеру его не выдать, серверу туда нельзя."""
-    return not conn.proxied and (conn.server_only or conn.kind == "srvllm" or not _direct_ok(conn.base_url))
+    return not conn.proxied and (conn.server_only or conn.kind == "srvllm" or conn.s06 or not _direct_ok(conn.base_url))
 
 
 def passport_of(conn: Connection) -> dict | None:
@@ -178,7 +181,7 @@ def passport_of(conn: Connection) -> dict | None:
 
 
 #: строка подключения, какой её видела проверка: id, владелец, вид, адрес и ключ (шифром)
-_SAME = "id = ? AND user_id = ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ?"
+_SAME = "id = ? AND user_id = ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ? AND s06 = ?"
 
 
 def snapshot(conn: Connection) -> tuple:
@@ -186,7 +189,8 @@ def snapshot(conn: Connection) -> tuple:
     (паспорт обнулён), подключение — удалить, а его id — отдать новому подключению другого пользователя."""
     row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ? AND user_id = ?",
                            (conn.id, conn.user_id)).fetchone()
-    return conn.id, conn.user_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None, int(conn.cleaner)
+    return (conn.id, conn.user_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None,
+            int(conn.cleaner), int(conn.s06))
 
 
 def passport_at(snap: tuple) -> dict | None:
@@ -212,7 +216,7 @@ def out(conn: Connection, passport: bool = True) -> dict:
         hint = "нужно ввести заново"
     item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
-            "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner}
+            "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06}
     if passport:
         item["passport"] = passport_of(conn)
     return item
@@ -262,32 +266,31 @@ def check_base_url(kind: str, text: str) -> str:
     return raw
 
 
-def check_sections(kind: str, wanted: list[str]) -> list[str]:
+def check_sections(kind: str, wanted: list[str], s06: bool = False) -> list[str]:
     if kind not in KINDS:
         raise _bad("kind", "вид подключения — openai или srvllm")
-    if not set(wanted) <= KINDS[kind]:
-        raise _bad("sections", "разделы — " + ", ".join(s for s in sections.SECTIONS if s in KINDS[kind]))
+    supported = set(sections.S06_CATALOG) if s06 else KINDS[kind]
+    if not set(wanted) <= supported:
+        raise _bad("sections", "разделы — " + ", ".join(s for s in sections.SECTIONS if s in supported))
     return [s for s in sections.SECTIONS if s in wanted]
-
-
-def check(kind: str, base_url: str, wanted: list[str]) -> tuple[str, list[str]]:
-    chosen = check_sections(kind, wanted)
-    return check_base_url(kind, base_url), chosen
 
 
 # ---- общие действия (профиль и панель администратора) ------------------------
 
 def create(user_id: int, body: ConnIn) -> dict:
     name, secret = check_name(body.name), check_token(body.token)
-    base_url, wanted = check(body.kind, body.base_url, body.sections)
+    wanted = check_sections(body.kind, body.sections, body.s06)
+    base_url = check_base_url(body.kind, body.base_url)
+    if body.s06:
+        _check_s06(body.kind, base_url, body.cleaner)
     if body.cleaner:
         _check_cleaner(body.kind, base_url, wanted)
     with sections.transaction():               # подключение — вместе со связями или никак
         cid = state.DB.execute(
-            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, cleaner)"
-            " VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
+            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, cleaner, s06)"
+            " VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)",
             (user_id, name, body.kind, base_url, security.encrypt(secret), clock.NOW(),
-             int(upstream.is_allowed(base_url)), int(body.cleaner))).lastrowid
+             int(upstream.is_allowed(base_url)), int(body.cleaner), int(body.s06))).lastrowid
         sections.set_sections(user_id, cid, wanted)
     log.info("пользователь %d: подключение %d создано", user_id, cid)
     return out(get(user_id, cid))
@@ -308,6 +311,15 @@ def _check_cleaner(kind: str, base_url: str, wanted: list[str]) -> None:
         raise _bad("path", "адрес Cleaner — без пути /api/v1")
 
 
+def _check_s06(kind: str, base_url: str, cleaner: bool) -> None:
+    if kind != "openai" or cleaner:
+        raise _bad("s06", "шлюз s06 — отдельный вид OpenAI-совместимого подключения")
+    if not upstream.is_allowed(base_url):
+        raise _bad("s06", "адрес шлюза s06 должен быть в списке администратора")
+    if httpx.URL(base_url).path != "/":
+        raise _bad("path", "адрес шлюза s06 — без пути /v1")
+
+
 def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     conn = get(user_id, conn_id)
     sent = body.model_fields_set
@@ -317,8 +329,13 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     kind = body.kind if "kind" in sent and body.kind is not None else conn.kind
     base_url = body.base_url if "base_url" in sent and body.base_url is not None else conn.base_url
     wanted = body.sections if "sections" in sent and body.sections is not None else list(conn.sections)
-    chosen = check_sections(kind, wanted)                           # разделы — против вида всегда
+    s06 = body.s06 if body.s06 is not None else conn.s06
+    chosen = check_sections(kind, wanted, s06)                      # разделы — против вида всегда
     cleaner = body.cleaner if body.cleaner is not None else conn.cleaner
+    if s06 and (not conn.s06 or kind != conn.kind or cleaner != conn.cleaner
+                or base_url.strip().rstrip("/") != conn.base_url):
+        _check_s06(kind, base_url.strip().rstrip("/"), cleaner)
+    changes["s06"] = int(s06)
     if cleaner and (not (kind == conn.kind and base_url == conn.base_url and set(chosen) <= conn.sections)
                     or not conn.cleaner):
         _check_cleaner(kind, base_url.strip().rstrip("/"), chosen)
@@ -332,14 +349,15 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     if not proxied and (set(chosen) - (conn.sections if kept else set())) & sections.SERVER_ONLY:
         raise _bad("server", "адрес вне списка разрешённых — уберите подключение из разделов, кроме чата,"
                              " или попросите администратора внести адрес")
-    moved = (kind != conn.kind or cleaner != conn.cleaner or proxied != conn.proxied
+    moved = (kind != conn.kind or cleaner != conn.cleaner or s06 != conn.s06 or proxied != conn.proxied
              or _address(changes["base_url"]) != _address(conn.base_url))
     if "token" in sent and body.token is not None:
         changes["token_enc"] = security.encrypt(check_token(body.token))
         changes["server_only"] = int(proxied)    # снимается только токеном, введённым для прямого
     elif moved:                                  # прежний ключ — только прежнему адресу
         raise _bad("token", "новый адрес — введите токен заново")
-    if "token_enc" in changes or kind != conn.kind or cleaner != conn.cleaner or changes["base_url"] != conn.base_url:
+    if ("token_enc" in changes or kind != conn.kind or cleaner != conn.cleaner or s06 != conn.s06
+            or changes["base_url"] != conn.base_url):
         changes["passport"] = None               # проверяли другой адрес, вид или ключ
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
     with sections.transaction():
@@ -431,7 +449,7 @@ async def get_token(conn_id: int, request: Request):
     conn = get(_uid(request), conn_id)
     # server_only, srvllm и адрес, который браузер сам не откроет, — тоже отказ: такое подключение
     # было через сервер, пока адрес не убрали из списка, и его токен браузеру не предназначался
-    if conn.server_only or conn.proxied or conn.kind == "srvllm" or not _direct_ok(conn.base_url):
+    if conn.server_only or conn.proxied or conn.kind == "srvllm" or conn.s06 or not _direct_ok(conn.base_url):
         raise HTTPException(403, {"code": "proxied", "message": "токен подключения через сервер не выдаётся"})
     # адреса — вместе с токеном: браузер несёт его только туда, а не по списку, который мог устареть
     try:

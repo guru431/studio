@@ -13,6 +13,7 @@ import { button, el, field, openDialog, showError } from './ui.js';
 const KINDS = {
   openai: { label: 'OpenAI-совместимый', placeholder: 'адрес API, https, оканчивается на /v1' },
   srvllm: { label: 'Шлюз srvllm', placeholder: 'адрес шлюза, http, IP и порт, без пути' },
+  s06: { label: 'Шлюз s06 · Qwen, WhisperX, PaddleOCR', placeholder: 'адрес шлюза, IP и порт, без пути /v1' },
   cleaner: { label: 'Cleaner · защита данных', placeholder: 'адрес Cleaner, HTTPS, IP и порт, без пути' },
 };
 export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', speech: 'Речь',
@@ -35,29 +36,33 @@ export function connectionForm(initial, { cleaner = false } = {}) {
     placeholder: initial ? `не менять (${initial.token_hint})` : 'ключ API' });
   const cleanerNote = el('p', { class: 'muted small', hidden: true }, 'Cleaner: только чат и перевод через сервер. '
     + 'Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор.');
+  const s06Note = el('p', { class: 'muted small', hidden: true }, 's06: чат и перевод Qwen, разговоры WhisperX, '
+    + 'сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет.');
   const box = el('form', { class: 'conn-form', novalidate: true },
     field('Название', name, 'name'), field('Вид', kind, 'kind'),
     field('Адрес', url, 'base_url'),
     el('p', { class: 'muted small' }, 'Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. '
       + 'Фото, видео и речь — только через студию.'),
-    field('Токен', token, 'token'), cleanerNote);
+    field('Токен', token, 'token'), cleanerNote, s06Note);
   box.addEventListener('submit', (event) => event.preventDefault());
 
-  kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
+  kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.s06 ? 's06' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
   name.value = initial ? initial.name : (cleaner ? 'Cleaner' : '');
   url.value = initial ? initial.base_url : '';
   url.placeholder = KINDS[kind.value].placeholder;
   cleanerNote.hidden = kind.value !== 'cleaner';
+  s06Note.hidden = kind.value !== 's06';
   kind.addEventListener('change', () => {
     url.placeholder = KINDS[kind.value].placeholder;
     cleanerNote.hidden = kind.value !== 'cleaner';
+    s06Note.hidden = kind.value !== 's06';
   });
 
   return {
     el: box,
     value() {
-      const out = { name: name.value.trim(), kind: kind.value === 'cleaner' ? 'openai' : kind.value,
-        cleaner: kind.value === 'cleaner', base_url: url.value.trim() };
+      const out = { name: name.value.trim(), kind: ['cleaner', 's06'].includes(kind.value) ? 'openai' : kind.value,
+        cleaner: kind.value === 'cleaner', s06: kind.value === 's06', base_url: url.value.trim() };
       if (!initial || token.value.trim()) out.token = token.value.trim();
       return out;
     },
