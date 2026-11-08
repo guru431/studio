@@ -7800,7 +7800,8 @@ CODE_CHAT_B = "b2222222-2222-4222-8222-222222222222"
 CODE_WAITING = "Компьютер пропал со связи — жду его"
 #: сообщения ленты: вид и текст (у ответа — текст разметки)
 CODE_MSGS = """[...document.querySelectorAll('#code-feed .code-msg')].map((m) => [m.classList.contains('user') ? 'user'
-  : 'assistant', m.classList.contains('user') ? m.textContent : m.querySelector('.md').textContent.trim()])"""
+  : 'assistant', m.classList.contains('user') ? m.textContent : [...m.querySelectorAll('.code-timeline-text')]
+    .map(node => node.textContent.trim()).join(' ').trim()])"""
 #: шаги ленты: инструмент, начало ввода, итог, ошибка, ссылка «Открыть файл»
 CODE_STEPS = """(async () => { const rows = [...document.querySelectorAll('#code-feed details.code-step')];
   await Promise.all(rows.map((row) => row.open ? Promise.resolve() : new Promise(resolve => {
