@@ -1298,9 +1298,9 @@ body.solo { display: grid; place-items: center; padding: 16px; }
   border-radius: 6px; background: none; color: var(--muted); font-size:calc(15px * var(--font-scale, 1)); line-height: 1; cursor: pointer; }
 .code-tab-close:hover { background: var(--panel-2); color: var(--text); }
 .code-tab-add { position: sticky; right: 0; flex: none; align-self: stretch; width: 34px; margin-left: 2px; padding: 0;
-  border: 0; border-radius: 9px 9px 0 0; background: var(--bg); color: var(--muted); font-size:calc(20px * var(--font-scale, 1)); line-height: 1;
-  cursor: pointer; }
-.code-tab-add:hover, .code-tab-add[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
+  border: 0; border-radius: 9px 9px 0 0; background: #c45100; color: #fff; font-size:calc(20px * var(--font-scale, 1)); line-height: 1;
+  font-weight: 700; cursor: pointer; }
+.code-tab-add:hover, .code-tab-add[aria-expanded="true"] { filter: brightness(.94); }
 .code-pane:has(> .code-session-picker) { flex: 1; }
 .code-session-picker { flex: 1; width: 100%; min-width: 0; }
 @media (max-width: 760px) {
