@@ -94,3 +94,19 @@ def test_tool_failure_payload_does_not_look_like_successful_completion():
     for item in [{'type': 'dynamicToolCall', 'success': False}, {'type': 'mcpToolCall', 'error': {'message': 'failed'}}]:
         step = codex.step_of({'id': 'tool', 'tool': 'check', 'status': 'completed', **item})
         assert step['error'] and step['status'] == 'failed'
+
+
+def test_web_search_keeps_completed_input_and_results_in_stream_and_history(runner):
+    t = _Turn(runner.project, 'a' * 16, CHAT, 'turn')
+    started = {'id': 'search', 'type': 'webSearch', 'query': '', 'action': None}
+    completed = {**started, 'query': 'Codex caching', 'action': {'type': 'search', 'query': 'Codex caching'},
+                 'results': [{'title': 'Prompt caching', 'url': 'https://example.com/caching', 'snippet': 'Cached input.'}]}
+    runner._notification(t, 'item/started', {'item': started})
+    runner._notification(t, 'item/completed', {'item': completed})
+    result = next(frame['e'] for frame in runner.sent if frame['e']['k'] == 'result')
+    assert result['input']['query'] == 'Codex caching'
+    assert result['text'] == 'Prompt caching\nhttps://example.com/caching\nCached input.'
+    [message] = codex.normalize([{'items': [completed]}])
+    [saved] = message['steps']
+    assert saved['input'] == result['input'] == t.feed.steps[0]['input']
+    assert saved['text'] == result['text'] == t.feed.steps[0]['text']

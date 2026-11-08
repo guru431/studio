@@ -303,6 +303,7 @@ async def test_native_activity_tracks_reasoning_tools_and_response_without_reaso
 
 
 async def test_access_and_context_use_native_policy_and_last_request(runner):
+    runner.now = lambda: 1800000000
     pid = projects.pid(runner.project.name)
     runner.start(runner.project, pid, CHAT, "Задание", None, None, access="read-only")
     task = runner._turns[CHAT].task
@@ -314,7 +315,15 @@ async def test_access_and_context_use_native_policy_and_last_request(runner):
         "last": {"totalTokens": 32000}, "total": {"totalTokens": 900000}, "modelContextWindow": 128000}})
     _, snapshot = await runner.watch(pid, CHAT)
     assert snapshot[0]["e"]["context"] == {"used": 32000, "limit": 128000, "percent": 25,
-                                          "usage": {"total": 900000}}
+                                          "usage": {"total": 900000},
+                                          "cache": {"updated_at": 1800000000, "model": "codex-test"}}
+    runner.now = lambda: 1800000060
+    runner._notification(t, "thread/tokenUsage/updated", {"tokenUsage": {
+        "last": {"totalTokens": 32000}, "total": {"totalTokens": 900000}, "modelContextWindow": 128000}})
+    assert t.context["cache"]["updated_at"] == 1800000000
+    runner._notification(t, "thread/tokenUsage/updated", {"tokenUsage": {
+        "last": {"totalTokens": 32000}, "total": {"totalTokens": 932000}, "modelContextWindow": 128000}})
+    assert t.context["cache"]["updated_at"] == 1800000060
     assert snapshot[0]["e"]["settings"]["access"] == "read-only"
     runner.answer(pid, CHAT, rid, "deny", None, None)
     await task

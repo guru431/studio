@@ -174,8 +174,12 @@ def last_model(project: Path, chat: str) -> str | None:
 
 def token_usage(project: Path, chat: str) -> dict | None:
     """Расход главной сессии из истории CLI; блоки одного ответа не удваивают счётчик."""
+    return _token_usage(get_session_messages(chat, directory=str(project)))
+
+
+def _token_usage(history):
     messages = {}
-    for m in get_session_messages(chat, directory=str(project)):
+    for m in history:
         if m.type != "assistant" or m.parent_tool_use_id is not None or not isinstance(m.message, dict):
             continue
         if m.message.get("model") == "<synthetic>":
@@ -190,6 +194,29 @@ def token_usage(project: Path, chat: str) -> dict | None:
         return None
     return {name: sum(usage.get(name, 0) for usage in messages.values())
             for name in set().union(*(usage.keys() for usage in messages.values()))}
+
+
+def context_stats(project: Path, chat: str, previous=None):
+    """Расход и кэш из одного снимка истории SDK, без повторного чтения файла сессии."""
+    history = get_session_messages(chat, directory=str(project))
+    return _token_usage(history), _cache_status(history, previous)
+
+
+def _cache_status(history, previous):
+    """SDK не отдаёт время истории: сохранённая отметка годится лишь для того же API-ответа."""
+    for m in reversed(history):
+        if m.type != "assistant" or m.parent_tool_use_id is not None or not isinstance(m.message, dict):
+            continue
+        model, message_id = m.message.get("model"), m.message.get("id")
+        if model == "<synthetic>":
+            continue
+        if not isinstance(model, str) or not isinstance(message_id, str):
+            return None
+        if isinstance(previous, dict) and previous.get("message_id") == message_id and previous.get("model") == model:
+            return previous
+        return {"model": model, "message_id": message_id,
+                "ttl_seconds": permissions.claude_cache_ttl(m.message.get("usage"))}
+    return None
 
 
 def mark_studio(project: Path, chat: str) -> None:

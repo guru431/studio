@@ -58,3 +58,14 @@ def context(used, limit, usage=None):
         return None
     return {"used": used, "limit": limit, "percent": min(100, round(used * 100 / limit, 1)),
             **({"usage": usage} if usage else {})}
+
+
+def claude_cache_ttl(usage):
+    """Срок только из отчёта о записи; при смешанном кэше — срок короткой части."""
+    creation = usage.get("cache_creation") if isinstance(usage, dict) else None
+    if isinstance(creation, dict):
+        for key, ttl in (("ephemeral_5m_input_tokens", 300), ("ephemeral_1h_input_tokens", 3600)):
+            value = creation.get(key)
+            if type(value) is int and value > 0:
+                return ttl
+    return None
