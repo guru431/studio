@@ -26,6 +26,8 @@ class FakeWindows:
         self.own = False
         self.closed = 0
         self.clipboard_calls = []
+        self.display_awake = True
+        self.wakes = 0
 
     def ensure_available(self):
         self.checks += 1
@@ -35,7 +37,13 @@ class FakeWindows:
     def physical_pixels(self):
         return nullcontext()
 
+    def wake_display(self):
+        self.wakes += 1
+        self.display_awake = True
+
     def monitors(self):
+        if not self.display_awake:
+            raise Refused('desktop_unavailable', 'display is asleep')
         return self.screens
 
     def cursor(self):
@@ -88,6 +96,40 @@ def test_monitors_hide_absolute_coordinates_and_never_capture():
         {"id": 1, "width": 1280, "height": 1024, "primary": False},
     ]
     assert api.sent == [] and api.clipboard_calls == []
+
+
+def test_sleeping_display_is_woken_before_start_and_each_frame():
+    api = FakeWindows()
+    api.display_awake = False
+    native = desktop.NativeDesktop(_api=api, _grab=lambda **_: Image.new('RGB', (1920, 1080)))
+    assert native.monitors()[0]['primary'] is True
+    assert api.wakes == 1
+    api.display_awake = False
+    assert native.frame(0)['width'] == 1600
+    assert api.wakes == 2
+    assert api.sent == [] and api.clipboard_calls == []
+
+
+def test_locked_session_is_not_woken():
+    api = FakeWindows()
+    api.available = False
+    api.display_awake = False
+    with pytest.raises(Refused, match='desktop_unavailable'):
+        desktop.NativeDesktop(_api=api).monitors()
+    assert api.wakes == 0 and not api.display_awake
+
+
+@pytest.mark.parametrize('result', [0, 0x80000000])
+def test_win32_display_request_only_resets_display_idle_timer(result):
+    api = object.__new__(desktop._Win32)
+    flags = []
+    api.kernel = SimpleNamespace(SetThreadExecutionState=lambda value: flags.append(value) or result)
+    if result:
+        api.wake_display()
+    else:
+        with pytest.raises(Refused, match='desktop_unavailable'):
+            api.wake_display()
+    assert flags == [0x00000002]  # No persistent, system-sleep or away-mode override.
 
 
 def test_move_maps_negative_monitor_coordinates_to_virtual_desktop():

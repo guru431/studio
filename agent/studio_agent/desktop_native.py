@@ -23,6 +23,7 @@ MAX_CAPTURE_EDGE = 16384
 MAX_CLIPBOARD_UNITS = 65536
 MAX_TEXT_UNITS = 4096
 MAX_EVENTS = 128
+ES_DISPLAY_REQUIRED = 0x00000002
 
 _UNAVAILABLE = "рабочий стол недоступен: нужен открытый сеанс Windows"
 _OWN_WINDOW = "окном агента можно управлять только на самом компьютере"
@@ -205,6 +206,7 @@ class _Win32:
             (self.user, "DestroyWindow", [HANDLE], BOOL),
             (self.kernel, "GetCurrentThreadId", [], DWORD),
             (self.kernel, "ProcessIdToSessionId", [DWORD, ctypes.POINTER(DWORD)], BOOL),
+            (self.kernel, "SetThreadExecutionState", [DWORD], DWORD),
             (self.kernel, "GlobalAlloc", [ctypes.c_uint, ctypes.c_size_t], HANDLE),
             (self.kernel, "GlobalLock", [HANDLE], HANDLE),
             (self.kernel, "GlobalUnlock", [HANDLE], BOOL),
@@ -251,6 +253,12 @@ class _Win32:
                 raise Refused("desktop_unavailable", _UNAVAILABLE)
         finally:
             self.user.CloseDesktop(desktop)
+
+    def wake_display(self):
+        # Without ES_CONTINUOUS this only refreshes the display idle timer.
+        # Active requests repeat it; closing the remote desktop restores normal idle behavior.
+        if not self.kernel.SetThreadExecutionState(ES_DISPLAY_REQUIRED):
+            raise Refused("desktop_unavailable", "Windows не удалось разбудить дисплей")
 
     @contextmanager
     def physical_pixels(self):
@@ -391,6 +399,7 @@ class NativeDesktop:
             except (AttributeError, OSError):
                 raise Refused("unsupported", "рабочий стол недоступен в этой версии Windows") from None
         self._api.ensure_available()
+        self._api.wake_display()
         return self._api
 
     def monitors(self):
@@ -436,7 +445,7 @@ class NativeDesktop:
                     finally:
                         image.close()
             except (OSError, ValueError):
-                raise Refused("desktop_unavailable", _UNAVAILABLE) from None
+                raise Refused("desktop_unavailable", "Windows не удалось получить изображение экрана. Подключитесь снова.") from None
 
     def input(self, events):
         if not isinstance(events, list) or not 0 < len(events) <= MAX_EVENTS:
