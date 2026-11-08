@@ -94,8 +94,10 @@ def test_asr_preserves_speakers_and_dictation_disables_diarization(studio, s06, 
     request = studio.gw.asr_requests[-1]
     assert request.url.path == "/speech/transcriptions" and not request.url.query
     assert b'name="file"' in request.content and b'name="diarize"\r\n\r\ntrue' in request.content
+    assert b'name="model"\r\n\r\nwhisperx' in request.content
     assert asyncio.run(speech.dictate(s06, "whisperx", b"audio", "audio/webm", "audio.webm")) == "Hello"
     assert b'name="diarize"\r\n\r\nfalse' in studio.gw.asr_requests[-1].content
+    assert b'name="model"\r\n\r\nwhisperx' in studio.gw.asr_requests[-1].content
     asyncio.run(speech.free_card(s06))
     assert not studio.gw.releases
 
