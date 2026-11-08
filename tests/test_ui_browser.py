@@ -9511,7 +9511,7 @@ def test_code_tabs_open_from_the_menu_and_switch(browser, live):
             ("eval", "len0", "history.length"),
             *code_from_list(CODE_CHAT_A), ("eval", "hashA", "location.hash"),
             ("click", "#code-tab-add"), ("wait", "document.querySelector('#code-tab-menu li[data-chat]')"),
-            ("eval", "menu", "[document.querySelector('#code-tab-menu li #code-new-chat')?.textContent,"
+            ("eval", "menu", "[document.querySelector('#code-tab-menu #code-new-chat')?.textContent,"
                              " [...document.querySelectorAll('#code-tab-menu li[data-chat]')].map((li) => li.dataset.chat)]"),
             ("click", f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] .code-chat-link"), code_tab_ready(CODE_CHAT_B),
             ("eval", "menuGone", "!document.querySelector('#code-tab-menu li')"),
