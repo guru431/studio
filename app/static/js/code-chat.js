@@ -6,8 +6,8 @@
  *   not_found (сессии на машине нет, студия её не заводила) — gone() вместо слов (вкладка уходит сама);
  * - лента #code-feed — хвост 12 сообщений (GET …/chats/<chat>), «Показать раньше» (#code-more) —
  *   страницы по 30 сообщений;
- *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant (шаги
- *   details.code-step, затем текст — markdown.js);
+ *   предыдущая (before = start); сообщения — .code-msg.user (текст как есть) и .code-msg.assistant
+ *   (текст markdown.js и свёрнутые details.code-step в хронологическом порядке);
  * - сразу за историей — поток live: idle — ничего, snapshot — всё состояние идущего хода вместо прежнего
  *   хвоста; «Отправить» — поток turn; события text, step, result, ask (карточка .code-ask; у вопроса — ещё
  *   «Свой ответ»), asked (карточка уходит), done (stopped — «Ход прерван», error — «Ошибка: …» или «Ошибка»;
@@ -128,6 +128,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let historyEmpty = false;
   const stepData = new WeakMap();
   const stepPaint = new WeakMap();
+  let expandSteps = false;
   const messageViews = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
@@ -154,9 +155,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-label': 'Предыдущее моё сообщение', title: 'Предыдущее моё сообщение', disabled: true });
   const next = el('button', { type: 'button', id: 'code-message-down', class: 'icon-btn',
     'aria-label': 'Следующее моё сообщение', title: 'Следующее моё сообщение', disabled: true });
+  const allSteps = el('button', { type: 'button', id: 'code-toggle-steps', class: 'icon-btn',
+    'aria-label': 'Развернуть все команды', title: 'Развернуть все команды', 'aria-pressed': 'false', disabled: true });
   previous.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>';
   next.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-6-6 6 6 6-6"/></svg>';
-  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': 'Мои сообщения', hidden: true }, previous, next);
+  allSteps.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4m-8 6 4 4 4-4"/></svg>';
+  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': 'Навигация по чату', hidden: true }, previous, allSteps, next);
   let messageTarget = null;
   let messageScrollTop = 0;
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание',
@@ -456,7 +460,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function paintNavigation() {
     if (!scroller || historyLoading) return;
     const { before, after } = messageNeighbours();
-    navigation.hidden = !feed.querySelector('.code-msg.user') && start <= 0;
+    const steps = [...feed.querySelectorAll('details.code-step')];
+    const expanded = steps.length > 0 && steps.every((step) => step.open);
+    const stepsLabel = expanded ? 'Свернуть все команды' : 'Развернуть все команды';
+    allSteps.disabled = steps.length === 0;
+    allSteps.setAttribute('aria-label', stepsLabel);
+    allSteps.setAttribute('aria-pressed', String(expanded));
+    allSteps.title = stepsLabel;
+    allSteps.querySelector('path').setAttribute('d', expanded ? 'm8 5 4 4 4-4m-8 14 4-4 4 4' : 'm8 9 4-4 4 4m-8 6 4 4 4-4');
+    navigation.hidden = !feed.querySelector('.code-msg.user') && !steps.length && start <= 0;
     previous.disabled = more.disabled || (!before && start <= 0);
     next.disabled = !after && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
     const nextLabel = after ? 'Следующее моё сообщение' : 'В конец чата';
@@ -515,10 +527,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
       el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')), head, state, timing, link));
     stepData.set(details, s);
-    let filled = false, touched = false, changeSerial = null;
+    let filled = false, changeSerial = null;
     let result, inputNode, changeNode;
     const progress = el('p', { class: 'code-step-progress muted small', hidden: true });
-    details.querySelector('summary').addEventListener('click', () => { touched = true; });
     function paintInput() {
       inputNode.textContent = typeof input?.command === 'string'
         ? `${input.command}${input.cwd ? `\n${input.cwd}` : ''}` : JSON.stringify(input ?? {}, null, 2);
@@ -553,10 +564,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           inputNode.hidden = !!changeNode;
         }
       }
-      if (!touched && !s.error && s.changes?.length && JSON.stringify(s.changes).length < 5000) details.open = true;
     }
     stepPaint.set(details, paint);
     details.addEventListener('toggle', () => {
+      paintNavigation();
       if (!details.open || filled) return;
       filled = true;
       result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': 'Вывод инструмента' });
@@ -565,19 +576,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       details.append(inputNode, result, progress);
       paint();
     });
+    details.open = expandSteps;
     paint();
     return details;
   }
 
   function textSegment(value, block = null, phase = null) {
     const node = el('div', { class: 'md code-timeline-text', ...(phase ? { 'data-phase': phase } : {}) });
-    const segment = { node, text: value, block, phase, dirty: false, finalized: true };
-    if (value) {
-      const paint = renderMarkdownInto(node, value, { valid: () => alive && feed.contains(node), fileLinks });
-      pendingPaints.add(paint);
-      paint.then(() => pendingPaints.delete(paint));
-    }
-    return segment;
+    return { node, text: value, block, phase, dirty: false, finalized: true };
   }
 
   function renderTimeline(body, m) {
@@ -597,24 +603,32 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       { kind: 'text', start: 0, end: textValue.length }];
     const segments = [];
     const nodes = new Map();
+    const textPaints = [];
     for (const part of parts) {
       if (part.kind !== 'text') continue;
       const segment = textSegment(textValue.slice(part.start, part.end), part.block, part.phase);
       segments.push(segment);
-      nodes.set(part, segment.node);
+      nodes.set(part, segment);
     }
     const make = (part) => {
       if (part.kind === 'step') return stepNode(byId.get(part.id));
-      return nodes.get(part);
+      const segment = nodes.get(part);
+      // Начинаем Markdown при добавлении сегмента: очередь списка ещё не прикрепила остальные узлы.
+      if (segment.text) textPaints.push(renderMarkdownInto(segment.node, segment.text,
+        { valid: () => alive && feed.contains(segment.node), fileLinks }));
+      return segment.node;
     };
     // Снимок активного хода строится сразу: следующая дельта должна найти все его шаги.
-    if (m.live || parts.length <= 8) body.replaceChildren(...parts.map(make));
-    else {
-      body.replaceChildren();
-      const paint = renderNodesInto(body, parts, make, { valid: () => alive && feed.contains(body) });
-      pendingPaints.add(paint);
-      paint.then(() => pendingPaints.delete(paint));
+    let built;
+    if (m.live || parts.length <= 8) {
+      body.replaceChildren(...parts.map(make));
+      built = Promise.resolve();
+    } else {
+      built = renderNodesInto(body, parts, make, { valid: () => alive && feed.contains(body) });
     }
+    const paint = built.then(() => Promise.all(textPaints));
+    pendingPaints.add(paint);
+    paint.then(() => pendingPaints.delete(paint));
     return { segments, active: parts.at(-1)?.kind === 'text' ? segments.at(-1) : null };
   }
 
@@ -1111,6 +1125,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           t.steps.append(stepNode(model));
           t.view.progress.update({}, t.models);
         });
+        paintNavigation();
         return false;
       }
       case 'progress':
@@ -1461,6 +1476,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   more.addEventListener('click', loadEarlier);
   previous.addEventListener('click', () => jumpMessage(-1));
+  allSteps.addEventListener('click', () => {
+    interacted();
+    acted = Date.now();
+    const steps = [...feed.querySelectorAll('details.code-step')];
+    expandSteps = steps.some((step) => !step.open);
+    grow(() => { for (const step of steps) step.open = expandSteps; });
+    paintNavigation();
+  });
   next.addEventListener('click', () => jumpMessage(1));
   scroller?.addEventListener('scroll', paintNavigation, { passive: true });
   window.addEventListener('resize', paintNavigation);
