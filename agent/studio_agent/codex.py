@@ -91,7 +91,9 @@ class Aliases:
 def step_of(item):
     kind = item.get("type")
     if kind == "commandExecution":
-        tool, data, text = "Shell", {"command": item.get("command"), "cwd": item.get("cwd")}, item.get("aggregatedOutput", "")
+        tool, data = "Shell", {"command": item.get("command"), "cwd": item.get("cwd")}
+        output = item.get("aggregatedOutput")
+        text = output if isinstance(output, str) else ""
     elif kind == "fileChange":
         tool, data, text = "Edit", {"changes": item.get("changes", [])}, ""
     elif kind in ("mcpToolCall", "dynamicToolCall"):
@@ -112,7 +114,7 @@ def step_of(item):
         if type(item.get(source)) is int:
             step[key] = item[source]
     if kind == "commandExecution":
-        if isinstance(text, str) and len(text) > limits.CLIP:
+        if len(text) > limits.CLIP:
             step["output_truncated"] = True
         if isinstance(item.get("processId"), str):
             step["process_id"] = item["processId"][:200]

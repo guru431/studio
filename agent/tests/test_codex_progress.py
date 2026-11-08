@@ -16,7 +16,7 @@ async def test_stream_output_status_diff_agents_plan_and_reconnect_share_one_sna
         runner._notification(t, method, data)
     notify("item/agentMessage/delta", itemId="intro", delta="Проверю 🛠")
     command = {"id": "cmd", "type": "commandExecution", "command": "pytest", "cwd": str(runner.project),
-               "status": "inProgress", "processId": "321"}
+               "status": "inProgress", "processId": "321", "aggregatedOutput": None}
     notify("item/started", item=command)
     notify("item/commandExecution/outputDelta", itemId="cmd", delta="Проверка идёт\n")
     assert t.feed.steps[0]["text"] == "Проверка идёт\n"
@@ -28,7 +28,7 @@ async def test_stream_output_status_diff_agents_plan_and_reconnect_share_one_sna
         "agentsStates": {CHILD: {"status": "running"}}})
     notify("item/completed", item={"id": "child-done", "type": "subAgentActivity", "agentThreadId": CHILD,
                                   "agentPath": "/root/gpu", "kind": "completed"})
-    notify("item/completed", item={**command, "status": "completed", "aggregatedOutput": "1 failed", "exitCode": 1,
+    notify("item/completed", item={**command, "status": "completed", "exitCode": 1,
                                   "durationMs": 1220})
     notify("item/agentMessage/delta", itemId="final", delta="Исправляю")
     running, [snapshot] = await runner.watch(t.pid, CHAT)
@@ -39,6 +39,7 @@ async def test_stream_output_status_diff_agents_plan_and_reconnect_share_one_sna
         {"kind": "text", "start": 10, "end": 19, "block": "final"}]
     assert data["steps"][0]["status"] == "failed" and data["steps"][0]["duration_ms"] == 1220
     assert data["steps"][0]["exit_code"] == 1
+    assert data["steps"][0]["text"] == "Проверка идёт\n"
     assert data["progress"]["changes"]["files"] == [{"path": "src/a.py", "added": 2, "removed": 1}]
     assert data["progress"]["agents"][0]["title"] == "/root/gpu"
     assert data["progress"]["agents"][0]["status"] == "completed"
