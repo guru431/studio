@@ -5,7 +5,7 @@ import json
 
 from claude_agent_sdk import AssistantMessage, StreamEvent, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 
-from . import diffs, limits
+from . import diffs, limits, timeline
 
 HIDDEN = {"…": "ввод не показан — слишком большой"}
 
@@ -75,8 +75,25 @@ class Feed:
     def __init__(self):
         self.text = ""
         self.steps: list[dict] = []
+        self.timeline: list[dict] = []
+        self._position = 0
+        self._ordered = True
         self._by_id: dict[str, dict] = {}
         self._deltas = False
+
+    def note(self, event):
+        if not self._ordered:
+            return
+        if event.get("k") == "text":
+            end = self._position + timeline.width(event.get("text", ""))
+            timeline.text_part(self.timeline, self._position, end,
+                               block=event.get("block"), phase=event.get("phase"))
+            self._position = end
+        elif event.get("k") == "step":
+            self.timeline.append({"kind": "step", "id": event["id"]})
+        if len(self.timeline) > timeline.MAX_PARTS:
+            self.timeline.clear()
+            self._ordered = False
 
     def _text(self, text: str) -> list[dict]:
         self.text += text

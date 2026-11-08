@@ -37,6 +37,7 @@ import { el, focusDesktop, words } from './ui.js';
 import { usageView } from './code-usage.js';
 import { contextView } from './code-context.js';
 import { changeView } from './code-diff.js';
+import { progressView } from './code-progress.js';
 import { fileHints } from './code-autocomplete.js';
 import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
@@ -113,7 +114,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let stateRequest = null;
   let adding = false;
   let images = imageDrafts.get(draftKey) || [];
-  let turn = null;               // ответ идущего хода: { node, steps, md, asks, text }
+  let turn = null;               // ответ идущего хода: узлы, текстовые сегменты и модели шагов
   let start = 0;                 // номер первого показанного сообщения истории
   let paintTimer = null;
   let acted = Date.now();        // последнее действие владельца в чате (открыл, вернулся, ввёл, ответил)
@@ -124,6 +125,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let claiming = false;
   let historyEmpty = false;
   const stepData = new WeakMap();
+  const stepPaint = new WeakMap();
+  const messageViews = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
   let renderedHistory = null;     // снимок и узлы хвоста: неизменившаяся история сохраняет раскрытие и выделение
@@ -489,7 +492,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function stepNode(s) {
     const input = s.input && typeof s.input === 'object' ? s.input : {};
-    const tail = FILE_TOOLS.has(s.tool) ? projectFilePath(input.file_path, agent, project) : null;
+    const filePath = input.file_path || s.changes?.[0]?.path || input.changes?.[0]?.path;
+    const tail = FILE_TOOLS.has(s.tool) ? projectFilePath(filePath, agent, project) : null;
     let link = null;
     if (tail) {
       link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file' }, 'Открыть файл');
@@ -498,20 +502,103 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         openFile(tail);
       });
     }
+    const state = el('span', { class: 'code-step-state' });
+    const timing = el('span', { class: 'code-step-duration' });
     const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
       el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')),
-        el('span', { class: 'code-step-head' }, preview(input)), link));
+        el('span', { class: 'code-step-head' }, typeof filePath === 'string' ? filePath : preview(input)), state, timing, link));
     stepData.set(details, s);
-    let filled = false;
+    let filled = false, touched = false, changeSerial = null;
+    let result, inputNode, changeNode;
+    const progress = el('p', { class: 'code-step-progress muted small', hidden: true });
+    details.querySelector('summary').addEventListener('click', () => { touched = true; });
+    function paint() {
+      details.classList.toggle('error', !!s.error);
+      details.dataset.state = s.error ? 'failed' : s.status || 'completed';
+      state.textContent = s.error ? 'Ошибка' : ({ running: 'Выполняется', completed: 'Готово', failed: 'Ошибка',
+        stopped: 'Остановлено', unknown: 'Статус не сообщается' }[s.status] || 'Готово');
+      timing.textContent = Number.isFinite(s.duration_ms) && s.duration_ms >= 0
+        ? `${(s.duration_ms / 1000).toLocaleString('ru', { maximumFractionDigits: 2 })} с` : '';
+      if (Number.isInteger(s.exit_code)) timing.textContent += `${timing.textContent ? ' · ' : ''}код ${s.exit_code}`;
+      progress.hidden = !s.progress_message && !s.output_truncated;
+      progress.textContent = [s.progress_message, s.output_truncated ? 'Показана часть вывода' : ''].filter(Boolean).join(' · ');
+      if (filled) {
+        const followOutput = result.scrollHeight - result.scrollTop - result.clientHeight < 24;
+        result.textContent = typeof s.text === 'string' ? s.text : '';
+        if (followOutput) result.scrollTop = result.scrollHeight;
+        result.hidden = !result.textContent;
+        const serial = JSON.stringify(s.error ? null : s.changes || null);
+        if (serial !== changeSerial) {
+          changeSerial = serial;
+          changeNode?.remove();
+          changeNode = !s.error ? changeView(s.changes) : null;
+          if (changeNode) result.before(changeNode);
+          inputNode.hidden = !!changeNode;
+        }
+      }
+      if (!touched && !s.error && s.changes?.length && JSON.stringify(s.changes).length < 5000) details.open = true;
+    }
+    stepPaint.set(details, paint);
     details.addEventListener('toggle', () => {
       if (!details.open || filled) return;
       filled = true;
-      const result = el('pre', { class: 'code-step-result' }, typeof s.text === 'string' ? s.text : '');
-      result.hidden = !result.textContent;
-      const changes = !s.error ? changeView(s.changes) : null;
-      details.append(el('pre', { class: 'code-step-input', hidden: !!changes }, JSON.stringify(input, null, 2)), changes || '', result);
+      result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': 'Вывод инструмента' });
+      inputNode = el('pre', { class: 'code-step-input', tabindex: '0', 'aria-label': 'Ввод инструмента' },
+        typeof input.command === 'string' ? `${input.command}${input.cwd ? `\n${input.cwd}` : ''}` : JSON.stringify(input, null, 2));
+      details.append(inputNode, result, progress);
+      paint();
     });
+    paint();
     return details;
+  }
+
+  function textSegment(value, block = null, phase = null) {
+    const node = el('div', { class: 'md code-timeline-text', ...(phase ? { 'data-phase': phase } : {}) });
+    const segment = { node, text: value, block, phase, dirty: false, finalized: true };
+    if (value) {
+      const paint = renderMarkdownInto(node, value, { valid: () => alive && feed.contains(node), fileLinks });
+      pendingPaints.add(paint);
+      paint.then(() => pendingPaints.delete(paint));
+    }
+    return segment;
+  }
+
+  function renderTimeline(body, m) {
+    const textValue = typeof m.text === 'string' ? m.text : '';
+    const items = Array.isArray(m.steps) ? m.steps : [];
+    const byId = new Map(items.map((step) => [step.id, step]));
+    let position = 0;
+    const seen = new Set();
+    const valid = Array.isArray(m.timeline) && m.timeline.length <= 2000 && m.timeline.every((part) => {
+      if (part?.kind === 'step' && byId.has(part.id) && !seen.has(part.id)) { seen.add(part.id); return true; }
+      if (part?.kind !== 'text' || !Number.isInteger(part.start) || !Number.isInteger(part.end)
+        || part.start !== position || part.end < part.start || part.end > textValue.length) return false;
+      position = part.end;
+      return true;
+    }) && position === textValue.length && seen.size === byId.size;
+    const parts = valid ? m.timeline : [...items.map((step) => ({ kind: 'step', id: step.id })),
+      { kind: 'text', start: 0, end: textValue.length }];
+    const segments = [];
+    const nodes = new Map();
+    for (const part of parts) {
+      if (part.kind !== 'text') continue;
+      const segment = textSegment(textValue.slice(part.start, part.end), part.block, part.phase);
+      segments.push(segment);
+      nodes.set(part, segment.node);
+    }
+    const make = (part) => {
+      if (part.kind === 'step') return stepNode(byId.get(part.id));
+      return nodes.get(part);
+    };
+    // Снимок активного хода строится сразу: следующая дельта должна найти все его шаги.
+    if (m.live || parts.length <= 8) body.replaceChildren(...parts.map(make));
+    else {
+      body.replaceChildren();
+      const paint = renderNodesInto(body, parts, make, { valid: () => alive && feed.contains(body) });
+      pendingPaints.add(paint);
+      paint.then(() => pendingPaints.delete(paint));
+    }
+    return { segments, active: parts.at(-1)?.kind === 'text' ? segments.at(-1) : null };
   }
 
   function messageNode(m) {
@@ -525,21 +612,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         ? el('img', { class: 'code-sent-image', src: `data:${i.mime};base64,${i.data}`, alt: i.name })
         : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
     }
-    const md = el('div', { class: 'md' });
-    if (typeof m.text === 'string' && m.text) {
-      // История выставляет прокрутку после всей страницы; измерять её после каждого блока дорого.
-      const paint = renderMarkdownInto(md, m.text, { valid: () => alive && feed.contains(md), fileLinks });
-      pendingPaints.add(paint);
-      paint.then(() => pendingPaints.delete(paint));
-    }
-    const steps = el('div', { class: 'code-steps' });
-    const items = Array.isArray(m.steps) ? m.steps : [];
-    if (items.length > 8) {
-      const paint = renderNodesInto(steps, items, stepNode, { valid: () => alive && feed.contains(steps) });
-      pendingPaints.add(paint);
-      paint.then(() => pendingPaints.delete(paint));
-    } else steps.append(...items.map(stepNode));
-    return el('div', { class: 'code-msg assistant' }, steps, md);
+    const body = el('div', { class: 'code-steps code-timeline' });
+    const progress = progressView({ openFile: (path) => {
+      const relative = projectFilePath(path, agent, project);
+      if (relative) openFile(relative);
+    }, openChild: children ? (row) => children.open(row) : null });
+    progress.update(m.progress || {}, m.steps || []);
+    const view = { body, progress, ...renderTimeline(body, m) };
+    const node = el('div', { class: 'code-msg assistant' }, progress.root, body);
+    messageViews.set(node, view);
+    return node;
   }
 
   function messages(items) {
@@ -550,9 +632,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Ответ идущего хода — в конце ленты (первое событие хода его заводит). */
   function current() {
     if (!turn) {
-      const node = messageNode({ role: 'assistant', text: '', steps: [] });
-      turn = { node, steps: node.querySelector('.code-steps'), md: node.querySelector('.md'),
-        asks: el('div', { class: 'code-asks' }), text: '' };
+      const node = messageNode({ role: 'assistant', text: '', steps: [], live: true });
+      turn = { node, steps: node.querySelector('.code-steps'), view: messageViews.get(node),
+        asks: el('div', { class: 'code-asks' }), models: [] };
       node.append(turn.asks);
       grow(() => feed.append(node));
     }
@@ -563,10 +645,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     clearTimeout(paintTimer);
     paintTimer = null;
     if (!turn) return;
-    const target = turn.md;
-    if (final) renderMarkdownInto(target, turn.text, { valid: () => alive && feed.contains(target), update: grow, fileLinks });
-    else if (turn.text.length < 2000) grow(() => target.replaceChildren(renderMarkdown(turn.text, { highlight: false, fileLinks })));
-    else grow(() => target.replaceChildren(el('pre', { class: 'code-stream-text' }, turn.text)));
+    for (const segment of turn.view.segments) {
+      if (!segment.dirty && !(final && !segment.finalized)) continue;
+      segment.dirty = false;
+      segment.finalized = final;
+      const target = segment.node;
+      if (final) {
+        const paint = renderMarkdownInto(target, segment.text, { valid: () => alive && feed.contains(target), update: grow, fileLinks });
+        pendingPaints.add(paint);
+        paint.then(() => pendingPaints.delete(paint));
+      } else if (segment.text.length < 2000) grow(() => target.replaceChildren(renderMarkdown(segment.text, { highlight: false, fileLinks })));
+      else grow(() => target.replaceChildren(el('pre', { class: 'code-stream-text' }, segment.text)));
+    }
   }
 
   function setRunning(value) {
@@ -855,6 +945,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!external) waitingForRelease = false;
     paintText(true);
     if (turn) {
+      for (const step of turn.steps.querySelectorAll('.code-step')) {
+        const model = stepData.get(step);
+        if (model?.status === 'running') {
+          model.status = data.status === 'stopped' ? 'stopped' : 'unknown';
+          stepPaint.get(step)?.();
+        }
+      }
+      turn.view.progress.update({}, turn.models);
       attention = data.attention || null;
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
@@ -908,10 +1006,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const t = current();
         if (data.settings) acceptSettings(data.settings);
         paintContext(data.context);
-        t.text = typeof data.text === 'string' ? data.text : '';
-        paintText();
+        clearTimeout(paintTimer);
+        paintTimer = null;
+        t.models = Array.isArray(data.steps) ? data.steps : [];
+        for (const step of t.models) if (step.status === 'running') activeTools.set(String(step.id), step.tool);
         grow(() => {
-          t.steps.replaceChildren(...(Array.isArray(data.steps) ? data.steps : []).map(stepNode));
+          Object.assign(t.view, renderTimeline(t.steps, { ...data, live: true }));
+          t.view.progress.update(data.progress || {}, t.models, true);
           t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map(askNode));
         });
         if (data.activity) paintActivity(data.activity.state, data.activity.tool);
@@ -963,41 +1064,56 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       case 'context':
         paintContext(data);
         return false;
-      case 'text':
+      case 'text': {
         paintActivity(turn?.asks.querySelector('.code-ask') ? 'waiting' : 'responding');
-        current().text += typeof data.text === 'string' ? data.text : '';
+        const t = current();
+        const delta = typeof data.text === 'string' ? data.text : '';
+        if (!t.view.active || (data.block && t.view.active.block && t.view.active.block !== data.block)) {
+          paintText(true);
+          const segment = textSegment('', data.block, data.phase);
+          t.view.segments.push(segment);
+          t.view.active = segment;
+          grow(() => t.steps.append(segment.node));
+        }
+        t.view.active.block ||= data.block;
+        t.view.active.text += delta;
+        t.view.active.dirty = true;
+        t.view.active.finalized = false;
         if (!paintTimer) paintTimer = setTimeout(paintText, PAINT_MS);
         return false;
+      }
       case 'step': {
         const t = current();
-        activeTools.set(String(data.id), data.tool);
+        paintText(true);
+        t.view.active = null;
+        const model = { ...data, text: '', error: false, status: data.status || 'running' };
+        t.models.push(model);
+        if (model.status === 'running') activeTools.set(String(data.id), data.tool);
         continueActivity();
-        grow(() => t.steps.append(stepNode({ id: data.id, tool: data.tool, input: data.input, text: '', error: false })));
+        grow(() => {
+          t.steps.append(stepNode(model));
+          t.view.progress.update({}, t.models);
+        });
         return false;
       }
-      case 'result':
-        activeTools.delete(String(data.id));
+      case 'progress':
+        grow(() => current().view.progress.update(data, current().models));
+        return false;
+      case 'step_update':
+      case 'result': {
+        const completed = event === 'result';
+        if (completed) activeTools.delete(String(data.id));
         for (const step of (turn ? turn.steps : feed).querySelectorAll('details.code-step')) {
           if (step.dataset.id !== String(data.id)) continue;
-          Object.assign(stepData.get(step) || {}, { text: data.text, error: data.error, changes: data.changes });
-          step.classList.toggle('error', !!data.error);
-          const result = step.querySelector('.code-step-result');
-          if (!result) continue;
-          result.textContent = typeof data.text === 'string' ? data.text : '';
-          result.hidden = !result.textContent;
-          step.classList.toggle('error', !!data.error);
-          step.querySelector('.code-changes')?.remove();
-          step.querySelector('.code-step-input').hidden = false;
-          if (!data.error) {
-            const changes = changeView(data.changes);
-            if (changes) {
-              result.before(changes);
-              step.querySelector('.code-step-input').hidden = true;
-            }
-          }
+          const model = stepData.get(step);
+          Object.assign(model, completed ? { progress_message: '', output_truncated: false } : {}, data,
+            completed ? { status: data.status || (data.error ? 'failed' : 'completed') } : {});
+          grow(() => stepPaint.get(step)?.());
         }
+        if (turn) grow(() => turn.view.progress.update({}, turn.models));
         continueActivity();
         return false;
+      }
       case 'ask': {
         const t = current();
         dropAsk(data.request_id);

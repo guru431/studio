@@ -45,7 +45,8 @@ CLOSE_AUTH = 4401
 CLOSE_REPLACED = 4409
 CLOSE_RESTART = 1012
 EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done", "settings", "context", "activity",
-                         "input_accepted", "followup", "followup_sent", "followup_removed", "queue", "ownership"})
+                         "input_accepted", "followup", "followup_sent", "followup_removed", "queue", "ownership",
+                         "step_update", "progress"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10

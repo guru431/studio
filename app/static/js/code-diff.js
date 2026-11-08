@@ -2,6 +2,63 @@
 import { el } from './ui.js';
 
 const MAX_LINES = 240;
+const LANGUAGES = { py: 'python', js: 'javascript', mjs: 'javascript', ts: 'typescript', tsx: 'typescript',
+  json: 'json', css: 'css', html: 'xml', xml: 'xml', sh: 'bash', ps1: 'powershell', yaml: 'yaml', yml: 'yaml', md: 'markdown' };
+
+export function patchFiles(patch, truncated = false) {
+  const files = [];
+  let current = null, old = null, inHunk = false;
+  for (const line of linesOf(patch)) {
+    if (line.startsWith('diff --git ')) { current = null; old = null; inHunk = false; }
+    if (line.startsWith('@@ ')) inHunk = true;
+    if (line.startsWith('--- ') && !inHunk) old = line.slice(4).replace(/^a\//, '');
+    if (line.startsWith('+++ ') && !inHunk) {
+      const path = line.slice(4).replace(/^b\//, '');
+      current = { path: path === '/dev/null' ? old || 'Удалённый файл' : path, patch: '', truncated };
+      files.push(current);
+    } else if (current) current.patch += line + '\n';
+  }
+  return files.length ? files : [{ path: 'Изменения за ход', patch, truncated }];
+}
+
+function codeCell(text, path) {
+  const cell = el('span', { class: 'code-change-code' }, text);
+  const language = LANGUAGES[path.split('.').at(-1)?.toLowerCase()];
+  if (language && text.length <= 1000 && window.hljs?.getLanguage(language)) {
+    cell.classList.add(`language-${language}`);
+    window.hljs.highlightElement(cell);
+  }
+  return cell;
+}
+
+function numbered(rows) {
+  let left = null, right = null;
+  return rows.map(([kind, text]) => {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+    if (hunk) { left = Number(hunk[1]); right = Number(hunk[2]); return { kind: 'header', text }; }
+    if (/^(diff --git |index |\\ No newline)/.test(text)
+      || (left === null && /^(--- |\+\+\+ )/.test(text))) return { kind: 'header', text };
+    if (kind === 'context' && !text.startsWith(' ')) return { kind: 'header', text };
+    const row = { kind, text, left: kind !== 'added' ? left : null, right: kind !== 'removed' ? right : null };
+    if (left !== null && kind !== 'added') left++;
+    if (right !== null && kind !== 'removed') right++;
+    return row;
+  });
+}
+
+function paired(rows) {
+  const pairs = [];
+  for (let i = 0; i < rows.length;) {
+    const row = rows[i];
+    if (row.kind === 'removed' || row.kind === 'added') {
+      const left = [], right = [];
+      while (rows[i]?.kind === 'removed') left.push(rows[i++]);
+      while (rows[i]?.kind === 'added') right.push(rows[i++]);
+      for (let j = 0; j < Math.max(left.length, right.length); j++) pairs.push([left[j], right[j]]);
+    } else { pairs.push([row, row]); i++; }
+  }
+  return pairs;
+}
 
 function linesOf(value) {
   const lines = String(value).split('\n');
@@ -47,8 +104,13 @@ export function changeView(changes) {
     if (!change || typeof change.path !== 'string') continue;
     let rows, caption;
     if (typeof change.patch === 'string') {
-      rows = linesOf(change.patch).map((text) => [text.startsWith('+') && !text.startsWith('+++') ? 'added'
-        : text.startsWith('-') && !text.startsWith('---') ? 'removed' : 'context', text]);
+      let inHunk = false;
+      rows = linesOf(change.patch).flatMap((text) => {
+        if (text.startsWith('@@ ')) inHunk = true;
+        if (text.startsWith('diff --git ')) inHunk = false;
+        if (!inHunk && /^(diff --git |index |--- |\+\+\+ )/.test(text)) return [];
+        return [[inHunk && text.startsWith('+') ? 'added' : inHunk && text.startsWith('-') ? 'removed' : 'context', text]];
+      });
       caption = 'Изменения';
     } else if (typeof change.before === 'string' && typeof change.after === 'string') {
       rows = comparison(change.before, change.after);
@@ -61,13 +123,22 @@ export function changeView(changes) {
     const removed = rows.filter(([kind]) => kind === 'removed').length;
     const counts = added || removed ? ` · +${added} −${removed}` : '';
     const partial = change.truncated || rows.length > MAX_LINES;
+    const shown = numbered(rows.slice(0, MAX_LINES));
+    const patch = typeof change.patch === 'string';
+    const content = (row) => row ? row.kind === 'header' ? el('span', { class: 'code-change-code' }, row.text)
+      : codeCell(patch ? row.text.slice(1) : row.text, change.path) : el('span', {});
     blocks.push(el('div', { class: 'code-change' },
       el('div', { class: 'code-change-title' }, `${change.path} · ${caption}${counts}${partial ? ' · показана часть' : ''}`),
-      el('pre', { class: 'code-change-lines', tabindex: '0', 'aria-label': `${caption}: ${change.path}` },
-        ...rows.slice(0, MAX_LINES).map(([kind, text]) => el('span', { class: `code-change-line ${kind}` },
-          el('span', { class: 'code-change-marker', 'aria-hidden': 'true' },
-            typeof change.patch === 'string' ? '' : kind === 'added' ? '+' : kind === 'removed' ? '−' : ' '), text)),
+      el('div', { class: 'code-change-lines', tabindex: '0', role: 'region', 'aria-label': `${caption}: ${change.path}` },
+        el('div', { class: 'code-diff-unified' }, ...shown.map((row) => el('div', { class: `code-change-line ${row.kind}` },
+          el('span', { class: 'code-change-number', 'aria-hidden': 'true' }, row.left ?? row.right ?? ''),
+          el('span', { class: 'code-change-marker', 'aria-hidden': 'true' }, row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : ' '), content(row)))),
+        el('div', { class: 'code-diff-split', 'aria-label': 'Слева до изменения, справа после' }, ...paired(shown).map(([left, right]) =>
+          el('div', { class: 'code-diff-pair' }, ...[left, right].map((row, index) => el('div', {
+            class: `code-change-line ${row?.kind || 'empty'}` },
+          el('span', { class: 'code-change-number', 'aria-hidden': 'true' }, (index ? row?.right : row?.left) ?? ''), content(row)))))),
         ...(partial ? [el('span', { class: 'muted' }, '… показана часть изменения')] : []))));
   }
+  if (changes.length > 8) blocks.push(el('p', { class: 'muted small code-change-title' }, `Показаны первые 8 из ${changes.length} файлов`));
   return blocks.length ? el('div', { class: 'code-changes' }, ...blocks) : null;
 }

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
 
-from . import diffs, limits, permissions
+from . import diffs, limits, permissions, timeline
 from .errors import Refused
 from .events import clip, text_of
 
@@ -43,7 +43,7 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
     """Записи сессии → сообщения `{"id", "role", "text", "steps", "time"}` главного агента.
 
     Подряд идущие ответы ассистента до следующего вопроса — одно сообщение; итоги инструментов — к его шагам."""
-    items, texts = [], {}  # texts: id(элемента ответа) → тексты блоков
+    items = []
     answer, steps = None, {}  # текущий ответ и его шаги по tool_use_id
     for m in messages:
         if m.parent_tool_use_id is not None and not include_subagents:
@@ -67,23 +67,19 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
             if answer is None:
                 answer, steps = {"id": m.uuid, "role": "assistant", "text": "", "steps": [], "time": None}, {}
                 items.append(answer)
-                texts[id(answer)] = []
             if isinstance(content, str):
                 content = [{"type": "text", "text": content}]
             for block in content if isinstance(content, list) else []:
                 if not isinstance(block, dict):
                     continue
                 if block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"]:
-                    texts[id(answer)].append(block["text"])
+                    timeline.append_text(answer, ("\n\n" if answer["text"] else "") + block["text"], block=m.uuid)
                 elif block.get("type") == "tool_use":
                     step = {"id": block.get("id"), "tool": block.get("name"), "input": clip(block.get("input")),
                             "text": "", "error": False}
-                    answer["steps"].append(step)
+                    timeline.append_step(answer, step)
                     steps[step["id"]] = step
-    for item in items:
-        if item["role"] == "assistant":
-            item["text"] = "\n\n".join(texts[id(item)])
-    return items
+    return [timeline.compact(item) for item in items]
 
 
 def _size(value) -> int:
@@ -92,6 +88,10 @@ def _size(value) -> int:
 
 def _shrink(item: dict, budget: int) -> dict:
     """Одиночный элемент больше бюджета: строки шагов — до 2000 знаков, затем шаги с начала прочь, затем начало текста."""
+    item = dict(item)
+    # После обрезки текста позиции сегментов неверны; большие сводки также уступают место ответу.
+    item.pop("timeline", None)
+    item.pop("progress", None)
     steps = [clip(s, STEP_MAX) for s in item["steps"]]
     item = dict(item, steps=steps)
     if _size(item) <= budget:
