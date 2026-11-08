@@ -71,6 +71,10 @@ def apply(root, dark: bool | None = None) -> dict:
                 selectforeground=c["on_accent"], insertcolor=c["text"], font=base)
     s.configure("TFrame", background=c["bg"])
     s.configure("Card.TFrame", background=c["panel"])
+    s.configure("TNotebook", background=c["bg"], borderwidth=0)
+    s.configure("TNotebook.Tab", padding=(10, 4), background=c["bg"], foreground=c["muted"])
+    s.map("TNotebook.Tab", background=[("selected", c["panel"]), ("active", c["border"])],
+          foreground=[("selected", c["text"]), ("active", c["text"])])
     s.configure("TLabel", background=c["bg"], foreground=c["text"])
     for area, bg in (("", c["bg"]), ("Card.", c["panel"])):
         s.configure(f"{area}TLabel", background=bg, foreground=c["text"])

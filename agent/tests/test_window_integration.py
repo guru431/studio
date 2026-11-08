@@ -29,15 +29,15 @@ def tk_root(tk_app):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("scale", [1.0, 1.5])
-@pytest.mark.parametrize("state", ["setup", "online"])
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("state", ["setup", "online", "offline", "revoked", "replaced"])
 def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk_root):
     root = tk_root
     assert all(value > 0 for value in window._work_area(root)[2:])
     root.tk.call("tk", "scaling", scale * 96 / 72)
     cfg = store.Config(projects_root="C:/work/projects", max_turns=8)
     ctrl = SimpleNamespace(state=state, config=lambda: cfg, autostart_enabled=lambda: False,
-                           backend_status=lambda: {}, login=lambda: "owner", pin_status=lambda: "set",
+                           backend_status=lambda: {}, login="owner", pin_status=lambda: "set",
                            activity_status=lambda: {"tasks": 0, "waiting": 0, "desktop_active": False,
                                                     "quit_when_idle": False},
                            stop_desktop_session=lambda: None, set_quit_when_idle=lambda enabled: None,
@@ -51,6 +51,8 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
     if state != "setup":
         main.show_pin()
     root.update()
+    # Обычное окно укладывается в 440 логических пикселей без уменьшения шрифта.
+    assert main.body.winfo_reqheight() <= main.px(440)
     assert main.win.winfo_height() <= 733 - main.px(48)
     assert main.viewport.winfo_height() <= 733 - main.px(48)
     main.viewport.yview_moveto(1)
@@ -58,6 +60,8 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
     assert main.body.winfo_rooty() + main.body.winfo_height() <= \
         main.viewport.winfo_rooty() + main.viewport.winfo_height() + 1
     if state != "setup":
+        main.sections.select(main.settings_page)
+        root.update()
         assert main.pin_line.winfo_rooty() >= main.viewport.winfo_rooty()
         main.viewport.yview_moveto(0)
         main.pin_line.winfo_children()[-1].focus_force()
@@ -69,6 +73,62 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
     main.apply_theme("light")
     root.update()
     assert main.viewport.yview()[1] == 1.0
+
+
+@pytest.mark.integration
+def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch, tk_root):
+    from tkinter import ttk
+    from studio_agent.app import Controller
+
+    store.save_config(home, store.Config(projects_root="C:/work/projects", theme="light"))
+    ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
+    ctrl.state = "online"
+    root = tk_root
+    monkeypatch.setattr(window.MainWindow, "lift", lambda self: None)
+    monkeypatch.setattr(window.MainWindow, "work", lambda self, fn, done, **kwargs: done(fn(), False))
+    monkeypatch.setattr(window, "_work_area", lambda win: (0, 0, 1024, 600))
+    main = window.MainWindow(root, ctrl)
+    main.pin = "locked"
+    main.show_pin()
+    root.update()
+    assert [main.sections.tab(tab, "text") for tab in main.sections.tabs()] == [
+        "Подключение", "Работа", "Настройки"]
+    main.sections.focus_force()
+    for page in (main.activity_page, main.settings_page):
+        main.sections.event_generate("<Control-Tab>")
+        root.update()
+        assert main.sections.select() == str(page)
+    limit = next(widget for widget in main.buttons if isinstance(widget, ttk.Entry))
+    limit.delete(0, "end")
+    limit.insert(0, "11")
+    for label, choice in (("Тёмная", "dark"), ("Светлая", "light")):
+        radio = next(widget for widget in main.buttons if isinstance(widget, ttk.Radiobutton)
+                     and widget.cget("text") == label)
+        radio.invoke()
+        root.update()
+        assert store.load_config(home).theme == choice
+        assert main.sections.select() == str(main.settings_page)
+        assert limit.get() == "11"
+    main.on_state("offline")
+    main.show_login("new-owner")
+    assert main.sections.select() == str(main.settings_page)
+    assert main.card_widgets[2].cget("text") == window.STATUS["offline"][0]
+    assert main.login_value.cget("text") == "new-owner"
+    limit.delete(0, "end")
+    limit.insert(0, "0")
+    save = next(widget for widget in limit.master.winfo_children() if isinstance(widget, ttk.Button))
+    save.invoke()
+    root.update()
+    assert main.settings_problem.get() == "Число заданий — целое число больше нуля"
+    limit.delete(0, "end")
+    limit.insert(0, "11")
+    save.invoke()
+    root.update()
+    assert store.load_config(home).max_turns == 11 and not main.settings_problem.get()
+    assert main.win.winfo_height() <= 600 - main.px(48)
+    main.sections.event_generate("<Control-Shift-Tab>")
+    root.update()
+    assert main.sections.select() == str(main.activity_page)
 
 
 @pytest.mark.integration
@@ -135,7 +195,7 @@ def test_local_activity_buttons_stop_only_desktop_and_wait_for_work_before_exit(
     assert stop.instate(['disabled']) and label.cget('text').endswith('не подключён')
     idle.invoke()
     main.show_activity()
-    assert not exits and idle.cget('text') == 'Отменить выход после завершения'
+    assert not exits and idle.cget('text') == 'Отменить выход'
     idle.invoke()
     work.clear()
     ctrl._refresh_activity()
