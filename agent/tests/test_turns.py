@@ -513,10 +513,15 @@ async def test_events_while_the_snapshot_is_made_follow_it(home, project, monkey
     t = r._turns[CHAT]
     t.feed.text += "Б"                                         # ход идёт дальше, пока снимок в потоке
     r._send(t, {"k": "text", "text": "Б"})
+    item = {"id": "f", "text": "Уточнение", "mode": "steer", "position": t.feed.position()}
+    t.followups.append(item)
+    r._send(t, {"k": "followup", **item})
     assert kinds(sent) == ["text"]                             # событие — не в канал раньше снимка
     release.set()
     running, frames = await watching
     assert running and [json.loads(frames[0].text)["e"]["text"], frames[1]["e"]] == ["А", {"k": "text", "text": "Б"}]
+    assert "followups" not in frames[0]["e"]
+    assert frames[2]["e"] == {"k": "followup", **item}
     assert json.loads(frames[0].text) == frames[0]             # снимок уже закодирован — писатель шлёт строку
     r._send(t, {"k": "text", "text": "В"})
     assert kinds(sent) == ["text", "text"]                     # после снимка — снова прямо в канал

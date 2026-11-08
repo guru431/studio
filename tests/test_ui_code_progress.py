@@ -97,11 +97,14 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
     live.add_user(login)
     first, last = 'Проверю 🛠', 'Готово'
     message = {'id': 'answer', 'role': 'assistant', 'text': first + last, 'time': T0,
-        'steps': [{'id': 'edit', 'tool': 'Edit', 'input': {}, 'text': '', 'status': 'completed',
-                   'changes': [{'path': 'src/a.py', 'patch': PATCH}]}],
+        'steps': [{'id': 'edit', 'tool': 'Edit', 'input': {'file_path': 'src/a.py'}, 'text': '', 'status': 'completed',
+                   'changes': [{'path': 'src/a.py', 'patch': PATCH},
+                               {'path': 'src/b.py', 'before': 'old', 'after': 'new'},
+                               {'path': 'src/a.py', 'before': 'extra = 2', 'after': 'extra = 3'}]}],
         'timeline': [{'kind': 'text', 'start': 0, 'end': 10, 'block': 'intro'}, {'kind': 'step', 'id': 'edit'},
                      {'kind': 'text', 'start': 10, 'end': 16, 'block': 'final'}],
-        'progress': {'changes': {'diff': PATCH, 'files': [{'path': 'src/a.py', 'added': 2, 'removed': 1}]},
+        'progress': {'changes': {'diff': PATCH, 'files': [{'path': 'src/a.py', 'added': 2, 'removed': 1},
+                                                       {'path': 'src/without-diff.py'}]},
             'plan': [{'step': 'Проверить', 'status': 'completed'}],
             'agents': [{'id': CHILD, 'title': 'GPU backend', 'status': 'completed', 'task': 'Проверка GPU'}]}}
     session = code_session('Прогресс', messages=[message])
@@ -131,22 +134,56 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             parts = page.locator('.code-timeline').evaluate("node => [...node.children].map(e => e.classList.contains('code-step') ? e.dataset.id : e.textContent.trim())")
             assert parts == [first, 'edit', last]
             assert page.locator('.code-step[open]').count() == 0
+            assert page.locator('.code-step-head').inner_text() == 'Файлов: 2'
+            assert page.locator('.code-step-file').all_text_contents() == ['src/a.py', 'src/b.py']
             page.locator('.code-step summary').click()
             page.locator('.code-step .code-changes').wait_for()
             assert page.locator('.code-diff-split').first.is_visible() == (width == 1280)
             assert page.locator('.code-diff-unified').first.is_visible() == (width == 320)
             summary = page.locator('.code-progress-summary').first
-            assert '+2' in summary.inner_text() and '−1' in summary.inner_text()
+            assert 'Файлов:' not in summary.inner_text()
             summary.click()
             page.screenshot(path=str(tmp_path / f'reference-progress-{desktop_browser.browser_type.name}-{width}.png'))
             page.locator('.code-progress-agent').click()
             page.get_by_text('Результат GPU', exact=True).wait_for()
             page.locator('#code-subagents-dialog .dialog-actions button').click()
-            page.locator('.code-progress-file').click()
+            changed = page.locator('#code-changed-files')
+            assert changed.locator('.code-changed-count').inner_text() == '2'
+            assert changed.evaluate("node => node.closest('.code-status-bar').contains(document.querySelector('#code-cache'))")
+            assert page.locator('.code-progress-file').count() == 0
+            for theme in ['light', 'dark']:
+                page.evaluate("theme => { document.documentElement.dataset.theme = theme; document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
+                if width == 320:
+                    changed.tap()
+                else:
+                    changed.focus()
+                    changed.press('Enter')
+                dialog = page.locator('#code-changed-dialog')
+                assert dialog.locator('.code-changed-file').count() == 2
+                assert dialog.locator('.code-changes').count() == 0
+                dialog.locator('.code-changed-file').nth(1).click()
+                assert 'Помощник не передал изменения' in dialog.inner_text()
+                dialog.locator('.code-changed-back').click()
+                dialog.locator('.code-changed-file').first.click()
+                assert '+2' in dialog.inner_text() and '−1' in dialog.inner_text()
+                assert 'old = 1' in dialog.inner_text() and 'new = 2' in dialog.inner_text()
+                assert dialog.locator('.code-diff-split').is_visible() == (width == 1280)
+                assert dialog.locator('.code-diff-unified').is_visible() == (width == 320)
+                assert dialog.evaluate('node => node.scrollWidth <= node.clientWidth')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                assert changed.evaluate('node => node.getBoundingClientRect().right <= innerWidth')
+                page.screenshot(path=str(tmp_path / f'changed-files-{desktop_browser.browser_type.name}-{width}-{theme}.png'))
+                if theme == 'light':
+                    page.keyboard.press('Escape')
+                    dialog.wait_for(state='detached')
+                    assert changed.get_attribute('aria-expanded') == 'false'
+            page.locator('.code-changed-open').click()
             page.locator('#code-editor').wait_for()
+            assert page.locator('#code-changed-dialog').count() == 0
             assert 'src/a.py' not in page.url
             page.goto(route)
             page.locator('#code-chat[data-loaded="1"]').wait_for()
+            assert changed.locator('.code-changed-count').inner_text() == '2'
             machine.script = [
                 {'k': 'text', 'text': 'Проверка началась 🛠', 'block': 'intro'},
                 {'k': 'step', 'id': 'cmd', 'tool': 'Shell', 'input': {'command': 'pytest'}, 'status': 'running', 'process_id': '123'},
@@ -156,22 +193,34 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             page.locator('#code-text').fill('Запусти проверку')
             page.locator('#code-send').click()
             page.locator('.code-step[data-id="cmd"]').wait_for()
+            assert changed.locator('.code-changed-count').inner_text() == '0'
+            changed.click()
+            assert 'Изменённых файлов нет' in page.locator('#code-changed-dialog').inner_text()
+            page.locator('#code-changed-dialog .dialog-close').click()
             page.locator('#code-toggle-steps').click()
             assert page.locator('.code-step[open]').count() == 2
             page.get_by_text('12 passed', exact=False).wait_for()
             assert page.locator('.code-step[data-id="cmd"]').get_attribute('data-state') == 'running'
+            changed.click()
             run = machine.running[CODE_CHAT_A]
             run['rest'] = [{'k': 'step', 'id': 'next-cmd', 'tool': 'Shell', 'input': {'command': 'check'},
-                            'status': 'running'}]
+                            'status': 'running'},
+                           {'k': 'progress', 'changes': {'diff': PATCH, 'files': [{'path': 'src/a.py'}], 'truncated': True}}]
             frames = []
             machine._play(CODE_CHAT_A, frames)
             for frame in frames:
                 channel._send(frame)
+            page.wait_for_function("() => document.querySelector('#code-changed-files').textContent === '≥1'")
+            page.locator('.code-changed-file').click()
+            assert 'показана часть' in page.locator('#code-changed-dialog').inner_text()
+            page.keyboard.press('Escape')
+            page.locator('#code-changed-dialog').wait_for(state='detached')
             page.locator('.code-step[data-id="next-cmd"][open] .code-step-input').wait_for()
             page.locator('#code-toggle-steps').click()
             assert page.locator('.code-step[open]').count() == 0
             page.reload()
             page.locator('#code-chat[data-loaded="1"]').wait_for()
+            assert changed.locator('.code-changed-count').inner_text() == '≥1'
             page.locator('.code-step[data-id="cmd"]').wait_for()
             assert page.locator('.code-step[open]').count() == 0
             page.locator('.code-step[data-id="cmd"] summary').click()
@@ -262,5 +311,71 @@ def test_web_search_updates_in_place_and_long_chat_scrolls_above_composer(deskto
               return scrolls && separated && composer.getBoundingClientRect().bottom === bottom
                 && end.bottom <= scroll.getBoundingClientRect().bottom + 1 && bottom <= innerHeight;
             }''')
+    finally:
+        channel.stop()
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_followups_stay_between_commands_and_split_streamed_text_after_reload(desktop_browser, live, width):
+    login = f'followup-order-{desktop_browser.browser_type.name}-{width}'
+    live.add_user(login)
+    session = {**code_session('Уточнения'), 'engine': 'codex'}
+    machine = FakeMachine({'alpha': {'chats': {CODE_CHAT_A: session}}})
+    machine.codex = CATALOG
+    machine.script = [{'k': 'text', 'text': 'До 🛠', 'block': 'intro'},
+                      {'k': 'step', 'id': 'before', 'tool': 'Shell', 'input': {'command': 'first'}, 'status': 'running'}]
+    aid, channel = code_online(live, login, machine)
+    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+    cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
+    try:
+        with desktop_browser.new_context(viewport={'width': width, 'height': 850}, has_touch=width == 320,
+                                         extra_http_headers={'Cookie': cookie}) as context:
+            if desktop_browser.browser_type.name == 'firefox':
+                context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                    'httpOnly': True, 'sameSite': 'Lax'} for key, value in signed.cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            page.locator('#code-text').fill('Начни')
+            page.locator('#code-send').click()
+            page.locator('.code-step[data-id="before"]').wait_for()
+
+            def play(*events):
+                machine.running[CODE_CHAT_A]['rest'] = list(events)
+                frames = []
+                machine._play(CODE_CHAT_A, frames)
+                for frame in frames:
+                    channel._send(frame)
+
+            def clarify(text):
+                page.locator('#code-text').fill(text)
+                page.locator('#code-send').click()
+                page.get_by_text(text, exact=True).wait_for()
+
+            clarify('Уточнение №1')
+            play({'k': 'text', 'text': 'После первого 🛠', 'block': 'reply'})
+            page.get_by_text('После первого 🛠', exact=True).wait_for()
+            clarify('Уточнение №2')
+            play({'k': 'text', 'text': 'После второго', 'block': 'reply'},
+                 {'k': 'result', 'id': 'before', 'text': 'done', 'status': 'completed'},
+                 {'k': 'step', 'id': 'after', 'tool': 'Shell', 'input': {'command': 'last'}, 'status': 'running'})
+            page.locator('.code-step[data-id="after"]').wait_for()
+            order = """() => [...document.querySelectorAll('.code-timeline > *')].map(node =>
+                node.classList.contains('code-step') ? node.dataset.id : node.textContent.trim()).filter(Boolean)"""
+            expected = ['До 🛠', 'before', 'Уточнение №1', 'После первого 🛠', 'Уточнение №2', 'После второго', 'after']
+            page.wait_for_function("() => document.querySelector('#code-feed').textContent.includes('После второго')")
+            assert page.evaluate(order) == expected
+            page.reload()
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            page.locator('.code-step[data-id="after"]').wait_for()
+            page.get_by_text('После первого 🛠', exact=True).wait_for()
+            page.get_by_text('После второго', exact=True).wait_for()
+            assert page.evaluate(order) == expected
+            assert page.locator('[data-followup]').count() == 2
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            assert not errors
     finally:
         channel.stop()

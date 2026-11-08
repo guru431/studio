@@ -1,11 +1,11 @@
 /* Сводка только из фактических событий/правок CLI. Данные живут вместе с DOM чата. */
 import { el } from './ui.js';
-import { changeView, patchFiles } from './code-diff.js';
+import { patchFiles } from './code-diff.js';
 
 const STATES = { running: 'работает', completed: 'завершён', errored: 'ошибка', failed: 'ошибка',
   shutdown: 'остановлен', interrupted: 'остановлен', pendingInit: 'запускается', unknown: 'статус не сообщается' };
 
-export function progressView({ openFile, openChild } = {}) {
+export function progressView({ onChanges, openChild } = {}) {
   const root = el('div', { class: 'code-progress', hidden: true });
   const details = el('details', { class: 'code-progress-details' });
   const summary = el('summary', { class: 'code-progress-summary' });
@@ -13,6 +13,7 @@ export function progressView({ openFile, openChild } = {}) {
   details.append(summary, body);
   root.append(details);
   let explicit = {}, steps = [];
+  let fileState = { files: [], changes: [] };
   let serial = '';
   let render = () => {};
   details.addEventListener('toggle', () => { if (details.open) render(); });
@@ -22,18 +23,18 @@ export function progressView({ openFile, openChild } = {}) {
     steps = currentSteps;
     const edits = steps.filter((step) => !step.error).flatMap((step) => step.changes || []);
     const changes = explicit.changes;
-    const files = changes?.files || [...new Map(edits.map((change) => [change.path, { path: change.path }])).values()];
+    const files = [...new Map((changes?.files || edits).filter((row) => typeof row?.path === 'string')
+      .map((row) => [row.path, { path: row.path, added: row.added, removed: row.removed }])).values()];
     const agents = explicit.agents || [...new Map(steps.flatMap((step) => step.agents || []).map((row) => [row.id, row])).values()];
     const processes = steps.filter((step) => step.status === 'running' && ['Shell', 'Bash'].includes(step.tool));
     const plan = Array.isArray(explicit.plan) ? explicit.plan : [];
-    const value = JSON.stringify([files, agents, processes.map((s) => [s.id, s.process_id]), plan, changes?.diff, edits]);
+    const value = JSON.stringify([files, agents, processes.map((s) => [s.id, s.process_id]), plan, changes, edits]);
     if (value === serial) return;
     serial = value;
+    fileState = { files, changes: changes?.diff ? patchFiles(changes.diff, changes.truncated) : edits,
+      truncated: !!changes?.truncated };
+    onChanges?.();
     const labels = [];
-    if (files.length) {
-      const counts = changes ? files.reduce((out, file) => [out[0] + (file.added || 0), out[1] + (file.removed || 0)], [0, 0]) : null;
-      labels.push(`Файлов: ${files.length}${counts ? ` · +${counts[0]} −${counts[1]}` : ''}${changes?.truncated ? ' · показана часть' : ''}`);
-    }
     if (agents.length) {
       const active = agents.filter((row) => ['running', 'pendingInit'].includes(row.status)).length;
       const done = agents.filter((row) => row.status === 'completed').length;
@@ -48,12 +49,6 @@ export function progressView({ openFile, openChild } = {}) {
       const blocks = [];
       if (plan.length) blocks.push(el('ol', { class: 'code-progress-plan' }, ...plan.map((row) => el('li', {
         'data-state': row.status }, `${row.status === 'completed' ? '✓' : row.status === 'inProgress' ? '◉' : '○'} ${row.step}`))));
-      if (files.length) blocks.push(el('div', { class: 'code-progress-files' }, ...files.slice(0, 200).map((row) => {
-        const button = el('button', { type: 'button', class: 'btn btn-sm code-progress-file' }, row.path,
-          Number.isInteger(row.added) ? ` · +${row.added} −${row.removed}` : '');
-        button.addEventListener('click', () => openFile?.(row.path));
-        return button;
-      })));
       if (agents.length) blocks.push(el('div', { class: 'code-progress-agents' }, ...agents.map((row) => {
         const button = el('button', { type: 'button', class: 'btn code-progress-agent', disabled: !openChild },
           el('b', {}, row.title || `Агент ${String(row.id).slice(0, 8)}`),
@@ -64,13 +59,11 @@ export function progressView({ openFile, openChild } = {}) {
       })));
       if (processes.length) blocks.push(el('div', { class: 'code-progress-processes' }, ...processes.map((step) =>
         el('div', {}, `${step.process_id ? `Процесс ${step.process_id} · ` : ''}${step.input?.command || step.tool}`))));
-      if (changes?.diff) blocks.push(changeView(patchFiles(changes.diff, changes.truncated)));
-      else if (edits.length) blocks.push(changeView(edits));
       body.replaceChildren(...blocks.filter(Boolean));
     };
     if (details.open) render();
     else body.replaceChildren();
   }
 
-  return { root, update };
+  return { root, update, changes: () => fileState };
 }

@@ -81,6 +81,11 @@ class Feed:
         self._by_id: dict[str, dict] = {}
         self._deltas = False
 
+    def position(self):
+        if not self._ordered:
+            return None
+        return {"text": self._position, "steps": sum(part.get("kind") == "step" for part in self.timeline)}
+
     def note(self, event):
         if not self._ordered:
             return

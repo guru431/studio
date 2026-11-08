@@ -70,17 +70,23 @@ def test_cache_countdown_survives_reload_and_handles_unknown_data(focus_browser,
             reload_chat()
             pw.expect(timer).to_have_text(expected)
             page.locator("#code-cache").click()
-            dialog = page.locator("#code-context-dialog")
+            dialog = page.locator("#code-cache-dialog")
             pw.expect(dialog).to_be_visible()
+            assert dialog.locator('dt').all_text_contents() == ['Из кэша', 'Запись в кэш', 'Кэш: оценка оставшегося времени']
             pw.expect(dialog).to_contain_text("Из кэша")
             pw.expect(dialog).to_contain_text("12\u00a0345")
             pw.expect(dialog).to_contain_text("Открытие чата отсчёт не продлевает")
             assert page.evaluate("""() => {
-                const first = document.querySelector('#code-context-dialog dt');
+                const first = document.querySelector('#code-cache-dialog dt');
                 document.dispatchEvent(new Event('visibilitychange'));
-                return first === document.querySelector('#code-context-dialog dt')
-                    && document.querySelector('#code-context-dialog dd:last-child').getAttribute('aria-live') === 'off';
+                return first === document.querySelector('#code-cache-dialog dt')
+                    && document.querySelector('#code-cache-dialog dd:last-child').getAttribute('aria-live') === 'off';
             }""")
+            page.locator("#code-cache-dialog .btn").click()
+            page.locator("#code-context").click()
+            details = page.locator("#code-context-dialog")
+            pw.expect(details).to_contain_text('Общий размер контекста')
+            assert 'Из кэша' not in details.inner_text() and 'Таймер кэша' not in details.inner_text()
             page.locator("#code-context-dialog .btn").click()
             if engine == "claude":
                 machine.context["cache"]["ttl_seconds"] = 300

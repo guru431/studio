@@ -7,7 +7,6 @@ const number = (value) => Number.isFinite(value) ? value.toLocaleString('ru-RU')
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;
   let settings = {};
-  let cacheDetail = null;
   const hasCache = engine === 'codex' || engine === 'claude';
   const cacheText = el('b', { id: 'code-cache-text' }, '—');
   const cacheButton = el('button', { type: 'button', id: 'code-cache', class: 'code-cache',
@@ -24,6 +23,19 @@ export function contextView(host, { chat, engine, project, messages }) {
   el('p', { class: 'muted small' }, 'Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.'),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
+  const cacheRead = el('dd');
+  const cacheWrite = el('dd');
+  const cacheDetail = el('dd', { 'aria-live': 'off' });
+  const cacheClose = el('button', { type: 'button', class: 'btn' }, 'Закрыть');
+  const cacheDialog = hasCache ? el('dialog', { id: 'code-cache-dialog', class: 'dialog code-usage-dialog',
+    'aria-labelledby': 'code-cache-title' }, el('h2', { id: 'code-cache-title' }, 'Кэш'),
+    el('dl', { class: 'code-usage-summary' }, el('dt', {}, 'Из кэша'), cacheRead,
+      el('dt', {}, 'Запись в кэш'), cacheWrite, el('dt', {}, 'Кэш: оценка оставшегося времени'), cacheDetail),
+    el('p', { class: 'muted small' }, engine === 'codex'
+      ? 'Таймер кэша — оценка 30 минут от последней обработки контекста современной моделью Codex. Сервер не сообщает точное время хранения и не гарантирует попадание в кэш. Открытие чата отсчёт не продлевает.'
+      : 'Таймер кэша — оценка по отчёту Claude: 5 минут или час, при смешанных сроках — короткий. Если срок или время обработки неизвестны, показано «—». Открытие чата отсчёт не продлевает.'),
+    el('div', { class: 'dialog-actions' }, cacheClose)) : null;
+  if (cacheDialog) host.append(cacheDialog);
   function cacheStatus() {
     const cache = context?.cache;
     const model = /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/.exec(settings.model || '');
@@ -33,7 +45,7 @@ export function contextView(host, { chat, engine, project, messages }) {
     const now = Date.now() / 1000;
     if (!ttl || cache?.model !== settings.model || !Number.isFinite(cache?.updated_at)
         || cache.updated_at <= 0 || cache.updated_at > now) {
-      return { state: 'unknown', text: '—', title: 'Кэш: время не сообщается. Подробности сессии' };
+      return { state: 'unknown', text: '—', title: 'Кэш: время не сообщается. Сведения о кэше' };
     }
     const seconds = Math.max(0, Math.ceil(ttl - (now - cache.updated_at)));
     return { state: seconds ? 'estimated' : 'elapsed',
@@ -48,7 +60,9 @@ export function contextView(host, { chat, engine, project, messages }) {
     cacheButton.dataset.state = value.state;
     cacheButton.title = value.title;
     cacheButton.setAttribute('aria-label', value.title);
-    if (dialog.open && cacheDetail) cacheDetail.textContent = value.text;
+    cacheDetail.textContent = value.text;
+    cacheRead.textContent = number(context?.usage?.cached);
+    cacheWrite.textContent = number(context?.usage?.cache_write);
   }
   function paint() {
     const usage = context?.usage || {};
@@ -62,20 +76,14 @@ export function contextView(host, { chat, engine, project, messages }) {
       ['Заполнено', context ? `${number(context.percent)}%` : 'Не сообщается'],
       ['Потрачено токенов за сессию', number(usage.total)],
       ['Входные токены', number(usage.input)], ['Выходные токены', number(usage.output)],
-      ['Из кэша', number(usage.cached)], ['Запись в кэш', number(usage.cache_write)],
       ['Рассуждения, токенов', number(usage.reasoning)],
     ];
     content.replaceChildren(...entries.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)]));
-    if (hasCache) {
-      cacheDetail = el('dd', { 'aria-live': 'off' }, cacheStatus().text);
-      content.append(el('dt', {}, 'Кэш: оценка оставшегося времени'), cacheDetail);
-    }
   }
-  if (hasCache) dialog.insertBefore(el('p', { class: 'muted small' }, engine === 'codex'
-    ? 'Таймер кэша — оценка 30 минут от последней обработки контекста современной моделью Codex. Сервер не сообщает точное время хранения и не гарантирует попадание в кэш. Открытие чата отсчёт не продлевает.'
-    : 'Таймер кэша — оценка по отчёту Claude: 5 минут или час, при смешанных сроках — короткий. Если срок или время обработки неизвестны, показано «—». Открытие чата отсчёт не продлевает.'), dialog.lastElementChild);
-  for (const control of [button, cacheButton]) control.addEventListener('click', () => { paint(); dialog.showModal(); });
+  button.addEventListener('click', () => { paint(); dialog.showModal(); });
+  cacheButton.addEventListener('click', () => { paintCache(); cacheDialog?.showModal(); });
   close.addEventListener('click', () => dialog.close());
+  cacheClose.addEventListener('click', () => cacheDialog?.close());
   paintCache();
   const cacheTimer = hasCache ? setInterval(paintCache, 1000) : null;
   if (hasCache) document.addEventListener('visibilitychange', paintCache);
@@ -98,6 +106,6 @@ export function contextView(host, { chat, engine, project, messages }) {
       button.dataset.limit = String(data.limit);
       if (dialog.open) paint();
     },
-    unmount() { clearInterval(cacheTimer); document.removeEventListener('visibilitychange', paintCache); dialog.remove(); },
+    unmount() { clearInterval(cacheTimer); document.removeEventListener('visibilitychange', paintCache); dialog.remove(); cacheDialog?.remove(); },
   };
 }

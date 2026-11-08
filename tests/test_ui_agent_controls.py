@@ -285,17 +285,18 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
         return ("eval", "arrow", f"document.querySelector('#code-message-{direction}').click(); true")
 
     at_top = """(() => {
-      const top = document.querySelector('.code-top').getBoundingClientRect().bottom + 12;
+      const top = document.querySelector('#code-chat-scroll').getBoundingClientRect().top;
       return [...document.querySelectorAll('#code-feed .code-msg.user')]
         .find(n => Math.abs(n.getBoundingClientRect().top - top) < 3)?.textContent;
     })()"""
     placement = """(() => {
       const nav = document.querySelector('.code-message-nav').getBoundingClientRect();
-      const input = document.querySelector('.code-compose-area').getBoundingClientRect();
-      const last = document.querySelector('#code-feed').getBoundingClientRect();
+      const input = document.querySelector('#code-composer').getBoundingClientRect();
+      const toolbar = document.querySelector('.code-status-bar');
+      const scroll = document.querySelector('#code-chat-scroll').getBoundingClientRect();
       const button = document.querySelector('#code-message-up'), box = button.getBoundingClientRect();
       return nav.right <= innerWidth && Math.abs(nav.right - input.right) < 2 && nav.bottom < input.top
-        && nav.top > document.querySelector('.code-top').getBoundingClientRect().bottom && nav.top < last.bottom
+        && toolbar.lastElementChild.matches('.code-message-nav') && scroll.bottom <= toolbar.getBoundingClientRect().top
         && button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
     })()"""
     try:
@@ -307,19 +308,19 @@ def test_chat_arrows_follow_user_messages_and_load_earlier_history(browser, live
             arrow("down"), ("eval", "next", at_top),
             ("eval", "tailAvailable", "!document.querySelector('#code-message-down').disabled"),
             arrow("down"),
-            ("eval", "end", """(() => { const view = document.querySelector('#view');
+            ("eval", "end", """(() => { const view = document.querySelector('#code-chat-scroll');
               return view.scrollHeight - view.clientHeight - view.scrollTop < 2
                 && document.querySelector('#code-message-down').disabled; })()"""),
             arrow("up"), ("eval", "afterEnd", at_top),
-            ("eval", "manual", "document.querySelector('#view').scrollTop = 0"),
-            ("wait", "document.querySelector('#view').scrollTop === 0"),
+            ("eval", "manual", "document.querySelector('#code-chat-scroll').scrollTop = 0"),
+            ("wait", "document.querySelector('#code-chat-scroll').scrollTop === 0"),
             arrow("up"),
             ("wait", "document.querySelectorAll('#code-feed .code-msg').length === 36 && !document.querySelector('#code-more').disabled"),
             ("eval", "older", at_top), arrow("up"),
             arrow("up"), *[arrow("up") for _ in range(9)], ("eval", "first", at_top),
             ("eval", "start", "document.querySelector('#code-message-up').disabled"),
             arrow("down"), ("eval", "afterFirst", at_top),
-            ("eval", "bottomAgain", "document.querySelector('#view').scrollTop = document.querySelector('#view').scrollHeight"),
+            ("eval", "bottomAgain", "document.querySelector('#code-chat-scroll').scrollTop = document.querySelector('#code-chat-scroll').scrollHeight"),
             ("wait", "document.querySelector('#code-message-down').disabled"),
             arrow("up"), ("eval", "afterManual", at_top),
             ("screenshot", str(tmp_path / f"message-arrows-{width}.png")),
