@@ -368,7 +368,7 @@ class MainWindow:
             self.body.destroy()
         if self._body_window is not None:
             self.viewport.delete(self._body_window)
-        self.body = ttk.Frame(self.viewport, padding=self.px(20))
+        self.body = ttk.Frame(self.viewport, padding=self.px(8))
         self._body_window = self.viewport.create_window(0, 0, window=self.body, anchor="nw")
         self.body.bind("<Configure>", self.schedule_fit)
         self.viewport.yview_moveto(0)
@@ -387,21 +387,22 @@ class MainWindow:
 
         ttk = self.ttk
         top = ttk.Frame(self.body)
-        top.grid(row=0, column=0, sticky="ew", pady=(0, self.px(16)))
+        top.grid(row=0, column=0, sticky="ew", pady=(0, self.px(8)))
         top.columnconfigure(1, weight=1)
-        self._logo = ImageTk.PhotoImage(tray.icon(self.px(32)), master=self.win)
+        self._logo = ImageTk.PhotoImage(tray.icon(self.px(24)), master=self.win)
         ttk.Label(top, image=self._logo).grid(row=0, column=0, padx=(0, self.px(10)))
         ttk.Label(top, text=TITLE, style="Title.TLabel").grid(row=0, column=1, sticky="w")
         if view_of(self.enrolled) == "login":
-            ttk.Label(top, text=NOT_LINKED, style="Badge.TLabel").grid(row=0, column=2, sticky="e")
-            self.theme_controls(top, row=1, card=False, span=3)
+            controls = ttk.Frame(top)
+            controls.grid(row=0, column=2, sticky="e", padx=(self.px(12), 0))
+            self.theme_controls(controls, row=0, card=False, span=1)
 
     def theme_controls(self, host, *, row: int, card: bool, span: int = 2) -> None:
         """Два явных варианта темы; старый config до выбора следует Windows."""
         ttk = self.ttk
         prefix = "Card." if card else ""
         box = ttk.Frame(host, style=prefix + "TFrame")
-        box.grid(row=row, column=0, columnspan=span, sticky="ew", pady=(self.px(8), self.px(10)))
+        box.grid(row=row, column=0, columnspan=span, sticky="ew", pady=(0, self.px(6)))
         box.columnconfigure(0, weight=1)
         ttk.Label(box, text="Тема", style=prefix + "Muted.TLabel").grid(row=0, column=0, sticky="w")
         selected = self.tk.StringVar(value="dark" if self.c["dark"] else "light")
@@ -429,8 +430,10 @@ class MainWindow:
                                     style=prefix + "TRadiobutton")
             button.grid(row=0, column=column, sticky="e", padx=(self.px(12), 0))
             self.buttons.append(button)
-        ttk.Label(box, textvariable=problem, style=prefix + "Error.TLabel").grid(
-            row=1, column=0, columnspan=3, sticky="w")
+        error = ttk.Label(box, textvariable=problem, style=prefix + "Error.TLabel")
+        error.grid(row=1, column=0, columnspan=3, sticky="w")
+        error.grid_remove()
+        problem.trace_add("write", lambda *_: error.grid() if problem.get() else error.grid_remove())
 
     def apply_theme(self, choice: str) -> None:
         """Перекрасить на месте: введённые поля, сообщения об ошибках и PIN не теряются."""
@@ -452,12 +455,12 @@ class MainWindow:
         self.show_card()
         self.show_backends()
 
-    def card(self, row: int):
+    def card(self, row: int, *, host=None):
         """Карточка: панель с границей."""
-        outer = self.tk.Frame(self.body, background=self.c["panel"], highlightthickness=1,
+        outer = self.tk.Frame(self.body if host is None else host, background=self.c["panel"], highlightthickness=1,
                               highlightbackground=self.c["border"], highlightcolor=self.c["border"])
-        outer.grid(row=row, column=0, sticky="ew", pady=(0, self.px(12)))
-        inner = self.ttk.Frame(outer, style="Card.TFrame", padding=self.px(16))
+        outer.grid(row=row, column=0, sticky="ew", pady=(0, self.px(6)))
+        inner = self.ttk.Frame(outer, style="Card.TFrame", padding=self.px(10))
         inner.pack(fill="both", expand=True)
         inner.columnconfigure(0, weight=1)
         return inner
@@ -481,35 +484,36 @@ class MainWindow:
         pin, pin2 = tk.StringVar(), tk.StringVar()
         auto = tk.BooleanVar(value=cfg.autostart)
         errors = tk.StringVar()
-        gap = self.px(10)
+        gap = self.px(6)
         r = 0
 
-        def field(label: str, var, *, secret: bool = False, column: int = 0, span: int = 2):
-            ttk.Label(box, text=label, style="Card.TLabel").grid(row=r, column=column, columnspan=span, sticky="w",
-                                                                 padx=(0 if column == 0 else gap, 0))
-            entry = ttk.Entry(box, textvariable=var, width=22 if span == 1 else 46, show="•" if secret else "")
-            entry.grid(row=r + 1, column=column, columnspan=span, sticky="ew", pady=(self.px(3), gap),
-                       padx=(0 if column == 0 else gap, 0))
+        def field(label: str, var, *, secret: bool = False):
+            ttk.Label(box, text=label, style="Card.TLabel").grid(row=r, column=0, sticky="w", padx=(0, gap))
+            entry = ttk.Entry(box, textvariable=var, width=30, show="•" if secret else "")
+            entry.grid(row=r, column=1, sticky="ew", pady=(0, gap))
             return entry
 
         field("Адрес студии", url)
-        r += 2
+        r += 1
         first = field("Логин", login)
-        r += 2
+        r += 1
         secret = field("Пароль", password, secret=True)
-        secret.grid_configure(pady=(self.px(3), self.px(2)))
-        ttk.Label(box, text=NOTE_PASSWORD, style="Card.Muted.TLabel").grid(row=r + 2, column=0, columnspan=2,
+        ttk.Label(box, text=NOTE_PASSWORD, style="Card.Muted.TLabel").grid(row=r + 1, column=0, columnspan=2,
                                                                           sticky="w", pady=(0, gap))
-        r += 3
-        field("Имя компьютера", name)
         r += 2
+        field("Имя компьютера", name)
+        r += 1
         self.folders_control(box, row=r, folders=folders, problem=errors)
         r += 2
-        box.columnconfigure(0, weight=1, uniform="pin")
-        box.columnconfigure(1, weight=1, uniform="pin")
-        field("PIN (по желанию, 4–8 цифр)", pin, secret=True, span=1)
-        field("PIN ещё раз", pin2, secret=True, column=1, span=1)
-        r += 2
+        pin_box = ttk.Frame(box, style="Card.TFrame")
+        pin_box.grid(row=r, column=0, columnspan=2, sticky="ew", pady=(0, gap))
+        for column, (label, variable) in enumerate((("PIN (по желанию)", pin), ("Ещё раз", pin2))):
+            ttk.Label(pin_box, text=label, style="Card.TLabel").grid(
+                row=0, column=column * 2, sticky="w", padx=(0, gap))
+            ttk.Entry(pin_box, textvariable=variable, width=8, show="•").grid(
+                row=0, column=column * 2 + 1, sticky="ew", padx=(0, gap))
+            pin_box.columnconfigure(column * 2 + 1, weight=1)
+        r += 1
         ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, style="Card.TCheckbutton").grid(
             row=r, column=0, columnspan=2, sticky="w")
         foot = ttk.Frame(self.body)
@@ -554,7 +558,18 @@ class MainWindow:
     def link_view(self) -> None:
         ttk = self.ttk
         cfg = self.ctrl.config()
-        box = self.card(1)
+        self.sections = ttk.Notebook(self.body)
+        self.sections.grid(row=1, column=0, sticky="ew")
+        self.sections.enable_traversal()
+        connection = ttk.Frame(self.sections, padding=(0, self.px(6), 0, 0))
+        self.activity_page = ttk.Frame(self.sections, padding=(0, self.px(6), 0, 0))
+        self.settings_page = ttk.Frame(self.sections, padding=(0, self.px(6), 0, 0))
+        for page, label in ((connection, "Подключение"), (self.activity_page, "Работа"),
+                            (self.settings_page, "Настройки")):
+            page.columnconfigure(0, weight=1)
+            self.sections.add(page, text=label)
+        self.sections.bind("<<NotebookTabChanged>>", lambda e: self.viewport.yview_moveto(0))
+        box = self.card(0, host=connection)
         box.columnconfigure(0, weight=0)
         box.columnconfigure(1, weight=1)
         head = ttk.Frame(box, style="Card.TFrame")
@@ -563,7 +578,7 @@ class MainWindow:
         dot = self.tk.Canvas(head, width=d, height=d, highlightthickness=0, background=self.c["panel"])
         oval = dot.create_oval(1, 1, d - 1, d - 1)
         dot.grid(row=0, column=0, padx=(0, self.px(10)))
-        words = ttk.Label(head, style="Card.Status.TLabel")
+        words = ttk.Label(head, style="Card.Status.TLabel", wraplength=self.px(360), justify="left")
         words.grid(row=0, column=1, sticky="w")
         hint = ttk.Label(box, style="Card.Muted.TLabel", wraplength=self.px(380), justify="left")
         hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
@@ -587,7 +602,7 @@ class MainWindow:
                                             ("Компьютер", cfg.name or DASH)), start=3):
             ttk.Label(box, text=label, style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
                                                                        padx=(0, self.px(16)), pady=self.px(2))
-            shown = ttk.Label(box, text=value, style="Card.TLabel")
+            shown = ttk.Label(box, text=value, style="Card.TLabel", wraplength=self.px(280), justify="left")
             shown.grid(row=i, column=1, sticky="w", pady=self.px(2))
             if label == "Вход":
                 self.login_value = shown
@@ -663,10 +678,8 @@ class MainWindow:
 
     def settings_card(self, cfg) -> None:
         tk, ttk = self.tk, self.ttk
-        box = self.card(3)
+        box = self.card(0, host=self.settings_page)
         box.columnconfigure(0, weight=1)
-        ttk.Label(box, text="Настройки", style="Card.Head.TLabel").grid(row=0, column=0, columnspan=2, sticky="w",
-                                                                       pady=(0, self.px(10)))
         self.theme_controls(box, row=1, card=True)
         problem = tk.StringVar()
         self.folders_control(box, row=2, folders=list(cfg.projects_roots), problem=problem, save=True)
@@ -686,19 +699,21 @@ class MainWindow:
 
         box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
-        box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=(self.px(12), self.px(12)))
+        box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=self.px(6))
         self.buttons.append(box_auto)
         self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
         self.pin_line.grid(row=7, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
-        ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380)).grid(
-            row=8, column=0, columnspan=2, sticky="w")
+        error = ttk.Label(box, textvariable=problem, style="Card.Error.TLabel", wraplength=self.px(380))
+        error.grid(row=8, column=0, columnspan=2, sticky="w")
+        error.grid_remove()
+        problem.trace_add("write", lambda *_: error.grid() if problem.get() else error.grid_remove())
         self.settings_problem = problem
         self.show_pin()
 
     def activity_card(self) -> None:
-        box = self.card(2)
+        box = self.card(0, host=self.activity_page)
         box.columnconfigure(0, weight=1)
         ttk = self.ttk
         ttk.Label(box, text="Работа на компьютере", style="Card.Head.TLabel").grid(
@@ -708,12 +723,14 @@ class MainWindow:
         desktop = ttk.Label(box, style="Card.TLabel", wraplength=self.px(380))
         desktop.grid(row=2, column=0, sticky="w", pady=(self.px(8), self.px(4)))
         stop = ttk.Button(box, text="Завершить этот сеанс", command=self.ctrl.stop_desktop_session)
-        stop.grid(row=3, column=0, sticky="w")
-        idle = ttk.Button(box, command=lambda: self.ctrl.set_quit_when_idle(
+        stop.grid(row=3, column=0, sticky="w", pady=(0, self.px(8)))
+        bar = ttk.Frame(box, style="Card.TFrame")
+        bar.grid(row=4, column=0, sticky="ew")
+        idle = ttk.Button(bar, command=lambda: self.ctrl.set_quit_when_idle(
             not self.ctrl.activity_status()["quit_when_idle"]))
-        idle.grid(row=4, column=0, sticky="w", pady=(self.px(12), self.px(4)))
-        immediate = ttk.Button(box, command=self.ctrl.request_quit)
-        immediate.grid(row=5, column=0, sticky="w")
+        idle.grid(row=0, column=0, sticky="w", padx=(0, self.px(6)))
+        immediate = ttk.Button(bar, command=self.ctrl.request_quit)
+        immediate.grid(row=0, column=1, sticky="w")
         self.activity_widgets = tasks, desktop, stop, idle, immediate
         self.show_activity()
 
@@ -726,9 +743,8 @@ class MainWindow:
         desktop.configure(text="Удалённый рабочий стол подключён" if value["desktop_active"]
                           else "Удалённый рабочий стол не подключён")
         stop.state(["!disabled"] if value["desktop_active"] else ["disabled"])
-        idle.configure(text="Отменить выход после завершения" if value["quit_when_idle"]
-                       else f"Выйти после завершения · заданий: {value['tasks']}")
-        immediate.configure(text=f"Выйти сейчас · заданий: {value['tasks']}")
+        idle.configure(text="Отменить выход" if value["quit_when_idle"] else "Выйти после завершения")
+        immediate.configure(text="Выйти сейчас")
 
     def desktop_control(self, box, *, row: int, enabled: bool, problem) -> None:
         selected = self.tk.BooleanVar(value=enabled)
@@ -745,12 +761,11 @@ class MainWindow:
             self.work(lambda: self.ctrl.set_desktop_enabled(proposed), done)
 
         area = self.ttk.Frame(box, style="Card.TFrame")
-        area.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, self.px(12)))
+        area.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, self.px(6)))
         button = self.ttk.Checkbutton(area, text="Разрешить удалённый рабочий стол", variable=selected,
                                      command=toggle, style="Card.TCheckbutton")
         button.grid(row=0, column=0, sticky="w")
-        self.ttk.Label(area, text="Экран, мышь, клавиатура и буфер. Выбор сохраняется после перезапуска.\n"
-                       "Изменить разрешение можно только здесь, на компьютере.",
+        self.ttk.Label(area, text="Экран, ввод и буфер. Выбор сохраняется; меняется только здесь.",
                        style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
             row=1, column=0, sticky="w", pady=(self.px(4), 0))
         self.buttons.append(button)
@@ -793,14 +808,14 @@ class MainWindow:
         ttk.Label(box, text="Папки проектов", style="Card.Muted.TLabel").grid(
             row=row, column=0, columnspan=2, sticky="w")
         area = ttk.Frame(box, style="Card.TFrame")
-        area.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), self.px(10)))
+        area.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), self.px(6)))
         area.columnconfigure(0, weight=1)
-        viewport = ttk.Frame(area, width=self.px(285), height=self.px(76), style="Card.TFrame")
+        viewport = ttk.Frame(area, width=self.px(285), height=self.px(52), style="Card.TFrame")
         viewport.grid(row=0, column=0, sticky="ew")
         viewport.grid_propagate(False)
         viewport.rowconfigure(0, weight=1)
         viewport.columnconfigure(0, weight=1)
-        listing = ttk.Treeview(viewport, show="tree", selectmode="browse", height=3, style="Folders.Treeview")
+        listing = ttk.Treeview(viewport, show="tree", selectmode="browse", height=2, style="Folders.Treeview")
         listing.column("#0", minwidth=self.px(180), width=self.px(285), stretch=False)
         listing.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(area, orient="vertical", command=listing.yview)
@@ -810,7 +825,7 @@ class MainWindow:
         horizontal.grid(row=1, column=0, sticky="ew")
         listing.configure(xscrollcommand=horizontal.set)
         bar = ttk.Frame(area, style="Card.TFrame")
-        bar.grid(row=2, column=0, columnspan=2, sticky="e", pady=(self.px(6), 0))
+        bar.grid(row=0, column=2, rowspan=2, sticky="n", padx=(self.px(6), 0))
 
         def render() -> None:
             import tkinter.font as tkfont
@@ -860,9 +875,9 @@ class MainWindow:
             index = int(listing.selection()[0])
             apply(folders[:index] + folders[index + 1:])
 
-        for column, (label, action) in enumerate((("Добавить…", add), ("Убрать", remove))):
+        for index, (label, action) in enumerate((("Добавить…", add), ("Убрать", remove))):
             button = ttk.Button(bar, text=label, command=action)
-            button.grid(row=0, column=column, padx=(self.px(8), 0))
+            button.grid(row=index, column=0, sticky="ew", pady=(0, self.px(4)))
             self.buttons.append(button)
         render()
 
@@ -874,7 +889,8 @@ class MainWindow:
         for child in line.winfo_children():
             child.destroy()
         words, buttons = pin_row(self.pin)
-        ttk.Label(line, text=words or "PIN…", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(line, text=words or "PIN…", style="Card.TLabel", wraplength=self.px(170), justify="left").grid(
+            row=0, column=0, sticky="w")
         actions = {"set": lambda: PinDialog(self, BUTTONS["set"]), "change": lambda: PinDialog(self, BUTTONS["change"]),
                    "clear": lambda: confirm(self, CONFIRM_PIN_OFF, "Убрать", self.clear_pin),
                    "unlock": self.unlock_pin}
