@@ -1693,3 +1693,12 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .cleaner-preview-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .cleaner-copy-text { width: 100%; resize: vertical; }
 .md .code-stream-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.code-visualization-dialog { width: min(96vw, 900px); max-width: 96vw; height: 92dvh; max-height: 96dvh;
+  display: flex; flex-direction: column; gap: .6rem; overflow: hidden; }
+.code-visualization-dialog:not([open]) { display: none; }
+.code-visualization-dialog h2 { margin: 0; overflow-wrap: anywhere; }
+.code-visualization-dialog > .btn { align-self: flex-end; flex: none; }
+.code-visualization-wide { width: 96vw; }
+.code-visualization-frame { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--panel); }
+.code-visualization-open { max-width: 100%; white-space: normal; }

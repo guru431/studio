@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -56,6 +56,7 @@ OPS = {
     "worktree_create": ("project", "query"),
     "read": ("project", "path"),
     "raw": ("project", "path"),
+    "visualization": ("project", "source"),
     "save": ("project", "path", "text", "version"),
     "git": ("project",),
 }
@@ -126,7 +127,7 @@ class Agent:
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                 "computer_info": True, "desktop": True, "metadata_cache": True}
+                 "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -288,6 +289,8 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "source":
+            return visualizations.valid_source(value)
         if name == "operation":
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
@@ -611,6 +614,13 @@ class Agent:
     async def _op_read(self, frame, after):
         project = await self._project(frame)
         return await asyncio.to_thread(files.read_text, project, frame["path"])
+
+    async def _op_visualization(self, frame, after):
+        project = await self._project(frame)
+        result = await asyncio.to_thread(visualizations.read, project, frame["source"])
+        if not self.open.touch(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
+            raise Refused("closed")
+        return result
 
     async def _op_file_operation(self, frame, after):
         project = await self._project(frame)

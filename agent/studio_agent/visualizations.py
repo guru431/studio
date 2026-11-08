@@ -1,0 +1,41 @@
+"""Read HTML from a project or Codex's visualization directory, without widening file access."""
+import os
+import stat
+from pathlib import Path
+
+from . import files, limits
+from .errors import Refused
+
+
+def valid_source(source) -> bool:
+    return (isinstance(source, str) and 0 < len(source) <= limits.PATH_MAX
+            and source.lower().endswith('.html')
+            and not any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in source))
+
+
+def read(project: Path, source: str) -> dict:
+    if not valid_source(source):
+        raise Refused('invalid')
+    target = Path(source.replace('\\', '/'))
+    if not target.is_absolute():
+        return files.read_text(project, source.replace('\\', '/'))
+    # Check lexical containment first: realpath alone would admit traversal and junctions.
+    roots = (project, Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'visualizations')
+    for root in roots:
+        try:
+            relative = target.relative_to(root.absolute())
+        except ValueError:
+            continue
+        parts = files._parts(relative.as_posix())
+        current = root
+        try:
+            for part in ('', *parts):
+                if part:
+                    current = current / part
+                info = current.lstat()
+                if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    raise Refused('outside')
+        except OSError:
+            raise Refused('not_found', 'Нет такой визуализации') from None
+        return files.read_text(root, relative.as_posix())
+    raise Refused('outside')

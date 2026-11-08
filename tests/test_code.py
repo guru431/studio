@@ -31,6 +31,8 @@ ALPHA, BETA = pid("alpha"), pid("beta")
 #: (тела: {"text": "x"}, {"request_id": "r1", "decision": "allow"}, {"path": ""},
 #: {"path": "a", "text": "", "version": "v"}, {"path": "a.pdf", "page": 1}).
 BODIES = {
+    ("POST", "/api/code/agents/1/projects/1/visualization"): {"source": "a.html"},
+    ("GET", "/api/code/agents/1/projects/1/visualization/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/seen"): {"attention": "0" * 32},
     ("GET", "/api/code/agents/1/desktop"): None,
     ("POST", "/api/code/agents/1/desktop/start"): {},
@@ -169,7 +171,8 @@ def test_someone_elses_agent_is_404_before_the_bridge(studio):
         parts = path.split("/")
         for i in range(1, len(parts)):
             if parts[i] == "1":
-                parts[i] = {"agents": str(aid), "projects": ALPHA, "chats": A}[parts[i - 1]]
+                parts[i] = {"agents": str(aid), "projects": ALPHA, "chats": A,
+                            "visualization": "0" * 32}[parts[i - 1]]
         body = BODIES[(method, path)]
         r = studio.c.request(method, "/".join(parts), **({} if body is None else {"json": body}))
         assert (r.status_code, detail(r)["code"]) == (404, "not_found"), (method, path, r.text)

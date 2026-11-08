@@ -31,6 +31,18 @@ Gitea — серверное pull-зеркало. GitHub получает ту �
 
 ## Устройство
 
+Визуализации Codex (`visualize` с JSON `path/mode/title`) распознаёт общее inline-расширение
+`visualization-markup.js` в `markdown.js` и Worker; блоки кода остаются текстом.
+`code-visualizations.js` открывает модальное окно с iframe `sandbox="allow-scripts"`.
+`POST …/projects/{pid}/visualization` требует `hello.visualizations`, owner/PIN/CSRF, читает
+HTML через op `visualization` и создаёт случайный токен. `GET …/visualization/{token}` сверяет
+сессию/компьютер/проект и живой PIN через `projects`, отдаёт документ с отдельной CSP;
+общая CSP оболочки остаётся прежней. `code_visualizations.py` держит один HTML ≤2 МиБ на
+пользователя в памяти на 5 минут, очищается при `bridge.forget` и по сроку, без диска/журнала.
+В iframe нет same-origin, форм, вложенных страниц и сетевых API; разрешены inline-скрипты
+и библиотеки из фиксированных CDN. Пути машин не попадают в URL. Проверки:
+`test_code_visualizations.py`, `test_ui_visualizations.py`, `agent/tests/test_visualizations.py`.
+
 `code-file-links.js` распознаёт в ответах помощника относительные пути проекта и абсолютные пути Windows
 (включая `/C:/…`, `file:///C:/…`, пробелы, URI-кодирование и суффикс номера строки). `markdown.js`
 нормализует их до очистки DOMPurify; `code-chat.js` открывает через `openFile`, не отправляя путь в HTTP URL.

@@ -123,9 +123,9 @@ async def lifespan(_app):
 async def headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers.setdefault("Referrer-Policy", "same-origin")
     if response.headers.get("content-type", "").startswith("text/html"):
-        response.headers["Content-Security-Policy"] = CSP
+        response.headers.setdefault("Content-Security-Policy", CSP)
     if request.url.path.startswith("/static/"):
         versioned = "v" in request.query_params or request.url.path.startswith(f"/static/v/{STATIC_VERSION}/")
         response.headers["Cache-Control"] = (VERSIONED if response.status_code in (200, 304) else 'no-store') if versioned else "no-cache"
