@@ -45,6 +45,7 @@ import auth
 import bridge
 import clock
 import code_attention
+import code_visualizations
 import lock_policy
 import ocr_render
 import operations
@@ -234,6 +235,7 @@ def _refuse(status: int, code: str, message: str, **extra) -> HTTPException:
 def own_agent(request: Request, aid: int) -> sqlite3.Row:
     """Компьютер учётки запроса, иначе 404. Его зовёт каждый маршрут раздела — заодно уходит память PDF по сроку."""
     _expire_pdfs()
+    code_visualizations.expire()
     row = state.DB.execute("SELECT id, name, has_pin FROM agents WHERE id = ? AND user_id = ?",
                            (aid, request.state.user.id)).fetchone()
     if row is None:
@@ -972,10 +974,48 @@ def _forget_pdf(user_id: int, session: str) -> None:
 
 
 bridge.FORGET_HOOKS.append(_forget_pdf)
+bridge.FORGET_HOOKS.append(code_visualizations.forget)
 
 
 class PathBody(BaseModel):
     path: Any = None             # вид — check_path: свой 422 `path`, не общий FastAPI
+
+
+class VisualizationBody(BaseModel):
+    source: str = Field(min_length=1, max_length=PATH_MAX, pattern=r"^[^\x00-\x1f\x7f]+$")
+
+
+@router.post("/agents/{aid}/projects/{pid}/visualization")
+async def visualization(aid: int, pid: str, body: VisualizationBody, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    require_capability(aid, "visualizations")
+    data = await ask(request, aid, "visualization", project=pid, source=body.source)
+    text = _strings(data, "text")["text"]
+    try:
+        size = len(text.encode('utf-8'))
+    except UnicodeEncodeError:
+        raise _refuse(502, "bridge", ODD) from None
+    if size > code_visualizations.MAX_BYTES:
+        raise _refuse(413, "too_large", TOO_LARGE)
+    token = code_visualizations.keep(request.state.user.id, bridge.tag(request.state.digest), aid, pid, text)
+    return {"token": token}
+
+
+@router.get("/agents/{aid}/projects/{pid}/visualization/{token}")
+async def visualization_frame(aid: int, pid: str, token: str, request: Request):
+    own_agent(request, aid)
+    check_pid(pid)
+    code_visualizations.expire()
+    kept = code_visualizations.VIEWS.get(request.state.user.id)
+    session = bridge.tag(request.state.digest)
+    if not kept or kept[:4] != (token, session, aid, pid):
+        raise _refuse(404, "not_found", "Визуализация закрыта — откройте её заново")
+    # Cached HTML must not bypass the computer's PIN or a lost link.
+    await ask(request, aid, "projects")
+    return Response(code_visualizations.document(kept[4]), media_type="text/html", headers={
+        "Content-Security-Policy": code_visualizations.CSP, "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store"})
 
 
 class PdfPage(PathBody):

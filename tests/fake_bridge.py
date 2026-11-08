@@ -72,6 +72,7 @@ class FakeMachine:
         self.project_activity = False
         self.project_summary = False
         self.computer_info = False
+        self.visualizations = False
         self.computer_data = {}
         self.desktop = False
         self.desktop_enabled = False
@@ -103,7 +104,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "desktop", "file_stats", "file_operations",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
@@ -560,6 +561,9 @@ class FakeMachine:
     def _op_read(self, req, events):
         data = self._file(req)
         return {"text": self._text(data), "version": _version(data)}
+
+    def _op_visualization(self, req, events):
+        return self._op_read({**req, 'path': req['source']}, events)
 
     def _op_raw(self, req, events):
         data = self._file(req)

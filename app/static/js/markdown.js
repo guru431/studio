@@ -16,6 +16,7 @@
  * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
 
 import { localFileHref } from './code-file-links.js';
+import { visualizationExtension, visualizationReference } from './visualization-markup.js';
 
 await Promise.all([['marked', 'marked.min.js'], ['DOMPurify', 'purify.min.js'], ['hljs', 'highlight.min.js']]
   .map(([name, file]) => {
@@ -49,6 +50,7 @@ function escapeHtml(text) {
 const parsers = {};
 
 function markdownParser(html) {
+  if (parsers[html]) return parsers[html];
   parsers[html] ||= new window.marked.Marked({
     gfm: true,
     async: false,
@@ -74,6 +76,7 @@ function markdownParser(html) {
       },
     },
   });
+  parsers[html].use({ extensions: [visualizationExtension] });
   return parsers[html];
 }
 
@@ -110,6 +113,21 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
   }
   for (const link of fragment.querySelectorAll('a[href]')) {
     const href = link.getAttribute('href');
+    if (href === '#studio-visualization') {
+      let reference;
+      try { reference = visualizationReference(JSON.parse(link.getAttribute('title'))); } catch { /* literal link */ }
+      if (reference) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn code-visualization-open';
+        button.textContent = 'Открыть визуализацию';
+        button.title = reference.title;
+        button.disabled = !fileLinks?.visualization;
+        button.addEventListener('click', () => fileLinks.visualization(reference));
+        link.replaceWith(button);
+        continue;
+      }
+    }
     const path = fileLinks?.resolve(href);
     if (path) {
       link.setAttribute('href', '#');

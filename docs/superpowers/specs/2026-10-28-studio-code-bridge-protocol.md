@@ -248,9 +248,16 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `files` | `project`, `path` | `{"items": [{"name", "dir", "size", "modified"}]}` — папки сначала, затем файлы, по имени | `outside` |
 | `read` | `project`, `path` | `{"text", "version"}` | `outside`, `too_large` (больше 2 МиБ), `binary` |
 | `raw` | `project`, `path` | `{"data": base64, "size", "version"}` | `outside`, `too_large` (больше 10 МиБ) |
+| `visualization` (0.16.0, `hello.visualizations`) | `project`, `source` | `{"text", "version"}` | `outside`, `invalid`, `not_found`, `too_large` (2 МиБ), `binary`, `closed` |
 | `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
 | `file_operation` (0.8.1, `hello.file_operations`) | `project`, `operation`, `path`, `destination` (путь или `null`) | `{}` | `outside`, `invalid`, `not_found`, `exists` (409), `read_only` (409), `busy` (409) |
 | `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git` |
+
+`visualization.source` — UTF-8 `.html` внутри выбранного проекта (относительный либо абсолютный
+путь) или абсолютный путь внутри `$CODEX_HOME/visualizations` (умолчание `~/.codex/visualizations`).
+Windows `\\` принимается как разделитель только здесь. `..`, ADS и выход из корней запрещены;
+каталог визуализаций и вложенные пути не могут быть junction/symlink. Требуется открытая
+PIN-сессия, повторная проверка после чтения. Это не расширяет допустимые пути `read/raw/save`.
 
 - `chats`: `title` — `custom_title`, иначе `summary`, иначе начало `first_prompt` (до 120 знаков);
   `created`, `modified` — секунды Unix; `tag` — метка SDK (`studio` у начатых студией) или `null`;

@@ -44,6 +44,7 @@ import { fileHints } from './code-autocomplete.js';
 import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
 import { projectFilePath } from './code-file-links.js';
+import { visualizationsView } from './code-visualizations.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -104,7 +105,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const workspace = document.getElementById('view');
   const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
     role: 'region', 'aria-label': 'Лента чата' });
-  const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile };
+  const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations });
+  const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile,
+    visualization: visualizations.open };
   let alive = true;
   let touched = false;           // выбор модели или усилия меняли в этом чате
   let controller = null;         // поток (turn или live), который читает страница
@@ -1590,6 +1593,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     focus() { if (alive) focusDesktop(text); },
     unmount() {
       alive = false;
+      visualizations.unmount();
       unsubscribeGit?.();
       context.unmount();
       usage.unmount();
