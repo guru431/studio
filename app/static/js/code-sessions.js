@@ -68,7 +68,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   const searchRow = el('div', { class: 'code-session-search' }, search, scope);
   const note = el('p', { class: 'small muted', role: 'status', id: 'code-search-status' });
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
-  const startsRows = [];
+  const startersRow = starts ? el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': 'Новый чат' }) : null;
   if (starts) {
     const starters = engineOrder(me?.code_defaults).filter((engine) => engine === 'claude'
       || (engine === 'codex' ? codex : opencode)).map((engine) => {
@@ -82,8 +82,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       }));
       return add;
     });
-    startsRows.push(el('li', { class: 'code-chats-new' },
-      el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': 'Новый чат' }, ...starters)));
+    startersRow.append(...starters);
   }
   function paint() {
     const terms = normalize(search.value).trim().split(/\s+/).filter(Boolean);
@@ -92,7 +91,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       && terms.every((term) => normalize(c.title || UNTITLED).includes(term)));
     const empty = loadError ? 'Не удалось загрузить чаты' : found === null ? 'Загружаю…'
       : terms.length ? 'Ничего не найдено' : 'Прошлых чатов пока нет';
-    list.replaceChildren(...startsRows, ...(matches.length ? matches.map((chat) => {
+    list.replaceChildren(...(matches.length ? matches.map((chat) => {
       const li = row({ ...(found || []).find((item) => item.chat === chat.chat), ...chat });
       for (const snippet of chat.snippets || []) li.querySelector('button').append(
         el('span', { class: 'code-search-snippet' }, `${snippet.role === 'user' ? 'Вы' : 'Ответ'}: ${snippet.text}`));
@@ -148,6 +147,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       failed(err);
     }).finally(() => { if (alive) list.setAttribute('aria-busy', 'false'); });
   }
+  if (startersRow) host.append(startersRow);
   host.append(searchRow, note, list);
   const copies = worktrees ? worktreeView(host, { aid, pid, opened: worktreeOpened }) : null;
   return {
@@ -155,6 +155,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       alive = false;
       clearTimeout(timer);
       request?.abort();
+      startersRow?.remove();
       searchRow.remove();
       note.remove();
       copies?.unmount();

@@ -7746,7 +7746,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
             *code_project(aid, "alpha"),
             ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 4"),
             ("eval", "hash", "location.hash"),
-            ("eval", "first", "!!document.querySelector('#code-chats .code-new-chat')"),
+            ("eval", "first", "!!document.querySelector('.code-session-picker .code-new-chat')"),
             ("eval", "views", "['#code-tab-chat', '#code-tab-files', '#code-tab-git'].map((s) => document.querySelector(s).textContent)"),
             ("eval", "rows", CODE_CHATS), ("eval", "fits", NO_OVERFLOW),
             ("eval", "buttons", "document.querySelectorAll('#code-chats .code-chat-close, #code-chats .code-chat-reopen').length"),
