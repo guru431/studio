@@ -65,5 +65,6 @@ export function subagentView(host, { endpoint }) {
   refresh.addEventListener('click', load);
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => { request?.abort(); history.replaceChildren(); });
-  return { button, unmount() { alive = false; request?.abort(); dialog.remove(); } };
+  return { button, open(row) { dialog.showModal(); openChild(row); },
+    unmount() { alive = false; request?.abort(); dialog.remove(); } };
 }

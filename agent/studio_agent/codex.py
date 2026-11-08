@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import codex_rpc, diffs, events, limits, metadata, permissions, sessions, store
+from . import codex_progress, codex_rpc, diffs, events, limits, metadata, permissions, sessions, store, timeline
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -105,6 +105,24 @@ def step_of(item):
         return None
     step = {"id": item["id"], "tool": tool, "input": events.clip(data),
             "text": events.clip(text), "error": item.get("status") in ("failed", "declined")}
+    status = item.get("status")
+    if status in ("inProgress", "completed", "failed", "declined"):
+        step["status"] = {"inProgress": "running", "declined": "failed"}.get(status, status)
+    for source, key in (("durationMs", "duration_ms"), ("exitCode", "exit_code")):
+        if type(item.get(source)) is int:
+            step[key] = item[source]
+    if kind == "commandExecution":
+        if isinstance(text, str) and len(text) > limits.CLIP:
+            step["output_truncated"] = True
+        if isinstance(item.get("processId"), str):
+            step["process_id"] = item["processId"][:200]
+        if item.get("exitCode") not in (None, 0):
+            step.update(error=True, status="failed")
+    elif kind == "collabAgentToolCall":
+        step["agents"] = codex_progress.children([item])
+    if (kind == "dynamicToolCall" and item.get("success") is False
+            or kind == "mcpToolCall" and item.get("error") is not None):
+        step.update(error=True, status="failed")
     if kind == "fileChange" and item.get("status") == "completed":
         if changes := diffs.codex(item.get("changes")):
             step["changes"] = changes
@@ -131,10 +149,15 @@ def normalize(turns):
                 answer = {"id": item["id"], "role": "assistant", "text": "", "steps": [], "time": None}
                 out.append(answer)
             if step:
-                answer["steps"].append(step)
+                timeline.append_step(answer, step)
             if text:
-                answer["text"] += ("\n\n" if answer["text"] else "") + text
-    return out
+                timeline.append_text(answer, ("\n\n" if answer["text"] else "") + text,
+                                     block=item.get("id"), phase=item.get("phase"))
+        if answer is not None:
+            agents = codex_progress.children(turn.get("items", []))
+            if agents:
+                answer["progress"] = {"agents": agents}
+    return [timeline.compact(message) for message in out]
 
 
 class _TurnClient:
@@ -423,17 +446,8 @@ class CodexRunner(Runner):
         source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
         if not same_project(source.get("cwd"), project):
             raise Refused("not_found")
-        children = {}
-        for turn in source.get("turns", []):
-            for item in turn.get("items", []):
-                if item.get("type") != "collabAgentToolCall":
-                    continue
-                for child in item.get("receiverThreadIds", []):
-                    if isinstance(child, str) and limits.CHAT_ID.fullmatch(child) and child != target:
-                        state = item.get("agentsStates", {}).get(child, {})
-                        children[child] = {"id": child, "title": f"Агент {child[:8]}",
-                                           "status": str(state.get("status", "unknown"))[:40]}
-        return {"items": list(children.values())[:50]}
+        children = codex_progress.children([item for turn in source.get("turns", []) for item in turn.get("items", [])])
+        return {"items": [row for row in children if row["id"] != target]}
 
     async def subagent_history(self, project, chat, child):
         if child not in {row["id"] for row in (await self.subagents(project, chat))["items"]}:
@@ -629,33 +643,70 @@ class CodexRunner(Runner):
             delta = p.get("delta", "")
             self._activity(t, "responding")
             t.feed.text += delta
-            self._send(t, {"k": "text", "text": delta})
+            self._send(t, {"k": "text", "text": delta, **({"block": p["itemId"]} if p.get("itemId") else {}),
+                           **({"phase": t.message_phase} if getattr(t, "message_phase", None) else {})})
+        elif method in ("turn/diff/updated", "turn/plan/updated"):
+            if method == "turn/diff/updated" and isinstance(p.get("diff"), str):
+                update = {"changes": codex_progress.patch_summary(p["diff"])}
+            elif method == "turn/plan/updated" and isinstance(p.get("plan"), list):
+                update = {"plan": codex_progress.plan(p["plan"])}
+            else:
+                return
+            t.progress.update(update)
+            self._send(t, {"k": "progress", **update})
+        elif method in ("item/commandExecution/outputDelta", "item/mcpToolCall/progress",
+                        "item/commandExecution/terminalInteraction"):
+            step = next((s for s in t.feed.steps if s["id"] == p.get("itemId")), None)
+            if step is None:
+                return
+            if method.endswith("outputDelta") and isinstance(p.get("delta"), str):
+                output = step["text"] + p["delta"]
+                step["text"] = output[-limits.CLIP:]
+                step["output_truncated"] = len(output) > limits.CLIP or step.get("output_truncated", False)
+                self._send(t, {"k": "step_update", "id": step["id"], "text": step["text"],
+                               "output_truncated": step["output_truncated"]})
+            elif method.endswith("terminalInteraction"):
+                step["process_id"] = str(p.get("processId", ""))[:200]
+                self._send(t, {"k": "step_update", "id": step["id"], "process_id": step["process_id"]})
+            elif isinstance(p.get("message"), str):
+                step["progress_message"] = p["message"][:500]
+                self._send(t, {"k": "step_update", "id": step["id"], "progress_message": step["progress_message"]})
         elif method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
             self._activity(t, "thinking")
         elif method in ("item/started", "item/completed"):
             item = p.get("item", {})
+            if item.get("type") in ("collabAgentToolCall", "subAgentActivity"):
+                t.progress["agents"] = codex_progress.children([item], t.progress.get("agents", []))
+                self._send(t, {"k": "progress", "agents": t.progress["agents"]})
             if item.get("type") == "reasoning":
                 self._activity(t, "thinking")
                 return
             if item.get("type") == "agentMessage":
                 if method == "item/started":
+                    t.message_phase = item.get("phase")
                     self._activity(t, "responding")
                 if method == "item/started" and t.feed.text and not t.feed.text.endswith("\n"):
                     t.feed.text += "\n\n"
-                    self._send(t, {"k": "text", "text": "\n\n"})
+                    self._send(t, {"k": "text", "text": "\n\n", "block": item.get("id"),
+                                   **({"phase": item["phase"]} if item.get("phase") else {})})
                 return
             step = step_of(item)
             if step is None:
                 return
             old = next((s for s in t.feed.steps if s["id"] == step["id"]), None)
+            if old is not None and item.get("type") == "commandExecution" and item.get("aggregatedOutput") is None:
+                step["text"] = old["text"]
+                if old.get("output_truncated"):
+                    step["output_truncated"] = True
             if old is None:
                 t.feed.steps.append(step)
                 self._send(t, {"k": "step", **{k: v for k, v in step.items() if k not in ("text", "error")}})
             else:
                 old.update(step)
             if method == "item/completed":
-                self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"],
-                               **({"changes": step["changes"]} if step.get("changes") else {})})
+                if old is not None:
+                    old.pop("progress_message", None)
+                self._send(t, {"k": "result", **step})
                 self._activity(t, "thinking")
             else:
                 self._activity(t, "tool", step["tool"])

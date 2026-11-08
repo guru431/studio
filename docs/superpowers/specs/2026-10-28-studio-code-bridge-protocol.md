@@ -314,11 +314,34 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `activity` | `state: thinking|tool|responding|waiting`, `tool?` | текущая стадия; в snapshot — `activity` без k |
 | `step` | `id`, `tool`, `input` (объект) | вызов инструмента начат |
 | `result` | `id`, `text`, `error` (bool) | итог инструмента |
+| `step_update` | `id`, `text?`, `output_truncated?`, `process_id?`, `progress_message?` | обновление уже известного шага, без его завершения; `text` заменяет текущий вывод |
+| `progress` | `changes?`, `plan?`, `agents?` | обновление переданных полей сводки активного хода |
 | `ask` | `request_id`, `kind: "permission"`, `tool`, `input`, `always` (bool: есть ли что запомнить) | запрос разрешения |
 | `ask` | `request_id`, `kind: "question"`, `questions`: `[{"id"?, "question", "header", "multi", "options": [{"id"?, "label", "description"}]}]` | вопрос агента; ID варианта OpenCode стабилен до закрытия карточки, включая snapshot |
 | `asked` | `request_id` | запрос закрыт (ответили, остановили) |
 | `snapshot` | `text`, `steps` (как в `history`), `asks` (открытые `ask` без `k`) | всё состояние идущего хода — вместо прежнего |
 | `done` | `status`: `done`, `stopped`, `error`; `message` (при `error`) | ход кончился |
+
+С моста 0.15.0 сообщения истории и `snapshot` могут нести `timeline` (до 2000 записей):
+`{kind: "text", start, end, block?, phase?}` ссылается на `[start,end)` единственного `text`
+в единицах UTF-16; `{kind: "step", id}` — на шаг из `steps`. `block` — id текстового элемента CLI,
+`phase` — `commentary|partial_answer|final_answer`, когда известен. `text`-события могут включать
+те же `block`/`phase`. Порядок совпадает с событиями; результаты обновляют существующий шаг.
+При урезке сообщения позиции удаляются; отсутствие/некорректность `timeline` означает прежний
+показ списка шагов и текста. Полный снимок заменяет прежнее состояние, включая сводку.
+
+Необязательные поля шага/`result`: `status: running|completed|failed`, `duration_ms`, `exit_code`,
+`process_id`, `output_truncated`, `agents`. Неизвестные длительности/коды отсутствуют.
+Ненулевой exit_code означает failed. Потоковый вывод ограничен хвостом 20 000 знаков, с пометкой;
+конечный результат CLI остаётся главным. PTY id — информационное поле, без нового управления процессами.
+
+`progress.changes` — `{diff, files: [{path, added, removed}], truncated}`: последний общий diff CLI,
+до 120 000 знаков и 200 файлов; счётчики вычислены до обрезки текста. `progress.plan` — до 100
+`{step,status: pending|inProgress|completed}`. `progress.agents` — до 50
+`{id,title,status,task?}`; переход к истории ребёнка повторяет штатную проверку принадлежности чату.
+`snapshot.progress` содержит полную накопленную сводку. Всё живёт в памяти моста/страницы;
+завершённая история восстанавливает только данные, сохранённые самим CLI. Новая база и журнал текстов
+не создаются. Старый мост работает с прежними событиями; новые сервер и мост обновляются вместе.
 
 `request_id`, `turn` — до 64 знаков `[A-Za-z0-9_-]`. Строки в `input`, `text` шагов и `result` мост
 обрезает до 20 000 знаков (пометка `…` в конце): кадр события не должен приближаться к `FRAME_MAX`.

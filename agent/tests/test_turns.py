@@ -276,7 +276,9 @@ async def test_watch_gives_a_snapshot_with_the_open_card_and_answer_still_works(
     running, frames = await r.watch(PID, CHAT)
     assert running is True and frames == [{"t": "ev", "project": PID, "chat": CHAT, "turn": turn, "e": {
         "k": "snapshot", "text": "Смотрю\n\nДальше",
-        "steps": [{"id": "t1", "tool": "Read", "input": {"file_path": "a"}, "text": "строки", "error": True}],
+        "steps": [{"id": "t1", "tool": "Read", "input": {"file_path": "a"}, "text": "строки", "error": True, "status": "failed"}],
+        "timeline": [{"kind": "text", "start": 0, "end": 6}, {"kind": "step", "id": "t1"},
+                     {"kind": "text", "start": 6, "end": 14}],
         "asks": [{"request_id": "toolu_1", "kind": "permission", "tool": "Bash", "input": {"command": "ls"},
                   "always": False}]}}]
     r.answer(PID, CHAT, "toolu_1", "allow", None, None)

@@ -333,7 +333,8 @@ class FakeMachine:
         self.turns += 1
         turn = f"t-{self.turns}"
         self.running[chat_id] = {"turn": turn, "project": req["project"], "rest": list(self.script),
-                                 "text": "", "steps": [], "asks": {}, "owner": req.get("window"), "followups": []}
+                                 "text": "", "steps": [], "asks": {}, "owner": req.get("window"), "followups": [],
+                                 "timeline": [], "progress": {}}
         self.script = []
         if req.get("window"):
             events.append(self._ev(chat_id, {"k": "input_accepted"}))
@@ -412,6 +413,8 @@ class FakeMachine:
                                                 if self.queue_edit else {}),
                                              **({"queue_paused": True} if run.get("queue_paused") else {}),
                                              **({"activity": run["activity"]} if run.get("activity") else {})}))
+            events[-1]["e"].update({key: run[key] for key in ("timeline", "progress")
+                                    if run.get(key) and (key != "timeline" or len(run[key]) > 1)})
         return {"running": run is not None}
 
     def _op_answer(self, req, events):
@@ -593,6 +596,8 @@ class FakeMachine:
     def _play(self, chat_id: str, events: list) -> None:
         """События хода до первого `ask` включительно или до `done`."""
         run = self.running[chat_id]
+        run.setdefault("timeline", [])
+        run.setdefault("progress", {})
         while run["rest"]:
             e = run["rest"].pop(0)
             if e["k"] == "done":
@@ -600,7 +605,11 @@ class FakeMachine:
                 return
             events.append(self._ev(chat_id, e))
             if e["k"] == "text":
+                start = len(run["text"].encode("utf-16-le", errors="surrogatepass")) // 2
                 run["text"] += e["text"]
+                run["timeline"].append({"kind": "text", "start": start,
+                                        "end": len(run["text"].encode("utf-16-le", errors="surrogatepass")) // 2,
+                                        **({"block": e["block"]} if e.get("block") else {})})
             elif e["k"] == "context":
                 self.context = {k: v for k, v in e.items() if k != "k"}
             elif e["k"] == "activity":
@@ -610,12 +619,14 @@ class FakeMachine:
                     if chat_id in project.get("chats", {}):
                         project["chats"][chat_id]["settings"] = {k: v for k, v in e.items() if k != "k"}
             elif e["k"] == "step":
-                run["steps"].append({"id": e["id"], "tool": e["tool"], "input": e["input"], "text": "",
-                                     "error": False})
-            elif e["k"] == "result":
+                run["steps"].append({**{k: v for k, v in e.items() if k != "k"}, "text": "", "error": False})
+                run["timeline"].append({"kind": "step", "id": e["id"]})
+            elif e["k"] in ("result", "step_update"):
                 for step in run["steps"]:
                     if step["id"] == e["id"]:
-                        step["text"], step["error"] = e["text"], e["error"]
+                        step.update({k: v for k, v in e.items() if k != "k"})
+            elif e["k"] == "progress":
+                run["progress"].update({k: v for k, v in e.items() if k != "k"})
             elif e["k"] == "ask":
                 run["asks"][e["request_id"]] = e
                 return
@@ -629,7 +640,8 @@ class FakeMachine:
             if chat is not None:
                 self.now += 1
                 chat["messages"].append({"id": f"m-{len(chat['messages'])}", "role": "assistant",
-                                         "text": run["text"], "steps": run["steps"], "time": self.now})
+                                         "text": run["text"], "steps": run["steps"], "time": self.now,
+                                         **{key: run[key] for key in ("timeline", "progress") if run.get(key)}})
                 chat["modified"] = self.now
 
 

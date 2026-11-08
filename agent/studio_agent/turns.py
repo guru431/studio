@@ -5,6 +5,7 @@
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import re
@@ -17,7 +18,7 @@ from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundEr
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage)
 
 from . import attachments as attachment_input
-from . import cli, events, image_input, limits, permissions, sessions, store
+from . import cli, events, image_input, limits, permissions, sessions, store, timeline
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class _Turn:
     context: dict | None = None
     settings: dict | None = None
     activity: dict | None = None
+    progress: dict = field(default_factory=dict)
     feed: events.Feed = field(default_factory=events.Feed)
     asks: dict[str, _Ask] = field(default_factory=dict)
     task: asyncio.Task | None = None
@@ -313,7 +315,8 @@ class Runner:
             held = t.held = []
             try:
                 asks = [{k: v for k, v in a.event.items() if k != "k"} for a in t.asks.values()]
-                snap = await asyncio.to_thread(self._snapshot, t, t.feed.text, [dict(s) for s in t.feed.steps], asks)
+                details = {"timeline": copy.deepcopy(t.feed.timeline), "progress": copy.deepcopy(t.progress)}
+                snap = await asyncio.to_thread(self._snapshot, t, t.feed.text, [dict(s) for s in t.feed.steps], asks, details)
             except BaseException:
                 t.held = None
                 for frame in held:
@@ -323,14 +326,16 @@ class Runner:
             return True, [snap, *held]
 
     @classmethod
-    def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict]) -> events.Ready:
+    def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict], details=None) -> events.Ready:
         """В потоке: снимок в пределах `HISTORY_BUDGET` и его ASCII-JSON."""
         room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(t.followups, ensure_ascii=True)) - len(json.dumps(cls._queue_state(t), ensure_ascii=True))
-        body = sessions.fit([{"text": text, "steps": steps}], room)[0]
+        extra = {k: v for k, v in (details or {}).items() if v}
+        body = sessions.fit([timeline.compact({"text": text, "steps": steps, **extra})], room)[0]
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
                                            "asks": asks, **({"context": t.context} if t.context else {}),
                                            **({"settings": t.settings} if t.settings else {}),
                                            **({"activity": t.activity} if t.activity else {}),
+                                           **{k: body[k] for k in ("timeline", "progress") if k in body},
                                            **({"owner": t.owner, "accepted": t.accepted} if t.owner else {}),
                                            **({"queue": cls._queue_state(t)} if t.queued else {}),
                                            **({"queue_paused": True} if t.queue_paused else {}),
@@ -628,6 +633,14 @@ class Runner:
 
     def _send(self, t: _Turn, e: dict) -> None:
         """Событие в канал (готовится снимок `watch` — за него); сбой канала ход не роняет."""
+        t.feed.note(e)
+        if e.get("k") in ("step", "result"):
+            for step in t.feed.steps:
+                if step["id"] == e.get("id"):
+                    step.setdefault("status", "running")
+                    if e["k"] == "result":
+                        step["status"] = e.get("status", "failed" if e.get("error") else "completed")
+                    break
         frame = self._frame(t, e)
         if t.held is not None:
             t.held.append(frame)

@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import diffs, events, limits, opencode_rpc, permissions, sessions, store
+from . import diffs, events, limits, opencode_rpc, permissions, sessions, store, timeline
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
@@ -127,15 +127,15 @@ def normalize(updates):
                 current = {"id": str(len(out)), "role": "assistant", "text": "", "steps": [], "time": None}
                 out.append(current)
             if kind == "agent_message_chunk":
-                current["text"] += text_of(update.get("content"))
+                timeline.append_text(current, text_of(update.get("content")))
             elif isinstance(update.get("toolCallId"), str):
                 old = next((s for s in current["steps"] if s["id"] == update["toolCallId"]), None)
                 step = step_of(update, old)
                 if old is None:
-                    current["steps"].append(step)
+                    timeline.append_step(current, step)
                 else:
                     old.update(step)
-    return out
+    return [timeline.compact(message) for message in out]
 
 
 def timestamp(value):
