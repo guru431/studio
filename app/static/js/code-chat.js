@@ -40,6 +40,7 @@ import { changeView } from './code-diff.js';
 import { fileHints } from './code-autocomplete.js';
 import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
+import { projectFilePath } from './code-file-links.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -88,17 +89,6 @@ function preview(input) {
   return text.length > PREVIEW_MAX ? `${text.slice(0, PREVIEW_MAX)}…` : text;
 }
 
-/** Путь файла шага внутри проекта — хвост через «/» ('src/app.py'), иначе null. Начало — projects_root
- * компьютера, «\» и имя проекта, без учёта регистра. */
-function tailOf(filePath, agent, project) {
-  if (typeof filePath !== 'string' || !agent || typeof agent.projects_root !== 'string' || !project) return null;
-  const start = `${agent.projects_root.replace(/\//g, '\\').replace(/\\+$/, '')}\\${project.name}\\`;
-  const path = filePath.replace(/\//g, '\\');
-  if (path.length <= start.length || path.slice(0, start.length).toLowerCase() !== start.toLowerCase()) return null;
-  const parts = path.slice(start.length).split('\\');
-  return parts.some((p) => p === '' || p === '.' || p === '..') ? null : parts.join('/');
-}
-
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
   openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
@@ -109,6 +99,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const draftKey = `${aid}/${chat}`;
   const historyKey = `${me.id}/${aid}/${pid}/${engine}/${chat}`;
   const scroller = document.getElementById('view');
+  const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile };
   let alive = true;
   let touched = false;           // выбор модели или усилия меняли в этом чате
   let controller = null;         // поток (turn или live), который читает страница
@@ -498,7 +489,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function stepNode(s) {
     const input = s.input && typeof s.input === 'object' ? s.input : {};
-    const tail = FILE_TOOLS.has(s.tool) ? tailOf(input.file_path, agent, project) : null;
+    const tail = FILE_TOOLS.has(s.tool) ? projectFilePath(input.file_path, agent, project) : null;
     let link = null;
     if (tail) {
       link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file' }, 'Открыть файл');
@@ -537,7 +528,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const md = el('div', { class: 'md' });
     if (typeof m.text === 'string' && m.text) {
       // История выставляет прокрутку после всей страницы; измерять её после каждого блока дорого.
-      const paint = renderMarkdownInto(md, m.text, { valid: () => alive && feed.contains(md) });
+      const paint = renderMarkdownInto(md, m.text, { valid: () => alive && feed.contains(md), fileLinks });
       pendingPaints.add(paint);
       paint.then(() => pendingPaints.delete(paint));
     }
@@ -573,8 +564,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     paintTimer = null;
     if (!turn) return;
     const target = turn.md;
-    if (final) renderMarkdownInto(target, turn.text, { valid: () => alive && feed.contains(target), update: grow });
-    else if (turn.text.length < 2000) grow(() => target.replaceChildren(renderMarkdown(turn.text, { highlight: false })));
+    if (final) renderMarkdownInto(target, turn.text, { valid: () => alive && feed.contains(target), update: grow, fileLinks });
+    else if (turn.text.length < 2000) grow(() => target.replaceChildren(renderMarkdown(turn.text, { highlight: false, fileLinks })));
     else grow(() => target.replaceChildren(el('pre', { class: 'code-stream-text' }, turn.text)));
   }
 

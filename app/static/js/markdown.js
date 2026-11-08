@@ -15,6 +15,8 @@
  * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
  * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
 
+import { localFileHref } from './code-file-links.js';
+
 await Promise.all([['marked', 'marked.min.js'], ['DOMPurify', 'purify.min.js'], ['hljs', 'highlight.min.js']]
   .map(([name, file]) => {
     if (window[name]) return;
@@ -59,6 +61,17 @@ function markdownParser(html) {
       checkbox({ checked }) {
         return checked ? '☑ ' : '☐ ';
       },
+      link(token) {
+        const href = localFileHref(token.href);
+        // Prefix a drive letter before sanitizing: DOMPurify correctly rejects a raw C: URI.
+        if (!href) return false;
+        return `<a href="${escapeHtml(href)}">${this.parser.parseInline(token.tokens)}</a>`;
+      },
+      image(token) {
+        const href = localFileHref(token.href);
+        if (!href) return false;
+        return `<a href="${escapeHtml(href)}">${escapeHtml(token.text || 'Открыть изображение')}</a>`;
+      },
     },
   });
   return parsers[html];
@@ -75,7 +88,7 @@ async function copy(pre, button) {
   setTimeout(() => { button.textContent = 'Копировать'; }, COPIED_MS);
 }
 
-function fragmentOf(out, { html = false, highlight = true } = {}) {
+function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = {}) {
   const fragment = window.DOMPurify.sanitize(out, { RETURN_DOM_FRAGMENT: true, ALLOWED_TAGS: TAGS,
     ALLOWED_ATTR: html ? [...ATTRS, 'colspan', 'rowspan'] : ATTRS, ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
   for (const node of fragment.querySelectorAll('[class]')) {
@@ -96,6 +109,19 @@ function fragmentOf(out, { html = false, highlight = true } = {}) {
     pre.append(button);
   }
   for (const link of fragment.querySelectorAll('a[href]')) {
+    const href = link.getAttribute('href');
+    const path = fileLinks?.resolve(href);
+    if (path) {
+      link.setAttribute('href', '#');
+      link.classList.add('code-message-file');
+      link.addEventListener('click', (event) => { event.preventDefault(); fileLinks.open(path); });
+      continue;
+    }
+    if (localFileHref(href)) {
+      link.removeAttribute('href');
+      link.title = 'Файл вне текущего проекта или недоступен в этом разделе';
+      continue;
+    }
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
   }
@@ -168,7 +194,7 @@ function drain() {
         size += (token.raw || token.text || '').length;
       }
       part.links = job.tokens.links;
-      const fragment = fragmentOf(markdownParser(false).parser(part));
+      const fragment = fragmentOf(markdownParser(false).parser(part), { fileLinks: job.fileLinks });
       if (job.text.length > 8000) {
         if (!job.group || job.groupSize >= 4000) {
           job.group = document.createElement('div');
@@ -193,11 +219,11 @@ function drain() {
 }
 
 /** Общий бюджет для всех сообщений: несколько историй не создают отдельные тяжёлые RAF. */
-export async function renderMarkdownInto(host, text, { valid = () => true, update = (change) => change() } = {}) {
+export async function renderMarkdownInto(host, text, { valid = () => true, update = (change) => change(), fileLinks = null } = {}) {
   host.replaceChildren();
   let done;
   const finished = new Promise((resolve) => { done = resolve; });
-  const job = { host, text: String(text ?? ''), valid, update, done, tokens: null, index: 0 };
+  const job = { host, text: String(text ?? ''), valid, update, done, fileLinks, tokens: null, index: 0 };
   renderVersions.set(host, job);
   if (job.text.length > 8000) {
     job.tokens = await tokenize(job.text);
