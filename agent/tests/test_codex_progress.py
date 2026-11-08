@@ -1,12 +1,28 @@
 """Путь событий Codex до истории и ограниченного снимка переподключения."""
 import json
 
-from studio_agent import codex, codex_progress, limits, sessions, timeline
+from studio_agent import codex, codex_progress, events, limits, sessions, timeline
 from studio_agent.turns import _Turn
 from test_codex import CHAT, runner
 
 CHILD = "01999999-2222-7333-8444-888888888888"
 PATCH = "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1,2 @@\n-old\n+new\n+extra\n"
+
+
+def test_followup_position_counts_published_events_in_utf16():
+    feed = events.Feed()
+    # Разобранные, но ещё не отправленные данные не сдвигают место уточнения.
+    feed.text = 'Будущий текст'
+    feed.steps = [{'id': 'future'}]
+    assert feed.position() == {'text': 0, 'steps': 0}
+    feed.note({'k': 'text', 'text': 'До 🛠'})
+    feed.note({'k': 'step', 'id': 'cmd'})
+    before = feed.position()
+    feed.note({'k': 'text', 'text': 'После'})
+    assert before == {'text': 5, 'steps': 1}
+    assert feed.position() == {'text': 10, 'steps': 1}
+    feed._ordered = False
+    assert feed.position() is None
 
 
 async def test_stream_output_status_diff_agents_plan_and_reconnect_share_one_snapshot(runner):

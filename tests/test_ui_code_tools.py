@@ -25,6 +25,10 @@ def test_suggestions_diffs_content_search_and_editable_queue(browser, live, widt
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             ("eval", "diff", "document.querySelector('.code-step').open=true; true"),
             ("eval", "diffText", "document.querySelector('.code-changes').textContent"),
+            ("wait", "document.querySelector('#code-changed-files').textContent === '1'"),
+            ("click", "#code-changed-files"), ("click", ".code-changed-file"),
+            ("eval", "fileDiff", "document.querySelector('#code-changed-dialog').textContent"),
+            ("click", "#code-changed-dialog .dialog-close"),
             ("click", "#code-text"), set_value("#code-text", "@util"), ("wait", "document.querySelector('#code-file-options button')"),
             ("press", "Enter"), ("eval", "inserted", "document.querySelector('#code-text').value"),
             ("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-search-content')"),
@@ -54,6 +58,7 @@ def test_suggestions_diffs_content_search_and_editable_queue(browser, live, widt
     assert not result.get("failed"), result
     assert result["values"]["inserted"] == "src/util.py "
     assert "old" in result["values"]["diffText"] and "new" in result["values"]["diffText"]
+    assert "old" in result["values"]["fileDiff"] and "new" in result["values"]["fileDiff"]
     assert "Needle" in result["values"]["snippet"]
     assert result["values"]["paused"] and result["values"]["fits"]
     assert not problems(result), problems(result)

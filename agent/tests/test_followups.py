@@ -19,18 +19,37 @@ async def test_codex_steers_the_existing_turn_and_reconnect_keeps_the_followup(r
     await asking(runner)
     t = runner._turns[CHAT]
     try:
+        position = t.feed.position()
         result = await runner.steer(PID, CHAT, "Уточнение", [], owner="a" * 32)
         assert result["mode"] == "steer"
         call = next(p for m, p in runner.fake.calls if m == "turn/steer")
         assert call == {"threadId": THREAD, "expectedTurnId": "turn1",
                         "input": [{"type": "text", "text": "Уточнение"}]}
         assert len([m for m, _ in runner.fake.calls if m == "turn/start"]) == 1
+        runner._notification(t, 'item/agentMessage/delta', {'itemId': 'after', 'delta': 'Дальше 🛠'})
         _, snapshot = await runner.watch(PID, CHAT)
         assert snapshot[0]["e"]["followups"][0]["text"] == "Уточнение"
+        assert snapshot[0]["e"]["followups"][0]["position"] == position
+        assert t.feed.position()['text'] > position['text']
         assert snapshot[0]["e"]["owner"] == "a" * 32
     finally:
         await runner.stop(PID, CHAT)
         await t.task
+
+
+@pytest.mark.parametrize('oversized', ['text', 'step'])
+def test_trimmed_snapshot_drops_followup_positions_without_mutating_the_turn(home, monkeypatch, oversized):
+    from studio_agent import limits
+    monkeypatch.setattr(limits, 'HISTORY_BUDGET', 4000)
+    t = _Turn(home, PID, CHAT, 'turn')
+    t.followups = [{'id': 'f', 'text': 'Уточнение', 'mode': 'steer', 'position': {'text': 20, 'steps': 0}}]
+    text = 'x' * 20000 if oversized == 'text' else 'x'
+    steps = [] if oversized == 'text' else [{'id': 'cmd', 'tool': 'Shell', 'text': 'x' * 20000}]
+    details = None if oversized == 'text' else {'timeline': [{'kind': 'step', 'id': 'cmd'},
+                                                          {'kind': 'text', 'start': 0, 'end': 1}]}
+    snapshot = Runner._snapshot(t, text, steps, [], details)['e']
+    assert 'position' not in snapshot['followups'][0]
+    assert t.followups[0]['position'] == {'text': 20, 'steps': 0}
 
 
 async def test_claim_moves_control_without_stopping_the_task(home):

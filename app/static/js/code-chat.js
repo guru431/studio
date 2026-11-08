@@ -38,6 +38,8 @@ import { usageView } from './code-usage.js';
 import { contextView } from './code-context.js';
 import { changeView } from './code-diff.js';
 import { progressView } from './code-progress.js';
+import { changesView } from './code-changes.js';
+import { withFollowups } from './code-followups.js';
 import { fileHints } from './code-autocomplete.js';
 import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
@@ -182,6 +184,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
   const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage });
+  const changedFiles = changesView(host, { openFile: (path) => {
+    const relative = projectFilePath(path, agent, project);
+    if (relative) openFile(relative);
+  } });
+  function paintChangedFiles() {
+    const latest = [...feed.children].findLast((node) => node.classList.contains('assistant'));
+    changedFiles.update(messageViews.get(latest)?.progress.changes());
+  }
   let hasGit = false;
   const unsubscribeGit = git?.subscribe(({ data }) => {
     hasGit = !!data;
@@ -213,8 +223,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const actions = el('div', { class: 'code-chat-actions' });
-  const statusBar = el('div', { class: 'code-status-bar' }, activity, navigation, actions,
-    context.cacheButton, contextBox, usage.button);
+  const statusBar = el('div', { class: 'code-status-bar' }, activity, actions,
+    changedFiles.button, context.cacheButton, contextBox, usage.button, navigation);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
   for (const action of me?.code_quick_actions || []) {
@@ -511,21 +521,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function stepNode(s) {
     const stepInput = () => s.input && typeof s.input === 'object' ? s.input : null;
     let input = stepInput();
-    const filePath = input?.file_path || s.changes?.[0]?.path || input?.changes?.[0]?.path;
-    const tail = FILE_TOOLS.has(s.tool) ? projectFilePath(filePath, agent, project) : null;
-    let link = null;
-    if (tail) {
-      link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file' }, 'Открыть файл');
-      link.addEventListener('click', (event) => {
-        event.preventDefault();               // и заголовок шага не раскрывается
-        openFile(tail);
-      });
-    }
+    const links = el('span', { class: 'code-step-files' });
+    let filesSerial = null;
     const state = el('span', { class: 'code-step-state' });
     const timing = el('span', { class: 'code-step-duration' });
-    const head = el('span', { class: 'code-step-head' }, typeof filePath === 'string' ? filePath : preview(input));
+    const head = el('span', { class: 'code-step-head' });
     const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
-      el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')), head, state, timing, link));
+      el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')), head, state, timing, links));
     stepData.set(details, s);
     let filled = false, changeSerial = null;
     let result, inputNode, changeNode;
@@ -538,8 +540,30 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const latest = stepInput();
       if (input !== latest) {
         input = latest;
-        if (typeof filePath !== 'string') head.textContent = preview(input);
         if (filled) paintInput();
+      }
+      const changes = Array.isArray(s.changes) && s.changes.length ? s.changes : Array.isArray(input?.changes) ? input.changes : [];
+      const changedPaths = changes.map((change) => change?.path).filter((path) => typeof path === 'string');
+      const paths = [...new Set(changedPaths.length ? changedPaths : typeof input?.file_path === 'string' ? [input.file_path] : [])];
+      head.textContent = paths.length > 1 ? `Файлов: ${paths.length}` : paths[0] || preview(input);
+      const pathsKey = JSON.stringify(paths);
+      if (filesSerial !== pathsKey) {
+        filesSerial = pathsKey;
+        links.replaceChildren();
+        if (FILE_TOOLS.has(s.tool)) for (const path of paths) {
+          const tail = projectFilePath(path, agent, project);
+          if (!tail) {
+            if (paths.length > 1) links.append(el('span', {}, path));
+            continue;
+          }
+          const link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file', title: `Открыть файл: ${path}` },
+            paths.length > 1 ? path : 'Открыть файл');
+          link.addEventListener('click', (event) => {
+            event.preventDefault();               // и заголовок шага не раскрывается
+            openFile(tail);
+          });
+          links.append(link);
+        }
       }
       details.classList.toggle('error', !!s.error);
       details.dataset.state = s.error ? 'failed' : s.status || 'completed';
@@ -599,8 +623,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       position = part.end;
       return true;
     }) && position === textValue.length && seen.size === byId.size;
-    const parts = valid ? m.timeline : [...items.map((step) => ({ kind: 'step', id: step.id })),
-      { kind: 'text', start: 0, end: textValue.length }];
+    const parts = withFollowups(valid ? m.timeline : [...items.map((step) => ({ kind: 'step', id: step.id })),
+      { kind: 'text', start: 0, end: textValue.length }], m.followups, textValue.length, items.length);
     const segments = [];
     const nodes = new Map();
     const textPaints = [];
@@ -612,6 +636,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     const make = (part) => {
       if (part.kind === 'step') return stepNode(byId.get(part.id));
+      if (part.kind === 'followup') return followupNode(part.data);
       const segment = nodes.get(part);
       // Начинаем Markdown при добавлении сегмента: очередь списка ещё не прикрепила остальные узлы.
       if (segment.text) textPaints.push(renderMarkdownInto(segment.node, segment.text,
@@ -644,10 +669,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
     }
     const body = el('div', { class: 'code-steps code-timeline' });
-    const progress = progressView({ openFile: (path) => {
-      const relative = projectFilePath(path, agent, project);
-      if (relative) openFile(relative);
-    }, openChild: children ? (row) => children.open(row) : null });
+    const progress = progressView({ onChanges: paintChangedFiles,
+      openChild: children ? (row) => children.open(row) : null });
     progress.update(m.progress || {}, m.steps || []);
     const view = { body, progress, ...renderTimeline(body, m) };
     const node = el('div', { class: 'code-msg assistant' }, progress.root, body);
@@ -667,7 +690,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       turn = { node, steps: node.querySelector('.code-steps'), view: messageViews.get(node),
         asks: el('div', { class: 'code-asks' }), models: [] };
       node.append(turn.asks);
-      grow(() => feed.append(node));
+      grow(() => { feed.append(node); paintChangedFiles(); });
     }
     return turn;
   }
@@ -761,14 +784,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     autosize();
   }
 
-  function showFollowup(data) {
+  function followupNode(data) {
     if (data.sent) { sentFollowups.add(data.id); queuedInputs.get(draftKey)?.delete(data.id); }
     if (agent?.queue_edit && data.mode === 'queue' && !data.sent && !sentFollowups.has(data.id)) queue.add(data);
-    if (typeof data.id !== 'string' || followups.has(data.id)) return;
+    if (followups.has(data.id)) return followups.get(data.id);
     const node = messageNode({ role: 'user', text: data.text });
     node.dataset.followup = data.id;
     followups.set(data.id, node);
-    grow(() => feed.append(node));
+    return node;
+  }
+
+  function showFollowup(data) {
+    if (typeof data.id !== 'string') return;
+    const node = followupNode(data);
+    if (node.isConnected) return;
+    const t = current();
+    paintText(true);
+    t.view.active = null;
+    grow(() => t.steps.append(node));
+    paintNavigation();
   }
 
   async function forkAt(messageId) {
@@ -1248,6 +1282,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const cached = snapshot?.page;
     if (cached) {
       feed.replaceChildren(...messages(cached.items));
+      paintChangedFiles();
       renderedHistory = { serial: snapshot.serial, nodes: [...feed.children] };
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
       const action = interactions;
@@ -1290,6 +1325,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       feed.replaceChildren(...messages(page.items));
       renderedHistory = { serial, nodes: [...feed.children] };
     }
+    paintChangedFiles();
     historyEmpty = page.total === 0;
     paintQuickActions();
     followups.clear();
@@ -1556,6 +1592,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       unsubscribeGit?.();
       context.unmount();
       usage.unmount();
+      changedFiles.unmount();
       hints?.unmount();
       queue.unmount();
       children?.unmount();

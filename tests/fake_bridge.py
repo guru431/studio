@@ -351,6 +351,8 @@ class FakeMachine:
         mode = 'queue' if req.get('engine') == 'opencode' or req.get('mode') == 'queue' else 'steer'
         identifier = f"{len(run['followups']):016x}" if self.queue_edit else f"followup-{len(run['followups'])}"
         item = {"id": identifier, "text": req["text"], "mode": mode,
+                "position": {"text": len(run.get("text", "").encode("utf-16-le", errors="surrogatepass")) // 2,
+                             "steps": len(run.get("steps", []))},
                 **({"version": 1, "input_text": req["text"]} if self.queue_edit and mode == 'queue' else {})}
         run["followups"].append(item)
         events.append(self._ev(req["chat"], {"k": "followup", **item}))

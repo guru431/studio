@@ -179,6 +179,9 @@ class Runner:
             item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else "") +
                     (f"\n[Вложений: {len(attachments)}]" if attachments else ""),
                     "mode": mode}
+            position = t.feed.position()
+            if position is not None:
+                item["position"] = position
             t.followups.append(item)
             self._send(t, {"k": "followup", **item,
                            **({"version": 1, "input_text": text} if mode == "queue" else {})})
@@ -319,7 +322,8 @@ class Runner:
             held = t.held = []
             try:
                 asks = [{k: v for k, v in a.event.items() if k != "k"} for a in t.asks.values()]
-                details = {"timeline": copy.deepcopy(t.feed.timeline), "progress": copy.deepcopy(t.progress)}
+                details = {"timeline": copy.deepcopy(t.feed.timeline), "progress": copy.deepcopy(t.progress),
+                           "followups": copy.deepcopy(t.followups)}
                 snap = await asyncio.to_thread(self._snapshot, t, t.feed.text, [dict(s) for s in t.feed.steps], asks, details)
             except BaseException:
                 t.held = None
@@ -332,9 +336,13 @@ class Runner:
     @classmethod
     def _snapshot(cls, t: _Turn, text: str, steps: list[dict], asks: list[dict], details=None) -> events.Ready:
         """В потоке: снимок в пределах `HISTORY_BUDGET` и его ASCII-JSON."""
-        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(t.followups, ensure_ascii=True)) - len(json.dumps(cls._queue_state(t), ensure_ascii=True))
-        extra = {k: v for k, v in (details or {}).items() if v}
+        followups = [dict(item) for item in (details or {}).get("followups", t.followups)]
+        room = limits.HISTORY_BUDGET - len(json.dumps(asks, ensure_ascii=True)) - len(json.dumps(followups, ensure_ascii=True)) - len(json.dumps(cls._queue_state(t), ensure_ascii=True))
+        extra = {k: v for k, v in (details or {}).items() if k in ("timeline", "progress") and v}
         body = sessions.fit([timeline.compact({"text": text, "steps": steps, **extra})], room)[0]
+        if body["text"] != text or len(body["steps"]) != len(steps) or ("timeline" in extra and "timeline" not in body):
+            for item in followups:
+                item.pop("position", None)
         return events.ready(cls._frame(t, {"k": "snapshot", "text": body["text"], "steps": body["steps"],
                                            "asks": asks, **({"context": t.context} if t.context else {}),
                                            **({"settings": t.settings} if t.settings else {}),
@@ -343,7 +351,7 @@ class Runner:
                                            **({"owner": t.owner, "accepted": t.accepted} if t.owner else {}),
                                            **({"queue": cls._queue_state(t)} if t.queued else {}),
                                            **({"queue_paused": True} if t.queue_paused else {}),
-                                           **({"followups": list(t.followups)} if t.followups else {})}))
+                                           **({"followups": followups} if followups else {})}))
 
     def answer(self, pid: str, chat: str, request_id: str, decision: str, message: str | None, answers) -> None:
         """Ответ на карточку; неверные поля — `invalid`, карточки нет (или ход другого проекта) — `gone`."""
