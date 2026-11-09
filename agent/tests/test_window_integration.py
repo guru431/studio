@@ -69,10 +69,14 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
         root.update()
         pin_bottom = main.pin_line.winfo_rooty() + main.pin_line.winfo_height()
         assert pin_bottom <= main.viewport.winfo_rooty() + main.viewport.winfo_height() + 1
+    root.update()
+    place = main.viewport.yview()
     main.apply_theme("dark")
     main.apply_theme("light")
     root.update()
-    assert main.viewport.yview()[1] == 1.0
+    # Смена темы перекрашивает на месте: прокрутка не сдвигается. Прежнее `== 1.0` держалось только при одном порядке
+    # случаев — строка PIN выше в фокусе прокручивает окно ровно до неё, а не до конца.
+    assert main.viewport.yview() == place
 
 
 @pytest.mark.integration
