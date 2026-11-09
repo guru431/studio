@@ -44,7 +44,7 @@ TTL_SEC = 3600
 JWT_SEC = 12 * 3600
 ENDPOINT_MAX = 1024
 RECORD_SIZE = 4096
-TITLE = "Код"
+TITLE = "Агенты"                      # имя раздела (sections-meta.js); заголовок push и ntfy «Агентов»
 JOB_NOTICES = {
     "images": ("photo", "картинка готова", "картинка не получилась"),
     "videos": ("video", "ролик готов", "ролик не получился"),

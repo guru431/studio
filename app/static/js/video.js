@@ -16,6 +16,8 @@
  * jobs.kick(). «Повторить» и «Ещё варианты» (2–4) у законченного ролика — POST /api/videos/<id>/repeat:
  * тот же кадр, промпт и параметры, новый seed. Текст сервера — только textContent. */
 import { api } from './api.js';
+import { icon } from './icons.js';
+import { menuItem, popupMenu } from './menu.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
 import { fieldBox } from './field.js';
@@ -35,21 +37,8 @@ const QUALITIES = [['fast', 'Быстро 480p'], ['standard', 'Обычно 576
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
 const SOURCES = { given: 'свой промпт', auto: 'придуман по фото', fallback: 'запасной промпт' };
 const RUNNING = new Set(['queued', 'in_progress']);
-const ICONS = {
-  clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
-  down: '<path d="M6 9l6 6 6-6"/>',
-  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
-  save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-};
 
 let screen = null;
-
-function icon(name, cls = 'ico') {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -101,11 +90,14 @@ function build(view, ctx) {
   const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: 'Длительность: 1–30 с' }, seconds,
     el('span', {}, 'с'));
   const qualityName = el('span', { class: 'chip-name' });
-  const chipQuality = el('button', { type: 'button', class: 'chip', id: 'chip-quality', 'aria-haspopup': 'true',
-    'aria-expanded': 'false', 'aria-controls': 'chip-quality-menu' }, qualityName, icon('down', 'ico caret'));
-  const qualityMenu = el('div', { class: 'chip-menu', id: 'chip-quality-menu', role: 'menu', hidden: true },
-    ...QUALITIES.map(([value, label]) => el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio',
-      'data-value': value }, label)));
+  const chipQuality = el('button', { type: 'button', class: 'chip', id: 'chip-quality' }, qualityName, icon('down', 'ico caret'));
+  const qualityMenu = el('div', { class: 'chip-menu', id: 'chip-quality-menu', role: 'menu', 'aria-label': 'Качество' },
+    ...QUALITIES.map(([value, label]) => menuItem(label, { radio: true, attrs: { 'data-value': value }, onSelect: () => {
+      quality = value;
+      paintQuality();
+      qualityPopup.close(true);
+    } })));
+  const qualityPopup = popupMenu(chipQuality, qualityMenu, { side: 'above' });
   const chipSmooth = el('button', { type: 'button', class: 'chip', id: 'chip-smooth', 'aria-pressed': 'true',
     title: 'Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с' }, 'плавно');
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
@@ -171,11 +163,6 @@ function build(view, ctx) {
     chipQuality.setAttribute('aria-label', named);
     chipQuality.title = named;
     for (const b of qualityMenu.children) b.setAttribute('aria-checked', String(b.dataset.value === quality));
-  }
-
-  function openQuality(open) {
-    qualityMenu.hidden = !open;
-    chipQuality.setAttribute('aria-expanded', String(open));
   }
 
   /* фото-источник */
@@ -577,27 +564,7 @@ function build(view, ctx) {
     if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
-  /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */
-  const onDocClick = (event) => {
-    if (!qualityMenu.hidden && !qualityMenu.contains(event.target) && !chipQuality.contains(event.target)) openQuality(false);
-  };
-  const onKey = (event) => {
-    if (event.key !== 'Escape' || qualityMenu.hidden) return;
-    openQuality(false);
-    chipQuality.focus();
-  };
-  document.addEventListener('click', onDocClick, true);
-  document.addEventListener('keydown', onKey);
-
-  chipQuality.addEventListener('click', () => openQuality(qualityMenu.hidden));
-  for (const option of qualityMenu.children) {
-    option.addEventListener('click', () => {
-      quality = option.dataset.value;
-      paintQuality();
-      openQuality(false);
-      chipQuality.focus();
-    });
-  }
+  /* события (меню качества закрывает себя само: menu.js) */
   chipSmooth.addEventListener('click', () => {
     smooth = !smooth;
     chipSmooth.setAttribute('aria-pressed', String(smooth));
@@ -631,8 +598,6 @@ function build(view, ctx) {
     destroy() {
       alive = false;
       selection.destroy();
-      document.removeEventListener('click', onDocClick, true);
-      document.removeEventListener('keydown', onKey);
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);
       running.clear();

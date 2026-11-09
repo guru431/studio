@@ -1,5 +1,6 @@
 /* Экран и ввод живут только в открытом окне. Разрешение меняется исключительно локально в агенте. */
 import { api } from './api.js';
+import { icon } from './icons.js';
 import { el, words } from './ui.js';
 
 const LOCAL = 'Рабочий стол отключён. Человек за компьютером должен включить его в настройках агента.';
@@ -24,10 +25,10 @@ export function desktopView(host, { locked }) {
   const connect = button('connect', 'Подключиться');
   connect.classList.add('btn-accent');
   const refresh = button('refresh', 'Проверить доступ');
-  const disconnect = button('disconnect', '⏻');
+  const disconnect = button('disconnect', icon('power'));
   disconnect.setAttribute('aria-label', 'Отключиться');
   disconnect.title = 'Отключиться';
-  const close = button('close', '×');
+  const close = button('close', icon('x'));
   close.setAttribute('aria-label', 'Закрыть');
   close.title = 'Закрыть';
   const monitor = el('select', { id: 'code-desktop-monitor', 'aria-label': 'Монитор' });

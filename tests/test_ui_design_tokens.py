@@ -161,7 +161,7 @@ SELECTED = """() => {
   const host = document.createElement('div'); host.id = 'probe'; document.body.append(host);
   host.innerHTML = `<div class="chip-menu"><button class="chip-option" role="menuitemradio" aria-checked="true">a</button>
     <button class="chip-option" role="menuitemradio" aria-checked="false">b</button></div>
-    <div class="model-menu"><button class="model-option" aria-current="true">m</button></div>
+    <div class="model-menu"><button class="menu-option model-option" role="menuitemradio" aria-checked="true">m</button></div>
     <nav class="settings-nav"><a href="#" aria-current="page">s</a><a href="#">t</a></nav>
     <div class="code-tabbar"><div class="code-tab" role="tab" aria-selected="true"><span class="code-tab-title">x</span>
       <button class="code-tab-close">×</button></div><div class="code-tab" role="tab" aria-selected="false">y</div></div>`;

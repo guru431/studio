@@ -1,12 +1,17 @@
-/* На телефоне — все разделы либо 3–4 личных и «Ещё». На компьютере остаётся исходный рельс. */
+/* На телефоне — все разделы либо 3–4 личных и «Ещё». На компьютере остаётся исходный рельс.
+ * Порядок и имена — из реестра sections-meta.js (вкладки рельса строит app.js); по умолчанию — Чат, Агенты, Фото.
+ * Сохранённый выбор — набор разделов, не порядок: смена порядка рельса его не ломает. Ниже 400 px в режиме «все»
+ * видны только значки, имя — в aria-label вкладки (app.css). */
 import { el } from './ui.js';
+import { icon } from './icons.js';
+import { NAMES } from './sections-meta.js';
 
-const DEFAULT = ['chat', 'photo', 'code'];
+const DEFAULT = ['chat', 'code', 'photo'];
 
 export function setupMobileNavigation(me, closeMenu) {
   const rail = document.getElementById('rail');
   const tabs = [...rail.querySelectorAll('a.tab[data-section]')];
-  const names = new Map(tabs.map(tab => [tab.dataset.section, tab.lastElementChild.textContent]));
+  const names = new Map(tabs.map(tab => [tab.dataset.section, NAMES[tab.dataset.section]]));
   const key = `studio-mobile-nav:${me.id}`;
   const modeKey = `studio-mobile-nav-mode:${me.id}`;
   const mobile = matchMedia('(max-width: 760px)');
@@ -23,11 +28,11 @@ export function setupMobileNavigation(me, closeMenu) {
   const label = el('span', { id: 'mobile-more-label' }, 'Ещё');
   const more = el('button', { id: 'mobile-more', class: 'mobile-more', type: 'button',
     'aria-haspopup': 'dialog', 'aria-controls': 'mobile-sections', 'aria-expanded': 'false' },
-    el('span', { class: 'mobile-more-icon', 'aria-hidden': 'true' }, '•••'), label);
+    icon('more', 'ico mobile-more-icon'), label);
   rail.insertBefore(more, rail.querySelector('.spacer'));
   const close = el('button', { id: 'mobile-sections-close', class: 'btn-link', type: 'button' }, 'Закрыть');
   const links = el('nav', { id: 'mobile-section-links', 'aria-label': 'Остальные разделы' });
-  const edit = el('button', { id: 'mobile-nav-edit', class: 'btn', type: 'button' }, 'Настроить нижние вкладки');
+  const edit = el('button', { id: 'mobile-nav-edit', class: 'btn', type: 'button' }, 'Настроить нижнюю панель');
   const editor = el('form', { id: 'mobile-nav-editor', hidden: true });
   const compact = el('input', { id: 'mobile-nav-mode-compact', type: 'radio', name: 'mobile-nav-mode', value: 'compact' });
   const all = el('input', { id: 'mobile-nav-mode-all', type: 'radio', name: 'mobile-nav-mode', value: 'all' });
@@ -76,7 +81,7 @@ export function setupMobileNavigation(me, closeMenu) {
     for (const tab of tabs) tab.classList.toggle('mobile-secondary', mode !== 'all' && !primary.includes(tab.dataset.section));
     links.replaceChildren(...tabs.filter(tab => !primary.includes(tab.dataset.section)).map(tab => {
       const link = el('a', { href: tab.getAttribute('href'), 'data-section': tab.dataset.section },
-        tab.querySelector('svg').cloneNode(true), el('span', {}, names.get(tab.dataset.section)));
+        icon(tab.dataset.section), el('span', {}, names.get(tab.dataset.section)));
       return link;
     }));
     setActive(active);

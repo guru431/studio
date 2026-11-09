@@ -273,7 +273,7 @@ def plan_pages(scanned: list[tuple[str, bool]]) -> "tuple[str | None, list[dict]
     waiting = sum(p["state"] == "waiting" for p in pages)
     if waiting > ocr_render.PAGES_MAX:
         raise documents.DocumentError(f"больше {ocr_render.PAGES_MAX} страниц-сканов — распознайте его частями"
-                                      " в разделе «Распознавание»")
+                                      " в разделе «Сканы»")
     if waiting:
         return None, pages
     text = "\n\n".join(t for t in texts if t)

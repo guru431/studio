@@ -8,7 +8,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 NAV_GEOMETRY = """(() => {
   const tabs = [...document.querySelectorAll('#rail .tab, #mobile-more')].filter(e => e.getBoundingClientRect().width);
-  const labels = tabs.map(e => {
+  // ниже 400 px в режиме «все» подписи скрыты (имя — в aria-label): у скрытой подписи нет геометрии
+  const labels = tabs.filter(e => e.querySelector(':scope > span:last-child').getClientRects().length).map(e => {
     const node = e.querySelector(':scope > span:last-child');
     const range = document.createRange(); range.selectNodeContents(node);
     const r = range.getBoundingClientRect(), b = e.getBoundingClientRect();
@@ -127,12 +128,12 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
     values = r['values']
     assert values['services'] and not values['overflow'], values
     if width < 760:
-        assert values['remaining'] == ['video', 'speech', 'transcribe', 'ocr', 'translate']
+        assert values['remaining'] == ['video', 'transcribe', 'speech', 'ocr', 'translate']
         assert values['activeLabel'] == 'Ещё: Разговоры'
         assert not values['activeGeometry']['overlaps'] and all(
             label['inside'] and label['hit'] for label in values['activeGeometry']['labels']), values['activeGeometry']
-        assert values['stored'] == values['kept'] == ['speech', 'transcribe', 'ocr', 'translate']
-        assert values['reset'] == ['chat', 'photo', 'code']
+        assert values['stored'] == values['kept'] == ['transcribe', 'speech', 'ocr', 'translate']
+        assert values['reset'] == ['chat', 'code', 'photo']
         geometry = values['geometry']
         assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels']), geometry
     else:
@@ -157,6 +158,8 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'largeFont', "document.querySelector('#appearance-font').value = '150';"
                              "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))"),
         ('idle',), ('eval', 'geometry', NAV_GEOMETRY),
+        ('eval', 'names', "[...document.querySelectorAll('#rail a.tab')].map(t => [t.getAttribute('aria-label'),"
+                          " t.querySelector(':scope > span:last-child').getClientRects().length > 0])"),
         ('eval', 'buttonRow', "[...document.querySelectorAll('#rail a.tab')].map(t => {const b=t.getBoundingClientRect(); return {top:b.top, width:b.width, height:b.height, iconTop:t.querySelector('svg').getBoundingClientRect().top};})"),
         ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),
         ('screenshot', str(tmp_path / f'all-tabs-{width}-{theme}.png')),
@@ -174,14 +177,17 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'savedCompact', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')")], width=width, mobile=True)
     assert not r.get('failed'), (r.get('failed'), list(r.get('values', {})), r.get('log'))
     values = r['values']
-    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'code']
+    assert values['allTabs'] == values['kept'] == ['chat', 'code', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate']
     assert values['mode'] == 'all' and values['moreHidden'] and not values['overflow'], values
     geometry = values['geometry']
     assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels']), geometry
+    # ниже 400 px — только значки, имя раздела остаётся в aria-label
+    assert [name for name, _ in values['names']] == ['Чат', 'Агенты', 'Фото', 'Видео', 'Разговоры', 'Озвучка', 'Сканы', 'Перевод']
+    assert all(shown == (width >= 400) for _, shown in values['names']), values['names']
     assert len({round(button['top']) for button in values['buttonRow']}) == 1
     assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
     assert all(button['width'] >= width / 8 - 1 and button['height'] >= 44 for button in values['buttonRow'])
-    assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
+    assert values['compact'] == ['code', 'transcribe', 'speech', 'ocr'] and values['savedCompact'] == 'compact'
     assert values['moreActive'] == 'Ещё: Перевод'
     assert all(label['hit'] for label in values['compactGeometry']['labels'])
 
