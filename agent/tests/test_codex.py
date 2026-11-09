@@ -529,3 +529,20 @@ async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, m
     assert out[0]["ok"]
     await task
     await runner.close(final=True)
+
+
+async def test_expected_not_found_keeps_the_shared_metadata_process(runner):
+    """Новый чат без thread: `history` и `state` получают штатный not_found живого сервера — общий
+    metadata-процесс остаётся; закрывает его только обрыв канала."""
+    with pytest.raises(Refused, match="not_found"):
+        await runner.history(runner.project, CHAT, None, 10)
+    await runner.state(runner.project, CHAT)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    runner.fake.read_error = codex_rpc.RpcError(method="thread/read", code=-32603)
+    with pytest.raises(codex_rpc.RpcError):
+        await runner.history(runner.project, CHAT, None, 10)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    runner.fake.read_error = codex_rpc.RpcError(transport=True)
+    with pytest.raises(codex_rpc.RpcError):
+        await runner.history(runner.project, CHAT, None, 10)
+    assert runner.fake.clients[0].closed and runner._meta is None

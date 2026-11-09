@@ -356,3 +356,25 @@ async def test_probe_cleanup_failure_does_not_break_other_backends(runner):
     previous = runner.catalog
     assert not await runner.probe(runner.project)
     assert runner.catalog == previous and all(c.closed for c in runner.fake.clients)
+
+
+async def test_catalog_rpc_survives_a_server_error_and_closes_on_transport_failure(runner, monkeypatch):
+    original = FakeRpc.request
+    failure = {"error": opencode_rpc.RpcError(method="session/list", code=-32000, not_found=True)}
+
+    async def request(self, method, params, **kwargs):
+        if method == "session/list" and failure["error"] is not None:
+            raise failure["error"]
+        return await original(self, method, params, **kwargs)
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    with pytest.raises(opencode_rpc.RpcError):
+        await runner.chats(runner.project)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    failure["error"] = None
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Внешняя сессия"]
+    assert len(runner.fake.clients) == 1
+    failure["error"] = opencode_rpc.RpcError(transport=True)
+    with pytest.raises(opencode_rpc.RpcError):
+        await runner.chats(runner.project)
+    assert runner.fake.clients[0].closed and runner._catalog_rpc is None

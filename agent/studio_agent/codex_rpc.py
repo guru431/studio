@@ -36,14 +36,17 @@ def version(path: Path) -> str:
 
 
 class RpcError(Exception):
-    """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал."""
+    """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал.
 
-    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None):
+    `transport` — канал с app-server оборвался (EOF, не JSON); без него — ответ живого сервера."""
+
+    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None, transport=False):
         super().__init__()
         self.not_found = not_found
         self.writer_active = writer_active
         self.method = method
         self.code = code if type(code) is int else None
+        self.transport = transport
 
 
 class Client:
@@ -113,7 +116,7 @@ class Client:
         finally:
             for rid, future in list(self.pending.items()):
                 if not future.done():
-                    future.set_exception(RpcError(method=self.methods.get(rid)))
+                    future.set_exception(RpcError(method=self.methods.get(rid), transport=True))
             self.inbox.put_nowait(None)
 
     async def disconnect(self):

@@ -113,12 +113,13 @@ async def test_eof_and_rpc_error_fail_pending_requests_without_exposing_body():
     with pytest.raises(RpcError) as error:
         await task
     assert error.value.writer_active and error.value.method == "thread/resume" and str(error.value) == ""
-    assert "private" not in repr(error.value)
+    assert "private" not in repr(error.value) and not error.value.transport
     task = asyncio.create_task(client.request("turn/start", {}))
     await asyncio.sleep(0)
     process.stdout.feed_eof()
-    with pytest.raises(RpcError):
+    with pytest.raises(RpcError) as error:
         await task
+    assert error.value.transport  # обрыв канала — не ответ сервера: общий процесс закрывается только тогда
     assert await client.inbox.get() is None
     await client.disconnect()
     assert not client.methods
