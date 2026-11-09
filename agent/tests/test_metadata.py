@@ -97,6 +97,29 @@ async def test_catalogs_are_parallel_shared_and_activity_is_not_cached(home, tmp
     assert calls == [2, 2]
 
 
+async def test_only_manual_refresh_asks_codex_to_reconcile_its_session_index(home, tmp_path, monkeypatch):
+    root = tmp_path / 'projects'; (root / 'demo').mkdir(parents=True)
+    agent = make(home, root)
+    pid = projects.pid('demo')
+    calls = []
+
+    async def codex_chats(project, refresh=False):
+        calls.append(('codex', refresh))
+        return []
+
+    async def opencode_chats(project):
+        calls.append(('opencode', False))
+        return []
+
+    agent.codex = SimpleNamespace(catalog={}, chats=codex_chats, live=lambda: {})
+    agent.opencode = SimpleNamespace(catalog={}, chats=opencode_chats, live=lambda: {})
+    monkeypatch.setattr(sessions, 'chats', lambda *args: [])
+    await opened(agent)
+    assert (await agent.handle(req('chats', project=pid)))[0]['data']['complete']
+    assert (await agent.handle(req('chats', project=pid, refresh=True)))[0]['data']['complete']
+    assert sorted(calls) == [('codex', False), ('codex', True), ('opencode', False), ('opencode', False)]
+
+
 async def test_catalog_timeout_keeps_shared_read_until_the_next_request(home, tmp_path, monkeypatch):
     root = tmp_path / 'projects'; (root / 'demo').mkdir(parents=True)
     agent = make(home, root)

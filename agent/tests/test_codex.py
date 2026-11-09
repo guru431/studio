@@ -615,6 +615,50 @@ async def test_subagent_requests_reach_the_owner_and_foreign_threads_stay_reject
     assert runner.sent[-1]["e"]["status"] == "done"
 
 
+async def test_manual_refresh_reconciles_the_session_index_with_a_background_full_scan(runner, monkeypatch):
+    """Обычное открытие — только готовый индекс (`useStateDbOnly`), без полного обхода. Ручное обновление
+    отвечает тем же индексом сразу и сверяет его полным обходом отдельным процессом; сессия вне индекса
+    появляется в следующих списках, общий metadata-процесс обход не держит."""
+    original = FakeRpc.request
+    old = "01999999-2222-7333-8444-bbbbbbbbbbbb"
+    gate = asyncio.Event()
+
+    async def request(self, method, params):
+        if method != "thread/list":
+            return await original(self, method, params)
+        self.factory.calls.append((method, params))
+        rows = [{"id": THREAD, "cwd": str(self.factory.project), "preview": "Новая", "updatedAt": 20}]
+        if not params.get("useStateDbOnly"):
+            await gate.wait()
+            rows.append({"id": old, "cwd": str(self.factory.project), "preview": "Старая", "updatedAt": 10})
+        return {"data": rows}
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    clock = [1000.0]
+    runner.now = lambda: clock[0]
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+    assert [p.get("useStateDbOnly") for m, p in runner.fake.calls if m == "thread/list"] == [True]
+    assert [row["title"] for row in await runner.chats(runner.project, refresh=True)] == ["Новая"]
+    scan = next(iter(runner._scans.values()))
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+    gate.set()
+    await scan
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая", "Старая"]
+    assert [p.get("useStateDbOnly") for m, p in runner.fake.calls if m == "thread/list"] == [True, True, None, True, True]
+    meta, full = runner.fake.clients
+    assert full.closed and not meta.closed and not runner._scans
+    # Тот же `refresh` шлёт опрос вкладок раз в 20 с: следующий обход — только через SCAN_EVERY_SEC.
+    clock[0] += codex.SCAN_EVERY_SEC - 1
+    await runner.chats(runner.project, refresh=True)
+    assert not runner._scans and len(runner.fake.clients) == 2
+    clock[0] += 1
+    await runner.chats(runner.project, refresh=True)
+    await asyncio.gather(*runner._scans.values())
+    assert len(runner.fake.clients) == 3 and runner.fake.clients[2].closed
+    await runner.close(final=True)
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+
+
 async def test_expected_not_found_keeps_the_shared_metadata_process(runner):
     """Новый чат без thread: `history` и `state` получают штатный not_found живого сервера — общий
     metadata-процесс остаётся; закрывает его только обрыв канала."""

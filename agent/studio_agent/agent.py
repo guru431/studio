@@ -492,8 +492,12 @@ class Agent:
         async def read(name, backend):
             async def load():
                 async with asyncio.timeout(30):
-                    return (await asyncio.to_thread(sessions.chats, project, {}) if name == "claude"
-                            else await backend.chats(project))
+                    if name == "claude":
+                        return await asyncio.to_thread(sessions.chats, project, {})
+                    if name == "codex" and frame.get("refresh"):
+                        # Ручное обновление: индекс Codex сверяется полным обходом в фоне.
+                        return await backend.chats(project, refresh=True)
+                    return await backend.chats(project)
             try:
                 # Срок ответа не отменяет общее чтение и не сбрасывает RPC других проектов.
                 async with asyncio.timeout(8):
