@@ -267,7 +267,7 @@ try {
                 $file = '{0:D3}-{1:D2}_{2}_s{3}.png' -f ($p + 1), ($k + 1), (Get-Slug $prompt), $seedOut
                 [IO.File]::WriteAllBytes((Join-Path $OutDir $file), [Convert]::FromBase64String($item.b64_json))
                 $manifestLine = "{0}-{1}`t{2}`t{3}`t{4}`t{5}`t{6}`n" -f ($p + 1), ($k + 1), $file, $seedOut, $Size, $Model,
-                    ($prompt -replace "`t", ' ')
+                    ($prompt -replace '[\t\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+', ' ')
                 [IO.File]::AppendAllText($manifest, $manifestLine, $manifestEncoding)
                 $done++
                 Write-Host ("  готово за {0:N0} с → {1}" -f ((Get-Date) - $t0).TotalSeconds, $file)
