@@ -736,6 +736,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     aid = Number(aid);
     if (aid === selected && mode === 'projects') {
       mode = 'loading';
+      // Как show(): идущее обновление сводок прежнего показа отменяется, иначе ↻ осталось бы занятым.
+      refreshing?.abort();
+      refreshing = null;
+      refreshBusy(false);
       projects(++gen, items.find((a) => a.id === aid));
       return;
     }

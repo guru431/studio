@@ -233,13 +233,14 @@ def _refuse(status: int, code: str, message: str, **extra) -> HTTPException:
 
 
 def own_agent(request: Request, aid: int) -> sqlite3.Row:
-    """Компьютер учётки запроса, иначе 404. Его зовёт каждый маршрут раздела — заодно уходит память PDF по сроку."""
+    """Компьютер учётки запроса, иначе 404 с `computer: true` — страница отличает его от `not_found` моста (нет
+    файла, сессии). Его зовёт каждый маршрут раздела — заодно уходит память PDF по сроку."""
     _expire_pdfs()
     code_visualizations.expire()
     row = state.DB.execute("SELECT id, name, has_pin FROM agents WHERE id = ? AND user_id = ?",
                            (aid, request.state.user.id)).fetchone()
     if row is None:
-        raise _refuse(404, "not_found", "нет такого компьютера")
+        raise _refuse(404, "not_found", "нет такого компьютера", computer=True)
     return row
 
 
@@ -731,8 +732,8 @@ def _session_open(digest: str) -> bool:
 
 async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, digest: str):
     """События SSE из очереди наблюдателя: `event: <k>`, данные — событие без `k`; без событий `PING_SEC` —
-    `: ping`. Конец — `done`, `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет) или
-    `closed` (сессия студии заперлась, отперлась, вышла или истекла). После отпирания доступ к компьютеру
+    `: ping`. Конец — `done`, `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет), `online`
+    (канал появился — поток, что ждал компьютер) или `closed` (сессия студии заперлась, отперлась, вышла или истекла). После отпирания доступ к компьютеру
     проверяется заново; оставшийся срок PIN сохраняется. Свою сессию поток сверяет на каждом тике пинга
     и на событиях не чаще `CHECK_SEC`.
     Поток `live` до первого `snapshot` пропускает прочие события: мост шлёт снимок после них, они в нём есть."""
@@ -752,7 +753,7 @@ async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, d
         if kind == "ping":
             yield ": ping\n\n"
             continue
-        if kind in ("offline", "closed"):
+        if kind in ("offline", "online", "closed"):
             yield _sse(kind, {})
             return
         k = e["k"]
@@ -913,13 +914,21 @@ async def claim(aid: int, pid: str, chat: str, body: Claim, request: Request):
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}/live")
 async def live(aid: int, pid: str, chat: str, request: Request):
     """Вернуться к чату: хода нет — одно `idle`; идёт — снимок (мост шлёт его за ответом на `watch`), дальше
-    события. Студия хода не помнит: всё состояние — у моста. Новый чат студии без хода — тоже `idle`."""
+    события. Студия хода не помнит: всё состояние — у моста. Новый чат студии без хода — тоже `idle`.
+    Компьютер не на связи — поток ожидания: `offline {wait: true}`, пинги, затем `online`, как только мост
+    вернулся (`bridge.attach`), — страница сразу открывает `live` снова, без опроса. Прежняя страница видит в
+    `offline` обычный конец потока и опрашивает, как раньше."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
     try:
         q, data = await _watched(request, aid, chat, "watch", quiet=True, project=pid)
     except HTTPException as e:
+        if e.detail["code"] == "offline":
+            q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
+            if aid in bridge.LINKS:                  # вернулся, пока шёл отказ: ждать нечего
+                q.put_nowait(("online", None))
+            return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True)
         if not _new_chat(request, aid, pid, chat, e):
             _warn(request, aid, "watch", e)
             raise

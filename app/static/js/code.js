@@ -466,9 +466,12 @@ function remember(aid, pid, key) {
 /* ---- отказы и PIN ------------------------------------------------------------------ */
 
 /** Отказ запроса: closed — поле PIN этого компьютера в панели (с `file` — после PIN к этому файлу), offline — словами
- * из «Текстов», прочее — словами. */
+ * из «Текстов», прочее — словами. Кэши раздела и метки активности сбрасывают только closed и 404 самого компьютера
+ * (`computer: true`); «нет файла» или сессии моста — обычный отказ. */
 function failed(err, aid, status, file = null) {
-  if (['closed', 'not_found'].includes(err?.code)) document.dispatchEvent(new Event('studio-code-clear'));
+  if (err?.code === 'closed' || (err?.code === 'not_found' && err.detail?.computer === true)) {
+    document.dispatchEvent(new Event('studio-code-clear'));
+  }
   if (err && err.code === 'closed') {
     if (proj && String(proj.aid) === String(aid)) {
       proj.canStart = false;

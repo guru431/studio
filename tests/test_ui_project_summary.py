@@ -397,6 +397,43 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
     assert not problems(result), problems(result)
 
 
+def test_project_refresh_finishes_when_the_same_computer_is_chosen_again(browser, live):
+    """Пока сводки грузятся, нажатие на тот же компьютер перечитывает проекты: прежнее обновление отменяется,
+    ↻ не остаётся занятым, сводки дочитываются заново."""
+    login = "project-summary-same-computer"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"summary": {"findings": 5, "ideas": 2, "changed": 1, "unpushed": 0,
+        "modified": T0, "checked_at": T0, "git": "ok"}}})
+    machine.project_summary = True
+    aid, server = code_online(live, login, machine)
+    gate = """(() => {const real = window.fetch; window.heldSummaries = 0;
+      window.fetch = async (url, options) => {
+        if (window.holdOnce && new URL(String(url), location.href).pathname.endsWith('/summary')) {
+          window.holdOnce = false; window.heldSummaries++;
+          await new Promise(resolve => window.releaseSummary = resolve);
+        }
+        return real(url, options);
+      };return true;})()"""
+    ready = "!document.querySelector('#code-project-refresh')?.disabled && document.querySelector('#code-projects')"
+    busy = "document.querySelector('#code-project-refresh').getAttribute('aria-busy')"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
+            ("eval", "open", f"location.hash='#/code/{aid}';true"), ("wait", ready),
+            ("eval", "hold", "window.holdOnce = true"), ("click", "#code-project-refresh"),
+            ("wait", "window.heldSummaries === 1"),
+            ("click", f"#code-agents li[data-id='{aid}'] button"),
+            ("wait", f"{busy} === 'false' && document.querySelector('.code-project-findings')?.textContent === 'П: 5'"),
+            ("eval", "release", "window.releaseSummary(); true"),
+            ("wait", ready), ("eval", "busy", busy),
+            ("eval", "label", "document.querySelector('#code-project-updated').textContent")])
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["busy"] == "false" and values["label"].startswith("Обновлено:"), values
+    assert not problems(result), problems(result)
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(browser, live, width):
     login = f"project-links-{width}"

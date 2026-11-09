@@ -756,13 +756,13 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
     page.locator('#code-text').blur()
     fits(page)
     page.screenshot(path=str(tmp_path / f'focused-{scale}-{font}.png'))
-    page.locator('#code-effort-pick').tap()
-    page.locator('#code-effort-menu [role="menuitemradio"]').nth(1).tap()
+    # Телефон: модель, усилие и права — одна кнопка #code-settings-pick (code-picker.js codeChoices).
+    page.locator('#code-settings-pick').tap()
+    page.locator('#code-settings-menu [role="group"]').nth(1).locator('[role="menuitemradio"]').nth(1).tap()
     assert page.locator('#code-effort').evaluate("""e => {
-      const r = e.getBoundingClientRect(), label = e.closest('.code-pick');
-      return label.querySelector('.code-pick-value').textContent === e.selectedOptions[0].textContent
-        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2).closest('button')
-          === label.querySelector('.code-pick-trigger');
+      const trigger = document.querySelector('#code-settings-pick'), r = trigger.getBoundingClientRect();
+      return trigger.querySelector('.code-pick-value').textContent.includes(e.selectedOptions[0].textContent)
+        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2).closest('button') === trigger;
     }""")
 
 
