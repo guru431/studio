@@ -1,7 +1,7 @@
 """Accepted POST loss and failed stream reconciliation in the real browser."""
 import pytest
 
-from test_ui_browser import ANSWERED, READY, browser, live, go, open_new_chat, signin
+from test_ui_browser import ANSWERED, READY, attach, browser, live, go, open_new_chat, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -74,6 +74,40 @@ def test_failed_history_read_retries_after_stream_ends_and_keeps_new_draft(brows
     assert not result.get('failed'), result
     assert result['values']['draft'] == 'Next unsent question'
     assert len(live.gw.chat_requests) - before == 1
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_switching_chats_while_sending_clears_the_sent_text_and_chips(browser, live, width):
+    """Отправил текст с документом в А и сразу открыл Б: ответ POST пришёл после смены диалога — отправленное
+    уходит из поля и в Б, своё набранное в Б остаётся."""
+    hold = """(() => {
+      const real=window.fetch;
+      window.fetch=async(url,options={})=>{
+        if (!window.held && String(url).endsWith('/turns')) {
+          window.held=true;
+          await new Promise(resolve=>window.releaseTurn=resolve);
+        }
+        return real(url,options);
+      }; return true;
+    })()"""
+    second = """(async()=>{const {api}=await import('/static/js/api.js');
+      window.second=(await api('POST','/api/chats',{})).id;return true;})()"""
+    chips = "document.querySelectorAll('#composer .att-chip').length"
+    phone = width == 320
+    result = browser.drive(live.url+'/', [*signin(), ('wait', READY), *open_new_chat(mobile=phone),
+        ('eval', 'second', second), ('eval', 'hold', hold),
+        attach("[new File(['Документ для вопроса'], 'note.txt', {type: 'text/plain'})]"),
+        ('wait', f"{chips}===1"),
+        ('type', '#chat-input', 'Sent from A'), ('click', '#send'),
+        ('wait', "typeof window.releaseTurn==='function'"),
+        ('eval', 'switch', "location.hash='#/chat/'+window.second; true"),
+        ('wait', "location.hash==='#/chat/'+window.second && document.querySelectorAll('#messages .msg').length===0"),
+        ('eval', 'release', "window.releaseTurn(); true"),
+        ('wait', f"document.querySelector('#chat-input').value==='' && {chips}===0"),
+        ('type', '#chat-input', 'Draft of B'),
+        ('eval', 'state', f"[document.querySelector('#chat-input').value, {chips}]")], width=width, mobile=phone)
+    assert not result.get('failed'), result
+    assert result['values']['state'] == ['Draft of B', 0]
 
 
 def test_late_recovery_does_not_replace_another_chat_or_its_draft(browser, live):
