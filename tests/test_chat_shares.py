@@ -307,6 +307,22 @@ def test_changed_data_key_makes_links_unavailable_without_a_server_error(studio,
     assert studio.c.delete(endpoint).status_code == 204
 
 
+def test_right_pin_on_an_unreadable_snapshot_is_not_counted_as_a_failure(studio, monkeypatch):
+    """Ревью R6: после смены STUDIO_DATA_KEY верный PIN — «ссылка недоступна» сколько угодно раз, а не пауза
+    `share_locked` после PIN_FAILS попыток; в журнал владельца — ни одного `share_pin_fail`."""
+    endpoint, uid = regular(studio)
+    _, token = create(studio, endpoint)
+    monkeypatch.setattr(state, 'CFG', dataclasses.replace(state.CFG, data_key=Fernet.generate_key().decode()))
+    for _ in range(chat_shares.PIN_FAILS + 2):
+        r = unlock(studio, token)
+        assert r.status_code == 404 and r.json()['detail']['code'] == 'share_gone', r.text
+    row = state.DB.execute('SELECT attempts, fails FROM chat_shares').fetchone()
+    assert tuple(row) == (0, 0)
+    assert state.DB.execute('SELECT attempts FROM chat_share_attempts').fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM security_events WHERE user_id = ? AND kind IN"
+                            " ('share_pin_fail', 'share_locked')", (uid,)).fetchone()[0] == 0
+
+
 def test_reasoning_is_left_out_of_a_link_unless_the_owner_includes_it(studio):
     endpoint, uid = regular(studio)
     state.DB.execute("UPDATE messages SET reasoning = 'Private draft' WHERE id = 'chat-a'")
