@@ -54,9 +54,14 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
   const open = (last = false) => {
     if (!context || busy || menu.matches(':popover-open')) return;
     const box = trigger.getBoundingClientRect();
-    menu.style.top = `${box.bottom + 6}px`;
-    menu.style.right = `${Math.max(8, innerWidth - box.right)}px`;
+    menu.style.top = '8px';
+    menu.style.left = '8px';
+    menu.style.right = 'auto';
     menu.showPopover();
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(box.right - width, innerWidth - width - 8))}px`;
+    menu.style.top = `${box.bottom + height + 6 <= innerHeight - 8
+      ? box.bottom + 6 : Math.max(8, box.top - height - 6)}px`;
     (last ? items.at(-1) : items[0]).focus({ preventScroll: true });
   };
   trigger.addEventListener('click', () => menu.matches(':popover-open') ? close() : open());

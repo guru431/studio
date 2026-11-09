@@ -366,7 +366,7 @@ def test_git_popup_fits_and_respects_busy_chat(iphone, tmp_path):
     page.locator('#code-git .code-git-branch').wait_for()
     pw.expect(page.locator('.code-git-actions')).to_have_count(0)
     assert page.locator('.code-project-tools button').evaluate_all('buttons=>buttons.map(b=>b.id)') == [
-        'code-repo-status', 'code-tab-git', 'code-tab-files', 'code-tab-chat', 'code-share-chat']
+        'code-repo-status', 'code-tab-git', 'code-tab-files', 'code-tab-chat']
     page.locator('#code-repo-status').tap()
     pw.expect(page.locator('#code-git-dialog')).to_be_visible()
     buttons = page.locator('.code-git-actions button')
