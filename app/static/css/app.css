@@ -1248,8 +1248,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-place-agent { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .code-place-sep { flex: none; color: var(--muted); white-space: pre; }
 .code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.code-project-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
-.code-view-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.code-project-tools { display: flex; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
+.code-view-actions { display: flex; flex: none; align-items: center; gap: 6px; }
 .code-views { flex: none; display: flex; gap: 6px; }
 .chat-share-trigger { flex: none; }
 .chat-share-trigger[aria-busy="true"] { opacity: .55; }
