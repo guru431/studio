@@ -406,6 +406,9 @@ class OpenCodeRunner(Runner):
                 if frame is None:
                     raise opencode_rpc.RpcError()
                 if "id" in frame:
+                    # Принадлежность сессии — на момент прихода запроса, а не когда до него дойдёт задача.
+                    session = frame.get("params", {}).get("sessionId")
+                    frame["family"] = session == target or session in t.subtasks
                     task = asyncio.create_task(self._request(t, frame))
                     requests.add(task)
                     task.add_done_callback(requests.discard)
@@ -448,6 +451,7 @@ class OpenCodeRunner(Runner):
                 self._send(t, {"k": "step", **{k: v for k, v in step.items() if k not in ("text", "error")}})
             else:
                 old.update(step)
+            self._adopt(t, update, old or step)
             if update.get("status") in ("completed", "failed"):
                 self._send(t, {"k": "result", "id": step["id"], "text": step["text"], "error": step["error"],
                                **({"changes": step["changes"]} if step.get("changes") and not step["error"] else {})})
@@ -465,6 +469,24 @@ class OpenCodeRunner(Runner):
             t.settings = settings(update, t.access)
             self._send(t, {"k": "settings", **t.settings})
 
+    @staticmethod
+    def _adopt(t, update, step):
+        """Дочерняя сессия инструмента `task` этого хода: OpenCode пишет её в metadata шага
+        (`sessionId`, `parentSessionId`). Только такие сессии получают карточку «Подзадача»."""
+        output = update.get("rawOutput")
+        for source in (output.get("metadata"), output) if isinstance(output, dict) else ():
+            if not isinstance(source, dict):
+                continue
+            child = source.get("sessionId") or source.get("sessionID")
+            parent = source.get("parentSessionId") or source.get("parentSessionID")
+            if (isinstance(child, str) and SESSION_ID.fullmatch(child) and child != t.client.session
+                    and parent in (None, t.client.session) and (child in t.subtasks or len(t.subtasks) < 50)):
+                data = step.get("input") if isinstance(step.get("input"), dict) else {}
+                name = next((v.strip()[:200] for v in (step.get("tool"), data.get("description"),
+                             data.get("subagent_type")) if isinstance(v, str) and v.strip() and v != "Tool"), None)
+                t.subtasks[child] = name or t.subtasks.get(child)
+                return
+
     async def _request(self, t, frame):
         try:
             await self._request_card(t, frame)
@@ -475,9 +497,13 @@ class OpenCodeRunner(Runner):
 
     async def _request_card(self, t, frame):
         method, p = frame["method"], frame.get("params", {})
-        if p.get("sessionId") != t.client.session:
+        session = p.get("sessionId")
+        # Чужая сессия — отказ; дочерняя сессия `task` этого хода — карточка с её именем, ответ тем же id.
+        if not frame.get("family", True) or session != t.client.session and (
+                not isinstance(session, str) or session not in t.subtasks):
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        subtask = (t.subtasks.get(session) or "без имени") if session != t.client.session else None
         rid = secrets.token_hex(8)
         if method == "session/request_permission":
             offered = p.get("options", [])
@@ -511,6 +537,8 @@ class OpenCodeRunner(Runner):
         else:
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        if subtask:
+            event["subtask"] = subtask
         ask = _Ask(event, asyncio.get_running_loop().create_future(), {"frame": frame}, [])
         t.asks[rid] = ask
         self._send(t, event)
