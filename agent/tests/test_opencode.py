@@ -340,6 +340,44 @@ async def test_foreign_request_is_rejected_without_card(runner):
     await task
 
 
+async def test_task_child_session_request_gets_a_subtask_card(runner, monkeypatch):
+    """Дочерняя сессия инструмента `task` текущего хода (metadata.sessionId, parentSessionId — сессия хода):
+    её разрешение — карточка «Подзадача», ответ тем же id; сессия с чужим родителем — отказ без карточки."""
+    original = FakeRpc.request
+    child = "ses_child1"
+
+    async def request(self, method, params, **kwargs):
+        if method == "session/prompt":
+            self.update({"sessionUpdate": "tool_call", "toolCallId": "task1", "title": "Проверка git",
+                         "rawInput": {"description": "Проверка git", "subagent_type": "general"},
+                         "status": "in_progress"})
+            self.update({"sessionUpdate": "tool_call_update", "toolCallId": "task1", "rawOutput": {
+                "metadata": {"parentSessionId": SESSION, "sessionId": child}}})
+            self.update({"sessionUpdate": "tool_call_update", "toolCallId": "task2", "title": "Чужое",
+                         "rawOutput": {"metadata": {"parentSessionId": "ses_other", "sessionId": "ses_foreign"}}})
+            self.inbox.put_nowait({"id": 95, "method": "session/request_permission", "params": {
+                "sessionId": "ses_foreign", "toolCall": {"title": "Shell"}, "options": []}})
+        return await original(self, method, params, **kwargs)
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    runner.fake.ask["params"]["sessionId"] = child
+    runner.start(runner.project, runner.pid, CHAT, "Запусти подзадачу", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        card = runner._turns[CHAT].asks[rid].event
+        assert (card["subtask"], card["tool"], card["input"]) == ("Проверка git", "Shell", {"command": "git status"})
+        assert runner.fake.replies == [{"id": 95, "error": {"code": -32601, "message": "Unsupported request"}}]
+        runner.answer(runner.pid, CHAT, rid, "allow", None, None)
+        await task
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+    assert runner.fake.replies[-1] == {"id": 91, "result": {"outcome": {"outcome": "selected", "optionId": "once"}}}
+    assert len([f for f in runner.sent if f["e"]["k"] == "ask"]) == 1
+
+
 async def test_unavailable_cli_reports_error_without_prompt(runner):
     runner.find_opencode = lambda: None
     assert not await runner.probe(runner.project)

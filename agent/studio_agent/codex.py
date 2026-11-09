@@ -181,6 +181,20 @@ def step_of(item):
     return events.bound(step)
 
 
+def spawned(thread):
+    """`thread/started` субагента: (родительский поток, имя). Thread v2 несёт `parentThreadId` и
+    `agentNickname`/`agentRole`; источник `subAgent.thread_spawn` — запасной путь того же смысла."""
+    source = thread.get("source")
+    sub = source.get("subAgent") if isinstance(source, dict) else None
+    spawn = sub.get("thread_spawn") or sub.get("threadSpawn") if isinstance(sub, dict) else None
+    spawn = spawn if isinstance(spawn, dict) else {}
+    parent = thread.get("parentThreadId") or spawn.get("parent_thread_id") or spawn.get("parentThreadId")
+    name = next((value.strip()[:200] for value in (thread.get("agentNickname"), spawn.get("agent_nickname"),
+                 thread.get("agentRole"), spawn.get("agent_role"), spawn.get("agent_path"))
+                 if isinstance(value, str) and value.strip()), None)
+    return parent, name
+
+
 def normalize(turns):
     out = []
     for turn in turns:
@@ -637,11 +651,13 @@ class CodexRunner(Runner):
                     raise codex_rpc.RpcError()
                 p = frame.get("params", {})
                 if "id" in frame:
+                    # Принадлежность потока — на момент прихода запроса, а не когда до него дойдёт задача.
+                    frame["family"] = p.get("threadId") == target or p.get("threadId") in t.subtasks
                     task = asyncio.create_task(self._request(t, frame))
                     requests.add(task)
                     task.add_done_callback(requests.discard)
                     continue
-                if p.get("threadId") != target:
+                if self._family(t, frame.get("method"), p) or p.get("threadId") != target:
                     continue
                 if frame.get("method") == "turn/completed":
                     if p.get("turn", {}).get("id") != client.turn:
@@ -777,6 +793,62 @@ class CodexRunner(Runner):
                 if ask.data["frame"]["id"] == p.get("requestId"):
                     self._settle(t, rid, None)
 
+    def _family(self, t, method, p):
+        """Субагенты этого хода: потоки, порождённые им (`collabAgentToolCall.receiverThreadIds` от потока
+        хода или уже известного субагента, `thread/started` с `parentThreadId` из них же). Их запросы
+        получают карточку; события самих субагентов — только статусом в сводке. True — событие субагента."""
+        family = {t.client.thread, *t.subtasks} - {None}
+        if method == "thread/started":
+            thread = p.get("thread")
+            if isinstance(thread, dict):
+                parent, name = spawned(thread)
+                if parent in family:
+                    self._adopt(t, thread.get("id"), name)
+            return False
+        sender = p.get("threadId")
+        if sender not in family:
+            return False
+        item = p.get("item") if isinstance(p.get("item"), dict) else {}
+        if method in ("item/started", "item/completed") and item.get("type") == "collabAgentToolCall":
+            for child in item.get("receiverThreadIds") or []:
+                self._adopt(t, child, None)
+        if sender == t.client.thread:
+            return False
+        rows = t.progress.get("agents", [])
+        if method in ("item/started", "item/completed") and item.get("type") == "collabAgentToolCall":
+            rows = codex_progress.children([item], rows)
+        elif method in ("turn/started", "turn/completed"):
+            status = "running" if method == "turn/started" else {
+                "completed": "completed", "interrupted": "interrupted", "failed": "errored"}.get(
+                (p.get("turn") or {}).get("status"), "unknown")
+            rows = [{**row, "status": status} if row["id"] == sender else row for row in rows]
+        elif method == "serverRequest/resolved":
+            self._notification(t, method, p)
+        if rows != t.progress.get("agents", []):
+            t.progress["agents"] = rows
+            self._send(t, {"k": "progress", "agents": rows})
+        return True
+
+    def _adopt(self, t, child, name):
+        if (not isinstance(child, str) or not limits.CHAT_ID.fullmatch(child) or child == t.client.thread
+                or child not in t.subtasks and len(t.subtasks) >= codex_progress.AGENTS_MAX):
+            return
+        t.subtasks[child] = name or t.subtasks.get(child)
+        if name:
+            rows = t.progress.get("agents", [])
+            if not any(row["id"] == child for row in rows):
+                rows = [*rows, {"id": child, "title": name, "status": "running"}][:codex_progress.AGENTS_MAX]
+            else:
+                rows = [{**row, "title": name} if row["id"] == child else row for row in rows]
+            if rows != t.progress.get("agents", []):
+                t.progress["agents"] = rows
+                self._send(t, {"k": "progress", "agents": rows})
+
+    @staticmethod
+    def _subtask_name(t, child):
+        row = next((row for row in t.progress.get("agents", []) if row["id"] == child), {})
+        return t.subtasks.get(child) or row.get("title") or f"Агент {child[:8]}"
+
     async def _request(self, t, frame):
         try:
             await self._request_card(t, frame)
@@ -790,9 +862,13 @@ class CodexRunner(Runner):
 
     async def _request_card(self, t, frame):
         method, p = frame["method"], frame.get("params", {})
-        if p.get("threadId") != t.client.thread:
+        thread = p.get("threadId")
+        # Чужой поток — отказ; субагент этого хода — та же карточка с его именем, ответ — тем же id запроса.
+        if not frame.get("family", True) or thread != t.client.thread and (
+                not isinstance(thread, str) or thread not in t.subtasks):
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        subtask = self._subtask_name(t, thread) if thread != t.client.thread else None
         rid = secrets.token_hex(8)
         if method == "item/tool/requestUserInput":
             rows = p.get("questions")
@@ -821,6 +897,8 @@ class CodexRunner(Runner):
         else:
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        if subtask:
+            event["subtask"] = events.clip(subtask, 200)
         ask = _Ask(event, asyncio.get_running_loop().create_future(), {"frame": frame}, [])
         t.asks[rid] = ask
         self._activity(t, "waiting")

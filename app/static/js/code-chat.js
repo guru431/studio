@@ -916,6 +916,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const card = el('div', { class: 'code-ask', 'data-request': String(a.request_id ?? '') });
     const error = el('p', { class: 'error code-ask-error', 'aria-live': 'polite' });
     const buttons = [];
+    // Запрос субагента хода (Codex, OpenCode): ответ уходит ему же; без поля — запрос самого хода
+    if (typeof a.subtask === 'string' && a.subtask) {
+      card.append(el('p', { class: 'code-ask-subtask muted small' }, `Подзадача · ${a.subtask}`));
+    }
 
     async function reply(body) {
       acted = Date.now();

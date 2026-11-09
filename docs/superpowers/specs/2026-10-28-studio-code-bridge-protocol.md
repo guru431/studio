@@ -343,6 +343,15 @@ PIN-сессия, повторная проверка после чтения. �
 | `snapshot` | `text`, `steps` (как в `history`), `asks` (открытые `ask` без `k`) | всё состояние идущего хода — вместо прежнего |
 | `done` | `status`: `done`, `stopped`, `error`; `message` (при `error`) | ход кончился |
 
+Оба вида `ask` (и в `snapshot.asks`) необязательно несут `subtask` — имя субагента (строка до 200 знаков),
+чей запрос это: Codex — поток, порождённый ходом (`collabAgentToolCall.receiverThreadIds` потока хода или
+известного субагента, `thread/started` с `parentThreadId` из них же); OpenCode — дочерняя сессия инструмента
+`task` (`metadata.sessionId` с `parentSessionId` сессии хода). Ответ — обычный `answer` с тем же `request_id`:
+мост отвечает CLI на исходный запрос субагента. Запросы прочих потоков/сессий мост по-прежнему отклоняет
+без карточки. Без поля — запрос самого хода; страница прежней версии поле не показывает. Ход субагентов Codex
+виден только статусом в `progress.agents` (`running`, `completed`, `interrupted`, `errored`), их шаги и текст
+в ленту хода не попадают. Сервер поле не фильтрует.
+
 С моста 0.15.0 сообщения истории и `snapshot` могут нести `timeline` (до 2000 записей):
 `{kind: "text", start, end, block?, phase?}` ссылается на `[start,end)` единственного `text`
 в единицах UTF-16; `{kind: "step", id}` — на шаг из `steps`. `block` — id текстового элемента CLI,
