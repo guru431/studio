@@ -294,6 +294,20 @@ def test_connection_requires_server_route_and_cannot_expose_browser_token(protec
     assert studio.c.get(f"/api/connections/{remote.conn_id}/token").status_code == 403
 
 
+def test_translation_through_cleaner_sends_no_context_of_the_previous_chunk(protected, monkeypatch):
+    """Конец перевода предыдущего куска — восстановленный Cleaner текст: в указание следующего куска он не идёт."""
+    import translate_text
+    from test_translate import wait_row
+    studio, remote = protected
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    result = studio.c.post("/api/translate", json={"text": "First one is here.\n\nSecond one is here.",
+                                                   "source_lang": "en", "target_lang": "ru",
+                                                   "connection_id": remote.conn_id, "model": "protected-model"})
+    assert result.status_code == 202, result.text
+    assert wait_row(studio, result.json()["id"])["state"] == "done"
+    assert [p["messages"][0]["content"] for p in remote.prepared] == [translate_text.system_prompt("en", "ru")] * 2
+
+
 def test_translation_uses_checked_request_and_shared_document_context(protected):
     studio, remote = protected
     result = studio.c.post("/api/translate", json={"text": f"Текст {EMAIL}", "source_lang": "auto", "target_lang": "en",

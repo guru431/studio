@@ -3,6 +3,7 @@
 - PDF — текстовый слой pypdf (страницы через пустую строку); без слоя — отказ «это скан».
 - DOCX — `word/document.xml` из zip: абзацы `w:p`, текст `w:t`.
 - TXT и MD — UTF-8 (BOM снимается), иначе cp1251.
+- Имя и текст (и текст слоя каждой страницы PDF) — в NFC (`nfc`): иначе поиск не находит их по составным буквам.
 - Отказы — DocumentError со словами для человека; текст, имя файла и байты в журнал не идут:
   журнал pypdf (он пишет начало битого файла) приглушён.
 """
@@ -10,6 +11,7 @@ import asyncio
 import io
 import logging
 import re
+import unicodedata
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -42,11 +44,18 @@ class DocumentError(ValueError):
         self.status = status
 
 
+def nfc(text: str) -> str:
+    """Текст в NFC. Имя и текст документа идут в поиск (триггеры search_*), а FTS5 с remove_diacritics сводит
+    разложенное «й» («и» + U+0306: имена из архивов macOS, слой PDF) к «и», составное «й» запроса — нет: «Чайковский»
+    в NFD не находился бы по «Чайковский». NFC — каноническая эквивалентность, видимый текст тот же."""
+    return unicodedata.normalize("NFC", text)
+
+
 # ---- загрузка ----------------------------------------------------------------
 
 def clean_name(filename: str) -> str:
-    """Имя без каталогов и управляющих знаков, не длиннее NAME_MAX."""
-    name = PurePosixPath(filename.replace("\\", "/")).name
+    """Имя без каталогов и управляющих знаков, в NFC (`nfc`), не длиннее NAME_MAX."""
+    name = PurePosixPath(nfc(filename).replace("\\", "/")).name
     name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
     return name[:NAME_MAX] or "file"
 
@@ -121,7 +130,7 @@ def pdf_pages(data: bytes, probe) -> list:
     pages, chars = [], 0
     try:
         for page in PdfReader(io.BytesIO(data)).pages:
-            text = (page.extract_text() or "").strip()
+            text = nfc(page.extract_text() or "").strip()
             pages.append(probe(page, text))
             chars += len(text)
             if chars > TEXT_MAX_CHARS:
@@ -163,11 +172,11 @@ def _plain(data: bytes) -> str:
 
 
 def extract(name: str, data: bytes) -> str:
-    """Текст документа по расширению имени; отказ — DocumentError."""
+    """Текст документа по расширению имени, в NFC; отказ — DocumentError."""
     suffix = PurePosixPath(name.lower()).suffix
     if suffix not in SUFFIXES:
         raise DocumentError(UNSUPPORTED)
-    text = _pdf(data) if suffix == ".pdf" else _docx(data) if suffix == ".docx" else _plain(data)
+    text = _pdf(data) if suffix == ".pdf" else nfc(_docx(data) if suffix == ".docx" else _plain(data))
     if len(text) > TEXT_MAX_CHARS:
         raise DocumentError(TOO_LONG)
     return text
