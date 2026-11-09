@@ -138,7 +138,7 @@ verify-backup и восстановление, Apache) — [deploy-host](docs/ar
 Контракт — `local-config/cron/project-registry.json::studio.tests`: наборы `main` (корень, `.venv`) и `agent`
 (`agent/`, своя `.venv`, [agent/CLAUDE.md](agent/CLAUDE.md#тесты)); быстрый и полный уровни запускают оба.
 
-    .venv/Scripts/python -m pytest -q                       # быстрый набор: 4 процесса xdist, бюджет 60 с (замер 45–76 с)
+    .venv/Scripts/python -m pytest -q                       # быстрый набор: 4 процесса xdist, бюджет 60 с (без нагрузки ~35–50 с)
     .venv/Scripts/python -m pytest -q -n0 <файл>            # один тест/файл без параллели
     .venv/Scripts/python -m pytest -q -m integration        # браузер (Edge/Chrome + node 22, Firefox, WebKit), PowerShell
     .venv/Scripts/python -m pytest -q -m manual             # живая приёмка после выкладки (команда — testing.md)
@@ -152,7 +152,7 @@ verify-backup и восстановление, Apache) — [deploy-host](docs/ar
 - Без реального времени: часы — `clock.NOW`, паузы — `clock.SLEEP`; шлюз — `httpx.MockTransport` (`tests/fakes.py`);
   мост — `tests/fake_bridge.py` (`FakeMachine`, `InProcessBridge`, `SocketBridge`). Тест дольше 1 с — `integration`;
   `integration`/`manual` — группой `serial`, одним процессом. Срок теста `timeout = 30` (метод `thread`),
-  `faulthandler_timeout = 20`.
+  `faulthandler_timeout = 20`; `--durations=0 --durations-min=1` в `addopts` — каждый прогон называет тесты дольше 1 с.
 - Браузер — 320 и 1280 px; WebKit — `tests/test_ui_webkit.py` (`playwright install webkit`; с `page.route` —
   `service_workers="block"`).
 - `STUDIO_ADMIN_PASSWORD` в vault — пароль восстановления, не рабочий: вход им на проде — 401, и из LAN пятая неудача
