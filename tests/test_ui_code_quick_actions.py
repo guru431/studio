@@ -26,9 +26,10 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
       const view = document.querySelector('#view'), rect = view.getBoundingClientRect();
       const padding = parseFloat(getComputedStyle(view).paddingBottom);
       const toolbar = document.querySelector('.code-status-bar');
+      const history = document.querySelector('.code-chat-history');
       const buttons = ['#code-fork-chat', '#code-subagents', '#code-context', '#code-usage'].map(s => document.querySelector(s));
       return { bottom: Math.abs(composer.bottom - rect.bottom + padding) < 20,
-        navigationLast: toolbar.lastElementChild === document.querySelector('.code-message-nav'),
+        navigationLast: history.lastElementChild === document.querySelector('.code-message-nav'),
         toolbar: !!toolbar && buttons.every(b => toolbar.contains(b)) && !toolbar.closest('form'),
         icons: buttons.slice(0, 2).every(b => b.querySelector('svg') && b.getAttribute('aria-label')),
         order: buttons.every((b,i) => !i || b.getBoundingClientRect().left >= buttons[i-1].getBoundingClientRect().right),
@@ -48,11 +49,12 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
             ("screenshot", str(tmp_path / f"working-chat-{width}.png")),
             ("click", "#code-stop"), ("wait", "document.querySelector('#code-chat').dataset.running === '0'"),
             *code_chat(aid, CODE_CHAT_B),
-            ("eval", "oldBottom", "(() => { const v = document.querySelector('#view'); return v.scrollHeight-v.clientHeight-v.scrollTop < 2; })()"),
-            ("eval", "scrollUp", "document.querySelector('#view').scrollTop=0; true"),
+            ("eval", "oldBottom", "(() => { const v = document.querySelector('#code-chat-scroll'); return v.scrollTop > 1000 && v.scrollHeight-v.clientHeight-v.scrollTop < 2; })()"),
+            ("eval", "scrollUp", "document.querySelector('#code-chat-scroll').scrollTop=0; true"),
+            ("wait", "document.querySelector('#code-chat-scroll').scrollTop === 0"),
             ("eval", "scrolled", shape),
             *code_tab_click(CODE_CHAT_A), *code_tab_click(CODE_CHAT_B),
-            ("eval", "reopenedBottom", "(() => { const v = document.querySelector('#view'); return v.scrollHeight-v.clientHeight-v.scrollTop < 2; })()")],
+            ("eval", "reopenedBottom", "(() => { const v = document.querySelector('#code-chat-scroll'); return v.scrollTop > 1000 && v.scrollHeight-v.clientHeight-v.scrollTop < 2; })()")],
             width=width, mobile=width == 320)
     finally:
         server.stop()

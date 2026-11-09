@@ -644,7 +644,8 @@ function onVisibility() {
 
 async function begin(knownState) {
   try {
-    const state = knownState ? useLockState(knownState) : await lockState();
+    // Как снимок HTML: общий scope объединяет старт с 423 от загрузки профиля.
+    const state = knownState ? useLockState(knownState) : await lockState('security');
     // HTML знает истечение сессии, но hash-маршрут и область защиты проверяет браузер.
     if (state.locked && guarded()) waitOpen(null, state);
     else {
