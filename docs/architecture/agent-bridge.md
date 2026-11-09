@@ -42,9 +42,9 @@
 | 0.15.2 | `context.cache` | §2.2 |
 | 0.15.3 | `followup.position` | §2.2 |
 | 0.16.0 | `hello.visualizations` (`visualization`) | §4 |
-| следующая | `hello.passive_requests` (`req.passive`); `ask.subtask`, `snapshot.asks[].subtask` | §16, §7 |
+| 0.17.0 | `hello.passive_requests` (`req.passive`); `ask.subtask`, `snapshot.asks[].subtask` | §16, §7 |
 
-## Дополнения после 0.16.2 (войдут в следующую версию)
+## 0.17.0
 
 - `codex_rpc.RpcError` / `opencode_rpc.RpcError` — признак `transport`; `codex.CodexRunner._metadata` и
   `opencode.OpenCodeRunner.chats` закрывают общий процесс только при `transport`, сроке или отмене: ответ живого
