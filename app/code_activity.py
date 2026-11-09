@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/code")
 SUMMARY_TIMEOUT = 5
 
 
-async def session_activity(request: Request, aid: int, data: dict) -> list:
+async def session_activity(request: Request, aid: int, data: dict, *, passive: bool = False) -> list:
     """Названия — из каталога моста; непрочитанные отметки живут до просмотра, без часового лимита."""
     items = {}
     for item in data.get("items", []):
@@ -29,7 +29,7 @@ async def session_activity(request: Request, aid: int, data: dict) -> list:
     async def titles(project):
         try:
             async with limit:
-                found = await ask(request, aid, "chats", quiet=True, project=project)
+                found = await ask(request, aid, "chats", quiet=True, passive=passive, project=project)
             for session in found.get("items", []):
                 item = items.get(session.get("chat")) if isinstance(session, dict) else None
                 if item is None or item["project"] != project:
@@ -53,7 +53,8 @@ async def session_activity(request: Request, aid: int, data: dict) -> list:
 
 @router.get("/activity")
 async def all_activity(request: Request):
-    """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем."""
+    """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем. Значок опрашивает её
+    из любого раздела — все просьбы фоновые и срок PIN компьютера не продлевают."""
     agents = [dict(row) for row in state.DB.execute("SELECT id, has_pin FROM agents WHERE user_id = ? ORDER BY id",
                                                    (request.state.user.id,))
               if (link := bridge.LINKS.get(row["id"])) is not None and link.hello.get("project_activity")]
@@ -63,13 +64,13 @@ async def all_activity(request: Request):
         try:
             async with asyncio.timeout(SUMMARY_TIMEOUT):
                 try:
-                    data = await ask(request, aid, "activity", quiet=True)
+                    data = await ask(request, aid, "activity", quiet=True, passive=True)
                 except HTTPException as error:
                     if error.detail.get("code") != "closed" or agent["has_pin"]:
                         raise
-                    await ask(request, aid, "open", quiet=True, pin=None)
-                    data = await ask(request, aid, "activity", quiet=True)
-                items = await session_activity(request, aid, data)
+                    await ask(request, aid, "open", quiet=True, passive=True, pin=None)
+                    data = await ask(request, aid, "activity", quiet=True, passive=True)
+                items = await session_activity(request, aid, data, passive=True)
             return {"aid": aid, "items": items}
         except (HTTPException, TimeoutError):
             return {"aid": aid, "items": []}

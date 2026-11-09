@@ -127,7 +127,8 @@ class Agent:
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                 "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True}
+                 "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
+                 "passive_requests": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -206,9 +207,13 @@ class Agent:
         idle_sec = frame.get("idle_sec", limits.OPEN_IDLE_SEC)
         if type(idle_sec) is not int or not 60 <= idle_sec <= 604800:
             raise Refused("invalid")
+        # Фоновая просьба студии (опрос, не действие владельца) проверяет срок PIN, но не продлевает его.
+        passive = frame.get("passive", False)
+        if type(passive) is not bool:
+            raise Refused("invalid")
         if op == "open":
-            return await self._open(session, frame.get("pin"), idle_sec)
-        if not self.open.touch(session, idle_sec):
+            return await self._open(session, frame.get("pin"), idle_sec, passive=passive)
+        if not self.open.alive(session, idle_sec):
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
@@ -239,17 +244,23 @@ class Agent:
             elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
         if op.startswith("desktop_"):
+            self._desktop_fields(op, frame)
+        # Продлевает только принятая просьба владельца: неизвестные и отклонённые по виду — нет.
+        if not passive:
+            self.open.touch(session, idle_sec)
+        if op.startswith("desktop_"):
             return await self._desktop_request(op, frame)
         result = await getattr(self, "_op_" + op)(frame, after)
         if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
             self._metadata.invalidate(frame.get("project"))
         return result
 
-    async def _desktop_request(self, op, frame):
+    @staticmethod
+    def _desktop_fields(op, frame):
         fields = {"desktop_status": set(), "desktop_start": set(), "desktop_stop": {"control"},
                   "desktop_frame": {"control", "monitor"}, "desktop_input": {"control", "events"},
                   "desktop_clipboard": {"control", "text"}}[op]
-        common = {"t", "id", "op", "session", "idle_sec"}
+        common = {"t", "id", "op", "session", "idle_sec", "passive"}
         supplied = set(frame) - common
         if op == "desktop_frame":
             supplied.discard("max_edge")
@@ -258,6 +269,10 @@ class Agent:
         control = frame.get("control")
         if "control" in fields and not (isinstance(control, str) and desktop.CONTROL.fullmatch(control)):
             raise Refused("invalid")
+
+    async def _desktop_request(self, op, frame):
+        """Поля проверены `_desktop_fields` до продления срока PIN."""
+        control = frame.get("control")
         session = frame["session"]
         if op == "desktop_status":
             return self.desktop.status()
@@ -332,8 +347,9 @@ class Agent:
             return True
         raise AssertionError(name)
 
-    async def _open(self, session: str, pin, idle_sec: int = limits.OPEN_IDLE_SEC) -> dict:
-        """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить; блок; `null` — нужен PIN; проверка.
+    async def _open(self, session: str, pin, idle_sec: int = limits.OPEN_IDLE_SEC, *, passive: bool = False) -> dict:
+        """Порядок — Ruling 4: без PIN — открыть; `null` открытой — продлить (фоновая — только проверить); блок;
+        `null` — нужен PIN; проверка.
 
         Пока шла проверка, пришёл новый канал (`new_link`) — сессия не открывается, `closed`:
         поздняя проверка прежнего канала не должна давать доступ по новому (протокол §3)."""
@@ -345,7 +361,7 @@ class Agent:
             if not has_pin:
                 self._open_now(session, link)
                 return {}
-            if pin is None and self.open.touch(session, idle_sec):
+            if pin is None and (self.open.alive(session, idle_sec) if passive else self.open.touch(session, idle_sec)):
                 return {}
             if locked:
                 raise Refused("pin_locked")
@@ -618,7 +634,7 @@ class Agent:
     async def _op_visualization(self, frame, after):
         project = await self._project(frame)
         result = await asyncio.to_thread(visualizations.read, project, frame["source"])
-        if not self.open.touch(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
+        if not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
             raise Refused("closed")
         return result
 

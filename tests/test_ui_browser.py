@@ -8158,6 +8158,7 @@ def test_code_idle_tab_polls_live(browser, live):
     login = "code-idle-poll"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.passive_requests = True
     aid, sb = code_online(live, login, machine)
 
     def start():
@@ -8175,7 +8176,10 @@ def test_code_idle_tab_polls_live(browser, live):
     finally:
         sb.stop()
     assert not r.get("failed"), r
-    assert len(code_requests(machine, "watch")) >= 3 and code_requests(machine, "turn") == []
+    watches = code_requests(machine, "watch")
+    assert len(watches) >= 3 and code_requests(machine, "turn") == []
+    # Открытие чата — действие владельца, опрос по таймеру — фоновый: срок PIN компьютера не продлевает.
+    assert "passive" not in watches[0] and all(q.get("passive") is True for q in watches[1:]), watches
     assert not known_refusals(problems(r), 409), problems(r)
 
 
@@ -9816,6 +9820,7 @@ def test_code_tab_marks_follow_the_machine(browser, live):
     login = "code-marks"
     live.add_user(login)
     machine = code_three()
+    machine.passive_requests = True
     aid, sb = code_online(live, login, machine)
     mark = CODE_MARK.format(CODE_CHAT_B)
 
@@ -9851,6 +9856,10 @@ def test_code_tab_marks_follow_the_machine(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     assert r["values"]["label"] == "идёт ход" and r["values"]["a"] is None
+    # Опрос меток и Git — фоновые просьбы; открытие проекта — нет.
+    assert any(q.get("passive") is True for q in code_requests(machine, "chats"))
+    assert any(q.get("passive") is True for q in code_requests(machine, "git"))
+    assert "passive" not in code_requests(machine, "chats")[0]
     assert not problems(r), problems(r)
 
 

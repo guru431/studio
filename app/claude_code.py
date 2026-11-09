@@ -263,10 +263,15 @@ def _warn(request: Request, aid: int, op: str, error: HTTPException) -> None:
     log.warning("пользователь %d: компьютер %d — %s: %s", request.state.user.id, aid, op, error.detail["code"])
 
 
-async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **args) -> dict:
+async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passive: bool = False, **args) -> dict:
     """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
-    запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи»."""
+    запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи».
+
+    Фоновая просьба (`passive` или заголовок страницы `X-Studio-Passive: 1` у опросов по таймеру) мосту с
+    `hello.passive_requests` идёт с `passive: true`: он проверяет срок PIN компьютера, не продлевая его.
+    Заголовок может только ужесточить доступ, поэтому ему можно верить."""
+    passive = passive or request.headers.get("x-studio-passive") == "1"
     if "chat" in args:
         window = request.headers.get("x-studio-window")
         if window is not None:
@@ -283,12 +288,16 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, **arg
         raise _refuse(422, "invalid", BAD_BODY) from None
     try:
         link = bridge.LINKS.get(aid)
+        if link is None:
+            raise bridge.Offline()  # без знакомства поддержку таймера не проверить: ждать возвращения моста
         timeout = state.DB.execute("SELECT computer_pin_timeout FROM users WHERE id = ?",
                                    (request.state.user.id,)).fetchone()[0]
-        if link is not None and link.hello.get("pin_timeout"):
+        if link.hello.get("pin_timeout"):
             args["idle_sec"] = timeout
         elif timeout != lock_policy.COMPUTER_TIMEOUT:
             raise _refuse(409, "unsupported", "обновите агент на компьютере для настройки таймера PIN")
+        if passive and link.hello.get("passive_requests"):
+            args["passive"] = True
         data = await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
         # The computer may finish its work after logout, expiry, disable or a screen lock.
         # Keeping that result on the computer does not authorize delivery to this request.

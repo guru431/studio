@@ -4,6 +4,7 @@ from fastapi import HTTPException
 
 import db
 import bridge
+import fake_bridge
 import claude_code
 import lock_policy
 import media
@@ -175,6 +176,25 @@ def test_computer_timer_is_persisted_and_relayed_to_capable_bridge(studio):
     assert studio.c.get(url(aid, "projects")).status_code == 200
     assert machine.requests[-1]["idle_sec"] == 600
     assert studio.c.get("/api/me").json()["screen_lock_timeout"] == 60
+    # Мост пропал (перезапуск, сон): «не на связи», страница ждёт его возвращения, а не просит обновления.
+    fake_bridge.drop(studio, link)
+    response = studio.c.get(url(aid, "projects"))
+    assert (response.status_code, response.json()["detail"]["code"]) == (409, "offline")
+
+
+def test_background_polls_are_passive_only_for_a_capable_bridge(studio):
+    aid, machine, link = setup(studio)
+    git = url(aid, "projects", "0" * 16, "git")
+    assert studio.c.get(git, headers={"x-studio-passive": "1"}).status_code in (200, 404, 409)
+    assert "passive" not in machine.requests[-1]  # старый мост не знает поля
+    link.hello["passive_requests"] = True
+    studio.c.get(git, headers={"x-studio-passive": "1"})
+    assert machine.requests[-1]["passive"] is True
+    studio.c.get(git)
+    assert "passive" not in machine.requests[-1]  # действие владельца продлевает срок, как прежде
+    link.hello["project_activity"] = True
+    assert studio.c.get("/api/code/activity").status_code == 200  # значок раздела — всегда фоновый
+    assert machine.requests[-1]["op"] == "activity" and machine.requests[-1]["passive"] is True
 
 
 @pytest.mark.parametrize("value", [0, 59, 604801, True, None, "600"])

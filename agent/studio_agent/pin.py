@@ -101,14 +101,19 @@ class OpenSessions:
     def open(self, session: str) -> None:
         self._seen[session] = self._now()
 
-    def touch(self, session: str, idle_sec: int = OPEN_IDLE_SEC) -> bool:
-        """Открыта и не простаивала дольше idle_sec — продлить; иначе убрать и False."""
+    def alive(self, session: str, idle_sec: int = OPEN_IDLE_SEC) -> bool:
+        """Открыта и не простаивала дольше idle_sec — True без продления; иначе убрать и False."""
         seen = self._seen.get(session)
-        now = self._now()
-        if seen is None or now - seen > idle_sec:
+        if seen is None or self._now() - seen > idle_sec:
             self._seen.pop(session, None)
             return False
-        self._seen[session] = now
+        return True
+
+    def touch(self, session: str, idle_sec: int = OPEN_IDLE_SEC) -> bool:
+        """Открыта и не простаивала дольше idle_sec — продлить; иначе убрать и False."""
+        if not self.alive(session, idle_sec):
+            return False
+        self._seen[session] = self._now()
         return True
 
     def close(self, session: str) -> None:

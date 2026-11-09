@@ -79,7 +79,8 @@ export function usageView(host, { aid, engine, supported }) {
       ...links.map((link) => el('p', {}, el('a', { href: link.url, target: '_blank', rel: 'noopener noreferrer' }, link.label)))
     ].filter((node) => node !== null));
   }
-  async function load(fresh = false) {
+  /** passive — обновление после конца задания, не по действию владельца: срок PIN компьютера не продлевает. */
+  async function load(fresh = false, passive = false) {
     if (loading) return;
     if (!supported) {
       content.replaceChildren(el('p', {}, 'Обновите мост на компьютере для просмотра лимитов и статистики.'));
@@ -92,7 +93,7 @@ export function usageView(host, { aid, engine, supported }) {
     if (dialog.open) content.replaceChildren(el('p', { class: 'muted' }, 'Получаю данные подписки…'));
     try {
       const data = await api('GET', `/api/code/agents/${aid}/usage?engine=${engine}&refresh=${fresh}`, undefined,
-        { signal: controller.signal });
+        { signal: controller.signal, ...(passive ? { headers: { 'x-studio-passive': '1' } } : {}) });
       if (alive) paint(data);
     } catch (err) {
       if (alive && !controller.signal.aborted) {
@@ -110,5 +111,5 @@ export function usageView(host, { aid, engine, supported }) {
   button.addEventListener('click', () => { dialog.showModal(); load(); });
   refresh.addEventListener('click', () => load(true));
   load();
-  return { button, refresh: () => load(), unmount() { alive = false; controller?.abort(); dialog.remove(); } };
+  return { button, refresh: () => load(false, true), unmount() { alive = false; controller?.abort(); dialog.remove(); } };
 }
