@@ -605,6 +605,7 @@ class FakeMachine:
         run = self.running[chat_id]
         run.setdefault("timeline", [])
         run.setdefault("progress", {})
+        run.setdefault("rest", [])      # ход, собранный тестом вручную: без него KeyError тихо съедал `asked`
         while run["rest"]:
             e = run["rest"].pop(0)
             if e["k"] == "done":
