@@ -622,6 +622,7 @@ async def test_manual_refresh_reconciles_the_session_index_with_a_background_ful
     original = FakeRpc.request
     old = "01999999-2222-7333-8444-bbbbbbbbbbbb"
     gate = asyncio.Event()
+    started = asyncio.Event()
 
     async def request(self, method, params):
         if method != "thread/list":
@@ -629,6 +630,7 @@ async def test_manual_refresh_reconciles_the_session_index_with_a_background_ful
         self.factory.calls.append((method, params))
         rows = [{"id": THREAD, "cwd": str(self.factory.project), "preview": "Новая", "updatedAt": 20}]
         if not params.get("useStateDbOnly"):
+            started.set()
             await gate.wait()
             rows.append({"id": old, "cwd": str(self.factory.project), "preview": "Старая", "updatedAt": 10})
         return {"data": rows}
@@ -640,6 +642,7 @@ async def test_manual_refresh_reconciles_the_session_index_with_a_background_ful
     assert [p.get("useStateDbOnly") for m, p in runner.fake.calls if m == "thread/list"] == [True]
     assert [row["title"] for row in await runner.chats(runner.project, refresh=True)] == ["Новая"]
     scan = next(iter(runner._scans.values()))
+    await started.wait()
     assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
     gate.set()
     await scan
