@@ -1214,21 +1214,25 @@ async def get_chat(chat_id: str, request: Request):
     row = _chat_row(uid, chat_id)
     atts = _attachments(chat_id)
     all_atts = [a for group in atts.values() for a in group]
-    scans, sources = {}, set()
-    pending = [a["id"] for a in all_atts if a["kind"] == "document" and a["text"] is None]
-    if pending:
-        marks = ",".join("?" * len(pending))
+    scans, sources, rescan = {}, set(), set()
+    docs = [a["id"] for a in all_atts if a["kind"] == "document"]
+    if docs:
+        # одним запросом: идущие сканы вложений (`ocr`) и кончившиеся с нераспознанными страницами (`rescan`)
+        marks = ",".join("?" * len(docs))
         for scan in state.DB.execute(
-                f"SELECT attachment_id, id FROM scans WHERE user_id = ? AND state IN {ocr.RUNNING}"
-                f" AND attachment_id IN ({marks}) ORDER BY created, rowid", (uid, *pending)):
-            scans.setdefault(scan["attachment_id"], []).append(scan["id"])
+                f"SELECT s.attachment_id, s.id, s.state, EXISTS (SELECT 1 FROM scan_pages p WHERE p.scan_id = s.id"
+                f" AND p.state IN ('failed', 'waiting')) AS unread FROM scans s WHERE s.user_id = ?"
+                f" AND s.attachment_id IN ({marks}) ORDER BY s.created, s.rowid", (uid, *docs)):
+            if scan["state"] in ocr.RUNNING:
+                scans.setdefault(scan["attachment_id"], []).append(scan["id"])
+            elif scan["unread"]:
+                rescan.add(scan["attachment_id"])
+        rescan -= set(scans)
     linked = {a["source_transcript_id"] for a in all_atts if a["source_transcript_id"] is not None}
     if linked:
         marks = ",".join("?" * len(linked))
         sources = {r[0] for r in state.DB.execute(
             f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
-    docs = [a["id"] for a in all_atts if a["kind"] == "document"]
-    rescan = _rescannable(uid, docs) if docs else set()
     views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
     return {"chat": _chat_view(uid, row),
             "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
@@ -1395,16 +1399,6 @@ def _scan_of(user_id: int, att_id: str):
     """Последний документ распознавания вложения (или None)."""
     return state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND attachment_id = ?"
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (user_id, att_id)).fetchone()
-
-
-def _rescannable(user_id: int, att_ids: list[str]) -> set[str]:
-    """Вложения, чей скан кончился и в нём есть нераспознанные страницы (`failed`, `waiting`): «Распознать заново»."""
-    marks = ",".join("?" * len(att_ids))
-    return {r[0] for r in state.DB.execute(
-        f"SELECT s.attachment_id FROM scans s WHERE s.user_id = ? AND s.attachment_id IN ({marks})"
-        f" AND s.state IN {ocr.TERMINAL} AND EXISTS (SELECT 1 FROM scan_pages p WHERE p.scan_id = s.id"
-        f" AND p.state IN ('failed', 'waiting')) AND NOT EXISTS (SELECT 1 FROM scans t WHERE t.user_id = s.user_id"
-        f" AND t.attachment_id = s.attachment_id AND t.state IN {ocr.RUNNING})", (user_id, *att_ids))}
 
 
 @router.post("/attachments/{att_id}/ocr", status_code=202)
