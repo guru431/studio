@@ -222,8 +222,12 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None
     if not out["users"]:
         problems.append("в копии нет ни одной учётки")
     key = Fernet(cfg.data_key)
+    # ссылки «Поделиться»: ключ ссылки и снимок (`sealed`; без шифра — копия до шага 36, его шифрует seal())
     for sql, name, words in (("SELECT token_enc FROM connections", "tokens", "токены подключений"),
-                             ("SELECT exa_key FROM users WHERE exa_key IS NOT NULL", "exa_keys", "ключи Exa")):
+                             ("SELECT exa_key FROM users WHERE exa_key IS NOT NULL", "exa_keys", "ключи Exa"),
+                             ("SELECT token_enc FROM chat_shares UNION ALL"
+                              " SELECT sealed FROM chat_shares WHERE sealed IS NOT NULL", "shares",
+                              "ссылки «Поделиться»")):
         count = out[name]
         for (blob,) in conn.execute(sql):
             try:
@@ -266,13 +270,14 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     копируется файлом `verify-<случайное>.db` в tmp_dir (локальный диск; файл, а не каталог: каталог
     уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
     копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
-    токены подключений и ключи Exa учёток текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
+    токены подключений, ключи Exa учёток и ссылки «Поделиться» текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
     обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
     out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
            "users": None, "tokens": {"ok": 0, "failed": 0}, "exa_keys": {"ok": 0, "failed": 0},
+           "shares": {"ok": 0, "failed": 0},
            "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
            "ok": False, "took": 0, "problems": []}
     try:
