@@ -32,14 +32,16 @@ export function projectGit(aid, pid) {
       fn(state);
       return () => listeners.delete(fn);
     },
-    refresh(force = false) {
+    /** passive — опрос по таймеру или после конца задания: мост проверяет срок PIN, не продлевая его. */
+    refresh(force = false, passive = false) {
       if (!alive) return Promise.resolve();
       if (pending) return pending;
       // Переключение вида сразу после открытия проекта использует тот же снимок.
       if (!force && readAt && Date.now() - readAt < 5000) return Promise.resolve();
       publish({ ...state, loading: true });
       const mine = gen;
-      pending = api('GET', `/api/code/agents/${aid}/projects/${pid}/git`).then(
+      pending = api('GET', `/api/code/agents/${aid}/projects/${pid}/git`, undefined,
+        passive ? { headers: { 'x-studio-passive': '1' } } : {}).then(
         (data) => { if (mine === gen) publish({ data, error: null, loading: false }); },
         (error) => { if (mine === gen) publish({ data: null, error, loading: false }); },
       ).finally(() => {
