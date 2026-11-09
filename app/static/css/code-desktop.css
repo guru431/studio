@@ -2,18 +2,18 @@
 .code-desktop-dialog[open] {
   display: flex;
   flex-direction: column;
-  gap: .8rem;
-  width: min(520px, calc(100vw / var(--ui-scale, 1) - 24px));
+  gap: var(--space-6);
+  width: min(520px, calc(100 * var(--vw) - 24px));
   max-width: none;
-  max-height: calc(100dvh / var(--ui-scale, 1) - 24px);
+  max-height: calc(100 * var(--dvh) - 24px);
   margin: auto;
-  padding: 1rem;
+  padding: var(--space-7);
 }
 .code-desktop-dialog[open].is-connected {
-  gap: .35rem;
-  width: calc(100vw / var(--ui-scale, 1));
-  height: calc(100dvh / var(--ui-scale, 1));
-  max-height: calc(100dvh / var(--ui-scale, 1));
+  gap: var(--space-3);
+  width: calc(100 * var(--vw));
+  height: calc(100 * var(--dvh));
+  max-height: calc(100 * var(--dvh));
   margin: 0;
   padding: 0;
   border: 0;
@@ -23,7 +23,7 @@
 .code-desktop-heading {
   display: flex;
   flex: 0 0 auto;
-  gap: .4rem;
+  gap: var(--space-3);
   align-items: center;
 }
 .code-desktop-dialog .code-desktop-heading h2 {
@@ -33,55 +33,55 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   margin: 0;
-  font-size: calc(1rem * var(--font-scale, 1));
+  font-size: var(--fs-lg);
 }
 .code-desktop-heading > button { flex: 0 0 auto; }
 .code-desktop-dialog .code-desktop-status {
   margin: 0;
-  padding: .75rem;
-  border-radius: 8px;
-  background: var(--panel-2);
-  font-size: calc(.85rem * var(--font-scale, 1));
+  padding: var(--space-6);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .is-connected .code-desktop-heading, .is-connected .code-desktop-status,
 .is-connected > .code-desktop-actions {
-  padding-inline: max(.4rem, env(safe-area-inset-left)) max(.4rem, env(safe-area-inset-right));
+  padding-inline: max(var(--space-3), var(--safe-left)) max(var(--space-3), var(--safe-right));
 }
-.is-connected .code-desktop-heading { padding-top: max(.25rem, env(safe-area-inset-top)); }
+.is-connected .code-desktop-heading { padding-top: max(var(--space-2), env(safe-area-inset-top)); }
 .code-desktop-dialog.is-connected .code-desktop-status {
   padding-block: 0;
   background: none;
-  font-size: calc(.75rem * var(--font-scale, 1));
+  font-size: var(--fs-xs);
 }
 .code-desktop-actions, .code-desktop-keys, .code-desktop-mouse-tools {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
-  gap: .35rem;
+  gap: var(--space-3);
 }
-.code-desktop-toolbar { padding-bottom: .35rem; }
+.code-desktop-toolbar { padding-bottom: var(--space-3); }
 .code-desktop-monitor-label, .code-desktop-resolution-label {
   display: flex;
-  gap: .25rem;
+  gap: var(--space-2);
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  font-size: calc(.75rem * var(--font-scale, 1));
+  font-size: var(--fs-xs);
 }
 .code-desktop-monitor-label { flex: 0 1 19rem; }
 .code-desktop-monitor-label select { min-width: 0; max-width: 100%; flex: 1; }
 .code-desktop-dialog select {
-  min-height: 32px;
-  padding: 3px 4px;
-  font-size: max(16px, calc(16px * var(--font-scale, 1)));
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  min-height: var(--h-sm);
+  padding: 3px var(--space-2);
+  font-size: max(16px, var(--fs-lg));
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
 }
-.code-desktop-modes, .code-desktop-scaling { display: flex; flex: 0 0 auto; gap: .2rem; }
-.code-desktop-scaling { padding-left: .35rem; border-left: 1px solid var(--border); }
+.code-desktop-modes, .code-desktop-scaling { display: flex; flex: 0 0 auto; gap: var(--space-1); }
+.code-desktop-scaling { padding-left: var(--space-3); border-left: 1px solid var(--line); }
 #code-desktop-zoom-reset { min-width: 4.2em; font-variant-numeric: tabular-nums; }
 .code-desktop-body {
   display: flex;
@@ -98,7 +98,6 @@
   margin: auto;
   overflow: hidden;
 }
-.code-desktop-dialog [hidden] { display: none !important; }
 #code-desktop-screen {
   display: block;
   width: 100%;
@@ -128,32 +127,32 @@
   display: grid;
   flex: 0 1 auto;
   min-height: 0;
-  max-height: 38dvh;
+  max-height: calc(38 * var(--dvh));
   overflow: auto;
-  gap: .45rem;
-  padding: .4rem max(.4rem, env(safe-area-inset-right)) max(.4rem, env(safe-area-inset-bottom)) max(.4rem, env(safe-area-inset-left));
-  border-top: 1px solid var(--border);
+  gap: var(--space-4);
+  padding: var(--space-3) max(var(--space-3), var(--safe-right)) max(var(--space-3), env(safe-area-inset-bottom)) max(var(--space-3), var(--safe-left));
+  border-top: 1px solid var(--line);
 }
 .code-desktop-tools p { margin: 0; }
 .code-desktop-dialog .btn {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 4px 7px;
-  font-size: calc(.8rem * var(--font-scale, 1));
+  min-width: var(--h-sm);
+  min-height: var(--h-sm);
+  padding: var(--space-2) 7px;
+  font-size: var(--fs-sm);
   line-height: 1.2;
   white-space: nowrap;
 }
 .code-desktop-dialog .btn[aria-pressed="true"]:not(.btn-accent):not(.solid) {
   background: var(--accent);
-  color: var(--accent-text);
+  color: var(--on-accent);
 }
-#code-desktop-close { font-size: 1.3rem; padding: 0; }
+#code-desktop-close { font-size: var(--fs-2xl); padding: 0; }
 .code-desktop-dialog > .code-desktop-mouse-tools {
   flex: 0 0 auto;
-  padding: .25rem max(.4rem, env(safe-area-inset-right)) max(.25rem, env(safe-area-inset-bottom)) max(.4rem, env(safe-area-inset-left));
-  border-top: 1px solid var(--border);
+  padding: var(--space-2) max(var(--space-3), var(--safe-right)) max(var(--space-2), env(safe-area-inset-bottom)) max(var(--space-3), var(--safe-left));
+  border-top: 1px solid var(--line);
 }
-.code-desktop-entry { display: flex; align-items: stretch; gap: .25rem; }
+.code-desktop-entry { display: flex; align-items: stretch; gap: var(--space-2); }
 .code-desktop-entry textarea { flex: 1; min-width: 0; }
-.code-desktop-clipboard { display: grid; gap: .25rem; }
-.code-desktop-tools textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 2.5rem; font-size: 16px; }
+.code-desktop-clipboard { display: grid; gap: var(--space-2); }
+.code-desktop-tools textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 2.5rem; font-size: max(16px, var(--fs-lg)); }

@@ -474,7 +474,7 @@ function build(view, ctx) {
     el('span', { class: 'sr' }, 'Прикрепить файл'), file);
   const send = el('button', { type: 'submit', id: 'send', class: 'send composer-go', 'aria-label': 'Отправить',
     title: 'Отправить' }, icon('send'));
-  const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go', 'aria-label': 'Остановить',
+  const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go composer-stop', 'aria-label': 'Остановить',
     title: 'Остановить', hidden: true }, icon('stop'));
   // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
   const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
