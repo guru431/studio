@@ -18,6 +18,7 @@ from .turns import Runner, _Ask
 
 log = logging.getLogger(__name__)
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+SCAN_EVERY_SEC = 600  # полный обход сессий проекта для сверки готового индекса — не чаще
 
 
 def same_project(left, right) -> bool:
@@ -255,6 +256,8 @@ class CodexRunner(Runner):
         self._usage_lock = asyncio.Lock()
         self._histories = metadata.HistoryIndex()
         self._history_paths = {}
+        # Сверка готового индекса сессий полным обходом: задачи, сессии вне индекса, ID из индекса.
+        self._scans, self._full, self._indexed, self._scanned = {}, {}, {}, {}
 
     async def takeover(self, project, pid, chat, owner, *, fork=False):
         if self._turn(pid, chat) is not None:
@@ -401,18 +404,66 @@ class CodexRunner(Runner):
             log.warning("Codex: каталог: %s", type(e).__name__)
             return False
 
-    async def chats(self, project):
+    def _list_params(self, project, state_db):
+        return {"cwd": str(project), "limit": limits.CHATS_MAX, **({"useStateDbOnly": True} if state_db else {}),
+                "sortKey": "updated_at", "sourceKinds": ["cli", "vscode", "exec", "appServer"]}
+
+    def _scan(self, project):
+        """Полный обход JSONL отдельным app-server в фоне: общий `_meta` и ответ списка его не ждут.
+        Сессии, которых нет в готовом индексе (старый CLI, сбой записи), добавляются к следующим спискам."""
+        key = str(Path(project).resolve()).casefold()
+        # `refresh` шлёт и фоновый опрос вкладок раз в 20 с: обход — не чаще SCAN_EVERY_SEC на проект.
+        if key in self._scans or self.now() - self._scanned.get(key, float("-inf")) < SCAN_EVERY_SEC:
+            return self._scans.get(key)
+        self._scanned[key] = self.now()
+
+        async def scan():
+            rpc = None
+            try:
+                path = await asyncio.to_thread(self.find_codex)
+                if path is None:
+                    return
+                rpc = self.rpc_factory(path, Path(project))
+                await rpc.connect()
+                data = await rpc.request("thread/list", self._list_params(project, False))
+                rows = [row for row in data.get("data", []) if isinstance(row, dict)][:limits.CHATS_MAX]
+                indexed = self._indexed.get(key)
+                extra = [row for row in rows if indexed is not None and row.get("id") not in indexed]
+                if extra:
+                    log.info("Codex: полный обход: сессий вне индекса %d", len(extra))
+                self._full[key] = extra
+            except Exception as e:
+                log.warning("Codex: полный обход сессий: %s", type(e).__name__)
+            finally:
+                if rpc is not None:
+                    with contextlib.suppress(Exception):
+                        await rpc.disconnect()
+                if self._scans.get(key) is task:
+                    del self._scans[key]
+
+        task = asyncio.create_task(scan())
+        self._scans[key] = task
+        return task
+
+    async def chats(self, project, refresh=False):
         if self.catalog is None:
             return []
-        # Обычный thread/list также сканирует JSONL для восстановления метаданных.
-        data = await self._metadata(project, "thread/list", {"cwd": str(project), "limit": limits.CHATS_MAX,
-                                                           "useStateDbOnly": True, "sortKey": "updated_at", "sourceKinds":
-                                                           ["cli", "vscode", "exec", "appServer"]})
+        # Обычный thread/list также сканирует JSONL для восстановления метаданных — секунды на проект.
+        # Готовый индекс отвечает сразу; ручное обновление (`refresh`) сверяет его полным обходом в фоне.
+        data = await self._metadata(project, "thread/list", self._list_params(project, True))
+        key = str(Path(project).resolve()).casefold()
+        rows = [row for row in data.get("data", []) if isinstance(row, dict)]
+        self._indexed[key] = {row.get("id") for row in rows}
+        if refresh:
+            self._scan(project)
+        if extra := [row for row in self._full.get(key, []) if row.get("id") not in self._indexed[key]]:
+            rows = sorted(rows + extra, reverse=True, key=lambda row: row.get("updatedAt")
+                          if type(row.get("updatedAt")) in (int, float) else 0)
         aliases = await asyncio.to_thread(self.aliases.load)
         reverse = {v["thread"]: k for k, v in aliases.items() if isinstance(v, dict)
                    and same_project(v.get("project"), project) and isinstance(v.get("thread"), str)}
         live, items = self.live(), []
-        for thread in data.get("data", []):
+        for thread in rows[:limits.CHATS_MAX]:
             tid = thread.get("id")
             if not isinstance(tid, str) or not limits.CHAT_ID.fullmatch(tid) or not same_project(thread.get("cwd"), project):
                 continue
@@ -954,6 +1005,13 @@ class CodexRunner(Runner):
         await super().close(final=final, hold=hold)
         self._histories.clear()
         self._history_paths.clear()
+        scans = list(self._scans.values())
+        for task in scans:
+            task.cancel()
+        await asyncio.gather(*scans, return_exceptions=True)
+        self._full.clear()
+        self._indexed.clear()
+        self._scanned.clear()
         async with self._meta_lock:
             if self._meta is not None:
                 await self._meta.disconnect()
