@@ -81,6 +81,8 @@ class Job:
 JOBS: dict[str, Job] = {}
 #: user_id → раннер его очереди
 RUNNERS: dict[int, asyncio.Task] = {}
+#: id ждущей озвучки → эпоха создания (`operations.capture` при постановке; раннер исполняет её под ней)
+EPOCHS: dict[str, tuple] = {}
 
 
 # ---- фразы ---------------------------------------------------------------------------
@@ -151,6 +153,7 @@ def _finish(sid: str, state_: str, detail: str, **extra) -> None:
     changed = state.DB.execute(f"UPDATE speeches SET state = ?, detail = ?, finished = ?{cols}"
                                " WHERE id = ? AND finished IS NULL",
                                (state_, detail, clock.NOW(), *extra.values(), sid)).rowcount
+    EPOCHS.pop(sid, None)
     if changed:
         push.job_finished("speeches", sid)
 
@@ -169,12 +172,15 @@ def kick(user_id: int) -> None:
 
 
 async def _runner(user_id: int) -> None:
-    """Старейшая ждущая озвучка пользователя — в работу, по одной, пока очередь не пуста."""
+    """Старейшая ждущая озвучка пользователя — в работу, по одной, пока очередь не пуста. Каждая — под своей
+    эпохой (`EPOCHS`), а не под эпохой запроса, запустившего раннер: после очистки истории живой раннер
+    берёт и новые озвучки."""
     while True:
         row = state.DB.execute("SELECT * FROM speeches WHERE user_id = ? AND state = 'queued' ORDER BY created, id"
                                " LIMIT 1", (user_id,)).fetchone()
         if row is None:
             return
+        epoch = EPOCHS.pop(row["id"], None) or operations.snapshot(user_id)
         if not state.DB.execute("UPDATE speeches SET state = 'working', detail = 'готовлю' WHERE id = ? AND state = 'queued'",
                                 (row["id"],)).rowcount:
             continue
@@ -184,7 +190,8 @@ async def _runner(user_id: int) -> None:
             conn = None
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"], voice=row["voice"], text=row["text"])
         JOBS[job.id] = job
-        job.task = asyncio.create_task(run(job))
+        with operations.restore(epoch):
+            job.task = asyncio.create_task(run(job))
         await job.task
 
 
@@ -270,8 +277,12 @@ def recover() -> None:
 
 
 def resume() -> None:
-    """Старт службы (после recover и state.HTTP): очереди с ждущими озвучками — снова в работу."""
-    for (uid,) in state.DB.execute("SELECT DISTINCT user_id FROM speeches WHERE state = 'queued'").fetchall():
+    """Старт службы (после recover и state.HTTP): очереди с ждущими озвучками — снова в работу, каждая — с
+    эпохой старта (очистка истории после него их сохранение запрещает, как у принятых запросом)."""
+    rows = state.DB.execute("SELECT id, user_id FROM speeches WHERE state = 'queued'").fetchall()
+    for row in rows:
+        EPOCHS[row["id"]] = operations.snapshot(row["user_id"])
+    for uid in {row["user_id"] for row in rows}:
         kick(uid)
 
 
@@ -301,6 +312,7 @@ async def stop() -> None:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    EPOCHS.clear()                                   # ждущие остаются в базе; эпоху им даст `resume`
 
 
 # ---- API -----------------------------------------------------------------------------
@@ -324,6 +336,7 @@ async def create(body: SpeechIn, request: Request):
     sid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, text, state, detail, created)"
                      " VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)", (sid, uid, conn.id, model, voice, text, QUEUED, now))
+    EPOCHS[sid] = operations.capture(uid)
     kick(uid)
     log.info("озвучка %s: принята", sid[:8])
     return _out(_row(uid, sid))

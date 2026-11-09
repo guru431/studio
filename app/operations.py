@@ -48,15 +48,36 @@ def check(user_id: int) -> None:
         raise HTTPException(409, {"code": "history_changed", "message": "история очищена или очищается — повторите действие"})
 
 
-@contextmanager
-def bind(user_id: int):
-    """Capture before reading a request body or awaiting conversion/upstream."""
+def snapshot(user_id: int) -> tuple:
+    """The user's epoch as it is now."""
     epoch = _epoch(user_id)
-    token = _CURRENT.set((epoch, epoch.revision, bool(epoch.barriers)))
+    return (epoch, epoch.revision, bool(epoch.barriers))
+
+
+def capture(user_id: int) -> tuple:
+    """Epoch of a job put in a per-user queue: the request's one (`auth.guard`), outside a request — the
+    current one. The queue runner runs each job under its own epoch (`restore`), not under the epoch of
+    whoever started the runner."""
+    current = _CURRENT.get()
+    if current is not None and current[0].user_id == user_id:
+        return current
+    return snapshot(user_id)
+
+
+@contextmanager
+def restore(captured: tuple):
+    token = _CURRENT.set(captured)
     try:
         yield
     finally:
         _CURRENT.reset(token)
+
+
+@contextmanager
+def bind(user_id: int):
+    """Capture before reading a request body or awaiting conversion/upstream."""
+    with restore(snapshot(user_id)):
+        yield
 
 
 @contextmanager

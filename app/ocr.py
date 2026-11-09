@@ -106,6 +106,10 @@ class PageFailed(OcrError):
     """Страница не прочитана — словами; остальные страницы документа это не останавливает."""
 
 
+class _Missing(OcrError):
+    """Файла документа нет (строки media или самого файла); шара не отвечает — обычный OcrError."""
+
+
 class _Cancelled(Exception):
     """Отмена человеком, замеченная между шагами."""
 
@@ -463,11 +467,11 @@ async def _page_text(job: Job, png: bytes) -> str:
 
 
 def _read(user_id: int, media_id: str) -> bytes:
-    """Файл документа — в потоке; файла нет — OcrError."""
+    """Файл документа — в потоке; файла нет — _Missing, шара не отвечает — OcrError."""
     try:
         return media.path(user_id, media_id).read_bytes()
     except (HTTPException, FileNotFoundError):
-        raise OcrError("файл документа удалён") from None
+        raise _Missing("файл документа удалён") from None
     except OSError:
         raise OcrError("хранилище недоступно") from None
 
@@ -485,8 +489,8 @@ async def _recognize_pages(job: Job, row) -> str:
         if source is not None and page["media_id"]:
             try:
                 drawn = await asyncio.to_thread(_read, job.user_id, page["media_id"])
-            except OcrError:                              # файла нет — нарисовать заново
-                pass
+            except _Missing:                              # файла нет — нарисовать заново; шара не отвечает —
+                pass                                      # отказ документа, прежний PNG остаётся
         try:
             if drawn is not None:
                 png = drawn

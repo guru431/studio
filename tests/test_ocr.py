@@ -459,6 +459,39 @@ def test_retry_page_recognizes_only_that_page_again(studio):
     assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).json()["detail"]["code"] == "nothing"
 
 
+@pytest.mark.parametrize("trouble", ["missing", "unreachable"])
+def test_retry_redraws_a_missing_page_but_not_one_on_an_unreachable_share(studio, monkeypatch, trouble):
+    """Ревью R8: «Повторить страницу» рисует PNG заново, только если файла нет; шара не отвечает (OSError) —
+    отказ документа словами, прежний PNG страницы не трогается и новый не сохраняется."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_replies = [(200, answer("Обрывок", "length"))]
+    sid = pdf_scan(studio, uid, conn, "ink")
+    assert wait_scan(studio, sid)["state"] == "done"
+    (page,) = page_rows(studio, sid)
+    old = page["media_id"]
+    if trouble == "missing":
+        media.path(uid, old).unlink()
+    else:
+        real = media.path
+
+        class Unreachable:
+            def read_bytes(self):
+                raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(media, "path", lambda u, m: Unreachable() if m == old else real(u, m))
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1}).status_code == 202
+    row = wait_scan(studio, sid)
+    (page,) = page_rows(studio, sid)
+    media_ids = on_loop(studio, lambda: {r[0] for r in state.DB.execute("SELECT id FROM media")})
+    if trouble == "missing":
+        assert (row["state"], page["state"]) == ("done", "done")
+        assert page["media_id"] != old and page["media_id"] in media_ids and old not in media_ids
+    else:
+        assert (row["state"], row["detail"]) == ("error", "хранилище недоступно")
+        assert page["media_id"] == old and old in media_ids and len(media_ids) == 2      # PDF и прежний PNG
+        assert len(studio.gw.ocr_requests) == 1
+
+
 def test_retry_refuses_a_running_or_foreign_document(studio):
     uid, conn = gateway_user(studio)
     studio.gw.ocr_hold = True

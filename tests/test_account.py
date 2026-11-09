@@ -188,6 +188,23 @@ def test_pin_exhaustion_and_bridge_login_failures_are_recorded(studio, monkeypat
     assert state.DB.execute("SELECT detail FROM security_events ORDER BY id DESC").fetchone()[0] == "bridge"
 
 
+def test_a_right_password_changed_meanwhile_is_not_journaled_as_wrong(studio, monkeypatch):
+    """Ревью R3: верный пароль, но хеш сменили, пока считался scrypt (`still_valid`), — вход не состоялся,
+    а в журнал владельца не пишется ложное «неверный пароль»."""
+    uid = make_user(studio, "owner")
+    real = security.verify_password
+
+    def changed_meanwhile(password, pw_hash):
+        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (security.hash_password("new-pass-789"), uid))
+        return real(password, pw_hash)
+
+    monkeypatch.setattr(security, "verify_password", changed_meanwhile)
+    assert login(studio, "owner", "password-123").status_code == 401
+    assert "login_fail" not in kinds(uid)
+    assert login(studio, "owner", "wrong-password").status_code == 401
+    assert kinds(uid) == ["login_fail"]
+
+
 def test_security_journal_keeps_a_bounded_recent_tail(studio, monkeypatch):
     uid = owner(studio)
     monkeypatch.setattr(security_log, "KEEP_MAX", 3)
@@ -225,6 +242,23 @@ def test_repeated_failures_collapse_into_one_counted_row(studio):
     items = studio.c.get("/api/me/security-events").json()["items"]
     assert {(i["kind"], i["count"]) for i in items} >= {("login_fail", 3)}
     assert all("first" in i for i in items)
+
+
+def test_a_failure_collapsed_between_pages_is_not_skipped(studio, monkeypatch):
+    """Ревью R4: страницы журнала — по id; свёртка повтора меняет строку на месте, id прежний, и «Показать ещё»
+    событие не теряет."""
+    uid = owner(studio)
+    monkeypatch.setattr(account, "EVENTS_PAGE", 2)
+    security_log.record(uid, "login_fail", detail="login", ip="203.0.113.5")
+    security_log.record(uid, "logout")
+    security_log.record(uid, "logout")
+    first = studio.c.get("/api/me/security-events").json()
+    assert [i["kind"] for i in first["items"]] == ["logout", "logout"]
+    studio.clock[0] += 10
+    security_log.record(uid, "login_fail", detail="login", ip="203.0.113.5")
+    rest = studio.c.get(f"/api/me/security-events?before={first['next']}").json()["items"]
+    assert [(i["kind"], i["count"]) for i in rest] == [("login_fail", 2), ("login", 1)]
+    assert rest[0]["created"] == rest[0]["first"] + 10
 
 
 def test_failure_flood_from_many_addresses_does_not_evict_other_events(studio, monkeypatch):
