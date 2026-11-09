@@ -124,6 +124,16 @@ class ChatSeen(BaseModel):
     attention: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class ChatMark(ChatSeen):
+    chat: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+class ProjectSeen(BaseModel):
+    """«Отметить прочитанными» проекта: ревизии, которые видел владелец (не «все в проекте»: позднее завершение
+    остаётся непрочитанным)."""
+    items: list[ChatMark] = Field(min_length=1, max_length=200)
+
+
 class DiscoveryQuery(BaseModel):
     query: str = Field(max_length=200, pattern=r"^[^\x00-\x1f]*$")
 
@@ -693,6 +703,17 @@ async def chat_seen(aid: int, pid: str, chat: str, body: ChatSeen, request: Requ
     check_chat(chat)
     await agent_access(aid, request)
     code_attention.seen(aid, pid, chat, body.attention)
+    return Response(status_code=204)
+
+
+@router.post("/agents/{aid}/projects/{pid}/seen", status_code=204)
+async def project_seen(aid: int, pid: str, body: ProjectSeen, request: Request):
+    """Как `chat_seen`, пачкой для одного проекта: свой компьютер, открытый PIN, CSRF (guard)."""
+    own_agent(request, aid)
+    check_pid(pid)
+    await agent_access(aid, request)
+    for item in body.items:
+        code_attention.seen(aid, pid, item.chat, item.attention)
     return Response(status_code=204)
 
 

@@ -107,6 +107,33 @@ def test_close_of_unknown_tab_is_a_no_op(studio):
     assert done(act(studio, "close", aid=aid, pid=BETA, chat=A)) == before
 
 
+def test_move_reorders_tabs_without_touching_active_or_other_devices_tabs(studio):
+    """Перетаскивание вкладки (D2): действие move ставит вкладку на место index (дальше конца — в конец), активная и
+    порядок проектов прежние; вкладки, открытой на другом устройстве после устаревшего документа, оно не теряет."""
+    aid = owner(studio)
+    for chat in (A, B, C):
+        done(act(studio, "open", aid=aid, pid=ALPHA, chat=chat))
+    done(act(studio, "open", aid=aid, pid=BETA, chat=A))          # BETA — открыт позже, первым в списке
+    doc = done(act(studio, "move", aid=aid, pid=ALPHA, chat=C, index=0))
+    assert project(doc, aid, ALPHA) == {"aid": aid, "pid": ALPHA, "tabs": [C, A, B], "active": C}
+    assert [p["pid"] for p in doc["projects"]] == [BETA, ALPHA]
+    assert doc["place"] == {"aid": aid, "pid": BETA, "view": "chat"}
+    doc = done(act(studio, "move", aid=aid, pid=ALPHA, chat=C, index=19))
+    assert project(doc, aid, ALPHA)["tabs"] == [A, B, C]
+    doc = done(act(studio, "move", aid=aid, pid=ALPHA, chat=B, index=0))
+    assert project(doc, aid, ALPHA)["tabs"] == [B, A, C]
+    # вкладки нет (закрыли на другом устройстве) или проекта нет — ничего
+    unknown = str(uuid.UUID(int=99))
+    assert done(act(studio, "move", aid=aid, pid=ALPHA, chat=unknown, index=0)) == doc
+    assert done(act(studio, "move", aid=aid, pid=pid("gamma"), chat=A, index=0)) == doc
+    for body in ({"op": "move", "aid": aid, "pid": ALPHA, "chat": A}, {"op": "move", "aid": aid, "pid": ALPHA, "index": 0},
+                 {"op": "move", "aid": aid, "pid": ALPHA, "chat": A, "index": -1},
+                 {"op": "move", "aid": aid, "pid": ALPHA, "chat": A, "index": 20},
+                 {"op": "move", "aid": aid, "pid": ALPHA, "chat": A, "index": "1"}):
+        assert studio.c.patch(URL, json=body).status_code == 422, body
+    assert done(studio.c.get(URL)) == doc
+
+
 def test_place_and_panel(studio):
     aid = owner(studio)
     doc = done(act(studio, "place", aid=aid, pid=BETA, view="files"))
