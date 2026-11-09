@@ -5,7 +5,26 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 35
+VERSION = 36
+
+#: ссылки «Поделиться» и хвосты безопасности учётки (chat_shares.py, security_log.py, account.py):
+#: - `chat_shares.sealed` — снимок шифром STUDIO_DATA_KEY (security.encrypt). В прежнем столбце `snapshot` новый код
+#:   держит заглушку `chat_shares.PLACEHOLDER` (JSON без переписки): прежний код (откат) покажет её вместо снимка.
+#:   Снимки, записанные открытым текстом (до шага или прежним кодом после отката), шифрует `chat_shares.seal()` при
+#:   старте службы. `expires` — срок ссылки (NULL — бессрочно), `views`/`viewed` — открытия по верному PIN,
+#:   `fails` — все неверные PIN ссылки (без окна): `chat_shares.FAILS_MAX` отзывает ссылку;
+#: - `security_events.count`/`first` — свёрнутые повторы неудач (security_log.NOISY): одна строка на вид, адрес и
+#:   подробность с числом и временем первой; прежний код пишет строки без них (count = 1);
+#: - `users.password_reset` — когда пароль сбросил администратор: студия предлагает владельцу аварийный выход.
+SHARES_36 = """ALTER TABLE chat_shares ADD COLUMN sealed BLOB;
+ALTER TABLE chat_shares ADD COLUMN expires REAL;
+ALTER TABLE chat_shares ADD COLUMN views INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chat_shares ADD COLUMN viewed REAL;
+ALTER TABLE chat_shares ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE security_events ADD COLUMN count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE security_events ADD COLUMN first REAL;
+ALTER TABLE users ADD COLUMN password_reset REAL;
+"""
 
 #: сессии учётки и журнал безопасности (account.py, security_log.py): у сессии — когда создана, грубый вид
 #: устройства по User-Agent при входе ('phone' | 'computer', строку UA не храним) и последняя отметка
@@ -469,7 +488,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -557,6 +576,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     34: SECURITY_34,
     # причина отказа ответа чата
     35: CHAT_35,
+    # ссылки «Поделиться»: снимок шифром, срок, счётчики; свёрнутые неудачи журнала; сброс пароля администратором
+    36: SHARES_36,
 }
 
 

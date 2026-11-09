@@ -256,7 +256,7 @@ ROUTES = {
         ("PUT", "/api/me/ntfy"), ("POST", "/api/me/ntfy/test"), ("POST", "/api/me/password"),
         ("DELETE", "/api/me/pin"), ("PUT", "/api/me/pin"), ("DELETE", "/api/me/push"), ("POST", "/api/me/push"),
         ("POST", "/api/me/screen-lock"), ("GET", "/api/me/sessions"), ("DELETE", "/api/me/sessions/{sid}"),
-        ("POST", "/api/me/emergency"), ("GET", "/api/me/security-events"),
+        ("POST", "/api/me/emergency"), ("GET", "/api/me/security-events"), ("DELETE", "/api/me/password-reset"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
         ("DELETE", "/api/passkeys/{key_id}")]},
