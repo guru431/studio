@@ -639,13 +639,14 @@ function storageBlock(host) {
 
   async function reload() {
     try {
-      const { kinds, total, pending, cleaner_pending } = await api('GET', '/api/me/storage');
+      const { kinds, total, pending, cleaner_pending, cleaner_stalled } = await api('GET', '/api/me/storage');
       const line = (key, name, n) => [el('dt', {}, name),
         el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
       list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
         ...line('total', 'Всего', total));
       say(queue, ...queueText(pending));
       if (cleaner_pending) queue.textContent += ` Контекстов Cleaner в очереди удаления: ${cleaner_pending}.`;
+      for (const s of cleaner_stalled || []) queue.textContent += ` Отложено после неудачи (${s.base_url}): ${s.count}.`;
     } catch (err) {
       say(queue, words(err), 'error');
     }

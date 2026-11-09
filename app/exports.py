@@ -147,6 +147,14 @@ def docx(segments: list[dict], title: str) -> bytes:
 
 # ---- распознавание (спека 2026-10-27-studio-ocr-design, 6.4): страница — {"n", "state", "text", "detail"} ----
 
+#: Тег — только элемент HTML по имени и в пределах строки: голые «<» и «>» (`<18`, `$x<5$`, `a < b > c`,
+#: `x<y и z>w`) и обобщения вроде `List<int>` — текст, а не разметка; прежнее `<[^>]+>` резало их через абзацы.
+HTML_TAG = re.compile(
+    r"</?(?:a|abbr|b|bdi|bdo|big|blockquote|body|br|caption|center|cite|code|col|colgroup|dd|del|dfn|div|dl|dt|em|"
+    r"figcaption|figure|font|h[1-6]|head|header|footer|hr|html|i|img|ins|kbd|li|mark|math|ol|p|pre|q|s|samp|small|"
+    r"span|strike|strong|sub|sup|table|tbody|td|tfoot|th|thead|tr|tt|u|ul|var|wbr)"
+    r"(?:\s[^<>\n]*)?/?>", re.I)
+
 def md_plain(md: str) -> str:
     """Markdown модели — простым текстом: строка таблицы HTML — ячейки через табуляцию, прочие теги
     убраны (`<br>` — перенос), сущности раскрыты; знаки заголовков, `**`, `__` и `` ` `` сняты."""
@@ -154,7 +162,7 @@ def md_plain(md: str) -> str:
     text = re.sub(r"\s*</t[dh]\s*>\s*", "\t", text, flags=re.I)
     text = re.sub(r"\t*</tr\s*>\s*", "\n", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    text = html.unescape(HTML_TAG.sub("", text))
     text = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "", text, flags=re.M)
     text = text.replace("**", "").replace("__", "").replace("`", "")
     return re.sub(r"\n{3,}", "\n\n", text).strip("\n ")       # табуляция — пустая первая ячейка, не пробел

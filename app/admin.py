@@ -238,13 +238,14 @@ def _start_probe(media_dir: Path) -> concurrent.futures.Future:
 @router.get("/storage")
 async def get_storage():
     """Хранилище без чужой истории: доступность шары и свободное место, возраст последней копии базы,
-    очередь удаления — только числом (без пользователей и путей). Шара не ответила за PROBE_SEC —
+    очередь удаления — только числом (без пользователей и путей), итог последней чистки «сирот» (media.orphans:
+    время и число, null — прохода не было). Шара не ответила за PROBE_SEC —
     «не отвечает», а не ожидание до таймаута Apache."""
     global PROBE
     if PROBE is None or PROBE.done():
         PROBE = _start_probe(state.CFG.media_dir)
     files, since = media.waiting()
-    out = {"pending": {"files": files, "since": since}}
+    out = {"pending": {"files": files, "since": since}, "orphans": media.orphans()}
     probe = asyncio.wrap_future(PROBE)
     done, _ = await asyncio.wait({probe}, timeout=PROBE_SEC)
     if not done:

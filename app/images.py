@@ -389,6 +389,29 @@ async def _discard(user_id: int, media_ids: list[str]) -> None:
         await media.delete_async(user_id, media_id)
 
 
+def _fit_mask(mask: bytes, image: "bytes | None") -> bytes:
+    """Маску редактора — к размеру исходника задания (для asyncio.to_thread). Редактор рисует её по полному
+    размеру картинки ленты (до RESULT_PIXELS), а normalize_image уменьшает исходник до ≤2 Мп и ≤2048:
+    PNG того же соотношения сторон (с точностью до округления сторон) уменьшается NEAREST. Прочее — как
+    есть, отказ скажет prepare_mask: её пределы — пределы копии модуля переводчика, они не меняются."""
+    if image is None:
+        return mask
+    target = image_size(image)
+    try:
+        with Image.open(io.BytesIO(mask)) as picture:
+            width, height = picture.size
+            if (picture.format != "PNG" or (width, height) == target or width < target[0]
+                    or width * height > RESULT_PIXELS
+                    or abs(width * target[1] - height * target[0]) > width + height):
+                return mask
+            fitted = picture.convert("L").resize(target, Image.Resampling.NEAREST)
+    except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return mask
+    out = io.BytesIO()
+    fitted.save(out, format="PNG")
+    return out.getvalue()
+
+
 # ---- API -------------------------------------------------------------------
 
 @router.post("", status_code=202)
@@ -421,7 +444,7 @@ async def create_job(request: Request):
                 raise UploadError("нужна одна маска: файл или маска прежней правки")
             mask = await forms.history_file(uid, body.mask_media_id)
         if mask is not None:
-            mask = await asyncio.to_thread(prepare_mask, mask, image)
+            mask = await asyncio.to_thread(lambda m=mask: prepare_mask(_fit_mask(m, image), image))
         if body.size == "original" and image is None:
             raise HTTPException(422, {"code": "image", "message": "для исходного размера нужно фото"})
     except UploadError as e:
@@ -704,7 +727,8 @@ def _picture(data: bytes) -> str:
         raise too_big
     # без warnings.catch_warnings: фильтр предупреждений общий на процесс, а здесь поток — параллельные
     # задания перепутали бы его. Бомбу отсекает предел пикселей по заголовку; больше двух
-    # MAX_IMAGE_PIXELS Pillow отказывает сам ещё в Image.open
+    # MAX_IMAGE_PIXELS Pillow отказывает сам ещё в Image.open. Предупреждение — тоже предел: фильтр «ошибка»
+    # может остаться на процесс от перекрывшихся catch_warnings копии image_upload (находка 2026-11-09)
     try:
         with Image.open(io.BytesIO(data)) as image:
             if image.format not in RESULT_TYPES:
@@ -713,7 +737,7 @@ def _picture(data: bytes) -> str:
                 raise too_big
             image.load()
             return RESULT_TYPES[image.format]
-    except Image.DecompressionBombError:
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise too_big from None
     except (OSError, ValueError, SyntaxError, EOFError):
         raise JobError("not_image", NOT_PICTURE) from None

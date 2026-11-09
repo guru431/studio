@@ -860,6 +860,10 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
                        " VALUES (?, ?, ?, ?, ?, 0, 'x', ?)", (media_id, uid, f"u{uid}/{media_id}", mime, size, time.time()))
     live_sql(live, "INSERT INTO purge(media_id, user_id, rel_path, queued) VALUES ('k-gone', ?, ?, ?)",
              (uid, f"u{uid}/k-gone.png", time.time() - 3600))
+    # удаление контекста Cleaner, отложенное после неудачи (адрес недоступен), — числом по адресу
+    live_sql(live, "INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, retry_at)"
+                   " VALUES ('k-ctx', ?, 'r1', 'http://10.77.1.16:4000', x'00', ?, ?)",
+             (uid, time.time() - 600, time.time() + 3600))
     # разделы настроек отвечают позже «Хранилища» (так бывало под нагрузкой): их ответ «Прочее» не перерисовывает —
     # иначе блок заменялся новым, пустым до своего ответа, и строки читались пустыми
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u) === '/api/sections'
@@ -879,6 +883,8 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
     assert v["same"] is True
     assert v["before"] == [["image", "1 файл · 2 КиБ"], ["video", "1 файл · 3 МиБ"], ["total", "2 файла · 3 МиБ"]]
     assert v["queue"].startswith("Ждут удаления на хранилище: 1 файл (с ") and v["fits"] is True
+    assert v["queue"].endswith(" Контекстов Cleaner в очереди удаления: 1."
+                               " Отложено после неудачи (http://10.77.1.16:4000): 1.")
     assert v["after"] == [["total", "0 файлов · 0 Б"]]
     assert not problems(r), problems(r)
 
@@ -931,7 +937,9 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     finally:
         copy.unlink()
     assert not r.get("failed"), r
-    share, backup, queue = r["values"]["lines"]
+    share, backup, queue, orphans = r["values"]["lines"]
+    assert orphans[0] == "orphans" and orphans[2] is False
+    assert orphans[1] == "проверки ещё не было" or ": удалено — " in orphans[1]
     assert share[0] == "share" and share[1].startswith("доступна, свободно ") and share[2] is False
     assert backup[0] == "backup" and backup[1].startswith("3 ч назад (") and backup[1].endswith("копий — 1")
     assert backup[2] is False
@@ -1964,6 +1972,40 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
     assert edits[2][0]["model"] == MODEL_IDS[nxt]
     assert edits[1 if model == "lustify" else 2][0]["strength"] == "0.25"
     assert "strength" not in edits[2 if model == "lustify" else 1][0]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_brush_edit_of_a_picture_larger_than_2_mp_says_the_size_and_works(browser, live, width):
+    """Находка 2026-11-09: картинка ленты со стороной больше 2048 — подсказка размера копии и правка кистью
+    без 400 «маска … того же размера»."""
+    login = f"ph-big-{width}"
+    live.add_user(login)
+    out = io.BytesIO()
+    Image.new("RGB", (2100, 700), (0, 0, 255)).save(out, "PNG")
+    live.gw.image_reply = (200, {"data": [{"b64_json": base64.b64encode(out.getvalue()).decode(), "seed": 5}]})
+    start = len(live.gw.edits)
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login, cards=1),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+            ("click", "#viewer .act-edit"),
+            ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
+            ("eval", "tip", "document.querySelector('#edit-size-tip').hidden ? null"
+                            " : document.querySelector('#edit-size-tip').textContent"),
+            ("eval", "editorOverflow", f"!({NO_OVERFLOW}) || document.querySelector('#editor').scrollWidth"
+                                       " > document.querySelector('#editor').clientWidth"),
+            ("type", "#edit-prompt", "change only this patch"),
+            ("click", "#edit-local"), ("click", "#edit-mask"), ("click", "#edit-submit"),
+            ("wait", f"!{is_open('#editor')} && {done_cards(2)}"),
+            ("eval", "error", "document.querySelector('#edit-error')?.textContent || ''")],
+            width=width, height=900, mobile=width == 320)
+    finally:
+        live.gw.image_reply = None
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tip"] == "Фото будет уменьшено до 2046×682." and not v["editorOverflow"] and not v["error"]
+    edits = live.gw.edits[start:]
+    assert len(edits) == 1 and edits[0][0]["size"] == "2046x682"
     assert not problems(r), problems(r)
 
 
