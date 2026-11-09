@@ -389,6 +389,29 @@ async def _discard(user_id: int, media_ids: list[str]) -> None:
         await media.delete_async(user_id, media_id)
 
 
+def _fit_mask(mask: bytes, image: "bytes | None") -> bytes:
+    """Маску редактора — к размеру исходника задания (для asyncio.to_thread). Редактор рисует её по полному
+    размеру картинки ленты (до RESULT_PIXELS), а normalize_image уменьшает исходник до ≤2 Мп и ≤2048:
+    PNG того же соотношения сторон (с точностью до округления сторон) уменьшается NEAREST. Прочее — как
+    есть, отказ скажет prepare_mask: её пределы — пределы копии модуля переводчика, они не меняются."""
+    if image is None:
+        return mask
+    target = image_size(image)
+    try:
+        with Image.open(io.BytesIO(mask)) as picture:
+            width, height = picture.size
+            if (picture.format != "PNG" or (width, height) == target or width < target[0]
+                    or width * height > RESULT_PIXELS
+                    or abs(width * target[1] - height * target[0]) > width + height):
+                return mask
+            fitted = picture.convert("L").resize(target, Image.Resampling.NEAREST)
+    except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return mask
+    out = io.BytesIO()
+    fitted.save(out, format="PNG")
+    return out.getvalue()
+
+
 # ---- API -------------------------------------------------------------------
 
 @router.post("", status_code=202)
@@ -421,7 +444,7 @@ async def create_job(request: Request):
                 raise UploadError("нужна одна маска: файл или маска прежней правки")
             mask = await forms.history_file(uid, body.mask_media_id)
         if mask is not None:
-            mask = await asyncio.to_thread(prepare_mask, mask, image)
+            mask = await asyncio.to_thread(lambda m=mask: prepare_mask(_fit_mask(m, image), image))
         if body.size == "original" and image is None:
             raise HTTPException(422, {"code": "image", "message": "для исходного размера нужно фото"})
     except UploadError as e:
