@@ -38,8 +38,9 @@ def open_page(browser, live, login, width):
     assert signed.status_code == 303
     cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
     mobile = width < 760
+    # Запросы под service worker WebKit не отдаёт page.route — сценарии подменяют историю, поэтому без него.
     context = browser.new_context(viewport={"width": width, "height": 852}, is_mobile=mobile, has_touch=mobile,
-                                  extra_http_headers={"Cookie": cookie})
+                                  extra_http_headers={"Cookie": cookie}, service_workers="block")
     page = context.new_page()
     page.set_default_timeout(10000)
     return context, page
@@ -54,8 +55,9 @@ def ready(page):
 
 def fits(page):
     return page.evaluate("""() => {
-        const bar = document.querySelector('.code-status-bar').getBoundingClientRect();
-        return document.documentElement.scrollWidth <= innerWidth && bar.right <= innerWidth + 1;
+        const bar = document.querySelector('.code-status-bar');
+        return document.documentElement.scrollWidth <= innerWidth && bar.getBoundingClientRect().right <= innerWidth + 1
+          && [...bar.children].every(e => !e.getClientRects().length || e.getBoundingClientRect().right <= innerWidth + 1);
     }""")
 
 
@@ -98,16 +100,18 @@ def test_first_history_overtaken_by_return_to_the_screen_still_enables_sending(f
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_failed_first_history_offers_retry_in_the_status_bar(focus_browser, live, width, tmp_path):
-    """Первая загрузка истории упала (502 моста): слова и «Повторить» в строке статуса; повтор загружает чат,
-    включает «Отправить» и выбор модели, кнопка уходит. Строка статуса не шире экрана в обеих темах."""
+    """Первая загрузка истории упала (502 моста): слова и «Повторить» в строке статуса, повтор сам через 5 с;
+    повтор загружает чат, включает «Отправить» и выбор модели, кнопка уходит. Строка статуса не шире экрана в
+    обеих темах."""
     login = f"reload-failed-{focus_browser.browser_type.name}-{width}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Сбой")})
     aid, _, bridge = online(live, login, machine)
     failed = []
+    failing = [True]
 
     def fail_once(route):
-        if route.request.method == "GET" and not failed:
+        if route.request.method == "GET" and failing[0]:
             failed.append(route.request.url)
             route.fulfill(status=502, content_type="application/json",
                           body='{"detail": {"code": "bridge", "message": "мост ответил непонятно"}}')
@@ -128,6 +132,12 @@ def test_failed_first_history_offers_retry_in_the_status_bar(focus_browser, live
                 page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
                 assert fits(page)
                 page.screenshot(path=str(tmp_path / f"reload-{width}-{theme}.png"))
+            deadline = time.monotonic() + 15                 # сбой моста — повтор сам, через RETRY_MS
+            while len(failed) < 2 and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert len(failed) >= 2
+            pw.expect(retry).to_be_visible()
+            failing[0] = False
             retry.tap() if width < 760 else retry.click()
             ready(page)
             pw.expect(retry).to_be_hidden()

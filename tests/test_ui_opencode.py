@@ -29,8 +29,10 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
     aid, sb = code_online(live, login, machine)
     geometry = """(() => {
       const rect = (s) => document.querySelector(s).getBoundingClientRect();
-      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-stop', '#code-send'];
-      const boxes = selectors.map(rect), bar = rect('#code-composer .composer-bar');
+      // Уже 760 px вместо трёх выборов — одна кнопка #code-settings-pick (code-picker.js codeChoices).
+      const selectors = ['#code-model', '#code-effort', '#code-access', '#code-settings-pick', '#code-stop', '#code-send'];
+      const boxes = selectors.map(s => document.querySelector(s)).filter(e => e.getClientRects().length)
+        .map(e => e.getBoundingClientRect()), bar = rect('#code-composer .composer-bar');
       const attach = document.querySelector('#code-attach'), mic = document.querySelector('#code-composer .mic');
       return { row: boxes.every(b => b.top >= bar.top - 1 && b.bottom <= bar.bottom + 1),
         locked: [...document.querySelectorAll('.code-pick-trigger')].filter(b => b.getClientRects().length).every(b => b.disabled),
@@ -45,7 +47,9 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_open(aid),
             *code_project(aid, "alpha"), ("wait", "!!document.querySelector('#code-new-codex')"), ("click", "#code-new-codex"),
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
-            ("eval", "compact", "(() => { const r = s => document.querySelector(s).getBoundingClientRect(); return "
+            ("eval", "compact", "(() => { const r = s => document.querySelector(s).getBoundingClientRect(); "
+                "if (innerWidth < 760) return !!document.querySelector('#code-settings-pick').getClientRects().length "
+                "&& !document.querySelector('#code-model').getClientRects().length; return "
                 "r('#code-effort').left - r('#code-model').right <= 12 && "
                 "r('#code-access').left - r('#code-effort').right <= 12; })()"),
             ("eval", "idleStatus", "document.querySelector('#code-activity').textContent === 'Нет активной задачи'"),
