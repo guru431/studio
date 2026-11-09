@@ -4,14 +4,16 @@
 
 1. Создание: фото с устройства (сохраняется в media с превью) или фото истории (`source_media_id`),
    нормализованное normalize_image, уходит шлюзу формой с именем файла `input.png` — имя с
-   устройства дальше студии не идёт. Строка появляется только после ответа шлюза с его id.
-   Seed выбирает студия (пусто — случайный): ответ на создание потерялся (таймаут, обрыв, 502/504
+   устройства дальше студии не идёт. Seed студии — строка `queued` без id шлюза (SENDING) встаёт до
+   запроса и получает id из ответа; seed пользователя — строка только после ответа. Seed выбирает студия (пусто — случайный): ответ на создание потерялся (таймаут, обрыв, 502/504
    перед шлюзом), а шлюз задание мог принять. Список шлюза (`GET /slot/videos`) общий для всех
    ключей, поэтому признак своего — только seed, который выбрала сама студия (случайный 32-битный,
    чужой его не повторит): по нему, длительности, качеству, дорисовке, промпту и времени студия
    ищет задание (`_adopt`) и берёт, только если такое ровно одно и его нет у другой строки. Seed
    задал пользователь (скрипты и другие учётки ставят те же 42) — список не читается, ответ —
-   неопределённый исход словами (`LOST_MANUAL`). Больше список шлюза студия не читает.
+   неопределённый исход словами (`LOST_MANUAL`). Остановка службы посреди запроса оставляет строку
+   SENDING: наблюдатель после перезапуска (`recover`, BOOT) или через SEND_STALE_SEC ищет её задание тем же
+   способом (`_resume`). Больше список шлюза студия не читает.
 2. Наблюдатель службы (`start_watcher`) раз в POLL_SEC начинает проход (`start_pass`): ролики
    каждого подключения — своей задачей, по очереди, не больше POLL_MAX подключений сразу; у
    подключения, чья задача ещё идёт, проход ничего не начинает. Вкладка не нужна, после
@@ -81,6 +83,14 @@ LOST_MANUAL = ("ролик мог начаться у шлюза, но в лен
                "от чужого в общей очереди шлюза. Шлюз сам снимет его по сроку; повторите — без seed студия "
                "находит такой ролик сама")
 LOST_UNFOUND = "ролик мог начаться у шлюза, но в его очереди не найден; шлюз сам снимет его по сроку"
+SENDING = "отправляю шлюзу"
+INTERRUPTED = "служба перезапускалась, пока ролик уходил шлюзу"
+#: строка SENDING моложе этого — её запрос ещё может идти (загрузка, ответ, поиск в списке шлюза)
+SEND_STALE_SEC = 900
+#: строку SENDING, которую шлюз не дал сверить (недоступен), наблюдатель бросает через столько
+RESUME_GIVEUP_SEC = 3600
+#: начало работы службы (recover): строка SENDING старше — её запрос оборвала остановка
+BOOT = 0.0
 
 #: задачи наблюдателя: id подключения → задача его роликов (одна на подключение)
 WATCHING: "dict[int | None, asyncio.Task]" = {}
@@ -228,16 +238,25 @@ def _video_connection(user_id: int, connection_id: "int | None" = None, model: "
     return conn
 
 
-async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
-    """Задание этого запроса в списке шлюза (п. 1 шапки; seed — только выбранный студией): тот же
-    seed, длительность, качество, дорисовка и промпт (свой — `given`, пустой — не `given`), создано
-    не раньше запроса и не принадлежит другой строке. Не ровно одно — None."""
+async def _listing(conn: Connection) -> "list | None":
+    """Список заданий шлюза (только для своего seed, п. 1 шапки); None — шлюз его не дал."""
     try:
         r = await upstream.request(conn, "GET", connections.slot_url(conn, "/videos"), timeout=ADOPT_TIMEOUT_SEC)
     except (httpx.HTTPError, upstream.UpstreamRefused):
         return None
     data = upstream.json_body(r).get("data") if r.is_success else None
-    found = [v for v in (data if isinstance(data, list) else [])
+    return data if isinstance(data, list) else None
+
+
+async def _adopt(conn: Connection, form: dict, since: float) -> "dict | None":
+    """Задание этого запроса в списке шлюза (п. 1 шапки; seed — только выбранный студией): тот же
+    seed, длительность, качество, дорисовка и промпт (свой — `given`, пустой — не `given`), создано
+    не раньше запроса и не принадлежит другой строке. Не ровно одно — None."""
+    return _pick(await _listing(conn) or [], form, since)
+
+
+def _pick(data: list, form: dict, since: float) -> "dict | None":
+    found = [v for v in data
              if isinstance(v, dict) and isinstance(v.get("id"), str) and VIDEO_ID_RE.fullmatch(v["id"])
              and str(v.get("seed")) == form["seed"] and str(v.get("seconds")) == form["seconds"]
              and v.get("quality") == form["quality"] and v.get("smooth") is (form["smooth"] == "true")
@@ -278,13 +297,43 @@ async def create_video(request: Request):
             source_id = await media.save_async(uid, image, "image/png", "studio-video-source.png", thumb=True)
         except media.StorageError as e:
             raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    return _out(_row(uid, await _send(uid, conn, image, source_id, body, owned=upload is not None)))
+
+
+async def _send(uid: int, conn: Connection, image: bytes, source_id: str, body: VideoIn, *, owned: bool) -> str:
+    """Задание шлюзу и строка ленты; итог — id строки. owned — исходник записан этим запросом: отказ его убирает.
+
+    Seed выбрала студия — строка `queued` без gateway_id встаёт ДО запроса (SENDING): остановка службы
+    посреди запроса (выкладка) оставляет её, и наблюдатель после перезапуска находит принятое шлюзом
+    задание по этому seed (`_resume`), а не оставляет ролик на карте без учёта. Seed пользователя ничего не
+    доказывает (п. 1 шапки) — строка, как прежде, только после ответа."""
     chosen = body.seed is None                   # seed выбрала студия — по нему можно найти своё задание
     seed = secrets.randbelow(2**32) if chosen else body.seed
     form = {"model": VIDEO_MODEL, "seconds": str(body.seconds), "quality": body.quality,
             "smooth": "true" if body.smooth else "false", "seed": str(seed)}
-    if body.prompt.strip():
-        form["prompt"] = body.prompt.strip()
-    failure, answer, lost, started = None, {}, False, clock.NOW()
+    prompt = body.prompt.strip()
+    if prompt:
+        form["prompt"] = prompt
+    video_id, started = uuid.uuid4().hex, clock.NOW()
+
+    def insert(gateway_id: "str | None", answer: dict) -> None:
+        status = answer.get("status")
+        prompt_source = _text(answer.get("prompt_source"), None)
+        chain = chains.of_source(uid, source_id) + [chains.video_step(
+            video_id=video_id, prompt=prompt, prompt_source=prompt_source, seconds=body.seconds,
+            quality=body.quality, created=started)]
+        state.DB.execute(
+            "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source,"
+            " seconds, quality, smooth, seed, state, progress, detail, created, chain)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (video_id, uid, conn.id, gateway_id, source_id, prompt, prompt_source, body.seconds, body.quality,
+             int(body.smooth), _int(answer.get("seed"), seed), status if status in ACTIVE else "queued",
+             min(100, max(0, _int(answer.get("progress"), 0))), _text(answer.get("detail"), "в очереди"), started,
+             json.dumps(chain, ensure_ascii=False)))
+
+    if chosen:
+        insert(None, {"detail": SENDING})
+    failure, answer, lost = None, {}, False
     try:
         r = await upstream.request(conn, "POST", connections.slot_url(conn, "/videos"), timeout=VIDEO_TIMEOUT_SEC,
                                    data=form, files={"input_reference": ("input.png", image, "image/png")})
@@ -310,35 +359,43 @@ async def create_video(request: Request):
                                     f"{failure.detail['message']} — {LOST_UNFOUND if chosen else LOST_MANUAL}"})
     if failure is not None:
         log.warning("ролик пользователя %d не создан: %s", uid, failure.status_code)
-        if upload is not None:
+        state.DB.execute("DELETE FROM videos WHERE id = ? AND gateway_id IS NULL", (video_id,))
+        if owned:
             await _forget(uid, source_id)
         raise failure
-    status = answer.get("status")
-    video_id, now = uuid.uuid4().hex, clock.NOW()
     try:
         operations.check(uid)
     except HTTPException:
         await _drop_quietly(conn, answer["id"], video_id)
-        if upload is not None:
+        state.DB.execute("DELETE FROM videos WHERE id = ? AND gateway_id IS NULL", (video_id,))
+        if owned:
             await _forget(uid, source_id)
         raise
     if not media.alive(uid, source_id):           # фото удалили, пока шлюз принимал ролик
         await _drop_quietly(conn, answer["id"], video_id)
+        state.DB.execute("DELETE FROM videos WHERE id = ? AND gateway_id IS NULL", (video_id,))
         raise HTTPException(404, media.GONE)
-    prompt_source = _text(answer.get("prompt_source"), None)
-    chain = chains.of_source(uid, source_id) + [chains.video_step(
-        video_id=video_id, prompt=body.prompt.strip(), prompt_source=prompt_source, seconds=body.seconds,
-        quality=body.quality, created=now)]
-    state.DB.execute(
-        "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source, seconds,"
-        " quality, smooth, seed, state, progress, detail, created, chain)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (video_id, uid, conn.id, answer["id"], source_id, body.prompt.strip(), prompt_source,
-         body.seconds, body.quality, int(body.smooth), _int(answer.get("seed"), seed),
-         status if status in ACTIVE else "queued", min(100, max(0, _int(answer.get("progress"), 0))),
-         _text(answer.get("detail"), "в очереди"), now, json.dumps(chain, ensure_ascii=False)))
+    if not chosen:
+        insert(answer["id"], answer)
+    elif not _attach(video_id, answer["id"], answer):
+        # пока шлюз принимал ролик, его отменили или удалили: принятое — снять, строка — как есть
+        await _drop_quietly(conn, answer["id"], video_id)
+        _row(uid, video_id)                       # удалили — 404 gone
+        return video_id
     log.info("ролик %s: создан, %d с, %s", video_id[:8], body.seconds, body.quality)
-    return _out(_row(uid, video_id))
+    return video_id
+
+
+def _attach(video_id: str, gateway_id: str, answer: dict) -> bool:
+    """Строке, ушедшей шлюзу (SENDING), — id его задания и ход; False — её уже отменили или удалили."""
+    status = answer.get("status")
+    return state.DB.execute(
+        "UPDATE videos SET gateway_id = ?, state = ?, progress = ?, detail = ?,"
+        " prompt_source = COALESCE(?, prompt_source), seed = COALESCE(?, seed)"
+        f" WHERE id = ? AND gateway_id IS NULL AND {WHERE_ACTIVE}",
+        (gateway_id, status if status in ACTIVE else "queued", min(100, max(0, _int(answer.get("progress"), 0))),
+         _text(answer.get("detail"), "в очереди"), _text(answer.get("prompt_source"), None),
+         _int(answer.get("seed"), None), video_id)).rowcount == 1
 
 
 @router.get("")
@@ -478,10 +535,43 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
     await _drop_quietly(conn, gateway_id, row["id"])
 
 
+def recover() -> None:
+    """Старт службы: строки SENDING старше этой отметки — оборванные остановкой, их сверяет наблюдатель."""
+    global BOOT
+    BOOT = clock.NOW()
+
+
+def _form_of(row) -> dict:
+    form = {"seconds": str(row["seconds"]), "quality": row["quality"], "smooth": "true" if row["smooth"] else "false",
+            "seed": str(row["seed"])}
+    if row["prompt"]:
+        form["prompt"] = row["prompt"]
+    return form
+
+
+async def _resume(row, conn: Connection) -> None:
+    """Строка SENDING, чей запрос оборвался (остановка службы посреди отправки): задание, принятое шлюзом,
+    ищется по seed студии (`_pick`, как у потерянного ответа) и берётся строкой — дальше его ведёт обычный
+    опрос; не найдено — `failed` словами. Шлюз списка не дал — следующий проход, до RESUME_GIVEUP_SEC."""
+    data = await _listing(conn)
+    if data is None:
+        if row["created"] < clock.NOW() - RESUME_GIVEUP_SEC:
+            await _fail(row, f"{INTERRUPTED} — {LOST_UNFOUND}")
+        return
+    found = _pick(data, _form_of(row), row["created"])
+    if found is None:
+        await _fail(row, f"{INTERRUPTED} — {LOST_UNFOUND}")
+    elif _attach(row["id"], found["id"], found):
+        log.warning("ролик %s: отправка оборвалась — задание найдено в списке шлюза", row["id"][:8])
+
+
 async def _poll(row) -> None:
     conn = _connection(row)
     if conn is None:
         await _fail(row, "подключение шлюза удалено из профиля")
+        return
+    if row["gateway_id"] is None:
+        await _resume(row, conn)
         return
     try:
         r = await upstream.request(conn, "GET", _url(conn, row["gateway_id"]), timeout=VIDEO_TIMEOUT_SEC)
@@ -537,8 +627,10 @@ def start_pass() -> "list[asyncio.Task]":
     now = clock.NOW()
     for conn_id in [c for c, until in PAUSED.items() if until <= now]:
         del PAUSED[conn_id]                       # пауза кончилась — запись не копится до перезапуска
-    rows = state.DB.execute(f"SELECT * FROM videos WHERE {WHERE_ACTIVE} AND gateway_id IS NOT NULL"
-                            " ORDER BY created").fetchall()
+    # строка без id шлюза — отправка (SENDING): чужая забота, пока её запрос может идти
+    rows = state.DB.execute(f"SELECT * FROM videos WHERE {WHERE_ACTIVE} AND (gateway_id IS NOT NULL"
+                            " OR created < ? OR created < ?) ORDER BY created",
+                            (BOOT, now - SEND_STALE_SEC)).fetchall()
     by_conn: "dict[int | None, list]" = {}
     for row in rows:
         by_conn.setdefault(row["connection_id"], []).append(row)
