@@ -35,6 +35,7 @@ import operations
 import profile
 import sections
 import security
+import security_log
 import state
 import upstream
 
@@ -139,6 +140,8 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     if body.password is not None:
         profile.check_password(body.password)
         changes["pw_hash"] = await asyncio.to_thread(security.hash_password, body.password)
+        # владелец после входа увидит совет проверить сессии и сделать аварийный выход (account.py)
+        changes["password_reset"] = clock.NOW()
     with operations.barrier(uid) if body.disabled else nullcontext():
         return await _apply_user_patch(uid, body, admin, changes)
 
@@ -158,8 +161,10 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+    if body.password is not None:      # в журнал владельца: без адреса и устройства администратора
+        security_log.record(uid, "password_reset")
     log.info("администратор %d: пользователь %d изменён (%s)", admin.id, uid,
-             ", ".join(sorted(k if k != "pw_hash" else "password" for k in changes)) or "ничего")
+             ", ".join(sorted(k if k != "pw_hash" else "password" for k in changes if k != "password_reset")) or "ничего")
     if body.disabled:
         # мосты Claude Code — 4401; смена пароля их не рвёт: ключ устройства самостоятелен (спека 6.2)
         await bridge.drop_user(uid)

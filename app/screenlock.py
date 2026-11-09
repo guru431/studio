@@ -289,6 +289,7 @@ async def set_pin(body: NewPin, request: Request):
     await auth.confirm_password(uid, body.password or "", "PIN")
     pin_hash = await asyncio.to_thread(security.hash_password, body.pin)
     state.DB.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (pin_hash, uid))
+    _journal(request, "pin_set")
     log.info("пользователь %d: PIN задан", uid)
     return {"pin": True}
 
@@ -297,7 +298,8 @@ async def set_pin(body: NewPin, request: Request):
 async def delete_pin(request: Request):
     """Без пароля: доступа удаление не даёт, отпирать тогда — паролем или passkey."""
     uid = request.state.user.id
-    state.DB.execute("UPDATE users SET pin_hash = NULL WHERE id = ?", (uid,))
+    if state.DB.execute("UPDATE users SET pin_hash = NULL WHERE id = ? AND pin_hash IS NOT NULL", (uid,)).rowcount:
+        _journal(request, "pin_delete")
     log.info("пользователь %d: PIN убран", uid)
     return Response(status_code=204)
 
@@ -348,6 +350,7 @@ async def add_passkey(body: NewKey, request: Request):
                                                           verified.sign_count, json.dumps(transports), body.name, now))
     except sqlite3.IntegrityError:
         raise HTTPException(409, {"code": "exists", "message": "этот ключ уже добавлен"}) from None
+    _journal(request, "passkey_add")
     log.info("пользователь %d: ключ добавлен", uid)
     return {"id": _handle(key_id), "name": body.name, "created": now, "used": None}
 
@@ -369,6 +372,7 @@ async def delete_passkey(key_id: str, request: Request):
     if found is None:
         raise HTTPException(404, {"code": "not_found", "message": "такого ключа нет"})
     state.DB.execute("DELETE FROM passkeys WHERE id = ? AND user_id = ?", (found, uid))
+    _journal(request, "passkey_delete")
     log.info("пользователь %d: ключ удалён", uid)
     return Response(status_code=204)
 

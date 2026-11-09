@@ -279,7 +279,7 @@ def _agent_events(user_id: int, rows: list, files: dict) -> list:
 
 def _security_events(user_id: int, rows: list, files: dict) -> list:
     """Журнал безопасности учётки (security_log.py): входы, отпирания, сессии, ссылки — без секретов."""
-    return [_pick(r, "id", "created", "kind", "detail", "device", "session", "ip") for r in rows]
+    return [_pick(r, "id", "created", "kind", "detail", "device", "session", "ip", "count", "first") for r in rows]
 
 
 #: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
