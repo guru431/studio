@@ -9,7 +9,10 @@
    ответа только читает её очередь (клиент ушёл — очередь не пополняется). Пока данных нет, раз в
    PING_SEC в поток идёт `: ping` — холодная модель грузится минутами, а Apache рвёт молчащую
    линию. Ответ — до ANSWER_MAX знаков и STREAM_TOTAL_SEC, конец — `[DONE]` или `finish_reason`
-   (без них — ошибка), у пользователя сразу — не больше USER_STREAMS таких ответов (429).
+   (без них — ошибка), у пользователя сразу — не больше USER_STREAMS таких ответов (429). Шлюз студии
+   ответил 503 (карта занята) — ход ждёт и повторяет (RETRY_SEC, WAIT_MAX_SEC; событие `wait`, «Не ждать» —
+   `POST .../nowait`). Причина отказа ответа — `messages.error`. Поток SSE сверяет сессию и блокировку
+   «Чата»: закрылась — событие `closed`, а ответ дочитывается.
    С «Интернетом» (`chats.web`, спека 2026-10-21-studio-chat-internet) запрос несёт tools, и ответ идёт
    кругами: вызовы модели исполняет web.call, шаги — в `messages.tools` по одному (событие SSE `tool`).
 3. Прямое подключение — браузер зовёт модель сам: ход отдаёт ему адрес и сообщения, готовый
@@ -56,6 +59,7 @@ import clock
 import connections
 import cleaner_client as cleaner
 import documents
+import lock_policy
 import manage
 import media
 import ocr
@@ -137,7 +141,15 @@ WEB_NOTE = ("У тебя есть доступ к интернету через 
             "отвечай по памяти. Говори, что нашёл что-то в интернете, только если инструмент в этом ответе вернул "
             "результат; если вернул ошибку — так и скажи и не выдумывай данные.")
 STORAGE = "хранилище недоступно"
-SCAN_POLL_SEC = 1                # ход ждёт скан: состояние документов — из базы раз в столько
+#: 503 шлюза студии (srvllm, s06) — карта занята генерацией или распознаванием: ход ждёт и повторяет запрос раз в
+#: RETRY_SEC, не дольше WAIT_MAX_SEC (как ocr, translate); срок не идёт, пока карту держит своё распознавание
+#: пользователя (ocr.holding). Ожидание не съедает срок ответа (STREAM_TOTAL_SEC)
+RETRY_SEC = 15
+WAIT_MAX_SEC = 1800
+CARD_BUSY = "карта занята дольше {} минут — попробуйте позже"
+GAVE_UP = "карта занята — ждать не стали"
+CHECK_SEC = 1                    # поток SSE сверяет свою сессию на событиях не чаще (на пингах — всегда)
+SCAN_POLL_SEC = 1               # ход ждёт скан: состояние документов — из базы раз в столько
 NO_OCR = "это скан — подключите «Сканы» в настройках"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания модель получила бы документ без них"
 #: начало слов ответа-ошибки «скан не распознан: …» — они хранятся в content ответа, страница получает их `error`
@@ -313,33 +325,41 @@ def _alive(row) -> bool:
 def _message_out(row, atts: list, views: dict | None = None) -> dict:
     """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
     `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null), `ocr` — ход
-    распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `error` — слова ответа-ошибки
-    «скан не распознан: …» (хранятся в content; тогда content — пустой: модели ответ не уходил)."""
+    распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `wait` — секунды ожидания карты
+    идущим ответом (не ждёт — null), `error` — слова ответа-ошибки (`messages.error`; у строк до шага 35 — только
+    «скан не распознан: …» из content). Слова, записанные и в content (скан, хранилище: прежний код читает их
+    оттуда), — не текст ответа: тогда content — пустой, модели ответ не уходил."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
     reasoning, seconds = live.thought_out() if live else (row["reasoning"], row["reasoning_sec"])
+    content = live.content if live else row["content"]
     error = None
-    if not live and row["status"] == "error" and row["role"] == "assistant" and row["content"].startswith(SCAN_FAILED):
-        error = row["content"]
-    return {"id": row["id"], "role": row["role"], "content": "" if error else live.content if live else row["content"],
+    if not live and row["status"] == "error" and row["role"] == "assistant":
+        error = row["error"] or (row["content"] if row["content"].startswith(SCAN_FAILED) else None)
+        if error is not None and content == error:
+            content = ""
+    return {"id": row["id"], "role": row["role"], "content": content,
             "cleaner_raw": row["cleaner_raw"],
             "error": error,
             "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
             "live": _alive(row),
             "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
             "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
-            "ocr": live.scan_state if live else None}
+            "ocr": live.scan_state if live else None, "wait": live.waited() if live else None}
 
 
-def _attachment_out(a, scans: dict | None = None, sources: set | None = None) -> dict:
+def _attachment_out(a, scans: dict | None = None, sources: set | None = None, rescan: set | None = None) -> dict:
     """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»);
     документ, чей скан ещё распознаётся, — `ocr {id}` (знаков у него пока нет; страница опрашивает документ).
-    Текст есть — скан кончился: запроса нет."""
+    Текст есть — скан кончился: запроса нет. `rescan: true` — скан вложения кончился с нераспознанными
+    страницами («Распознать заново», `POST /api/attachments/{id}/ocr`); считается только в GET диалога."""
     out = {"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"], "chars": a["chars"]}
     if a["kind"] == "document" and a["text"] is None:
         pending = ocr.pending(a["user_id"], [a["id"]]) if scans is None else scans.get(a["id"], [])
         if pending:
             out["ocr"] = {"id": pending[0]}
+    if rescan is not None and a["id"] in rescan:
+        out["rescan"] = True
     if a["source_transcript_id"] is not None:
         exists = (state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
                                    (a["source_transcript_id"], a["user_id"])).fetchone() is not None
@@ -349,11 +369,11 @@ def _attachment_out(a, scans: dict | None = None, sources: set | None = None) ->
 
 
 def _finish(message_id: str, chat_id: str, content: str, status: str, reasoning: "str | None" = None,
-            reasoning_sec: "float | None" = None) -> bool:
-    """Итог идущего ответа; False — он уже сохранён (или удалён)."""
-    done = state.DB.execute("UPDATE messages SET content = ?, status = ?, reasoning = ?, reasoning_sec = ?"
+            reasoning_sec: "float | None" = None, error: "str | None" = None) -> bool:
+    """Итог идущего ответа (`error` — причина отказа словами); False — он уже сохранён (или удалён)."""
+    done = state.DB.execute("UPDATE messages SET content = ?, status = ?, reasoning = ?, reasoning_sec = ?, error = ?"
                             " WHERE id = ? AND status = 'streaming'",
-                            (content, status, reasoning, reasoning_sec, message_id)).rowcount == 1
+                            (content, status, reasoning, reasoning_sec, error, message_id)).rowcount == 1
     if done:
         state.DB.execute("UPDATE chats SET updated = ? WHERE id = ?", (clock.NOW(), chat_id))
     return done
@@ -557,6 +577,10 @@ def _too_big(tokens: int, limit: int) -> HTTPException:
 
 # ---- поток через сервер --------------------------------------------------------
 
+#: «конец» круга, когда шлюз студии ответил 503 (`StreamTask._round`): не finish_reason модели
+BUSY = object()
+
+
 @dataclass
 class ToolCall:
     """Вызов инструмента из потока модели: `id` и имя — из первого куска, аргументы — склейкой кусков."""
@@ -569,7 +593,8 @@ class ToolCall:
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
     ("delta", текст), ("think", текст или None), ("tool", {kind, label}), ("ocr", {page, pages}) — ход скана, которого
-    ждёт ответ (`scans`), ("done", статус) или ("error", слова). Поток SSE закрылся
+    ждёт ответ (`scans`), ("wait", {seconds} или None) — ожидание карты после 503 шлюза студии (None — шлюз
+    принял запрос), ("done", статус) или ("error", слова). Поток SSE закрылся
     (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
@@ -613,6 +638,45 @@ class StreamTask:
     user_message_id: str | None = None
     scan_state: dict | None = None   # ход распознавания для страницы ({page, pages}), пока ждём
     cleaner_preview: object = field(default=None, repr=False)
+    #: ждём карту (503 шлюза): (начало ожидания — для слов, начало отсчёта срока WAIT_MAX_SEC); не ждём — None
+    card_wait: "tuple[float, float] | None" = None
+    gave_up: bool = False        # «Не ждать»: отмена ожидания — ошибка GAVE_UP, а не «остановлено»
+
+    def waited(self) -> "float | None":
+        """Секунды ожидания карты для страницы; не ждём — None."""
+        return None if self.card_wait is None else clock.NOW() - self.card_wait[0]
+
+    def _card_gateway(self) -> bool:
+        """503 значит «карта занята» только у шлюза студии: srvllm и s06 (у облака — отказ его словами)."""
+        return self.conn.kind == "srvllm" or self.conn.s06
+
+    def _card_free(self) -> None:
+        """Шлюз принял запрос: ожидание карты кончилось — страница прячет плашку (`wait {}`)."""
+        if self.card_wait is not None:
+            self.card_wait = None
+            self.fresh = True
+            self.put("wait", None)
+
+    async def _wait_card(self) -> "str | None":
+        """503 шлюза: событие `wait {seconds}` и пауза RETRY_SEC; итог — слова ошибки (ждём дольше WAIT_MAX_SEC)
+        или None — повторить запрос. Срок не идёт, пока карту держит своё распознавание пользователя
+        (`ocr.holding`: его скан, снимок перевода) — её освободит его конец; срок ответа пауза не съедает."""
+        now = clock.NOW()
+        shown, counted = self.card_wait or (now, now)
+        if ocr.holding(self.user_id):
+            counted = now
+        if now - counted >= WAIT_MAX_SEC:
+            log.info("чат %s: ответ %s — карта занята дольше срока", self.chat_id[:8], self.message_id[:8])
+            self.card_wait = None
+            return CARD_BUSY.format(WAIT_MAX_SEC // 60)
+        if self.card_wait is None:
+            log.info("чат %s: ответ %s — жду карту", self.chat_id[:8], self.message_id[:8])
+        self.card_wait = (shown, counted)
+        self.fresh = True
+        self.put("wait", {"seconds": round(now - shown)})
+        await clock.SLEEP(RETRY_SEC)
+        self.deadline += clock.NOW() - now
+        return None
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -724,6 +788,9 @@ class StreamTask:
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                        timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
+                if r.status_code == 503 and self._card_gateway():
+                    await r.aread()
+                    return None, BUSY, [], text                 # карта занята — ждать (_read)
                 if r.status_code != 200:
                     await r.aread()
                     no_tools = offer and r.status_code == 400 and re.search(
@@ -731,6 +798,7 @@ class StreamTask:
                         r"|(?:does not|doesn't|cannot) support (?:tools?|function calling)"
                         r"|(?:not supported|unsupported).{0,20}(?:tools?|tool[_ ]choice)", r.text.lower())
                     return NO_TOOLS if no_tools else upstream.gateway_error(r, self.conn.name), None, [], text
+                self._card_free()
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:
                         return self._cut_time(), None, [], text
@@ -889,6 +957,11 @@ class StreamTask:
             error, ending, calls, text = await self._round(payload, offer and rounds == 0)
             if error is not None:
                 return error
+            if ending == BUSY:                           # 503: тот же круг заново после паузы
+                error = await self._wait_card()
+                if error is not None:
+                    return error
+                continue
             if not (offer and ending == "tool_calls" and calls):
                 break
             rounds += 1
@@ -910,7 +983,7 @@ class StreamTask:
         """Ход со сканом: ждать документы раз в SCAN_POLL_SEC (событие `ocr` — при смене страниц без слоя),
         затем — пока раннер распознавания освобождает карту (ocr.idle), и только тогда контекст (compose,
         фото, дата) и предел модели. Итог — слова ошибки (документ не распознан, не помещается) или None.
-        Отмена хода (не остановка службы) отменяет и документы."""
+        Отмена хода (не остановка службы) отменяет ждущие в очереди документы, идущий дорабатывает."""
         log.info("чат %s: ответ %s — жду скан (%d док.)", self.chat_id[:8], self.message_id[:8], len(self.scans))
         marks = ", ".join("?" * len(self.scans))
         try:
@@ -932,12 +1005,14 @@ class StreamTask:
                     break
                 await clock.SLEEP(SCAN_POLL_SEC)
         except asyncio.CancelledError:
-            if not self.shutdown:                        # остановка службы: документы прервёт ocr.stop
+            # «Остановить» ответа отменяет только ждущие в очереди документы; идущий дорабатывает — распознанное
+            # уже стоило минут карты, и «Ответить заново» возьмёт его текст. Остановка службы: документы прервёт
+            # ocr.stop
+            if not self.shutdown:
                 for scan_id in self.scans:
-                    try:
+                    row = state.DB.execute("SELECT state FROM scans WHERE id = ?", (scan_id,)).fetchone()
+                    if row is not None and row["state"] == "queued":
                         await ocr.request_cancel(self.user_id, scan_id)
-                    except HTTPException:                # документа уже нет (стирание истории)
-                        pass
             raise
         finally:
             self.scan_state = None
@@ -964,14 +1039,18 @@ class StreamTask:
             if error is None:
                 error = await self._read()
             status = "done" if error is None else "error"
-        except asyncio.CancelledError:               # кнопка «стоп» или остановка службы
-            status = "error" if self.shutdown else "stopped"
+        except asyncio.CancelledError:               # кнопка «стоп», «Не ждать» или остановка службы
+            status = "error" if self.shutdown or self.gave_up else "stopped"
+            if self.gave_up and not self.shutdown:
+                error = GAVE_UP
         except Exception as e:                       # noqa: BLE001 — ответ не должен висеть
             status, error = "error", f"сбой службы: {type(e).__name__}"
         finally:
             pings.cancel()
+        self.card_wait = None
         thought = self.thought_out()
-        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status, *thought)
+        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status, *thought,
+                error=error if status == "error" else None)
         if STREAMS.get(self.message_id) is self:
             del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
@@ -1037,11 +1116,30 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _events(st: StreamTask, user_message_id: str):
-    """События SSE хода из очереди ответа; глушит очередь, когда поток закрылся, — `_EventStream`."""
+def _session_open(digest: str) -> bool:
+    """Сессия студии жива, учётка включена и «Чат» не заперт — как их видит `auth.guard` (без продления)."""
+    row = state.DB.execute("SELECT u.disabled, s.expires FROM sessions s"
+                           " JOIN users u ON u.id = s.user_id WHERE s.digest = ?", (digest,)).fetchone()
+    return (row is not None and not row["disabled"] and row["expires"] > clock.NOW()
+            and not lock_policy.locked(digest, "chat"))
+
+
+async def _events(st: StreamTask, user_message_id: str, digest: "str | None" = None):
+    """События SSE хода из очереди ответа; глушит очередь, когда поток закрылся, — `_EventStream`. Свою сессию
+    (`digest`) поток сверяет на каждом пинге и на событиях не чаще CHECK_SEC: вышли, учётку отключили, сессия
+    истекла или «Чат» заперт — `closed`, и поток кончается (ответ дочитывается и сохраняется, как при уходе
+    клиента; страница перечитает диалог через обычные проверки входа и блокировки)."""
     yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": st.message_id})
+    checked = clock.NOW()
     while True:
         kind, data = await st.queue.get()
+        now = clock.NOW()
+        if digest is not None and kind not in ("done", "error") and (kind == "ping" or now - checked >= CHECK_SEC):
+            checked = now
+            if not _session_open(digest):
+                log.info("чат %s: поток ответа %s закрыт — сессия", st.chat_id[:8], st.message_id[:8])
+                yield _sse("closed", {})
+                return
         if kind == "ping":
             yield ": ping\n\n"
         elif kind == "delta":
@@ -1052,6 +1150,8 @@ async def _events(st: StreamTask, user_message_id: str):
             yield _sse("tool", data)
         elif kind == "ocr":
             yield _sse("ocr", data)
+        elif kind == "wait":
+            yield _sse("wait", data if data is not None else {})
         elif kind in ("replace", "cleaner"):
             yield _sse(kind, data)
         elif kind == "done":
@@ -1067,8 +1167,8 @@ class _EventStream(StreamingResponse):
     и глушит её сам ответ, а не finally генератора: отмена может застать ответ в `send` (генератор так и
     стоял бы на yield до сборщика мусора) или ещё до первого куска (тела генератора не было вовсе)."""
 
-    def __init__(self, st: StreamTask, user_message_id: str):
-        super().__init__(_events(st, user_message_id), media_type="text/event-stream",
+    def __init__(self, st: StreamTask, user_message_id: str, digest: "str | None" = None):
+        super().__init__(_events(st, user_message_id, digest), media_type="text/event-stream",
                          headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
         self.st = st
 
@@ -1114,20 +1214,26 @@ async def get_chat(chat_id: str, request: Request):
     row = _chat_row(uid, chat_id)
     atts = _attachments(chat_id)
     all_atts = [a for group in atts.values() for a in group]
-    scans, sources = {}, set()
-    pending = [a["id"] for a in all_atts if a["kind"] == "document" and a["text"] is None]
-    if pending:
-        marks = ",".join("?" * len(pending))
+    scans, sources, rescan = {}, set(), set()
+    docs = [a["id"] for a in all_atts if a["kind"] == "document"]
+    if docs:
+        # одним запросом: идущие сканы вложений (`ocr`) и кончившиеся с нераспознанными страницами (`rescan`)
+        marks = ",".join("?" * len(docs))
         for scan in state.DB.execute(
-                f"SELECT attachment_id, id FROM scans WHERE user_id = ? AND state IN {ocr.RUNNING}"
-                f" AND attachment_id IN ({marks}) ORDER BY created, rowid", (uid, *pending)):
-            scans.setdefault(scan["attachment_id"], []).append(scan["id"])
+                f"SELECT s.attachment_id, s.id, s.state, EXISTS (SELECT 1 FROM scan_pages p WHERE p.scan_id = s.id"
+                f" AND p.state IN ('failed', 'waiting')) AS unread FROM scans s WHERE s.user_id = ?"
+                f" AND s.attachment_id IN ({marks}) ORDER BY s.created, s.rowid", (uid, *docs)):
+            if scan["state"] in ocr.RUNNING:
+                scans.setdefault(scan["attachment_id"], []).append(scan["id"])
+            elif scan["unread"]:
+                rescan.add(scan["attachment_id"])
+        rescan -= set(scans)
     linked = {a["source_transcript_id"] for a in all_atts if a["source_transcript_id"] is not None}
     if linked:
         marks = ",".join("?" * len(linked))
         sources = {r[0] for r in state.DB.execute(
             f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
-    views = {a["id"]: _attachment_out(a, scans, sources) for a in all_atts}
+    views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
     return {"chat": _chat_view(uid, row),
             "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
 
@@ -1287,6 +1393,27 @@ async def delete_attachment(att_id: str, request: Request):
         await ocr.request_cancel(uid, scan_id)
     await _drop_attachments([row])
     return Response(status_code=204)
+
+
+def _scan_of(user_id: int, att_id: str):
+    """Последний документ распознавания вложения (или None)."""
+    return state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND attachment_id = ?"
+                            " ORDER BY created DESC, rowid DESC LIMIT 1", (user_id, att_id)).fetchone()
+
+
+@router.post("/attachments/{att_id}/ocr", status_code=202)
+async def rescan_attachment(att_id: str, request: Request):
+    """«Распознать заново» вложения, чей скан не распознан (или распознан не весь): тот же документ — снова в
+    очередь (`ocr.retry`), текст вложения — его новый итог; ход с этим вложением в истории ждёт его."""
+    uid = request.state.user.id
+    if state.DB.execute("SELECT 1 FROM attachments WHERE id = ? AND user_id = ?", (att_id, uid)).fetchone() is None:
+        raise _gone("такого вложения нет")
+    scan = _scan_of(uid, att_id)
+    if scan is None:
+        raise _gone("скана этого вложения больше нет")
+    ocr.retry(uid, scan["id"])
+    ocr.kick(uid)
+    return {"ocr": {"id": scan["id"]}}
 
 
 async def sweep_attachments() -> None:
@@ -1588,7 +1715,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             messages = with_date(await fill_photos(chat_id, uid, messages), uid)  # файлы — после COMMIT и в потоке
     except BaseException as e:
         # строка ответа уже в базе: без итога диалог считался бы занятым (см. _busy)
-        _finish(answer_id, chat_id, STORAGE if isinstance(e, OSError) else "", "error")
+        words = STORAGE if isinstance(e, OSError) else None
+        _finish(answer_id, chat_id, words or "", "error", error=words)
         if isinstance(e, OSError):                   # картинка вложения не прочиталась с шары
             log.warning("чат %s: вложение не прочиталось (%s)", chat_id[:8], type(e).__name__)
             raise HTTPException(503, {"code": "storage", "message": STORAGE}) from None
@@ -1611,7 +1739,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                     scans=scans, user_message_id=user_mid, cleaner_preview=preview)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
-    return _EventStream(st, user_mid)
+    return _EventStream(st, user_mid, getattr(request.state, "digest", None))
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}")
@@ -1637,6 +1765,20 @@ async def answer_alive(chat_id: str, message_id: str, request: Request):
                         " AND via = 'browser' AND status = 'streaming'",
                         (clock.NOW(), message_id, chat_id)).rowcount != 1:
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже не идёт"})
+    return Response(status_code=204)
+
+
+@router.post("/chats/{chat_id}/nowait", status_code=204)
+async def stop_waiting(chat_id: str, request: Request):
+    """«Не ждать»: ответ, который ждёт карту (503 шлюза), кончается ошибкой GAVE_UP; уже не ждёт — 409 `state`
+    (проверка и отмена — без await между ними: начавший читать модель ответ не оборвать)."""
+    _chat_row(request.state.user.id, chat_id)
+    waiting = [st for st in _chat_streams(chat_id) if st.card_wait is not None]
+    if not waiting:
+        raise HTTPException(409, {"code": "state", "message": "ответ уже не ждёт карту"})
+    for st in waiting:
+        st.gave_up = True
+    await _cancel(waiting)
     return Response(status_code=204)
 
 

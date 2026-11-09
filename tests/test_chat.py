@@ -594,7 +594,7 @@ def test_unreadable_share_marks_the_answer(studio, env, monkeypatch):
     assert r.status_code == 503 and r.json()["detail"] == {"code": "storage", "message": "хранилище недоступно"}
     msgs = messages(studio, cid)
     assert [(m["role"], m["status"]) for m in msgs] == [("user", "done"), ("assistant", "error")]
-    assert msgs[1]["content"] == "хранилище недоступно" and not studio.gw.chat_requests
+    assert (msgs[1]["content"], msgs[1]["error"]) == ("", "хранилище недоступно") and not studio.gw.chat_requests
     assert not chat.STREAMS
 
 

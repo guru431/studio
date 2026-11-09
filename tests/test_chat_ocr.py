@@ -263,25 +263,61 @@ def test_scan_with_the_ocr_address_off_the_allowlist_says_so(studio):
                                              " администратора внести его")
 
 
-def test_stop_while_waiting_cancels_the_scan(studio):
+def test_stop_while_waiting_keeps_the_running_scan_and_drops_the_queued(studio):
+    """«Остановить» ответ, ждущий сканы: идущий документ дорабатывает (распознанное не теряется — «Ответить
+    заново» возьмёт его текст), ждущий в очереди — отменён."""
     add_gateway(studio); cid = new_chat(studio)
     studio.gw.ocr_hold = True
-    att = upload(studio, scan_pdf("ink", "ink"))
+    running = upload(studio, scan_pdf("ink", "ink"))
+    queued = upload(studio, scan_pdf("ink"), "второй.pdf")
     try:
-        with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": QUESTION, "attachment_ids": [att["id"]]}) as r:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns",
+                             json={"text": QUESTION, "attachment_ids": [running["id"], queued["id"]]}) as r:
             events = events_of(r.iter_lines())
             assert next(events)[0] == "turn"
-            assert next(d for e, d in events if e == "ocr") == {"page": 0, "pages": 2}
+            assert next(d for e, d in events if e == "ocr") == {"page": 0, "pages": 3}
             wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
             assert studio.c.post(f"/api/chats/{cid}/stop").status_code == 204
             rest = [(e, d) for e, d in events if e not in ("ping", "ocr")]
-        assert scan_of(studio, att["ocr"]["id"])["state"] == "cancelling"
+        assert scan_of(studio, running["ocr"]["id"])["state"] == "working"
+        assert scan_of(studio, queued["ocr"]["id"])["state"] == "cancelled"
     finally:
         studio.gw.ocr_hold = False
     assert rest == [("done", {"status": "stopped"})]
-    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans").fetchone()[0] == "cancelled")
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?",
+                                                (running["ocr"]["id"],)).fetchone()[0] == "done")
     assert messages(studio, cid)[1]["status"] == "stopped" and studio.gw.chat_requests == []
-    assert len(studio.gw.ocr_requests) == 1
+    assert len(studio.gw.ocr_requests) == 2
+    assert att_text(studio, running["id"])[0] == f"Страница 1\n\n{TEXT}\n\nСтраница 2\n\n{TEXT}"
+    assert sse(studio.c.post(f"/api/chats/{cid}/turns", json={"regenerate": True}))[-1][0] in ("done", "error")
+
+
+def test_failed_scan_attachment_can_be_recognized_again(studio):
+    """У вложения, чей скан не распознан, — «Распознать заново» (`rescan`): документ снова в очереди, текст
+    вложения — его итог; следующий ход ждёт его, как при первой загрузке."""
+    add_gateway(studio); cid = new_chat(studio)
+    held_until_the_turn_waits(studio)
+    studio.gw.ocr_replies = [(500, {"error": {"message": "внутренняя ошибка"}})]
+    att = upload(studio, scan_pdf("ink"))
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1][0] == "error"
+    shown = messages(studio, cid)[0]["attachments"][0]
+    assert shown["rescan"] is True
+    assert studio.c.post("/api/attachments/nope/ocr").status_code == 404
+    studio.gw.ocr_hold = True
+    try:
+        r = studio.c.post(f"/api/attachments/{att['id']}/ocr")
+        assert r.status_code == 202 and r.json() == {"ocr": {"id": att["ocr"]["id"]}}
+        shown = messages(studio, cid)[0]["attachments"][0]
+        assert shown["ocr"] == {"id": att["ocr"]["id"]} and "rescan" not in shown
+        assert studio.c.post(f"/api/attachments/{att['id']}/ocr").json()["detail"]["code"] == "running"
+    finally:
+        studio.gw.ocr_hold = False
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans").fetchone()[0] == "done")
+    assert att_text(studio, att["id"])[0] == f"Страница 1\n\n{TEXT}"
+    assert "rescan" not in messages(studio, cid)[0]["attachments"][0]
+    assert sse(ask(studio, cid, "ещё раз"))[-1] == ("done", {"status": "done"})
+    assert doc("скан.pdf", f"Страница 1\n\n{TEXT}", f"{QUESTION}\n\nещё раз") == (
+        studio.gw.chat_requests[-1]["messages"][-1]["content"])
 
 
 def test_reload_shows_the_scan_progress(studio):
