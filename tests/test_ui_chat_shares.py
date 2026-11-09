@@ -47,6 +47,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async text => {window.copiedShare = text}}})")
             page.goto(live.url + '/#/chat/' + cid)
             page.locator('#chat-share').click()
+            page.locator('#chat-share-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')
             pw.expect(pin).to_be_enabled()
             if mobile:
@@ -64,6 +65,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             assert page.evaluate('window.copiedShare') == url
             page.locator('#chat-share-dialog .dialog-close').click()
             page.locator('#chat-share').click()
+            page.locator('#chat-share-menu [data-action="link"]').click()
             pw.expect(link).to_have_value(url)
             pw.expect(page.locator('#chat-share-pin')).to_have_value('')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -136,6 +138,7 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
             page = context.new_page()
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
             page.locator('#code-share-chat').click()
+            page.locator('#code-share-chat-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')
             pw.expect(pin).to_be_enabled()
             pin.fill('4567')

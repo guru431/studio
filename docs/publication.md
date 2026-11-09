@@ -20,6 +20,12 @@ pull-зеркало получает его с основного сервера
 Значения ключей и паролей туда не помещаются: они по-прежнему поступают из vault
 или секретного файла сервера через stdin.
 
+Для экспорта чатов в PDF выкладка также доставляет общий `md2pdf.py`: по умолчанию
+`~/.claude/bin/md2pdf.py`, иной источник задаётся `STUDIO_MD2PDF_SOURCE`. Его SHA-256 должен
+совпадать с закоммиченным `deploy/md2pdf.sha256`; проверка идёт до первого SSH и до подмены кода
+на хосте. Доставленная копия — `deploy/md2pdf.py`, без изменений относительно общего инструмента.
+`install.sh` проверяет Chromium, ставит его при отсутствии и сохраняет прежний код до проверок.
+
 Профиль задаёт `STUDIO_SSH`, `STUDIO_SSH_PORT`, `STUDIO_SSH_KEY`, `STUDIO_VAULT`,
 `STUDIO_URL`, `STUDIO_REMOTE_ROOT`, `STUDIO_MEDIA_DIR` и `STUDIO_HAIRPIN_IP`.
 `STUDIO_CERT_DIR` выбирает каталог сертификата Apache, `STUDIO_APACHE_PORT` —

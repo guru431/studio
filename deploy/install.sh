@@ -74,6 +74,16 @@ fi
 
 # Звук студии (расшифровка, озвучка) — ffmpeg debian; до подмены кода: не встал — работает прежний
 command -v ffmpeg >/dev/null     || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg >/dev/null
+# The shared Markdown-to-PDF CLI uses Chromium; install before swapping the running app.
+command -v chromium >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium fonts-dejavu-core >/dev/null
+[ -s "$NEW/deploy/md2pdf.py" ] || {
+    echo "ОШИБКА: нет общего md2pdf.py — deploy.sh должен доставить конвертер" >&2
+    exit 1
+}
+[ "$(sha256sum "$NEW/deploy/md2pdf.py" | cut -d' ' -f1)" = "$(tr -d '\r\n' < "$NEW/deploy/md2pdf.sha256")" ] || {
+    echo "ОШИБКА: md2pdf.py не совпал с закреплённой версией — прежний код не тронут" >&2
+    exit 1
+}
 # Субтитры YouTube в чате — общий yt-dlp debian (root обновляет его ночью из /etc/crontab): своей копии нет,
 # поэтому без него только предупреждение, выкладка идёт дальше
 command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — чтение YouTube в чате недоступно" >&2

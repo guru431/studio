@@ -31,6 +31,7 @@ import audio
 import auth
 import bridge
 import chat
+import chat_exports
 import chat_shares
 import cleaner_client as cleaner
 import checks
@@ -89,6 +90,7 @@ async def lifespan(_app):
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
+    chat_exports.clean_tmp()
     audio.clean_tmp()
     images.recover()
     chat.recover()
@@ -154,6 +156,7 @@ app.include_router(presets.router)          # раньше images: /api/images/p
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
+app.include_router(chat_exports.router)
 app.include_router(chat_shares.router)
 app.include_router(dictation.router)
 app.include_router(transcripts.router)

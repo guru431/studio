@@ -48,6 +48,19 @@ read-токен живёт только в памяти страницы, не �
 возврат Back/Forward тоже стирает текст и просит PIN. Тесты — `test_chat_shares.py`,
 `test_ui_chat_shares.py` (Firefox/Chromium/WebKit, 320/1280).
 
+`chat_exports.py` использует те же `regular_snapshot` / `agent_snapshot` и owner/PIN-проверки для
+`POST …/chats/<id>/export {format: "md"|"pdf"}`. Экспорт не создаёт публичную ссылку; включает
+всю переписку, команды/вывод и имена вложений. После PDF повторяются проверки сессии, раздела,
+поколения истории и исходного чата; у «Агентов» — ещё живой PIN. PDF — через общий CLI `md2pdf.py`,
+строго закреплённый `deploy/md2pdf.sha256` (доставка байт-в-байт из `STUDIO_MD2PDF_SOURCE` или
+`~/.claude/bin/md2pdf.py`). Markdown перед рендером разбирается без HTML; изображения превращаются
+в текст, внешние/локальные ресурсы не загружаются. Файлы и профиль браузера — в локальном приватном
+`tmp/chat-export-*`, удаляются в finally и при старте; ключ данных не передаётся конвертеру.
+Одновременно не больше двух PDF на службу и одного на учётку, бюджет конвертера 45 с.
+Верхняя кнопка `code.js` справа от «Чат» и кнопка обычного чата используют `chat-share.js::shareMenu`:
+нативный popover, три пункта, клавиатура и закрытие при смене чата/раздела. Тесты:
+`test_chat_exports.py`, `test_ui_chat_exports.py` и прежние сценарии общего доступа.
+
 Визуализации Codex (`visualize` с JSON `path/mode/title`) распознаёт общее inline-расширение
 `visualization-markup.js` в `markdown.js` и Worker; блоки кода остаются текстом.
 `code-visualizations.js` открывает модальное окно с iframe `sandbox="allow-scripts"`.

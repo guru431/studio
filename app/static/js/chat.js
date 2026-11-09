@@ -65,7 +65,7 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
-import { SHARE_ICON, shareDialog } from './chat-share.js';
+import { shareDialog, shareMenu } from './chat-share.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
@@ -113,7 +113,6 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
-  share: SHARE_ICON,
 };
 
 const jobs = new Map();          // id диалога → ответ, который читает эта вкладка
@@ -461,9 +460,8 @@ function build(view, ctx) {
     'aria-expanded': 'false' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
   const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', hidden: true });
   const connName = el('span', { class: 'chat-conn' });
-  const share = iconButton('share', 'Поделиться чатом', { id: 'chat-share', hidden: true });
   const head = el('header', { class: 'head chat-head' }, toggle,
-    el('div', { class: 'model-wrap' }, chip, modelMenu), connName, share);
+    el('div', { class: 'model-wrap' }, chip, modelMenu), connName);
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -492,9 +490,16 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
-  share.addEventListener('click', () => {
-    if (chatId) shareDialog(root, `/api/chats/${chatId}/share`);
-  });
+  const sharing = shareMenu(root, { id: 'chat-share', failed: (err) => { notice.textContent = words(err); } });
+  const share = sharing.button;
+  share.hidden = true;
+  head.append(share);
+
+  function shareContext() {
+    share.hidden = !chatId;
+    sharing.set(chatId ? { title: chat?.chat.id === chatId ? chat.chat.title || 'Чат' : 'Чат', share: `/api/chats/${chatId}/share`,
+      export: `/api/chats/${chatId}/export` } : null);
+  }
 
   /* выдвижная панель списка (≤ 760px) */
   function panel(open) {
@@ -571,6 +576,7 @@ function build(view, ctx) {
       try {
         const out = await api('PATCH', `/api/chats/${item.id}`, { title: title.value });
         if (chat && chat.chat.id === out.id) chat.chat = out;
+        shareContext();
         dialog.close();
         loadList();
       } catch (err) {
@@ -1155,6 +1161,7 @@ function build(view, ctx) {
       ]);
       if (!alive || mine !== opened || chatId !== id) return;
       chat = data;
+      shareContext();
       if (receipt?.accepted && data.messages.some((message) => message.id === receipt.assistant_message_id)) {
         acknowledgeTurn(attempt);
       }
@@ -1186,7 +1193,7 @@ function build(view, ctx) {
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
     chatId = id;
-    share.hidden = !chatId;
+    shareContext();
     chat = null;
     needsReload = false;
     failures = 0;
@@ -1222,6 +1229,7 @@ function build(view, ctx) {
       const data = await api('GET', `/api/chats/${encodeURIComponent(id)}`);
       if (mine !== opened) return;
       chat = data;
+      shareContext();
     } catch (err) {
       if (mine !== opened) return;
       feed.replaceChildren(el('p', { class: 'error feed-note' }, words(err)));
@@ -1367,8 +1375,8 @@ function build(view, ctx) {
       const created = await api('POST', '/api/chats', draft || {});
       ++opened;
       chatId = created.id;
-      share.hidden = false;
       chat = { chat: created, messages: [] };
+      shareContext();
       draft = null;
       history.replaceState(history.state, '', `#/chat/${created.id}`);
       loadList();
@@ -1618,6 +1626,7 @@ function build(view, ctx) {
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
+      sharing.unmount();
       alive = false;
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);

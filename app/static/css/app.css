@@ -1248,8 +1248,17 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-place-agent { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .code-place-sep { flex: none; color: var(--muted); white-space: pre; }
 .code-place-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.code-project-tools { display: flex; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
+.code-project-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; margin-left: auto; }
+.code-view-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .code-views { flex: none; display: flex; gap: 6px; }
+.chat-share-trigger { flex: none; }
+.chat-share-trigger[aria-busy="true"] { opacity: .55; }
+.chat-share-menu { position: fixed; left: auto; bottom: auto; margin: 0; padding: 6px; width: 240px;
+  max-width: calc(100vw - 16px); color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow); }
+.chat-share-menu .menu-item { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 8px;
+  white-space: nowrap; text-align: left; }
+.chat-share-menu .menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .code-repo-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; padding: 4px 6px;
   border: 0; border-radius: 5px; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
 .code-repo-status:hover { background: var(--panel-2); }

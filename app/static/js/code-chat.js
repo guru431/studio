@@ -45,7 +45,6 @@ import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
 import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
-import { SHARE_ICON, shareDialog } from './chat-share.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -227,11 +226,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const actions = el('div', { class: 'code-chat-actions' });
-  const share = el('button', { type: 'button', class: 'icon-btn', id: 'code-share-chat',
-    'aria-label': 'Поделиться чатом', title: 'Поделиться чатом' });
-  share.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${SHARE_ICON}</svg>`; // constant artwork
-  share.addEventListener('click', () => shareDialog(host, endpoint('/share'), typeof title === 'string' ? title : 'Чат', api));
-  actions.append(share);
   const statusBar = el('div', { class: 'code-status-bar' }, activity, actions,
     changedFiles.button, context.cacheButton, contextBox, usage.button);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,

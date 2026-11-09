@@ -31,6 +31,7 @@ ALPHA, BETA = pid("alpha"), pid("beta")
 #: (тела: {"text": "x"}, {"request_id": "r1", "decision": "allow"}, {"path": ""},
 #: {"path": "a", "text": "", "version": "v"}, {"path": "a.pdf", "page": 1}).
 BODIES = {
+    ("POST", "/api/code/agents/1/projects/1/chats/1/export"): {"format": "md"},
     ("GET", "/api/code/agents/1/projects/1/chats/1/share"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/share"): {"pin": "0123"},
     ("DELETE", "/api/code/agents/1/projects/1/chats/1/share"): None,
