@@ -725,7 +725,9 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
       const scale = parseFloat(root.style.zoom), box = field.getBoundingClientRect();
       return { readable: parseFloat(getComputedStyle(field).fontSize) * scale >= 16,
         compactPicks: [...document.querySelectorAll('.code-pick-value')].every(e =>
-          getComputedStyle(e).fontSize === getComputedStyle(document.querySelector('#code-context')).fontSize),
+          Math.abs(parseFloat(getComputedStyle(e).fontSize)
+            - (parseFloat(getComputedStyle(document.querySelector('.code-compose-area')).width) <= 550 ? 11 : 12)
+              * parseFloat(getComputedStyle(root).getPropertyValue('--font-scale'))) < .01),
         nativePicks: [...document.querySelectorAll('.code-pick select')].every(e =>
           parseFloat(getComputedStyle(e).fontSize) * scale >= 16),
         viewport: visualViewport.scale === 1,
@@ -736,11 +738,13 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
     page.locator('#code-text').blur()
     fits(page)
     page.screenshot(path=str(tmp_path / f'focused-{scale}-{font}.png'))
-    page.locator('#code-effort').select_option(index=1)
+    page.locator('#code-effort-pick').tap()
+    page.locator('#code-effort-menu [role="menuitemradio"]').nth(1).tap()
     assert page.locator('#code-effort').evaluate("""e => {
       const r = e.getBoundingClientRect(), label = e.closest('.code-pick');
       return label.querySelector('.code-pick-value').textContent === e.selectedOptions[0].textContent
-        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === e;
+        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2).closest('button')
+          === label.querySelector('.code-pick-trigger');
     }""")
 
 

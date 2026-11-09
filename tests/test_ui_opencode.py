@@ -33,6 +33,7 @@ def test_code_composer_icons_and_controls_stay_in_one_row(browser, live, tmp_pat
       const boxes = selectors.map(rect), bar = rect('#code-composer .composer-bar');
       const attach = document.querySelector('#code-attach'), mic = document.querySelector('#code-composer .mic');
       return { row: boxes.every(b => b.top >= bar.top - 1 && b.bottom <= bar.bottom + 1),
+        locked: [...document.querySelectorAll('.code-pick-trigger')].filter(b => b.getClientRects().length).every(b => b.disabled),
         fits: boxes.every(b => b.left >= bar.left - 1 && b.right <= bar.right + 1),
         controls: boxes.every(b => b.width >= 24),
         adjacent: attach.nextElementSibling === mic && Math.abs(rect('#code-attach').left - rect('#code-composer .mic').left) < 1,
