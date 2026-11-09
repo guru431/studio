@@ -858,6 +858,10 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
                        " VALUES (?, ?, ?, ?, ?, 0, 'x', ?)", (media_id, uid, f"u{uid}/{media_id}", mime, size, time.time()))
     live_sql(live, "INSERT INTO purge(media_id, user_id, rel_path, queued) VALUES ('k-gone', ?, ?, ?)",
              (uid, f"u{uid}/k-gone.png", time.time() - 3600))
+    # удаление контекста Cleaner, отложенное после неудачи (адрес недоступен), — числом по адресу
+    live_sql(live, "INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, retry_at)"
+                   " VALUES ('k-ctx', ?, 'r1', 'http://10.77.1.16:4000', x'00', ?, ?)",
+             (uid, time.time() - 600, time.time() + 3600))
     # разделы настроек отвечают позже «Хранилища» (так бывало под нагрузкой): их ответ «Прочее» не перерисовывает —
     # иначе блок заменялся новым, пустым до своего ответа, и строки читались пустыми
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u) === '/api/sections'
@@ -877,6 +881,8 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
     assert v["same"] is True
     assert v["before"] == [["image", "1 файл · 2 КиБ"], ["video", "1 файл · 3 МиБ"], ["total", "2 файла · 3 МиБ"]]
     assert v["queue"].startswith("Ждут удаления на хранилище: 1 файл (с ") and v["fits"] is True
+    assert v["queue"].endswith(" Контекстов Cleaner в очереди удаления: 1."
+                               " Отложено после неудачи (http://10.77.1.16:4000): 1.")
     assert v["after"] == [["total", "0 файлов · 0 Б"]]
     assert not problems(r), problems(r)
 
@@ -929,7 +935,9 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     finally:
         copy.unlink()
     assert not r.get("failed"), r
-    share, backup, queue = r["values"]["lines"]
+    share, backup, queue, orphans = r["values"]["lines"]
+    assert orphans[0] == "orphans" and orphans[2] is False
+    assert orphans[1] == "проверки ещё не было" or ": удалено — " in orphans[1]
     assert share[0] == "share" and share[1].startswith("доступна, свободно ") and share[2] is False
     assert backup[0] == "backup" and backup[1].startswith("3 ч назад (") and backup[1].endswith("копий — 1")
     assert backup[2] is False

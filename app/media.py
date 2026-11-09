@@ -24,6 +24,7 @@
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -45,6 +46,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 import clock
+import db
 import lock_policy
 import operations
 import state
@@ -423,6 +425,8 @@ async def _purge_loop() -> None:
     while True:
         try:
             await purge()
+            if orphans_due():
+                await sweep_orphans()
         except Exception as e:                    # noqa: BLE001 — очередь не должна вставать
             log.warning("очередь удаления: сбой прохода (%s)", type(e).__name__)
         await clock.SLEEP(PURGE_SEC)
@@ -441,21 +445,111 @@ def alive(user_id: int, media_id: str) -> bool:
         "SELECT 1 FROM media WHERE id = ? AND user_id = ?", (media_id, user_id)).fetchone() is not None
 
 
+#: Все столбцы схемы с id файла media: запись с таким id держит файл (referenced, sweep_orphans). Новый
+#: столбец `*media_id` без строки здесь роняет test_media_orphans; на базе с незнакомым столбцом (код откатили
+#: после шага схемы новее) чистка «сирот» не идёт вовсе. JSON-снимки (`images.chain`, `videos.chain`,
+#: `chat_shares.snapshot`) файлов не держат: цепочка показывает пропавший шаг «удалён», а файлы снимка
+#: «Поделиться» — строки `chat_share_files`.
+REFERENCES = {
+    "images": ("media_id", "source_media_id", "mask_media_id"),
+    "videos": ("media_id", "source_media_id"),
+    "attachments": ("media_id",),
+    "transcripts": ("source_media_id", "result_media_id"),
+    "voices": ("media_id",),
+    "speeches": ("media_id",),
+    "scans": ("source_media_id",),
+    "scan_pages": ("media_id",),
+    "translations": ("source_media_id",),
+    "chat_share_files": ("media_id",),          # своего user_id нет — владелец у chat_shares
+}
+#: `*media_id`, которые не ссылки: очередь удаления держит путь файла, чьей строки уже нет
+NOT_REFERENCES = {("purge", "media_id")}
+
+
+def _owned(table: str, columns: tuple) -> str:
+    """Подзапрос «есть запись пользователя с этим id в столбцах таблицы»: параметры — user_id, media_id."""
+    if table == "chat_share_files":
+        return ("SELECT 1 FROM chat_share_files f JOIN chat_shares s ON s.id = f.share_id"
+                " WHERE s.user_id = ? AND f.media_id = ?")
+    return f"SELECT 1 FROM {table} WHERE user_id = ? AND ? IN ({', '.join(columns)})"
+
+
+_REFERENCED = " UNION ALL ".join(_owned(t, c) for t, c in REFERENCES.items()) + " LIMIT 1"
+
+
 def referenced(user_id: int, media_id: str) -> bool:
     """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик, вложение чата,
     расшифровка (запись, итог), голос, озвучка, документ распознавания (исходник) или его страница,
-    перевод (исходный файл или снимок): удаление другой записи его не трогает."""
-    return state.DB.execute(
-        "SELECT 1 FROM images WHERE user_id = ? AND ? IN (media_id, source_media_id, mask_media_id)"
-        " UNION ALL SELECT 1 FROM videos WHERE user_id = ? AND ? IN (media_id, source_media_id)"
-        " UNION ALL SELECT 1 FROM attachments WHERE user_id = ? AND media_id = ?"
-        " UNION ALL SELECT 1 FROM transcripts WHERE user_id = ? AND ? IN (source_media_id, result_media_id)"
-        " UNION ALL SELECT 1 FROM voices WHERE user_id = ? AND media_id = ?"
-        " UNION ALL SELECT 1 FROM speeches WHERE user_id = ? AND media_id = ?"
-        " UNION ALL SELECT 1 FROM scans WHERE user_id = ? AND source_media_id = ?"
-        " UNION ALL SELECT 1 FROM scan_pages WHERE user_id = ? AND media_id = ?"
-        " UNION ALL SELECT 1 FROM translations WHERE user_id = ? AND source_media_id = ? LIMIT 1",
-        (user_id, media_id) * 9).fetchone() is not None
+    перевод (исходный файл или снимок), снимок «Поделиться» (REFERENCES): удаление другой записи его не трогает."""
+    return state.DB.execute(_REFERENCED, (user_id, media_id) * len(REFERENCES)).fetchone() is not None
+
+
+# ---- чистка «сирот» (идея 2026-11-09) ----------------------------------------
+
+#: Строка media без записи истории (запрос оборвала остановка службы между сохранением файла и записью):
+#: старше ORPHAN_AGE_SEC — запись к ней уже не придёт. Проход — раз в ORPHAN_EVERY_SEC (отметка — в settings
+#: `orphans`, переживает перезапуски), не больше ORPHAN_BATCH строк; пути — в очередь удаления.
+ORPHAN_AGE_SEC = 86400
+ORPHAN_EVERY_SEC = 86400
+ORPHAN_BATCH = 1000
+
+
+def _unknown_references() -> list[str]:
+    """Столбцы `*media_id` базы, которых нет в REFERENCES и NOT_REFERENCES (база новее кода)."""
+    known = {(t, c) for t, cols in REFERENCES.items() for c in cols} | NOT_REFERENCES
+    return sorted(f"{t}.{c}" for t, c in state.DB.execute(
+        "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p"
+        " WHERE m.type = 'table' AND p.name LIKE '%media\\_id' ESCAPE '\\'") if (t, c) not in known)
+
+
+def orphans() -> dict | None:
+    """Итог последнего прохода `{at, found}` (для панели; found null — пропущен) или None — прохода ещё не было."""
+    row = state.DB.execute("SELECT value FROM settings WHERE key = 'orphans'").fetchone()
+    return json.loads(row["value"]) if row else None
+
+
+def orphans_due() -> bool:
+    last = orphans()
+    return last is None or clock.NOW() - last["at"] >= ORPHAN_EVERY_SEC
+
+
+async def sweep_orphans() -> int | None:
+    """Строки media старше ORPHAN_AGE_SEC, на которые не ссылается ни одна запись (REFERENCES), — в очередь
+    удаления, как delete_async: строка и путь — одной транзакцией без await, файлы — в потоке. Итог — число
+    найденных; None — проход не шёл: в базе есть незнакомые ссылки на файлы или она новее кода — удалять
+    по неполному списку значило бы терять файлы. В журнал — только числа."""
+    unknown = _unknown_references()
+    newer = state.DB.execute("PRAGMA user_version").fetchone()[0] > db.VERSION
+    if unknown or newer:
+        _record_orphans(None)
+        log.warning("чистка файлов: пропущена — в базе незнакомые ссылки на файлы (%d)", len(unknown))
+        return None
+    held = " UNION ".join(f"SELECT {c} AS ref FROM {t}" for t, cols in REFERENCES.items() for c in cols)
+    state.DB.execute("BEGIN")
+    try:
+        # NOT IN по списку с NULL не находит ничего: NULL отсеяны
+        rows = [r for r in state.DB.execute(
+            f"SELECT id, user_id, rel_path FROM media WHERE created < ? AND id NOT IN"
+            f" (SELECT ref FROM ({held}) WHERE ref IS NOT NULL) ORDER BY created LIMIT ?",
+            (clock.NOW() - ORPHAN_AGE_SEC, ORPHAN_BATCH)) if r["id"] not in SAVING]
+        for r in rows:
+            queue(r["user_id"], [(r["id"], r["rel_path"])])
+        state.DB.executemany("DELETE FROM media WHERE id = ?", [(r["id"],) for r in rows])
+        _record_orphans(len(rows))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    if rows:
+        log.info("чистка файлов: без записи истории — %d", len(rows))
+        await _purge([(r["id"], r["rel_path"]) for r in rows])
+    return len(rows)
+
+
+def _record_orphans(found: "int | None") -> None:
+    """Отметка прохода; found None — проход пропущен (база с незнакомыми ссылками), панель так и скажет."""
+    state.DB.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('orphans', ?)",
+                     (json.dumps({"at": clock.NOW(), "found": found}),))
 
 
 async def delete_async(user_id: int, media_id: str) -> None:
