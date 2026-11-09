@@ -8,7 +8,8 @@
   смена пароля — нет: ключ устройства самостоятелен (спека 6.2).
 - Просьба (`call`) ждёт ответа с тем же `id` не дольше `CALL_SEC`; канал пропал — сразу `Offline`, а не по
   сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал или его заменил новый —
-  им `("offline", None)`. Кадры канала, который уже не текущий (заменён, снят), никуда не идут.
+  им `("offline", None)`; канал появился (`attach`) — `("online", None)`: поток `live`, что ждёт компьютер,
+  кончается, и страница сразу открывает новый. Кадры канала, который уже не текущий (заменён, снят), никуда не идут.
   Карточку (`ask`) или конец хода (`done`) чата без наблюдателей владельцу сообщает push (`push.notify_later`).
   Своего состояния хода студия не хранит: источник правды — машина (спека 6.10).
 - Признак сессии студии для моста — `tag`: не дайджест сессии и тем более не токен, а производное от
@@ -116,7 +117,7 @@ class SocketLink(Link):
 
 
 class Watch(asyncio.Queue):
-    """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("closed", None); `session` — `tag`
+    """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("online", None) | ("closed", None); `session` — `tag`
     сессии студии, что смотрит (её `forget` кладёт `closed`). Событий в ней — не больше `WATCH_MAX`: застрявший
     поток SSE (TCP жив, страница не читает) получает `offline` и снимается (`_put_event`)."""
 
@@ -279,6 +280,17 @@ async def attach(link: Link) -> None:
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"]})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
+    if old is None and LINKS.get(link.agent_id) is link:
+        _online(link.agent_id)           # после welcome: просьбы ждавших страниц идут мосту следом за ним; при
+                                         # замене канала ждущих нет (live шёл к прежнему), потокам хватает offline
+
+
+def _online(agent_id: int) -> None:
+    """Наблюдателям чатов компьютера — канал снова есть: ждущий поток `live` кончится, страница откроет новый."""
+    for (aid, _chat), queues in WATCHERS.items():
+        if aid == agent_id:
+            for q in queues:
+                q.put_nowait(("online", None))
 
 
 def _fail_pending(link: Link) -> None:
