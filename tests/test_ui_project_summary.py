@@ -237,10 +237,14 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
         }}
         return real(url, options);
       }}; return true; }})()"""
+    # Windows без анимаций (сервер, RDP) отдаёт браузеру prefers-reduced-motion: reduce — тогда ↻ не вращается
+    # по CSS, и ожидаемое имя анимации — none; остальное состояние кнопки одинаково.
     loading = """(() => {
       const button = document.querySelector('#code-project-refresh'), footer = button.closest('.code-panel-footer');
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
       return [button.disabled, button.getAttribute('aria-busy'), footer.getAttribute('aria-busy'),
-        getComputedStyle(button.firstElementChild).animationName, document.querySelector('#code-project-updated').textContent];
+        getComputedStyle(button.firstElementChild).animationName, document.querySelector('#code-project-updated').textContent,
+        reduce];
     })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
@@ -319,7 +323,9 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
     assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == values["initialReadCount"] + 39
     assert values["twoLines"] and values["compactControls"]
-    assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', 'spin', 'Обновляю сведения…']
+    spin = 'none' if values["loadingList"][5] else 'spin'
+    assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', spin, 'Обновляю сведения…',
+                                                                values["loadingList"][5]]
     assert values["finished"][:4] == [False, 'false', 'false', 'none']
     assert values["finished"][4].startswith('Обновлено:')
     assert [entry[:2] for entry in values["github"]] == [
