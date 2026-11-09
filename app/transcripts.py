@@ -47,6 +47,7 @@ import documents
 import exports
 import forms
 import media
+import operations
 import push
 import sections
 import speech
@@ -92,6 +93,8 @@ class Job:
 JOBS: dict[str, Job] = {}
 #: user_id → раннер его очереди (п. 7)
 RUNNERS: dict[int, asyncio.Task] = {}
+#: id ждущей записи → эпоха создания (`operations.capture` при постановке; раннер исполняет её под ней)
+EPOCHS: dict[str, tuple] = {}
 
 
 def _clock(sec: float) -> str:
@@ -179,6 +182,7 @@ def _finish(tid: str, state_: str, detail_: str, **extra) -> None:
     changed = state.DB.execute(f"UPDATE transcripts SET state = ?, detail = ?, finished = ?{cols}"
                                " WHERE id = ? AND finished IS NULL",
                                (state_, detail_, clock.NOW(), *extra.values(), tid)).rowcount
+    EPOCHS.pop(tid, None)
     if changed:
         push.job_finished("transcripts", tid)
 
@@ -202,12 +206,15 @@ def kick(user_id: int) -> None:
 
 
 async def _runner(user_id: int) -> None:
-    """Старейшая ждущая запись пользователя — в работу, по одной, пока очередь не пуста."""
+    """Старейшая ждущая запись пользователя — в работу, по одной, пока очередь не пуста. Каждая — под своей
+    эпохой (`EPOCHS`), а не под эпохой запроса, запустившего раннер: после очистки истории живой раннер
+    берёт и новые записи."""
     while True:
         row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE user_id = ? AND state = 'queued'"
                                " ORDER BY created, id LIMIT 1", (user_id,)).fetchone()
         if row is None:
             return
+        epoch = EPOCHS.pop(row["id"], None) or operations.snapshot(user_id)
         now = clock.NOW()
         if not state.DB.execute("UPDATE transcripts SET state = 'working', detail = 'готовлю запись'"
                                 " WHERE id = ? AND state = 'queued'", (row["id"],)).rowcount:
@@ -219,7 +226,8 @@ async def _runner(user_id: int) -> None:
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
                   source_media_id=row["source_media_id"], stage_at=now)
         JOBS[job.id] = job
-        job.task = asyncio.create_task(run(job))
+        with operations.restore(epoch):
+            job.task = asyncio.create_task(run(job))
         await job.task
 
 
@@ -308,8 +316,12 @@ def recover() -> None:
 
 
 def resume() -> None:
-    """Старт службы (после recover и state.HTTP): очереди с ждущими записями — снова в работу."""
-    for (uid,) in state.DB.execute("SELECT DISTINCT user_id FROM transcripts WHERE state = 'queued'").fetchall():
+    """Старт службы (после recover и state.HTTP): очереди с ждущими записями — снова в работу, каждая — с
+    эпохой старта (очистка истории после него их сохранение запрещает, как у принятых запросом)."""
+    rows = state.DB.execute("SELECT id, user_id FROM transcripts WHERE state = 'queued'").fetchall()
+    for row in rows:
+        EPOCHS[row["id"]] = operations.snapshot(row["user_id"])
+    for uid in {row["user_id"] for row in rows}:
         kick(uid)
 
 
@@ -341,6 +353,7 @@ async def stop() -> None:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    EPOCHS.clear()                                   # ждущие остаются в базе; эпоху им даст `resume`
 
 
 async def backfill_text() -> int:
@@ -420,6 +433,7 @@ async def upload(request: Request):
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
                      " created) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
                      (tid, uid, conn.id, model, name, source, QUEUED, now))
+    EPOCHS[tid] = operations.capture(uid)
     kick(uid)
     log.info("расшифровка %s: принята", tid[:8])
     return _out(_row(uid, tid))
