@@ -17,26 +17,24 @@
  * Готовая оболочка ставит <html data-ready="1"> (по нему ждут браузерные тесты). Профиль при запуске
  * не пришёл (нет связи) — «Повторить», и сам повтор при появлении сети и возвращении на экран.
  *
- * Тема — пунктом #theme-toggle меню аватара (сразу под именем; подпись — что включит нажатие, меню после
- * нажатия остаётся открытым): из «auto» первое нажатие ставит противоположную видимой,
- * дальше «Бумага» ↔ «Графит»; соседний выбор режима возвращает «Как на устройстве». Выбор уходит
- * в PATCH /api/me; отказ виден рядом с повтором, несохранённый выбор сохраняется в открытом окне.
- * Тема и вид ленты — в учётке: вернувшись
- * на экран, студия перечитывает профиль (их могли сменить на другом устройстве) — тема меняется
- * сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
+ * Меню аватара (#menu) — раскрывающаяся панель, не role="menu": имя и логин, сегмент «Тема: Авто · Светлая ·
+ * Тёмная» (радиокнопки — стрелки переключают; меню после выбора остаётся открытым) со строкой сохранения и
+ * «Повторить», «Настройки», «Администрирование» (администратору), разделитель, «Выйти». У аватара aria-expanded;
+ * Escape и нажатие вне панели закрывают её, Escape возвращает фокус аватару; фокус, ушедший из панели Tab'ом, — тоже.
+ * Тема и акцент — appearance.js (выбор уходит в PATCH /api/me; отказ виден под сегментом с повтором). Тема и вид
+ * ленты — в учётке: вернувшись на экран, студия перечитывает профиль (их могли сменить на другом устройстве) —
+ * тема меняется сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
-import { api, loadMe, me } from './api.js';
+import { loadMe, me } from './api.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
-import { setupAppearance } from './appearance.js';
+import { choose, current as look, follow, paintSave, retrySave, setupAppearance } from './appearance.js';
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
 
-const THEME_KEY = 'studio-theme';
-const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
 const HINTS = {
   chat: 'Чтобы писать в чат, выберите модель в настройках раздела «Чат»',
   photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
@@ -57,11 +55,6 @@ const ICONS = {
   translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
   code: '<path d="M4 6l5 5-5 5M11 18h9"/>',
 };
-const THEME_ICONS = {
-  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
-    + 'M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-};
 
 const SECTIONS = {
   chat: { title: 'Чат', load: () => import('./chat.js') },
@@ -80,16 +73,10 @@ const SECTIONS = {
 const view = document.getElementById('view');
 const preloadSection = document.getElementById('theme-start')?.preloadSection || (() => {});
 const avatar = document.getElementById('avatar');
-const toggle = document.getElementById('theme-toggle');
-const darkMedia = matchMedia('(prefers-color-scheme: dark)');
 const menu = document.getElementById('menu');
 let current = null;      // { section, module }
 let renders = 0;         // номер последнего перехода: медленная загрузка раздела не перебьёт новый
 let entries = 0;         // номера меток записей истории ({ entry: n } в history.state) — для hold() раздела
-let themeMode = null;
-let pendingTheme = null;
-let themeRevision = 0;
-let savingTheme = false;
 let mobileNavigation = null;
 
 function el(tag, attrs = {}, ...children) {
@@ -125,101 +112,6 @@ function hintOf(section) {
 
 function navigate(path) {
   location.hash = '#/' + String(path).replace(/^#?\/?/, '');
-}
-
-function applyTheme(theme) {
-  const root = document.documentElement;
-  const fixed = theme === 'dark' || theme === 'light';
-  if (fixed) root.dataset.theme = theme;
-  else delete root.dataset.theme;
-  try {
-    if (fixed) localStorage.setItem(THEME_KEY, theme);
-    else localStorage.removeItem(THEME_KEY);
-  } catch {
-    // хранилище закрыто — тема всё равно применена
-  }
-  const [light, dark] = document.querySelectorAll('meta[name="theme-color"]');
-  light.content = fixed ? THEME_COLORS[theme] : THEME_COLORS.light;
-  dark.content = fixed ? THEME_COLORS[theme] : THEME_COLORS.dark;
-  const scheme = (name) => (fixed ? (theme === name ? 'all' : 'not all') : `(prefers-color-scheme: ${name})`);
-  document.getElementById('hl-paper').media = scheme('light');
-  document.getElementById('hl-graphite').media = scheme('dark');
-}
-
-function visibleTheme() {
-  const theme = themeMode ?? me.theme;
-  if (theme === 'dark' || theme === 'light') return theme;
-  return darkMedia.matches ? 'dark' : 'light';
-}
-
-function paintToggle() {
-  const dark = visibleTheme() === 'dark';
-  toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${THEME_ICONS[dark ? 'sun' : 'moon']}</svg>`;   // константа
-  toggle.append(dark ? 'Светлая тема' : 'Тёмная тема');
-  document.getElementById('theme-mode').value = themeMode ?? me.theme;
-}
-
-async function saveTheme() {
-  if (savingTheme || pendingTheme === null) return;
-  savingTheme = true;
-  const status = document.getElementById('theme-save-status');
-  const retry = document.getElementById('theme-save-retry');
-  retry.hidden = true;
-  status.classList.remove('error');
-  status.textContent = 'Сохраняем тему…';
-  while (pendingTheme !== null) {
-    const choice = pendingTheme;
-    try {
-      // Последовательные запросы: медленный ответ старого выбора не перезапишет новый.
-      await api('PATCH', '/api/me', { theme: choice });
-    } catch {
-      if (pendingTheme !== choice) continue;
-      status.classList.add('error');
-      status.textContent = 'Не удалось сохранить тему. Выбор действует в этом окне.';
-      retry.hidden = false;
-      savingTheme = false;
-      return;
-    }
-    if (pendingTheme === choice) pendingTheme = null;
-  }
-  savingTheme = false;
-  status.textContent = 'Тема сохранена для учётки.';
-}
-
-function chooseTheme(next) {
-  themeMode = me.theme = pendingTheme = next;
-  themeRevision++;
-  applyTheme(next);
-  paintToggle();
-  saveTheme();
-}
-
-function setupTheme() {
-  setupAppearance();
-  themeMode = me.theme;
-  paintToggle();
-  toggle.addEventListener('click', () => {
-    chooseTheme(visibleTheme() === 'dark' ? 'light' : 'dark');
-  });
-  document.getElementById('theme-mode').addEventListener('change', (event) => chooseTheme(event.target.value));
-  document.getElementById('theme-save-retry').addEventListener('click', saveTheme);
-  window.addEventListener('online', saveTheme);
-  darkMedia.addEventListener('change', paintToggle);
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible') return;
-    const revision = themeRevision;
-    const hadPendingTheme = pendingTheme !== null || savingTheme;
-    try {
-      await loadMe();
-    } catch {
-      return;              // нет связи — остаётся прежнее; сессия кончилась — api.js увёл на вход
-    }
-    if (hadPendingTheme || pendingTheme !== null || revision !== themeRevision) me.theme = themeMode;
-    else themeMode = me.theme;
-    applyTheme(themeMode);
-    paintToggle();
-    document.dispatchEvent(new Event('studio-me'));   // открытый раздел (чат: ключ Exa) перерисует своё
-  });
 }
 
 function parse(hash) {
@@ -350,8 +242,23 @@ function setupMenu() {
       avatar.focus();
     }
   });
-  menu.addEventListener('click', (event) => {   // пункт темы (button) меню не закрывает: видно, что тема сменилась
+  // фокус ушёл из панели (Tab за «Выйти», Shift+Tab за аватар) — панель закрыта; щелчок по пустому месту
+  // (relatedTarget null) оставляет её — его закрывает обработчик нажатия выше
+  menu.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (next && !menu.contains(next) && next !== avatar) openMenu(false);
+  });
+  menu.addEventListener('click', (event) => {   // выбор темы меню не закрывает: видно, что тема сменилась
     if (event.target.closest('a.menu-item')) openMenu(false);
+  });
+  const themes = [...menu.querySelectorAll('input[name="menu-theme"]')];
+  for (const input of themes) input.addEventListener('change', () => { if (input.checked) choose('theme', input.value); });
+  const status = document.getElementById('theme-save-status');
+  const retry = document.getElementById('theme-save-retry');
+  retry.addEventListener('click', retrySave);
+  follow(menu, () => {
+    for (const input of themes) input.checked = input.value === look().theme;
+    paintSave(status, retry);
   });
 }
 
@@ -402,11 +309,10 @@ function retryLater(first, worker) {
 
 /** Профиль есть: тема, меню, раздел по адресу. */
 async function enter(worker) {
-  applyTheme(me.theme);
+  setupAppearance();
   setupMenu();
   setupJobs({ navigate });
-  setupTheme();
-  mobileNavigation = setupMobileNavigation(me, () => openMenu(false));
+  mobileNavigation = setupMobileNavigation(me);
   window.addEventListener('hashchange', render);
   await render();
   setupCodeActivity();

@@ -1,4 +1,5 @@
 """Профиль (app/profile.py), панель администратора (app/admin.py), удаление истории (app/history.py)."""
+import json
 import logging
 
 import pytest
@@ -68,7 +69,7 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["timezone"] == "Europe/Moscow"
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
-                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset"}
+                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent"}
     assert me["password_reset"] is None
 
 
@@ -173,6 +174,30 @@ def test_theme_is_validated(studio):
     r = studio.c.patch("/api/me", json={"theme": "dark"})
     assert r.status_code == 200 and r.json()["theme"] == "dark"
     assert studio.c.get("/api/me").json()["theme"] == "dark"
+
+
+def test_accent_is_kept_per_account_inside_views_and_validated(studio):
+    """Акцент — из списка `profile.ACCENTS`, на всех устройствах учётки; хранится в JSON `users.views` (без шага
+    схемы): вид ленты и акцент не затирают друг друга, а `views` наружу — без ключа акцента."""
+    make_user(studio, "owner"); signin(studio, "owner")
+    me = studio.c.get("/api/me").json()
+    assert me["accent"] == "orange" and me["views"] == {}
+    for bad in ("pink", "", None, 3, "Blue"):
+        r = studio.c.patch("/api/me", json={"accent": bad, "theme": "dark"})
+        assert r.status_code == 422 and code(r) == "accent", bad
+    assert studio.c.get("/api/me").json()["theme"] == "auto"
+    me = studio.c.patch("/api/me", json={"accent": "blue", "views": {"photo": "table"}}).json()
+    assert (me["accent"], me["views"]) == ("blue", {"photo": "table"})
+    me = studio.c.patch("/api/me", json={"views": {"video": "tiles"}}).json()
+    assert (me["accent"], me["views"]) == ("blue", {"photo": "table", "video": "tiles"})
+    assert studio.c.patch("/api/me", json={"accent": "violet"}).json()["views"] == {"photo": "table", "video": "tiles"}
+    stored = json.loads(state.DB.execute("SELECT views FROM users WHERE login = 'owner'").fetchone()[0])
+    assert stored == {"photo": "table", "video": "tiles", "accent": "violet"}
+    # значение, которого код не знает (новее — после отката вперёд-назад), — умолчание, а не 500
+    state.DB.execute("UPDATE users SET views = ? WHERE login = 'owner'", (json.dumps({"accent": "teal"}),))
+    assert studio.c.get("/api/me").json()["accent"] == "orange"
+    make_user(studio, "friend"); signin(studio, "friend")
+    assert studio.c.get("/api/me").json()["accent"] == "orange"
 
 
 def test_views_are_kept_per_section_and_validated(studio):
@@ -399,7 +424,7 @@ def test_reset_password_and_disable_end_sessions(studio):
 
 
 def test_admin_cannot_reset_own_password_from_the_panel(studio):
-    """Свой пароль — только «Прочее → Пароль» с текущим: иначе получивший телефон открытым на минуту
+    """Свой пароль — только «Защита → Пароль» с текущим: иначе получивший телефон открытым на минуту
     сменил бы его из панели и потом открывал бы запертую студию сам (спека screen-lock, раздел 4)."""
     owner = make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     r = studio.c.patch(f"/api/admin/users/{owner}", json={"password": "stolen-password"})

@@ -98,13 +98,19 @@ def test_root_icon_paths_answer_without_login(studio):
     assert r.status_code == 200 and r.headers["content-type"] in ("image/x-icon", "image/vnd.microsoft.icon")
 
 
-def test_theme_toggle_lives_in_the_profile_menu_not_the_settings():
+def test_avatar_menu_is_a_disclosure_with_one_theme_choice():
+    """Меню аватара — панель, не role="menu" (в ней сегмент радиокнопок): имя → тема «Авто · Светлая · Тёмная» →
+    «Настройки» → «Администрирование» → разделитель → «Выйти». Шрифт, масштаб и нижняя панель — в «Оформлении»."""
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     menu = index[index.index('<div id="menu"'):]
     menu = menu[:menu.index("</div>\n<main")]
-    assert 'id="theme-toggle"' in menu and 'id="theme-toggle"' not in index[:index.index('<div id="menu"')]
-    assert menu.index('class="menu-who"') < menu.index('id="theme-toggle"') < menu.index('href="#/settings"')
-    assert "themeBlock" not in (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
+    assert 'role="menu' not in menu and 'aria-haspopup="menu"' not in index
+    assert re.search(r'<button id="avatar"[^>]*aria-expanded="false"[^>]*aria-controls="menu"', index)
+    order = ['class="menu-who"', 'id="menu-theme-auto"', 'id="menu-theme-light"', 'id="menu-theme-dark"',
+             'id="theme-save-status"', 'href="#/settings"', 'id="menu-admin"', 'class="menu-sep"', 'id="menu-logout"']
+    assert [menu.index(mark) for mark in order] == sorted(menu.index(mark) for mark in order)
+    assert "appearance-controls" not in menu and "theme-toggle" not in index and "theme-mode" not in index
+    assert "menu.insertBefore" not in (STATIC / "js" / "mobile-navigation.js").read_text(encoding="utf-8")
 
 
 def test_text_fields_carry_the_mic_through_field_js_and_have_no_seed():

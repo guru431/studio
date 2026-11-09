@@ -163,7 +163,7 @@ function usersBlock(host) {
         button('Изменить', { class: 'btn btn-sm user-edit' }, () => edit(user)),
         button('Подключения', { class: 'btn btn-sm user-conns' }, () => connections(user)),
         button('Сбросить пароль', { class: 'btn btn-sm user-reset', disabled: self,
-          title: self ? 'свой пароль — в «Настройках» → «Прочее»' : null }, () => resetPassword(user)),
+          title: self ? 'свой пароль — в «Настройках» → «Защита»' : null }, () => resetPassword(user)),
         button(user.disabled ? 'Включить' : 'Отключить', { class: 'btn btn-sm user-toggle', disabled: self,
           title: self ? 'себя отключить нельзя' : null },
         () => act(api('PATCH', `/api/admin/users/${user.id}`, { disabled: !user.disabled }))),

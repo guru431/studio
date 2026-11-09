@@ -122,7 +122,7 @@ export function emergencyBlock(host) {
  * аварийный выход снимает его и сам. */
 export function passwordResetNotice(me, navigate) {
   if (!me.password_reset) return null;
-  const open = button('Открыть «Безопасность»', { class: 'btn btn-accent', id: 'password-reset-open' });
+  const open = button('Открыть «Защиту»', { class: 'btn btn-accent', id: 'password-reset-open' });
   const dialog = openDialog(document.body, { id: 'password-reset-dialog', title: 'Пароль сменил администратор',
     cancelText: 'Понятно', actions: [open], body: [
       el('p', {}, `Пароль вашей учётки сбросил администратор ${moment(me.password_reset)}. Если вы об этом не просили, `
@@ -131,7 +131,7 @@ export function passwordResetNotice(me, navigate) {
         + '«Поделиться», push и ntfy.')] });
   open.addEventListener('click', () => {
     dialog.close();
-    navigate('settings/other');
+    navigate('settings/security');
   });
   dialog.addEventListener('close', () => { api('DELETE', '/api/me/password-reset').catch(() => null); });
   return dialog;

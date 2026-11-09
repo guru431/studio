@@ -127,7 +127,7 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     if body.password is not None and uid == admin.id:
         # свой — только с текущим (POST /api/me/password): иначе получивший телефон открытым на минуту
         # сменил бы пароль и потом открывал бы запертую студию сам (спека screen-lock, раздел 4)
-        raise HTTPException(409, {"code": "self", "message": "свой пароль меняют в «Настройках» → «Прочее»"})
+        raise HTTPException(409, {"code": "self", "message": "свой пароль меняют в «Настройках» → «Защита»"})
     changes = {}
     if body.login is not None:
         changes["login"] = _login(body.login)               # сессии — по id: переименование их не гасит

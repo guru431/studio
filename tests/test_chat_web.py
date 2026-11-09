@@ -26,7 +26,7 @@ def patch(s, cid, **body) -> dict:
     return r.json()
 
 
-NO_KEY = {"code": "no_exa_key", "message": "сначала задайте ключ Exa в Настройках → Прочее → Интернет"}
+NO_KEY = {"code": "no_exa_key", "message": "сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет"}
 
 
 def web_of(cid) -> int:

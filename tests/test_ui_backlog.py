@@ -54,7 +54,7 @@ def test_invalid_push_status_preserves_device_flag_and_reports_error(browser, li
         ? Promise.resolve(new Response(JSON.stringify(%s), {headers: {'content-type': 'application/json'}}))
         : original(url, options);
     })();""" % json.dumps(payload)
-    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"),
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"),
         ("wait", "document.querySelector('#push-enabled') && (!document.querySelector('#push-enabled').disabled"
                  " || document.querySelector('#push-status').textContent)"),
         ("eval", "push", "[document.querySelector('#push-enabled').disabled, document.querySelector('#push-status').textContent,"
