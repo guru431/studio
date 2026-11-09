@@ -82,8 +82,9 @@ def test_agents_icon_counts_sessions_across_computers_and_sections(browser, live
         other_server.stop()
     assert not result.get("failed"), result
     assert all(result["values"][key] for key in ("outside", "fits", "kept", "fresh", "largeFits"))
-    assert result["values"]["label"] == "Агенты · Запущенных сессий: 3"
-    assert result["values"]["emptyLabel"] == "Агенты"
+    assert result["values"]["label"] == "Агенты · Запущенных сессий: 3 · ждут ответа: 1"
+    # Остановленные ходы — завершённые и не прочитанные: число скрыто, точка «Входящих» и слова остаются (D2).
+    assert result["values"]["emptyLabel"] == "Агенты · не прочитано: 3"
     assert not problems(result), problems(result)
 
 

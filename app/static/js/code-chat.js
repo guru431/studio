@@ -72,8 +72,31 @@ const IMAGES_MAX = 8 * 1024 * 1024;
 const IMAGE_COUNT = 8;
 
 /** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
-const drafts = new Map();
-const imageDrafts = new Map();  // картинки черновика — только память, как текст
+/** Черновики чатов (`${aid}/${chat}`) — только память страницы. Смена «есть черновик / нет» — событие
+ * `studio-code-draft` { key, draft } на document: по нему вкладка показывает ✎ (code.js, code-tabs.js). */
+class Drafts extends Map {
+  set(key, value) {
+    const had = hasDraft(key);
+    super.set(key, value);
+    announceDraft(key, had);
+    return this;
+  }
+
+  delete(key) {
+    const had = hasDraft(key);
+    const out = super.delete(key);
+    announceDraft(key, had);
+    return out;
+  }
+}
+function hasDraft(key) {
+  return drafts.has(key) || imageDrafts.has(key);
+}
+function announceDraft(key, had) {
+  if (had !== hasDraft(key)) document.dispatchEvent(new CustomEvent('studio-code-draft', { detail: { key, draft: !had } }));
+}
+const drafts = new Drafts();
+const imageDrafts = new Drafts();  // картинки черновика — только память, как текст
 const historyCache = new Map(); // последние 12 историй, только память этой страницы
 document.addEventListener('studio-code-clear', () => historyCache.clear());
 const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
@@ -288,8 +311,42 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   scroller.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
     more, feed, quickActions);
+  // Плашка ожидающего вопроса над полем (D2): на узком экране карточка .code-ask часто вне ленты на экране.
+  // Кнопки нажимают кнопки самой карточки — тот же ответ, те же блокировки (чужое окно, отправка).
+  const askText = el('span', { class: 'code-ask-pin-text' });
+  const askAllow = el('button', { type: 'button', id: 'code-ask-pin-allow', class: 'btn btn-sm btn-accent' }, 'Разрешить');
+  const askDeny = el('button', { type: 'button', id: 'code-ask-pin-deny', class: 'btn btn-sm' }, 'Отклонить');
+  const askShow = el('button', { type: 'button', id: 'code-ask-pin-show', class: 'btn btn-sm' }, 'Показать');
+  const askPin = el('div', { id: 'code-ask-pin', class: 'code-ask-pin', role: 'region', 'aria-label': 'Ждёт вашего ответа',
+    hidden: true }, askText, el('div', { class: 'code-ask-pin-actions' }, askAllow, askDeny, askShow));
+  const firstAsk = () => feed.querySelector('.code-ask');
+  function paintAskPin() {
+    const cards = feed.querySelectorAll('.code-ask');
+    const card = cards[0];
+    askPin.hidden = !card;
+    if (!card) return;
+    const yes = card.querySelector('.code-ask-yes');
+    const no = card.querySelector('.code-ask-no');
+    const tool = card.querySelector('.code-ask-tool')?.textContent;
+    askText.textContent = (yes ? `${assistant} просит разрешения${tool ? `: ${tool}` : ''}` : `${assistant} задаёт вопрос`)
+      + (cards.length > 1 ? ` · ещё ${cards.length - 1}` : '');
+    askAllow.hidden = !yes;
+    askDeny.hidden = !no;
+    askAllow.disabled = !!yes?.disabled;
+    askDeny.disabled = !!no?.disabled;
+  }
+  askAllow.addEventListener('click', () => firstAsk()?.querySelector('.code-ask-yes')?.click());
+  askDeny.addEventListener('click', () => firstAsk()?.querySelector('.code-ask-no')?.click());
+  askShow.addEventListener('click', () => {
+    const card = firstAsk();
+    if (!card) return;
+    card.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    card.querySelector('button:not([disabled]), input')?.focus({ preventScroll: true });
+  });
+  const askObserver = new MutationObserver(paintAskPin);
+  askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
-    el('div', { class: 'code-compose-area' }, status, sessionNotice, statusBar, form));
+    el('div', { class: 'code-compose-area' }, status, sessionNotice, askPin, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -1664,6 +1721,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     focus() { if (alive) focusDesktop(text); },
     unmount() {
       alive = false;
+      askObserver.disconnect();
       sharing.unmount();
       for (const view of picks.values()) view.unmount();
       visualizations.unmount();
