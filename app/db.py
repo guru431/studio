@@ -5,7 +5,20 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 33
+VERSION = 34
+
+#: сессии учётки и журнал безопасности (account.py, security_log.py): у сессии — когда создана, грубый вид
+#: устройства по User-Agent при входе ('phone' | 'computer', строку UA не храним) и последняя отметка
+#: активности (seen обнуляет запирание, а список сессий показывает и запертые). Прежний код этих столбцов не
+#: пишет — у его сессий NULL. Журнал только добавляется (security_log.record), без текстов; kind без CHECK:
+#: новый вид события не требует шага схемы. Уходит с учёткой; «Удалить всю историю» его не трогает
+SECURITY_34 = """ALTER TABLE sessions ADD COLUMN created REAL;
+ALTER TABLE sessions ADD COLUMN device TEXT;
+ALTER TABLE sessions ADD COLUMN active REAL;
+CREATE TABLE security_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       created REAL NOT NULL, kind TEXT NOT NULL, detail TEXT, device TEXT, session TEXT, ip TEXT);
+CREATE INDEX security_events_user ON security_events(user_id, id);
+"""
 
 SHARES_33 = """CREATE TABLE chat_shares(
        id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
@@ -452,7 +465,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -536,6 +549,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     31: CHAT_31,
     32: S06_32,
     33: SHARES_33,
+    # сессии учётки (создана, вид устройства, активность) и журнал безопасности
+    34: SECURITY_34,
 }
 
 
@@ -549,19 +564,19 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def page(conn: sqlite3.Connection, table: str, user_id: int, before: "float | None", before_id: "str | None",
-         limit: int, columns: str = "*") -> sqlite3.Cursor:
+         limit: int, columns: str = "*", extra: str = "", extra_args: tuple = ()) -> sqlite3.Cursor:
     """Страница ленты истории (images, videos, transcripts, speeches): новые сверху — created, затем id по
     убыванию. Курсор — created и id последней записи прежней страницы: у записей бывает одно время.
     Без before_id (вкладка до выкладки составного курсора) — только created, записи того же времени
-    пропадают. table и columns — из кода, не из запроса."""
+    пропадают. table, columns и extra (« AND …» с extra_args) — из кода, не из запроса."""
     if before is None:
         where, args = "", ()
     elif before_id is None:
         where, args = " AND created < ?", (before,)
     else:
         where, args = " AND (created < ? OR (created = ? AND id < ?))", (before, before, before_id)
-    return conn.execute(f"SELECT {columns} FROM {table} WHERE user_id = ?{where} ORDER BY created DESC, id DESC LIMIT ?",
-                        (user_id, *args, limit))
+    return conn.execute(f"SELECT {columns} FROM {table} WHERE user_id = ?{extra}{where}"
+                        " ORDER BY created DESC, id DESC LIMIT ?", (user_id, *extra_args, *args, limit))
 
 
 def migrate(conn: sqlite3.Connection) -> None:

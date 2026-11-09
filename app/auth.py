@@ -20,7 +20,10 @@
   На всех устройствах 423 `screen_locked` на защищённые разделы; для всего приложения — всё /api/*,
   кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
   (LOCK_SEC, locked, 429 `locked`).
-- Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся.
+- Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся. Вход, неверный пароль
+  известной учётки и выход — ещё и в журнал безопасности учётки (security_log).
+- Сессия помнит, когда создана, грубый вид устройства по User-Agent входа (`device_class`; строка UA не
+  хранится) и последнюю активность (`active`, screenlock.alive) — для списка сессий (account.py).
 """
 import asyncio
 import base64
@@ -41,10 +44,15 @@ import clock
 import lock_policy
 import operations
 import security
+import security_log
 import state
 import static_assets
 
 COOKIE = "__Host-studio_sid"
+#: выход, стирание истории и аварийный выход стирают HTTP-кэш браузера (медиа — `private, max-age=86400`).
+#: Только "cache": cookies и хранилища ("storage" — и кэш оболочки служебного работника, и сам работник)
+#: остаются, offline-оболочка и флаги устройства живы
+CLEAR_CACHE = '"cache"'
 SESSION_SEC = 30 * 86400
 RENEW_SEC = 86400
 LOCK_FAILS = 5
@@ -110,20 +118,32 @@ def _set_cookie(response: Response, value: str) -> None:
     response.set_cookie(COOKIE, value, max_age=SESSION_SEC, path="/", secure=True, httponly=True, samesite="lax")
 
 
-def create_session(user_id: int) -> tuple[str, str]:
+#: User-Agent телефона и планшета — только для грубого вида устройства в списке сессий; сама строка не хранится
+MOBILE_UA = re.compile(r"Mobi|Android|iPhone|iPad|iPod", re.IGNORECASE)
+
+
+def device_class(user_agent: str | None) -> str | None:
+    """'phone' | 'computer' по User-Agent входа; пусто — None. Грубо: «версия для ПК» на телефоне — компьютер."""
+    if not user_agent:
+        return None
+    return "phone" if MOBILE_UA.search(user_agent) else "computer"
+
+
+def create_session(user_id: int, device: str | None = None) -> tuple[str, str]:
     """(значение cookie, csrf). Токены — token_urlsafe, без `=`: Starlette не берёт их в кавычки."""
     now = clock.NOW()
     value, csrf = security.new_token(), security.new_token()
     state.DB.execute("DELETE FROM sessions WHERE expires <= ?", (now,))      # заодно забыть истёкшие
     # seen = now: только что вошедший паролем не заперт
-    state.DB.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, seen) VALUES (?, ?, ?, ?, ?, ?)",
-                     (security.digest(value), user_id, csrf, now + SESSION_SEC, now, now))
+    state.DB.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, seen, created, device, active)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (security.digest(value), user_id, csrf, now + SESSION_SEC, now, now, now, device, now))
     return value, csrf
 
 
 def screen_locked(enabled: int, mobile: int, seen: float | None, now: float,
                   timeout: int = lock_policy.DEFAULT_TIMEOUT) -> bool:
-    """Таймер приложения действует на всех устройствах; 15 с — допуск доставки отметки."""
+    """Таймер приложения действует на всех устройствах; lock_policy.HEARTBEAT_GRACE — допуск доставки отметки."""
     return bool(enabled) and (seen is None or now - seen > timeout + lock_policy.HEARTBEAT_GRACE)
 
 
@@ -339,7 +359,8 @@ async def login(request: Request):
         replaced = request.cookies.get(COOKIE)
         if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
             state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
-        value, _ = create_session(uid)
+        value, _ = create_session(uid, device_class(request.headers.get("user-agent")))
+        security_log.record(uid, "login", digest=security.digest(value), ip=ip)
         log.info("вход с %s: успешно", ip)
         response = RedirectResponse("/", status_code=303)
         _set_cookie(response, value)
@@ -348,11 +369,12 @@ async def login(request: Request):
     return _login_page("Неверный логин или пароль", 401)
 
 
-async def check_password(name: str, password: str, ip: str) -> int | None:
+async def check_password(name: str, password: str, ip: str, source: str = "login") -> int | None:
     """id учётки, если логин (уже `strip().lower()`) и пароль верны, иначе None — после растущей задержки.
     Общая для входа и привязки моста (agents.py): неудачи и пауза у них одни. Паузу (`locked`) вызывающий
     проверил сам. Верный ответ возвращается без await после сверки учётки: вызывающий заводит сессию
-    или ключ на проверенную учётку."""
+    или ключ на проверенную учётку. Неверный пароль известной включённой учётки — в её журнал безопасности
+    (`login_fail`, подробность — `source`: login | bridge)."""
     # неудача записывается ДО проверки пароля и снимается при успехе: пачка параллельных попыток
     # не проходит проверку паузы разом, пока считается хеш
     attempt = clock.NOW()
@@ -368,6 +390,8 @@ async def check_password(name: str, password: str, ip: str) -> int | None:
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса
         return row["id"]
+    if row is not None:
+        security_log.record(row["id"], "login_fail", detail=source, ip=ip)
     fails = _login_fails(name)
     if fails > LOCK_FAILS:
         await clock.SLEEP(min(2 ** (fails - LOCK_FAILS), DELAY_MAX))
@@ -380,7 +404,12 @@ async def logout(request: Request):
         return _login_page("Запрос пришёл с чужого сайта", 403)
     value = request.cookies.get(COOKIE)
     if value:
-        state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(value),))
+        digest = security.digest(value)
+        row = state.DB.execute("SELECT user_id FROM sessions WHERE digest = ?", (digest,)).fetchone()
+        if row is not None:
+            security_log.record(row["user_id"], "logout", digest=digest, ip=client_ip(request))
+        state.DB.execute("DELETE FROM sessions WHERE digest = ?", (digest,))
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    response.headers["Clear-Site-Data"] = CLEAR_CACHE
     return response

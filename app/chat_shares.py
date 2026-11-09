@@ -19,6 +19,7 @@ import media
 import lock_policy
 import operations
 import security
+import security_log
 import state
 
 router = APIRouter()
@@ -130,7 +131,13 @@ async def _store(request: Request, body: ShareIn, snapshot: dict, expected, file
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+    _journal(request, "share_create", source)
     return _out(_owned(request, **source))
+
+
+def _journal(request: Request, kind: str, source: dict) -> None:
+    security_log.record(request.state.user.id, kind, detail="code" if source.get("agent_id") else "chat",
+                        digest=request.state.digest, ip=auth.client_ip(request))
 
 
 @router.get("/api/chats/{chat_id}/share")
@@ -168,8 +175,9 @@ async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
 @router.delete("/api/chats/{chat_id}/share", status_code=204)
 async def revoke_chat_share(chat_id: str, request: Request):
     chat._chat_row(request.state.user.id, chat_id)
-    state.DB.execute("DELETE FROM chat_shares WHERE chat_id = ? AND user_id = ?",
-                     (chat_id, request.state.user.id))
+    if state.DB.execute("DELETE FROM chat_shares WHERE chat_id = ? AND user_id = ?",
+                        (chat_id, request.state.user.id)).rowcount:
+        _journal(request, "share_revoke", {})
 
 
 def _agent_source(request, aid, pid, session_id):
@@ -234,6 +242,7 @@ async def revoke_agent_share(aid: int, pid: str, session_id: str, request: Reque
     row = _owned(request, **source)
     if row:
         state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (row["id"],))
+        _journal(request, "share_revoke", source)
 
 
 @router.api_route("/share", methods=["GET", "HEAD"])
