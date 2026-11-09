@@ -5,15 +5,17 @@ import re
 import secrets
 import subprocess
 
-from . import files, projects
+from . import files, gitinfo, projects
 from .errors import Refused
 
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")
 
 
 def _git(project, args):
+    """`core.fsmonitor` конфига репозитория не исполняется (`gitinfo.SAFE`). `worktree add` — по нажатию владельца:
+    фильтры (git-lfs) и хуки выгрузки файлов в новой копии работают, как у его собственного git."""
     try:
-        result = subprocess.run(["git", "-C", str(project), *args], capture_output=True,
+        result = subprocess.run(["git", "-C", str(project), *gitinfo.SAFE, *args], capture_output=True,
                                 stdin=subprocess.DEVNULL, timeout=20,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.TimeoutExpired):
