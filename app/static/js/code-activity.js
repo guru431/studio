@@ -8,6 +8,7 @@ const POLL_MS = 20000;
 const activity = new Map();
 const revisions = new Map();
 let badge;
+let dot;
 let tab;
 let timer;
 let requested = false;
@@ -15,12 +16,20 @@ let lastAction = Date.now();
 
 function paint() {
   if (!badge) return;
-  const total = allCodeActivity().filter((item) => item.running).length;
+  const items = allCodeActivity();
+  const total = items.filter((item) => item.running).length;
+  const asking = items.filter((item) => item.asking).length;
+  const unread = items.filter((item) => item.unread && !item.running).length;
   badge.textContent = String(total);
   badge.hidden = total === 0;
-  const label = total ? `Агенты · Запущенных сессий: ${total}` : 'Агенты';
+  badge.dataset.asking = asking ? '1' : '';
+  // Точка — завершённые и не прочитанные; число и точка открывают «Входящие» (code-inbox.js).
+  dot.hidden = !unread;
+  const parts = [total ? `Запущенных сессий: ${total}` : '', asking ? `ждут ответа: ${asking}` : '',
+    unread ? `не прочитано: ${unread}` : ''].filter(Boolean);
+  const label = parts.length ? `Агенты · ${parts.join(' · ')}` : 'Агенты';
   tab.setAttribute('aria-label', label);
-  tab.title = label;
+  tab.title = parts.length ? `${label} · нажмите на число, чтобы открыть «Входящие»` : label;
 }
 
 export function setCodeActivity(aid, items) {
@@ -89,7 +98,14 @@ async function refresh() {
 export function setupCodeActivity() {
   if (badge) return;
   badge = document.getElementById('code-running-count');
+  dot = document.getElementById('code-inbox-dot');
   tab = badge.closest('a');
+  // Нажатие на число или точку — «Входящие» поверх текущего раздела; на остальную вкладку — переход в раздел.
+  tab.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest('.tab-count, .tab-dot')) return;
+    event.preventDefault();
+    import('./code-inbox.js').then(({ openInbox }) => openInbox(tab)).catch(() => { location.hash = '#/code'; });
+  });
   document.addEventListener('studio-code-activity', ({ detail: item }) => {
     const aid = Number(item.aid);
     const items = new Map(activity.get(aid));

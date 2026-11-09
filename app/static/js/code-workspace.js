@@ -1,7 +1,7 @@
 /* Рабочее место раздела «Claude Code» в учётке (GET/PATCH /api/code/workspace; спека 2026-10-29-studio-code-workspace-design,
  * 6.8): кэш документа { panel, place, projects } на время показа раздела и действия записи.
  * - load() — документ с сервера (вход в раздел, возвращение на экран); get() — кэш (до загрузки — пустой);
- * - act(op, fields) — действие (open, close, place, panel): кэш меняется сразу так же, как его поменяет сервер (apply —
+ * - act(op, fields) — действие (open, close, place, panel, move): кэш меняется сразу так же, как его поменяет сервер (apply —
  *   те же пределы и та же соседняя активная), запрос — в фоне; ответ сервера заменяет кэш, а действия, на которые
  *   ответа ещё нет, ложатся поверх. Отказ (сеть, 5xx) проглатывается — на экране всё уже сделано; ответы не по порядку
  *   старый документ поверх нового не кладут. GET и PATCH — одной очередью, в порядке действий, даже после reset.
@@ -42,6 +42,11 @@ function apply(d, { op, fields: f }) {
     if (!tabs.length) return { ...d, projects: rest };
     const active = found.active === f.chat ? tabs[Math.min(i, tabs.length - 1)] : found.active;
     return { ...d, projects: d.projects.map((p) => (p === found ? { ...p, tabs, active } : p)) };
+  }
+  if (op === 'move' && found && found.tabs.includes(f.chat)) {   // место index (0…TABS_MAX-1), дальше конца — в конец
+    const tabs = found.tabs.filter((c) => c !== f.chat);
+    tabs.splice(Math.min(Math.max(0, f.index), TABS_MAX - 1, tabs.length), 0, f.chat);
+    return { ...d, projects: d.projects.map((p) => (p === found ? { ...p, tabs } : p)) };
   }
   return d;
 }
