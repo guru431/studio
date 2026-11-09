@@ -25,6 +25,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import account
 import admin
 import agents
 import audio
@@ -146,6 +147,7 @@ app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), na
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
 app.include_router(profile.router)
+app.include_router(account.router)
 app.include_router(screenlock.router)
 app.include_router(connections.router)
 app.include_router(checks.router)

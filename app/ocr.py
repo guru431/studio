@@ -47,6 +47,7 @@ import clock
 import db
 import documents
 import exports
+import lock_policy
 import media
 import operations
 import ocr_render
@@ -739,8 +740,12 @@ async def upload(request: Request):
 @router.get("")
 async def list_scans(request: Request, before: "float | None" = None,
                      before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
-    """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "scans", request.state.user.id, before, before_id, limit, COLUMNS)
+    """Новые сверху; следующая страница — before=<created>&before_id=<id> последней. Сканы закрытого чата или
+    перевода (lock_policy.hidden_scans) в ленту не идут: защищён раздел, что их завёл."""
+    uid = request.state.user.id
+    closed, args = lock_policy.hidden_scans(uid, lock_policy.RESTRICTED.get())
+    rows = db.page(state.DB, "scans", uid, before, before_id, limit, COLUMNS,
+                   f" AND id NOT IN ({closed})" if closed else "", args)
     return {"items": [_out(r) for r in rows]}
 
 

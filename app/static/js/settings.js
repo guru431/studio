@@ -1,7 +1,8 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
  * Слева — разделы, «Агенты» (умолчания чатов и компьютеры) и «Прочее» (голосовой ввод, пароль,
- * блокировка, уведомления и push, ключ Exa, хранилище и история), справа — выбранный раздел: его
+ * блокировка, сессии, аварийный выход и журнал безопасности — account-security.js, уведомления и push,
+ * ключ Exa, хранилище и история), справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -23,6 +24,7 @@
  * переключаются на месте, в «Прочем» — только голосовой ввод; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
+import { emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
@@ -597,7 +599,7 @@ export function queueText(pending) {
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
 const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['speech', 'Речь'],
   ['transcribe', 'Разговоры'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
-  ['code', 'Агенты: чаты'], ['agents', 'Агенты: подключения']];
+  ['code', 'Агенты: чаты'], ['agents', 'Агенты: подключения'], ['security', 'Журнал безопасности']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -1359,7 +1361,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       renderDictation();
       const storage = other ? storageBlock(host) : null;
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, dictationHost,
-        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), notifyBlock(), ntfyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
+        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), sessionsBlock(host),
+          emergencyBlock(host), securityEventsBlock(), notifyBlock(), ntfyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
       return;
     }
     const s = sectionOf(shown);

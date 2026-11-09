@@ -33,6 +33,7 @@ import bridge
 import clock
 import lock_policy
 import security
+import security_log
 import state
 
 PASSWORD_MAX = 1024
@@ -110,7 +111,14 @@ def _has_keys(uid: int) -> bool:
 
 
 def _seen(request: Request, value: float | None) -> None:
-    state.DB.execute("UPDATE sessions SET seen = ? WHERE digest = ?", (value, request.state.digest))
+    """seen — срок отпирания (запирание обнуляет); active — последняя активность для списка сессий."""
+    state.DB.execute("UPDATE sessions SET seen = ?, active = COALESCE(?, active) WHERE digest = ?",
+                     (value, value, request.state.digest))
+
+
+def _journal(request: Request, kind: str, detail: str | None = None) -> None:
+    security_log.record(request.state.user.id, kind, detail=detail, digest=request.state.digest,
+                        ip=auth.client_ip(request))
 
 
 def _forget_code(request: Request) -> None:
@@ -202,10 +210,16 @@ async def lock_now(request: Request):
 @router.post("/lock/password", status_code=204)
 async def open_with_password(body: Password, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "отпирание")
+    try:
+        await auth.confirm_password(uid, body.password, "отпирание")
+    except HTTPException as e:
+        if e.status_code == 403:
+            _journal(request, "unlock_fail", "password")
+        raise
     state.DB.execute("UPDATE users SET pin_fails = 0 WHERE id = ?", (uid,))    # PIN снова работает везде
     _seen(request, clock.NOW())
     _forget_code(request)
+    _journal(request, "unlock", "password")
     log.info("пользователь %d: открыто (пароль)", uid)
     return Response(status_code=204)
 
@@ -233,10 +247,13 @@ async def open_with_pin(body: Pin, request: Request):
                                   (uid, stored)).rowcount == 1:
         _seen(request, clock.NOW())
         _forget_code(request)
+        _journal(request, "unlock", "pin")
         log.info("пользователь %d: открыто (PIN)", uid)
         return Response(status_code=204)
     log.warning("пользователь %d: PIN неверен", uid)
+    _journal(request, "unlock_fail", "pin")
     if fails >= PIN_FAILS:
+        _journal(request, "pin_exhausted")
         log.warning("пользователь %d: PIN исчерпан", uid)
     raise HTTPException(403, {"code": "pin", "message": "неверный PIN", "left": PIN_FAILS - fails})
 
@@ -391,11 +408,13 @@ async def open_with_passkey(body: Answer, request: Request):
             require_user_verification=True)
     except Exception as e:       # ответ устройства — данные клиента: любой сбой разбора — отказ, а не 500
         log.warning("пользователь %d: ключ не подошёл (%s)", uid, type(e).__name__)
+        _journal(request, "unlock_fail", "passkey")
         raise HTTPException(403, REFUSED_OPEN) from None
     now = clock.NOW()
     state.DB.execute("UPDATE passkeys SET sign_count = ?, used = ? WHERE id = ?",
                      (verified.new_sign_count, now, row["id"]))
     _seen(request, now)
     _forget_code(request)
+    _journal(request, "unlock", "passkey")
     log.info("пользователь %d: открыто (passkey)", uid)
     return Response(status_code=204)

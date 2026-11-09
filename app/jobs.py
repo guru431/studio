@@ -143,7 +143,8 @@ async def list_jobs(request: Request, since: "float | None" = None):
     hidden = lock_policy.hidden(request.state.digest)
     items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after)
              + _translate(uid, after) + _speech(uid, after))
-    items = [i for i in items if i["section"] not in hidden]
+    items = [i for i in items if i["section"] not in hidden
+             and not (i["section"] == "ocr" and hidden and lock_policy.scan_sections(uid, i["id"]) & hidden)]
     running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
     subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ? UNION ALL"
