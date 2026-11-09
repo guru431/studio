@@ -27,6 +27,7 @@ WORDS = {"setup": "не настроен", "connecting": "подключаетс
          "revoked": "компьютер отозван", "replaced": "ключ используется другим мостом"}
 PROBE_EVERY_SEC = 3600  # модели Claude Code — не чаще раза в час (решение плана 6)
 ACTIVITY_SEC = 0.25  # локальная индикация и штатный выход после завершения работы
+_UNKNOWN = object()  # версия `claude.exe` ещё не спрошена (`_main` её не ждёт)
 QUIT_SEC = 60  # выход: ходы (turns.CLOSE_SEC × 2) и канал
 UNENROLL_SEC = 120  # «Отключиться»: ходы, канал и запрос к студии (15 с) — не дольше
 ERASE_TRIES, ERASE_PAUSE_SEC = 10, 0.05  # стирание ключа: файл читает другой поток (окно, трей) — WinError 5/32
@@ -486,8 +487,11 @@ class Controller:
                 log.warning("подписчик состояния: %s", type(e).__name__)
 
     async def _main(self) -> None:
-        path = self._versioned = await asyncio.to_thread(self._find_cli)
-        version = await asyncio.to_thread(self._cli_version, path)
+        # Версию `claude --version` (до 30 с при первом запуске) спросит первый канал (`_refresh_cli`) — до своего
+        # `hello`: готовность ядра (`_built`, метка самообновления) её не ждёт.
+        path = await asyncio.to_thread(self._find_cli)
+        self._versioned = _UNKNOWN
+        version = ""
         agent = None
         self.runner = Runner(lambda f: agent.emit(f), choices=store.Choices(self.h), cli_path=path,
                              factory=self._sdk_factory, find_cli=self._find_cli)
@@ -631,9 +635,11 @@ class Controller:
         (студия увидит её в следующем `hello`)."""
         path = self.runner.cli_path = await asyncio.to_thread(cli.current, self.runner.cli_path, self._find_cli)
         if path != self._versioned:
+            first = self._versioned is _UNKNOWN
             self.agent.cc_version = await asyncio.to_thread(self._cli_version, path)
             self._versioned = path
-            log.info("Claude Code: сменился, версия %s", self.agent.cc_version)
+            if not first:
+                log.info("Claude Code: сменился, версия %s", self.agent.cc_version)
 
     async def _refresh_models(self) -> bool:
         """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает. Итог — сменился ли
