@@ -11,12 +11,16 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 import audio
 import clock
+import documents
 import forms
 import media
 import operations
+import sections
+import speech
 import state
 from image_upload import UploadError
 
@@ -25,6 +29,9 @@ SAMPLE_MIN, SAMPLE_MAX = 4.5, 15.5
 NAME_MAX = 64
 TEXT_MAX = 500
 BUDGET_SEC = 60                 # WAV и длительность образца (до 10 МиБ записи) — ffmpeg за секунды
+PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
+#: пользователи, чья проба голоса идёт сейчас (одна за раз)
+PROBING: set = set()
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/voices")
@@ -108,6 +115,40 @@ async def list_voices(request: Request):
 @router.get("/{voice_id}")
 async def get_voice(voice_id: str, request: Request):
     return _out(_row(request.state.user.id, voice_id), with_text=True)
+
+
+class ProbeIn(BaseModel):
+    text: str = Field(max_length=PROBE_MAX * 2)
+
+
+@router.post("/{voice_id}/probe")
+async def probe(voice_id: str, body: ProbeIn, request: Request):
+    """Проба голоса короткой фразой пользователя (до PROBE_MAX знаков, одна фраза Qwen3-TTS `/clone`
+    подключения раздела «Речь»). Не задание очереди и не история: звук — в ответе (`no-store`), ничего не
+    сохраняется. Карта занята — сразу 503 словами, без ожидания (очередь озвучек её дождётся сама); одна проба
+    пользователя за раз — иначе 409."""
+    uid = request.state.user.id
+    text = " ".join(documents.nfc(body.text).split())
+    if not 1 <= len(text) <= PROBE_MAX:
+        raise _bad("text", f"фраза пробы — от 1 до {PROBE_MAX} знаков")
+    conn, model = sections.resolve(uid, "speech", None, None)
+    if conn.kind != "srvllm":
+        raise HTTPException(409, {"code": "voice", "message": "голос по образцу — у озвучки шлюза srvllm"})
+    reference_ = await reference(uid, voice_id)
+    if uid in PROBING:
+        raise HTTPException(409, {"code": "busy", "message": "проба уже идёт — дождитесь её"})
+    PROBING.add(uid)
+    try:
+        await speech.free_card(conn)
+        data, mime = await speech.say(conn, model, text, reference_)
+    except speech.Busy:
+        raise HTTPException(503, {"code": "busy", "message": "карта занята — попробуйте пробу позже"}) from None
+    except speech.SpeechError as e:
+        raise HTTPException(502, {"code": "gateway", "message": str(e)}) from None
+    finally:
+        PROBING.discard(uid)
+    log.info("пользователь %d: проба голоса %s", uid, voice_id[:8])
+    return Response(data, media_type=mime, headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/{voice_id}", status_code=204)

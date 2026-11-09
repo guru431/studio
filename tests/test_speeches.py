@@ -124,6 +124,46 @@ def test_history_wipe_drops_the_jobs_from_memory(studio, fake_audio, monkeypatch
     assert speeches.RUNNERS == {}
 
 
+def test_ready_parts_can_be_heard_before_the_mp3_is_glued(studio, fake_audio, monkeypatch):
+    """Готовые части идущей озвучки отдаются до склейки (n с 0); итоговый mp3 — прежний, части после него — 404."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.tts_replies = [(200, WAV_FAKE), (503, {"detail": "busy"})]       # вторая фраза ждёт карту
+    sid = studio.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": vid}).json()["id"]
+    for _ in range(3000):
+        item = studio.c.get(f"/api/speeches/{sid}").json()
+        if item["parts"] == 1:
+            break
+    assert item["parts"] == 1 and item["state"] == "working"
+    part = studio.c.get(f"/api/speeches/{sid}/parts/0")
+    assert part.status_code == 200 and part.content == WAV_FAKE and part.headers["content-type"] == "audio/wav"
+    assert part.headers["cache-control"] == "no-store"
+    assert studio.c.get(f"/api/speeches/{sid}/parts/1").status_code == 404
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    done = wait_sp(studio, sid, {"done", "error"})
+    assert done["state"] == "done" and done["parts"] == 0 and ("mp3_of", 2) in fake_audio.calls
+    assert studio.c.get(f"/api/speeches/{sid}/parts/0").status_code == 404
+
+
+def test_voice_probe_says_one_short_phrase_and_keeps_nothing(studio, fake_audio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    media_before = state.DB.execute("SELECT count(*) FROM media").fetchone()[0]
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "  Привет,\n как слышно? "})
+    assert r.status_code == 200 and r.content == WAV_FAKE and r.headers["cache-control"] == "no-store"
+    (q,) = studio.gw.tts_requests
+    assert "Привет, как слышно?".encode() in q.content and "текст образца".encode() in q.content
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == media_before
+    assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0 and "как слышно" not in caplog.text
+    assert studio.c.post(f"/api/voices/{vid}/probe", json={"text": "я" * 201}).status_code == 422
+    assert studio.c.post(f"/api/voices/{'0' * 32}/probe", json={"text": "Привет"}).status_code == 404
+    studio.gw.tts_replies = [(503, {"detail": "busy"})]
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет"})
+    assert r.status_code == 503 and studio.sleeps.count(speeches.RETRY_SEC) == 0     # без ожидания карты
+
+
 def test_queued_speeches_run_in_turn_and_survive_a_restart(studio, fake_audio):
     add_gateway(studio)
     vid = voice(studio, fake_audio)

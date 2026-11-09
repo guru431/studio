@@ -4,7 +4,8 @@
  * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков; field.js: «очистить», микрофон)
  * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
  * заводят в настройках раздела «Речь»), у внешнего сервиса — имя голоса с подсказками.
- * Озвучка — POST /api/speeches, задание на сервере; идущие опрашиваются раз в POLL_MS.
+ * Озвучка — POST /api/speeches, задание на сервере (очередь пользователя: «в очереди · N»); идущие
+ * опрашиваются раз в POLL_MS, готовые части идущей можно слушать до склейки (#sp-live).
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
  * выбор по номеру. Раздел без модели (ctx.hint): озвучки слушаются, скачиваются и удаляются, вместо
  * поля текста — подсказка. #/speech?id=<id> («Открыть» в «В работе», jobs.js) выбирает озвучку;
@@ -175,8 +176,44 @@ function build(view, ctx) {
     });
   }
 
+  /* Слушать по мере готовности: готовые части идущей озвучки (GET …/parts/<n>) — по очереди в одном плеере,
+   * он переживает перерисовку при опросе; следующая часть — по `ended`, а пока её нет — после опроса.
+   * Итоговый mp3 от этого не меняется; кончилась — обычный плеер готовой озвучки. */
+  let live = null;            // { id, audio, next, ready, waiting }
+
+  function playPart() {
+    if (!live || live.next >= live.ready) {
+      if (live) live.waiting = true;
+      return;
+    }
+    live.waiting = false;
+    live.audio.src = `/api/speeches/${encodeURIComponent(live.id)}/parts/${live.next}`;
+    live.next += 1;
+    live.audio.play().catch(() => {});      // без жеста автозапуск может быть запрещён: «Play» — у человека
+  }
+
+  function liveAudio(item) {
+    if (!live || live.id !== item.id) {
+      if (live) live.audio.pause();
+      const audio = el('audio', { class: 'sp-audio sp-live', id: 'sp-live', controls: true, preload: 'auto' });
+      live = { id: item.id, audio, next: 0, ready: 0, waiting: false };
+      audio.addEventListener('ended', playPart);
+      live.ready = item.parts;
+      audio.src = `/api/speeches/${encodeURIComponent(item.id)}/parts/0`;
+      live.next = 1;
+    }
+    live.ready = item.parts;
+    if (live.waiting) playPart();
+    return el('div', { class: 'sp-live-box' }, el('p', { class: 'muted small' },
+      `Готово частей: ${item.parts} — можно слушать, пока озвучка идёт`), live.audio);
+  }
+
   function paintView() {
     const item = records.current;
+    if (live && (!item || item.id !== live.id || !RUNNING.has(item.state))) {
+      live.audio.pause();
+      live = null;
+    }
     if (!item) {
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите озвучку в списке.'
         : 'Напишите или продиктуйте текст внизу и нажмите «Озвучить».'));
@@ -196,6 +233,7 @@ function build(view, ctx) {
         refresh();
       });
       nodes.push(el('div', { class: 'tr-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }), el('p', {}, item.detail), cancel));
+      if (item.parts > 0) nodes.push(liveAudio(item));
     } else if (item.state === 'done') {
       nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
         src: `/api/media/${encodeURIComponent(item.media_id)}` }));
@@ -267,6 +305,7 @@ function build(view, ctx) {
     follow,
     destroy() {
       records.stop();
+      if (live) live.audio.pause();
     },
   };
 }

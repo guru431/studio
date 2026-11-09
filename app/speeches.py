@@ -75,6 +75,7 @@ class Job:
     task: "asyncio.Task | None" = None
     by_user: bool = False
     files: list = field(default_factory=list)
+    ready: int = 0                                    # частей, уже записанных во временные файлы (слушать до склейки)
 
 
 JOBS: dict[str, Job] = {}
@@ -138,7 +139,7 @@ def _out(row) -> dict:
             "detail": job.stage if job is not None and row["state"] == "working"
             else waiting(row) if row["state"] == "queued" else row["detail"],
             "media_id": row["media_id"], "duration": row["duration"], "created": row["created"],
-            "finished": row["finished"]}
+            "finished": row["finished"], "parts": job.ready if job is not None and row["state"] == "working" else 0}
 
 
 def _store(job: Job) -> None:
@@ -229,6 +230,7 @@ async def run(job: Job) -> None:
                 part = audio.temp(".wav" if mime == "audio/wav" else ".mp3")
                 job.files.append(part)
                 await asyncio.to_thread(part.write_bytes, data)
+                job.ready = n
             out = audio.temp(".mp3")
             job.files.append(out)
             await audio.mp3_of(job.files[:-1], out)
@@ -338,6 +340,23 @@ async def list_speeches(request: Request, before: "float | None" = None,
 @router.get("/{sid}")
 async def get_speech(sid: str, request: Request):
     return _out(_row(request.state.user.id, sid))
+
+
+@router.get("/{sid}/parts/{n}")
+async def get_part(sid: str, n: int, request: Request):
+    """Готовая часть идущей озвучки (n с 0) — слушать до склейки; итоговый mp3 от этого не меняется. Части
+    живут во временных файлах задания: кончилось (склейка, уборка) — 404, дальше слушают готовую озвучку."""
+    _row(request.state.user.id, sid)
+    job = JOBS.get(sid)
+    if job is None or not 0 <= n < job.ready:
+        raise HTTPException(404, {"code": "gone", "message": "этой части нет — слушайте готовую озвучку"})
+    part = job.files[n]
+    try:
+        data = await asyncio.to_thread(part.read_bytes)
+    except FileNotFoundError:
+        raise HTTPException(404, {"code": "gone", "message": "этой части нет — слушайте готовую озвучку"}) from None
+    return Response(data, media_type="audio/wav" if part.suffix == ".wav" else "audio/mpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.post("/{sid}/cancel")
