@@ -143,6 +143,48 @@ def test_unread_and_seen_require_own_open_computer(studio):
     assert studio.c.get("/api/code/activity").json() == {"items": []}
 
 
+def test_project_seen_marks_only_listed_revisions_of_that_project(studio):
+    """«Отметить прочитанными» проекта (D2): снимаются только переданные ревизии этого проекта; завершение, пришедшее
+    после показа панели, и сессии другого проекта остаются непрочитанными."""
+    aid, machine, link = setup(studio)
+    link.hello["project_activity"] = True
+    third = "33333333-4444-4555-8666-777777777777"
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    emit(studio, link, ALPHA, third, {"k": "done", "status": "done"})
+    emit(studio, link, BETA, B, {"k": "done", "status": "done"})
+    shown = {chat: code_attention.revision(aid, ALPHA, chat) for chat in (A, third)}
+    emit(studio, link, ALPHA, third, {"k": "done", "status": "done"})      # новое завершение после показа
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/seen"
+    body = {"items": [{"chat": chat, "attention": revision} for chat, revision in shown.items()]}
+    assert studio.c.post(path, json=body).status_code == 204
+    left = {i["chat"] for i in studio.c.get("/api/code/activity").json()["items"][0]["items"] if i.get("unread")}
+    assert left == {third, B}
+    # ревизия чужого проекта по адресу этого не снимается
+    other = {"items": [{"chat": B, "attention": code_attention.revision(aid, BETA, B)}]}
+    assert studio.c.post(path, json=other).status_code == 204
+    assert code_attention.revision(aid, BETA, B) is not None
+    assert state.DB.execute("SELECT seen FROM code_attention WHERE chat = ?", (B,)).fetchone()[0] == 0
+    for bad in ({"items": [{"chat": "x", "attention": "0" * 32}]}, {"items": [{"chat": A, "attention": "x"}]},
+                {"items": [{"chat": A, "attention": "0" * 32}] * 201}, {}):
+        assert studio.c.post(path, json=bad).status_code == 422
+    assert studio.c.post(f"/api/code/agents/{aid}/projects/ALPHA/seen", json=body).status_code == 422
+
+
+def test_project_seen_requires_own_open_computer(studio):
+    aid, machine, link = setup(studio, pin="2468")
+    link.hello["project_activity"] = True
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    body = {"items": [{"chat": A, "attention": code_attention.revision(aid, ALPHA, A)}]}
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/seen"
+    machine.open_sessions.clear()
+    assert studio.c.post(path, json=body).json()["detail"]["code"] == "closed"
+    assert state.DB.execute("SELECT seen FROM code_attention").fetchone()[0] == 0
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    assert studio.c.post(path, json=body).status_code == 404
+    assert state.DB.execute("SELECT seen FROM code_attention").fetchone()[0] == 0
+
+
 def test_history_does_not_acknowledge_completion_that_arrived_during_its_read(studio, monkeypatch):
     aid, machine, link = setup(studio)
     emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})

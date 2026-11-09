@@ -8,12 +8,14 @@
 - К мосту не ходит: проверяет только, что компьютер свой (`claude_code.own_agent`), и вид полей.
 - Пределы: вкладок в проекте — `TABS_MAX` (лишняя — самая левая неактивная), проектов с вкладками — `PROJECTS_MAX`
   (лишний — открытый раньше всех).
+- `move` — перестановка вкладки (перетаскивание, Shift+стрелки): место `index` в ряду, дальше конца — в конец;
+  активная, вид и порядок проектов не меняются; вкладки нет — ничего.
 """
 import json
 from typing import Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, StrictInt, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 
 import claude_code
 import clock
@@ -25,15 +27,17 @@ router = APIRouter(prefix="/api/code")
 TABS_MAX = 20
 PROJECTS_MAX = 100
 #: действие → поля, без которых его нет
-NEEDS = {"open": ("pid", "chat"), "close": ("pid", "chat"), "place": ("pid", "view"), "panel": ()}
+NEEDS = {"open": ("pid", "chat"), "close": ("pid", "chat"), "place": ("pid", "view"), "panel": (),
+         "move": ("pid", "chat", "index")}
 
 
 class Action(BaseModel):
-    op: Literal["open", "close", "place", "panel"]
+    op: Literal["open", "close", "place", "panel", "move"]
     aid: StrictInt
     pid: str | None = None
     chat: str | None = None
     view: Literal["chat", "files", "git"] | None = None
+    index: StrictInt | None = Field(default=None, ge=0, lt=TABS_MAX)
 
     @model_validator(mode="after")
     def _needs(self):
@@ -91,6 +95,16 @@ def _close(aid: int, pid: str, chat: str) -> None:
                      (json.dumps(tabs), active, aid, pid))
 
 
+def _move(aid: int, pid: str, chat: str, index: int) -> None:
+    """Вкладка — на место index (дальше конца — в конец); активная и `touched` прежние. Чужая — ничего."""
+    tabs, _ = _tabs(aid, pid) or ([], None)
+    if chat not in tabs:
+        return
+    tabs.remove(chat)
+    tabs.insert(min(index, len(tabs)), chat)
+    state.DB.execute("UPDATE code_tabs SET tabs = ? WHERE agent_id = ? AND project = ?", (json.dumps(tabs), aid, pid))
+
+
 def _place(uid: int, aid: int, pid: str, view: str) -> None:
     state.DB.execute("INSERT INTO code_place(user_id, agent_id, project, view) VALUES (?, ?, ?, ?)"
                      " ON CONFLICT(user_id) DO UPDATE SET agent_id = excluded.agent_id, project = excluded.project,"
@@ -125,6 +139,8 @@ async def patch_workspace(body: Action, request: Request):
             _close(body.aid, body.pid, body.chat)
         elif body.op == "place":
             _place(uid, body.aid, body.pid, body.view)
+        elif body.op == "move":
+            _move(body.aid, body.pid, body.chat, body.index)
         else:
             _panel(uid, body.aid)
         state.DB.execute("COMMIT")

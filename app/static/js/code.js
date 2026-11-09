@@ -90,6 +90,14 @@ const lists = new Map();
 const chatLists = new Map();
 const CHAT_LISTS_MAX = 20;
 document.addEventListener('studio-code-clear', () => { lists.clear(); chatLists.clear(); });
+/** Чаты с неотправленным черновиком (`${aid}/${chat}`, событие code-chat.js) — признак ✎ вкладки; только память. */
+const draftKeys = new Set();
+document.addEventListener('studio-code-draft', ({ detail }) => {
+  if (detail.draft) draftKeys.add(detail.key);
+  else draftKeys.delete(detail.key);
+  if (proj && detail.key.startsWith(`${proj.aid}/`)) paintTabs();
+});
+let wantSearch = false; // Ctrl+K: экран новой вкладки ставит фокус в поиск сессий
 
 function cacheKey(p) {
   return `${me.id}/${p.key}`;
@@ -163,6 +171,41 @@ function panelOpen(open) {
 
 function onKey(event) {
   if (event.key === 'Escape') panelOpen(false);
+  else shortcut(event);
+}
+
+/** Клавиши раздела (D2), по event.code — работают и в русской раскладке. Ctrl+Alt+←/→ — соседняя вкладка (текста не
+ * вводит, поэтому и из поля задания); Ctrl+K (⌘K) — поиск сессий проекта, без проекта — поиск проектов панели;
+ * в поле на macOS Ctrl+K — «стереть до конца строки», его не трогаем. В открытом окне (dialog) — ничего. */
+function shortcut(event) {
+  if (event.defaultPrevented || event.isComposing || !ui || (event.target instanceof Element && event.target.closest('dialog'))) return;
+  const arrow = event.code === 'ArrowLeft' ? -1 : event.code === 'ArrowRight' ? 1 : 0;
+  if (arrow && event.ctrlKey && event.altKey && !event.shiftKey && !event.metaKey) {
+    const p = proj;
+    if (!p) return;
+    const { tabs } = tabsOf(p.aid, p.pid);
+    if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
+    if (!tabs.length) return;
+    event.preventDefault();
+    const at = shownKey === 'chat' && shownChat ? tabs.indexOf(shownChat) : -1;
+    toChat(p, at < 0 ? tabsOf(p.aid, p.pid).active || tabs[0] : tabs[(at + arrow + tabs.length) % tabs.length]);
+    return;
+  }
+  if (event.code !== 'KeyK' || event.altKey || event.shiftKey || event.ctrlKey === event.metaKey) return;
+  const field = event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]');
+  if (event.ctrlKey && field && /Mac|iPhone|iPad/.test(navigator.platform)) return;
+  event.preventDefault();
+  if (!proj) {
+    panelOpen(true);
+    document.getElementById('code-project-search')?.focus();
+    return;
+  }
+  const search = document.getElementById('code-chat-search');
+  if (search && shownKey === 'chat' && !shownChat) search.focus();
+  else {
+    wantSearch = true;
+    location.replace(`#/code/${proj.aid}/${proj.pid}?tab=new`);
+  }
 }
 
 function layout() {
@@ -292,9 +335,11 @@ function paintTabs() {
   if (!p || !p.bar) return;
   const { tabs } = tabsOf(p.aid, p.pid);
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
-  ui.tabsHost.hidden = blocked === String(p.aid) || !tabs.length;
+  // Компьютер не на связи — ряд остаётся с точкой «не на связи»; неизвестный компьютер — ряда нет.
+  ui.tabsHost.hidden = (blocked === String(p.aid) && !p.offline) || !tabs.length;
   p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded,
-    choosing: shownKey === 'chat' && !shownChat });
+    choosing: shownKey === 'chat' && !shownChat, offline: !!p.offline,
+    drafts: new Set(tabs.filter((chat) => draftKeys.has(`${p.aid}/${chat}`))) });
   p.gitActions?.controls();
   ensurePoll();
 }
@@ -420,6 +465,7 @@ function enter(aid, pid) {
     add: () => location.replace(`#/code/${aid}/${pid}?tab=new`),
     pick: (chat, keyboard = false) => toChat(p, chat, !keyboard),
     close: (chat) => closeTab(p, chat),
+    move: (chat, index) => act('move', { aid: Number(aid), pid, chat, index }),
   });
   ui.body.replaceChildren(p.chatBox, p.filesBox, p.gitBox);
   ui.placeAgent.textContent = '';
@@ -561,6 +607,8 @@ function sessions(mine, p, status) {
     } });
   const scroller = host.closest('#view');
   if (scroller) scroller.scrollTop = 0;
+  if (wantSearch) picker.querySelector('#code-chat-search')?.focus();
+  wantSearch = false;
 }
 
 async function chat(mine, p, id, agent, section, status) {
@@ -755,6 +803,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   p.chatSearch = !!agent?.chat_search;
   p.worktrees = !!agent?.worktrees;
   p.opencode = agent?.opencode || null;
+  p.offline = !!agent && !agent.online;
   p.canStart = false;
   if (agent && id) {
     // чат на экране — его вкладка активна (нет её — добавляется: push, «В работе», выбор в «+»), проект и вид — его
@@ -884,6 +933,7 @@ export function unmount() {
   shownStatus = null;
   shownHash = null;
   wantFile = null;
+  wantSearch = false;
   returnTo = null;
   none = false;
   host = null;

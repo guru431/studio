@@ -38,6 +38,8 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/visualization"): {"source": "a.html"},
     ("GET", "/api/code/agents/1/projects/1/visualization/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/seen"): {"attention": "0" * 32},
+    ("POST", "/api/code/agents/1/projects/1/seen"): {"items": [{"chat": "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70",
+                                                                "attention": "0" * 32}]},
     ("GET", "/api/code/agents/1/desktop"): None,
     ("POST", "/api/code/agents/1/desktop/start"): {},
     ("POST", "/api/code/agents/1/desktop/frame"): {"control": "0" * 32, "monitor": 0},

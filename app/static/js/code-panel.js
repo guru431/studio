@@ -22,7 +22,7 @@
  *   к журналу по уже открытому адресу, через обычную защиту несохранённых правок «Файлов».
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api, me } from './api.js';
-import { dateTime } from './time.js';
+import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
@@ -46,6 +46,18 @@ function newer(latest, current) {
   for (let i = 0; i < 3; i += 1) { if (a[i] !== b[i]) return a[i] > b[i]; }
   return false;
 }
+
+/** «был на связи …» отключённого компьютера (D2): сегодня/вчера — время, раньше — дата; пояс учётки (time.js). */
+export function lastSeenText(stamp, now = Date.now() / 1000) {
+  const days = calendarDay(now).number - calendarDay(stamp).number;
+  if (days === 0) return `был на связи сегодня в ${timeOnly(stamp)}`;
+  if (days === 1) return `был на связи вчера в ${timeOnly(stamp)}`;
+  return `был на связи ${dateTime(stamp, { day: 'numeric', month: 'short', year: days > 300 ? 'numeric' : undefined,
+    hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/** Слова поиска проектов: регистр и е/ё не различаются. */
+const searchable = (text) => text.toLocaleLowerCase('ru').replaceAll('ё', 'е');
 
 function remoteBadge(remote, name) {
   return {
@@ -76,7 +88,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
     title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, '↻'));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
-  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sortBox, refresh, updated);
+  // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.
+  const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
+    placeholder: 'Поиск проектов', 'aria-label': 'Поиск проектов', autocomplete: 'off', maxlength: '200',
+    'aria-keyshortcuts': 'Control+K' });
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, search, sortBox, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
@@ -222,6 +238,47 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     });
   }
   body.addEventListener('scroll', visible, { passive: true });
+
+  function filterProjects() {
+    const words = searchable(search.value).split(/\s+/).filter(Boolean);
+    const listBox = body.querySelector('#code-projects');
+    if (!listBox) return;
+    let found = 0;
+    for (const li of listBox.querySelectorAll(':scope > li[data-pid]')) {
+      const name = searchable(li.querySelector('.code-project-name')?.textContent || '');
+      li.hidden = !words.every((word) => name.includes(word));
+      if (!li.hidden) found += 1;
+    }
+    let none = body.querySelector('#code-project-none');
+    if (!found && words.length) {
+      if (!none) body.append(none = el('p', { id: 'code-project-none', class: 'muted' }, 'Проекты не найдены'));
+    } else none?.remove();
+    visible();
+  }
+  search.addEventListener('input', filterProjects);
+  search.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && search.value) {
+      event.stopPropagation();          // Escape сначала очищает поиск, а не закрывает панель телефона
+      search.value = '';
+      filterProjects();
+    }
+  });
+
+  async function markRead(aid, pid, button) {
+    const items = [...(activity.get(aid)?.values() || [])]
+      .filter((item) => item.project === pid && item.unread && typeof item.attention === 'string')
+      .slice(0, 200).map((item) => ({ chat: item.chat, attention: item.attention }));
+    if (!items.length) return;
+    button.disabled = true;
+    try {
+      await api('POST', `/api/code/agents/${aid}/projects/${pid}/seen`, { items });
+      for (const item of items) document.dispatchEvent(new CustomEvent('studio-code-seen', { detail: { aid, ...item } }));
+    } catch (err) {
+      if (!alive) return;
+      button.disabled = false;
+      status.textContent = words(err);
+    }
+  }
 
   function dateText(stamp, compact = false) {
     if (!Number.isFinite(stamp)) return compact ? '—' : 'нет данных';
@@ -472,7 +529,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         'aria-haspopup': 'dialog' });
       remote.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2m9 4v3m-4 0h8M2 9h11m-4-4 4 4-4 4"/></svg>';
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, info, remote, note);
+      const seen = !agent.online && Number.isFinite(agent.last_seen)
+        ? el('span', { class: 'code-agent-seen muted' }, lastSeenText(agent.last_seen)) : null;
+      if (seen) row.title = seen.textContent;
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, info, remote, seen, note);
     }));
   }
 
@@ -511,7 +571,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         badge.setAttribute('aria-label', label);
       }
       const list = li.querySelector('.code-project-sessions');
-      const old = new Map([...list.children].map((node) => [node.dataset.chat, node]));
+      const old = new Map([...list.querySelectorAll(':scope > a[data-chat]')].map((node) => [node.dataset.chat, node]));
       for (const item of tasks) {
         let link = old.get(item.chat);
         if (!link) {
@@ -529,6 +589,19 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           el('span', { class: 'code-session-state' }, CODE_ACTIVITY_LABELS[kind]));
       }
       for (const link of old.values()) link.remove();
+      // «Отметить прочитанными» (D2): только ревизии, показанные здесь; новое завершение останется непрочитанным.
+      const unread = tasks.filter((item) => item.unread && typeof item.attention === 'string').length;
+      let mark = list.querySelector('.code-project-read');
+      if (unread) {
+        if (!mark) {
+          mark = el('button', { type: 'button', class: 'btn btn-sm code-project-read' });
+          const pid = li.dataset.pid;
+          mark.addEventListener('click', () => markRead(selected, pid, mark));
+        }
+        mark.textContent = `Отметить прочитанными · ${unread}`;
+        mark.disabled = false;
+        list.append(mark);
+      } else mark?.remove();
       list.hidden = !tasks.length;
     }
   }
@@ -657,6 +730,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     paintCounts();
     paintHere();
     footer.hidden = false;
+    filterProjects();
     showComputer();
     sortProjects();
     refreshActivity();
