@@ -222,13 +222,20 @@ async def _drop_quietly(conn: Connection, gateway_id: str, video_id: str) -> Non
 
 async def cancel_user(user_id: int) -> None:
     """Все идущие ролики пользователя — снять у шлюза и пометить отменёнными (стирание истории,
-    удаление и отключение учётки); отказ шлюза не мешает — забытое он снимет сам по сроку."""
-    rows = state.DB.execute(f"SELECT * FROM videos WHERE user_id = ? AND {WHERE_ACTIVE}"
-                            " AND gateway_id IS NOT NULL", (user_id,)).fetchall()
+    удаление и отключение учётки); отказ шлюза не мешает — забытое он снимет сам по сроку. Строка отправки
+    (SENDING, без id шлюза) отменяется сразу: живой запрос снимет принятое сам (`_attach` не встанет), а у
+    оборванного остановкой службы (как в `start_pass`) принятое ищется в списке шлюза по seed студии (`_pick`,
+    как в `_resume`) — иначе строка отключённой учётки вечно ждала бы наблюдателя, а он — её учётку."""
+    rows = state.DB.execute(f"SELECT * FROM videos WHERE user_id = ? AND {WHERE_ACTIVE}", (user_id,)).fetchall()
     for row in rows:
-        conn = _connection(row)
-        if conn is not None:
-            await _drop_quietly(conn, row["gateway_id"], row["id"])
+        conn, gateway_id = _connection(row), row["gateway_id"]
+        if gateway_id is None:
+            _settle(row["id"], "cancelled", "отменено")
+            if conn is not None and (row["created"] < BOOT or row["created"] < clock.NOW() - SEND_STALE_SEC):
+                found = _pick(await _listing(conn) or [], _form_of(row), row["created"])
+                gateway_id = found["id"] if found is not None else None
+        if conn is not None and gateway_id is not None:
+            await _drop_quietly(conn, gateway_id, row["id"])
         _settle(row["id"], "cancelled", "отменено")
 
 
