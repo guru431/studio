@@ -1475,7 +1475,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-chat-actions { display: flex; flex: none; gap: 4px; margin-left: auto; }
 .code-status-bar .icon-btn { width: 32px; height: 36px; }
 .code-chat-actions:empty { display: none; }
-.code-reload { flex: none; }
+.code-reload { flex: none; display: inline-flex; align-items: center; gap: 4px; }
 .code-reload[hidden] { display: none; }
 .code-msg.user .code-fork { display: block; margin-top: 6px; font-size: calc(11px * var(--font-scale, 1)); }
 .code-subagents-dialog { width: min(900px, calc(100vw - 24px)); }
@@ -1563,6 +1563,13 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-pick:has(#code-effort) { max-width: 80px; }
 .code-pick:has(#code-access) { max-width: 150px; }
 .code-pick:has(#code-delivery) { max-width: 180px; }
+/* Узкий экран: одна кнопка «модель · усилие · права» (code-picker.js codeChoices) вместо трёх; полный ряд — от 760 px. */
+.code-settings-pick { display: none; }
+.code-settings-group + .code-settings-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+@media (max-width: 759.98px) {
+  .code-composer .code-settings-pick { display: inline-flex; flex: 1 1 auto; max-width: none; }
+  .code-composer .code-pick:has(#code-model, #code-effort, #code-access) { display: none; }
+}
 .code-pick-menu { position: fixed; inset: auto; margin: 0; padding: 5px; width: 280px; overflow-y: auto;
   background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
 .code-pick-heading { padding: 7px 10px; font-size: calc(12px * var(--font-scale, 1)); color: var(--muted); }
@@ -1605,6 +1612,7 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-session-summary { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); }
 @container (max-width: 550px) {
   .code-status-bar { gap: 4px; }
+  .code-reload-label { display: none; }
   .code-go-label { display: none; }
   .code-go-icon { display: block; }
   .code-composer .composer-go { padding: 6px; min-width: 32px; }

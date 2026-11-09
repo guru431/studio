@@ -32,7 +32,7 @@
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api as request, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
-import { codePicker } from './code-picker.js';
+import { codeChoices, codePicker } from './code-picker.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -233,7 +233,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const reloadButton = el('button', { type: 'button', id: 'code-reload', class: 'btn btn-sm code-reload', hidden: true,
-    title: 'Загрузить чат заново' }, 'Повторить');
+    title: 'Загрузить чат заново', 'aria-label': 'Повторить' }, el('span', { class: 'code-reload-label' }, 'Повторить'));
+  reloadButton.insertAdjacentHTML('afterbegin', '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>');
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
   const sharing = shareMenu(host, { id: 'code-share-chat', request: api, failed: (err) => {
@@ -275,10 +276,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     picks.set(select, view);
     return view.root;
   };
+  // Узкий экран (< 760 px) — одна кнопка «модель · усилие · права» вместо трёх (CSS), те же select.
+  const choices = codeChoices(host, 'Настройки хода', [['Модель', model], ['Усилие', effort], ['Права', access]]);
+  picks.set('choices', choices);
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
+        choices.root, pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
       stop, send));
   host.dataset.engine = engine;
   scroller.append(
