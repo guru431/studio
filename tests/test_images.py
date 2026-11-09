@@ -485,6 +485,58 @@ def test_brush_mask_of_a_picture_larger_than_2_mp_is_fitted_to_the_reduced_sourc
     assert r.status_code == 400 and "того же размера" in r.json()["detail"]["message"]
 
 
+def test_a_feed_picture_above_16_mp_is_a_brush_source(studio):
+    """Картинка ленты допускается до RESULT_PIXELS (4096², 16,7 Мп), а normalize_image копии модуля
+    переводчика — до 16 Мп: «Изменить» кистью и «Описать» такую картинку отклоняли. Студия уменьшает фото
+    истории до рамки normalize_image сама, копию модуля не трогая; фото с устройства — в прежних пределах."""
+    assert (forms.HISTORY_MAX, forms.HISTORY_PIXELS) == (images.RESULT_MAX, images.RESULT_PIXELS)
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    big = Image.new("RGB", (4096, 4096), (0, 0, 255))
+    big.paste((0, 255, 0), (0, 0, 2048, 2048))
+    big_png = png(big)
+    feed_id = media.save(uid, big_png, "image/png", "feed.png")
+    reduced = (1448, 1448)                                    # рамка normalize_image: ≤2 Мп
+    mask = Image.new("L", (4096, 4096), 0)                    # маска редактора — по naturalWidth/Height
+    mask.paste(255, (0, 0, 2048, 2048))
+    seen = []
+
+    async def edits(request):
+        fields, sent = decode_form(request.content, request.headers["content-type"])
+        seen.append((fields["size"], image_size(sent)))
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(
+            png(Image.new("RGB", reduced, "red"))).decode()}]})
+
+    studio.gw.on["/slot/images/edits"] = edits
+    r = studio.c.post("/api/images", data={"model": "flux", "size": "original", "prompt": "x",
+                                           "source_media_id": feed_id},
+                      files={"mask": ("mask.png", png(mask), "image/png")})
+    assert r.status_code == 202, r.text
+    body = wait_state(studio, r.json()["id"], {"done", "error"})
+    assert body["state"] == "done", body
+    assert seen == [("1448x1448", reduced)]
+    with Image.open(io.BytesIO(studio.c.get(f"/api/media/{body['media_id']}").content)) as result:
+        assert result.getpixel((10, 10)) == (255, 0, 0)                              # выделено — правка
+        assert result.getpixel((reduced[0] - 10, reduced[1] - 10)) == (0, 0, 255)    # вне — исходник
+    r = studio.c.post("/api/images", data={"model": "flux", "size": "original", "prompt": "x"},
+                      files={"image": ("big.png", big_png, "image/png")})
+    assert r.status_code == 400 and "16 Мп" in r.json()["detail"]["message"]
+
+
+def test_a_feed_picture_above_10_mib_is_a_source(studio):
+    """Файл ленты больше 10 МиБ (предел фото с устройства), но в пределах картинки ленты — тоже исходник."""
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    noise = Image.frombytes("RGB", (2000, 1800), (bytes(range(256)) * 42188)[:2000 * 1800 * 3])
+    heavy = io.BytesIO()
+    noise.save(heavy, "PNG", compress_level=0)
+    assert len(heavy.getvalue()) > forms.MAX_UPLOAD
+    heavy_id = media.save(uid, heavy.getvalue(), "image/png", "heavy.png")
+    r = start(studio, size="original", model="flux", source_media_id=heavy_id)
+    assert r.status_code == 202, r.text
+    assert wait_state(studio, r.json()["id"], {"done", "error"})["state"] == "done"
+
+
 def test_edit_from_history_uses_the_stored_source(studio):
     add_gateway(studio)
     first = wait_state(studio, start(studio).json()["id"], {"done"})
