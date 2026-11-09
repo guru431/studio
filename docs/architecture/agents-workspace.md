@@ -300,6 +300,30 @@ push общий для раздела «Агенты».
   не дольше `IDLE_POLL_FOR_SEC` после действия владельца, только при видимой странице. Порядок кнопок в шапке —
   статус Git → Git → Файлы → Чат (`code.js` `VIEWS`).
 
+## Входящие, вкладки, клавиатура
+
+- «Входящие» — `code-inbox.js::openInbox`: нижний лист по нажатию на число/точку «Агентов» (`.tab-count`/`.tab-dot`,
+  `#code-inbox-dot`) в рельсе и нижней панели; остальная часть вкладки — переход в раздел. Три группы по всем
+  компьютерам из `GET /api/code/activity` — ждёт ответа / работает / не прочитано; строка ведёт сразу в чат;
+  защищённый раздел — сначала отпирание; закрытые PIN и offline-компьютеры не показываются (лист это говорит); имена
+  проектов читаются с `X-Studio-Passive`. С клавиатуры и диктору — те же три группы в «В работе»; подпись вкладки
+  называет число ждущих и непрочитанных (`#code-running-count[data-asking]`).
+- Плашка ожидающего вопроса над полем ввода: `#code-ask-pin`, `#code-ask-pin-allow|deny|show` нажимают кнопки самой
+  карточки; обновление — MutationObserver ленты.
+- Черновики: `drafts`/`imageDrafts` в `code-chat.js` — класс `Drafts`; событие `studio-code-draft {key: "aid/chat",
+  draft}`, `code.js` держит `draftKeys`. `code-tabs.js::tabBar` — опция `move`, `show({drafts, offline})`; классы
+  `.code-tab-draft` (✎), `.code-tab-offline` (кольцо «не на связи»), `.dragging`, `.reordering`. Ряд вкладок
+  отключённого компьютера виден.
+- Перетаскивание вкладок (`op: move` рабочего места, [agents.md](agents.md)): мышь — после 6 px, палец — после
+  удержания 400 мс; клавиатура — Shift+←/→.
+- `code.js::shortcut`: Ctrl+Alt+←/→ — соседняя вкладка; Ctrl/⌘+K — поиск сессий (без проекта — поиск проектов);
+  клавиши — по `event.code` (работает в русской раскладке); в поле ввода на macOS Ctrl+K не перехватывается.
+- `code-panel.js`: `lastSeenText` («был на связи сегодня/вчера в …», в поясе учётки), поиск проектов
+  `#code-project-search` (регистр и е/ё не различаются, Escape очищает), `.code-project-read` «Отметить прочитанными ·
+  N» (`POST …/projects/{pid}/seen`).
+- Тесты — `tests/test_ui_agent_inbox.py`, `tests/test_workspace.py`, `tests/test_code_activity.py`. На хосте разработки
+  Chromium сообщает `prefers-reduced-motion: reduce` — сценарии анимаций это учитывают.
+
 ## Ловушки
 
 - Метку записи истории `{entry: n}` ставит роутер `app.js` каждой показанной записи; по ней `code.js` `hold()`
