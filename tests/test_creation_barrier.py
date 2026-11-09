@@ -123,6 +123,27 @@ def test_creation_started_during_wipe_is_rejected_after_wipe_finishes(studio, mo
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 
 
+def test_a_transcript_uploaded_while_history_is_wiped_is_rejected_and_its_file_removed(studio, fake_audio, monkeypatch):
+    """Загрузка записи кончилась уже в новом поколении истории: строки нет, файл убран, ответ — 409 словами
+    (а не `queued`, которая упала бы потом «сбой службы»)."""
+    add_gateway(studio)
+    uid = owner_id()
+    real_save = media.save_stream
+
+    async def saved_then_wiped(*args, **kwargs):
+        source = await real_save(*args, **kwargs)
+        with operations.barrier(uid):            # «Удалить всю историю» началась, пока запрос дописывал файл
+            pass
+        return source
+
+    monkeypatch.setattr(media, "save_stream", saved_then_wiped)
+    result = upload(studio)
+    assert result.status_code == 409 and result.json()["detail"]["code"] == "history_changed", result.text
+    assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
+    studio.c.portal.call(media.purge)
+    assert state.DB.execute("SELECT count(*) FROM media WHERE user_id = ?", (uid,)).fetchone()[0] == 0
+
+
 # ---- очереди на пользователя: эпоха — у задания, а не у раннера ------------------------
 
 def owner_id() -> int:
@@ -148,7 +169,9 @@ def test_a_queued_speech_keeps_its_own_epoch_not_the_runner_one(studio, fake_aud
     later = studio.c.post("/api/speeches", json={"text": "Позже.", "voice": vid})
     assert later.status_code == 202 and later.json()["state"] == "queued"
     studio.gw.tts_replies = [(200, WAV_FAKE)]
-    assert wait_sp(studio, first, speeches.TERMINAL)["state"] == "error"
+    failed = wait_sp(studio, first, speeches.TERMINAL)
+    # причина словами барьера, а не «сбой службы: HTTPException»
+    assert failed["state"] == "error" and failed["detail"] == "история очищена или очищается — повторите действие"
     done = wait_sp(studio, later.json()["id"], speeches.TERMINAL)
     assert done["state"] == "done", done
     assert speeches.EPOCHS == {}
@@ -186,7 +209,8 @@ def test_a_queued_transcript_keeps_its_own_epoch_not_the_runner_one(studio, fake
     later = upload(studio)
     assert later.status_code == 202 and later.json()["state"] == "queued"
     studio.gw.asr_replies = []
-    assert wait_tr(studio, first, transcripts.TERMINAL)["state"] == "error"
+    failed = wait_tr(studio, first, transcripts.TERMINAL)
+    assert failed["state"] == "error" and failed["detail"] == "история очищена или очищается — повторите действие"
     done = wait_tr(studio, later.json()["id"], transcripts.TERMINAL)
     assert done["state"] == "done", done
     assert transcripts.EPOCHS == {}

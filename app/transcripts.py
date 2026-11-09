@@ -282,6 +282,9 @@ async def run(job: Job) -> None:
         except (JobError, audio.AudioError, speech.SpeechError, media.StorageError) as e:
             outcome = ("error", str(e), {})
             log.info("расшифровка %s: ошибка %s", job.id[:8], type(e).__name__)
+        except HTTPException as e:                   # барьер истории (`operations.check`): 409 очистка, 401 учётка
+            outcome = ("error", e.detail.get("message", "сбой службы") if isinstance(e.detail, dict) else "сбой службы", {})
+            log.info("расшифровка %s: отказ %s", job.id[:8], e.status_code)
         except Exception as e:                       # noqa: BLE001 — задание не должно висеть
             outcome = ("error", f"сбой службы: {type(e).__name__}", {})
             log.warning("расшифровка %s: сбой %s", job.id[:8], type(e).__name__)
@@ -429,6 +432,11 @@ async def upload(request: Request):
     if _full_queue(uid) or not media.alive(uid, source):    # пока шла загрузка
         await media.delete_async(uid, source)
         raise _busy()
+    try:
+        operations.check(uid)        # историю стёрли, пока шла загрузка: строки нет, файл — в уборку (как speeches)
+    except HTTPException:
+        await media.delete_async(uid, source)
+        raise
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
                      " created) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",

@@ -249,6 +249,9 @@ async def run(job: Job) -> None:
         except (JobError, audio.AudioError, speech.SpeechError, media.StorageError) as e:
             outcome = ("error", str(e), {})
             log.info("озвучка %s: ошибка %s", job.id[:8], type(e).__name__)
+        except HTTPException as e:                   # барьер истории (`operations.check`): 409 очистка, 401 учётка
+            outcome = ("error", e.detail.get("message", "сбой службы") if isinstance(e.detail, dict) else "сбой службы", {})
+            log.info("озвучка %s: отказ %s", job.id[:8], e.status_code)
         except Exception as e:                       # noqa: BLE001 — задание не должно висеть
             outcome = ("error", f"сбой службы: {type(e).__name__}", {})
             log.warning("озвучка %s: сбой %s", job.id[:8], type(e).__name__)
