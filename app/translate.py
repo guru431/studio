@@ -12,9 +12,10 @@
    язык перевода — `redirect` (совпал с целевым — на английский, английский — на русский); у «Продолжить» оба
    уже в строке. Локальная модель — сначала release моделей картинок (иначе ждала бы карту под арендой
    Lustify), один раз на задание. Затем куски `waiting` по порядку потоком (`job.live` — перевод идущего куска
-   для страницы). 503 — ждать и повторять раз в RETRY_SEC до WAIT_MAX_SEC («жду карту · м:сс»); обрезанный
-   ответ — кусок пополам, половинки по очереди (их обрезка — ошибка); прочий отказ — кусок `failed`, запись —
-   ошибка «кусок n из N: …», дальше не идёт.
+   для страницы); указание куска несёт конец перевода предыдущего готового (`_context`, `translate_text.tail`) —
+   кроме Cleaner и блоков снимка. 503 — ждать и повторять раз в RETRY_SEC до WAIT_MAX_SEC («жду карту · м:сс»);
+   обрезанный ответ — кусок пополам, половинки по очереди (их обрезка — ошибка); прочий отказ — кусок `failed`,
+   запись — ошибка «кусок n из N: …», дальше не идёт.
 4. «Остановить» (`request_cancel`): ждущий — сразу «остановлено»; идущий — `cancelling`: поток куска бросается
    на следующей дельте (обрыв шлюз дальше не передаёт, карту он не держит — модель дочитает сама), готовые
    куски остаются. Перезапуск службы — недоделанное и ждущее становится ошибкой «прервано» (`recover`).
@@ -261,10 +262,12 @@ async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, 
     return shown, counted
 
 
-async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = False) -> str:
+async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = False, context: str = "") -> str:
     """Перевод текста одним запросом; 503 — ждать и повторять (остановка между попытками — сразу).
     Дельты дописываются к `job.live` после уже готового (половинка обрезанного куска); у нумерованного
-    списка блоков (`blocks`) — нет: «[1] …» — не перевод для показа."""
+    списка блоков (`blocks`) — нет: «[1] …» — не перевод для показа. `context` — конец перевода предыдущего
+    куска (`translate_text.tail`); через Cleaner — не идёт: это восстановленный им текст, а Cleaner проверяет
+    только то, что ему прислали как данные хода."""
     head, waited = job.live, None
 
     def on_delta(piece: str) -> None:
@@ -284,23 +287,30 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                         job.live = head + value
 
                 try:
-                    return await cleaner.translate(job.conn, job.id, job.model,
-                                                   translate_text.system_prompt(origin, lang, blocks), text, on_text)
+                    return documents.nfc(await cleaner.translate(job.conn, job.id, job.model,          # в поиск
+                                                                 translate_text.system_prompt(origin, lang, blocks),
+                                                                 text, on_text))
                 except HTTPException as exc:
                     raise translate_text.TranslateError(exc.detail["message"]) from None
-            return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks)
+            return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks,
+                                              context=context)
         except translate_text.Busy:
             waited = await _busy(job, waited)
 
 
-async def _chunk(job: Job, text: str, origin: str, lang: str) -> str:
-    """Кусок; обрезанный ответ — пополам, половинки по очереди (их обрезка — ошибка `Cut`)."""
+async def _chunk(job: Job, text: str, origin: str, lang: str, context: str = "") -> str:
+    """Кусок; обрезанный ответ — пополам, половинки по очереди (их обрезка — ошибка `Cut`): вторая — с концом
+    перевода первой как контекстом."""
     try:
-        return await _attempt(job, text, origin, lang)
+        return await _attempt(job, text, origin, lang, context=context)
     except translate_text.Cut:
         out = job.live = ""
-        for half, sep in translate_text.split(text, max(1, len(text) // 2)):
-            out += await _attempt(job, half, origin, lang) + sep
+        halves = translate_text.split(text, max(1, len(text) // 2))
+        for i, (half, sep) in enumerate(halves):
+            done = await _attempt(job, half, origin, lang, context=context)
+            following = halves[i + 1][0] if i + 1 < len(halves) else ""
+            context = "" if translate_text.repeats(half, following) else translate_text.tail(done)
+            out += done + sep
             job.live = out
         return out
 
@@ -461,13 +471,25 @@ def _failed(job: Job, n: int, parts: int, e: Exception) -> translate_text.Transl
     return translate_text.TranslateError(f"кусок {n} из {parts}: {e}")
 
 
-async def _part(job: Job, n: int, source: str, parts: int, origin: str, lang: str) -> None:
+def _context(job: Job, n: int, source: str) -> str:
+    """Контекст куска n: конец перевода куска n − 1, если он готов (и у «Продолжить» — из базы). Пусто — через
+    Cleaner (`_attempt`) и у куска, чей исходник начат последним предложением прежнего (`translate_text.repeats`)."""
+    if n < 2 or job.conn.cleaner:
+        return ""
+    row = state.DB.execute("SELECT source, text FROM translation_parts WHERE translation_id = ? AND n = ?"
+                           " AND state = 'done'", (job.id, n - 1)).fetchone()
+    if row is None or translate_text.repeats(row["source"], source):
+        return ""
+    return translate_text.tail(row["text"] or "")
+
+
+async def _part(job: Job, n: int, source: str, parts: int, origin: str, lang: str, context: str = "") -> None:
     """Один кусок (или блок снимка) — своим запросом; отказ — кусок `failed`, ошибка записи с его номером."""
     _check(job)
     job.stage, job.live = f"перевожу · {n} из {parts}", ""
     _store(job)
     try:
-        text = await _chunk(job, source, origin, lang)
+        text = await _chunk(job, source, origin, lang, context)
     except translate_text.TranslateError as e:
         raise _failed(job, n, parts, e) from e
     _check(job)                                  # ответ остановленного — выбросить
@@ -533,8 +555,9 @@ async def _translate(job: Job, row) -> "str | None":
     if row["kind"] == "photo":
         await _blocks(job, waiting, row["parts"], origin, lang)
         return None
-    for part in waiting:
-        await _part(job, part["n"], part["source"], row["parts"], origin, lang)
+    for part in waiting:                         # у снимка контекста нет: блоки — отдельные надписи
+        await _part(job, part["n"], part["source"], row["parts"], origin, lang,
+                    _context(job, part["n"], part["source"]))
     return None
 
 

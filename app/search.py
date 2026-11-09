@@ -10,9 +10,12 @@
 - Новые сверху (created, затем item по убыванию, у одной записи — позже проиндексированная); диалог —
   один раз, последним по времени совпадением (сообщение, документ или название; при одном времени —
   ответ, а не вопрос). Курсор `before` — `{created, item, part}` последней строки страницы.
-- Ремонт индекса — `reindex`, не 'rebuild' FTS5 (он теряет «ё» = «е», db.YO).
-- Ответ: `{items: [{section, id, part, title, snippet, model, created, href}], more}`; snippet — FTS5
-  с маркерами MARK вокруг найденного (страница строит выделение узлами), без слов — пусто.
+- Ремонт индекса — `reindex`, не 'rebuild' FTS5 (он теряет «ё» = «е», db.YO). Запрос — в NFC; записи разделов
+  тоже (documents.nfc и др.), а тела, записанные до этого, один раз переводит в NFC `compose_once` при старте.
+- Ответ: `{items: [{section, id, part, title, snippet, model, created, href, attachment}], more}`; snippet — FTS5
+  с маркерами MARK вокруг найденного (страница строит выделение узлами), без слов — пусто. href строки диалога —
+  `chat/<id>?m=<id сообщения>` (у документа — сообщения, с которым он отправлен; у названия — без `?m`),
+  attachment — имя документа строки-вложения, иначе null. В адресе — только id, не слова.
 - `GET /api/search/models` — разные модели своей истории по разделам.
 - Только `user_id` сессии. Журнал — «search: N», без слов и фильтров.
 """
@@ -49,6 +52,7 @@ EMPTY = {"code": "input", "message": "введите слова или выбе�
 #: моделей: заголовка у них нет (_title), а ссылка вела бы в никуда. «+» — без индекса по section: план
 #: запроса прежний (FTS5 внешним циклом, иначе индекс search_docs_user)
 KNOWN = "+d.section IN ({})".format(", ".join(f"'{s}'" for s in TITLES))
+NFC_FLAG = "search:nfc"          # compose_once уже прошёл по этой базе
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/search")
@@ -101,6 +105,35 @@ def reindex(conn) -> None:
         raise
 
 
+def compose_once(conn) -> int:
+    """Один раз на базу (флаг `settings` NFC_FLAG, при старте службы): тела search_docs не в NFC — в NFC. Новые
+    записи разделов приходят в NFC (documents.nfc, ocr.recognize, translate_text), а записанные раньше — нет, и FTS5
+    находил «Чайковский» в NFD только по «Чаиковскии». Строка — DELETE и INSERT с тем же id: FTS обновляют
+    триггеры search_docs_ad/ai с заменой «ё» (db.YO), и удаление потом идёт тем же телом, что в индексе ('delete'
+    с иным телом оставил бы в FTS5 с внешним содержимым чужие токены). Исходные таблицы истории не меняются:
+    правка записи переиндексирует её из них как есть. Итог — число переписанных строк."""
+    conn.execute("BEGIN")
+    try:
+        if conn.execute("SELECT 1 FROM settings WHERE key = ?", (NFC_FLAG,)).fetchone() is not None:
+            conn.execute("COMMIT")
+            return 0
+        stale = [tuple(row) for row in conn.execute(
+            "SELECT id, section, item, part, user_id, model, created, body FROM search_docs")
+            if not unicodedata.is_normalized("NFC", row[7])]
+        for row in stale:
+            conn.execute("DELETE FROM search_docs WHERE id = ?", (row[0],))
+            conn.execute("INSERT INTO search_docs(id, section, item, part, user_id, model, created, body)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (*row[:7], unicodedata.normalize("NFC", row[7])))
+        conn.execute("INSERT INTO settings(key, value) VALUES (?, '1')", (NFC_FLAG,))
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    if stale:
+        log.info("search: %d строк индекса — в NFC", len(stale))
+    return len(stale)
+
+
 def _title(section: str, item: str, user_id: int) -> str:
     table, column = TITLES[section]
     row = state.DB.execute(f"SELECT {column} FROM {table} WHERE id = ? AND user_id = ?", (item, user_id)).fetchone()
@@ -110,8 +143,23 @@ def _title(section: str, item: str, user_id: int) -> str:
     return text if len(text) <= TITLE_MAX else text[:TITLE_MAX].rstrip() + "…"
 
 
-def _href(section: str, item: str) -> str:
-    return f"chat/{item}" if section == "chat" else f"{section}?id={item}"
+def _href(section: str, item: str, message: "str | None" = None) -> str:
+    if section != "chat":
+        return f"{section}?id={item}"
+    return f"chat/{item}?m={message}" if message else f"chat/{item}"
+
+
+def _chat_place(item: str, part: str, user_id: int) -> tuple["str | None", "str | None"]:
+    """(id сообщения, имя документа) строки диалога: сообщение — само, документ — сообщение, с которым он
+    отправлен, и своё имя; название — (None, None). Адрес страницы несёт только id (`?m=`), не текст."""
+    if part == "title":
+        return None, None
+    row = state.DB.execute("SELECT a.message_id, a.name FROM attachments a JOIN messages m ON m.id = a.message_id"
+                           " WHERE a.id = ? AND a.user_id = ? AND m.chat_id = ?", (part, user_id, item)).fetchone()
+    if row is not None:
+        return row["message_id"], row["name"]
+    row = state.DB.execute("SELECT 1 FROM messages WHERE id = ? AND chat_id = ?", (part, item)).fetchone()
+    return (part if row is not None else None), None
 
 
 @router.post("")
@@ -185,9 +233,12 @@ async def find(body: SearchIn, request: Request):
             snippet = state.DB.execute("SELECT snippet(search, 0, ?, ?, '…', ?) FROM search"
                                        " WHERE search MATCH ? AND rowid = ?",
                                        (*MARK, SNIPPET_TOKENS, match, row["doc"])).fetchone()[0]
+        message, attachment = (_chat_place(row["item"], row["part"], uid) if row["section"] == "chat"
+                               else (None, None))
         items.append({"section": row["section"], "id": row["item"], "part": row["part"],
                       "title": _title(row["section"], row["item"], uid), "snippet": snippet, "model": row["model"],
-                      "created": row["created"], "href": _href(row["section"], row["item"])})
+                      "created": row["created"], "href": _href(row["section"], row["item"], message),
+                      "attachment": attachment})
     log.info("search: %d", len(items))
     return {"items": items, "more": len(rows) > body.limit}
 
