@@ -188,6 +188,23 @@ def test_pin_exhaustion_and_bridge_login_failures_are_recorded(studio, monkeypat
     assert state.DB.execute("SELECT detail FROM security_events ORDER BY id DESC").fetchone()[0] == "bridge"
 
 
+def test_a_right_password_changed_meanwhile_is_not_journaled_as_wrong(studio, monkeypatch):
+    """Ревью R3: верный пароль, но хеш сменили, пока считался scrypt (`still_valid`), — вход не состоялся,
+    а в журнал владельца не пишется ложное «неверный пароль»."""
+    uid = make_user(studio, "owner")
+    real = security.verify_password
+
+    def changed_meanwhile(password, pw_hash):
+        state.DB.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (security.hash_password("new-pass-789"), uid))
+        return real(password, pw_hash)
+
+    monkeypatch.setattr(security, "verify_password", changed_meanwhile)
+    assert login(studio, "owner", "password-123").status_code == 401
+    assert "login_fail" not in kinds(uid)
+    assert login(studio, "owner", "wrong-password").status_code == 401
+    assert kinds(uid) == ["login_fail"]
+
+
 def test_security_journal_keeps_a_bounded_recent_tail(studio, monkeypatch):
     uid = owner(studio)
     monkeypatch.setattr(security_log, "KEEP_MAX", 3)
