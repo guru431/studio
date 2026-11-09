@@ -3,9 +3,20 @@
 (function () {
   try {
     var theme = localStorage.getItem('studio-theme');
-    if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+    if (theme === 'dark' || theme === 'light') {
+      document.documentElement.dataset.theme = theme;
+      // Профиль ещё не пришёл (медленная сеть, офлайн): строка состояния и подсветка кода — по выбранной теме,
+      // а не по устройству. Цвета — как THEME_COLORS в app.js; после профиля их снова ставит app.js applyTheme.
+      var color = theme === 'dark' ? '#1b1b1b' : '#fbfaf7';
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) { meta.content = color; });
+      var paper = document.getElementById('hl-paper'), graphite = document.getElementById('hl-graphite');
+      if (paper) paper.media = theme === 'light' ? 'all' : 'not all';
+      if (graphite) graphite.media = theme === 'dark' ? 'all' : 'not all';
+    }
     var font = Number(localStorage.getItem('studio-font-size')) || 100;
     var scale = Number(localStorage.getItem('studio-ui-scale')) || 100;
+    // сенсорный экран: мельче 75% цели касания и текст становятся неразличимы (appearance.js — тот же предел)
+    if (scale < 75 && window.matchMedia && matchMedia('(pointer: coarse)').matches) scale = 75;
     if (font >= 85 && font <= 150) document.documentElement.style.setProperty('--font-scale', font / 100);
     if ([50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].indexOf(scale) !== -1) {
       document.documentElement.style.setProperty('--ui-scale', scale / 100);

@@ -246,7 +246,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   if (fresh) applyDefaults();
   const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go',
     'aria-label': 'Отправить', title: 'Отправить' }, el('span', { class: 'code-go-label' }, 'Отправить'));
-  const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go', hidden: true,
+  const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go composer-stop', hidden: true,
     'aria-label': 'Остановить', title: 'Остановить' }, el('span', { class: 'code-go-label' }, 'Остановить'));
   send.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>');
   stop.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>');
@@ -441,7 +441,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       });
       return el('div', { class: `code-image${IMAGE_TYPES.has(image.mime) ? '' : ' code-file'}`, title: image.name },
         IMAGE_TYPES.has(image.mime) ? el('img', { src: `data:${image.mime};base64,${image.data}`, alt: image.name })
-          : el('span', { class: 'code-file-name' }, image.name), remove);
+          : el('span', { class: 'code-attachment-name' }, image.name), remove);
     }));
   }
 
