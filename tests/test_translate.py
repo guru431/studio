@@ -806,7 +806,7 @@ def test_docx_export_keeps_plain_text_and_strips_markdown_only_of_scans(studio):
     plain = wait_row(studio, file_job(studio, uid, conn, text="Type `List<int>`, a < b > c, **bold**"))["id"]
     assert docx_lines(plain) == ["Тип `List<int>`, a < b > c, **жирно**"]
     scanned = wait_row(studio, file_job(studio, uid, conn, text="Type `List<int>`, **bold**", scan_id="0" * 32))["id"]
-    assert docx_lines(scanned) == ["Тип List, жирно"]
+    assert docx_lines(scanned) == ["Тип List<int>, жирно"]    # `<int>` — не тег HTML: остаётся
 
 
 def test_export_gives_txt_and_docx_named_by_language(studio):

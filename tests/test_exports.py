@@ -104,6 +104,18 @@ def test_md_plain_turns_tables_into_tab_rows_and_drops_the_marks():
     assert exports.md_plain(md) == "Итоги\n\nВажно: код и подчёркнуто\n\nТовар\tЦена\nХлеб & соль\t50\n\nКонец\nстроки"
 
 
+def test_md_plain_keeps_comparisons_formulas_and_generics_but_drops_real_tags():
+    """Находка 2026-11-09: `<[^>]+>` резал всё от голого «<» до ближайшего «>», через абзацы."""
+    md = ("Возраст пациента <18 лет — педиатрия.\n\nДавление >140 — гипертония.\n\n"
+          "Формула $x<5$ и $y>3$, a < b > c, x<y и z>w.\n\nТип `List<int>` и Map<String, Integer>.\n\n"
+          "<p align=\"center\">Абзац</p> <b>жирно</b><sup>2</sup> H<sub>2</sub>O <img src=\"x.png\"/>"
+          "<div class=\"note\">\nзаметка\n</div>")
+    assert exports.md_plain(md) == (
+        "Возраст пациента <18 лет — педиатрия.\n\nДавление >140 — гипертония.\n\n"
+        "Формула $x<5$ и $y>3$, a < b > c, x<y и z>w.\n\nТип List<int> и Map<String, Integer>.\n\n"
+        "Абзац жирно2 H2O \nзаметка")
+
+
 PAGES = [{"n": 1, "state": "done", "text": "# Заголовок\n\nТекст", "detail": None},
          {"n": 2, "state": "layer", "text": "Слой", "detail": None},
          {"n": 3, "state": "failed", "text": None, "detail": "на странице не найден текст"},
