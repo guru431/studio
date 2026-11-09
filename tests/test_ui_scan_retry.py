@@ -56,6 +56,15 @@ def test_failed_chat_scan_is_recognized_again_from_the_attachment(browser, live,
             ("eval", "fits", NO_OVERFLOW),
             ("click", "#messages .msg.user .att-rescan"),
             ("wait", f"!{rescan}"),
+            # перезагрузка — после нового итога скана: открытая страница число знаков вложения сама не перечитывает,
+            # а раньше времени перечитанный диалог показал бы вложение ещё без текста
+            ("eval", "poll", """(() => { const id = location.hash.split('/')[2]; window.rescanned = false;
+              (async () => { while (!window.rescanned) {
+                const chat = await (await fetch('/api/chats/' + id)).json();
+                window.rescanned = (chat.messages || []).some(m => (m.attachments || []).some(a => a.chars > 0));
+                if (!window.rescanned) await new Promise(done => setTimeout(done, 200)); } })();
+              return true; })()"""),
+            ("wait", "window.rescanned"),
             ("eval", "reload", "location.reload()"),
             ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
             ("wait", "document.querySelector('#messages .msg.user .att')?.textContent.includes('зн.')"),
