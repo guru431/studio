@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, limits
+from . import VERSION, jobs, limits
 
 RPC_SEC = 60
 
@@ -47,7 +47,7 @@ class RpcError(Exception):
 class Client:
     def __init__(self, path: Path, cwd: Path, *, spawn=asyncio.create_subprocess_exec):
         self.path, self.cwd, self.spawn = path, cwd, spawn
-        self.process = self.reader = None
+        self.process = self.reader = self.job = None
         self.pending, self.methods = {}, {}
         self.inbox = asyncio.Queue()
         self.seq = 0
@@ -57,6 +57,8 @@ class Client:
         self.process = await self.spawn(str(self.path), "acp", cwd=str(self.cwd),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             limit=limits.FRAME_MAX, creationflags=subprocess.CREATE_NO_WINDOW)
+        # MCP-серверы и шеллы CLI — в его job: disconnect не оставит их сиротами.
+        self.job = jobs.attach(getattr(self.process, "pid", None))
         self.reader = asyncio.create_task(self._read())
         try:
             self.info = await self.request("initialize", {"protocolVersion": 1,
@@ -119,6 +121,9 @@ class Client:
                 with contextlib.suppress(ProcessLookupError):
                     self.process.kill()
                 await self.process.wait()
+        if self.job is not None:
+            self.job.close()  # оставшиеся потомки CLI завершаются вместе с job
+            self.job = None
         if self.reader is not None:
             self.reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
