@@ -250,11 +250,11 @@ function toChat(p, chat, focus = true) {
 }
 
 /** Сессии проекта (GET …/chats): один запрос на открытие проекта; ответ — названия и метки вкладок. */
-function chatsOf(p, fresh = false) {
+function chatsOf(p, fresh = false, passive = false) {
   if (!p.listing || (fresh && !p.listingPending)) {
     p.listingPending = true;
-    const promise = api('GET', `${base(p.aid, p.pid)}/chats`, undefined,
-      fresh ? { headers: { 'x-studio-refresh': 'true' } } : {}).then((out) => {
+    const headers = { ...(fresh ? { 'x-studio-refresh': 'true' } : {}), ...(passive ? { 'x-studio-passive': '1' } : {}) };
+    const promise = api('GET', `${base(p.aid, p.pid)}/chats`, undefined, { headers }).then((out) => {
       if (p.listing === promise) {
         p.items = out.complete === false
           ? [...out.items, ...p.items.filter((old) => !out.items.some((item) => item.chat === old.chat))] : out.items;
@@ -301,9 +301,9 @@ function paintTabs() {
 
 /* ---- метки вкладок: опрос, пока страница видна и владелец недавно что-то делал в разделе ---------------------- */
 
-/** Опрос продлевает открытость компьютера (каждая просьба мосту, протокол §3): забытая вкладка браузера не должна
- * держать его открытым вечно — только видимая страница, не дольше IDLE_POLL_FOR_SEC после действия, и только у
- * открытого проекта; список чатов нужен только при открытых вкладках, снимок Git — всегда. */
+/** Опрос — фоновые просьбы (`X-Studio-Passive`): мост с `passive_requests` срок PIN не продлевает, старый мост
+ * продлевает (протокол §3), поэтому опрос всё равно идёт только при видимой странице, не дольше IDLE_POLL_FOR_SEC
+ * после действия и только у открытого проекта; список чатов нужен только при открытых вкладках, снимок Git — всегда. */
 function polling(p) {
   return !!p && proj === p && document.visibilityState !== 'hidden' && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000
     && p.canStart;
@@ -321,7 +321,7 @@ function ensurePoll() {
     pollTimer = null;
     if (!polling(p)) return;
     try {
-      await Promise.all([p.repo.refresh(true), ...(tabsOf(p.aid, p.pid).tabs.length ? [chatsOf(p, true)] : [])]);
+      await Promise.all([p.repo.refresh(true, true), ...(tabsOf(p.aid, p.pid).tabs.length ? [chatsOf(p, true, true)] : [])]);
       ensurePoll();
     } catch {
       // закрыт, не на связи — опрос до следующего действия; скажет о нём показанный чат
@@ -601,7 +601,7 @@ async function chat(mine, p, id, agent, section, status) {
         throw new DOMException('Сведения о сессии изменились', 'AbortError');
       }
     }) : null,
-    taskDone: () => { p.repo.refresh(true); panel.updateSummary(p.aid, p.pid); },
+    taskDone: () => { p.repo.refresh(true, true); panel.updateSummary(p.aid, p.pid); },
     forked: (data) => {
       p.info.set(data.chat, { chat: data.chat, engine: data.engine, origin: 'studio' });
       p.listing = null;

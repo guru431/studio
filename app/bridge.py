@@ -205,7 +205,8 @@ def parse_hello(frame: dict) -> dict:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "metadata_cache", "file_stats", "file_operations",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info", "desktop", "visualizations"):
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info", "desktop", "visualizations",
+                       "passive_requests"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")

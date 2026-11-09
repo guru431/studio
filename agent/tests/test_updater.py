@@ -200,6 +200,52 @@ def test_failed_launch_rolls_back_and_success_preserves_autostart(tmp_path, monk
     set_value.assert_not_called()
 
 
+def test_confirmed_update_keeps_the_current_and_the_previous_release_only(tmp_path, monkeypatch):
+    """После `complete` — текущий выпуск и предыдущий (откат); не трогаются выпуск без итога хелпера (готовится),
+    выпуск автозапуска, ссылки и всё вне `releases`."""
+    import _winapi
+    import winreg
+
+    base = tmp_path / 'Programs' / 'studio-agent' / 'releases'
+    names = ['release-old', 'release-run', 'release-stale', 'release-preparing', 'release-new']
+    for name in names:
+        (base / name).mkdir(parents=True)
+        (base / name / 'studio_agent.pyw').write_text('')
+    for name in names[:3]:
+        (base / name / '_update_result').write_text('complete')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / '_update_result').write_text('complete')
+    _winapi.CreateJunction(str(outside), str(base / 'release-link'))
+    stage = base / 'release-new'
+    (stage / '_update_ready').touch()
+    plan = {'pid': 1, 'home': str(tmp_path / 'home'), 'old_repo': str(base / 'release-old'), 'old_python': 'py'}
+    registry = Mock()
+    registry.__enter__ = Mock(return_value=registry)
+    registry.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(winreg, 'OpenKey', Mock(return_value=registry))
+    run = base / 'release-run'
+    monkeypatch.setattr(winreg, 'QueryValueEx', Mock(return_value=(
+        f'"{run / ".venv/Scripts/pythonw.exe"}" "{run / "studio_agent.pyw"}"', winreg.REG_SZ)))
+    monkeypatch.setattr(winreg, 'SetValueEx', Mock())
+    assert update_helper.activate(stage, plan, wait=lambda pid: True, start=Mock()) == 'complete'
+    assert sorted(p.name for p in base.iterdir()) == ['release-link', 'release-new', 'release-old',
+                                                      'release-preparing', 'release-run']
+    assert (outside / '_update_result').is_file()
+
+
+def test_unconfirmed_or_rolled_back_update_removes_no_release(tmp_path):
+    base = tmp_path / 'releases'
+    for name in ('release-a', 'release-b'):
+        (base / name).mkdir(parents=True)
+        (base / name / '_update_result').write_text('complete')
+    stage = base / 'release-b'
+    plan = {'pid': 1, 'home': str(tmp_path), 'old_repo': str(tmp_path / 'base'), 'old_python': 'py'}
+    start = Mock(return_value=SimpleNamespace(poll=lambda: 1))
+    assert update_helper.activate(stage, plan, wait=lambda pid: True, start=start) == 'rolled_back'
+    assert sorted(p.name for p in base.iterdir()) == ['release-a', 'release-b']
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(15)
 def test_real_windows_process_handle_waits_for_natural_exit():

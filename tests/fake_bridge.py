@@ -73,6 +73,7 @@ class FakeMachine:
         self.project_summary = False
         self.computer_info = False
         self.visualizations = False
+        self.passive_requests = False            # фоновые просьбы (`passive: true`) срок PIN не продлевают (§3)
         self.computer_data = {}
         self.desktop = False
         self.desktop_enabled = False
@@ -104,7 +105,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
