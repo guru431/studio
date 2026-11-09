@@ -840,8 +840,10 @@ def test_a_new_login_from_welcome_reaches_subscribers_after_it_is_saved(make, ho
     ctrl = make(welcomes=welcomes)
     logins = []
     ctrl.on_login(lambda login: logins.append((login, ctrl.login)))
-    ctrl.start()
+    # Настройка до старта ядра: иначе первое подключение ядра и `restart_link` настройки гоняются,
+    # первый канал с login гасится, а `welcome` второго — без login, и событие не приходит никогда.
     assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
+    ctrl.start()
     until(lambda: logins)
     assert logins == [("ivanov", "ivanov")]                    # окно и трей прочтут уже записанный
     ctrl.restart_link().result(5)
@@ -854,8 +856,8 @@ def test_login_from_enroll_and_welcome(make, home, root):
     welcomes = [{"t": "welcome", "agent_id": 7, "name": "Рабочий ПК", "login": "ivanov"},
                 {"t": "welcome", "agent_id": 7, "name": "Рабочий ПК"}]
     ctrl = make(welcomes=welcomes)
+    assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []   # до старта: см. выше
     ctrl.start()
-    assert ctrl.apply_setup(form(root, login=" Owner ", password="x")) == []
     assert ctrl.fresh                                           # первый online — уведомление трея
     until(lambda: ctrl.login == "ivanov")                      # welcome сильнее ответа привязки
     assert store.load_config(home).name == "Рабочий ПК"
