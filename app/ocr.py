@@ -188,7 +188,7 @@ async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
         content = upstream.json_body(r).get("markdown")
         if not isinstance(content, str) or not content.strip():
             raise PageFailed(EMPTY)
-        return content.strip()
+        return documents.nfc(content.strip())
     try:
         choice = upstream.json_body(r)["choices"][0]
         content, finish = choice["message"].get("content"), choice.get("finish_reason")
@@ -200,7 +200,7 @@ async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
         raise PageFailed(EMPTY)
     if _layout_only(content):
         raise PageFailed("модель вернула разметку без текста")
-    return content.strip()
+    return documents.nfc(content.strip())        # итог идёт в поиск (search_scans_*), как текст документов
 
 
 async def release(conn, busy=None) -> bool:

@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import time
+import unicodedata
 import zipfile
 from urllib.parse import quote
 from xml.etree import ElementTree
@@ -127,6 +128,14 @@ def test_pages_are_recognized_in_order_with_the_cleaner_prompt(studio, caplog):
     assert json.loads(studio.gw.requests[-1].content) == {}
     assert NAME not in caplog.text and "Договор" not in caplog.text and "Текст страницы" not in caplog.text
     assert ocr.JOBS == {}
+
+
+def test_recognized_text_is_composed_to_nfc_for_the_search(studio):
+    """Итог страницы — в NFC: разложенное «й» FTS5 сводит к «и», и «Чайковский» не нашёлся бы."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_reply = answer(unicodedata.normalize("NFD", "Чайковский"))
+    row = wait_scan(studio, pdf_scan(studio, uid, conn, "ink"))
+    assert row["text"] == "Чайковский" and page_rows(studio, row["id"])[0]["text"] == "Чайковский"
 
 
 def test_truncated_empty_and_layout_only_pages_fail_alone(studio):
