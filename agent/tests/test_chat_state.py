@@ -66,6 +66,20 @@ def test_chrome_uses_current_profile_and_preserves_desktop_authorization(tmp_pat
     assert chrome.config(tmp_path, which=lambda _: None) is None
 
 
+def test_chrome_override_keeps_paths_outside_bmp_and_controls_valid_toml(tmp_path):
+    """Эмодзи в пути — не пара суррогатов `\\ud83d…` (TOML её запрещает); управляющие и кавычки — экранированы."""
+    from studio_agent import chrome
+    import tomllib
+    project = tmp_path / "проект 😀 \"q\" \\ \x7f"
+    value = {"command": "node", "args": [f"--filesystemRoot={project}", "tab\there"], "enabled": False, "n": 90}
+    assert tomllib.loads("value=" + chrome._toml(value))["value"] == value
+    npm = tmp_path / "node_modules/npm/bin"
+    npm.mkdir(parents=True)
+    (npm / "npx-cli.js").write_text("", "utf-8")
+    config = chrome.config(project, which=lambda name: str(tmp_path / name))
+    assert tomllib.loads("value=" + chrome._toml(config))["value"] == config
+
+
 def test_existing_codex_context_reads_only_counters_under_the_profile(tmp_path):
     import json
     from studio_agent.codex import last_context

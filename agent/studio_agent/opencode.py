@@ -240,7 +240,10 @@ class OpenCodeRunner(Runner):
                     if not next_cursor or next_cursor == cursor:
                         break
                     cursor = next_cursor
-            except BaseException:
+            except BaseException as e:
+                # Ответ живого ACP (RpcError без обрыва) процесс каталога не гасит — как Codex `_metadata`.
+                if isinstance(e, opencode_rpc.RpcError) and not e.transport:
+                    raise
                 if self._catalog_rpc is not None:
                     await self._catalog_rpc.disconnect()
                     self._catalog_rpc = None

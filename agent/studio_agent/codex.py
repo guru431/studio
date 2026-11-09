@@ -341,7 +341,11 @@ class CodexRunner(Runner):
                     self._meta = self.rpc_factory(path, Path(project))
                     await self._meta.connect()
                 return await self._meta.request(method, params)
-            except BaseException:
+            except BaseException as e:
+                # Ответ живого сервера (not_found нового чата и прочие RpcError) процесс не гасит:
+                # перезапуск задержал бы под `_meta_lock` все чтения Codex. Закрывают обрыв, срок, отмена.
+                if isinstance(e, codex_rpc.RpcError) and not e.transport:
+                    raise
                 if self._meta is not None:
                     await self._meta.disconnect()
                     self._meta = None

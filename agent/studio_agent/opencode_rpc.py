@@ -34,11 +34,14 @@ def version(path: Path) -> str:
 
 
 class RpcError(Exception):
-    """Тело ошибки может содержать пути/тексты; в исключении только метод и код."""
+    """Тело ошибки может содержать пути/тексты; в исключении только метод и код.
 
-    def __init__(self, *, method=None, code=None, not_found=False):
+    `transport` — канал с ACP оборвался; без него — ответ живого процесса."""
+
+    def __init__(self, *, method=None, code=None, not_found=False, transport=False):
         super().__init__()
         self.method, self.code, self.not_found = method, code if type(code) is int else None, not_found
+        self.transport = transport
 
 
 class Client:
@@ -103,7 +106,7 @@ class Client:
         finally:
             for rid, future in list(self.pending.items()):
                 if not future.done():
-                    future.set_exception(RpcError(method=self.methods.get(rid)))
+                    future.set_exception(RpcError(method=self.methods.get(rid), transport=True))
             self.inbox.put_nowait(None)
 
     async def disconnect(self):

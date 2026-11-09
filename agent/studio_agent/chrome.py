@@ -40,7 +40,17 @@ def overrides(project):
 
 def _toml(value):
     if isinstance(value, dict):
-        return "{" + ",".join(f"{json.dumps(k)}={_toml(v)}" for k, v in value.items()) + "}"
+        return "{" + ",".join(f"{_string(k)}={_toml(v)}" for k, v in value.items()) + "}"
     if isinstance(value, list):
         return "[" + ",".join(_toml(v) for v in value) + "]"
+    if isinstance(value, str):
+        return _string(value)
     return json.dumps(value)
+
+
+def _string(value):
+    # json.dumps(ensure_ascii=True) пишет символ вне BMP парой `😀`, а TOML принимает в `\u`
+    # только скалярные значения Unicode. Поэтому символы — как есть; экранируются кавычка, обратная
+    # черта и управляющие (TOML запрещает их в базовой строке, включая DEL).
+    return '"' + "".join("\\" + ch if ch in '"\\' else f"\\u{ord(ch):04x}" if ord(ch) < 0x20 or ord(ch) == 0x7F
+                         else ch for ch in value) + '"'

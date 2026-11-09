@@ -109,14 +109,15 @@ async def test_errors_eof_and_timeout_remove_waiters_without_private_content():
     with pytest.raises(opencode_rpc.RpcError) as error:
         await task
     assert error.value.not_found and error.value.method == "session/load" and error.value.code == -32000
-    assert str(error.value) == "" and "private" not in repr(error.value)
+    assert str(error.value) == "" and "private" not in repr(error.value) and not error.value.transport
     with pytest.raises(TimeoutError):
         await client.request("session/list", {}, timeout=0)
     assert not client.pending and not client.methods
     task = asyncio.create_task(client.request("session/prompt", {}, timeout=None))
     await asyncio.sleep(0)
     process.close()
-    with pytest.raises(opencode_rpc.RpcError):
+    with pytest.raises(opencode_rpc.RpcError) as error:
         await task
+    assert error.value.transport
     assert await client.inbox.get() is None
     await client.disconnect()
