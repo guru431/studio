@@ -479,8 +479,12 @@ def test_recognize_again_after_an_error_continues_the_waiting_pages(studio, monk
     assert wait_scan(studio, sid)["state"] == "error"
     assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]).startswith(
         "[скан не распознан: карта занята")
-    assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 202
-    assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]) is None
+    studio.gw.ocr_hold = True
+    try:
+        assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 202
+        assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]) is None
+    finally:
+        studio.gw.ocr_hold = False
     row = wait_scan(studio, sid)
     assert (row["state"], row["text"]) == ("done", TEXT)
     assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]) == (
