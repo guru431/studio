@@ -1168,7 +1168,11 @@ def _image_bytes(data: dict) -> tuple[bytes, str]:
             if image.width * image.height > 16_000_000:
                 raise _refuse(413, 'too_large', 'Изображение больше 16 мегапикселей')
             image.verify()
-    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        # больше MAX_IMAGE_PIXELS Pillow, то есть и 16 Мп; предупреждение — ошибка, если фильтр
+        # catch_warnings копии image_upload остался на процесс от перекрывшихся потоков
+        raise _refuse(413, 'too_large', 'Изображение больше 16 мегапикселей') from None
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
         raise _refuse(415, 'not_image', 'Изображение не читается') from None
     return raw, mime
 
