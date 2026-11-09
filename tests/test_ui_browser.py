@@ -102,45 +102,78 @@ MENU_OPEN = "!document.querySelector('#menu').hidden"
 MENU_INSIDE = ("(() => { const b = document.querySelector('#menu').getBoundingClientRect();"
                " return b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight; })()")
 MENU_ITEMS = "[...document.querySelectorAll('#menu .menu-item')].filter(e => !e.hidden).map(e => e.textContent.trim())"
-THEME_WORDS = ("Тёмная тема", "Светлая тема")
+MENU_THEME = "[...document.querySelectorAll('#menu input[name=menu-theme]')].find(i => i.checked)?.value"
+
+
+def theme_option(value):
+    """Подпись сегмента темы в меню аватара (сама радиокнопка .sr обрезана до 1 px)."""
+    return f"#menu-theme label:has(> #menu-theme-{value})"
 
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
-def test_theme_toggle_in_the_profile_menu(browser, live, width):
-    """Тема — пункт меню профиля сразу под именем (в шапке кнопки нет): подпись — что включит нажатие;
-    нажатие меняет тему, пишет её в учётку и оставляет меню открытым; после перезагрузки тема та же."""
+def test_theme_segment_in_the_profile_menu(browser, live, width):
+    """Тема — сегмент «Авто · Светлая · Тёмная» сразу под именем (в шапке кнопки нет): выбор меняет тему, пишет её
+    в учётку и оставляет меню открытым; после перезагрузки тема та же; «Авто» возвращает тему устройства."""
     login = f"toggle{width}"
     live.add_user(login)
-    expected = "(matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark')"
-    label = "document.querySelector('#theme-toggle').textContent.trim()"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
-        ("eval", "want", expected),
-        ("eval", "shownClosed", "document.querySelector('#theme-toggle').getBoundingClientRect().width > 0"),
+        ("eval", "shownClosed", "document.querySelector('#menu-theme').getBoundingClientRect().width > 0"),
         ("click", "#avatar"), ("wait", MENU_OPEN),
-        ("eval", "place", "(() => { const t = document.querySelector('#theme-toggle');"
-                          " return [t.parentElement.id, t.previousElementSibling.className, t.className,"
-                          " t.getAttribute('role')]; })()"),
-        ("eval", "before", label),
-        ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme === {expected}"),
-        ("eval", "stillOpen", MENU_OPEN), ("eval", "after", label),
+        ("eval", "place", "(() => { const t = document.querySelector('#menu-theme');"
+                          " return [t.parentElement.id, t.previousElementSibling.className, t.tagName,"
+                          " [...t.querySelectorAll('label')].map(l => l.textContent.trim()),"
+                          " t.querySelector('legend').textContent]; })()"),
+        ("eval", "before", MENU_THEME),
+        ("click", theme_option("dark")), ("wait", "document.documentElement.dataset.theme === 'dark'"),
+        ("eval", "stillOpen", MENU_OPEN), ("eval", "after", MENU_THEME),
         ("idle",), ("eval", "saved", "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
+        ("eval", "status", "document.querySelector('#theme-save-status').textContent"),
         ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
         ("eval", "kept", "document.documentElement.dataset.theme"),
-        ("click", "#avatar"), ("wait", MENU_OPEN),
-        ("click", "#theme-toggle"), ("wait", f"document.documentElement.dataset.theme !== {expected}"),
+        ("click", "#avatar"), ("wait", MENU_OPEN), ("eval", "keptChecked", MENU_THEME),
+        ("click", theme_option("light")), ("wait", "document.documentElement.dataset.theme === 'light'"),
         ("eval", "inside", MENU_INSIDE),
-        ("eval", "go", "location.hash = '#/profile'"), ("wait", "document.querySelector('#view .page')"),
-        ("eval", "profileTheme", "!!document.querySelector('#theme-auto, #theme-dark, #theme-light')")],
+        ("click", theme_option("auto")), ("wait", "!document.documentElement.hasAttribute('data-theme')"),
+        ("idle",), ("eval", "savedAuto", "fetch('/api/me').then(r => r.json()).then(m => m.theme)")],
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    words = dict(zip(("dark", "light"), THEME_WORDS))
-    other = "light" if v["want"] == "dark" else "dark"
     assert v["shownClosed"] is False
-    assert v["place"] == ["menu", "menu-who", "menu-item menu-theme", "menuitem"]
-    assert v["before"] == words[v["want"]] and v["after"] == words[other] and v["stillOpen"] is True
-    assert v["saved"] == v["want"] and v["kept"] == v["want"] and v["inside"] and v["profileTheme"] is False
+    assert v["place"] == ["menu", "menu-who", "FIELDSET", ["Авто", "Светлая", "Тёмная"], "Тема · вся учётка"]
+    assert v["before"] == "auto" and v["after"] == "dark" and v["stillOpen"] is True
+    assert v["saved"] == v["kept"] == v["keptChecked"] == "dark" and v["status"] == "Оформление сохранено для учётки."
+    assert v["inside"] and v["savedAuto"] == "auto"
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_avatar_menu_works_from_the_keyboard(browser, live, width):
+    """Панель аватара без role="menu": aria-expanded у аватара; Tab с аватара ведёт в сегмент темы, стрелка меняет тему,
+    Escape закрывает и возвращает фокус аватару; Tab за последний пункт закрывает панель."""
+    login = f"keys{width}"
+    live.add_user(login, theme="light")
+    active = "document.activeElement.id"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "expanded", "document.querySelector('#avatar').getAttribute('aria-expanded')"),
+        ("eval", "roles", "[...document.querySelectorAll('#menu [role]')].map(e => e.getAttribute('role'))"),
+        ("press", "Tab"), ("eval", "first", active),
+        ("press", "ArrowRight"), ("wait", "document.documentElement.dataset.theme === 'dark'"),
+        ("eval", "moved", active), ("idle",),
+        ("press", "Escape"), ("wait", "document.querySelector('#menu').hidden"),
+        ("eval", "back", active),
+        ("eval", "collapsed", "document.querySelector('#avatar').getAttribute('aria-expanded')"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "last", "document.querySelector('#menu-logout').focus()"), ("press", "Tab"),
+        ("wait", "document.querySelector('#menu').hidden"),
+        ("eval", "tabbedOut", "document.querySelector('#avatar').getAttribute('aria-expanded')")],
+        width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["expanded"] == "true" and v["collapsed"] == v["tabbedOut"] == "false"
+    assert v["roles"] == ["status"], v["roles"]
+    assert v["first"] == "menu-theme-light" and v["moved"] == "menu-theme-dark" and v["back"] == "avatar"
     assert not problems(r), problems(r)
 
 
@@ -191,8 +224,7 @@ def test_avatar_menu_and_logout(browser, live, width):
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    items = r["values"]["items"]
-    assert items[0] in THEME_WORDS and items[1:] == ["Нижняя панель", "Настройки", "Панель", "Выход"]
+    assert r["values"]["items"] == ["Настройки", "Администрирование", "Выйти"]
     assert r["values"]["inside"]
     assert not problems(r), problems(r)
 
@@ -306,8 +338,7 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
         ("eval", "items", MENU_ITEMS),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"][0] in THEME_WORDS
-    assert r["values"]["items"][1:] == ["Нижняя панель", "Настройки", "Выход"]
+    assert r["values"]["items"] == ["Настройки", "Выйти"]
 
 
 def test_api_passes_the_deadline_through(browser, live):
@@ -420,7 +451,7 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["kinds"] == ["OpenAI-совместимый", "Шлюз srvllm", "Шлюз s06 · Qwen, WhisperX, PaddleOCR",
-                          "Cleaner · защита данных"]
+                          "Cleaner · очистка данных"]
     assert "/v1" in v["placeholder"]
     assert v["link"] == ["Облако", live.cloud.base_url, "из браузера"] and v["chatBefore"] is False
     assert v["default"] == [True, "cloud-chat", True] and not v["overflow"]
@@ -451,7 +482,7 @@ def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
         ("click", f"{panel} .link:last-child .link-refresh"),
         ("wait", "document.querySelector('.section-status').textContent.includes('CORS')"),
         ("eval", "cors", "document.querySelector('.section-status').textContent"),
-        *go("settings/other"), ("wait", "document.querySelector('#pw-current')"),
+        *go("settings/security"), ("wait", "document.querySelector('#pw-current')"),
         ("type", "#pw-current", "wrong-password"), ("type", "#pw-new", "new-password-1"),
         ("type", "#pw-repeat", "new-password-2"), ("click", "#password-save"),
         ("wait", "document.querySelector('#password-status').textContent.length > 0"),
@@ -473,13 +504,13 @@ def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
 
 
 def test_settings_exa_key_is_saved_and_never_shown(browser, live):
-    """«Прочее» → «Интернет»: ключ Exa сохраняется, поле после этого пустое, показан только признак «Ключ
+    """«Ввод и интернет» → «Интернет»: ключ Exa сохраняется, поле после этого пустое, показан только признак «Ключ
     задан» (и после перезагрузки); ключа нет ни в DOM, ни в хранилищах; «Убрать» — «Ключа нет»."""
     live.add_user("exauser")
     secret = "exa-secret-key-0123456789"
     status = "document.querySelector('#exa-status').textContent"
     r = browser.drive(live.url + "/", [*signin("exauser"), ("wait", READY),
-        *go("settings/other"), ("wait", f"document.querySelector('#exa-key') && {status}"),
+        *go("settings/input"), ("wait", f"document.querySelector('#exa-key') && {status}"),
         ("eval", "empty", f"[{status}, document.querySelector('#exa-remove').disabled,"
                           " document.querySelector('#exa-key').type, document.querySelector('#exa-key').autocomplete,"
                           " [...document.querySelectorAll('.exa-block a')].map(a => [a.href, a.target, a.rel])]"),
@@ -636,37 +667,62 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
         ("eval", "go", "location.hash = '#/profile'"), ("wait", "location.hash.startsWith('#/settings')"),
         ("wait", "document.querySelector('.settings-nav a')"),
         ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => [a.dataset.section, a.textContent])"),
+        ("eval", "groups", "[...document.querySelectorAll('.settings-nav .settings-group')].map(h => h.textContent)"),
         *go("settings/transcribe"), ("wait", "document.querySelector('.section-panel[data-section=transcribe] h2')"),
         ("eval", "records", "document.querySelector('.section-panel h2').textContent"),
         *go("settings/ocr"), ("wait", "document.querySelector('.section-panel[data-section=ocr] h2')"),
         ("eval", "scans", "document.querySelector('.section-panel h2').textContent"),
         *go("settings/code"), ("wait", "document.querySelector('#code-defaults-save') && document.querySelector('#agents li')"),
         ("eval", "code", "!!document.querySelector('[data-section=code] #code-defaults-save') && "
-                          "!!document.querySelector('[data-section=code] #agents') && !document.querySelector('[data-section=dictation]')"),
+                          "!!document.querySelector('.section-panel[data-section=code] #agents') && !document.querySelector('[data-section=dictation]')"),
         ("eval", "codeFits", NO_OVERFLOW),
-        *go("settings/other"), ("wait", f"document.querySelector('{dictation} input.model-default[value=gigaam]')"),
-        ("eval", "other", "!document.querySelector('#code-defaults-save, #agents') && !!document.querySelector('#pw-current')"),
-        set_value("#pw-current", "unsaved-password"),
+        *go("settings/other"), ("wait", "location.hash === '#/settings/security' && document.querySelector('#pw-current')"),
+        ("eval", "security", "[...document.querySelectorAll('.section-panel[data-section=security] h2')].map(h => h.textContent)"),
+        ("eval", "securityCurrent", "document.querySelector('.settings-nav [aria-current=page]')?.dataset.section"),
+        *go("settings/input"), ("wait", f"document.querySelector('{dictation} input.model-default[value=gigaam]')"),
+        ("eval", "input", "!document.querySelector('#code-defaults-save, #agents, #pw-current') && !!document.querySelector('#exa-key')"),
+        set_value("#exa-key", "unsaved-key"),
         ("eval", "mark", f"document.querySelector('{dictation}').dataset.before = '1'"),
         ("click", f"{dictation} input.model-default[value=whisperx]"),
         ("wait", f"document.querySelector('{dictation}').dataset.before !== '1' && "
                  f"document.querySelector('{dictation} input.model-default[value=whisperx]').checked"),
-        ("eval", "draft", "document.querySelector('#pw-current').value"),
-        ("eval", "otherFits", NO_OVERFLOW),
-        *go("settings/dictation"), ("wait", "document.querySelector('.settings-nav [data-section=other][aria-current=page]')"),
+        ("eval", "draft", "document.querySelector('#exa-key').value"),
+        ("eval", "inputFits", NO_OVERFLOW),
+        *go("settings/dictation"), ("wait", "location.hash === '#/settings/input' && "
+                                            "document.querySelector('.settings-nav [data-section=input][aria-current=page]')"),
         ("eval", "reload", "location.reload()"), ("wait", READY),
         ("wait", f"document.querySelector('{dictation} input.model-default[value=whisperx]')?.checked"),
-        ("eval", "saved", f"document.querySelector('{dictation} input.model-default:checked').value")],
+        ("eval", "saved", f"document.querySelector('{dictation} input.model-default:checked').value"),
+        *go("settings/appearance"), ("wait", "document.querySelector('#appearance-theme-auto')"),
+        ("eval", "appearance", "[...document.querySelectorAll('.section-panel[data-section=appearance] h2')].map(h => h.textContent)"),
+        ("eval", "scopes", "[...document.querySelectorAll('.section-panel[data-section=appearance] .scope-note')].map(p => p.textContent)"),
+        ("eval", "appearanceFits", NO_OVERFLOW),
+        *go("settings/notifications"), ("wait", "document.querySelector('.section-panel[data-section=notifications] h2')"),
+        ("eval", "notifications", "[...document.querySelectorAll('.section-panel[data-section=notifications] > section > h2')].map(h => h.textContent)"),
+        *go("settings/data"), ("wait", "document.querySelector('#history-wipe') && document.querySelector('#export-open')"),
+        ("eval", "data", "[...document.querySelectorAll('.section-panel[data-section=data] > section > h2')].map(h => h.textContent)"),
+        *go("settings/cleaner"), ("wait", "document.querySelector('.section-panel[data-section=cleaner] h2')"),
+        ("eval", "cleaner", "document.querySelector('.section-panel[data-section=cleaner] h2').textContent")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
-    assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Речь"],
-                        ["transcribe", "Разговоры"], ["ocr", "Сканы"], ["translate", "Перевод"],
-                        ["cleaner", "Защита данных"], ["code", "Агенты"], ["other", "Прочее"]]
+    assert v["groups"] == ["Разделы", "Учётка"]
+    assert v["nav"] == [["chat", "Чат"], ["code", "Агенты"], ["photo", "Фото"], ["video", "Видео"],
+                        ["transcribe", "Разговоры"], ["speech", "Речь"], ["ocr", "Сканы"], ["translate", "Перевод"],
+                        ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["security", "Защита"],
+                        ["notifications", "Уведомления"], ["data", "Данные"], ["input", "Ввод и интернет"]]
     assert v["records"] == "Разговоры" and v["scans"] == "Сканы"
-    assert v["code"] and v["other"] and v["codeFits"] and v["otherFits"]
-    assert v["draft"] == "unsaved-password" and v["saved"] == "whisperx"
+    assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
+    assert v["securityCurrent"] == "security"
+    assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Аварийный выход", "Журнал безопасности"]
+    assert v["appearance"] == ["Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
+    assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
+                           "Это устройство — в других браузерах и на других устройствах свой выбор.",
+                           "Это устройство — этот браузер и учётка.", "Вся учётка — на всех ваших устройствах."]
+    assert v["notifications"] == ["Уведомления", "ntfy"] and v["data"] == ["Хранилище", "История"]
+    assert v["cleaner"] == "Очистка данных · Cleaner"
+    assert v["draft"] == "unsaved-key" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
 
 
@@ -798,7 +854,7 @@ def test_phone_avatar_never_covers_scrolled_profile_and_admin(browser, live):
     """B1-M8: на телефоне аватар закреплён, а шапка раздела уезжала с прокруткой — блоки
     профиля и панели проходили под аватаром. Шапка — на месте, с непрозрачным фоном."""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
-        *go("settings/other"), ("wait", "document.querySelector('#history-wipe')"),
+        *go("settings/data"), ("wait", "document.querySelector('#history-wipe')"),
         ("eval", "profile", HEAD_UNDER_AVATAR),
         *go("admin"), ("wait", "document.querySelector('#users tbody tr') && document.querySelector('#allow-list li')"),
         ("eval", "admin", HEAD_UNDER_AVATAR)], width=390, height=400, mobile=True)
@@ -816,7 +872,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
             token: {live.gw.TOKEN!r}, sections: ['chat', 'photo', 'video'] }});
           await m.loadMe(); return true; }})()"""),
         make_history(), history_of("before"),
-        *go("settings/other"), ("wait", "document.querySelector('#history-wipe')"),
+        *go("settings/data"), ("wait", "document.querySelector('#history-wipe')"),
         ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")),
         ("eval", "confirmHidden", "document.querySelector('#wipe-confirm').hidden"),
         ("eval", "warning", "document.querySelector('#wipe-dialog p').textContent"),
@@ -853,7 +909,7 @@ STORAGE_TEXTS = """[...document.querySelectorAll('#storage dd')].map((d) => [d.d
 
 
 def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, live):
-    """«Прочее» → «Хранилище»: свои файлы по видам и итог, очередь удаления с датой; после «Удалить всю
+    """«Данные» → «Хранилище»: свои файлы по видам и итог, очередь удаления с датой; после «Удалить всю
     историю» — пусто и «очередь пуста»."""
     uid = live.add_user("keeper")
     for media_id, mime, size in (("k-img", "image/png", 2048), ("k-vid", "video/mp4", 3 << 20)):
@@ -865,12 +921,12 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
     live_sql(live, "INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, retry_at)"
                    " VALUES ('k-ctx', ?, 'r1', 'http://10.77.1.16:4000', x'00', ?, ?)",
              (uid, time.time() - 600, time.time() + 3600))
-    # разделы настроек отвечают позже «Хранилища» (так бывало под нагрузкой): их ответ «Прочее» не перерисовывает —
+    # разделы настроек отвечают позже «Хранилища» (так бывало под нагрузкой): их ответ «Данные» не перерисовывает —
     # иначе блок заменялся новым, пустым до своего ответа, и строки читались пустыми
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u) === '/api/sections'
       ? new Promise((r) => setTimeout(r, 600)).then(() => real(u, o)) : real(u, o); return true; })()"""
     r = browser.drive(live.url + "/", [*signin("keeper"), ("wait", READY), ("eval", "slow", slow),
-        *go("settings/other"), ("wait", "document.querySelector('#storage dd[data-kind=\"total\"]')"),
+        *go("settings/data"), ("wait", "document.querySelector('#storage dd[data-kind=\"total\"]')"),
         ("eval", "mark", "document.querySelector('#storage').dataset.mark = '1'"),
         ("eval", "same", settled("document.querySelector('#storage').dataset.mark === '1'", 1000)),
         ("eval", "before", STORAGE_TEXTS), ("eval", "queue", "document.querySelector('#storage-queue').textContent"),
@@ -898,7 +954,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
                    " VALUES ('exp-chat', ?, 'title', NULL, 'm', ?, ?)", (uid, time.time(), time.time()))
     boxes = "[...document.querySelectorAll('#export-dialog input[name=export-section]')]"
     r = browser.drive(live.url + "/", [*signin("exporter"), ("wait", READY),
-        *go("settings/other"), ("wait", "document.querySelector('#export-open')"),
+        *go("settings/data"), ("wait", "document.querySelector('#export-open')"),
         ("click", "#export-open"), ("wait", is_open("#export-dialog")),
         ("eval", "boxes", f"{boxes}.map((b) => [b.value, b.checked])"),
         ("eval", "labels", f"{boxes}.slice(-3).map((b) => b.closest('label').textContent)"),
@@ -1453,11 +1509,11 @@ def test_chat_internet_needs_an_exa_key(browser, live):
         ("eval", "refused", f"[document.querySelector('#chat-error').textContent, ...{state}]")], width=1280)
     assert not r.get("failed"), r
     v = r["values"]
-    hint = "Задайте ключ Exa в Настройках → Прочее → Интернет"
+    hint = "Задайте ключ Exa в Настройках → Ввод и интернет → Интернет"
     assert v["nokey"] == [False, True, "false", hint, hint]
     title = "Интернет: поиск, страницы и субтитры YouTube"
     assert v["returned"] == v["reloaded"] == [False, False, "false", title, ""]
-    assert v["refused"] == ["Сначала задайте ключ Exa в Настройках → Прочее → Интернет", False, True, "false", hint, hint]
+    assert v["refused"] == ["Сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет", False, True, "false", hint, hint]
     assert known_refusals(problems(r), 409) == [], problems(r)
 
 
@@ -5012,7 +5068,7 @@ def server_lock_is(value):
 
 
 def lock_settings(login):
-    return [*signin(login), ("wait", READY), *go("settings/other"), ("wait", "document.querySelector('#lock-enabled')")]
+    return [*signin(login), ("wait", READY), *go("settings/security"), ("wait", "document.querySelector('#lock-enabled')")]
 
 
 def test_touch_emulation_gives_a_coarse_pointer(browser, live):
@@ -5091,7 +5147,7 @@ def test_lock_settings_set_change_and_remove_the_pin(browser, live):
     assert r["sent"].count("PUT /api/me/pin") == 1, r["sent"]
     assert not problems(r), problems(r)
 
-    phone = browser.drive(live.url + "/", [("wait", READY), *go("settings/other"),     # вход — из первой вкладки
+    phone = browser.drive(live.url + "/", [("wait", READY), *go("settings/security"),     # вход — из первой вкладки
         ("wait", "document.querySelector('#pin-set')"), ("click", "#pin-set"),
         ("eval", "hint", "document.querySelector('#pin-form').textContent"),
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=320, mobile=True, touch=True)
@@ -6081,12 +6137,12 @@ def picture_job(name):
 
 
 def notify_settings(login):
-    return [*signin(login), ("wait", READY), add_gateway(), *go("settings/other"),
+    return [*signin(login), ("wait", READY), add_gateway(), *go("settings/notifications"),
             ("wait", "document.querySelector('#notify-enabled')")]
 
 
 def test_notification_only_when_hidden_and_without_content(browser, live):
-    """«Прочее» → «Уведомления» включает флаг устройства; готовое при видимой странице — без
+    """«Уведомления» включает флаг устройства; готовое при видимой странице — без
     уведомления, при скрытой — одно: «Студия: картинка готова», tag — id, data.href — запись, без промпта."""
     login = "notify-on"
     live.add_user(login)
@@ -7160,7 +7216,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         *go("settings/code"), ("wait", agents_loaded),
         ("eval", "empty", "document.querySelector('#agents li').textContent"),
         ("eval", "nested", "document.querySelector('.settings > .agent-download').hidden && !document.querySelector('.agents-block .agent-download')"),
-        *go("settings/other"), ("wait", "document.querySelector('#password-save')"),
+        *go("settings/security"), ("wait", "document.querySelector('#password-save')"),
         ("eval", "other", "document.querySelector('.settings > .agent-download').hidden"),
         *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
@@ -7241,7 +7297,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     uid = live.add_user(login)
     keys = push_keys()
     init = push_init(keys)
-    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", PUSH_READY),
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"), ("wait", PUSH_READY),
         ("eval", "label", "document.querySelector('#push-enabled').closest('label').textContent"),
         ("eval", "hint", "document.querySelector('#push-hint').textContent"),
         ("eval", "before", "document.querySelector('#push-enabled').checked"),
@@ -7264,7 +7320,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     assert push_rows(live, uid) == [(PUSH_ENDPOINT, keys["p256dh"], keys["auth"], 1)]
     assert not problems(r), problems(r)
 
-    r = browser.drive(live.url + "/#/settings/other", [("wait", READY), ("wait", PUSH_READY),
+    r = browser.drive(live.url + "/#/settings/notifications", [("wait", READY), ("wait", PUSH_READY),
         ("eval", "checked", "document.querySelector('#push-enabled').checked"),
         ("click", "#push-enabled"),
         ("wait", "localStorage.getItem('studio-push') === null"),
@@ -7295,7 +7351,7 @@ def test_push_checkbox_gives_up_without_service_worker(browser, live):
     нажимается, подписки нет ни у сервера, ни во флаге устройства."""
     login = "push-no-worker"
     uid = live.add_user(login)
-    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/other"), ("wait", PUSH_READY),
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"), ("wait", PUSH_READY),
         ("click", "#push-enabled"),
         ("wait", "document.querySelector('#push-status').textContent !== ''"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
@@ -10398,7 +10454,7 @@ def test_code_reentry_does_not_record_another_open(browser, live):
     ready = "!!document.querySelector('#code-projects li[data-pid]')"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), ("wait", ready),
-            *go("settings/other"), ("wait", "!document.querySelector('#code-panel')"),
+            *go("settings/security"), ("wait", "!document.querySelector('#code-panel')"),
             *go("code"), ("wait", ready),
             ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", ready),
             ("eval", "old", "!!(window.oldProjects = document.querySelector('#code-projects'))"),

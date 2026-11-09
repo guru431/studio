@@ -1,8 +1,12 @@
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
- * Слева — разделы, «Агенты» (умолчания чатов и компьютеры) и «Прочее» (голосовой ввод, пароль,
- * блокировка, сессии, аварийный выход и журнал безопасности — account-security.js, уведомления и push,
- * ключ Exa, хранилище и история), справа — выбранный раздел: его
+ * Слева две группы. «Разделы» — в порядке рельса (Чат, Агенты, Фото, Видео, Разговоры, Речь, Сканы, Перевод;
+ * «Агенты» — умолчания чатов и компьютеры) и «Очистка данных · Cleaner». «Учётка»: «Оформление» (тема и акцент
+ * учётки, шрифт, масштаб, плотность и нижняя панель этого устройства, часовой пояс — appearance.js),
+ * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, аварийный выход и журнал безопасности —
+ * account-security.js), «Уведомления» (push, ntfy), «Данные» (хранилище, выгрузка, удаление истории),
+ * «Ввод и интернет» (голосовой ввод, ключ Exa). Прежние адреса (`other` — «Прочее», `dictation`) ведут
+ * на новые (OLD_IDS). Справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
@@ -21,10 +25,12 @@
  * с микрофона, её текст и имя (POST /api/voices), список с «Удалить».
  *
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
- * переключаются на месте, в «Прочем» — только голосовой ввод; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
+ * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
 import { emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
+import { accountLookBlock, deviceLookBlock } from './appearance.js';
+import { openMobileNavigationEditor } from './mobile-navigation.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
@@ -82,7 +88,7 @@ export async function modelsOf(conn) {
   return directModels(conn);
 }
 
-/* ---- «Прочее»: пароль и история -------------------------------------------------- */
+/* ---- «Учётка»: оформление, защита, уведомления, данные ------------------------------ */
 
 function say(node, text, kind) {
   node.textContent = text;
@@ -200,6 +206,16 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
   return block;
 }
 
+/** «Нижняя панель» телефона — тот же редактор, что в листе «Ещё» (mobile-navigation.js); на широком экране скрыт. */
+function mobileNavBlock() {
+  const open = button('Настроить нижнюю панель', { class: 'btn', id: 'appearance-mobile-nav-open',
+    'aria-haspopup': 'dialog' }, () => openMobileNavigationEditor(open));
+  return el('section', { class: 'block appearance-mobile-nav' }, el('h2', {}, 'Нижняя панель'),
+    el('p', { class: 'muted small scope-note' }, 'Это устройство — этот браузер и учётка.'),
+    el('p', { class: 'muted small' }, 'На телефоне: все разделы в один ряд или 3–4 основных и «Ещё». '
+      + 'Та же настройка — в листе «Ещё».'), open);
+}
+
 function timezoneBlock(refreshTimes) {
   const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone,
     ...(Intl.supportedValuesOf?.('timeZone') || [])].filter(Boolean))].sort();
@@ -222,6 +238,7 @@ function timezoneBlock(refreshTimes) {
     }
   });
   return el('section', { class: 'block' }, el('h2', {}, 'Часовой пояс'),
+    el('p', { class: 'muted small scope-note' }, 'Вся учётка — на всех ваших устройствах.'),
     el('p', { class: 'muted small' }, 'Для дат, времени и поиска на всех ваших устройствах, а также календарной даты'
       + ' в контексте чата — через сервер, напрямую и через Cleaner. По умолчанию — Москва.'),
     field('Часовой пояс', select, select.id), el('div', { class: 'row' }, save, note));
@@ -1110,10 +1127,20 @@ function voicesBlock(host) {
 
 /* ---- разделы ---------------------------------------------------------------------- */
 
+/** Разделы — в порядке рельса; «Учётка» — личные группы. Прежние адреса — на новые места. */
+const RAIL_ORDER = ['chat', 'code', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate'];
+const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
+const OLD_IDS = { other: 'security', dictation: 'input' };
+const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data']);   // ответ разделов их не перерисовывает
+
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, cleaner: 'Защита данных', code: 'Агенты', other: 'Прочее' };
-  const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['cleaner', 'code'] : []), 'other'];
+  const names = { ...SECTION_NAMES, cleaner: 'Очистка данных · Cleaner', code: 'Агенты', appearance: 'Оформление',
+    security: 'Защита', notifications: 'Уведомления', data: 'Данные', input: other ? 'Ввод и интернет' : 'Голосовой ввод' };
+  // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
+  const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];
+  const accountIds = other ? ACCOUNT_IDS : ['input'];
+  const ids = [...sectionIds, ...accountIds];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });
   const download = other ? agentDownload() : null;
@@ -1125,18 +1152,28 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   const opened = new Set();       // `<раздел>:<подключение>` — паспорт раскрыт
   let data = [];
   let dictationHost = null;
-  if (section === 'dictation') section = 'other';  // прежняя ссылка открывает перенесённые настройки
-  let current = ids.includes(section) ? section : null;
+  const start = moved(section);
+  let current = ids.includes(start) ? start : null;
 
-  for (const id of ids) {
-    const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, names[id]);
-    if (!hash) {
-      link.addEventListener('click', (event) => {
-        event.preventDefault();
-        show(id);
-      });
+  /** Прежний адрес («Прочее», голосовой ввод) — на новое место; в адресной строке — заменой, без новой записи. */
+  function moved(id) {
+    if (!(id in OLD_IDS)) return id;
+    if (hash) history.replaceState(history.state, '', `#/settings/${OLD_IDS[id]}`);
+    return OLD_IDS[id];
+  }
+
+  for (const [title, list] of [['Разделы', sectionIds], ['Учётка', accountIds]]) {
+    nav.append(el('h2', { class: 'settings-group' }, title));
+    for (const id of list) {
+      const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, names[id]);
+      if (!hash) {
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          show(id);
+        });
+      }
+      nav.append(link);
     }
-    nav.append(link);
   }
 
   async function changed() {
@@ -1298,7 +1335,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('b', { class: 'link-name' }, conn.name),
           el('span', { class: 'link-url' }, conn.base_url),
           el('span', { class: 'link-hint' },
-            conn.cleaner ? el('span', { class: 'tag' }, 'Cleaner · защита данных') : null,
+            conn.cleaner ? el('span', { class: 'tag' }, 'Cleaner · очистка данных') : null,
             el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? 'через сервер' : 'из браузера'),
             ` ключ ${conn.token_hint}`)),
         el('div', { class: 'link-buttons' }, checkButton,
@@ -1366,16 +1403,18 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       if (a.dataset.section === shown) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
-    if (shown === 'other' && dictationHost) {
+    if (shown === 'input' && dictationHost) {
       renderDictation();
       return;
     }
     dictationHost = null;
     const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
       : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
+    const group = (id, ...blocks) => panel.replaceChildren(back,
+      el('div', { class: 'section-panel', 'data-section': id }, ...blocks));
     if (shown === 'cleaner') {
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'cleaner' },
-        el('section', { class: 'block' }, el('h2', {}, 'Защита данных · Cleaner'),
+        el('section', { class: 'block' }, el('h2', {}, 'Очистка данных · Cleaner'),
           el('p', {}, 'Личные подключения и модели по умолчанию для чата и перевода.'),
           el('details', { class: 'small' }, el('summary', {}, 'Как подключить и использовать'),
           el('p', { class: 'muted' }, 'В Cleaner откройте «Ключи» и создайте ключ с доступом к облачному подключению и его моделям. '
@@ -1393,13 +1432,27 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         codeDefaultsBlock(agents), quickActionsBlock(), computerPinBlock(), agentsBlock(host, agents)));
       return;
     }
-    if (shown === 'other') {
+    if (shown === 'input') {
       dictationHost = el('div', { class: 'dictation-settings' });
       renderDictation();
-      const storage = other ? storageBlock(host) : null;
-      panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'other' }, dictationHost,
-        ...(other ? [timezoneBlock(storage.reload), passwordBlock(), lockBlock(), sessionsBlock(host),
-          emergencyBlock(host), securityEventsBlock(), notifyBlock(), ntfyBlock(), exaBlock(), storage.el, wipeBlock(host, storage.reload)] : [])));
+      group('input', dictationHost, ...(other ? [exaBlock()] : []));
+      return;
+    }
+    if (shown === 'appearance') {
+      group('appearance', accountLookBlock(), deviceLookBlock(), mobileNavBlock(), timezoneBlock(() => {}));
+      return;
+    }
+    if (shown === 'security') {
+      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), emergencyBlock(host), securityEventsBlock());
+      return;
+    }
+    if (shown === 'notifications') {
+      group('notifications', notifyBlock(), ntfyBlock());
+      return;
+    }
+    if (shown === 'data') {
+      const storage = storageBlock(host);
+      group('data', storage.el, wipeBlock(host, storage.reload));
       return;
     }
     const s = sectionOf(shown);
@@ -1411,7 +1464,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   }
 
   function show(id) {
-    if (id === 'dictation') id = 'other';
+    id = moved(id);
     const next = ids.includes(id) ? id : null;
     if (next !== current) say(note, '');
     current = next;
@@ -1426,7 +1479,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     // Ответ разделов обновляет только голосовой ввод: личные блоки и «Агенты» сохраняют поля и свои ответы.
     if (dictationHost) renderDictation();
-    else if ((current || ids[0]) !== 'code') render();
+    else if (!PERSONAL.has(current || ids[0])) render();
   }
 
   render();

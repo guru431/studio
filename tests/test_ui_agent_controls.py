@@ -482,8 +482,8 @@ def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, 
 def test_font_size_and_zoom_persist_without_losing_form(browser, live, width, tmp_path):
     login = f"appearance-{width}"
     live.add_user(login)
-    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
-        ("click", "#avatar"), ("wait", "!document.querySelector('#menu').hidden"),
+    look = ("wait", "document.querySelector('.section-panel[data-section=appearance] #appearance-scale')")
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/appearance"), look,
         ("eval", "initial", "[document.querySelector('#appearance-scale').value, document.documentElement.style.zoom]"),
         ("eval", "options", "[...document.querySelector('#appearance-scale').options].map(o => Number(o.value))"),
         ("eval", "chosenSize", """(() => {
@@ -493,25 +493,27 @@ def test_font_size_and_zoom_persist_without_losing_form(browser, live, width, tm
         ("screenshot", str(tmp_path / f"appearance-{width}.png")),
         ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth"),
         ("eval", "reload", "location.reload(); true"),
-        ("wait", "performance.getEntriesByType('navigation')[0].type === 'reload' && " + READY),
+        ("wait", "performance.getEntriesByType('navigation')[0].type === 'reload' && " + READY), look,
         ("eval", "saved", "[document.querySelector('#appearance-font').value, document.querySelector('#appearance-scale').value]"),
         *go("settings/code"), ("wait", "!!document.querySelector('[data-settings=code]') || !!document.querySelector('.code-defaults-block')"),
         ("eval", "names", "[document.querySelector('#rail [data-section=code] > span:last-child').textContent.trim(), document.querySelector('a[href=\"#/settings/code\"]').textContent]"),
-        ("click", "#avatar"),
+        *go("settings/appearance"), look,
         ("eval", "largest", """(() => { const f = document.querySelector('#appearance-font'); f.value='150';
           f.dispatchEvent(new Event('input')); const s = document.querySelector('#appearance-scale'); s.value='100';
-          s.dispatchEvent(new Event('change')); const r = document.querySelector('#menu').getBoundingClientRect();
+          s.dispatchEvent(new Event('change'));
+          const r = document.querySelector('.section-panel[data-section=appearance]').getBoundingClientRect();
           return [document.documentElement.scrollWidth <= innerWidth, r.left >= 0, r.right <= innerWidth,
             document.body.getBoundingClientRect().height <= innerHeight + 1]; })()"""),
         ("screenshot", str(tmp_path / f"appearance-largest-{width}.png")),
         set_value('#appearance-scale', '50'),
         ("eval", "reloadSmallest", "location.reload(); true"),
-        ("wait", "performance.getEntriesByType('navigation')[0].type === 'reload' && " + READY),
+        ("wait", "performance.getEntriesByType('navigation')[0].type === 'reload' && " + READY), look,
         ("eval", "smallest", "[document.querySelector('#appearance-scale').value, document.documentElement.style.zoom, document.documentElement.scrollWidth <= innerWidth]")],
         width=width, mobile=width == 390,
         init="if (!localStorage.getItem('studio-ui-scale')) localStorage.setItem('studio-ui-scale', '150');")
     assert not result.get("failed"), result
-    assert result["values"]["initial"] == ["100", "1"]
+    # непригодный сохранённый масштаб (150) theme.js не применяет: увеличения нет, в списке — 100%
+    assert result["values"]["initial"] == ["100", ""]
     assert result["values"]["options"] == list(range(50, 101, 5))
     assert result["values"]["chosenSize"] == ["18.75px", "0.8"]
     assert result["values"]["saved"] == ["125", "80"]

@@ -1,12 +1,16 @@
-/* Тема до первой отрисовки: последняя выбранная, из localStorage. Значение профиля (/api/me)
- * потом ставит app.js и оно главнее. Скрипт обычный, не модуль: исполняется сразу, в <head>. */
+/* Тема и акцент до первой отрисовки: последние выбранные, из localStorage. Значения профиля (/api/me)
+ * потом ставит appearance.js, и они главнее. Шрифт, масштаб и плотность — настройки этого устройства, только
+ * отсюда и из «Настройки → Оформление». Скрипт обычный, не модуль: исполняется сразу, в <head>. */
 (function () {
   try {
+    var accent = localStorage.getItem('studio-accent');     // ACCENTS в appearance.js; оранжевый — без атрибута
+    if (accent === 'blue' || accent === 'violet' || accent === 'rose') document.documentElement.dataset.accent = accent;
+    if (localStorage.getItem('studio-density') === 'compact') document.documentElement.dataset.density = 'compact';
     var theme = localStorage.getItem('studio-theme');
     if (theme === 'dark' || theme === 'light') {
       document.documentElement.dataset.theme = theme;
       // Профиль ещё не пришёл (медленная сеть, офлайн): строка состояния и подсветка кода — по выбранной теме,
-      // а не по устройству. Цвета — как THEME_COLORS в app.js; после профиля их снова ставит app.js applyTheme.
+      // а не по устройству. Цвета — как THEME_COLORS в appearance.js; после профиля их снова ставит appearance.js applyTheme.
       var color = theme === 'dark' ? '#1b1b1b' : '#fbfaf7';
       document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) { meta.content = color; });
       var paper = document.getElementById('hl-paper'), graphite = document.getElementById('hl-graphite');

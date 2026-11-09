@@ -21,7 +21,7 @@ def test_timezone_setting_persists_and_applies_to_projects(browser, live, width,
     _, server = code_online(live, login, machine)
     ready = "document.querySelector('#timezone') && !document.querySelector('#timezone').disabled"
     try:
-        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/other'),
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/appearance'),
             ('wait', ready), ('eval', 'default', "document.querySelector('#timezone').value"),
             set_value('#timezone', 'America/New_York'), ('click', '#timezone-save'),
             ('wait', "document.querySelector('#timezone-status').textContent === 'Часовой пояс сохранён'"),
@@ -55,7 +55,7 @@ def test_timezone_setting_in_webkit(webkit, live):
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.set_default_timeout(10000)
         page.goto(live.url + '/#/settings')
-        page.locator('.settings-nav a[data-section="other"]').tap()
+        page.locator('.settings-nav a[data-section="appearance"]').tap()
         page.wait_for_selector('#timezone')
         assert page.locator('#timezone').input_value() == 'Europe/Moscow'
         page.locator('#timezone').select_option('Asia/Tokyo')
