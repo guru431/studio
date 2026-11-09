@@ -14,6 +14,7 @@
  *   ряда), с клавиатуры — Shift+←/→ у вкладки в фокусе; итог — move(chat, index) (code.js → act('move')).
  * Текст машины — только textContent. */
 import { ENGINE_NAMES } from './code-options.js';
+import { icon } from './icons.js';
 import { el } from './ui.js';
 
 const UNTITLED = 'Новый чат';
@@ -46,7 +47,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     let mark = null;
     if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: 'ждёт ответа' }, el('span', { class: 'sr' }, 'ждёт ответа'));
     else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: 'идёт ход' }, el('span', { class: 'sr' }, 'идёт ход'));
-    const shut = el('button', { type: 'button', tabindex: '-1', class: 'code-tab-close', 'aria-label': 'Закрыть вкладку', title: 'Закрыть вкладку' }, '×');
+    const shut = el('button', { type: 'button', tabindex: '-1', class: 'code-tab-close', 'aria-label': 'Закрыть вкладку', title: 'Закрыть вкладку' }, icon('x'));
     const draft = state.drafts?.has(chat)
       ? el('span', { class: 'code-tab-draft', title: 'Есть неотправленный черновик' }, el('span', { 'aria-hidden': 'true' }, '✎'),
         el('span', { class: 'sr' }, 'есть черновик')) : null;

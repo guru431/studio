@@ -1,9 +1,9 @@
-/* Раздел «Речь» (#/speech) — раскладка как у «Разговоров» (спека 2026-10-20, раздел 6.4).
+/* Раздел «Озвучка» (#/speech) — раскладка как у «Разговоров» (спека 2026-10-20, раздел 6.4).
  *
  * Слева — озвучки по дням, справа — выбранная: текст, плеер, «Скачать» (mp3), «Удалить»; идущая —
  * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков; field.js: «очистить», микрофон)
  * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
- * заводят в настройках раздела «Речь»), у внешнего сервиса — имя голоса с подсказками.
+ * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере (очередь пользователя: «в очереди · N»); идущие
  * опрашиваются раз в POLL_MS, готовые части идущей можно слушать до склейки (#sp-live).
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
@@ -11,6 +11,8 @@
  * поля текста — подсказка. #/speech?id=<id> («Открыть» в «В работе», jobs.js) выбирает озвучку;
  * принятая озвучка зовёт jobs.kick(). Текст сервера — только textContent. */
 import { api } from './api.js';
+import { icon } from './icons.js';
+import { NAMES } from './sections-meta.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
@@ -22,15 +24,8 @@ const PAGE = 60;
 const TEXT_MAX = 2000;
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const SERVICE_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
-const ICONS = { list: '<path d="M4 6h16M4 12h16M4 18h16"/>' };
 
 let screen = null;
-
-function icon(name) {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константа выше
-  return box.firstChild;
-}
 
 function clock(sec) {
   const s = Math.max(0, Math.round(sec || 0));
@@ -54,7 +49,7 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Озвучки',
     'aria-controls': 'sp-aside', 'aria-expanded': 'false' }, icon('list'));
-  const head = el('header', { class: 'head' }, toggle, el('h1', {}, 'Речь'));
+  const head = el('header', { class: 'head' }, toggle, el('h1', {}, NAMES.speech));
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
@@ -93,7 +88,7 @@ function build(view, ctx) {
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       voiceBox.replaceChildren(pick);
       if (!voices.length) {
-        hint.replaceChildren('Голосов пока нет — добавьте голос в настройках раздела «Речь»: ',
+        hint.replaceChildren('Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: ',
           el('a', { href: '#/settings/speech' }, 'открыть настройки'));
         hint.hidden = false;
       }

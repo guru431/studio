@@ -25,6 +25,8 @@
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
 import { api, hooks, me } from './api.js';
+import { icon } from './icons.js';
+import { actionMenu } from './menu.js';
 import { dateTime } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
@@ -37,18 +39,8 @@ const ACCEPT = 'audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', 'Текст .txt'], ['docx', 'Word .docx'], ['srt', 'Субтитры .srt']];
 const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Составить итоги'], ['tasks', 'Выделить решения и задачи']];
-const ICONS = {
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
-};
 
 let screen = null;
-
-function icon(name) {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec || 0));
@@ -304,14 +296,8 @@ function build(view, ctx) {
   }
 
   function chatMenu(item) {
-    const menu = el('div', { class: 'tr-formats tr-chat-menu', hidden: true }, ...ASKS.map(([ask, label]) => {
-      const b = el('button', { type: 'button', class: 'btn btn-sm', 'data-ask': ask }, label);
-      b.addEventListener('click', () => ctx.navigate(`chat?transcript=${encodeURIComponent(item.id)}&ask=${ask}`));
-      return b;
-    }));
-    const open = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-chat', 'aria-haspopup': 'true' }, 'В чат ▾');
-    open.addEventListener('click', () => { menu.hidden = !menu.hidden; });
-    return el('div', { class: 'tr-download-wrap' }, open, menu);
+    return actionMenu('В чат ▾', { id: 'tr-chat', cls: 'tr-chat-menu', entries: ASKS.map(([ask, label]) => [label,
+      { 'data-ask': ask }, () => ctx.navigate(`chat?transcript=${encodeURIComponent(item.id)}&ask=${ask}`)]) });
   }
 
   function paintView() {
@@ -355,19 +341,11 @@ function build(view, ctx) {
           error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
         }
       });
-      const formats = el('div', { class: 'tr-formats', hidden: true }, ...FORMATS.map(([format, label]) => {
-        const b = el('button', { type: 'button', class: 'btn btn-sm', 'data-format': format }, label);
-        b.addEventListener('click', () => {
-          formats.hidden = true;
-          download(format);
-        });
-        return b;
-      }));
-      const more = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-download', 'aria-haspopup': 'true' }, 'Скачать ▾');
-      more.addEventListener('click', () => { formats.hidden = !formats.hidden; });
+      const formats = actionMenu('Скачать ▾', { id: 'tr-download', entries: FORMATS.map(([format, label]) => [label,
+        { 'data-format': format }, () => download(format)]) });
       // во время правки «Копировать», «Скачать» и «В чат» взяли бы сохранённый текст, а не черновик,
       // и «В чат» молча увёл бы от него — их нет до «Сохранить» или «Отмена»
-      if (!editing) acts.append(copy, el('div', { class: 'tr-download-wrap' }, more, formats));
+      if (!editing) acts.append(copy, formats);
       if (item.segments && !editing) {
         const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, 'Править');
         edit.addEventListener('click', () => {

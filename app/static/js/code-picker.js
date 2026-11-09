@@ -1,7 +1,9 @@
 /* Compact session choices; the select remains the source of values and change events.
  * codePicker — one choice (model, effort, access, delivery); codeChoices — on a narrow screen one button
- * «model · effort · access» with a menu of three groups over the same selects (CSS shows one or the other). */
+ * «model · effort · access» with a menu of three groups over the same selects (CSS shows one or the other).
+ * Меню — общий компонент menu.js (popupMenu). */
 import { el } from './ui.js';
+import { popupMenu } from './menu.js';
 
 const EFFORT_NAMES = { minimal: 'Минимальное', low: 'Низкое', medium: 'Среднее', high: 'Высокое',
   xhigh: 'Очень высокое', max: 'Максимальное', ultra: 'Предельное', auto: 'Автоматически', adaptive: 'Адаптивное' };
@@ -29,81 +31,6 @@ function optionItems(select, close) {
   });
 }
 
-/** Меню-popover у кнопки: размещение в видимой области с учётом масштаба, стрелки, Home/End, Escape и Tab
- * (фокус — на кнопку), закрытие при прокрутке страницы, смене размера и уходе со страницы.
- * fill(close) → [узлы меню, пункты по порядку]. */
-function popupMenu(trigger, menu, { blocked, fill }) {
-  let items = [];
-  const close = (focus = false) => {
-    if (menu.matches(':popover-open')) menu.hidePopover();
-    trigger.setAttribute('aria-expanded', 'false');
-    if (focus && trigger.isConnected && !trigger.disabled) trigger.focus({ preventScroll: true });
-  };
-  const focusItem = item => {
-    if (!item) return;
-    item.focus({ preventScroll: true });
-    if (item.offsetTop < menu.scrollTop) menu.scrollTop = item.offsetTop;
-    else if (item.offsetTop + item.offsetHeight > menu.scrollTop + menu.clientHeight) {
-      menu.scrollTop = item.offsetTop + item.offsetHeight - menu.clientHeight;
-    }
-  };
-  const open = (last = false) => {
-    if (blocked() || menu.matches(':popover-open')) return;
-    const [nodes, list] = fill(close);
-    items = list;
-    menu.replaceChildren(...nodes);
-    const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1;
-    const viewport = window.visualViewport;
-    const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
-    const width = viewport?.width || innerWidth, height = viewport?.height || innerHeight;
-    menu.style.maxWidth = `${(width - 16) / zoom}px`;
-    menu.style.maxHeight = `${(height - 16) / zoom}px`;
-    menu.style.left = `${(left + 8) / zoom}px`;
-    menu.style.top = `${(top + 8) / zoom}px`;
-    menu.showPopover();
-    const box = trigger.getBoundingClientRect(), size = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(left + 8, Math.min(box.left, left + width - size.width - 8)) / zoom}px`;
-    menu.style.top = `${Math.max(top + 8, box.top - size.height - 6 >= top + 8
-      ? box.top - size.height - 6 : Math.min(box.bottom + 6, top + height - size.height - 8)) / zoom}px`;
-    trigger.setAttribute('aria-expanded', 'true');
-    const available = items.filter(item => !item.disabled);
-    focusItem(last ? available.at(-1) : available.find(item => item.getAttribute('aria-checked') === 'true') || available[0]);
-  };
-  trigger.addEventListener('click', () => menu.matches(':popover-open') ? close() : open());
-  trigger.addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault(); open(event.key === 'ArrowUp');
-    }
-  });
-  menu.addEventListener('keydown', event => {
-    const available = items.filter(item => !item.disabled), current = available.indexOf(document.activeElement);
-    let next;
-    if (event.key === 'ArrowDown') next = (current + 1) % available.length;
-    else if (event.key === 'ArrowUp') next = (current + available.length - 1) % available.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = available.length - 1;
-    else if (event.key === 'Escape' || event.key === 'Tab') close(true);
-    else return;
-    if (event.key !== 'Tab') event.preventDefault();
-    if (next !== undefined) focusItem(available[next]);
-  });
-  menu.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(menu.matches(':popover-open'))));
-  const scrolled = event => { if (!menu.contains(event.target)) close(); };
-  const hidden = () => { if (document.hidden) close(); };
-  const resized = () => close();
-  window.addEventListener('resize', resized);
-  window.addEventListener('scroll', scrolled, true);
-  window.visualViewport?.addEventListener('resize', resized);
-  document.addEventListener('visibilitychange', hidden);
-  return { close, unmount() {
-    close(); menu.remove();
-    window.removeEventListener('resize', resized);
-    window.removeEventListener('scroll', scrolled, true);
-    window.visualViewport?.removeEventListener('resize', resized);
-    document.removeEventListener('visibilitychange', hidden);
-  } };
-}
-
 export function codePicker(host, label, select) {
   const value = el('span', { class: 'code-pick-value', 'aria-hidden': 'true' });
   const trigger = el('button', { type: 'button', class: 'code-pick-trigger', id: `${select.id}-pick`,
@@ -115,7 +42,7 @@ export function codePicker(host, label, select) {
   const menu = el('div', { id: `${select.id}-menu`, class: 'code-pick-menu', popover: 'auto',
     role: 'menu', 'aria-label': label });
   host.append(menu);
-  const popup = popupMenu(trigger, menu, { blocked: () => select.disabled || root.hidden, fill: close => {
+  const popup = popupMenu(trigger, menu, { side: 'above', blocked: () => select.disabled || root.hidden, fill: close => {
     const items = optionItems(select, close);
     return [[el('div', { class: 'code-pick-heading', 'aria-hidden': 'true' }, label), ...items], items];
   } });
@@ -144,7 +71,7 @@ export function codeChoices(host, label, groups) {
     role: 'menu', 'aria-label': label });
   host.append(menu);
   const disabled = () => groups.every(([, select]) => select.disabled);
-  const popup = popupMenu(trigger, menu, { blocked: () => disabled() || root.hidden, fill: close => {
+  const popup = popupMenu(trigger, menu, { side: 'above', blocked: () => disabled() || root.hidden, fill: close => {
     const all = [];
     const nodes = groups.map(([name, select]) => {
       const id = `code-settings-${select.id}`;

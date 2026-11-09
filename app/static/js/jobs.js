@@ -21,6 +21,7 @@
  * push, уведомляет сервер — локальный опрос не дублирует его. Нажатие ведёт sw.js: адрес записи попадает
  * в URL окна до возврата фокуса; запасной postMessage({ jobs: href }) проверяет HREF. */
 import { api } from './api.js';
+import { svg } from './icons.js';
 import { timeOnly } from './time.js';
 import { el, words } from './ui.js';
 import { allCodeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
@@ -46,18 +47,6 @@ const NOTICES = {
 export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
 /** Адрес отмены из ответа (jobs.py CANCEL): иное не отправляется. */
 const CANCEL = /^\/api\/(?:(?:images|videos|transcripts|ocr|translate|speeches)\/[\w-]+\/cancel|chats\/[\w-]+\/stop)$/;
-/** Значки разделов (и у строк «Поиска», search.js). */
-export const ICONS = {
-  code: '<rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4M8 8l3 2-3 2M13 12h3"/>',
-  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
-  photo: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
-  video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
-  transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
-  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
-  translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
-  speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
-};
-
 let badge = null;
 let count;
 let dot;
@@ -106,7 +95,7 @@ function serverNow() {
 
 function icon(section) {
   const box = el('span', { class: 'jobs-ico', 'aria-hidden': 'true' });
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${ICONS[section] || ''}</svg>`;   // константы выше
+  box.innerHTML = svg(section);   // константы icons.js: значок раздела — тот же, что на рельсе
   return box;
 }
 

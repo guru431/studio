@@ -14,12 +14,12 @@
  * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
  * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null. */
 import { api } from './api.js';
+import { svg } from './icons.js';
 import { el, words } from './ui.js';
 
 export const MAX_SEC = 120;
 const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
-const ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/>'
-  + '<path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+const ICON = svg('mic');
 
 let active = null;       // { cancel() } — идущая запись (или ожидание разрешения) студии
 

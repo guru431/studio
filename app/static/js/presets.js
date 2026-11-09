@@ -4,31 +4,36 @@
  * пресет не хранит: поля seed нет (спека 2026-10-27-studio-ui-tidy, 4.5). Пресеты — GET/POST/DELETE
  * /api/images/presets, одни на всех устройствах учётки.
  *
- * presetChip({ host, snapshot, apply, say, close }): host() — корень раздела (окна); snapshot() —
+ * presetChip({ host, snapshot, apply, say }): host() — корень раздела (окна); snapshot() —
  * параметры поля сейчас { model, connection_id, size, strength, prompt }; apply(params) —
- * поставить пресет; say(text, bad) — строка состояния раздела; close() — закрыть меню. Ответ —
- * { wrap, chip, menu, load() }; открывает меню раздел (его общий список меню). Текст — textContent. */
+ * поставить пресет; say(text, bad) — строка состояния раздела. Ответ — { wrap, chip, menu, load() }.
+ * Меню — общий компонент menu.js: в строке пресета два пункта — применить и «Удалить пресет «…»» (значок ×),
+ * стрелки проходят их по порядку. Текст — textContent. */
 import { api } from './api.js';
 import { button, el, field, openDialog, words } from './ui.js';
+import { icon } from './icons.js';
+import { menuItem, popupMenu } from './menu.js';
 
-export function presetChip({ host, snapshot, apply, say, close }) {
+export function presetChip({ host, snapshot, apply, say }) {
   let items = [];
-  const chip = el('button', { type: 'button', class: 'chip', id: 'chip-preset', 'aria-haspopup': 'true',
-    'aria-expanded': 'false', 'aria-controls': 'chip-preset-menu', 'aria-label': 'Пресеты', title: 'Пресеты' }, '★');
+  const chip = el('button', { type: 'button', class: 'chip', id: 'chip-preset', 'aria-label': 'Пресеты', title: 'Пресеты' },
+    icon('star'));
   const list = el('div', { class: 'preset-list' });
-  const save = el('button', { type: 'button', class: 'chip-option', id: 'preset-save', role: 'menuitem' },
-    'Сохранить как пресет…');
-  const menu = el('div', { class: 'chip-menu preset-menu', id: 'chip-preset-menu', role: 'menu', hidden: true }, list, save);
+  const save = menuItem('Сохранить как пресет…', { attrs: { id: 'preset-save' } });
+  const menu = el('div', { class: 'chip-menu preset-menu', id: 'chip-preset-menu', role: 'menu', 'aria-label': 'Пресеты' },
+    list, save);
+  const popup = popupMenu(chip, menu, { side: 'above' });
+  const close = () => popup.close();
 
   function paint() {
     list.replaceChildren(...(items.length ? items.map((p) => {
-      const use = el('button', { type: 'button', class: 'chip-option preset-apply', role: 'menuitem', 'data-id': p.id }, p.name);
+      const use = menuItem(p.name, { attrs: { class: 'preset-apply', 'data-id': p.id } });
       use.addEventListener('click', () => {
         close();
         apply(p.params);
       });
-      const drop = el('button', { type: 'button', class: 'icon-btn preset-delete', 'aria-label': `Удалить пресет «${p.name}»`,
-        title: 'Удалить' }, '×');
+      const drop = el('button', { type: 'button', class: 'icon-btn preset-delete', role: 'menuitem', tabindex: '-1',
+        'aria-label': `Удалить пресет «${p.name}»`, title: 'Удалить' }, icon('x'));
       drop.addEventListener('click', () => {
         close();
         confirmDelete(p);

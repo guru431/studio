@@ -138,6 +138,7 @@ let preparing = null;    // идущая подготовка: нажатия и
 let calling = false;     // идёт navigator.credentials.get и его проверка: нажатия и подготовки — мимо
 let pinPad;
 let pinDots;
+let pinCount;
 let pinOk;
 let pinOn = false;       // у учётки задан PIN и попытки остались — панель вместо пароля
 let digits = '';         // набранные цифры: только здесь, ни в DOM, ни в хранилище
@@ -331,10 +332,11 @@ async function load() {
   }
 }
 
-/** Точки по числу набранных цифр (длина PIN странице неизвестна); «OK» — от PIN_MIN цифр; пока идёт
- * запрос — панель выключена. */
+/** Точки по числу набранных цифр (длина PIN странице неизвестна — диктору «Набрано N из 4–8»); «OK» — от PIN_MIN
+ * цифр; пока идёт запрос — панель выключена. */
 function paintPin() {
   pinDots.replaceChildren(...Array.from(digits, () => document.createElement('span')));
+  pinCount.textContent = digits.length ? `Набрано ${digits.length} из ${PIN_MIN}–${PIN_MAX}` : '';
   for (const key of pinPad.querySelectorAll('button')) key.disabled = pinGoing;
   pinOk.disabled = checking || pinGoing || digits.length < PIN_MIN;
 }
@@ -671,6 +673,7 @@ export function installLock() {
   note = document.getElementById('lock-status');
   pinPad = document.getElementById('lock-pin');
   pinDots = document.getElementById('lock-pin-dots');
+  pinCount = document.getElementById('lock-pin-count');
   pinOk = document.getElementById('lock-pin-ok');
   elsewhere = document.createElement('button');
   elsewhere.type = 'button';

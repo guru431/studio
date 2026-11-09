@@ -21,6 +21,7 @@
  * feed, error }), sync(), exit(), destroy() }: button («Выбрать») и tools (✕ и счёт) раздел ставит в
  * шапку, bar — в конец корня раздела; decorate — в конце render карточки, dayTools — опция ленты. */
 import { dayKey } from './feed.js';
+import { svg } from './icons.js';
 import { saveMany } from './save.js';
 import { button, el, openDialog, plural, words } from './ui.js';
 
@@ -28,15 +29,6 @@ const ARCHIVE_MAX = 1000;        // файлов в одном архиве (med
 const PRESS_MS = 500;            // долгое нажатие
 const SLOP_PX = 10;              // сдвиг пальца, после которого это уже прокрутка
 const NARROW = '(max-width: 760px)';
-const ICONS = {
-  pick: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
-  check: '<path d="M6 12.5l4 4 8-9"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-};
-
-function svg(name) {
-  return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-}
 
 export function createSelection({ section, nouns, selectable, mediaOf, remove, extraActions = [] }) {
   const picked = new Set();      // id отмеченных (строки, как data-id)
@@ -326,10 +318,11 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     if (card && card.hasAttribute('data-pickable')) event.preventDefault();      // Android: долгое нажатие — наше
   }
 
-  /* в фазе захвата — раньше разделов: открытое меню (чип, раздел, аватар) Escape закрывает само, без выхода */
+  /* в фазе захвата — раньше разделов: открытое меню (чип, раздел — popover menu.js; аватар) Escape закрывает само,
+   * без выхода */
   function onKey(event) {
     if (event.key === 'Escape' && selecting && !busy
-      && !document.querySelector('dialog[open], [role="menu"]:not([hidden])')) exit();
+      && !document.querySelector('dialog[open], [role="menu"]:not([hidden]):not([popover]), [popover]:popover-open')) exit();
   }
 
   function place() {

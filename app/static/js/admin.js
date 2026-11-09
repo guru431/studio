@@ -6,6 +6,7 @@
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, me } from './api.js';
+import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
@@ -381,7 +382,7 @@ export function mount(view, ctx) {
   const allow = allowlistBlock();
   const storage = storageBlock();
   root.append(users.el, allow.el, storage.el);
-  view.append(el('header', { class: 'head' }, el('h1', {}, 'Панель')), root);
+  view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   allow.load();
   storage.load();

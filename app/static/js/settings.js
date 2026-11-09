@@ -35,6 +35,7 @@ import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
+import { NAMES, sectionPairs } from './sections-meta.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
@@ -259,8 +260,7 @@ function day(ts) {
   return dateOnly(ts, { day: 'numeric', month: 'long' });
 }
 
-const LOCK_SECTIONS = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Разговоры', speech: 'Речь',
-  ocr: 'Сканы', translate: 'Перевод', code: 'Агенты' };
+const LOCK_SECTIONS = Object.fromEntries(sectionPairs());
 
 /** Пользователь задаёт время в удобных единицах; сервер всегда получает целое число секунд. */
 function timeoutField(id, seconds, max) {
@@ -597,9 +597,9 @@ export function queueText(pending) {
 /* «Выгрузить мою историю»: окно с галочками разделов (все отмечены) → «Подготовить» (POST /api/me/export,
  * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
-const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['speech', 'Речь'],
-  ['transcribe', 'Разговоры'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
-  ['code', 'Агенты: чаты'], ['agents', 'Агенты: подключения'], ['security', 'Журнал безопасности']];
+const EXPORT_SECTIONS = [...sectionPairs(['chat', 'photo', 'video', 'transcribe', 'speech']), ['voices', 'Голоса озвучки'],
+  ...sectionPairs(['ocr', 'translate']), ['code', `${NAMES.code}: чаты`], ['agents', `${NAMES.code}: подключения`],
+  ['security', 'Журнал безопасности']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -1112,7 +1112,7 @@ function voicesBlock(host) {
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, cleaner: 'Защита данных', code: 'Агенты', other: 'Прочее' };
+  const names = { ...SECTION_NAMES, cleaner: 'Защита данных', code: NAMES.code, other: 'Прочее' };
   const ids = [...Object.keys(SECTION_NAMES).filter((id) => id !== 'dictation'), ...(other ? ['cleaner', 'code'] : []), 'other'];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
   const panel = el('div', { class: 'settings-panel' });

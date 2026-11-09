@@ -190,7 +190,7 @@ def test_too_many_scanned_pages_are_refused_in_words(studio, monkeypatch):
     r = studio.c.post("/api/attachments", files={"file": ("скан.pdf", scan_pdf(LAYER, "ink", "ink", "ink"),
                                                           "application/pdf")})
     assert r.status_code == 422 and r.json()["detail"]["message"] == (
-        "больше 2 страниц-сканов — распознайте его частями в разделе «Распознавание»")
+        "больше 2 страниц-сканов — распознайте его частями в разделе «Сканы»")
     assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM attachments").fetchone()[0]) == 0
 
 
