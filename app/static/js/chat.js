@@ -1135,10 +1135,12 @@ function build(view, ctx) {
     } else if ((remoteStream() || otherTab()) && !jobs.has(chatId)) poll = setTimeout(reload, POLL_MS);
   }
 
+  /* отправка принята: она уходит из поля, даже если открыт уже другой диалог (поле общее) — чипы по самим
+     объектам, текст — только тот же, что ушёл (набранное заново остаётся) */
   function acknowledgeTurn(attempt) {
-    if (pendingTurn !== attempt) return;
-    pendingTurn = null;
-    if (chatId !== attempt.id || attempt.regenerate) return;
+    if (pendingTurn === attempt) pendingTurn = null;
+    if (attempt.regenerate || attempt.acknowledged) return;
+    attempt.acknowledged = true;
     if (input.value === attempt.text) { input.value = ''; autosize(); }
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
@@ -1197,7 +1199,6 @@ function build(view, ctx) {
     chat = null;
     needsReload = false;
     failures = 0;
-    pendingTurn = null;
     historyRead?.controller.abort();
     historyRead = null;
     draftWeb = false;
