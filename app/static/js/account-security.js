@@ -13,9 +13,11 @@ const DEVICES = { phone: 'Телефон', computer: 'Компьютер' };
 const EVENTS = { login: 'вход', login_fail: 'неверный пароль', logout: 'выход', unlock: 'открыто',
   unlock_fail: 'не открыто', pin_exhausted: 'PIN исчерпан', password: 'пароль сменён', session_end: 'сессия завершена',
   emergency: 'аварийный выход', share_create: 'ссылка создана', share_revoke: 'ссылка отозвана',
-  share_pin_fail: 'неверный PIN ссылки', share_locked: 'ссылка на паузе' };
+  share_pin_fail: 'неверный PIN ссылки', share_locked: 'ссылка остановлена', pin_set: 'PIN задан',
+  pin_delete: 'PIN убран', passkey_add: 'ключ добавлен', passkey_delete: 'ключ удалён',
+  password_reset: 'пароль сброшен администратором' };
 const DETAILS = { password: 'паролем', pin: 'PIN', passkey: 'ключом', bridge: 'мост', login: '', chat: 'чат',
-  code: 'агенты', agents: 'и компьютеры' };
+  code: 'агенты', agents: 'и компьютеры', pause: 'на 15 минут', revoked: '— отключена' };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -115,6 +117,26 @@ export function emergencyBlock(host) {
     el('div', { class: 'row' }, start, note));
 }
 
+/** Пароль учётки сбросил администратор (`me.password_reset`): один раз после входа — совет проверить сессии и
+ * сделать аварийный выход. Окно закрылось любым путём — флаг снимается на сервере (DELETE /api/me/password-reset);
+ * аварийный выход снимает его и сам. */
+export function passwordResetNotice(me, navigate) {
+  if (!me.password_reset) return null;
+  const open = button('Открыть «Безопасность»', { class: 'btn btn-accent', id: 'password-reset-open' });
+  const dialog = openDialog(document.body, { id: 'password-reset-dialog', title: 'Пароль сменил администратор',
+    cancelText: 'Понятно', actions: [open], body: [
+      el('p', {}, `Пароль вашей учётки сбросил администратор ${moment(me.password_reset)}. Если вы об этом не просили, `
+        + 'кто-то мог войти в учётку.'),
+      el('p', {}, 'Проверьте «Сессии» и сделайте «Аварийный выход»: он завершит все сессии, отключит ссылки '
+        + '«Поделиться», push и ntfy.')] });
+  open.addEventListener('click', () => {
+    dialog.close();
+    navigate('settings/other');
+  });
+  dialog.addEventListener('close', () => { api('DELETE', '/api/me/password-reset').catch(() => null); });
+  return dialog;
+}
+
 /** «Журнал безопасности»: входы, неудачи, отпирания, сессии и ссылки — новые сверху. */
 export function securityEventsBlock() {
   const events = el('ul', { class: 'agent-events security-events', id: 'security-events' });
@@ -127,8 +149,10 @@ export function securityEventsBlock() {
     more.disabled = true;
     try {
       const page = await api('GET', before ? `/api/me/security-events?before=${before}` : '/api/me/security-events');
+      // свёрнутые повторы неудач: «×N, с <время первой>» (security_log.NOISY)
       const rows = page.items.map((e) => el('li', { 'data-kind': e.kind }, [moment(e.created),
-        [EVENTS[e.kind] || e.kind, DETAILS[e.detail] ?? ''].filter(Boolean).join(' '),
+        [EVENTS[e.kind] || e.kind, DETAILS[e.detail] ?? '',
+          e.count > 1 ? `×${e.count}, с ${moment(e.first)}` : ''].filter(Boolean).join(' '),
         e.current ? 'это устройство' : DEVICES[e.device], e.ip].filter(Boolean).join(' · ')));
       if (before) events.append(...rows);
       else events.replaceChildren(...(rows.length ? rows : [el('li', {}, 'Событий пока нет.')]));
@@ -143,7 +167,7 @@ export function securityEventsBlock() {
 
   load(null);
   return el('section', { class: 'block security-events-block' }, el('h2', {}, 'Журнал безопасности'),
-    el('p', { class: 'muted small' }, 'Входы и неудачные попытки, отпирания, завершённые сессии и ссылки «Поделиться» '
-      + 'за полгода. «Удалить всю историю» его не стирает; он входит в выгрузку истории.'),
+    el('p', { class: 'muted small' }, 'Входы и неудачные попытки, отпирания, PIN и ключи, завершённые сессии и ссылки '
+      + '«Поделиться» за полгода; повторы неудач с одного адреса — одной строкой со счётчиком. «Удалить всю историю» его не стирает; он входит в выгрузку истории.'),
     events, note, el('div', { class: 'row' }, more));
 }

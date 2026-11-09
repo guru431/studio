@@ -1101,3 +1101,39 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page.reload()
     pw.expect(page.locator("#code-feed")).to_contain_text("про A")
     fits(page)
+
+
+@pytest.mark.parametrize('size', [(320, 740), (1280, 800)])
+def test_search_opens_a_long_chat_at_the_found_message_in_webkit(webkit, live, size):
+    """Переход из поиска к сообщению в WebKit. Привязки прокрутки (overflow-anchor) нет у Safari до 18 — она
+    выключена и здесь: длинные ответы выше, дорисованные кадрами после перехода, увели бы сообщение вниз, а
+    chat.js держит его у верха ленты сам."""
+    from test_ui_browser import FOUND_PLACE, long_chat
+
+    width, height = size
+    login = f"webkit-jump-{width}"
+    cid, target = long_chat(live, live.add_user(login))
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    assert signed.status_code == 303
+    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+    touch = width < 600
+    with webkit.new_context(viewport={"width": width, "height": height}, is_mobile=touch, has_touch=touch,
+                            extra_http_headers={"Cookie": cookie}) as context:
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        page.goto(live.url + "/#/search")
+        page.add_style_tag(content='#messages { overflow-anchor: none; }')
+        page.locator('#search-q').fill('спальник')
+        row = page.locator('#search-results .search-row[data-section=chat]')
+        pw.expect(row.locator('.search-doc')).to_have_text('📄 снаряжение.txt')
+        if touch:
+            row.tap()
+        else:
+            row.click()
+        page.locator('.msg.msg-found').wait_for()
+        assert page.evaluate('location.hash') == f'#/chat/{cid}?m={target}'
+        page.wait_for_timeout(1500)
+        place = page.evaluate(FOUND_PLACE)
+        assert place['id'] == target and place['lazy'] and not place['end'], place
+        assert 0 <= place['top'] <= 40, place
+        fits(page)

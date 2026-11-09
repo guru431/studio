@@ -13,6 +13,35 @@ SHELL = "caches.keys().then(keys => keys.some(k => k.startsWith('studio-shell-')
 
 
 @pytest.mark.parametrize('width', [320, 1280])
+def test_admin_password_reset_notice_leads_to_security_and_journal_shows_collapsed_failures(browser, live, width, tmp_path):
+    """После сброса пароля администратором: окно-совет один раз (закрытие снимает флаг на сервере), «Открыть
+    «Безопасность»» ведёт в «Прочее»; свёрнутые неудачи в журнале — одной строкой «×N»."""
+    login = f'password-reset-{width}'
+    uid = live.add_user(login)
+    conn = db.connect(live.db_path)
+    now = time.time()
+    conn.execute("UPDATE users SET password_reset = ? WHERE id = ?", (now - 60, uid))
+    conn.execute("INSERT INTO security_events(user_id, created, kind, detail, ip, count, first)"
+                 " VALUES (?, ?, 'login_fail', 'login', '203.0.113.5', 5, ?)", (uid, now - 30, now - 600))
+    conn.close()
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
+        ('wait', "document.querySelector('#password-reset-dialog')?.open"),
+        ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),
+        ('screenshot', str(tmp_path / f'password-reset-{width}.png'), '#password-reset-dialog'),
+        ('click', '#password-reset-open'),
+        ('wait', "location.hash === '#/settings/other' && !document.querySelector('#password-reset-dialog')"),
+        ('wait', "document.querySelector('#security-events li[data-kind=login_fail]')"),
+        ('eval', 'row', "document.querySelector('#security-events li[data-kind=login_fail]').textContent"),
+        ('wait', "fetch('/api/me').then(r => r.json()).then(m => m.password_reset === null)")],
+        width=width, mobile=width == 320)
+    assert not result.get('failed'), result
+    values = result['values']
+    assert not values['overflow']
+    assert '×5' in values['row'] and '203.0.113.5' in values['row']
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize('width', [320, 1280])
 def test_sessions_journal_and_emergency_exit(browser, live, width, tmp_path):
     login = f'account-security-{width}'
     uid = live.add_user(login)

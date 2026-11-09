@@ -654,6 +654,15 @@ label { font-size:calc(13px * var(--font-scale, 1)); color: var(--muted); }
 .att b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .att svg.ico { width: 16px; height: 16px; color: var(--muted); }
 .msg.assistant { display: flex; gap: 12px; min-width: 0; }
+/* сообщение из поиска (chat.js, ?m=): вспышка рамки, без движения — постоянная рамка */
+.msg.msg-found { border-radius: 14px; animation: msg-found 2.4s ease-out forwards; }
+@keyframes msg-found {
+  from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
+  to { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg.msg-found { animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+}
 .msg.assistant .mark { width: 24px; height: 24px; flex: none; margin-top: 1px; border-radius: 7px; background: var(--accent); }
 .msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .msg-body .md:empty { display: none; }
@@ -1143,6 +1152,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .search-title { font-weight: 600; font-size:calc(14px * var(--font-scale, 1)); -webkit-line-clamp: 2; line-clamp: 2; }
 .search-snippet { font-size:calc(14px * var(--font-scale, 1)); -webkit-line-clamp: 3; line-clamp: 3; }
 .search-meta { color: var(--muted); font-size:calc(12px * var(--font-scale, 1)); }
+.search-doc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size:calc(13px * var(--font-scale, 1)); }
 .search-row mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 #search-more { align-self: center; }
 

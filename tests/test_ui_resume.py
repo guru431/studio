@@ -48,7 +48,11 @@ def test_return_reveals_unexpired_screen_before_mark_finishes(browser, live, wid
         width=width, mobile=width < 760)
     assert not response.get('failed'), response
     assert response['values']['revealed'] is True
-    assert not problems(response), problems(response)
+    # `locked`: тест запирает сервер посреди работы страницы — фоновые опросы (/api/me, /api/jobs,
+    # /api/code/activity) штатно получают 423 и ждут отпирания (`api.js` `hooks.locked`), это не сбой.
+    faults = [line for line in problems(response)
+              if not (result == 'locked' and 'status of 423' in str(line))]
+    assert not faults, faults
 
 
 @pytest.mark.parametrize('width', [320, 1280])
