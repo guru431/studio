@@ -22,7 +22,7 @@ def test_ntfy_settings_save_reload_test_and_disable(browser, live, monkeypatch, 
     monkeypatch.setattr(upstream, 'RESOLVE', resolve)
     ready = "document.querySelector('#ntfy-save') && !document.querySelector('#ntfy-save').disabled"
     before = len(live.gw.ntfy_requests)
-    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/other'), ('wait', ready),
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/notifications'), ('wait', ready),
         ('eval', 'default_off', "!document.querySelector('#ntfy-enabled').checked && document.querySelector('#ntfy-test').disabled"),
         set_value('#ntfy-server', 'https://psh.example.net'), set_value('#ntfy-topic', 'ui-private-topic'),
         set_value('#ntfy-token', 'tk-ui-private'), ('click', '#ntfy-enabled'), ('click', '#ntfy-save'),

@@ -25,6 +25,9 @@ import security_log
 import state
 
 THEMES = ("auto", "dark", "light")
+#: акцент учётки (appearance.js, `[data-accent]` в app.css): первый — умолчание. Хранится ключом `accent` в JSON
+#: `users.views` (без шага схемы: прежний код этот ключ не читает и при правке вида ленты сохраняет)
+ACCENTS = ("orange", "blue", "violet", "rose")
 VIEWS = ("preview", "tiles", "table")       # views.js
 VIEW_SECTIONS = ("photo", "video")
 PASSWORD_MAX = 1024
@@ -56,6 +59,7 @@ class CodeQuickAction(BaseModel):
 
 class MePatch(BaseModel):
     theme: str | None = None
+    accent: object = None                   # проверка — по ACCENTS в patch_me: отказ — 422 `accent`
     timezone: str | None = Field(None, min_length=1, max_length=100)
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
     code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
@@ -114,8 +118,11 @@ def _me(request: Request) -> dict:
                            " password_reset FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
+    views = json.loads(row["views"])
+    accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
-            "theme": row["theme"], "timezone": row["timezone"], "views": json.loads(row["views"]),
+            "theme": row["theme"], "accent": accent if accent in ACCENTS else ACCENTS[0],
+            "timezone": row["timezone"], "views": views,
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
@@ -149,11 +156,17 @@ async def patch_me(body: MePatch, request: Request):
         if body.theme not in THEMES:
             raise HTTPException(422, {"code": "theme", "message": "тема — auto, dark или light"})
         changes["theme"] = body.theme
-    if "views" in sent:
-        if body.views is None or any(k not in VIEW_SECTIONS or v not in VIEWS for k, v in body.views.items()):
+    if "accent" in sent and (not isinstance(body.accent, str) or body.accent not in ACCENTS):
+        raise HTTPException(422, {"code": "accent", "message": "акцент — " + ", ".join(ACCENTS)})
+    if "views" in sent or "accent" in sent:
+        if "views" in sent and (body.views is None
+                                or any(k not in VIEW_SECTIONS or v not in VIEWS for k, v in body.views.items())):
             raise HTTPException(422, {"code": "views", "message": "вид ленты — preview, tiles или table у photo и video"})
         stored = state.DB.execute("SELECT views FROM users WHERE id = ?", (uid,)).fetchone()["views"]
-        changes["views"] = json.dumps({**json.loads(stored), **body.views})
+        views = {**json.loads(stored), **(body.views or {})}
+        if "accent" in sent:
+            views["accent"] = body.accent
+        changes["views"] = json.dumps(views)
     if "code_defaults" in sent:
         stored = json.loads(state.DB.execute("SELECT code_defaults FROM users WHERE id = ?", (uid,)).fetchone()[0])
         for engine, choice in body.code_defaults.items():

@@ -3,7 +3,9 @@ import { el } from './ui.js';
 
 const DEFAULT = ['chat', 'photo', 'code'];
 
-export function setupMobileNavigation(me, closeMenu) {
+let openEditor = null;
+
+export function setupMobileNavigation(me) {
   const rail = document.getElementById('rail');
   const tabs = [...rail.querySelectorAll('a.tab[data-section]')];
   const names = new Map(tabs.map(tab => [tab.dataset.section, tab.lastElementChild.textContent]));
@@ -51,10 +53,6 @@ export function setupMobileNavigation(me, closeMenu) {
     'aria-labelledby': 'mobile-sections-title' },
     el('div', { class: 'mobile-sections-head' }, heading, close), links, edit, editor);
   document.body.append(dialog);
-  const configure = el('button', { id: 'mobile-nav-configure', class: 'menu-item mobile-nav-configure',
-    role: 'menuitem', type: 'button', 'aria-haspopup': 'dialog', 'aria-controls': dialog.id }, 'Нижняя панель');
-  const menu = document.getElementById('menu');
-  menu.insertBefore(configure, menu.querySelector('a[href="#/settings"]'));
   let returnFocus = more;
 
   function setActive(section) {
@@ -124,16 +122,15 @@ export function setupMobileNavigation(me, closeMenu) {
     dialog.showModal();
     more.setAttribute('aria-expanded', 'true');
   });
-  configure.addEventListener('click', () => {
-    returnFocus = document.getElementById('avatar');
-    closeMenu();
+  openEditor = (from) => {      // «Настройки → Оформление»: фокус после закрытия — на открывшую кнопку
+    returnFocus = from;
     dialog.showModal();
     showEditor(true);
-  });
+  };
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
     more.setAttribute('aria-expanded', 'false');
-    (mode === 'all' ? document.getElementById('avatar') : returnFocus).focus();
+    (mode === 'all' && returnFocus === more ? document.getElementById('avatar') : returnFocus).focus();
   });
   links.addEventListener('click', event => { if (event.target.closest('a')) dialog.close(); });
   edit.addEventListener('click', () => showEditor(true));
@@ -156,4 +153,9 @@ export function setupMobileNavigation(me, closeMenu) {
   paint();
   measure();
   return { setActive };
+}
+
+/** Настройка нижней панели из «Настройки → Оформление» (setup ещё не прошёл — ничего). */
+export function openMobileNavigationEditor(from) {
+  if (openEditor) openEditor(from);
 }

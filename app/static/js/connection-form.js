@@ -14,7 +14,7 @@ const KINDS = {
   openai: { label: 'OpenAI-совместимый', placeholder: 'адрес API, https, оканчивается на /v1' },
   srvllm: { label: 'Шлюз srvllm', placeholder: 'адрес шлюза, http, IP и порт, без пути' },
   s06: { label: 'Шлюз s06 · Qwen, WhisperX, PaddleOCR', placeholder: 'адрес шлюза, IP и порт, без пути /v1' },
-  cleaner: { label: 'Cleaner · защита данных', placeholder: 'адрес Cleaner, HTTPS, IP и порт, без пути' },
+  cleaner: { label: 'Cleaner · очистка данных', placeholder: 'адрес Cleaner, HTTPS, IP и порт, без пути' },
 };
 export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', speech: 'Речь',
   transcribe: 'Разговоры', ocr: 'Сканы', translate: 'Перевод', dictation: 'Голосовой ввод' };

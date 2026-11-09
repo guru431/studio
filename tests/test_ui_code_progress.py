@@ -264,7 +264,7 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             page.wait_for_function("() => document.querySelector('#code-feed').textContent.includes('Проверка завершена')")
             assert page.locator('.code-step[data-id="cmd"]').get_attribute('data-state') == 'failed'
             for theme in ['light', 'dark']:
-                page.evaluate("theme => { const control = document.querySelector('#theme-mode'); control.value = theme; control.dispatchEvent(new Event('change', {bubbles: true})); document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
+                page.evaluate("theme => { const control = document.querySelector('#menu-theme-' + theme); control.checked = true; control.dispatchEvent(new Event('change', {bubbles: true})); document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
                 page.wait_for_function("theme => document.querySelector(theme === 'dark' ? '#hl-graphite' : '#hl-paper').media === 'all'", arg=theme)
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 page.screenshot(path=str(tmp_path / f'progress-{desktop_browser.browser_type.name}-{width}-{theme}.png'))
