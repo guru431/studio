@@ -11,9 +11,14 @@ import admin
 import audio
 import history
 import media
+import operations
+import speeches
 import state
+import transcripts
 from conftest import add_gateway, make_user
-from fakes import PNG_REAL, video_object
+from fakes import PNG_REAL, WAV_FAKE, video_object
+from test_speeches import busy_speech, voice, wait_sp
+from test_transcripts import upload, wait_tr
 
 
 async def disable(uid, administrator, *, reenable=False):
@@ -116,3 +121,91 @@ def test_creation_started_during_wipe_is_rejected_after_wipe_finishes(studio, mo
     assert result.status_code == 409, result.text
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+
+
+# ---- очереди на пользователя: эпоха — у задания, а не у раннера ------------------------
+
+def owner_id() -> int:
+    return state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+
+
+def wiped(studio, uid) -> None:
+    """Поколение истории сменилось (как после «Удалить всю историю»), а раннер очереди ещё жив."""
+    async def bump():
+        with operations.barrier(uid):
+            pass
+    studio.c.portal.call(bump)
+
+
+def test_a_queued_speech_keeps_its_own_epoch_not_the_runner_one(studio, fake_audio, monkeypatch):
+    """S1 принят до очистки, S3 — после, в очередь живого раннера: S3 сохраняется, S1 — нет."""
+    add_gateway(studio)
+    uid = owner_id()
+    first = busy_speech(studio, fake_audio, monkeypatch)
+    wait_sp(studio, first, {"working"})
+    wiped(studio, uid)
+    vid = state.DB.execute("SELECT voice FROM speeches").fetchone()[0]
+    later = studio.c.post("/api/speeches", json={"text": "Позже.", "voice": vid})
+    assert later.status_code == 202 and later.json()["state"] == "queued"
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    assert wait_sp(studio, first, speeches.TERMINAL)["state"] == "error"
+    done = wait_sp(studio, later.json()["id"], speeches.TERMINAL)
+    assert done["state"] == "done", done
+    assert speeches.EPOCHS == {}
+
+
+def test_a_speech_resumed_after_restart_is_bound_to_an_epoch(studio, fake_audio, monkeypatch):
+    """Ждущая с прошлого запуска — с эпохой старта: очистка истории после него её сохранение запрещает."""
+    add_gateway(studio)
+    uid = owner_id()
+    vid = voice(studio, fake_audio)
+    sid = studio.c.post("/api/speeches", json={"text": "Привет.", "voice": vid}).json()["id"]
+    assert wait_sp(studio, sid, speeches.TERMINAL)["state"] == "done"
+    state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, text, state, detail, created)"
+                     " SELECT 'q1', user_id, connection_id, model, voice, 'Ещё.', 'queued', 'в очереди', created + 1"
+                     " FROM speeches WHERE id = ?", (sid,))
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.tts_replies = [(503, {"detail": "busy"})]
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    wait_sp(studio, "q1", {"working"})
+    wiped(studio, uid)
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    assert wait_sp(studio, "q1", speeches.TERMINAL)["state"] == "error"
+    assert state.DB.execute("SELECT count(*) FROM media WHERE mime = 'audio/mpeg'").fetchone()[0] == 1
+
+
+def test_a_queued_transcript_keeps_its_own_epoch_not_the_runner_one(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    uid = owner_id()
+    monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
+    first = upload(studio).json()["id"]
+    wait_tr(studio, first, {"working"})
+    wiped(studio, uid)
+    later = upload(studio)
+    assert later.status_code == 202 and later.json()["state"] == "queued"
+    studio.gw.asr_replies = []
+    assert wait_tr(studio, first, transcripts.TERMINAL)["state"] == "error"
+    done = wait_tr(studio, later.json()["id"], transcripts.TERMINAL)
+    assert done["state"] == "done", done
+    assert transcripts.EPOCHS == {}
+
+
+def test_a_transcript_resumed_after_restart_is_bound_to_an_epoch(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    uid = owner_id()
+    tid = upload(studio).json()["id"]
+    assert wait_tr(studio, tid, transcripts.TERMINAL)["state"] == "done"
+    state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state,"
+                     " detail, created) SELECT 'q1', user_id, connection_id, model, name, source_media_id, 'queued',"
+                     " 'в очереди', created + 1 FROM transcripts WHERE id = ?", (tid,))
+    monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    wait_tr(studio, "q1", {"working"})
+    wiped(studio, uid)
+    studio.gw.asr_replies = []
+    assert wait_tr(studio, "q1", transcripts.TERMINAL)["state"] == "error"
+    assert state.DB.execute("SELECT count(*) FROM media WHERE mime = 'application/json'").fetchone()[0] == 1

@@ -382,7 +382,13 @@ async def unlock(body: UnlockIn, request: Request):
     # Reserve before awaiting the hash: a concurrent batch cannot bypass the limit.
     reserved = state.DB.execute("UPDATE chat_shares SET attempts = attempts + 1 WHERE id = ? RETURNING attempts",
                                 (row["id"],)).fetchone()[0]
-    snapshot = await asyncio.to_thread(_open, row, body.pin)
+    try:
+        snapshot = await asyncio.to_thread(_open, row, body.pin)
+    except HTTPException:
+        # верный PIN, а снимок не расшифровать (`share_gone`): не неудача — резервы ссылки и адреса снять
+        state.DB.execute("UPDATE chat_shares SET attempts = MAX(0, attempts - 1) WHERE id = ?", (row["id"],))
+        state.DB.execute("UPDATE chat_share_attempts SET attempts = MAX(0, attempts - 1) WHERE ip_hash = ?", (ip_hash,))
+        raise
     current = _public_share(row["token_hash"])
     if current["id"] != row["id"]:
         raise _refuse()

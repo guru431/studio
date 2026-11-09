@@ -3,10 +3,12 @@
 tests/test_studio.py (прежний server.py); шлюз — FakeGateway, часы — clock.NOW, паузы — clock.SLEEP.
 Проход наблюдателя идёт в цикле приложения (там живёт state.HTTP) — `poll`."""
 import asyncio
+import concurrent.futures
 import io
 import itertools
 import json
 import logging
+import threading
 
 import httpx
 import pytest
@@ -391,6 +393,68 @@ def test_video_cancelled_or_deleted_while_sending_is_dropped_at_the_gateway(stud
     else:
         assert r.status_code == 201 and r.json()["state"] == "cancelled"
         assert state.DB.execute("SELECT gateway_id FROM videos").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("gone", [False, True], ids=["cancelled", "deleted"])
+def test_the_source_of_a_video_stopped_while_sending_is_not_an_orphan(studio, env, gone):
+    """Ревью R7: исходник, записанный запросом, не теряется, когда строку отменили или удалили через API,
+    пока шлюз принимал ролик: отменённая строка его держит (лента и «Повторить»), удаление строки уносит
+    его само (`delete_video`) — `_send` забывать его не должен."""
+    add_gateway(studio)
+    sending, answer = threading.Event(), threading.Event()
+
+    async def create(request):
+        sending.set()
+        async with asyncio.timeout(5):
+            while not answer.is_set():
+                await asyncio.sleep(0.001)
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/videos"] = create
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        creating = executor.submit(create_video, studio)
+        try:
+            assert sending.wait(5)
+            (vid,) = state.DB.execute("SELECT id FROM videos").fetchone()
+            if gone:
+                assert studio.c.delete(f"/api/videos/{vid}").status_code == 204
+            else:
+                assert studio.c.post(f"/api/videos/{vid}/cancel").json()["state"] == "cancelled"
+        finally:
+            answer.set()
+        r = creating.result(timeout=5)
+    assert studio.gw.video_deleted == [v_gateway_id(studio)]
+    if gone:
+        assert r.status_code == 404 and media_rows() == 0 and share_files(env) == []
+    else:
+        assert r.status_code == 201 and r.json()["state"] == "cancelled"
+        source = r.json()["source_media_id"]
+        assert media.referenced(owner_id(), source)
+        assert studio.c.get(f"/api/media/{source}").status_code == 200
+
+
+def test_disabling_the_account_closes_its_interrupted_sending_video(studio, caplog):
+    """Ревью R2: строка SENDING (без id шлюза), чей запрос оборвался, у отключённой учётки не висит «в очереди»
+    с предупреждением наблюдателя на каждом проходе: она отменена, а принятое шлюзом задание снято."""
+    add_gateway(studio)
+    uid = owner_id()
+    administrator = make_user(studio, "administrator", is_admin=True)
+    _stopped_while_sending(studio)
+    with pytest.raises(BaseException):
+        create_video(studio)
+    (row,) = state.DB.execute("SELECT * FROM videos").fetchall()
+    assert row["gateway_id"] is None and row["detail"] == videos.SENDING
+    gid = v_gateway_id(studio)
+    _restart(studio)
+    signin(studio, "administrator")
+    assert studio.c.patch(f"/api/admin/users/{uid}", json={"disabled": True}).status_code == 200
+    got = state.DB.execute("SELECT state, gateway_id FROM videos").fetchone()
+    assert tuple(got) == ("cancelled", None)
+    assert studio.gw.video_deleted == [gid]
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    poll(studio)
+    assert "сбой прохода" not in caplog.text and administrator
 
 
 # ---- наблюдатель -------------------------------------------------------------

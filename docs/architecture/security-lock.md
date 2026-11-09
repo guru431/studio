@@ -70,8 +70,9 @@
   `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.
 - Шумные неудачи `security_log.NOISY` (`login_fail`, `share_pin_fail`) сворачиваются в пределах
-  `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), строка
-  поднимается наверх; своя квота `security_log.NOISY_MAX` (200). `unlock_fail` не сворачивается. API и выгрузка
+  `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), `created` —
+  время последней; строка меняется на месте, id прежний (страницы `before=<id>` повтор не теряют); своя квота
+  `security_log.NOISY_MAX` (200). `unlock_fail` не сворачивается. API и выгрузка
   (`takeout.SECTIONS` → `security`, `security_events/0001.json`) отдают `count` и `first`.
 - «Удалить всю историю» журнал не трогает (след входов: стирание без пароля — чужая сессия заметала бы следы; как
   `agent_events`).

@@ -193,6 +193,34 @@ def _scan(uid, sid, origin, word, now):
     return pdf, png
 
 
+def test_jobs_hide_protected_scans_without_a_query_per_scan(studio):
+    """Ревью R5: «В работе» опрашивается часто — закрытые сканы отсекает один подзапрос (`hidden_scans`), а не
+    запросы на каждый скан: число запросов не растёт с числом сканов."""
+    uid = owner(studio)
+    now = studio.clock[0]
+    enable(studio, ["chat"])
+    expire(studio)
+
+    def jobs_and_statements():
+        seen = []
+        studio.c.portal.call(state.DB.set_trace_callback, seen.append)
+        try:
+            body = studio.c.get("/api/jobs").json()
+        finally:
+            studio.c.portal.call(state.DB.set_trace_callback, None)
+        return sorted(i["id"] for i in body["finished"] if i["section"] == "ocr"), len(seen)
+
+    _scan(uid, "hidden0", "chat", "тайное", now)
+    _scan(uid, "open0", "section", "открытое", now)
+    few = jobs_and_statements()
+    for n in range(1, 6):
+        _scan(uid, f"hidden{n}", "chat", "тайное", now)
+        _scan(uid, f"open{n}", "section", "открытое", now)
+    many = jobs_and_statements()
+    assert few[0] == ["open0"] and many[0] == [f"open{n}" for n in range(6)]
+    assert many[1] == few[1]
+
+
 @pytest.mark.parametrize("closed", ["chat", "translate"])
 def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
     """Скан вложения чата и скан перевода — данные своего раздела: защита «Чата» или «Перевода» закрывает
