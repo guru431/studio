@@ -67,7 +67,12 @@ def _safe_html(markdown_text: str) -> str:
     parser.renderer.rules["image"] = lambda tokens, idx, options, env: html.escape(tokens[idx].content)
     body = parser.render(markdown_text)
     body = body.replace('<pre>', '<pre style="white-space:pre-wrap;overflow-wrap:anywhere">')
-    return '<div>\n' + body + '\n</div>\n'
+    # md2pdf parses this file again as CommonMark with raw HTML: the <div> block ends at the first
+    # blank line, and the rest would become Markdown again (images fetched, code re-formatted).
+    # Newlines inside <pre> become character references; blank lines elsewhere are insignificant.
+    body = re.sub(r'<pre\b.*?</pre>', lambda match: match[0].replace('\n', '&#10;'), body, flags=re.S)
+    body = re.sub(r'\n\s*\n', '\n', body)
+    return '<div>\n' + body + '</div>\n'
 
 
 def converter() -> Path:
