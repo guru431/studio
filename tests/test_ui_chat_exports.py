@@ -39,6 +39,12 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             button = trigger.bounding_box()
             assert button['x'] >= chat['x'] + chat['width']
             assert abs(button['y'] + button['height']/2 - chat['y'] - chat['height']/2) < 4
+            repo = page.locator('#code-repo-status')
+            pw.expect(repo).to_be_visible()
+            status_box = repo.bounding_box()
+            git_tab = page.locator('#code-tab-git').bounding_box()
+            assert 0 <= git_tab['x'] - status_box['x'] - status_box['width'] <= 12
+            assert abs(status_box['y'] + status_box['height']/2 - git_tab['y'] - git_tab['height']/2) < 4
             assert 'M12 15V3' in trigger.locator('path').get_attribute('d')
             if not mobile:
                 trigger.focus()
