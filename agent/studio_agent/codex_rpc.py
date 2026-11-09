@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, chrome, limits
+from . import VERSION, chrome, jobs, limits
 
 RPC_SEC = 25
 
@@ -36,14 +36,17 @@ def version(path: Path) -> str:
 
 
 class RpcError(Exception):
-    """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал."""
+    """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал.
 
-    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None):
+    `transport` — канал с app-server оборвался (EOF, не JSON); без него — ответ живого сервера."""
+
+    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None, transport=False):
         super().__init__()
         self.not_found = not_found
         self.writer_active = writer_active
         self.method = method
         self.code = code if type(code) is int else None
+        self.transport = transport
 
 
 class Client:
@@ -51,6 +54,7 @@ class Client:
         self.path, self.cwd, self.spawn = path, cwd, spawn
         self.process = None
         self.reader = None
+        self.job = None
         self.pending = {}
         self.methods = {}
         self.inbox = asyncio.Queue()
@@ -64,6 +68,8 @@ class Client:
                                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                         stderr=asyncio.subprocess.DEVNULL, limit=limits.FRAME_MAX,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
+        # MCP-серверы и шеллы CLI — в его job: disconnect не оставит их сиротами.
+        self.job = jobs.attach(getattr(self.process, "pid", None))
         self.reader = asyncio.create_task(self._read())
         try:
             await self.request("initialize", {"clientInfo": {"name": "studio_agent", "title": "Studio Agent",
@@ -113,7 +119,7 @@ class Client:
         finally:
             for rid, future in list(self.pending.items()):
                 if not future.done():
-                    future.set_exception(RpcError(method=self.methods.get(rid)))
+                    future.set_exception(RpcError(method=self.methods.get(rid), transport=True))
             self.inbox.put_nowait(None)
 
     async def disconnect(self):
@@ -126,6 +132,9 @@ class Client:
                 with contextlib.suppress(ProcessLookupError):
                     self.process.kill()
                 await self.process.wait()
+        if self.job is not None:
+            self.job.close()  # оставшиеся потомки CLI завершаются вместе с job
+            self.job = None
         if self.reader is not None:
             self.reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):

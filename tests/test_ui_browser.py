@@ -8021,6 +8021,39 @@ def test_code_permission_card_yes_and_always(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_subtask_permission_card_names_the_subagent(browser, live, width):
+    """Запрос субагента (`subtask` у `ask`): над карточкой «Подзадача · <имя>», длинное имя не уводит страницу
+    вбок; ответ — обычный answer того же request_id. Карточка без поля — без этой строки."""
+    login = f"code-subtask-{width}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    name = "Ревизор " + "очень-длинное-имя-субагента" * 4
+    machine.script = [{**code_permission("r1", False, "Shell", {"command": "git status"}), "subtask": name},
+                      code_permission("r2", False), {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Запусти субагента"), ("wait", "document.querySelector(\".code-ask[data-request='r1']\")"),
+            ("eval", "card", """(() => { const c = document.querySelector(".code-ask[data-request='r1']");
+              return [c.firstElementChild.className, c.firstElementChild.textContent,
+                c.querySelector('.code-ask-title').textContent, c.querySelector('.code-ask-tool').textContent]; })()"""),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", ".code-ask[data-request='r1'] .code-ask-yes"),
+            ("wait", "document.querySelector(\".code-ask[data-request='r2']\")"),
+            ("eval", "plain", "!document.querySelector(\".code-ask[data-request='r2'] .code-ask-subtask\")"),
+            ("click", ".code-ask[data-request='r2'] .code-ask-yes"),
+            ("wait", CODE_IDLE_AFTER.format(n=1))], width=width, mobile=width == 320)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["card"] == ["code-ask-subtask muted small", f"Подзадача · {name}", "Claude Code просит разрешения", "Shell"]
+    assert v["fits"] is True and v["plain"] is True
+    assert [(a["request_id"], a["decision"]) for a in code_requests(machine, "answer")] == [("r1", "allow"), ("r2", "allow")]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_code_permission_no_with_words(browser, live):
     """«Нет» со словами в поле — deny и message; без предложенного правила кнопки «Да, больше не спрашивать» нет."""
     login = "code-deny"

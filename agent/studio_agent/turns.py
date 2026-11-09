@@ -101,6 +101,7 @@ class _Turn:
     queue_wake: asyncio.Event = field(default_factory=asyncio.Event)
     attachments: list = field(default_factory=list)
     files: attachment_input.Files = field(default_factory=attachment_input.Files)
+    subtasks: dict = field(default_factory=dict)  # id потока/сессии субагента этого хода → имя (или None)
 
 
 class Runner:
