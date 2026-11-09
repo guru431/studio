@@ -29,7 +29,13 @@ def test_snapshot_preserves_all_roots_and_distinguishes_unavailable_values(monke
 
 
 def test_failed_windows_probe_and_external_lookup_still_return_identity_and_roots(monkeypatch):
-    def fail(*args, **kwargs):
+    real_run = subprocess.run
+
+    def fail(command, *args, **kwargs):
+        # Отказывает только проба PowerShell: `computer_info.subprocess` — общий модуль, и
+        # `platform.platform()` с холодным кэшем (Python 3.14) зовёт тот же `subprocess.run`.
+        if command[0] != 'powershell.exe':
+            return real_run(command, *args, **kwargs)
         raise subprocess.TimeoutExpired('powershell', 10)
 
     class Unavailable:
