@@ -30,6 +30,8 @@
  * GET /api/images/<id>/variants. Параметры по модели — chain.js: силы нет у FLUX, seed — у внешнего
  * сервиса («Повторить с тем же seed» — просто «Повторить»). */
 import { api } from './api.js';
+import { icon, iconButton } from './icons.js';
+import { menuItem, popupMenu, popupPanel } from './menu.js';
 import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
 import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
@@ -56,25 +58,8 @@ const SIZES = [['portrait', 'Портрет 832×1216', '832x1216'], ['square', 
   ['landscape', 'Альбом 1216×832', '1216x832']];
 const RUNNING = new Set(['working', 'cancelling', 'queued']);
 const CANCELLABLE = new Set(['working', 'queued']);
-const ICONS = {
-  clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
-  down: '<path d="M6 9l6 6 6-6"/>',
-  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
-  save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
-  x:'<path d="M6 6l12 12M18 6L6 18"/>',
-};
 
 let screen = null;
-
-function icon(name, cls = 'ico') {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
-
-function iconButton(name, label, attrs = {}) {
-  return el('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label, ...attrs }, icon(name));
-}
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -100,18 +85,18 @@ function build(view, ctx) {
   let shutDescribe = null;       // уборка открытого окна «Описать»: отмена задания, часы, опрос, превью
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
   const gated = new Set();       // кнопки открытого просмотра, начинающие задание
-  const popups = [];             // { chip, menu } — открывающиеся меню
   let alive = true;
 
   /* разметка */
   const status = el('p', { id: 'photo-status', class: 'status photo-status', 'aria-live': 'polite' });
   const describeFile = el('input', { type: 'file', id: 'describe-file', class: 'sr', accept: ACCEPT });
-  const menuItems = [el('label', { class: 'menu-item', id: 'photo-describe-pick', role: 'menuitem' },
-    'Описать фото с устройства…', describeFile)];
-  if (ctx.me.is_admin) menuItems.push(button('Освободить карту', { class: 'menu-item', id: 'photo-release', role: 'menuitem' }, release));
-  const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', hidden: true }, ...menuItems);
-  const toggle = iconButton('more', 'Ещё', { id: 'photo-menu-toggle', 'aria-haspopup': 'true', 'aria-expanded': 'false',
-    'aria-controls': 'photo-menu' });
+  // выбор файла — кнопкой меню: поле файла вне меню, закрытое меню его не прячет
+  const menuItems = [menuItem('Описать фото с устройства…', { attrs: { id: 'photo-describe-pick' },
+    onSelect: () => { menuPopup.close(true); describeFile.click(); } })];
+  if (ctx.me.is_admin) menuItems.push(menuItem('Освободить карту', { attrs: { id: 'photo-release' }, onSelect: release }));
+  const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', 'aria-label': 'Ещё' }, ...menuItems);
+  const toggle = iconButton('more', 'Ещё', { id: 'photo-menu-toggle' });
+  const menuPopup = popupMenu(toggle, menu, { align: 'end' });
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
   const selection = createSelection({ section: 'photo', nouns: ['картинку', 'картинки', 'картинок'],
     selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
@@ -127,7 +112,7 @@ function build(view, ctx) {
   });
   feedBox.dataset.view = layout.value;
   const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), selection.tools, el('span', { class: 'grow' }),
-    selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu));
+    selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile));
 
   const sourceImg = el('img', { alt: 'Исходное фото' });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -147,21 +132,17 @@ function build(view, ctx) {
   // в чипе — только имя формата («Портрет»), размеры — в меню
   const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; }, (label) => label.split(' ')[0]);
   const seriesName = el('span', { class: 'chip-name' }, '×1');
-  const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series', 'aria-haspopup': 'true',
-    'aria-expanded': 'false', 'aria-controls': 'chip-series-menu', title: 'Серия: несколько вариантов подряд' }, seriesName);
+  const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series',
+    title: 'Серия: несколько вариантов подряд' }, seriesName);
   const series = seriesControl({ prefix: 'photo-series', canStrength: () => isLustify() && !!source,
     canSeed: () => !choice || choice.kind === 'srvllm', from: () => strength.value, onChange: () => {
       seriesName.textContent = series ? series.label() : '×1';
       chipSeries.classList.toggle('on', !!(series && series.value()));
     } });
-  const seriesMenu = el('div', { class: 'chip-menu series-menu', id: 'chip-series-menu', role: 'menu', hidden: true },
-    series.panel);
-  chipSeries.addEventListener('click', () => popup(chipSeries, seriesMenu, seriesMenu.hidden));
-  popups.push({ chip: chipSeries, menu: seriesMenu });
-  const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say,
-    close: () => popup(null, null, false) });
-  presets.chip.addEventListener('click', () => popup(presets.chip, presets.menu, presets.menu.hidden));
-  popups.push({ chip: presets.chip, menu: presets.menu });
+  // серия — форма (число, что меняется, ползунок): не меню, а панель-диалог у чипа (menu.js popupPanel)
+  const seriesMenu = el('div', { class: 'series-menu', id: 'chip-series-menu' }, series.panel);
+  popupPanel(chipSeries, seriesMenu, { label: 'Серия картинок', side: 'above' });
+  const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate' }, 'EN');
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
@@ -220,9 +201,9 @@ function build(view, ctx) {
   /* меню чипов и раздела */
   function chipMenu(id, initial, get, set, short = (label) => label) {
     const name = el('span', { class: 'chip-name' });
-    const chip = el('button', { type: 'button', class: 'chip', id, 'aria-haspopup': 'true', 'aria-expanded': 'false',
-      'aria-controls': `${id}-menu` }, name, icon('down', 'ico caret'));
-    const list = el('div', { class: 'chip-menu', id: `${id}-menu`, role: 'menu', hidden: true });
+    const chip = el('button', { type: 'button', class: 'chip', id }, name, icon('down', 'ico caret'));
+    const list = el('div', { class: 'chip-menu', id: `${id}-menu`, role: 'menu' });
+    const chipPopup = popupMenu(chip, list, { side: 'above' });
     let options = [];
     const paint = () => {
       name.textContent = short((options.find((o) => o[0] === get()) || options[0] || [null, 'модель'])[1]);
@@ -231,19 +212,14 @@ function build(view, ctx) {
     const fill = (next) => {
       options = next;
       list.replaceChildren(...options.map(([value, label]) => {
-        const option = el('button', { type: 'button', class: 'chip-option', role: 'menuitemradio', 'data-value': value }, label);
-        option.addEventListener('click', () => {
+        return menuItem(label, { radio: true, attrs: { 'data-value': value }, onSelect: () => {
           set(value);
           paint();
-          popup(chip, list, false);
-          chip.focus();
-        });
-        return option;
+          chipPopup.close(true);
+        } });
       }));
       paint();
     };
-    chip.addEventListener('click', () => popup(chip, list, list.hidden));
-    popups.push({ chip, menu: list });
     fill(initial);
     return { wrap: el('div', { class: 'chip-wrap' }, chip, list), fill, paint };
   }
@@ -268,15 +244,6 @@ function build(view, ctx) {
     chipModel.fill(choices.map(([value, label]) => [value, label]));
     paintSource();
   }
-
-  function popup(chip, list, open) {
-    for (const p of popups) {
-      p.menu.hidden = p.menu !== list || !open;
-      p.chip.setAttribute('aria-expanded', String(!p.menu.hidden));
-    }
-  }
-  popups.push({ chip: toggle, menu });
-  toggle.addEventListener('click', () => popup(toggle, menu, menu.hidden));
 
   function say(text, bad) {
     status.textContent = text;
@@ -919,7 +886,7 @@ function build(view, ctx) {
 
   /* освобождение карты (администратор) */
   async function release() {
-    popup(toggle, menu, false);
+    menuPopup.close();
     say('', false);
     try {
       const { results } = await api('POST', '/api/images/release');
@@ -937,22 +904,7 @@ function build(view, ctx) {
     if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
   }
 
-  /* события; нажатие вне меню — в фазе захвата: в режиме выделения лента глушит нажатие по карточке */
-  const onDocClick = (event) => {
-    for (const p of popups) {
-      if (!p.menu.hidden && !p.menu.contains(event.target) && !p.chip.contains(event.target)) popup(p.chip, p.menu, false);
-    }
-  };
-  const onKey = (event) => {
-    if (event.key !== 'Escape') return;
-    const shown = popups.find((p) => !p.menu.hidden);
-    if (shown) {
-      popup(shown.chip, shown.menu, false);
-      shown.chip.focus();
-    }
-  };
-  document.addEventListener('click', onDocClick, true);
-  document.addEventListener('keydown', onKey);
+  /* события (меню закрывают сами: menu.js) */
 
   file.addEventListener('change', () => setSource(file.files[0] || null));
   sourceClear.addEventListener('click', () => {
@@ -967,7 +919,6 @@ function build(view, ctx) {
   describeFile.addEventListener('change', () => {
     const f = describeFile.files[0];
     describeFile.value = '';
-    popup(toggle, menu, false);
     if (f) describe({ file: f });
   });
   prompt.addEventListener('input', autosize);
@@ -993,8 +944,6 @@ function build(view, ctx) {
       alive = false;
       if (shutDescribe) shutDescribe();
       selection.destroy();
-      document.removeEventListener('click', onDocClick, true);
-      document.removeEventListener('keydown', onKey);
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);
       running.clear();

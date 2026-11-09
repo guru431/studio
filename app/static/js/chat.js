@@ -62,6 +62,8 @@
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
  * пока человек не тронул ленту. В адресе — только id. */
 import { api, me } from './api.js';
+import { icon, iconButton } from './icons.js';
+import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
@@ -104,35 +106,10 @@ const WEB_ASK = 'Запросы, составленные из расшифро�
 const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субтитры' };   // строка хода по виду инструмента
 const THINK_TITLE = 'Рассуждение: модель думает перед ответом, ход мысли виден';
 const THINK_NOTE = 'С рассуждением модель реже ищет в интернете';   // замер 2026-10-22: 5 поисков из 10 против 10
-const ICONS = {
-  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
-  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 00-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0012 3z"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  clip: '<path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.4 8.4a1.8 1.8 0 01-2.6-2.6l7.6-7.6"/>',
-  send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
-  stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
-  down: '<path d="M6 9l6 6 6-6"/>',
-  doc: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/>',
-  image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
-  list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
-  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
-};
 
 const jobs = new Map();          // id диалога → ответ, который читает эта вкладка
 const tokens = new Map();        // id подключения → { token, url } прямого подключения (память вкладки)
 let screen = null;               // смонтированный раздел
-
-function icon(name, cls = 'ico') {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
-
-function iconButton(name, label, attrs = {}) {
-  return el('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label, ...attrs }, icon(name));
-}
 
 function elapsed(since) {
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
@@ -451,7 +428,6 @@ function build(view, ctx) {
   let notReady = null;         // повтор хода прямого подключения, пока скан распознаётся (409 `not_ready`)
   let paintTimer = null;
   let lastPaint = 0;
-  let menuFor = null;          // пункт списка с открытым меню
   let alive = true;
   let needsReload = false;
   let failures = 0;
@@ -468,9 +444,11 @@ function build(view, ctx) {
   const toggle = iconButton('list', 'Диалоги', { id: 'chats-toggle', class: 'icon-btn chats-toggle', 'aria-controls': 'chats',
     'aria-expanded': 'false' });
   const chipName = el('span', { class: 'chip-name' });
-  const chip = el('button', { type: 'button', id: 'model-chip', class: 'model-chip', 'aria-haspopup': 'true',
-    'aria-expanded': 'false' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
-  const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', hidden: true });
+  const chip = el('button', { type: 'button', id: 'model-chip', class: 'model-chip' },
+    el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
+  // меню моделей — общий компонент menu.js: группы по подключениям, выбранная — menuitemradio с ✓
+  const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', role: 'menu', 'aria-label': 'Модель' });
+  const models = popupMenu(chip, modelMenu, { fill: fillModels });
   const connName = el('span', { class: 'chat-conn' });
   const head = el('header', { class: 'head chat-head' }, toggle,
     el('div', { class: 'model-wrap' }, chip, modelMenu), connName);
@@ -549,32 +527,22 @@ function build(view, ctx) {
   function listItem(item) {
     const link = el('a', { href: `#/chat/${item.id}`, class: 'chat-link', 'aria-current': item.id === chatId ? 'page' : null },
       item.title || 'Новый диалог');
-    const more = iconButton('more', 'Действия с диалогом', { class: 'icon-btn chat-more', 'aria-haspopup': 'true' });
+    const more = iconButton('more', 'Действия с диалогом', { class: 'icon-btn chat-more' });
     const li = el('div', { class: 'chat-item', 'data-id': item.id }, link, more);
     link.addEventListener('click', () => panel(false));
-    more.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const was = menuFor === li;
-      closeItemMenu();
-      if (!was) openItemMenu(li, item);
-    });
+    // меню строки — общий компонент menu.js; пункты собираются при открытии (название могло смениться)
+    const menu = el('div', { class: 'chat-menu', role: 'menu', 'aria-label': 'Действия с диалогом' });
+    li.append(menu);
+    popupMenu(more, menu, { align: 'end', fill: (close) => {
+      const items = [
+        menuItem('Поделиться чатом', { attrs: { class: 'chat-share' }, onSelect: () => {
+          close(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`);
+        } }),
+        menuItem('Переименовать', { attrs: { class: 'chat-rename' }, onSelect: () => { close(); renameDialog(item); } }),
+        menuItem('Удалить', { attrs: { class: 'chat-delete danger' }, onSelect: () => { close(); deleteDialog(item); } })];
+      return [items, items];
+    } });
     return li;
-  }
-
-  function openItemMenu(li, item) {
-    const share = el('button', { type: 'button', class: 'menu-item chat-share' }, 'Поделиться чатом');
-    const rename = el('button', { type: 'button', class: 'menu-item chat-rename' }, 'Переименовать');
-    const remove = el('button', { type: 'button', class: 'menu-item chat-delete btn-danger' }, 'Удалить');
-    rename.addEventListener('click', () => { closeItemMenu(); renameDialog(item); });
-    remove.addEventListener('click', () => { closeItemMenu(); deleteDialog(item); });
-    share.addEventListener('click', () => { closeItemMenu(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`); });
-    li.append(el('div', { class: 'chat-menu', role: 'menu' }, share, rename, remove));
-    menuFor = li;
-  }
-
-  function closeItemMenu() {
-    if (menuFor) menuFor.querySelector('.chat-menu')?.remove();
-    menuFor = null;
   }
 
   function renameDialog(item) {
@@ -866,31 +834,32 @@ function build(view, ctx) {
         el('pre', { class: 'att-text' }, a.meta.text)] });
   }
 
-  function openModels(open) {
-    modelMenu.hidden = !open;
-    chip.setAttribute('aria-expanded', String(open));
-    if (!open) return;
+  /** Пункты меню моделей при открытии: отмеченные модели раздела «Чат» по подключениям. */
+  function fillModels(close) {
     const now = chosen();
     const shown = links.filter((l) => l.models.length);
     if (!shown.length) {
-      modelMenu.replaceChildren(el('p', { class: 'muted small' }, 'Нет отмеченных моделей — выберите в настройках раздела «Чат»'));
-      return;
+      return [[el('p', { class: 'muted small menu-note' }, 'Нет отмеченных моделей — выберите в настройках раздела «Чат»')], []];
     }
-    modelMenu.replaceChildren(...shown.map(({ connection: conn, models }) => {
-      const group = el('div', { class: 'model-group', 'data-conn': String(conn.id) },
-        shown.length > 1 ? el('p', { class: 'model-group-name' }, conn.name) : null);
-      for (const id of models) {
-        const option = el('button', { type: 'button', class: 'model-option', 'data-conn': String(conn.id), 'data-model': id,
-          'aria-current': conn.id === now.connection_id && id === now.model ? 'true' : null }, id);
-        option.addEventListener('click', () => choose(conn.id, id));
+    const items = [];
+    const nodes = shown.map(({ connection: conn, models: ids }) => {
+      const name = shown.length > 1 ? el('p', { class: 'model-group-name', id: `model-group-${conn.id}` }, conn.name) : null;
+      const group = el('div', { class: 'model-group', role: 'group', 'data-conn': String(conn.id),
+        'aria-labelledby': name ? name.id : null }, name);
+      for (const id of ids) {
+        const option = menuItem(id, { radio: true, checked: conn.id === now.connection_id && id === now.model,
+          attrs: { class: 'model-option', 'data-conn': String(conn.id), 'data-model': id },
+          onSelect: () => { close(true); choose(conn.id, id); } });
+        items.push(option);
         group.append(option);
       }
       return group;
-    }));
+    });
+    return [nodes, items];
   }
 
   async function choose(connId, model) {
-    openModels(false);
+    models.close();
     needModel = false;                             // явный выбор
     if (!chat) {
       draft = { connection_id: connId, model };
@@ -918,7 +887,7 @@ function build(view, ctx) {
   }
 
   function attLabel(a) {
-    return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'image' : 'doc'), el('b', {}, a.name),
+    return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'photo' : 'doc'), el('b', {}, a.name),
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
@@ -953,7 +922,8 @@ function build(view, ctx) {
     badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
       if (!steps) return;
       steps.open = true;
-      steps.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      steps.scrollIntoView({ block: 'nearest',
+        behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     });
     // ответ ждёт карту (503 шлюза): «Не ждать» — один узел на сообщение, перерисовка счётчика его не пересоздаёт
     const nowait = button('Не ждать', { class: 'btn btn-sm msg-nowait', hidden: true }, async () => {
@@ -1250,7 +1220,7 @@ function build(view, ctx) {
 
   async function open(id) {
     panel(false);
-    openModels(false);
+    models.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
@@ -1324,7 +1294,7 @@ function build(view, ctx) {
         label = el('button', { type: 'button', class: 'att-name att-open', title: 'Показать текст' }, name);
         label.addEventListener('click', () => showText(a));
       }
-      return el('span', { class: `att-chip${a.error ? ' bad' : ''}` }, icon(image ? 'image' : 'doc'), label,
+      return el('span', { class: `att-chip${a.error ? ' bad' : ''}` }, icon(image ? 'photo' : 'doc'), label,
         a.transcript || a.scan ? el('span', { class: 'muted att-state' }, `${a.meta.chars.toLocaleString('ru-RU')} зн.`) : null,
         a.busy ? el('span', { class: 'muted att-state' }, 'загружаю…') : null,
         a.error ? el('span', { class: 'error att-state' }, a.error) : null,
@@ -1601,20 +1571,11 @@ function build(view, ctx) {
   }
 
   /* события */
-  const onDocClick = (event) => {
-    if (!modelMenu.hidden && !modelMenu.contains(event.target) && !chip.contains(event.target)) openModels(false);
-    if (menuFor && !menuFor.contains(event.target)) closeItemMenu();
-  };
+  // Escape меню (модель, строка списка) ловит само меню (menu.js): здесь — только выдвижная панель списка
   const onKey = (event) => {
-    if (event.key !== 'Escape') return;
-    if (!modelMenu.hidden) {
-      openModels(false);
-      chip.focus();
-    }
-    closeItemMenu();
+    if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('.popup-menu:popover-open')) return;
     panel(false);
   };
-  document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('studio-me', paintWeb);     // профиль перечитан: ключ Exa могли задать или убрать
   const resume = () => {
@@ -1631,7 +1592,6 @@ function build(view, ctx) {
   fresh.addEventListener('click', newChat);
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
-  chip.addEventListener('click', () => openModels(modelMenu.hidden));
   webToggle.addEventListener('click', switchWeb);
   thinkToggle.addEventListener('click', switchThink);
   scroller.addEventListener('scroll', () => {
@@ -1702,8 +1662,8 @@ function build(view, ctx) {
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);
       document.removeEventListener('visibilitychange', resume);
-      document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onKey);
+      models.close();
       document.removeEventListener('studio-me', paintWeb);
       clearInterval(tick);
       clearTimeout(poll);

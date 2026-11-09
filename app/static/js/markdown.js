@@ -11,7 +11,7 @@
  * Внешние <img> (markdown-картинка с чужим адресом) блокирует CSP страниц (`img-src`, main.CSP), поэтому
  * DOMPurify их не вычищает.
  *
- * renderMarkdown(text, { html: true }) — текст распознавания («Распознавание», ocr.js): HunyuanOCR пишет
+ * renderMarkdown(text, { html: true }) — текст распознавания («Сканы», ocr.js): HunyuanOCR пишет
  * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
  * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
 

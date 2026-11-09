@@ -18,13 +18,15 @@ import { api } from './api.js';
 import { timeOnly } from './time.js';
 import { dayKey, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
-import { HREF, ICONS } from './jobs.js';
+import { HREF } from './jobs.js';
+import { svg } from './icons.js';
+import { NAMES, sectionPairs } from './sections-meta.js';
 import { el, words } from './ui.js';
 
 export const SEARCH_PAUSE_MS = 300;
 const LIMIT = 30;
-const SECTIONS = [['', 'Все'], ['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['speech', 'Речь'],
-  ['transcribe', 'Разговоры'], ['ocr', 'Распознавание'], ['translate', 'Перевод']];
+/** Фильтр разделов: разделы с историей в порядке рельса («Агенты» — история на компьютере, поиск её не видит). */
+const SECTIONS = [['', 'Все'], ...sectionPairs().filter(([id]) => id !== 'code')];
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const HAS_WORD = /[\p{L}\p{N}]/u;
@@ -36,7 +38,7 @@ let screen = null;
 
 function icon(section) {
   const box = el('span', { class: 'search-ico', 'aria-hidden': 'true' });
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${ICONS[section] || ''}</svg>`;   // константы jobs.js
+  box.innerHTML = svg(section);   // константы icons.js
   return box;
 }
 
@@ -94,7 +96,7 @@ function mountScreen(view, ctx) {
   const results = el('div', { id: 'search-results', 'data-state': 'idle' });
   const moreBtn = el('button', { type: 'button', id: 'search-more', class: 'btn', hidden: true }, 'Показать ещё');
 
-  view.append(el('header', { class: 'head' }, el('h1', {}, 'Поиск')),
+  view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.search)),
     el('div', { class: 'page search-page' },
       field.box, field.error, chips,
       el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, 'с'), since,

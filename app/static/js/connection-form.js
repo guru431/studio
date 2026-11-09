@@ -8,6 +8,7 @@
  * editConnection(host, base, initial, onSaved) — окно «Подключение»: `base` — '/api/connections'
  * своих или '/api/admin/users/<id>/connections' панели. */
 import { api } from './api.js';
+import { NAMES, sectionPairs } from './sections-meta.js';
 import { button, el, field, openDialog, showError } from './ui.js';
 
 const KINDS = {
@@ -16,8 +17,9 @@ const KINDS = {
   s06: { label: 'Шлюз s06 · Qwen, WhisperX, PaddleOCR', placeholder: 'адрес шлюза, IP и порт, без пути /v1' },
   cleaner: { label: 'Cleaner · очистка данных', placeholder: 'адрес Cleaner, HTTPS, IP и порт, без пути' },
 };
-export const SECTION_NAMES = { chat: 'Чат', photo: 'Фото', video: 'Видео', speech: 'Речь',
-  transcribe: 'Разговоры', ocr: 'Сканы', translate: 'Перевод', dictation: 'Голосовой ввод' };
+/** Разделы подключений (все, кроме «Агентов» — им модели сообщает мост) в порядке рельса и голосовой ввод. */
+export const SECTION_NAMES = { ...Object.fromEntries(sectionPairs().filter(([id]) => id !== 'code')),
+  dictation: NAMES.dictation };
 const ERROR_FIELD = { name: 'name', token: 'token' };   // прочие коды — под адресом
 
 export function sectionsText(sections) {

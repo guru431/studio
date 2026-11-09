@@ -42,6 +42,7 @@
  * спрашивает окно «Изменения не сохранены» «Файлов»; «Уйти без сохранения» — снова туда (hold — его зовёт роутер
  * app.js до смены адреса или раздела). */
 import { api, me } from './api.js';
+import { svg } from './icons.js';
 import { projectGit, gitLevel, GIT_ACTIONS } from './code-git.js';
 import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
@@ -57,9 +58,6 @@ const NO_AGENT = 'Нет такого компьютера';
 const AID_RE = /^\d+$/;
 const PID_RE = /^[0-9a-f]{16}$/;
 const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const CODE_ICON = '<path d="M4 6l5 5-5 5M11 18h9"/>';
-const MENU_ICON = '<path d="M4 6h16M4 12h16M4 18h16"/>';
-const BRANCH_ICON = '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10M18 7v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/>';
 const VIEWS = [['git', 'Git'], ['files', 'Файлы'], ['chat', 'Чат']];
 const IDLE_POLL_SEC = 20;        // метки вкладок: GET …/chats открытого проекта (тесты подменяют паузу setTimeout)
 const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в разделе (как опрос live чата)
@@ -212,7 +210,7 @@ function layout() {
   const toggle = el('button', { type: 'button', id: 'code-panel-toggle', class: 'icon-btn code-panel-toggle',
     'aria-controls': 'code-panel', 'aria-expanded': 'false', 'aria-label': 'Компьютеры и проекты',
     title: 'Компьютеры и проекты' });
-  toggle.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${MENU_ICON}</svg>`;   // константа выше
+  toggle.innerHTML = svg('list');   // константа icons.js
   const placeAgent = el('span', { class: 'code-place-agent' });
   const placeProject = el('b', { class: 'code-place-project' });
   const place = el('span', { id: 'code-place', class: 'code-place', hidden: true }, placeAgent,
@@ -255,7 +253,7 @@ function empty() {
   ui.top.hidden = true;
   ui.statusBox.replaceChildren();
   const badge = el('span', { class: 'badge', 'aria-hidden': 'true' });
-  badge.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${CODE_ICON}</svg>`;   // константа выше
+  badge.innerHTML = svg('code');   // константа icons.js
   ui.body.replaceChildren(el('div', { id: 'code-empty', class: 'empty' }, badge, el('p', {}, NONE), agentDownload()));
 }
 
@@ -452,7 +450,7 @@ function enter(aid, pid) {
     const ahead = data.upstream ? Number(data.ahead) || 0 : data.unpushed || 0;
     const behind = data.upstream ? Number(data.behind) || 0 : 0;
     const glyph = el('span', { class: 'code-repo-icon', 'aria-hidden': 'true' });
-    glyph.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${BRANCH_ICON}</svg>`;
+    glyph.innerHTML = svg('branch');   // константа icons.js
     ui.repoStatus.replaceChildren(glyph, el('span', { class: 'code-repo-branch' }, `${branch}${files.length ? '*' : ''}`));
     if (behind) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↓${behind}`));
     if (ahead) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↑${ahead}`));

@@ -22,6 +22,7 @@
  *   к журналу по уже открытому адресу, через обычную защиту несохранённых правок «Файлов».
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api, me } from './api.js';
+import { icon } from './icons.js';
 import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
@@ -86,7 +87,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
   const sortBox = el('label', { class: 'input code-project-sort' }, sortText, sort);
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
-    title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, '↻'));
+    title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
   // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.
   const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
@@ -506,7 +507,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       row.addEventListener('click', () => { infoIntent = null; select(agent.id); });
       const info = el('button', { type: 'button', class: 'btn code-agent-info',
         title: 'Сведения о компьютере', 'aria-label': `Сведения о компьютере · ${agent.name}`, 'aria-haspopup': 'dialog' },
-        el('span', { 'aria-hidden': 'true' }, 'ⓘ'));
+        el('span', { 'aria-hidden': 'true' }, icon('info')));
       info.addEventListener('click', () => computerClicked(agent.id));
       const update = updates.get(agent.id);
       const available = newer(agent.latest_version, agent.agent_version);

@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Студия",
   "short_name": "Студия",
-  "description": "Чат, фото и видео",
+  "description": "Чат, агенты, фото, видео, разговоры, озвучка, сканы и перевод",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

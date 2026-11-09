@@ -7,6 +7,7 @@
  * openCompare(host, left, right): host — корень раздела; left и right — { media_id, label }
  * (подпись — шаг цепочки или модель · seed · сила). Текст подписей — textContent. */
 import { button, el } from './ui.js';
+import { icon } from './icons.js';
 
 const KEY_STEP = 5;              // ←/→ вне ползунка — на столько процентов
 
@@ -27,7 +28,7 @@ export function openCompare(host, left, right) {
     'aria-label': 'Граница сравнения' });
   const swap = button('Поменять местами', { class: 'btn btn-sm', id: 'compare-swap' });
   const close = el('button', { type: 'button', class: 'icon-btn viewer-close', id: 'compare-close', 'aria-label': 'Закрыть',
-    title: 'Закрыть' }, '×');
+    title: 'Закрыть' }, icon('x'));
   const dialog = el('dialog', { id: 'compare', class: 'viewer compare', 'aria-label': 'Сравнение картинок' },
     el('div', { class: 'viewer-top' }, close), el('div', { class: 'compare-stage' }, frame),
     el('div', { class: 'viewer-bar compare-bar' }, el('div', { class: 'compare-labels' }, leftLabel, rightLabel), range,
