@@ -99,6 +99,11 @@ def render_pdf(text: str) -> bytes:
         env["MD2PDF_TIMEOUT"] = str(PDF_SECONDS)
         # Temporary HTML and the private browser profile stay in this local work directory.
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = str(root)
+        # Service accounts can have /nonexistent as HOME. Chromium's crash handler
+        # still needs writable config/cache paths even with a private user-data-dir.
+        env["HOME"] = str(root)
+        env["XDG_CONFIG_HOME"] = str(root / "config")
+        env["XDG_CACHE_HOME"] = str(root / "cache")
         try:
             result = subprocess.run([sys.executable, str(tool), str(source), str(target)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

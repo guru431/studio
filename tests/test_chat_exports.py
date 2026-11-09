@@ -1,6 +1,7 @@
 """Whole-chat exports preserve owner/PIN access through asynchronous PDF rendering."""
 from html.parser import HTMLParser
 import io
+from pathlib import Path
 import subprocess
 
 from pypdf import PdfReader
@@ -117,6 +118,10 @@ def test_pdf_timeout_cleans_work_and_never_passes_data_key(studio, monkeypatch, 
     def timeout(argv, **kwargs):
         assert 'STUDIO_DATA_KEY' not in kwargs['env']
         assert len(argv) == 4 and argv[2].endswith('chat.md')
+        directory = Path(argv[2]).parent
+        assert kwargs['env']['HOME'] == str(directory)
+        assert kwargs['env']['XDG_CONFIG_HOME'] == str(directory / 'config')
+        assert kwargs['env']['XDG_CACHE_HOME'] == str(directory / 'cache')
         assert kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
         raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
 
