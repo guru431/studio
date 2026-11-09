@@ -9,7 +9,9 @@
  * Выдача — новые сверху, по дням (как ленты), «Показать ещё» — курсором последней строки, если запрос
  * тот же, что у выдачи (иначе — новый поиск: ввод ещё ждал паузы). Строка —
  * значок раздела, заголовок, кусок текста с найденным (маркеры \u0002…\u0003 → <mark> узлами, не
- * HTML), модель и время; нажатие — ctx.navigate(href) (адрес проверяет HREF jobs.js). Номер запроса:
+ * HTML), модель и время; у найденного в документе диалога — имя документа своей строкой (`attachment`); нажатие —
+ * ctx.navigate(href) (адрес проверяет HREF jobs.js или MESSAGE_HREF: строка диалога — `chat/<id>?m=<сообщение>`,
+ * chat.js прокручивает к нему и подсвечивает). Номер запроса:
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
  * ready | error (по нему ждут тесты). */
 import { api } from './api.js';
@@ -26,6 +28,8 @@ const SECTIONS = [['', 'Все'], ['chat', 'Чат'], ['photo', 'Фото'], ['v
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const HAS_WORD = /[\p{L}\p{N}]/u;
+/** Строка диалога ведёт к своему сообщению: в адресе — только id (`?m=`), не слова поиска. */
+const MESSAGE_HREF = /^chat\/[\w-]+\?m=[\w-]+$/;
 
 const memory = { q: '', section: '', model: '', since: '', until: '' };
 let screen = null;
@@ -55,11 +59,13 @@ function when(created) {
 function row(item, go) {
   const same = SAME_TEXT.has(item.section) && item.snippet;
   const title = el('b', { class: 'search-title' }, ...(same ? marked(item.snippet) : [item.title]));
+  // найдено в документе диалога — его имя своей строкой, отдельно от куска текста
+  const doc = item.attachment ? el('span', { class: 'search-doc', title: item.attachment }, `📄 ${item.attachment}`) : null;
   const snippet = !same && item.snippet ? el('span', { class: 'search-snippet' }, ...marked(item.snippet)) : null;
   const meta = el('span', { class: 'search-meta' }, [item.model, when(item.created)].filter(Boolean).join(' · '));
   const node = el('button', { type: 'button', class: 'search-row', 'data-section': item.section, 'data-id': item.id },
-    icon(item.section), el('span', { class: 'search-text' }, title, snippet, meta));
-  node.addEventListener('click', () => { if (HREF.test(item.href)) go(item.href); });
+    icon(item.section), el('span', { class: 'search-text' }, title, doc, snippet, meta));
+  node.addEventListener('click', () => { if (HREF.test(item.href) || MESSAGE_HREF.test(item.href)) go(item.href); });
   return el('li', {}, node);
 }
 

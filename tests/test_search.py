@@ -3,6 +3,7 @@
 import logging
 import pathlib
 import time
+import unicodedata
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -15,7 +16,7 @@ import search as search_api
 import state
 import transcripts
 from conftest import T0, add_gateway, make_user, signin
-from test_chat import events_of, new_chat, wait
+from test_chat import attach, events_of, new_chat, sse, turn, wait
 from test_transcripts import result_file, upload, wait_tr
 
 IMAGE = ("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
@@ -183,6 +184,65 @@ def test_reindex_repairs_the_index_and_keeps_yo_where_rebuild_loses_it(studio):
     assert found("елк") == [("speech", "s", "")] and len(found("кош")) == 4
 
 
+NFD = unicodedata.normalize("NFD", "Чайковский")
+
+
+def test_a_document_named_and_written_in_nfd_is_found_by_the_composed_word(studio):
+    """Находка 2026-11-09: имя и текст документа из архива macOS — NFD, «й» там «и» + U+0306; FTS5 сводил его к «и»,
+    и «Чайковский» не находился. Документ пишется в NFC — находится. Строка вложения ведёт к своему сообщению и
+    несёт имя документа отдельно от сниппета."""
+    add_gateway(studio); cid = new_chat(studio)
+    doc = attach(studio, f"{NFD}.txt", f"Письмо {NFD} о симфонии".encode("utf-8"), "text/plain")
+    events = sse(turn(studio, cid, "Что в письме?", attachment_ids=[doc["id"]]))
+    question = next(d for e, d in events if e == "turn")["user_message_id"]
+    items = search(studio, q="Чайковский симфонии").json()["items"]
+    assert [(i["section"], i["id"], i["part"]) for i in items] == [("chat", cid, doc["id"])]
+    assert items[0]["href"] == f"chat/{cid}?m={question}" and items[0]["attachment"] == "Чайковский.txt"
+    assert "\u0002Чайковский\u0003" in items[0]["snippet"]
+
+
+def test_chat_rows_lead_to_their_message_and_titles_to_the_chat(studio):
+    """Переход к сообщению: ссылка — id сообщения (`?m=`), не текст; у строки вложения — сообщение, к которому оно
+    отправлено; название — сам диалог."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(CHAT, ("c1", uid, "Отпуск", "m", T0, T0))
+    state.DB.execute(MESSAGE, ("m1", "c1", "user", "Отпуск у моря", "m", T0 + 1))
+    state.DB.execute(MESSAGE, ("m2", "c1", "assistant", "Хорошо", "m", T0 + 2))
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, created)"
+                     " VALUES ('a1', ?, 'm1', 'document', 'план.txt', 'x', 'палатка и спальник', ?)", (uid, T0 + 1))
+    by = {i["part"]: i for i in search(studio, q="отпуск").json()["items"]}
+    assert (by["m1"]["href"], by["m1"]["attachment"]) == ("chat/c1?m=m1", None)
+    by = {i["part"]: i for i in search(studio, q="палатка").json()["items"]}
+    assert (by["a1"]["href"], by["a1"]["attachment"]) == ("chat/c1?m=m1", "план.txt")
+    state.DB.execute("DELETE FROM messages WHERE id IN ('m1', 'm2')")
+    items = search(studio, q="отпуск").json()["items"]
+    assert [(i["part"], i["href"], i["attachment"]) for i in items] == [("title", "chat/c1", None)]
+
+
+def test_compose_once_brings_old_nfd_rows_to_nfc_without_breaking_the_index(studio):
+    """Разовый перевод в NFC строк, записанных до правки: тело search_docs и FTS — одной транзакцией, с той же
+    заменой «ё», что у триггеров; id строк прежние, удаление записи потом уносит её из индекса (иначе FTS5 с внешним
+    содержимым удалял бы не те токены). Флаг `settings` — один раз на базу; исходные таблицы не меняются."""
+    uid = make_user(studio, "owner")
+    flag = "SELECT 1 FROM settings WHERE key = ?", (search_api.NFC_FLAG,)
+    assert state.DB.execute(*flag).fetchone() is not None              # старт службы уже прошёл по этой базе
+    state.DB.execute("DELETE FROM settings WHERE key = ?", (search_api.NFC_FLAG,))
+    state.DB.execute(IMAGE, ("i1", uid, "flux", f"{NFD} у ёлки", T0))
+    state.DB.execute(IMAGE, ("i2", uid, "flux", "Шопен", T0 + 1))
+    before = dict(state.DB.execute("SELECT item, id FROM search_docs").fetchall())
+    assert found("чайковск") == []
+    assert search_api.compose_once(state.DB) == 1
+    assert found("чайковск") == found("елк") == [("photo", "i1", "")]
+    assert dict(state.DB.execute("SELECT item, id FROM search_docs").fetchall()) == before
+    assert state.DB.execute("SELECT prompt FROM images WHERE id = 'i1'").fetchone()[0] == f"{NFD} у ёлки"
+    state.DB.execute("INSERT INTO search(search) VALUES ('integrity-check')")
+    state.DB.execute(IMAGE, ("i3", uid, "flux", NFD, T0 + 2))
+    assert search_api.compose_once(state.DB) == 0                      # флаг: второй раз — ничего
+    state.DB.execute("DELETE FROM images WHERE id IN ('i1', 'i3')")
+    assert found("чайковск") == found("елк") == [] and found("чаиковск") == []
+    state.DB.execute("INSERT INTO search(search) VALUES ('integrity-check')")
+
+
 def test_answer_is_indexed_once_it_is_done_not_while_it_streams(studio):
     """Ход пишет текст ответа каждые SAVE_SEC со статусом streaming — индекс только по готовому."""
     add_gateway(studio); cid = new_chat(studio)
@@ -327,8 +387,8 @@ def test_each_section_is_found_by_the_start_of_a_word_in_any_case_and_yo(studio)
     by = {i["section"]: i for i in r.json()["items"]}
     assert by["photo"] == {"section": "photo", "id": "i", "part": "", "title": "Кошка на крыше",
                            "snippet": "\u0002Кошка\u0003 на крыше", "model": "lustify", "created": T0 + 1,
-                           "href": "photo?id=i"}
-    assert by["chat"]["title"] == "Про зверей" and by["chat"]["href"] == "chat/c" and by["chat"]["part"] == "m"
+                           "href": "photo?id=i", "attachment": None}
+    assert by["chat"]["title"] == "Про зверей" and by["chat"]["href"] == "chat/c?m=m" and by["chat"]["part"] == "m"
     assert by["chat"]["snippet"] == "Две \u0002кошки\u0003 спят"
     assert by["transcribe"]["title"] == "Звонок.m4a" and by["transcribe"]["href"] == "transcribe?id=t"
     assert by["speech"]["href"] == "speech?id=s" and r.json()["more"] is False

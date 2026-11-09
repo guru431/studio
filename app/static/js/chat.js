@@ -56,7 +56,11 @@
  * (своя вкладка) или `ocr` идущего ответа (вкладка, что его не читает) дают плашку «📄 Распознаю скан · стр. N из M»
  * до первого текста модели. Прямое подключение — 409 `not_ready`: под полем NOT_READY, страница опрашивает документы
  * сканов поля ввода и вложений диалога и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки,
- * POST /api/ocr/<id>/attachments, модель — умолчание раздела, без окна внешней модели. */
+ * POST /api/ocr/<id>/attachments, модель — умолчание раздела, без окна внешней модели.
+ *
+ * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
+ * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
+ * пока человек не тронул ленту. В адресе — только id. */
 import { api, me } from './api.js';
 import { calendarDay } from './time.js';
 import { fieldBox } from './field.js';
@@ -74,6 +78,7 @@ const POLL_MS = 2000;
 const RECOVERY_DELAYS = [1000, 2000, 4000, 8000, 15000];
 const BEAT_MS = 15000;           // признак жизни ответа из браузера; сервер ждёт его 90 с (ALIVE_SEC)
 const STICK_PX = 48;             // ближе к низу — автопрокрутка не отпускает ленту
+const REVEAL_PX = 12;            // сообщение из поиска — на столько ниже верха ленты
 const COPIED_MS = 1500;
 const CUT_LENGTH = '\n\n[ответ обрезан пределом длины модели]';   // как chat.CUT_LENGTH сервера
 const CUT_SIZE = '\n\n[ответ обрезан: слишком длинный для студии]';   // как chat.CUT_SIZE сервера
@@ -440,6 +445,7 @@ function build(view, ctx) {
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let sending = false;
   let stick = true;
+  let found = null;            // { id, lit } сообщение из поиска (?m=): держим на виду, пока человек не тронул ленту
   let opened = 0;              // медленный ответ прежнего диалога не перебьёт новый
   let poll = null;
   let notReady = null;         // повтор хода прямого подключения, пока скан распознаётся (409 `not_ready`)
@@ -933,7 +939,7 @@ function build(view, ctx) {
 
   function messageNode(m, last) {
     if (m.role === 'user') {
-      const box = el('div', { class: 'msg user' });
+      const box = el('div', { class: 'msg user', 'data-id': m.id });
       if (m.attachments && m.attachments.length) box.append(el('div', { class: 'atts' }, ...m.attachments.map(attLabel)));
       if (m.content) box.append(el('div', { class: 'bubble' }, m.content));
       return box;
@@ -960,7 +966,7 @@ function build(view, ctx) {
         nowait.disabled = false;
       }
     });
-    const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
+    const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
       el('div', { class: 'msg-body' }, badge, think, md, steps, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null });
     paint(m);
@@ -1137,8 +1143,29 @@ function build(view, ctx) {
   }
 
   function scrollDown(force) {
-    if (force) stick = true;
-    if (stick) scroller.scrollTop = scroller.scrollHeight;
+    if (force) {
+      stick = true;
+      found = null;
+    }
+    if (found) reveal();
+    else if (stick) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  /* сообщение из поиска: его верх — у верха ленты. Длинные ответы выше него дорисовываются кадрами (markdown.js) —
+     каждая дорисовка зовёт scrollDown, и оно снова ставится на место; первое касание ленты отпускает. Нет такого
+     сообщения (удалено, другой диалог) — конец ленты, как обычно. */
+  function reveal() {
+    const node = [...feed.children].find((n) => n.dataset.id === found.id);
+    if (!node) {
+      scrollDown(true);
+      return;
+    }
+    stick = false;
+    if (!found.lit) {
+      found.lit = true;
+      node.classList.add('msg-found');
+    }
+    scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - REVEAL_PX;
   }
 
   function remoteStream() {
@@ -1228,6 +1255,7 @@ function build(view, ctx) {
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
     chatId = id;
+    found = null;                                    // ?m= нового адреса ставит query() следом
     shareContext();
     chat = null;
     needsReload = false;
@@ -1275,7 +1303,7 @@ function build(view, ctx) {
     paintChip();
     syncBusy();
     schedulePoll();
-    scrollDown(true);
+    scrollDown(!found);                              // из поиска — к сообщению, иначе — в конец
   }
 
   /* поле ввода и вложения */
@@ -1607,6 +1635,9 @@ function build(view, ctx) {
   scroller.addEventListener('scroll', () => {
     stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }, { passive: true });
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {   // человек тронул ленту — она его
+    scroller.addEventListener(type, () => { found = null; }, { passive: true });
+  }
   input.addEventListener('input', () => {
     autosize();
     dropWaiting();
@@ -1657,6 +1688,9 @@ function build(view, ctx) {
     query(query) {                                 // #/chat?transcript=<id>&ask=… или ?ocr=<id>&ask=…
       const tid = query && query.get('transcript');
       const sid = query && query.get('ocr');
+      const mid = query && query.get('m');           // #/chat/<id>?m=<сообщение> — из поиска
+      found = chatId && mid && /^[\w-]+$/.test(mid) ? { id: mid, lit: false } : null;
+      if (found && chat) reveal();                   // диалог уже открыт; иначе — open() по приходе истории
       if (tid) fromTranscript(tid, query.get('ask') || 'discuss');
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
