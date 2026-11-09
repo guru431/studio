@@ -209,23 +209,36 @@ function build(view, ctx) {
     running.delete(id);
   }
 
+  /* Одна цепочка опросов на ролик (как в photo.js): ответ опроса, ушедшего до «Отменить» или удаления,
+   * устарел — он выбрасывается; запись сменилась (отмена кончила ролик) — цепочка не продолжается. */
   async function poll(id) {
-    if (!running.has(id) || !alive) return;
+    const entry = running.get(id);
+    if (!entry || !alive) return;
+    clearTimeout(entry.timer);
+    if (entry.inflight) {
+      entry.again = true;
+      return;
+    }
+    entry.inflight = true;
+    entry.again = false;
+    let item = null;
     try {
-      const item = await api('GET', `/api/videos/${id}`);
-      if (!alive) return;
-      feed.update(item);
-      watch(item);
+      item = await api('GET', `/api/videos/${id}`);
     } catch (err) {
-      if (!alive) return;
-      if (err.code === 'gone') {
+      if (alive && err.code === 'gone' && running.get(id) === entry) {
         forget(id);
         feed.remove(id);
         return;
       }
+    } finally {
+      entry.inflight = false;
     }
-    const next = running.get(id);
-    if (next) next.timer = setTimeout(() => poll(id), POLL_MS);
+    if (!alive || running.get(id) !== entry) return;
+    if (item && !entry.again) {
+      feed.update(item);
+      watch(item);
+    }
+    if (running.get(id) === entry) entry.timer = setTimeout(() => poll(id), entry.again ? 0 : POLL_MS);
   }
 
   function busyText(entry) {
@@ -421,6 +434,8 @@ function build(view, ctx) {
     try {
       const out = await api('POST', `/api/videos/${item.id}/cancel`);
       if (!alive) return;
+      const entry = running.get(item.id);
+      if (entry && entry.inflight) entry.again = true;      // опрос в пути ушёл до отмены — его ответ устарел
       feed.update(out);
       watch(out);
     } catch (err) {
