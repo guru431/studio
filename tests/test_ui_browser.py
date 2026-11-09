@@ -6323,6 +6323,66 @@ def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, li
     assert not problems(r), problems(r)
 
 
+def long_chat(live, uid, pairs=24, found_at=14):
+    """Диалог из `pairs` пар; ответы до искомого — длинный Markdown (> 8000 знаков: Worker и дорисовка кадрами).
+    Вопрос `found_at` несёт документ «снаряжение.txt» со словом «спальник». Итог — (id диалога, id вопроса)."""
+    import uuid
+    now = time.time() - 3600
+    cid = uuid.uuid4().hex
+    live_sql(live, "INSERT INTO chats(id, user_id, title, created, updated) VALUES (?, ?, 'Поход', ?, ?)",
+             (cid, uid, now, now + 2 * pairs))
+    long = "\n\n".join(f"Абзац {n}. " + "Длинный ответ про маршрут и привалы. " * 8 for n in range(30))
+    target = None
+    for n in range(pairs):
+        question, answer = uuid.uuid4().hex, uuid.uuid4().hex
+        live_sql(live, "INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                       " VALUES (?, ?, 'user', ?, 'done', 'server', 'local-gemma-abl', ?)",
+                 (question, cid, f"Вопрос {n}", now + 2 * n))
+        live_sql(live, "INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                       " VALUES (?, ?, 'assistant', ?, 'done', 'server', 'local-gemma-abl', ?)",
+                 (answer, cid, long if n < found_at else f"Короткий ответ {n}.", now + 2 * n + 1))
+        if n == found_at:
+            target = question
+            live_sql(live, "INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, created)"
+                           " VALUES (?, ?, ?, 'document', 'снаряжение.txt', 'nope', 'палатка и спальник', ?)",
+                     (uuid.uuid4().hex, uid, question, now + 2 * n))
+    return cid, target
+
+
+#: верх найденного сообщения — у верха ленты, лента не в конце; ответы выше дорисованы
+FOUND_PLACE = """(() => { const s = document.querySelector('#messages'), m = document.querySelector('.msg.msg-found');
+  return { id: m && m.dataset.id, top: m && Math.round(m.getBoundingClientRect().top - s.getBoundingClientRect().top),
+    end: s.scrollTop + s.clientHeight >= s.scrollHeight - 48, lazy: document.querySelectorAll('.md .md-part').length > 0 }; })()"""
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_search_opens_a_long_chat_at_the_found_message(browser, live, width):
+    """Идея 2026-11-09: найденное в документе середины длинного диалога — переход прямо к сообщению (`?m=` — id,
+    не слова), верх его — у верха ленты и с подсветкой, хотя длинные ответы выше дорисовываются кадрами после
+    перехода; имя документа — своей строкой выдачи."""
+    login = f"search-jump{width}"
+    cid, target = long_chat(live, live.add_user(login))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        *go("search"), ("wait", "document.querySelector('#search-q')"),
+        ("type", "#search-q", "спальник"), ("wait", search_ready(1)),
+        ("eval", "doc", "document.querySelector('#search-results .search-doc').textContent"),
+        ("eval", "overflow", f"!({NO_OVERFLOW})"),
+        # без привязки прокрутки (Safari до 18): место держит chat.js, а не браузер
+        ("eval", "anchor", "document.head.appendChild(Object.assign(document.createElement('style'),"
+                           " { textContent: '#messages { overflow-anchor: none; }' })) && true"),
+        ("click", "#search-results .search-row[data-section=chat]"),
+        ("wait", "document.querySelector('.msg.msg-found')"), ("eval", "hash", "location.hash"),
+        ("eval", "place", settled(FOUND_PLACE, 1500))],
+        width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["doc"] == "📄 снаряжение.txt" and not v["overflow"]
+    assert v["hash"] == f"#/chat/{cid}?m={target}"
+    assert v["place"]["id"] == target and v["place"]["lazy"] and not v["place"]["end"], v["place"]
+    assert 0 <= v["place"]["top"] <= 40, v["place"]
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
 def test_search_more_right_after_typing_starts_the_new_query(browser, live):
     """«Показать ещё» в паузе после ввода: новый запрос ещё не ушёл — кнопка начинает его заново, а не
     дописывает его страницу курсором прежнего к прежнему списку."""
