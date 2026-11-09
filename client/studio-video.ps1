@@ -237,7 +237,8 @@ function Format-Span([TimeSpan]$Span) {
 }
 
 function Add-ManifestLine([string[]]$Cells) {
-    $line = ($Cells | ForEach-Object { $_ -replace '[\t\r\n]+', ' ' }) -join "`t"
+    # Ячейка — без табуляции и любых разделителей строк Unicode (тот же класс у Python-версии)
+    $line = ($Cells | ForEach-Object { $_ -replace '[\t\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+', ' ' }) -join "`t"
     [IO.File]::AppendAllText($manifest, $line + "`r`n", $Utf8Bom)    # BOM — только в новом файле
 }
 
@@ -380,8 +381,9 @@ if (-not @($rows | Where-Object { $_.Trim() }).Count) {
 $sha = [Security.Cryptography.SHA256]::Create()
 function Get-Sha256([byte[]]$Bytes) { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '').ToLowerInvariant() }
 
+# Файлы с точкой в начале имени («._IMG.jpg» macOS с флешки) — не картинки, как у Python-версии
 $images = @(Get-ChildItem -LiteralPath $Folder -File |
-    Where-Object { $Mime.ContainsKey($_.Extension.ToLowerInvariant()) } |
+    Where-Object { $Mime.ContainsKey($_.Extension.ToLowerInvariant()) -and -not $_.Name.StartsWith('.') } |
     Sort-Object { $_.Name.ToLowerInvariant() })
 if ($images.Count -eq 0) { throw "В папке $Folder нет картинок (.jpg .jpeg .png .webp)" }
 

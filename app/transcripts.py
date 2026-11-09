@@ -3,7 +3,7 @@
 1. Загрузка — тело запроса и есть запись (`Content-Type` — её тип, имя — заголовком `X-Studio-Name`,
    `encodeURIComponent`: строка запроса попала бы в журнал Apache). Тело идёт потоком на шару
    (`media.save_stream`, до UPLOAD_MAX) — не в память: служба живёт в MemoryMax=2G. Тип записи — по
-   заголовку, иначе по расширению имени; не звук — 415. Одно идущее задание на пользователя — 409.
+   заголовку, иначе по расширению имени; не звук — 415. Задания пользователя — очередью (п. 7).
 2. Задание — в фоне, как картинки: `probe` (длиннее DURATION_MAX — отказ словами), сжатие в mp3
    16 кГц моно во временный файл (audio.py), освобождение моделей картинок и gemma-abl
    (speech.free_card), распознавание подключением раздела «Расшифровка» (WhisperX с собеседниками).
@@ -21,6 +21,10 @@
    JSON `transcripts.edits` поверх файла итога, который не меняется (`raw` в нём — сегменты до склейки,
    для SRT). Показываемые реплики собирает одна `view` — для GET, выгрузок, «Копировать» и вложения в
    чат (`POST …/attachments`). Последнее сохранение побеждает; текст и имена в журнал не пишутся.
+7. Очередь (как у сканов): запись встаёт `queued` («в очереди · N»), один раннер на пользователя
+   (`RUNNERS`, `kick`) берёт старейшую в `working`; ждущих — не больше QUEUE_MAX (дальше 409 busy).
+   Отмена ждущей — сразу `cancelled`; перезапуск службы: идущая — «прервано», ждущие остаются в очереди
+   и продолжаются (`resume`); стирание истории и учётки отменяет и ждущие.
 """
 import asyncio
 import json
@@ -37,6 +41,7 @@ from pydantic import BaseModel, Field
 import audio
 import chat
 import clock
+import connections
 import db
 import documents
 import exports
@@ -57,6 +62,8 @@ EDIT_TEXT_MAX = 20_000
 NAME_EDIT_MAX = 60
 NAME_BANNED = {"Cc", "Zl", "Zp"}             # имя — одной строкой; знаки формата (Cf: ZWJ, мягкий перенос) — можно
 INTERRUPTED = "прервано перезапуском студии"
+QUEUE_MAX = 5
+QUEUED = "в очереди"
 #: столбцы строки для ленты, опроса и ответов — без `text` (весь текст записи, нужен только индексу поиска)
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, result_media_id, duration, speakers, state,"
            " detail, created, finished, edits")
@@ -83,6 +90,8 @@ class Job:
 
 
 JOBS: dict[str, Job] = {}
+#: user_id → раннер его очереди (п. 7)
+RUNNERS: dict[int, asyncio.Task] = {}
 
 
 def _clock(sec: float) -> str:
@@ -95,6 +104,14 @@ def detail(job: Job) -> str:
     if job.stage in ("распознаю", "жду карту"):
         return f"{job.stage} · {_clock(clock.NOW() - job.stage_at)}"
     return job.stage
+
+
+def waiting(row) -> str:
+    """Слова ждущей записи: место в очереди пользователя (п. 7)."""
+    ahead = state.DB.execute("SELECT COUNT(*) FROM transcripts WHERE user_id = ? AND state = 'queued'"
+                             " AND (created < ? OR (created = ? AND id < ?))",
+                             (row["user_id"], row["created"], row["created"], row["id"])).fetchone()[0]
+    return f"{QUEUED} · {ahead + 1}"
 
 
 def _row(user_id: int, tid: str):
@@ -143,7 +160,8 @@ def _out(row, segments: "list | None" = None) -> dict:
     job = JOBS.get(row["id"])
     edits = edits_of(row)
     out = {"id": row["id"], "name": row["name"], "state": row["state"],
-           "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
+           "detail": detail(job) if job is not None and row["state"] == "working"
+           else waiting(row) if row["state"] == "queued" else row["detail"],
            "model": row["model"], "duration": row["duration"], "speakers": _speakers(row, edits["names"]),
            "source_media_id": row["source_media_id"], "created": row["created"], "finished": row["finished"],
            "names": edits["names"], "edited": bool(edits["texts"] or edits["names"])}
@@ -156,21 +174,53 @@ def _store(job: Job) -> None:
     state.DB.execute("UPDATE transcripts SET detail = ? WHERE id = ? AND state = 'working'", (job.stage, job.id))
 
 
-def _finish(job: Job, state_: str, detail_: str, **extra) -> None:
+def _finish(tid: str, state_: str, detail_: str, **extra) -> None:
     cols = "".join(f", {k} = ?" for k in extra)                  # имена — из кода, не из запроса
     changed = state.DB.execute(f"UPDATE transcripts SET state = ?, detail = ?, finished = ?{cols}"
                                " WHERE id = ? AND finished IS NULL",
-                               (state_, detail_, clock.NOW(), *extra.values(), job.id)).rowcount
+                               (state_, detail_, clock.NOW(), *extra.values(), tid)).rowcount
     if changed:
-        push.job_finished("transcripts", job.id)
+        push.job_finished("transcripts", tid)
 
 
-def _active(user_id: int) -> "Job | None":
-    return next((j for j in JOBS.values() if j.user_id == user_id and j.task is not None and not j.task.done()), None)
+def _full_queue(user_id: int) -> bool:
+    return state.DB.execute("SELECT COUNT(*) FROM transcripts WHERE user_id = ? AND state = 'queued'",
+                            (user_id,)).fetchone()[0] >= QUEUE_MAX
 
 
 def _busy() -> HTTPException:
-    return HTTPException(409, {"code": "busy", "message": "идёт другая расшифровка — дождитесь её или отмените"})
+    return HTTPException(409, {"code": "busy", "message": (
+        f"в очереди уже {QUEUE_MAX} записей — дождитесь их или отмените")})
+
+
+def kick(user_id: int) -> None:
+    """Раннер очереди пользователя, если его нет (п. 7)."""
+    task = RUNNERS.get(user_id)
+    if task is None or task.done():
+        task = RUNNERS[user_id] = asyncio.create_task(_runner(user_id))
+        task.add_done_callback(lambda t: RUNNERS.pop(user_id) if RUNNERS.get(user_id) is t else None)
+
+
+async def _runner(user_id: int) -> None:
+    """Старейшая ждущая запись пользователя — в работу, по одной, пока очередь не пуста."""
+    while True:
+        row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE user_id = ? AND state = 'queued'"
+                               " ORDER BY created, id LIMIT 1", (user_id,)).fetchone()
+        if row is None:
+            return
+        now = clock.NOW()
+        if not state.DB.execute("UPDATE transcripts SET state = 'working', detail = 'готовлю запись'"
+                                " WHERE id = ? AND state = 'queued'", (row["id"],)).rowcount:
+            continue
+        try:
+            conn = connections.get(user_id, row["connection_id"])
+        except HTTPException:                        # подключение удалили, пока запись ждала
+            conn = None
+        job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
+                  source_media_id=row["source_media_id"], stage_at=now)
+        JOBS[job.id] = job
+        job.task = asyncio.create_task(run(job))
+        await job.task
 
 
 async def _recognize(job: Job, path) -> list:
@@ -199,6 +249,8 @@ async def run(job: Job) -> None:
     outcome = ("error", INTERRUPTED, {})              # остановка службы
     try:
         try:
+            if job.conn is None:
+                raise JobError("подключение раздела удалено из профиля")
             try:
                 source = media.path(job.user_id, job.source_media_id)
             except HTTPException:
@@ -241,16 +293,24 @@ async def run(job: Job) -> None:
             cleanup.result()
         finally:
             state_, detail_, extra = outcome
-            _finish(job, state_, detail_, **extra)
+            _finish(job.id, state_, detail_, **extra)
             JOBS.pop(job.id, None)
 
 
 def recover() -> None:
-    """После перезапуска идущих заданий нет: их строки — ошибка «прервано перезапуском»."""
+    """После перезапуска идущих заданий нет: их строки — ошибка «прервано перезапуском»; ждущие остаются
+    в очереди — их продолжит `resume`."""
     count = state.DB.execute("UPDATE transcripts SET state = 'error', detail = ?, finished = ?"
-                             " WHERE state NOT IN ('done', 'error', 'cancelled')", (INTERRUPTED, clock.NOW())).rowcount
+                             " WHERE state NOT IN ('done', 'error', 'cancelled', 'queued')",
+                             (INTERRUPTED, clock.NOW())).rowcount
     if count:
         log.warning("расшифровки: %d прервано перезапуском", count)
+
+
+def resume() -> None:
+    """Старт службы (после recover и state.HTTP): очереди с ждущими записями — снова в работу."""
+    for (uid,) in state.DB.execute("SELECT DISTINCT user_id FROM transcripts WHERE state = 'queued'").fetchall():
+        kick(uid)
 
 
 async def _cancel(jobs: list[Job]) -> None:
@@ -260,14 +320,24 @@ async def _cancel(jobs: list[Job]) -> None:
     await asyncio.gather(*(j.task for j in jobs), return_exceptions=True)
 
 
+def _drop_waiting(user_id: int, tid: "str | None" = None) -> int:
+    """Ждущие записи пользователя (или одна) — `cancelled`; итог — сколько."""
+    rows = state.DB.execute("SELECT id FROM transcripts WHERE user_id = ? AND state = 'queued'"
+                            + (" AND id = ?" if tid else ""), (user_id, tid) if tid else (user_id,)).fetchall()
+    for (wid,) in rows:
+        _finish(wid, "cancelled", "отменено")
+    return len(rows)
+
+
 async def stop_user(user_id: int) -> None:
-    """Стирание истории, удаление и отключение учётки: её расшифровки останавливаются."""
+    """Стирание истории, удаление и отключение учётки: её расшифровки — и ждущие — останавливаются."""
+    _drop_waiting(user_id)
     await _cancel([j for j in JOBS.values() if j.user_id == user_id and j.task is not None and not j.task.done()])
 
 
 async def stop() -> None:
-    """Остановка службы: задания записывают «прервано» и кончаются до закрытия базы."""
-    tasks = [j.task for j in JOBS.values() if j.task is not None and not j.task.done()]
+    """Остановка службы: задания записывают «прервано» и кончаются до закрытия базы; ждущие остаются."""
+    tasks = list(RUNNERS.values()) + [j.task for j in JOBS.values() if j.task is not None and not j.task.done()]
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -312,7 +382,8 @@ def start_backfill() -> asyncio.Task:
 # ---- API -------------------------------------------------------------------
 
 def _name(raw: str) -> str:
-    name = unquote(raw or "").strip().replace("\x00", "")[:NAME_MAX]
+    # NFC: имя идёт в поиск (search_transcripts_*), разложенное «й» из архива macOS иначе не находилось бы
+    name = documents.nfc(unquote(raw or "")).strip().replace("\x00", "")[:NAME_MAX]
     return name or "запись"
 
 
@@ -326,7 +397,7 @@ async def upload(request: Request):
     uid = request.state.user.id
     conn, model = sections.resolve(uid, "transcribe", _int_header(request, "x-studio-connection"),
                                    request.headers.get("x-studio-model") or None)
-    if _active(uid) is not None:
+    if _full_queue(uid):
         raise _busy()
     name = _name(request.headers.get("x-studio-name", ""))
     mime = forms.audio_type(request.headers.get("content-type", ""), name)
@@ -342,16 +413,14 @@ async def upload(request: Request):
         raise HTTPException(413, too_big) from None
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
-    if _active(uid) is not None or not media.alive(uid, source):    # пока шла загрузка
+    if _full_queue(uid) or not media.alive(uid, source):    # пока шла загрузка
         await media.delete_async(uid, source)
         raise _busy()
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
-                     " created) VALUES (?, ?, ?, ?, ?, ?, 'working', 'готовлю запись', ?)",
-                     (tid, uid, conn.id, model, name, source, now))
-    job = Job(id=tid, user_id=uid, conn=conn, model=model, source_media_id=source, stage_at=now)
-    JOBS[tid] = job
-    job.task = asyncio.create_task(run(job))
+                     " created) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                     (tid, uid, conn.id, model, name, source, QUEUED, now))
+    kick(uid)
     log.info("расшифровка %s: принята", tid[:8])
     return _out(_row(uid, tid))
 
@@ -481,6 +550,8 @@ async def cancel(tid: str, request: Request):
     job = JOBS.get(tid)
     if job is not None and job.task is not None and not job.task.done():
         await _cancel([job])
+    elif _drop_waiting(uid, tid):
+        log.info("расшифровка %s: снята из очереди", tid[:8])
     return {"state": _row(uid, tid)["state"]}
 
 

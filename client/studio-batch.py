@@ -71,6 +71,8 @@ MAX_SEED = 4294967295
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 # Недопустимое в имени файла Windows: папку с картинками могут унести и туда
 BAD_NAME = re.compile(r'[\x00-\x1f"<>|:*?\\/]')
+# Промпт в журнале — без табуляции и разделителей строк Unicode (тот же класс у PowerShell-версии)
+SEPARATORS = re.compile(r"[\t\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+")
 
 
 class Fail(Exception):
@@ -243,7 +245,9 @@ def run(args):
         if not image.is_file() or not 0 < image.stat().st_size <= MAX_IMAGE:
             raise Fail("Фото должно быть непустым файлом до 10 МиБ")
 
-    lines = Path(args.prompts_file).read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    # Строки — только по CR/LF, как Get-Content у PowerShell-версии: splitlines резал бы промпт и по
+    # U+2028/VT/FF/NEL (копия с веба)
+    lines = re.split(r"\r\n|\r|\n", Path(args.prompts_file).read_text(encoding="utf-8-sig", errors="replace"))
     prompts = [s for s in (line.strip() for line in lines) if s and not s.startswith("#")]
     if not prompts:
         raise Fail(f"В файле {args.prompts_file} нет промптов")
@@ -295,7 +299,7 @@ def run(args):
                     (out_dir / file).write_bytes(base64.b64decode(item["b64_json"]))
                     with open(manifest, "a", encoding="utf-8", newline="\n") as f:
                         f.write(f"{p}-{k}\t{file}\t{seed_out}\t{args.size}\t{args.model}\t"
-                                f"{prompt.replace(chr(9), ' ')}\n")
+                                f"{SEPARATORS.sub(' ', prompt)}\n")
                     done += 1
                     say(f"  готово за {time.monotonic() - t0:.0f} с → {file}")
                 except Exception as e:      # картинка не вышла — следующая; Ctrl+C сюда не попадает

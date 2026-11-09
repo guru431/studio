@@ -6,17 +6,23 @@
 Базы не касается ничего, кроме `history_file` (строка media — с цикла событий); Pillow и файлы —
 в asyncio.to_thread."""
 import asyncio
+import io
 import re
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 
 from fastapi import HTTPException, Request
+from PIL import Image, ImageOps
 
 import media
 from image_upload import IMAGE_FIELDS, MAX_PIXELS, MAX_UPLOAD, UploadError, decode_form, normalize_image
 
 MEDIA_ID_RE = re.compile(r"[0-9a-f]{32}")
+#: фото истории как исходник — до пределов картинки ленты (images.RESULT_MAX, images.RESULT_PIXELS;
+#: images импортирует этот модуль, сверяет тест)
+HISTORY_MAX = 50 * 1024 * 1024
+HISTORY_PIXELS = 4096 * 4096
 #: отказ decode_form форме без файла фото — тогда фото может прийти полем source_media_id
 NO_FILE = f"нужен файл {IMAGE_FIELDS[0]} (PNG, JPEG или WebP)"
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
@@ -59,19 +65,41 @@ def decode(raw: bytes, content_type: str, *, with_mask: bool = False,
     return fields, image, (extra or {}).get("mask")
 
 
-def _load(file: Path) -> bytes:
-    if file.stat().st_size > MAX_UPLOAD:
-        raise UploadError(f"фото должно быть непустым и не больше {MAX_UPLOAD // (1024 * 1024)} МиБ", 413)
+def _load(file: Path, limit: int) -> bytes:
+    if file.stat().st_size > limit:
+        raise UploadError(f"фото должно быть непустым и не больше {limit // (1024 * 1024)} МиБ", 413)
     return file.read_bytes()
 
 
-async def history_file(user_id: int, media_id: str) -> bytes:
-    """Свой файл истории (фото или маска) до MAX_UPLOAD; чужой, неизвестный и пропавший с шары — 404 gone."""
+def _fit_history(raw: bytes, max_pixels: int) -> bytes:
+    """Фото истории больше max_pixels (картинка ленты — до HISTORY_PIXELS) — сразу к рамке normalize_image
+    (≤2048 по стороне и ≤2 Мп, тем же thumbnail и с поворотом по EXIF): её предел — копии модуля
+    переводчика, он не меняется, а уменьшенное ею же она оставляет как есть. Прочее — как есть: отказ
+    скажет normalize_image. Для asyncio.to_thread."""
+    try:
+        with Image.open(io.BytesIO(raw)) as picture:
+            width, height = picture.size
+            if (picture.format not in ("PNG", "JPEG", "WEBP") or width * height <= max_pixels
+                    or width * height > HISTORY_PIXELS):
+                return raw
+            # рамка симметрична по сторонам: уменьшить до поворота по EXIF — то же, что после, но быстрее
+            scale = min(1, 2048 / width, 2048 / height, (2 * 1024 * 1024 / (width * height)) ** 0.5)
+            picture.thumbnail((max(1, int(width * scale)), max(1, int(height * scale))))
+            image = ImageOps.exif_transpose(picture).convert("RGB")
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return raw
+    out = io.BytesIO()
+    image.save(out, format="PNG", compress_level=1)        # промежуточный: его тут же прочтёт normalize_image
+    return out.getvalue()
+
+
+async def history_file(user_id: int, media_id: str, limit: int = MAX_UPLOAD) -> bytes:
+    """Свой файл истории (фото или маска) до limit; чужой, неизвестный и пропавший с шары — 404 gone."""
     if not MEDIA_ID_RE.fullmatch(media_id):
         raise HTTPException(404, media.GONE)
     file = media.path(user_id, media_id)
     try:
-        return await asyncio.to_thread(_load, file)
+        return await asyncio.to_thread(_load, file, limit)
     except FileNotFoundError:
         raise HTTPException(404, media.GONE) from None
     except OSError:
@@ -84,7 +112,8 @@ async def photo(user_id: int, upload: "bytes | None", source_id: "str | None",
     if upload is None and source_id is None:
         return None
     if upload is None:
-        upload = await history_file(user_id, source_id)
+        # картинка ленты — до HISTORY_MAX и HISTORY_PIXELS: шире пределов фото с устройства
+        upload = await asyncio.to_thread(_fit_history, await history_file(user_id, source_id, HISTORY_MAX), max_pixels)
     return await asyncio.to_thread(normalize_image, upload, max_pixels)
 
 

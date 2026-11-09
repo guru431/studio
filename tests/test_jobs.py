@@ -83,7 +83,7 @@ def test_running_jobs_of_every_section(studio):
     assert all(i["state"] == "running" and i["finished"] is None for i in run.values())
     assert run["i1"] == {"section": "photo", "id": "i1", "state": "running", "title": "Картинка · Lustify",
                          "detail": "жду карту или генерирую", "started": T0 - 30, "finished": None,
-                         "href": "photo?id=i1"}
+                         "href": "photo?id=i1", "cancel": "/api/images/i1/cancel"}
     assert run["i2"]["title"] == "Правка · FLUX" and run["i2"]["detail"] == "отменяю"
     assert run["i3"]["detail"] == "в очереди серии"
     assert run["v1"]["title"] == "Ролик · 5 с" and run["v1"]["href"] == "video?id=v1" and run["v1"]["progress"] == 0
@@ -95,6 +95,41 @@ def test_running_jobs_of_every_section(studio):
     assert run["m1"]["section"] == "chat" and run["m1"]["title"] == "Ответ · План отпуска"
     assert run["m1"]["href"] == "chat/c1"
     assert "секретный" not in str(out)
+    assert {k: v["cancel"] for k, v in run.items()} == {
+        "i1": "/api/images/i1/cancel", "i2": "/api/images/i2/cancel", "i3": "/api/images/i3/cancel",
+        "v1": "/api/videos/v1/cancel", "v2": "/api/videos/v2/cancel", "t1": "/api/transcripts/t1/cancel",
+        "s1": "/api/speeches/s1/cancel", "m1": "/api/chats/c1/stop"}
+
+
+def test_queued_records_and_speeches_are_running_with_their_place(studio):
+    """Очередь расшифровок и озвучек: ждущие — среди идущих, «в очереди · N», с «Отменить»; готовые — без него."""
+    uid = me(studio)
+    transcript(uid, "t1", state_="queued", created=T0 - 20, detail="в очереди")
+    transcript(uid, "t2", state_="queued", created=T0 - 10, detail="в очереди")
+    speech(uid, "s1", state_="queued", detail="в очереди")
+    speech(uid, "s2", state_="done", finished=T0 - 5)
+    out = get(studio)
+    run = by_id(out["running"])
+    assert (run["t1"]["detail"], run["t2"]["detail"], run["s1"]["detail"]) == (
+        "в очереди · 1", "в очереди · 2", "в очереди · 1")
+    assert run["t2"]["cancel"] == "/api/transcripts/t2/cancel"
+    (done,) = out["finished"]
+    assert done["id"] == "s2" and "cancel" not in done
+
+
+def test_cancel_from_the_panel_is_closed_with_its_section(studio):
+    """«Отменить» в «В работе» — адрес раздела: закрытый раздел отвечает 423, открытый — отменяет."""
+    uid = me(studio)
+    transcript(uid, "t1", state_="queued", detail="в очереди")
+    speech(uid, "s1", state_="queued", detail="в очереди")
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "sections": ["transcribe"],
+                                                      "timeout": 300, "password": "password-123"}).status_code == 200
+    assert studio.c.post("/api/lock/now").status_code == 204
+    cancel = {i["id"]: i.get("cancel") for i in get(studio)["running"]}
+    assert "t1" not in cancel                                          # закрытый раздел панель не показывает
+    assert studio.c.post("/api/transcripts/t1/cancel").status_code == 423
+    assert studio.c.post(cancel["s1"]).json() == {"state": "cancelled"}
+    assert state.DB.execute("SELECT state FROM transcripts WHERE id = 't1'").fetchone()[0] == "queued"
 
 
 def test_other_users_jobs_are_not_listed(studio):
@@ -210,7 +245,8 @@ def test_jobs_panel_lists_running_and_done_scans(studio, caplog):
     run, fin = by_id(out["running"]), by_id(out["finished"])
     assert set(run) == {"o1", "o2", "o3"} and set(fin) == {"o4", "o5"}
     assert run["o1"] == {"section": "ocr", "id": "o1", "state": "running", "title": f"Распознавание «{SCAN}»",
-                         "detail": "распознаю · стр. 2 из 3", "started": T0 - 30, "finished": None, "href": "ocr?id=o1"}
+                         "detail": "распознаю · стр. 2 из 3", "started": T0 - 30, "finished": None, "href": "ocr?id=o1",
+                         "cancel": "/api/ocr/o1/cancel"}
     assert run["o2"]["detail"] == "в очереди" and run["o3"]["detail"] == "отменяю"
     assert (fin["o4"]["state"], fin["o5"]["state"], fin["o5"]["detail"]) == ("done", "error", "файл документа удалён")
     assert SCAN not in caplog.text
@@ -235,7 +271,7 @@ def test_jobs_list_translations(studio, caplog):
     assert set(run) == {"r1", "r2"} and set(fin) == {"r3"}
     assert run["r1"] == {"section": "translate", "id": "r1", "state": "running", "title": f"Перевод «{SCAN}»",
                          "detail": "перевожу · 2 из 3", "started": T0 - 30, "finished": None,
-                         "href": "translate?id=r1"}
+                         "href": "translate?id=r1", "cancel": "/api/translate/r1/cancel"}
     assert run["r2"]["detail"] == "в очереди" and fin["r3"]["state"] == "done"
     assert "секретный" not in str(out) and SCAN not in caplog.text
 
