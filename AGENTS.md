@@ -9,23 +9,27 @@
 владельца `owner-images`). Модели, карта и маршруты шлюза — проект `llm_routers`; отсюда выделено
 2026-10-19, старая история — там.
 
-Основная ветка и GitHub используют общую очищенную историю. Реальные параметры
-установки — в игнорируемом `deploy/local-profile.sh`; правила — [docs/publication.md](docs/publication.md).
+`origin` приватный, но основная ветка после очистки публикуется на GitHub: в отслеживаемые файлы — только
+примеры адресов, имён и путей. Реальные параметры установки — в игнорируемом `deploy/local-profile.sh`;
+правила — [docs/publication.md](docs/publication.md). Устройство по областям — [docs/architecture/](docs/architecture/README.md).
 
 ## Что нельзя ломать
 
 - История — в базе (`/var/lib/studio/studio.db`) и на шаре (`/mnt/storage/SharedData/studio`), в
   журнал — ничего: промпты, ключи, пароли, тексты, картинки и имена файлов не пишутся.
-- Анонимны `/health`, `/login`, `/logout`, `/robots.txt`, PIN-вход `/share` и оболочка PWA;
-  `/share/*` — отдельные PIN/read-токены без доступа к учётке (`chat_shares.py`). Всё `/api/*` —
-  через сессию и CSRF (`auth.guard`). Пользователь видит только своё. Запертой сессии телефона
-  (блокировка, `app/screenlock.py`) — 423 на всё, кроме `auth.SCREEN_LOCK_PATHS`.
+- Анонимны `/health`, `/login`, `/logout`, `/robots.txt`, оболочка PWA и два класса входов со своей защитой:
+  публичная ссылка `/share` и `/share/unlock|check|file` (`chat_shares.py`: секреты только телом JSON ≤ 4096 байт,
+  чужой `Origin` — 403, PIN с паузами и общим пределом, read-токен без прав учётки) и `auth.OPEN_API`:
+  `/api/agent/enroll` (логин и пароль с паузами `/login`) и `/api/agent/package` (Bearer-ключ действующего
+  устройства активной учётки). Остальное `/api/*` — через сессию и CSRF (`auth.guard`); WebSocket
+  `/api/agent/link` проверяет ключ сам. Пользователь видит только своё. Запертой сессии (блокировка на всех
+  устройствах, `app/lock_policy.py`) — 423 на API защищённых разделов, кроме `auth.SCREEN_LOCK_PATHS`.
 - Служба слушает только unix-сокет `/run/studio/web.sock` за Apache debian
   ([deploy/apache-vhost.conf](deploy/apache-vhost.conf)) и потому верит последнему
   `X-Forwarded-For` — TCP-порт не открывать.
 - Секреты — только vault и `/etc/studio/studio.env` (`STUDIO_DATA_KEY`) на хосте, на хост — потоком
   stdin; скрипты в репозитории без ключа, копии с ключом `*.local.ps1` и `*.local.py` — в
-  `.gitignore`. Репозиторий приватный.
+  `.gitignore`. Основная ветка публикуется после очистки — секретов и реальных адресов в Git нет.
 - `client/*.ps1` — UTF-8 с BOM и CRLF; `client/*.py` — UTF-8 без BOM и LF (shebang), только stdlib.
   Поведение двух версий одинаковое — правка идёт в обе. `deploy/*` — LF.
 

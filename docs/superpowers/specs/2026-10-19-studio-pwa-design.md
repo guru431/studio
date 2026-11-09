@@ -38,6 +38,16 @@
 офлайн, квоты на место, обмен диалогами между пользователями, изоляция очереди роликов на уровне
 шлюза, поиск по истории.
 
+> Пометка 2026-11-09: это границы **этапа 1**, а не запрет навсегда. Позже реализованы: голос
+> (голосовой ввод, расшифровка, озвучка — [2026-10-20-studio-sections-voice-design](2026-10-20-studio-sections-voice-design.md)),
+> веб-поиск («Интернет» чата — [2026-10-21-studio-chat-internet-design](2026-10-21-studio-chat-internet-design.md)),
+> поиск по истории ([2026-10-21-studio-history-search-design](2026-10-21-studio-history-search-design.md)),
+> push-уведомления (Web Push с 2026-10-30 и ntfy — [docs/architecture/notifications.md](../../architecture/notifications.md);
+> решение wontfix о push пересмотрено владельцем 2026-10-30), инструменты и плагины (Claude Code, Codex, OpenCode —
+> [2026-10-28-studio-claude-code-design](2026-10-28-studio-claude-code-design.md)), обмен диалогами — ссылки
+> «Поделиться» с PIN ([docs/architecture/sharing-export.md](../../architecture/sharing-export.md)). Остальное в
+> перечне по-прежнему не делается.
+
 ## 5. Анти-цели — провал, даже если всё «работает»
 
 - Посторонний из интернета попадает внутрь.
