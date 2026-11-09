@@ -108,9 +108,33 @@ def busy_speech(s, fake_audio, monkeypatch) -> str:
 
 def test_history_wipe_drops_the_jobs_from_memory(studio, fake_audio, monkeypatch):
     add_gateway(studio)
-    busy_speech(studio, fake_audio, monkeypatch)
+    first = busy_speech(studio, fake_audio, monkeypatch)
+    wait_sp(studio, first, {"working"})
+    vid = state.DB.execute("SELECT voice FROM speeches").fetchone()[0]
+    waiting = [studio.c.post("/api/speeches", json={"text": f"Фраза {n}.", "voice": vid}).json()
+               for n in range(speeches.QUEUE_MAX)]
+    assert [(w["state"], w["detail"]) for w in waiting] == [
+        ("queued", f"в очереди · {n}") for n in range(1, speeches.QUEUE_MAX + 1)]
+    r = studio.c.post("/api/speeches", json={"text": "Лишняя.", "voice": vid})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    assert studio.c.post(f"/api/speeches/{waiting[0]['id']}/cancel").json() == {"state": "cancelled"}
+    assert studio.c.get(f"/api/speeches/{waiting[1]['id']}").json()["detail"] == "в очереди · 1"
     assert studio.c.delete("/api/history").status_code == 200
     assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0 and speeches.JOBS == {}
+    assert speeches.RUNNERS == {}
+
+
+def test_queued_speeches_run_in_turn_and_survive_a_restart(studio, fake_audio):
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    ids = [studio.c.post("/api/speeches", json={"text": f"Фраза {n}.", "voice": vid}).json()["id"] for n in range(2)]
+    assert [wait_sp(studio, s, {"done", "error"})["state"] for s in ids] == ["done", "done"]
+    state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, text, state, detail, created)"
+                     " SELECT 'q1', user_id, connection_id, model, voice, 'Ещё.', 'queued', 'в очереди', created + 1"
+                     " FROM speeches WHERE id = ?", (ids[0],))
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    assert wait_sp(studio, "q1", {"done", "error"})["state"] == "done"
 
 
 def test_deleting_a_user_drops_their_jobs_from_memory(studio, fake_audio, monkeypatch):

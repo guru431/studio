@@ -4,7 +4,8 @@
  * точка, если есть готовые позже отметки просмотра (`data-new`). Отметка — время сервера `now` того
  * опроса, при котором панель открыли (localStorage `studio-jobs-seen`, удобство устройства, как тема:
  * пропала — новыми считаются все готовые за час). Панель — <dialog>: «Идёт» и «Готово за час», у
- * строки — «Открыть» (адрес раздела с ?id=, chat/<id>); отмены и удаления в панели нет. Открытая
+ * строки — «Открыть» (адрес раздела с ?id=, chat/<id>), у идущих и ждущих — ещё «Отменить» (адрес
+ * отмены раздела из ответа, `cancel`; удаления в панели нет). Открытая
  * панель на опросе строки не пересобирает: сопоставляет по id (fill), фокус и нажатие не теряются.
  *
  * Опрос: раз в JOBS_POLL_MS, пока что-то идёт или открыта панель, иначе раз в IDLE_POLL_MS и при
@@ -21,7 +22,7 @@
  * в URL окна до возврата фокуса; запасной postMessage({ jobs: href }) проверяет HREF. */
 import { api } from './api.js';
 import { timeOnly } from './time.js';
-import { el } from './ui.js';
+import { el, words } from './ui.js';
 import { allCodeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 import { ENGINE_NAMES } from './code-options.js';
 
@@ -43,6 +44,8 @@ const NOTICES = {
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. Push Claude Code
  * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
 export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
+/** Адрес отмены из ответа (jobs.py CANCEL): иное не отправляется. */
+const CANCEL = /^\/api\/(?:(?:images|videos|transcripts|ocr|translate|speeches)\/[\w-]+\/cancel|chats\/[\w-]+\/stop)$/;
 /** Значки разделов (и у строк «Поиска», search.js). */
 export const ICONS = {
   code: '<rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4M8 8l3 2-3 2M13 12h3"/>',
@@ -123,6 +126,29 @@ function tick() {
   }
 }
 
+/** «Отменить» идущей или ждущей строки — обычный адрес отмены её раздела (ответ сервера `cancel`):
+ * закрытый раздел отвечает 423, как любой его запрос. Отказ — словами в строке до следующего опроса. */
+function cancelButton(item) {
+  if (typeof item.cancel !== 'string' || !CANCEL.test(item.cancel)) return null;
+  const stop = el('button', { type: 'button', class: 'btn btn-sm jobs-cancel', 'aria-label': `Отменить: ${item.title}` },
+    'Отменить');
+  stop.addEventListener('click', async () => {
+    stop.disabled = true;
+    try {
+      await api('POST', item.cancel);
+    } catch (err) {
+      const detail = stop.closest('.jobs-row')?.querySelector('.jobs-detail');
+      if (detail) {
+        detail.textContent = words(err);
+        detail.classList.add('error');
+      }
+      stop.disabled = false;
+    }
+    poll();
+  });
+  return stop;
+}
+
 function row(item, fresh) {
   const open = el('button', { type: 'button', class: 'btn btn-sm jobs-open' }, 'Открыть');
   open.addEventListener('click', () => openHref(item.href));
@@ -130,7 +156,7 @@ function row(item, fresh) {
     'data-state': item.state }, icon(item.section),
   el('div', { class: 'jobs-text' }, el('b', { class: 'jobs-title', title: item.title }, item.title),
     el('span', { class: `jobs-detail${item.state === 'error' ? ' error' : ''}` }, detailText(item))),
-  open);
+  el('div', { class: 'jobs-acts' }, item.finished === null ? cancelButton(item) : null, open));
 }
 
 /** Строка того же id — тот же узел: меняются только слова и состояние. */

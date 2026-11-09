@@ -102,7 +102,9 @@ async def lifespan(_app):
     videos.recover()
     state.HTTP = state.make_http()
     state.CLEANER_HTTP = state.make_cleaner_http()
-    loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
+    transcripts.resume()                         # ждущие в очереди — дальше (после recover и HTTP)
+    speeches.resume()
+    loops =([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
               asyncio.create_task(cleaner.sweep())]
              if state.WATCHER else [])
     try:

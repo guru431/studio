@@ -19,7 +19,7 @@ import { el, openDialog, words } from './ui.js';
 const POLL_MS = 3000;
 const PAGE = 60;
 const TEXT_MAX = 2000;
-const RUNNING = new Set(['working', 'cancelling']);
+const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const SERVICE_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 const ICONS = { list: '<path d="M4 6h16M4 12h16M4 18h16"/>' };
 
