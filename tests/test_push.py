@@ -321,13 +321,13 @@ def test_finished_jobs_push_once_to_the_owner_without_content(studio, table, sec
         elif table == "videos":
             videos._settle(item_id, outcome, job.detail)
         elif table == "transcripts":
-            transcripts._finish(job, outcome, job.detail)
+            transcripts._finish(item_id, outcome, job.detail)
         elif table == "scans":
             ocr._finish(item_id, outcome, job.detail)
         elif table == "translations":
             translate._finish(item_id, outcome, job.detail)
         else:
-            speeches._finish(job, outcome, job.detail)
+            speeches._finish(item_id, outcome, job.detail)
 
     for suffix, owner, outcome in (("done", uid, "done"), ("error", uid, "failed" if table == "videos" else "error"),
                                     ("cancel", uid, "cancelled"), ("other", other, "done")):
