@@ -286,6 +286,113 @@ def test_unsent_video_is_not_looked_up(studio):
     assert studio.c.get("/api/videos").json()["items"] == [] and media_rows() == 0
 
 
+def _stopped_while_sending(s, accepted=True):
+    """Выкладка посреди создания: --timeout-graceful-shutdown отменяет запрос к шлюзу (CancelledError),
+    а шлюз задание уже принял (accepted) или ещё нет."""
+    async def create(request):
+        if request.method != "POST":
+            return await s.gw.builtin(request)
+        if accepted:
+            await s.gw.builtin(request)
+        raise asyncio.CancelledError()
+
+    s.gw.on["/slot/videos"] = create
+
+
+def _restart(s):
+    s.c.__exit__(None, None, None)
+    s.gw.on.pop("/slot/videos", None)
+    s.clock[0] += 5
+    s.c.__enter__()
+
+
+def test_video_accepted_before_a_shutdown_is_found_after_restart(studio):
+    """Находка 2026-11-09: ролик, принятый шлюзом до обрыва службы, генерировался на карте без учёта —
+    строки не было. Теперь строка (seed студии) встаёт до запроса, а после перезапуска наблюдатель находит
+    задание в списке шлюза и доводит ролик до истории."""
+    add_gateway(studio)
+    _stopped_while_sending(studio)
+    with pytest.raises(BaseException):
+        create_video(studio, prompt=PROMPT, seconds="7")
+    (row,) = state.DB.execute("SELECT * FROM videos").fetchall()
+    assert row["gateway_id"] is None and row["state"] == "queued" and row["detail"] == videos.SENDING
+    gid = v_gateway_id(studio)
+    _restart(studio)
+    poll(studio)
+    assert state.DB.execute("SELECT gateway_id FROM videos").fetchone()[0] == gid
+    studio.gw.video_status = "completed"
+    poll(studio)
+    got = item(studio, row["id"])
+    assert got["state"] == "done" and got["seed"] == row["seed"] and studio.gw.video_deleted == [gid]
+    assert got["prompt"] == PROMPT and got["seconds"] == 7
+
+
+def test_video_not_accepted_before_a_shutdown_fails_in_words(studio):
+    add_gateway(studio)
+    foreign = _foreign(studio, 7)                                      # чужое — не трогается
+    _stopped_while_sending(studio, accepted=False)
+    with pytest.raises(BaseException):
+        create_video(studio)
+    _restart(studio)
+    poll(studio)
+    (got,) = studio.c.get("/api/videos").json()["items"]
+    assert got["state"] == "failed" and got["detail"].startswith(videos.INTERRUPTED)
+    assert foreign in studio.gw.videos and studio.gw.video_deleted == []
+
+
+def test_a_sending_video_is_left_to_its_request_and_the_users_seed_is_not_written_early(studio):
+    """Идущую отправку (моложе SEND_STALE_SEC, после старта службы) наблюдатель не трогает; с seed
+    пользователя строки до ответа нет — ему нечем сверить своё задание."""
+    add_gateway(studio)
+    seen = []
+
+    async def create(request):
+        seen.append([tuple(r) for r in state.DB.execute("SELECT state, gateway_id FROM videos")])
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/videos"] = create
+    assert create_video(studio).status_code == 201
+    assert create_video(studio, seed="42").status_code == 201
+    assert seen[0] == [("queued", None)] and len(seen[1]) == 1           # вторая строка — только после ответа
+    videos.BOOT = 0.0
+    sending = "f" * 32                                                  # отправка этого процесса ещё идёт
+    state.DB.execute("INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, seconds,"
+                     " quality, smooth, seed, state, detail, created) SELECT ?, user_id, connection_id, NULL,"
+                     " source_media_id, prompt, seconds, quality, smooth, 1, 'queued', ?, ? FROM videos LIMIT 1",
+                     (sending, videos.SENDING, T0))
+    poll(studio)
+    assert [c["path"] for c in studio.gw.video_calls].count("/slot/videos") == 2   # список не читался
+    assert item(studio, sending)["state"] == "queued"
+    studio.clock[0] = T0 + videos.SEND_STALE_SEC + 1                    # давно — запрос оборвался
+    poll(studio)
+    assert item(studio, sending)["state"] == "failed"
+
+
+@pytest.mark.parametrize("gone", [False, True], ids=["cancelled", "deleted"])
+def test_video_cancelled_or_deleted_while_sending_is_dropped_at_the_gateway(studio, gone):
+    add_gateway(studio)
+
+    async def create(request):
+        (vid,) = state.DB.execute("SELECT id FROM videos").fetchone()
+        answer = await studio.gw.builtin(request)
+        # пока шлюз принимал, ролик отменили или удалили на другой вкладке
+        if gone:
+            state.DB.execute("DELETE FROM videos WHERE id = ?", (vid,))
+        else:
+            state.DB.execute("UPDATE videos SET state = 'cancelled', detail = 'отменено' WHERE id = ?", (vid,))
+        return answer
+
+    studio.gw.on["/slot/videos"] = create
+    r = create_video(studio)
+    gid = v_gateway_id(studio)
+    assert studio.gw.video_deleted == [gid]
+    if gone:
+        assert r.status_code == 404
+    else:
+        assert r.status_code == 201 and r.json()["state"] == "cancelled"
+        assert state.DB.execute("SELECT gateway_id FROM videos").fetchone()[0] is None
+
+
 # ---- наблюдатель -------------------------------------------------------------
 
 def test_watcher_brings_a_finished_video_into_history(studio):
@@ -733,6 +840,60 @@ def test_video_from_history_image(studio):
     assert both.status_code == 400
     unknown = studio.c.post("/api/videos", files={"source_media_id": (None, "0" * 32)})
     assert unknown.status_code == 404 and len(studio.gw.video_forms) == 1
+
+
+def test_repeat_and_more_variants_send_the_same_clip_with_new_seeds(studio, monkeypatch):
+    """«Повторить» и «Ещё варианты»: тот же исходник истории (не копия), свой промпт, длительность,
+    качество и дорисовка; seed — новый от студии у каждого; придуманный шлюзом промпт не повторяется."""
+    add_gateway(studio)
+    first = create_video(studio, prompt=PROMPT, seconds="7", quality="high", smooth="false").json()
+    seeds = iter(range(100, 110))
+    monkeypatch.setattr(videos.secrets, "randbelow", lambda _n: next(seeds))
+    one = studio.c.post(f"/api/videos/{first['id']}/repeat", json={})
+    assert one.status_code == 201, one.text
+    more = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 3})
+    assert more.status_code == 201 and more.json()["message"] is None
+    made = one.json()["items"] + more.json()["items"]
+    assert [v["seed"] for v in made] == [100, 101, 102, 103]
+    assert {(v["source_media_id"], v["prompt"], v["seconds"], v["quality"], v["smooth"]) for v in made} == {
+        (first["source_media_id"], PROMPT, 7, "high", False)}
+    forms_ = studio.gw.video_forms
+    assert [f[0] for f in forms_[1:]] == [{"model": videos.VIDEO_MODEL, "prompt": PROMPT, "seconds": "7",
+                                           "quality": "high", "smooth": "false", "seed": str(s)} for s in range(100, 104)]
+    assert all(f[1] == forms_[0][1] for f in forms_[1:]) and media_rows() == 1
+    # промпт придумал шлюз (столбец prompt — его) — повтор снова просит придумать; у строки без цепочки — так же
+    auto = create_video(studio).json()
+    state.DB.execute("UPDATE videos SET prompt_source = 'auto', prompt = 'she turns' WHERE id = ?", (auto["id"],))
+    assert studio.c.post(f"/api/videos/{auto['id']}/repeat", json={"count": 1}).status_code == 201
+    assert "prompt" not in studio.gw.video_forms[-1][0]
+    state.DB.execute("UPDATE videos SET chain = NULL WHERE id = ?", (auto["id"],))
+    assert studio.c.post(f"/api/videos/{auto['id']}/repeat", json={"count": 1}).status_code == 201
+    assert "prompt" not in studio.gw.video_forms[-1][0]
+    assert studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 5}).status_code == 422
+    assert studio.c.post(f"/api/videos/{'0' * 32}/repeat", json={}).status_code == 404
+    assert len(studio.gw.video_forms) == 8
+
+
+def test_more_variants_stop_at_the_first_refusal_and_keep_what_was_accepted(studio):
+    add_gateway(studio)
+    first = create_video(studio).json()
+    posts = []
+
+    async def create(request):
+        if request.method != "POST":
+            return await studio.gw.builtin(request)
+        posts.append(1)
+        if len(posts) >= 2:
+            return httpx.Response(429, json={"error": {"message": "очередь полна"}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/videos"] = create
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 4})
+    assert r.status_code == 201 and len(r.json()["items"]) == 1 and len(posts) == 2
+    assert "очередь роликов полна" in r.json()["message"]
+    assert len(studio.c.get("/api/videos").json()["items"]) == 2           # отказанная строка не осталась
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 2})
+    assert r.status_code == 429 and "очередь роликов полна" in r.json()["detail"]["message"]
 
 
 def test_users_see_only_their_videos(studio):

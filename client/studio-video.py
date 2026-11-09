@@ -83,6 +83,9 @@ MANIFEST = "video-manifest.tsv"
 HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt", "model",
           "fingerprint"]
 OLD_HEADER = HEADER[:9]                # журнал прежней версии: без модели и отпечатка
+LINES = re.compile(r"\r\n|\r|\n")
+# Ячейка журнала — без табуляции и любых разделителей строк Unicode (тот же класс у PowerShell-версии)
+SEPARATORS = re.compile(r"[\t\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+")
 
 
 class Fail(Exception):
@@ -262,7 +265,7 @@ class Videos:
 
     def add_row(self, cells):
         with open(self.manifest, "a", encoding="utf-8", newline="\n") as f:
-            f.write("\t".join(re.sub(r"[\t\r\n]+", " ", c) for c in cells) + "\n")
+            f.write("\t".join(SEPARATORS.sub(" ", c) for c in cells) + "\n")
 
     def label(self, job):
         return f"ролик {job.n}/{self.total} {job.image.name}"
@@ -392,7 +395,11 @@ class Videos:
         if self.manifest.exists():
             raw = self.manifest.read_bytes()
             bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
-            rows = raw[len(bom):].decode("utf-8", "replace").splitlines()
+            # Строки — только по CR/LF, как .NET ReadAllLines у PowerShell-версии: splitlines резал бы и по
+            # U+2028/VT/FF/NEL внутри промпта, и половина строки теряла бы отпечаток
+            rows = LINES.split(raw[len(bom):].decode("utf-8", "replace"))
+            if rows and not rows[-1]:
+                rows.pop()
             if rows and rows[0].split("\t") == OLD_HEADER:
                 # Журнал прежней версии: шапку — с новыми столбцами, строки как есть
                 part = self.folder / (MANIFEST + ".part")

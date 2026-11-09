@@ -128,6 +128,7 @@ body.shell { display:flex; height:calc(100dvh / var(--ui-scale, 1)); min-height:
   -webkit-box-orient:vertical; overflow-wrap:anywhere; }
 .jobs-ico { flex: none; color: var(--muted); display: grid; }
 .jobs-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.jobs-acts { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .jobs-title, .jobs-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jobs-title { font-weight: 600; font-size:calc(14px * var(--font-scale, 1)); }
 .jobs-detail { color: var(--muted); font-size:calc(13px * var(--font-scale, 1)); }
