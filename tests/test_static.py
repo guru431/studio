@@ -41,7 +41,8 @@ def test_manifest_makes_an_installable_app():
     m = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
     assert m["name"] == m["short_name"] == "Студия"
     assert m["start_url"] == "/" and m["scope"] == "/" and m["display"] == "standalone" and m["lang"] == "ru"
-    assert m["background_color"] == m["theme_color"] == "#1b1b1b"
+    # заставка PWA одна на обе темы — нейтральный серый (рамка полей), не тёмный «Графит»
+    assert m["background_color"] == m["theme_color"] == "#7f786c"
     sizes = {(i["sizes"], i.get("purpose", "any")) for i in m["icons"]}
     assert {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")} <= sizes
     for icon in m["icons"]:

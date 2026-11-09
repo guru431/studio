@@ -470,7 +470,8 @@ def test_new_tab_picker_fills_workspace_and_preserves_chat_draft(browser, live, 
     assert not result.get("failed"), result
     values = result["values"]
     assert all(values["initial"].values()) and all(values["opened"].values()), values
-    assert values["fonts"] == [f"{11 if width <= 550 else 12}px"] * 4 + ["10px"]
+    # мета-строка — не мельче 11 px (--fs-2xs = max(11px, 11px × размер текста)), прежде 10 px
+    assert values["fonts"] == [f"{11 if width <= 550 else 12}px"] * 4 + ["11px"]
     assert values["rows"] == [CODE_CHAT_B] and values["stillOpen"] and values["lastClosed"]
     assert values["draft"] == "Черновик задания"
     assert not problems(result), problems(result)

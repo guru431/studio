@@ -116,6 +116,65 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     fits(page)
 
 
+@pytest.mark.parametrize('iphone', [(852, 393)], indirect=True)
+def test_landscape_iphone_keeps_rail_and_content_out_of_the_notch(iphone):
+    """Ландшафт iPhone (> 760 px — настольный рельс): вкладки и содержимое не под вырезом.
+    Playwright не эмулирует вырез: безопасные поля подставлены в переменные, которые CSS берёт из env()."""
+    page, _ = iphone
+    page.evaluate("""() => { const s = document.documentElement.style;
+      s.setProperty('--safe-left', '59px'); s.setProperty('--safe-right', '59px'); }""")
+    geometry = page.evaluate("""() => {
+      const rail = document.querySelector('#rail'), view = document.querySelector('#view');
+      const boxes = [...rail.querySelectorAll('.tab, #avatar, #jobs, #search-open, .logo')]
+        .map(e => e.getBoundingClientRect()).filter(r => r.width);
+      const r = view.getBoundingClientRect();
+      return {column: getComputedStyle(rail).flexDirection === 'column', railRight: rail.getBoundingClientRect().right,
+        left: Math.min(...boxes.map(b => b.left)), viewLeft: r.left,
+        contentRight: r.right - parseFloat(getComputedStyle(view).paddingRight), width: innerWidth};
+    }""")
+    assert geometry['column'], geometry
+    assert geometry['left'] >= 59 and geometry['viewLeft'] >= geometry['railRight'] - 1, geometry
+    assert geometry['contentRight'] <= geometry['width'] - 59 + 1, geometry
+    fits(page)
+    page.locator('#avatar').tap()
+    menu = page.locator('#menu').bounding_box()
+    assert menu['x'] >= geometry['railRight'] - 1, menu
+    page.locator('#jobs').tap()
+    panel = page.locator('#jobs-panel').bounding_box()
+    assert panel['x'] >= geometry['railRight'] - 1 and panel['x'] + panel['width'] <= geometry['width'], panel
+
+
+@pytest.mark.parametrize('iphone', [(393, 852)], indirect=True)
+def test_touch_targets_reach_44px_and_phone_scale_stays_readable(iphone):
+    """Касание: значки, «×» вкладки, малые кнопки и ссылки-кнопки ловят палец в квадрате 44 px без
+    изменения раскладки; масштаб интерфейса на сенсорном экране — не меньше 75%."""
+    page, _ = iphone
+    assert page.evaluate("matchMedia('(pointer: coarse)').matches")
+    hits = page.evaluate("""() => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;top:300px;left:40px;display:flex;align-items:center;gap:40px;z-index:99';
+      host.innerHTML = '<button class="icon-btn" id="h-icon">i</button>'
+        + '<span class="code-tab"><button class="code-tab-close" id="h-close">×</button></span>'
+        + '<button class="btn btn-sm" id="h-small">s</button><button class="btn-link" id="h-link">l</button>';
+      document.body.append(host);
+      const out = {};
+      for (const b of host.querySelectorAll('button')) {
+        const r = b.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+        out[b.id] = [[x, y - 21], [x, y + 21], [x - 21, y], [x + 21, y]]
+          .every(([px, py]) => document.elementFromPoint(px, py)?.closest('#' + b.id));
+      }
+      host.remove(); return out;
+    }""")
+    assert all(hits.values()), hits
+    page.evaluate("localStorage.setItem('studio-ui-scale', '50')")
+    page.reload()
+    page.locator('#code-projects li[data-pid]').first.wait_for()
+    assert page.evaluate("document.documentElement.style.zoom") == '0.75'
+    allowed = page.locator('#appearance-scale option:not([disabled])').evaluate_all('o => o.map(e => e.value)')
+    assert allowed == ['75', '80', '85', '90', '95', '100'] and page.locator('#appearance-scale').input_value() == '75'
+    fits(page)
+
+
 @pytest.mark.parametrize('iphone', [(320, 740)], indirect=True)
 def test_settings_direct_link_and_reload_reveal_inherited_visibility(iphone):
     source, _ = iphone
@@ -501,7 +560,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
-@pytest.mark.parametrize("scale", [100, 50])
+# сенсорный экран — не мельче 75% (appearance.js): наименьший масштаб телефона
+@pytest.mark.parametrize("scale", [100, 75])
 def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(iphone, scale, tmp_path):
     page, aid = iphone
     from fake_bridge import T0
@@ -727,7 +787,7 @@ def test_return_reveals_chat_before_lock_network_and_preserves_messages(iphone):
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)
-@pytest.mark.parametrize("scale,font", [(100, 85), (80, 100), (50, 85)])
+@pytest.mark.parametrize("scale,font", [(100, 85), (80, 100), (75, 85)])
 def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone, scale, font, tmp_path):
     page, aid = iphone
     page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
@@ -742,10 +802,11 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
       const root = document.documentElement, field = document.querySelector('#code-text');
       const scale = parseFloat(root.style.zoom), box = field.getBoundingClientRect();
       return { readable: parseFloat(getComputedStyle(field).fontSize) * scale >= 16,
+        // подписи не мельче 11 px: --fs-2xs / --fs-xs = max(11px, 11 или 12 × размер текста)
         compactPicks: [...document.querySelectorAll('.code-pick-value')].every(e =>
-          Math.abs(parseFloat(getComputedStyle(e).fontSize)
-            - (parseFloat(getComputedStyle(document.querySelector('.code-compose-area')).width) <= 550 ? 11 : 12)
-              * parseFloat(getComputedStyle(root).getPropertyValue('--font-scale'))) < .01),
+          Math.abs(parseFloat(getComputedStyle(e).fontSize) - Math.max(11,
+            (parseFloat(getComputedStyle(document.querySelector('.code-compose-area')).width) <= 550 ? 11 : 12)
+              * parseFloat(getComputedStyle(root).getPropertyValue('--font-scale')))) < .01),
         nativePicks: [...document.querySelectorAll('.code-pick select')].every(e =>
           parseFloat(getComputedStyle(e).fontSize) * scale >= 16),
         viewport: visualViewport.scale === 1,

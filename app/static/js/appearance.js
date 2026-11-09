@@ -6,15 +6,17 @@ export function setupAppearance() {
   if (!host) return;
   const root = document.documentElement;
   const font = el('input', { id: 'appearance-font', type: 'range', min: '85', max: '150', step: '5', value: '100' });
+  // сенсорный экран — не мельче 75%: цели касания и подписи иначе меньше пальца; мышь — до 50%
+  const floor = matchMedia('(pointer: coarse)').matches ? 75 : 50;
   const scale = el('select', { id: 'appearance-scale' }, ...[50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].map((n) =>
-    el('option', { value: n }, `${n}%`)));
+    el('option', { value: n, disabled: n < floor }, `${n}%`)));
   const fontValue = el('output', { for: 'appearance-font' });
   const reset = el('button', { type: 'button', class: 'btn-link' }, 'Сбросить шрифт и масштаб');
   function read(key, fallback) {
     try { return Number(localStorage.getItem(key)) || fallback; } catch { return fallback; }
   }
   font.value = String(Math.max(85, Math.min(150, read('studio-font-size', 100))));
-  scale.value = String(read('studio-ui-scale', 100));
+  scale.value = String(Math.max(floor, read('studio-ui-scale', 100)));
   if (!scale.value) scale.value = '100';
   function apply() {
     root.style.setProperty('--font-scale', Number(font.value) / 100);
