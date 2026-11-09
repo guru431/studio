@@ -54,7 +54,7 @@ def test_new_session_is_open_even_with_the_lock_on(studio):
 def test_phone_session_locks_after_stale_sec(studio):
     uid = owner(studio)
     lock_on(uid); phone(studio)
-    studio.clock[0] += 75
+    studio.clock[0] += auth.STALE_SEC
     assert studio.c.get("/api/me").status_code == 200
     studio.clock[0] += 1
     r = studio.c.get("/api/me")
@@ -173,7 +173,7 @@ def test_marks_keep_a_phone_open_and_never_open_a_locked_one(studio):
         assert alive(studio).json() == {"locked": False}
     assert studio.c.get("/api/me").status_code == 200
     seen = session_row(studio)["seen"]
-    studio.clock[0] += 76
+    studio.clock[0] += auth.STALE_SEC + 1
     assert alive(studio).json() == {"locked": True}
     assert session_row(studio)["seen"] == seen
     assert studio.c.get("/api/me").status_code == 423

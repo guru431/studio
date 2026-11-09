@@ -42,7 +42,7 @@ import state
 import workspace
 
 #: порядок вкладок студии; Claude Code — в конце: отметки чатов (code) и история подключений (agents)
-SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate", "code", "agents")
+SECTIONS = ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr", "translate", "code", "agents", "security")
 #: большая выгрузка качается дольше 10 минут архива выделенного
 EXPORT_TTL_SEC = 3600
 EXPORT_KEEP = 2
@@ -91,6 +91,8 @@ README = """Выгрузка истории студии
   он на компьютере. code_chats/workspace.json — рабочее место раздела: компьютер панели, открытый проект
   и вид, вкладки проектов (номера сессий по порядку и активная).
 - agent_events/ — история подключений компьютеров Claude Code.
+- security_events/ — журнал безопасности учётки: входы и неудачи, отпирания, завершение сессий, аварийный
+  выход, ссылки «Поделиться»; вид устройства, признак сессии и адрес, без паролей и PIN.
 - files/<id>.<расширение> — сами файлы (без миниатюр).
 - manifest.json — последним: что в архиве, сколько записей в разделах (counts), sha256 каждого файла
   (files) и каждой записи JSON и этого описания (entries), id файлов, которых на хранилище уже не
@@ -275,11 +277,16 @@ def _agent_events(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "created", "kind", "agent_id", "agent_name", "device", "ip") for r in rows]
 
 
+def _security_events(user_id: int, rows: list, files: dict) -> list:
+    """Журнал безопасности учётки (security_log.py): входы, отпирания, сессии, ссылки — без секретов."""
+    return [_pick(r, "id", "created", "kind", "detail", "device", "session", "ip") for r in rows]
+
+
 #: раздел → (таблица и каталог страниц, сборщик страницы); чат — отдельно, по файлу на диалог
 TABLES = {"photo": ("images", _images), "video": ("videos", _videos), "transcribe": ("transcripts", _transcripts),
           "ocr": ("scans", _scans), "speech": ("speeches", _speeches), "voices": ("voices", _voices),
           "translate": ("translations", _translations), "code": ("code_chats", _code_chats),
-          "agents": ("agent_events", _agent_events)}
+          "agents": ("agent_events", _agent_events), "security": ("security_events", _security_events)}
 
 
 # ---- запись: JSON и суммы — в потоке ------------------------------------------------

@@ -125,6 +125,10 @@ async def find(body: SearchIn, request: Request):
     if hidden:
         where.append("d.section NOT IN (" + ",".join("?" for _ in hidden) + ")")
         args.extend(hidden)
+        closed, closed_args = lock_policy.hidden_scans(uid, hidden)    # скан закрытого чата или перевода
+        if closed:
+            where.append(f"NOT (d.section = 'ocr' AND d.item IN ({closed}))")
+            args.extend(closed_args)
     for column, value in (("section", body.section), ("model", body.model)):
         if value:
             where.append(f"d.{column} = ?")

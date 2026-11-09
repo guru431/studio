@@ -11,7 +11,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 import auth
@@ -20,6 +20,7 @@ import history
 import media
 import sections
 import security
+import security_log
 import state
 
 THEMES = ("auto", "dark", "light")
@@ -182,6 +183,7 @@ async def change_password(body: PasswordChange, request: Request):
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+    security_log.record(uid, "password", digest=request.state.digest, ip=auth.client_ip(request))
     log.info("пользователь %d: пароль сменён, прочие сессии закрыты", uid)
     return Response(status_code=204)
 
@@ -230,10 +232,11 @@ async def get_storage(request: Request):
 
 @router.delete("/history")
 async def delete_history(request: Request):
-    """pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница так и скажет."""
+    """pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница так и скажет.
+    Clear-Site-Data: "cache" — картинки и ролики не остаются в HTTP-кэше этого браузера до суток."""
     result = {"pending_files": await history.delete_all(request.state.user.id)}
     pending = state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions WHERE user_id = ?",
                                (request.state.user.id,)).fetchone()[0]
     if pending:
         result["cleaner_pending"] = pending
-    return result
+    return JSONResponse(result, headers={"Clear-Site-Data": auth.CLEAR_CACHE})

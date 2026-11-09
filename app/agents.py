@@ -66,7 +66,7 @@ async def enroll(request: Request):
         raise _refuse(ip, 422, "name", "имя компьютера — от 1 до 64 знаков без управляющих")
     if auth.locked(name, ip):
         raise _refuse(ip, 429, "locked", "слишком много попыток — подождите 15 минут")
-    uid = await auth.check_password(name, password, ip)
+    uid = await auth.check_password(name, password, ip, source="bridge")
     if uid is None:
         raise _refuse(ip, 401, "login", "неверный логин или пароль")
     # без await после сверки учётки: ключ получает проверенная живая учётка
