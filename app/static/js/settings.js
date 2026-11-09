@@ -978,6 +978,41 @@ function clock(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** Проба голоса своей короткой фразой: POST /api/voices/<id>/probe — звук в ответе, в историю не идёт,
+ * карта занята — словами сразу. Blob плеера освобождается при закрытии окна. */
+function probeVoice(host, voice) {
+  const phrase = el('input', { id: 'voice-probe-text', maxlength: '200', value: 'Привет! Так звучит этот голос.',
+    autocomplete: 'off' });
+  const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+  const player = el('audio', { id: 'voice-probe-audio', controls: true, hidden: true });
+  const go = button('Послушать', { class: 'btn btn-accent', id: 'voice-probe-go' });
+  const dialog = openDialog(host, { id: 'voice-probe-dialog', title: `Проба: ${voice.name}`, cancelText: 'Закрыть',
+    body: [field('Фраза (до 200 знаков)', phrase, 'text'), player, fail], actions: [go] });
+  let url = null;
+  dialog.addEventListener('close', () => {
+    player.pause();
+    if (url) URL.revokeObjectURL(url);
+  });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    fail.textContent = '';
+    try {
+      const response = await api('POST', `/api/voices/${encodeURIComponent(voice.id)}/probe`, { text: phrase.value });
+      const blob = await response.blob();
+      if (!dialog.open) return;
+      if (url) URL.revokeObjectURL(url);
+      url = URL.createObjectURL(blob);
+      player.src = url;
+      player.hidden = false;
+      player.play().catch(() => {});
+    } catch (err) {
+      fail.textContent = words(err);
+    } finally {
+      go.disabled = false;
+    }
+  });
+}
+
 function voicesBlock(host) {
   const list = el('ul', { class: 'voices' });
   const note = status('voice-status');
@@ -995,8 +1030,9 @@ function voicesBlock(host) {
           }
           reload();
         });
+        const tryIt = button('Проба', { class: 'btn btn-sm voice-probe' }, () => probeVoice(host, v));
         return el('li', { class: 'voice', 'data-id': v.id }, el('b', {}, v.name),
-          el('span', { class: 'muted small' }, ` образец ${clock(v.duration)}`), del);
+          el('span', { class: 'muted small' }, ` образец ${clock(v.duration)}`), tryIt, del);
       }) : [el('li', { class: 'muted small' }, 'Голосов пока нет: озвучка шлюза srvllm говорит голосом по образцу')]));
     } catch (err) {
       say(note, words(err), 'error');
