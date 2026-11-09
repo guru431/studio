@@ -213,6 +213,27 @@ function build(view, ctx) {
       page.state === 'layer' ? 'страница взята из текстового слоя' : 'картинка страницы ещё не готова');
   }
 
+  /* «Повторить страницу» (page) и «Распознать заново» (без page): документ снова в очереди — POST …/retry */
+  function retryButton(item, id, label, page) {
+    const go = el('button', { type: 'button', class: 'btn btn-sm', id }, label);
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      error.textContent = '';
+      try {
+        await api('POST', `/api/ocr/${item.id}/retry`, page ? { page } : {});
+      } catch (err) {
+        go.disabled = false;
+        error.textContent = words(err);
+        return;
+      }
+      kick();
+      // документ мог успеть кончиться тем же «готово»: refresh смены не увидел бы — перечитать его самого
+      await docs.load();
+      await select(item.id);
+    });
+    return go;
+  }
+
   function textNode(page, item) {
     if (page.state === 'done' || page.state === 'layer') {
       const box = el('div', { class: 'ocr-text md' });
@@ -220,7 +241,13 @@ function build(view, ctx) {
       return box;
     }
     if (page.state === 'blank') return el('p', { class: 'ocr-text muted' }, 'пустая страница');
-    if (page.state === 'failed') return el('p', { class: 'ocr-text error' }, `не распознана: ${page.detail || 'причина неизвестна'}`);
+    if (page.state === 'failed') {
+      const box = el('div', { class: 'ocr-text' },
+        el('p', { class: 'error' }, `не распознана: ${page.detail || 'причина неизвестна'}`));
+      // документ кончился — эту страницу можно отправить на распознавание ещё раз, остальные остаются
+      if (!RUNNING.has(item.state)) box.append(retryButton(item, 'ocr-retry-page', 'Повторить страницу', page.n));
+      return box;
+    }
     return el('p', { class: 'ocr-text muted' }, RUNNING.has(item.state) ? 'ждёт распознавания' : 'не распознана');
   }
 
@@ -299,6 +326,10 @@ function build(view, ctx) {
         menu('ocr-download', 'ocr-formats', 'Скачать ▾', FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', 'В чат ▾', ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
+    }
+    if (item.state !== 'done' && !RUNNING.has(item.state)
+        && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed')) {
+      acts.append(retryButton(item, 'ocr-retry', 'Распознать заново'));     // ошибка или отмена документа
     }
     if (!RUNNING.has(item.state)) {
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, 'Удалить');

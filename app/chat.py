@@ -348,15 +348,18 @@ def _message_out(row, atts: list, views: dict | None = None) -> dict:
             "ocr": live.scan_state if live else None, "wait": live.waited() if live else None}
 
 
-def _attachment_out(a, scans: dict | None = None, sources: set | None = None) -> dict:
+def _attachment_out(a, scans: dict | None = None, sources: set | None = None, rescan: set | None = None) -> dict:
     """Вложение сообщения; из расшифровки — ещё `source` (есть ли ещё своя расшифровка: ссылка «к записи»);
     документ, чей скан ещё распознаётся, — `ocr {id}` (знаков у него пока нет; страница опрашивает документ).
-    Текст есть — скан кончился: запроса нет."""
+    Текст есть — скан кончился: запроса нет. `rescan: true` — скан вложения кончился с нераспознанными
+    страницами («Распознать заново», `POST /api/attachments/{id}/ocr`); считается только в GET диалога."""
     out = {"id": a["id"], "kind": a["kind"], "name": a["name"], "media_id": a["media_id"], "chars": a["chars"]}
     if a["kind"] == "document" and a["text"] is None:
         pending = ocr.pending(a["user_id"], [a["id"]]) if scans is None else scans.get(a["id"], [])
         if pending:
             out["ocr"] = {"id": pending[0]}
+    if rescan is not None and a["id"] in rescan:
+        out["rescan"] = True
     if a["source_transcript_id"] is not None:
         exists = (state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
                                    (a["source_transcript_id"], a["user_id"])).fetchone() is not None
@@ -980,7 +983,7 @@ class StreamTask:
         """Ход со сканом: ждать документы раз в SCAN_POLL_SEC (событие `ocr` — при смене страниц без слоя),
         затем — пока раннер распознавания освобождает карту (ocr.idle), и только тогда контекст (compose,
         фото, дата) и предел модели. Итог — слова ошибки (документ не распознан, не помещается) или None.
-        Отмена хода (не остановка службы) отменяет и документы."""
+        Отмена хода (не остановка службы) отменяет ждущие в очереди документы, идущий дорабатывает."""
         log.info("чат %s: ответ %s — жду скан (%d док.)", self.chat_id[:8], self.message_id[:8], len(self.scans))
         marks = ", ".join("?" * len(self.scans))
         try:
@@ -1002,12 +1005,14 @@ class StreamTask:
                     break
                 await clock.SLEEP(SCAN_POLL_SEC)
         except asyncio.CancelledError:
-            if not self.shutdown:                        # остановка службы: документы прервёт ocr.stop
+            # «Остановить» ответа отменяет только ждущие в очереди документы; идущий дорабатывает — распознанное
+            # уже стоило минут карты, и «Ответить заново» возьмёт его текст. Остановка службы: документы прервёт
+            # ocr.stop
+            if not self.shutdown:
                 for scan_id in self.scans:
-                    try:
+                    row = state.DB.execute("SELECT state FROM scans WHERE id = ?", (scan_id,)).fetchone()
+                    if row is not None and row["state"] == "queued":
                         await ocr.request_cancel(self.user_id, scan_id)
-                    except HTTPException:                # документа уже нет (стирание истории)
-                        pass
             raise
         finally:
             self.scan_state = None
@@ -1222,7 +1227,9 @@ async def get_chat(chat_id: str, request: Request):
         marks = ",".join("?" * len(linked))
         sources = {r[0] for r in state.DB.execute(
             f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
-    views = {a["id"]: _attachment_out(a, scans, sources) for a in all_atts}
+    docs = [a["id"] for a in all_atts if a["kind"] == "document"]
+    rescan = _rescannable(uid, docs) if docs else set()
+    views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
     return {"chat": _chat_view(uid, row),
             "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
 
@@ -1382,6 +1389,37 @@ async def delete_attachment(att_id: str, request: Request):
         await ocr.request_cancel(uid, scan_id)
     await _drop_attachments([row])
     return Response(status_code=204)
+
+
+def _scan_of(user_id: int, att_id: str):
+    """Последний документ распознавания вложения (или None)."""
+    return state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND attachment_id = ?"
+                            " ORDER BY created DESC, rowid DESC LIMIT 1", (user_id, att_id)).fetchone()
+
+
+def _rescannable(user_id: int, att_ids: list[str]) -> set[str]:
+    """Вложения, чей скан кончился и в нём есть нераспознанные страницы (`failed`, `waiting`): «Распознать заново»."""
+    marks = ",".join("?" * len(att_ids))
+    return {r[0] for r in state.DB.execute(
+        f"SELECT s.attachment_id FROM scans s WHERE s.user_id = ? AND s.attachment_id IN ({marks})"
+        f" AND s.state IN {ocr.TERMINAL} AND EXISTS (SELECT 1 FROM scan_pages p WHERE p.scan_id = s.id"
+        f" AND p.state IN ('failed', 'waiting')) AND NOT EXISTS (SELECT 1 FROM scans t WHERE t.user_id = s.user_id"
+        f" AND t.attachment_id = s.attachment_id AND t.state IN {ocr.RUNNING})", (user_id, *att_ids))}
+
+
+@router.post("/attachments/{att_id}/ocr", status_code=202)
+async def rescan_attachment(att_id: str, request: Request):
+    """«Распознать заново» вложения, чей скан не распознан (или распознан не весь): тот же документ — снова в
+    очередь (`ocr.retry`), текст вложения — его новый итог; ход с этим вложением в истории ждёт его."""
+    uid = request.state.user.id
+    if state.DB.execute("SELECT 1 FROM attachments WHERE id = ? AND user_id = ?", (att_id, uid)).fetchone() is None:
+        raise _gone("такого вложения нет")
+    scan = _scan_of(uid, att_id)
+    if scan is None:
+        raise _gone("скана этого вложения больше нет")
+    ocr.retry(uid, scan["id"])
+    ocr.kick(uid)
+    return {"ocr": {"id": scan["id"]}}
 
 
 async def sweep_attachments() -> None:

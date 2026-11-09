@@ -28,7 +28,8 @@
 7. Журнал — только id, коды и числа: имя файла, текст страниц и картинки туда не пишутся. База — только
    с цикла событий; рендер, чтение и запись файлов — в потоке.
 8. API раздела — `router` (`/api/ocr`, вторая половина файла): загрузка, лента, документ со страницами,
-   отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md».
+   отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md», «Повторить
+   страницу» и «Распознать заново» кончившегося документа (`retry`).
 """
 import asyncio
 import base64
@@ -41,9 +42,11 @@ from dataclasses import dataclass
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 import chat
 import clock
+import connections
 import db
 import documents
 import exports
@@ -352,6 +355,51 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
     return sid
 
 
+def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
+    """«Повторить страницу» (`page` — её номер, только `failed`) и «Распознать заново» (`page` None — все
+    нераспознанные: `failed` и `waiting`) кончившегося документа: страницы снова `waiting`, документ — в очередь
+    (раннер — `kick` зовущего) с подключением документа. Распознанные страницы остаются, PNG страницы PDF —
+    прежний. У документа из чата текст вложения до итога пуст — ход ждёт документ, как при первой загрузке;
+    итог пересобирает его (`attachment_text`). Идёт — 409 `running`, нечего — 409 `nothing`, подключения нет —
+    409 `no_connection`, очередь полна — 409 `busy`."""
+    row = state.DB.execute("SELECT state, connection_id, attachment_id FROM scans WHERE id = ? AND user_id = ?",
+                           (scan_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "документ ещё распознаётся"})
+    where, args = ("state IN ('failed', 'waiting')", ()) if page is None else ("n = ? AND state = 'failed'", (page,))
+    pages = state.DB.execute(f"SELECT n, state FROM scan_pages WHERE scan_id = ? AND {where}", (scan_id, *args)).fetchall()
+    if not pages:
+        raise HTTPException(409, {"code": "nothing", "message": "распознавать заново нечего"})
+    try:
+        conn = connections.get(user_id, row["connection_id"])
+    except HTTPException:
+        raise HTTPException(409, {"code": "no_connection", "message": (
+            "подключения документа больше нет — загрузите документ заново")}) from None
+    operations.check(user_id)
+    if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
+                        (user_id,)).fetchone()[0] >= QUEUE_MAX:
+        raise HTTPException(409, {"code": "busy", "message": (
+            f"в очереди уже {QUEUE_MAX} документов — дождитесь их или отмените")})
+    numbers, counted = [p["n"] for p in pages], sum(p["state"] == "failed" for p in pages)
+    marks = ", ".join("?" * len(numbers))
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute(f"UPDATE scan_pages SET state = 'waiting', text = NULL, detail = NULL"
+                         f" WHERE scan_id = ? AND n IN ({marks})", (scan_id, *numbers))
+        state.DB.execute("UPDATE scans SET state = 'queued', detail = ?, finished = NULL, done_pages = done_pages - ?"
+                         " WHERE id = ?", (QUEUED, counted, scan_id))
+        if row["attachment_id"] is not None:
+            state.DB.execute("UPDATE attachments SET text = NULL, chars = 0 WHERE id = ?", (row["attachment_id"],))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW())
+    log.info("распознавание %s: заново, %d стр.", scan_id[:8], len(numbers))
+
+
 def kick(user_id: int) -> None:
     """Раннер пользователя, если его нет (с цикла событий)."""
     task = RUNNERS.get(user_id)
@@ -432,17 +480,27 @@ async def _recognize_pages(job: Job, row) -> str:
     for page in waiting:
         _check(job)
         n = page["n"]
+        drawn = None                                      # PNG страницы PDF, уже нарисованный (повтор — `retry`)
+        if source is not None and page["media_id"]:
+            try:
+                drawn = await asyncio.to_thread(_read, job.user_id, page["media_id"])
+            except OcrError:                              # файла нет — нарисовать заново
+                pass
         try:
-            if source is not None:
+            if drawn is not None:
+                png = drawn
+            elif source is not None:
                 png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
             else:
                 png = await asyncio.to_thread(ocr_render.photo_png,
                                               await asyncio.to_thread(_read, job.user_id, page["media_id"]))
         except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
             png = None
-        if png is not None and source is not None:
+        if png is not None and source is not None and drawn is None:
             media_id = await media.save_async(job.user_id, png, "image/png", f"{stem}-{n}.png")
             state.DB.execute("UPDATE scan_pages SET media_id = ? WHERE scan_id = ? AND n = ?", (media_id, job.id, n))
+            if page["media_id"] and not media.referenced(job.user_id, page["media_id"]):   # прежний не прочитался
+                await media.delete_async(job.user_id, page["media_id"])
         _check(job)
         if png is None:
             page_state, text, why = "failed", None, UNREADABLE
@@ -758,6 +816,19 @@ async def get_scan(sid: str, request: Request, brief: bool = False):
 @router.post("/{sid}/cancel")
 async def cancel(sid: str, request: Request):
     return {"state": await request_cancel(request.state.user.id, sid)}
+
+
+class RetryIn(BaseModel):
+    page: int | None = Field(default=None, ge=1)
+
+
+@router.post("/{sid}/retry", status_code=202)
+async def retry_scan(sid: str, body: RetryIn, request: Request):
+    """«Повторить страницу» (`page`) или «Распознать заново» (без `page`) кончившегося документа — `retry`."""
+    uid = request.state.user.id
+    retry(uid, sid, body.page)
+    kick(uid)
+    return _out(_row(uid, sid))
 
 
 @router.delete("/{sid}", status_code=204)
