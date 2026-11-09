@@ -80,6 +80,7 @@ def test_bridge_image_is_413_even_when_the_warning_filter_leaked(filters):
 
 
 def test_ocr_photo_check_still_refuses_a_bomb_without_the_filter(filters):
-    with pytest.raises(ocr_render.ScanError) as e:
+    # Без catch_warnings Pillow предупреждает об этой «бомбе» до отказа — ожидаемо, а не шум набора
+    with pytest.warns(Image.DecompressionBombWarning), pytest.raises(ocr_render.ScanError) as e:
         ocr_render.check_photo(BOMB)
     assert e.value.status == 413
