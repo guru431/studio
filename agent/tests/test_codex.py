@@ -529,3 +529,148 @@ async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, m
     assert out[0]["ok"]
     await task
     await runner.close(final=True)
+
+
+CHILD = "01999999-2222-7333-8444-888888888888"
+GRANDCHILD = "01999999-2222-7333-8444-aaaaaaaaaaaa"
+FOREIGN = "01999999-2222-7333-8444-999999999999"
+
+
+def approval(rid, thread, command):
+    return {"id": rid, "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": thread, "turnId": "child-turn", "itemId": f"c{rid}", "command": command}}
+
+
+async def test_subagent_requests_reach_the_owner_and_foreign_threads_stay_rejected(runner, monkeypatch):
+    """Запрос потока, порождённого ходом (collabAgentToolCall, thread/started c parentThreadId, вложенный
+    субагент), — карточка «Подзадача», ответ тем же id; посторонний поток — отказ без карточки. Ход ребёнка —
+    только статусом в сводке субагентов, его шаги в ленту родителя не попадают."""
+    original = FakeRpc.request
+
+    async def request(self, method, params):
+        if method != "turn/start":
+            return await original(self, method, params)
+        self.factory.calls.append((method, params))
+        spawn = {"id": "spawn1", "type": "collabAgentToolCall", "tool": "spawnAgent", "status": "inProgress",
+                 "senderThreadId": THREAD, "receiverThreadIds": [CHILD], "prompt": "Проверь git",
+                 "agentsStates": {CHILD: {"status": "pendingInit"}}}
+        nested = {"id": "spawn2", "type": "collabAgentToolCall", "tool": "spawnAgent", "status": "inProgress",
+                  "senderThreadId": CHILD, "receiverThreadIds": [GRANDCHILD], "prompt": "Глубже"}
+        for frame in (
+                approval(90, CHILD, "раньше порождения"),
+                {"method": "item/started", "params": {"threadId": THREAD, "turnId": "turn1", "item": spawn}},
+                {"method": "thread/started", "params": {"thread": {"id": CHILD, "parentThreadId": THREAD,
+                                                                   "agentNickname": "Ревизор"}}},
+                {"method": "thread/started", "params": {"thread": {"id": FOREIGN, "parentThreadId": EPHEMERAL}}},
+                {"method": "turn/started", "params": {"threadId": CHILD, "turn": {"id": "child-turn"}}},
+                {"method": "item/started", "params": {"threadId": CHILD, "item": {
+                    "id": "c92", "type": "commandExecution", "command": "git status", "cwd": str(self.cwd)}}},
+                {"method": "item/started", "params": {"threadId": CHILD, "item": nested}},
+                approval(93, FOREIGN, "rm -rf /"),
+                approval(92, CHILD, "git status")):
+            self.inbox.put_nowait(frame)
+        return {"turn": {"id": "turn1"}}
+
+    async def send(self, frame):
+        self.factory.replies.append(frame)
+        if frame.get("id") == 92:
+            self.inbox.put_nowait(approval(94, GRANDCHILD, "git log"))
+        elif frame.get("id") == 94:
+            self.inbox.put_nowait({"method": "turn/completed", "params": {"threadId": CHILD, "turn": {
+                "id": "child-turn", "status": "completed"}}})
+            self.done()
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    monkeypatch.setattr(FakeRpc, "send", send)
+    pid = projects.pid(runner.project.name)
+    runner.start(runner.project, pid, CHAT, "Запусти субагента", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        card = runner._turns[CHAT].asks[rid].event
+        assert (card["subtask"], card["tool"], card["input"]["command"]) == ("Ревизор", "Shell", "git status")
+        assert [reply["id"] for reply in runner.fake.replies] == [90, 93]
+        assert all(reply["error"]["code"] == -32601 for reply in runner.fake.replies)
+        running, [snapshot] = await runner.watch(pid, CHAT)
+        assert snapshot["e"]["asks"][0]["subtask"] == "Ревизор"
+        assert [step["id"] for step in runner._turns[CHAT].feed.steps] == ["spawn1"]
+        runner.answer(pid, CHAT, rid, "allow", None, None)
+        for _ in range(100):
+            if len([f for f in runner.sent if f["e"]["k"] == "ask"]) == 2:
+                break
+            await asyncio.sleep(0)
+        rid = next(iter(runner._turns[CHAT].asks))
+        assert runner._turns[CHAT].asks[rid].event["subtask"] == "Агент 01999999"
+        runner.answer(pid, CHAT, rid, "deny", None, None)
+        await task
+    finally:
+        if not task.done():
+            await runner.stop(pid, CHAT)
+            await task
+    assert runner.fake.replies[2:] == [{"id": 92, "result": {"decision": "accept"}},
+                                       {"id": 94, "result": {"decision": "decline"}}]
+    agents = [f["e"]["agents"] for f in runner.sent if f["e"]["k"] == "progress"][-1]
+    assert [(row["id"], row["title"], row["status"]) for row in agents] == [
+        (CHILD, "Ревизор", "completed"), (GRANDCHILD, "Агент 01999999", "running")]
+    assert runner.sent[-1]["e"]["status"] == "done"
+
+
+async def test_manual_refresh_reconciles_the_session_index_with_a_background_full_scan(runner, monkeypatch):
+    """Обычное открытие — только готовый индекс (`useStateDbOnly`), без полного обхода. Ручное обновление
+    отвечает тем же индексом сразу и сверяет его полным обходом отдельным процессом; сессия вне индекса
+    появляется в следующих списках, общий metadata-процесс обход не держит."""
+    original = FakeRpc.request
+    old = "01999999-2222-7333-8444-bbbbbbbbbbbb"
+    gate = asyncio.Event()
+
+    async def request(self, method, params):
+        if method != "thread/list":
+            return await original(self, method, params)
+        self.factory.calls.append((method, params))
+        rows = [{"id": THREAD, "cwd": str(self.factory.project), "preview": "Новая", "updatedAt": 20}]
+        if not params.get("useStateDbOnly"):
+            await gate.wait()
+            rows.append({"id": old, "cwd": str(self.factory.project), "preview": "Старая", "updatedAt": 10})
+        return {"data": rows}
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    clock = [1000.0]
+    runner.now = lambda: clock[0]
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+    assert [p.get("useStateDbOnly") for m, p in runner.fake.calls if m == "thread/list"] == [True]
+    assert [row["title"] for row in await runner.chats(runner.project, refresh=True)] == ["Новая"]
+    scan = next(iter(runner._scans.values()))
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+    gate.set()
+    await scan
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая", "Старая"]
+    assert [p.get("useStateDbOnly") for m, p in runner.fake.calls if m == "thread/list"] == [True, True, None, True, True]
+    meta, full = runner.fake.clients
+    assert full.closed and not meta.closed and not runner._scans
+    # Тот же `refresh` шлёт опрос вкладок раз в 20 с: следующий обход — только через SCAN_EVERY_SEC.
+    clock[0] += codex.SCAN_EVERY_SEC - 1
+    await runner.chats(runner.project, refresh=True)
+    assert not runner._scans and len(runner.fake.clients) == 2
+    clock[0] += 1
+    await runner.chats(runner.project, refresh=True)
+    await asyncio.gather(*runner._scans.values())
+    assert len(runner.fake.clients) == 3 and runner.fake.clients[2].closed
+    await runner.close(final=True)
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
+
+
+async def test_expected_not_found_keeps_the_shared_metadata_process(runner):
+    """Новый чат без thread: `history` и `state` получают штатный not_found живого сервера — общий
+    metadata-процесс остаётся; закрывает его только обрыв канала."""
+    with pytest.raises(Refused, match="not_found"):
+        await runner.history(runner.project, CHAT, None, 10)
+    await runner.state(runner.project, CHAT)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    runner.fake.read_error = codex_rpc.RpcError(method="thread/read", code=-32603)
+    with pytest.raises(codex_rpc.RpcError):
+        await runner.history(runner.project, CHAT, None, 10)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    runner.fake.read_error = codex_rpc.RpcError(transport=True)
+    with pytest.raises(codex_rpc.RpcError):
+        await runner.history(runner.project, CHAT, None, 10)
+    assert runner.fake.clients[0].closed and runner._meta is None

@@ -18,6 +18,7 @@ from .turns import Runner, _Ask
 
 log = logging.getLogger(__name__)
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+SCAN_EVERY_SEC = 600  # полный обход сессий проекта для сверки готового индекса — не чаще
 
 
 def same_project(left, right) -> bool:
@@ -181,6 +182,20 @@ def step_of(item):
     return events.bound(step)
 
 
+def spawned(thread):
+    """`thread/started` субагента: (родительский поток, имя). Thread v2 несёт `parentThreadId` и
+    `agentNickname`/`agentRole`; источник `subAgent.thread_spawn` — запасной путь того же смысла."""
+    source = thread.get("source")
+    sub = source.get("subAgent") if isinstance(source, dict) else None
+    spawn = sub.get("thread_spawn") or sub.get("threadSpawn") if isinstance(sub, dict) else None
+    spawn = spawn if isinstance(spawn, dict) else {}
+    parent = thread.get("parentThreadId") or spawn.get("parent_thread_id") or spawn.get("parentThreadId")
+    name = next((value.strip()[:200] for value in (thread.get("agentNickname"), spawn.get("agent_nickname"),
+                 thread.get("agentRole"), spawn.get("agent_role"), spawn.get("agent_path"))
+                 if isinstance(value, str) and value.strip()), None)
+    return parent, name
+
+
 def normalize(turns):
     out = []
     for turn in turns:
@@ -241,6 +256,8 @@ class CodexRunner(Runner):
         self._usage_lock = asyncio.Lock()
         self._histories = metadata.HistoryIndex()
         self._history_paths = {}
+        # Сверка готового индекса сессий полным обходом: задачи, сессии вне индекса, ID из индекса.
+        self._scans, self._full, self._indexed, self._scanned = {}, {}, {}, {}
 
     async def takeover(self, project, pid, chat, owner, *, fork=False):
         if self._turn(pid, chat) is not None:
@@ -341,7 +358,11 @@ class CodexRunner(Runner):
                     self._meta = self.rpc_factory(path, Path(project))
                     await self._meta.connect()
                 return await self._meta.request(method, params)
-            except BaseException:
+            except BaseException as e:
+                # Ответ живого сервера (not_found нового чата и прочие RpcError) процесс не гасит:
+                # перезапуск задержал бы под `_meta_lock` все чтения Codex. Закрывают обрыв, срок, отмена.
+                if isinstance(e, codex_rpc.RpcError) and not e.transport:
+                    raise
                 if self._meta is not None:
                     await self._meta.disconnect()
                     self._meta = None
@@ -383,18 +404,66 @@ class CodexRunner(Runner):
             log.warning("Codex: каталог: %s", type(e).__name__)
             return False
 
-    async def chats(self, project):
+    def _list_params(self, project, state_db):
+        return {"cwd": str(project), "limit": limits.CHATS_MAX, **({"useStateDbOnly": True} if state_db else {}),
+                "sortKey": "updated_at", "sourceKinds": ["cli", "vscode", "exec", "appServer"]}
+
+    def _scan(self, project):
+        """Полный обход JSONL отдельным app-server в фоне: общий `_meta` и ответ списка его не ждут.
+        Сессии, которых нет в готовом индексе (старый CLI, сбой записи), добавляются к следующим спискам."""
+        key = str(Path(project).resolve()).casefold()
+        # `refresh` шлёт и фоновый опрос вкладок раз в 20 с: обход — не чаще SCAN_EVERY_SEC на проект.
+        if key in self._scans or self.now() - self._scanned.get(key, float("-inf")) < SCAN_EVERY_SEC:
+            return self._scans.get(key)
+        self._scanned[key] = self.now()
+
+        async def scan():
+            rpc = None
+            try:
+                path = await asyncio.to_thread(self.find_codex)
+                if path is None:
+                    return
+                rpc = self.rpc_factory(path, Path(project))
+                await rpc.connect()
+                data = await rpc.request("thread/list", self._list_params(project, False))
+                rows = [row for row in data.get("data", []) if isinstance(row, dict)][:limits.CHATS_MAX]
+                indexed = self._indexed.get(key)
+                extra = [row for row in rows if indexed is not None and row.get("id") not in indexed]
+                if extra:
+                    log.info("Codex: полный обход: сессий вне индекса %d", len(extra))
+                self._full[key] = extra
+            except Exception as e:
+                log.warning("Codex: полный обход сессий: %s", type(e).__name__)
+            finally:
+                if rpc is not None:
+                    with contextlib.suppress(Exception):
+                        await rpc.disconnect()
+                if self._scans.get(key) is task:
+                    del self._scans[key]
+
+        task = asyncio.create_task(scan())
+        self._scans[key] = task
+        return task
+
+    async def chats(self, project, refresh=False):
         if self.catalog is None:
             return []
-        # Обычный thread/list также сканирует JSONL для восстановления метаданных.
-        data = await self._metadata(project, "thread/list", {"cwd": str(project), "limit": limits.CHATS_MAX,
-                                                           "useStateDbOnly": True, "sortKey": "updated_at", "sourceKinds":
-                                                           ["cli", "vscode", "exec", "appServer"]})
+        # Обычный thread/list также сканирует JSONL для восстановления метаданных — секунды на проект.
+        # Готовый индекс отвечает сразу; ручное обновление (`refresh`) сверяет его полным обходом в фоне.
+        data = await self._metadata(project, "thread/list", self._list_params(project, True))
+        key = str(Path(project).resolve()).casefold()
+        rows = [row for row in data.get("data", []) if isinstance(row, dict)]
+        self._indexed[key] = {row.get("id") for row in rows}
+        if refresh:
+            self._scan(project)
+        if extra := [row for row in self._full.get(key, []) if row.get("id") not in self._indexed[key]]:
+            rows = sorted(rows + extra, reverse=True, key=lambda row: row.get("updatedAt")
+                          if type(row.get("updatedAt")) in (int, float) else 0)
         aliases = await asyncio.to_thread(self.aliases.load)
         reverse = {v["thread"]: k for k, v in aliases.items() if isinstance(v, dict)
                    and same_project(v.get("project"), project) and isinstance(v.get("thread"), str)}
         live, items = self.live(), []
-        for thread in data.get("data", []):
+        for thread in rows[:limits.CHATS_MAX]:
             tid = thread.get("id")
             if not isinstance(tid, str) or not limits.CHAT_ID.fullmatch(tid) or not same_project(thread.get("cwd"), project):
                 continue
@@ -633,11 +702,13 @@ class CodexRunner(Runner):
                     raise codex_rpc.RpcError()
                 p = frame.get("params", {})
                 if "id" in frame:
+                    # Принадлежность потока — на момент прихода запроса, а не когда до него дойдёт задача.
+                    frame["family"] = p.get("threadId") == target or p.get("threadId") in t.subtasks
                     task = asyncio.create_task(self._request(t, frame))
                     requests.add(task)
                     task.add_done_callback(requests.discard)
                     continue
-                if p.get("threadId") != target:
+                if self._family(t, frame.get("method"), p) or p.get("threadId") != target:
                     continue
                 if frame.get("method") == "turn/completed":
                     if p.get("turn", {}).get("id") != client.turn:
@@ -773,6 +844,62 @@ class CodexRunner(Runner):
                 if ask.data["frame"]["id"] == p.get("requestId"):
                     self._settle(t, rid, None)
 
+    def _family(self, t, method, p):
+        """Субагенты этого хода: потоки, порождённые им (`collabAgentToolCall.receiverThreadIds` от потока
+        хода или уже известного субагента, `thread/started` с `parentThreadId` из них же). Их запросы
+        получают карточку; события самих субагентов — только статусом в сводке. True — событие субагента."""
+        family = {t.client.thread, *t.subtasks} - {None}
+        if method == "thread/started":
+            thread = p.get("thread")
+            if isinstance(thread, dict):
+                parent, name = spawned(thread)
+                if parent in family:
+                    self._adopt(t, thread.get("id"), name)
+            return False
+        sender = p.get("threadId")
+        if sender not in family:
+            return False
+        item = p.get("item") if isinstance(p.get("item"), dict) else {}
+        if method in ("item/started", "item/completed") and item.get("type") == "collabAgentToolCall":
+            for child in item.get("receiverThreadIds") or []:
+                self._adopt(t, child, None)
+        if sender == t.client.thread:
+            return False
+        rows = t.progress.get("agents", [])
+        if method in ("item/started", "item/completed") and item.get("type") == "collabAgentToolCall":
+            rows = codex_progress.children([item], rows)
+        elif method in ("turn/started", "turn/completed"):
+            status = "running" if method == "turn/started" else {
+                "completed": "completed", "interrupted": "interrupted", "failed": "errored"}.get(
+                (p.get("turn") or {}).get("status"), "unknown")
+            rows = [{**row, "status": status} if row["id"] == sender else row for row in rows]
+        elif method == "serverRequest/resolved":
+            self._notification(t, method, p)
+        if rows != t.progress.get("agents", []):
+            t.progress["agents"] = rows
+            self._send(t, {"k": "progress", "agents": rows})
+        return True
+
+    def _adopt(self, t, child, name):
+        if (not isinstance(child, str) or not limits.CHAT_ID.fullmatch(child) or child == t.client.thread
+                or child not in t.subtasks and len(t.subtasks) >= codex_progress.AGENTS_MAX):
+            return
+        t.subtasks[child] = name or t.subtasks.get(child)
+        if name:
+            rows = t.progress.get("agents", [])
+            if not any(row["id"] == child for row in rows):
+                rows = [*rows, {"id": child, "title": name, "status": "running"}][:codex_progress.AGENTS_MAX]
+            else:
+                rows = [{**row, "title": name} if row["id"] == child else row for row in rows]
+            if rows != t.progress.get("agents", []):
+                t.progress["agents"] = rows
+                self._send(t, {"k": "progress", "agents": rows})
+
+    @staticmethod
+    def _subtask_name(t, child):
+        row = next((row for row in t.progress.get("agents", []) if row["id"] == child), {})
+        return t.subtasks.get(child) or row.get("title") or f"Агент {child[:8]}"
+
     async def _request(self, t, frame):
         try:
             await self._request_card(t, frame)
@@ -786,9 +913,13 @@ class CodexRunner(Runner):
 
     async def _request_card(self, t, frame):
         method, p = frame["method"], frame.get("params", {})
-        if p.get("threadId") != t.client.thread:
+        thread = p.get("threadId")
+        # Чужой поток — отказ; субагент этого хода — та же карточка с его именем, ответ — тем же id запроса.
+        if not frame.get("family", True) or thread != t.client.thread and (
+                not isinstance(thread, str) or thread not in t.subtasks):
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        subtask = self._subtask_name(t, thread) if thread != t.client.thread else None
         rid = secrets.token_hex(8)
         if method == "item/tool/requestUserInput":
             rows = p.get("questions")
@@ -817,6 +948,8 @@ class CodexRunner(Runner):
         else:
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
+        if subtask:
+            event["subtask"] = events.clip(subtask, 200)
         ask = _Ask(event, asyncio.get_running_loop().create_future(), {"frame": frame}, [])
         t.asks[rid] = ask
         self._activity(t, "waiting")
@@ -872,6 +1005,13 @@ class CodexRunner(Runner):
         await super().close(final=final, hold=hold)
         self._histories.clear()
         self._history_paths.clear()
+        scans = list(self._scans.values())
+        for task in scans:
+            task.cancel()
+        await asyncio.gather(*scans, return_exceptions=True)
+        self._full.clear()
+        self._indexed.clear()
+        self._scanned.clear()
         async with self._meta_lock:
             if self._meta is not None:
                 await self._meta.disconnect()

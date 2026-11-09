@@ -340,6 +340,44 @@ async def test_foreign_request_is_rejected_without_card(runner):
     await task
 
 
+async def test_task_child_session_request_gets_a_subtask_card(runner, monkeypatch):
+    """Дочерняя сессия инструмента `task` текущего хода (metadata.sessionId, parentSessionId — сессия хода):
+    её разрешение — карточка «Подзадача», ответ тем же id; сессия с чужим родителем — отказ без карточки."""
+    original = FakeRpc.request
+    child = "ses_child1"
+
+    async def request(self, method, params, **kwargs):
+        if method == "session/prompt":
+            self.update({"sessionUpdate": "tool_call", "toolCallId": "task1", "title": "Проверка git",
+                         "rawInput": {"description": "Проверка git", "subagent_type": "general"},
+                         "status": "in_progress"})
+            self.update({"sessionUpdate": "tool_call_update", "toolCallId": "task1", "rawOutput": {
+                "metadata": {"parentSessionId": SESSION, "sessionId": child}}})
+            self.update({"sessionUpdate": "tool_call_update", "toolCallId": "task2", "title": "Чужое",
+                         "rawOutput": {"metadata": {"parentSessionId": "ses_other", "sessionId": "ses_foreign"}}})
+            self.inbox.put_nowait({"id": 95, "method": "session/request_permission", "params": {
+                "sessionId": "ses_foreign", "toolCall": {"title": "Shell"}, "options": []}})
+        return await original(self, method, params, **kwargs)
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    runner.fake.ask["params"]["sessionId"] = child
+    runner.start(runner.project, runner.pid, CHAT, "Запусти подзадачу", None, None)
+    task = runner._turns[CHAT].task
+    try:
+        rid = await asking(runner)
+        card = runner._turns[CHAT].asks[rid].event
+        assert (card["subtask"], card["tool"], card["input"]) == ("Проверка git", "Shell", {"command": "git status"})
+        assert runner.fake.replies == [{"id": 95, "error": {"code": -32601, "message": "Unsupported request"}}]
+        runner.answer(runner.pid, CHAT, rid, "allow", None, None)
+        await task
+    finally:
+        if not task.done():
+            await runner.stop(runner.pid, CHAT)
+            await task
+    assert runner.fake.replies[-1] == {"id": 91, "result": {"outcome": {"outcome": "selected", "optionId": "once"}}}
+    assert len([f for f in runner.sent if f["e"]["k"] == "ask"]) == 1
+
+
 async def test_unavailable_cli_reports_error_without_prompt(runner):
     runner.find_opencode = lambda: None
     assert not await runner.probe(runner.project)
@@ -356,3 +394,25 @@ async def test_probe_cleanup_failure_does_not_break_other_backends(runner):
     previous = runner.catalog
     assert not await runner.probe(runner.project)
     assert runner.catalog == previous and all(c.closed for c in runner.fake.clients)
+
+
+async def test_catalog_rpc_survives_a_server_error_and_closes_on_transport_failure(runner, monkeypatch):
+    original = FakeRpc.request
+    failure = {"error": opencode_rpc.RpcError(method="session/list", code=-32000, not_found=True)}
+
+    async def request(self, method, params, **kwargs):
+        if method == "session/list" and failure["error"] is not None:
+            raise failure["error"]
+        return await original(self, method, params, **kwargs)
+
+    monkeypatch.setattr(FakeRpc, "request", request)
+    with pytest.raises(opencode_rpc.RpcError):
+        await runner.chats(runner.project)
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed
+    failure["error"] = None
+    assert [row["title"] for row in await runner.chats(runner.project)] == ["Внешняя сессия"]
+    assert len(runner.fake.clients) == 1
+    failure["error"] = opencode_rpc.RpcError(transport=True)
+    with pytest.raises(opencode_rpc.RpcError):
+        await runner.chats(runner.project)
+    assert runner.fake.clients[0].closed and runner._catalog_rpc is None
