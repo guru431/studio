@@ -22,7 +22,7 @@ import state
 import upstream
 from conftest import T0, add_connection, add_gateway, login, make_user, signin
 from fakes import PNG_REAL, TOKEN
-from image_upload import decode_form, normalize_image
+from image_upload import decode_form, image_size, normalize_image
 
 PROMPT = "секретный промпт: женщина у окна"
 LUSTIFY, FLUX = "lustify-v10-krea2-turbo", "flux-3-image-klein"
@@ -445,6 +445,44 @@ def test_masked_edit_preserves_source_size_and_pixels_without_forwarding_mask(st
     assert len(observed) == 1
     job = images.JOBS[job_id]
     assert job.mask is None and job.image is None
+
+
+def test_brush_mask_of_a_picture_larger_than_2_mp_is_fitted_to_the_reduced_source(studio):
+    """Находка 2026-11-09: маска редактора — по naturalWidth/Height картинки ленты (до 4096²), а исходник
+    normalize_image уменьшает до ≤2 Мп: правка кистью отвечала 400 «маска … того же размера»."""
+    big = Image.new("RGB", (2100, 700), (0, 0, 255))      # сторона больше 2048
+    source = png(big)
+    reduced = image_size(normalize_image(source))
+    assert reduced != (2100, 700)
+    mask = Image.new("RGBA", (2100, 700), (0, 0, 0, 255))        # холст редактора — RGBA
+    mask.paste((255, 255, 255, 255), (0, 0, 1050, 350))
+
+    async def edits(request):
+        fields, sent = decode_form(request.content, request.headers["content-type"])
+        assert fields["size"] == "{}x{}".format(*reduced)
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(
+            png(Image.new("RGB", reduced, "red"))).decode()}]})
+
+    studio.gw.on["/slot/images/edits"] = edits
+    add_gateway(studio)
+    r = studio.c.post("/api/images", data={"model": "flux", "size": "original", "prompt": "x"},
+                      files={"image": ("big.png", source, "image/png"),
+                             "mask": ("mask.png", png(mask), "image/png")})
+    assert r.status_code == 202, r.text
+    body = wait_state(studio, r.json()["id"], {"done", "error"})
+    assert body["state"] == "done", body
+    with Image.open(io.BytesIO(studio.c.get(f"/api/media/{body['media_id']}").content)) as result:
+        assert result.size == reduced
+        assert result.getpixel((10, 10)) == (255, 0, 0)                              # выделено — правка
+        assert result.getpixel((reduced[0] - 10, reduced[1] - 10)) == (0, 0, 255)    # вне — исходник
+    with Image.open(io.BytesIO(studio.c.get(f"/api/media/{body['mask_media_id']}").content)) as stored:
+        assert stored.size == reduced                     # повтор правки идёт с маской размера исходника
+    # другое соотношение сторон — по-прежнему отказ, а не растянутое выделение
+    odd = Image.new("L", (2100, 900), 0)
+    odd.paste(255, (0, 0, 100, 100))
+    r = studio.c.post("/api/images", data={"model": "flux", "size": "original", "prompt": "x"},
+                      files={"image": ("big.png", source, "image/png"), "mask": ("mask.png", png(odd), "image/png")})
+    assert r.status_code == 400 and "того же размера" in r.json()["detail"]["message"]
 
 
 def test_edit_from_history_uses_the_stored_source(studio):

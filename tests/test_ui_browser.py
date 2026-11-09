@@ -1965,6 +1965,40 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_brush_edit_of_a_picture_larger_than_2_mp_says_the_size_and_works(browser, live, width):
+    """Находка 2026-11-09: картинка ленты со стороной больше 2048 — подсказка размера копии и правка кистью
+    без 400 «маска … того же размера»."""
+    login = f"ph-big-{width}"
+    live.add_user(login)
+    out = io.BytesIO()
+    Image.new("RGB", (2100, 700), (0, 0, 255)).save(out, "PNG")
+    live.gw.image_reply = (200, {"data": [{"b64_json": base64.b64encode(out.getvalue()).decode(), "seed": 5}]})
+    start = len(live.gw.edits)
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login, cards=1),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+            ("click", "#viewer .act-edit"),
+            ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
+            ("eval", "tip", "document.querySelector('#edit-size-tip').hidden ? null"
+                            " : document.querySelector('#edit-size-tip').textContent"),
+            ("eval", "editorOverflow", f"!({NO_OVERFLOW}) || document.querySelector('#editor').scrollWidth"
+                                       " > document.querySelector('#editor').clientWidth"),
+            ("type", "#edit-prompt", "change only this patch"),
+            ("click", "#edit-local"), ("click", "#edit-mask"), ("click", "#edit-submit"),
+            ("wait", f"!{is_open('#editor')} && {done_cards(2)}"),
+            ("eval", "error", "document.querySelector('#edit-error')?.textContent || ''")],
+            width=width, height=900, mobile=width == 320)
+    finally:
+        live.gw.image_reply = None
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tip"] == "Фото будет уменьшено до 2046×682." and not v["editorOverflow"] and not v["error"]
+    edits = live.gw.edits[start:]
+    assert len(edits) == 1 and edits[0][0]["size"] == "2046x682"
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width,model", [(390, "lustify"), (1280, "flux")])
 def test_photo_description_is_edited_and_creates_without_a_source(browser, live, width, model):
     login = f"desc-{width}"
