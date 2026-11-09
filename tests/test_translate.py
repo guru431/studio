@@ -114,6 +114,44 @@ def test_text_is_translated_in_chunks_and_lands_in_history(studio, monkeypatch, 
     assert translate.JOBS == {}
 
 
+def test_next_chunk_gets_the_end_of_the_previous_translation_as_context(studio, monkeypatch):
+    """Связность кусков: указание второго и третьего куска несёт конец перевода предыдущего (идея 2026-11-09);
+    подставная модель повторяет контекст перед переводом — в запись повтор не попадает. «Продолжить» берёт
+    контекст из готового куска в базе."""
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    add_gateway(studio)
+    studio.gw.chat_script = [["Анна вошла. Она улыбнулась."], ["Анна вошла. Она улыбнулась.", "\n\nОна села."],
+                             ["Конец."]]
+    tid = start(studio, THREE)
+    row = wait_row(studio, tid)
+    assert row["state"] == "done" and row["text"] == "Анна вошла. Она улыбнулась.\n\nОна села.\n\nКонец."
+    systems = [b["messages"][0]["content"] for b in studio.gw.chat_requests if b.get("stream")]
+    assert systems == [translate_text.system_prompt("en", "ru"),
+                       translate_text.system_prompt("en", "ru", context="Анна вошла. Она улыбнулась."),
+                       translate_text.system_prompt("en", "ru", context="Она села.")]
+    assert streamed(studio) == ["First one is here.", "Second one is here.", "Third one is here."]
+
+    studio.gw.chat_requests.clear()
+    studio.gw.chat_script = [["Первый."], ["Третий."]]
+    failing_second(studio)
+    tid = start(studio, THREE)
+    assert wait_row(studio, tid)["state"] == "error"
+    studio.gw.on.clear()
+    studio.gw.chat_requests.clear()
+    studio.gw.chat_script = [["Второй."], ["Третий."]]
+    assert studio.c.post(f"/api/translate/{tid}/continue").status_code == 200
+    assert wait_row(studio, tid)["state"] == "done"
+    assert [b["messages"][0]["content"] for b in studio.gw.chat_requests] == [
+        translate_text.system_prompt("en", "ru", context="Первый."),
+        translate_text.system_prompt("en", "ru", context="Второй.")]
+
+    studio.gw.chat_requests.clear()                     # припев: кусок начат концом прежнего — без контекста
+    studio.gw.chat_script = [["Припев."], ["Припев."]]
+    row = wait_row(studio, start(studio, "Chorus is here.\n\nChorus is here."))
+    assert row["text"] == "Припев.\n\nПрипев."
+    assert [b["messages"][0]["content"] for b in studio.gw.chat_requests] == [translate_text.system_prompt("en", "ru")] * 2
+
+
 def test_same_language_goes_to_english(studio):
     add_gateway(studio)
     studio.gw.chat_reply = ["ru"]

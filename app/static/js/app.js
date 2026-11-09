@@ -32,6 +32,8 @@ import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
 import { setupAppearance } from './appearance.js';
 import { setupMobileNavigation } from './mobile-navigation.js';
+import { passwordResetNotice } from './account-security.js';
+import { setupPushSync } from './push-sync.js';
 
 const THEME_KEY = 'studio-theme';
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
@@ -409,6 +411,8 @@ async function enter(worker) {
   await render();
   setupCodeActivity();
   await worker;
+  setupPushSync();           // подписка push, которую служебный работник не смог отправить запертым (sw.js)
+  passwordResetNotice(me, navigate);   // пароль сбросил администратор — совет про аварийный выход
   document.documentElement.dataset.ready = '1';
 }
 

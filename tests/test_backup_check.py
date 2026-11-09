@@ -167,6 +167,23 @@ def test_verify_backup_checks_the_exa_keys_too(base, env, monkeypatch):
     assert "exa-" not in json.dumps(out, ensure_ascii=False)
 
 
+def test_verify_backup_checks_the_share_links_too(base, env, monkeypatch):
+    """Ссылки «Поделиться» — ключ ссылки и снимок шифром того же STUDIO_DATA_KEY: чужой ключ — провал словами.
+    Снимок без шифра (копия до шага 36: его зашифрует `chat_shares.seal()` при старте) не считается."""
+    add_rows(base, files=())
+    uid = base.execute("SELECT MIN(id) FROM users").fetchone()[0]
+    alien = Fernet(Fernet.generate_key())
+    for n, (token, sealed) in enumerate(((security.encrypt("t0"), security.encrypt("{}")),
+                                         (alien.encrypt(b"t1"), alien.encrypt(b"{}")),
+                                         (security.encrypt("t2"), None))):
+        base.execute("INSERT INTO chat_shares(id, user_id, token_hash, token_enc, pin_hash, snapshot, created, sealed)"
+                     " VALUES (?, ?, ?, ?, 'p', '{}', ?, ?)", (f"s{n}", uid, f"h{n}", token, T0, sealed))
+    backup_of(base, env, monkeypatch)
+    out = manage.verify_backup()
+    assert out["ok"] is False and out["shares"] == {"ok": 3, "failed": 2} and out["tokens"] == {"ok": 3, "failed": 0}
+    assert "ссылки «Поделиться» не расшифрованы: 2 из 5 — STUDIO_DATA_KEY не тот, что у копии" in out["problems"]
+
+
 def test_verify_backup_with_the_share_down(base, env, monkeypatch, tmp_path):
     """Копия — по явному пути, шары нет: «шара недоступна», файлы не проверены, итог — провал."""
     add_rows(base)

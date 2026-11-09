@@ -9,7 +9,11 @@
 - `POST /api/me/emergency {password, agents}` — аварийный выход с паролем учётки: все сессии (и текущая), все
   ссылки «Поделиться», push и ntfy всех устройств и прежний шаблон ntfy; `agents: true` — ещё и ключи
   компьютеров (как отзыв из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
-- `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху.
+- `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху; свёрнутые повторы
+  неудач — `count` и время первой `first` (security_log.NOISY).
+- Сброс пароля администратором (admin.py) ставит `users.password_reset`: `GET /api/me` отдаёт его владельцу, и
+  студия после входа советует проверить сессии и сделать аварийный выход. `DELETE /api/me/password-reset` («Понятно»)
+  и аварийный выход флаг снимают. Администратору флаг не виден.
 - Все пути — под обычными guard и CSRF; частичная блокировка закрывает их, как управление защитой (lock_policy).
 - Журнал службы — только id и числа.
 """
@@ -91,6 +95,7 @@ async def emergency(body: Emergency, request: Request):
     try:
         for table in ("chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "sessions"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))   # имена — из кода
+        state.DB.execute("UPDATE users SET password_reset = NULL WHERE id = ?", (uid,))  # совет сброса исполнен
         revoked = state.DB.execute("DELETE FROM agents WHERE user_id = ? RETURNING id, name",
                                    (uid,)).fetchall() if body.agents else []
         state.DB.execute("COMMIT")
@@ -109,11 +114,18 @@ async def emergency(body: Emergency, request: Request):
     return response
 
 
+@router.delete("/password-reset", status_code=204)
+async def dismiss_password_reset(request: Request):
+    """«Понятно» у совета после сброса пароля администратором: флаг снят, совет больше не показывается."""
+    state.DB.execute("UPDATE users SET password_reset = NULL WHERE id = ?", (request.state.user.id,))
+    return Response(status_code=204)
+
+
 @router.get("/security-events")
 async def security_events(request: Request, before: int | None = None):
     uid, current = request.state.user.id, security_log.handle(request.state.digest)
     where, args = ("", ()) if before is None else (" AND id < ?", (before,))
-    rows = state.DB.execute("SELECT id, created, kind, detail, device, session, ip FROM security_events"
+    rows = state.DB.execute("SELECT id, created, kind, detail, device, session, ip, count, first FROM security_events"
                             f" WHERE user_id = ?{where} ORDER BY id DESC LIMIT ?", (uid, *args, EVENTS_PAGE)).fetchall()
     items = [dict(r) | {"current": r["session"] == current} for r in rows]
     return {"items": items, "next": items[-1]["id"] if len(items) == EVENTS_PAGE else None}

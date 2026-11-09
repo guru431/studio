@@ -88,6 +88,44 @@ assert.deepEqual(await click(), [target]);
   assert.equal(studio.url, target);
 }
 
+// pushsubscriptionchange: a locked Studio (423) keeps the new subscription for the page to send after unlock;
+// any other refusal drops it, as before.
+async function resubscribe(status) {
+  const handlers = new Map();
+  const sent = [];
+  const posted = [];
+  let unsubscribed = false;
+  const sub = { toJSON: () => ({ endpoint: 'https://web.push.apple.com/new' }), async unsubscribe() { unsubscribed = true; } };
+  const fetch = async (url, options = {}) => {
+    sent.push(`${options.method || 'GET'} ${url}`);
+    if (url === '/api/me') return { ok: true, status: 200, json: async () => ({ csrf: 'c' }) };
+    return { ok: status === 204, status, json: async () => ({}) };
+  };
+  const studio = { postMessage: (message) => posted.push(message) };
+  vm.runInNewContext(source, {
+    VERSION: 'test', URL, fetch, JSON,
+    self: { location: { origin }, addEventListener: (name, fn) => handlers.set(name, fn),
+      clients: { async matchAll(options) { assert.equal(options.type, 'window'); return [studio]; } } },
+  });
+  let finished;
+  handlers.get('pushsubscriptionchange')({ newSubscription: sub, waitUntil(promise) { finished = promise; } });
+  await finished;
+  return { sent, posted, unsubscribed };
+}
+
+{
+  const locked = await resubscribe(423);
+  assert.deepEqual(locked.sent, ['GET /api/me', 'POST /api/me/push']);
+  assert.equal(locked.unsubscribed, false);
+  assert.equal(JSON.stringify(locked.posted), '[{"push":"resync"}]');
+  const gone = await resubscribe(401);
+  assert.equal(gone.unsubscribed, true);
+  assert.deepEqual(gone.posted, []);
+  const done = await resubscribe(204);
+  assert.equal(done.unsubscribed, false);
+  assert.deepEqual(done.posted, []);
+}
+
 // Other origins and non-app pages are not reused.
 {
   const foreign = windowAt('https://other.example/');

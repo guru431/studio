@@ -1,6 +1,7 @@
 """Текст документов чата (app/documents.py): PDF, DOCX, TXT и MD; отказы — словами."""
 import asyncio
 import io
+import unicodedata
 import zipfile
 
 import httpx
@@ -44,6 +45,26 @@ def docx(*paragraphs: list[str], xml: str | None = None) -> bytes:
         z.writestr("word/document.xml", xml if xml is not None else
                    f'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>')
     return out.getvalue()
+
+
+NFD = unicodedata.normalize("NFD", "Чайковский")      # «й» из архива macOS: «и» и U+0306
+
+
+def test_names_and_texts_are_composed_to_nfc(monkeypatch):
+    """Поиск: FTS5 с remove_diacritics сводит разложенное «й» к «и», а составное «й» запроса — нет; имя и текст
+    документа поэтому пишутся в NFC (находка 2026-11-09 «Поиск не находит текст в NFD»)."""
+    assert NFD != "Чайковский"
+    assert documents.clean_name(f"папка/{NFD}.txt") == "Чайковский.txt"
+    assert documents.extract("a.txt", f"{NFD} и Шопен".encode("utf-8")) == "Чайковский и Шопен"
+    assert documents.extract("a.docx", docx([NFD])) == "Чайковский"
+
+    class Page:
+        def extract_text(self):
+            return f" {NFD} "
+
+    monkeypatch.setattr(documents, "PdfReader", lambda _: type("R", (), {"pages": [Page(), Page()]})())
+    assert documents.pdf_page_texts(b"%PDF") == ["Чайковский", "Чайковский"]
+    assert documents.extract("a.pdf", b"%PDF") == "Чайковский\n\nЧайковский"
 
 
 def refusal(name, data) -> str:

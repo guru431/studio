@@ -148,7 +148,7 @@ def test_vapid_key_is_stored_encrypted_and_replaced_when_unreadable(studio, monk
     assert "push: ключ VAPID заменён, подписки сброшены" in caplog.text
     [stored] = state.DB.execute("SELECT value FROM settings WHERE key = 'vapid'").fetchone()
     assert security.decrypt(stored.encode()) == push.b64u(fresh.private_numbers().private_value.to_bytes(32, "big"))
-    assert studio.c.get("/api/me/push").json() == {"key": push.public_key(), "subscribed": False}
+    assert studio.c.get("/api/me/push").json() == {"key": push.public_key(), "subscribed": False, "endpoint": None}
 
 
 def test_only_known_push_hosts_are_accepted(studio):
@@ -176,14 +176,15 @@ def test_only_known_push_hosts_are_accepted(studio):
                  {"p256dh": "%%%", "auth": push.b64u(d.auth)}):
         r = studio.c.post("/api/me/push", json={"endpoint": d.endpoint, "keys": keys})
         assert (r.status_code, r.json()["detail"]) == (422, {"code": "keys", "message": "неверные ключи подписки"}), keys
-    assert len(subs()) == 4
+    # подписка у сессии одна: каждая принятая заменяла прежнюю
+    assert [r["endpoint"] for r in subs()] == ["https://db5p.notify.windows.com/w/?token=d"]
 
 
 def test_subscription_lives_with_its_session(studio):
     uid = make_user(studio, "owner")
     signin(studio, "owner")
     first, second = Device(), Device("https://web.push.apple.com/second")
-    assert studio.c.get("/api/me/push").json() == {"key": push.public_key(), "subscribed": False}
+    assert studio.c.get("/api/me/push").json() == {"key": push.public_key(), "subscribed": False, "endpoint": None}
     assert studio.c.post("/api/me/push", json=first.body()).status_code == 204
     assert studio.c.get("/api/me/push").json()["subscribed"] is True
     [row] = subs()
@@ -200,6 +201,26 @@ def test_subscription_lives_with_its_session(studio):
     assert studio.c.get("/api/me/push").json()["subscribed"] is True
     assert studio.c.post("/logout", follow_redirects=False).status_code == 303
     assert subs() == []
+
+
+def test_page_can_tell_a_stale_subscription_and_replace_it_after_unlock(studio):
+    """IDEAS «Сессии учётки», хвост: под частичной защитой pushsubscriptionchange не может сменить подписку (POST
+    закрыт — 423, иначе запертая сессия увела бы уведомления), но GET отдаёт признак адреса — страница после отпирания
+    видит, что он не тот, что у браузера, и отправляет новую. Сам адрес наружу не уходит."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    old, new = Device(), Device("https://web.push.apple.com/renewed")
+    assert studio.c.post("/api/me/push", json=old.body()).status_code == 204
+    answer = studio.c.get("/api/me/push").json()
+    assert answer["endpoint"] == hashlib.sha256(old.endpoint.encode()).hexdigest()[:16]
+    assert old.endpoint not in str(answer)
+    state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"code\"]' WHERE id = ?", (uid,))
+    state.DB.execute("UPDATE sessions SET seen = 0")
+    assert studio.c.post("/api/me/push", json=new.body()).status_code == 423
+    assert studio.c.get("/api/me/push").json()["endpoint"] == answer["endpoint"]     # сверка доступна и запертой
+    state.DB.execute("UPDATE sessions SET seen = ?", (studio.clock[0],))           # отперли
+    assert studio.c.post("/api/me/push", json=new.body()).status_code == 204
+    assert studio.c.get("/api/me/push").json()["endpoint"] == hashlib.sha256(new.endpoint.encode()).hexdigest()[:16]
 
 
 def test_notify_sends_an_encrypted_payload_and_forgets_gone_subscriptions(studio):

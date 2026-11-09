@@ -249,10 +249,18 @@ def _keys(keys: Keys) -> tuple[bytes, bytes] | None:
     return p256dh, auth
 
 
+def endpoint_mark(endpoint: str) -> str:
+    """Признак адреса подписки для сверки страницей (push-sync.js): не сам адрес — он и есть доступ к устройству."""
+    return hashlib.sha256(endpoint.encode()).hexdigest()[:16]
+
+
 @router.get("/me/push")
 async def get_push(request: Request):
-    row = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ?", (request.state.digest,)).fetchone()
-    return {"key": public_key(), "subscribed": row is not None}
+    """`endpoint` — признак адреса подписки этой сессии (или null): страница сверяет его с подпиской браузера и после
+    отпирания отправляет новую, если служебный работник не смог (pushsubscriptionchange под блокировкой)."""
+    row = state.DB.execute("SELECT endpoint FROM push_subs WHERE digest = ?", (request.state.digest,)).fetchone()
+    return {"key": public_key(), "subscribed": row is not None,
+            "endpoint": endpoint_mark(row["endpoint"]) if row else None}
 
 
 @router.post("/me/push", status_code=204)
@@ -264,6 +272,8 @@ async def subscribe(body: Subscription, request: Request):
         raise HTTPException(422, {"code": "keys", "message": "неверные ключи подписки"})
     uid = request.state.user.id
     vapid_key()                          # ключ — до строки: замена ключа стёрла бы и эту подписку
+    # у сессии (браузера) подписка одна: новая заменяет прежнюю, а не копится рядом мёртвым адресом
+    state.DB.execute("DELETE FROM push_subs WHERE digest = ? AND endpoint != ?", (request.state.digest, body.endpoint))
     state.DB.execute(
         "INSERT INTO push_subs(endpoint, user_id, digest, p256dh, auth, created) VALUES (?, ?, ?, ?, ?, ?)"
         " ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, digest = excluded.digest,"

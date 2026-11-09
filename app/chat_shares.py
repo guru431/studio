@@ -2,14 +2,25 @@
 
 The link token lives in the URL fragment (never Apache's request log). A successful
 PIN check grants a separate, expiring read token, never a Studio account session.
+
+Снимок переписки хранится только шифром STUDIO_DATA_KEY (`chat_shares.sealed`, db.SHARES_36), как токены
+подключений: в базе и ночных копиях открытого текста нет. В прежнем столбце `snapshot` — заглушка `PLACEHOLDER`,
+её прежний код (откат) покажет вместо снимка. Открытые снимки (до шага 36 или прежнего кода) шифрует `seal()` при
+старте. Сменили ключ данных — снимок не расшифровать: ссылка «недоступна», владелец создаёт новую.
+
+Срок ссылки — `days` при создании (1, 7, 30 дней или бессрочно, по умолчанию `DAYS_DEFAULT`): истёкшая удаляется
+со снимком при первом же обращении к ссылкам или старте. Неверные PIN считаются и без окна (`fails`): `FAILS_MAX`
+отзывает ссылку, владельцу — push/ntfy без содержимого и `share_locked` в журнале безопасности.
 """
 import asyncio
 import json
+import logging
 import uuid
 
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import auth
 import chat
@@ -18,14 +29,27 @@ import clock
 import media
 import lock_policy
 import operations
+import push
 import security
 import security_log
 import state
 
+log = logging.getLogger("studio")
 router = APIRouter()
 PIN_FAILS = 5
 IP_ATTEMPTS = 30
 LOCK_SEC = 900
+#: все неверные PIN ссылки, без окна: пауза LOCK_SEC сдерживает темп, а этот предел — сам подбор (4 цифры)
+FAILS_MAX = 50
+#: срок ссылки в днях; None — бессрочно. Неделя по умолчанию: ссылку обычно открывают в первые дни, а снимок
+#: переписки и подбор PIN не должны жить дольше нужного — бессрочную владелец выбирает явно
+DAYS = (1, 7, 30)
+DAYS_DEFAULT = 7
+#: в прежнем столбце `snapshot`: прежний код (откат) отдаст получателю это вместо зашифрованной переписки
+PLACEHOLDER = {"title": "Ссылка недоступна", "messages": [{
+    "role": "assistant", "attachments": [], "text": "Эту ссылку создала более новая версия Студии, и сейчас её не "
+    "открыть. Попросите владельца прислать ссылку заново."}]}
+PLACEHOLDER_RAW = json.dumps(PLACEHOLDER, ensure_ascii=False, separators=(",", ":"))
 VIEW_SEC = 8 * 3600
 MAX_MESSAGES = 10000
 MAX_SNAPSHOT = 16 * 1024 * 1024
@@ -50,6 +74,16 @@ async def public_guard(request: Request, call_next):
 class ShareIn(BaseModel):
     pin: str = Field(strict=True, pattern=r"^[0-9]{4}$", min_length=4, max_length=4)
     title: str = Field(default="Чат", max_length=200)
+    #: рассуждение модели обычного чата — черновик, который владелец обычно не перечитывал: только по выбору
+    reasoning: StrictBool = False
+    days: int | None = Field(default=DAYS_DEFAULT, strict=True)
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, value):
+        if value is not None and value not in DAYS:
+            raise ValueError("срок ссылки — 1, 7, 30 дней или бессрочно")
+        return value
 
 
 class UnlockIn(BaseModel):
@@ -76,7 +110,33 @@ def _owner_open(request: Request, section: str) -> None:
     operations.check(request.state.user.id)
 
 
+def _expire() -> None:
+    """Истёкшие ссылки — прочь вместе со снимком, читателями и списком файлов (каскад)."""
+    state.DB.execute("DELETE FROM chat_shares WHERE expires IS NOT NULL AND expires <= ?", (clock.NOW(),))
+
+
+def seal() -> int:
+    """При старте: снимки открытым текстом — шифром, на их место — заглушка. secure_delete на время записи: SQLite
+    обнулит освобождённые страницы с прежним текстом, а не оставит их в файле базы и её копиях."""
+    _expire()
+    rows = state.DB.execute("SELECT id, snapshot FROM chat_shares WHERE sealed IS NULL").fetchall()
+    if not rows:
+        return 0
+    before = state.DB.execute("PRAGMA secure_delete").fetchone()[0]
+    state.DB.execute("PRAGMA secure_delete = ON")
+    try:
+        for row in rows:
+            state.DB.execute("UPDATE chat_shares SET sealed = ?, snapshot = ? WHERE id = ? AND sealed IS NULL",
+                             (security.encrypt(row["snapshot"]), PLACEHOLDER_RAW, row["id"]))
+    finally:
+        state.DB.execute(f"PRAGMA secure_delete = {int(before)}")
+    state.DB.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    log.info("ссылки «Поделиться»: зашифровано снимков — %d", len(rows))
+    return len(rows)
+
+
 def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, session_id=None, engine=None):
+    _expire()
     return state.DB.execute(
         "SELECT * FROM chat_shares WHERE user_id = ? AND chat_id IS ? AND agent_id IS ?"
         " AND project IS ? AND session_id IS ? AND engine IS ?",
@@ -86,8 +146,12 @@ def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, sessi
 def _out(row) -> dict:
     if row is None:
         return {"enabled": False}
-    return {"enabled": True, "url": state.CFG.origin.rstrip("/") + "/share#" + security.decrypt(row["token_enc"]),
-            "created": row["created"]}
+    try:
+        url = state.CFG.origin.rstrip("/") + "/share#" + security.decrypt(row["token_enc"])
+    except InvalidToken:          # сменили STUDIO_DATA_KEY: ссылку не показать и не открыть — создать новую
+        url = None
+    return {"enabled": True, "url": url, "created": row["created"], "expires": row["expires"],
+            "views": row["views"], "viewed": row["viewed"], "fails": row["fails"]}
 
 
 def _encode(snapshot: dict) -> str:
@@ -102,7 +166,7 @@ def _encode(snapshot: dict) -> str:
 
 
 async def _store(request: Request, body: ShareIn, snapshot: dict, expected, files=(), **source):
-    raw = _encode(snapshot)
+    sealed = await asyncio.to_thread(security.encrypt, _encode(snapshot))
     pin_hash = await asyncio.to_thread(security.hash_password, body.pin)
     if source.get("agent_id"):
         await claude_code.ask(request, source["agent_id"], "history", project=source["project"],
@@ -114,17 +178,18 @@ async def _store(request: Request, body: ShareIn, snapshot: dict, expected, file
     current = _owned(request, **source)
     if (current["id"] if current else None) != (expected["id"] if expected else None):
         raise _refuse(409, "share_changed", "настройки ссылки изменились — откройте окно заново")
-    token, share_id = security.new_token(), uuid.uuid4().hex
+    token, share_id, now = security.new_token(), uuid.uuid4().hex, clock.NOW()
     state.DB.execute("BEGIN")
     try:
         if current:
             state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (current["id"],))
         state.DB.execute(
             "INSERT INTO chat_shares(id,user_id,chat_id,agent_id,project,session_id,engine,"
-            "token_hash,token_enc,pin_hash,snapshot,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "token_hash,token_enc,pin_hash,snapshot,sealed,created,expires) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (share_id, request.state.user.id, source.get("chat_id"), source.get("agent_id"),
              source.get("project"), source.get("session_id"), source.get("engine"), security.digest(token),
-             security.encrypt(token), pin_hash, raw, clock.NOW()))
+             security.encrypt(token), pin_hash, PLACEHOLDER_RAW, sealed, now,
+             None if body.days is None else now + body.days * 86400))
         state.DB.executemany("INSERT INTO chat_share_files(share_id,media_id) VALUES(?,?)",
                              [(share_id, mid) for mid in set(files)])
         state.DB.execute("COMMIT")
@@ -146,7 +211,8 @@ async def chat_share(chat_id: str, request: Request):
     return _out(_owned(request, chat_id=chat_id))
 
 
-def regular_snapshot(user_id: int, chat_id: str) -> tuple[dict, list[str]]:
+def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tuple[dict, list[str]]:
+    """Снимок обычного чата; `reasoning=False` — без рассуждения модели (ссылка по умолчанию)."""
     row = chat._chat_row(user_id, chat_id)
     atts = chat._attachments(chat_id)
     files, messages = [], []
@@ -159,7 +225,7 @@ def regular_snapshot(user_id: int, chat_id: str) -> tuple[dict, list[str]]:
                 files.append(a["media_id"])
                 attachments.append({"file": a["media_id"], "name": a["name"], "kind": a["kind"]})
         messages.append({"role": message["role"], "text": message["content"], "attachments": attachments,
-                         "reasoning": message["reasoning"], "status": message["status"]})
+                         "reasoning": message["reasoning"] if reasoning else None, "status": message["status"]})
     snapshot = {"title": row["title"] or "Чат", "messages": messages}
     _encode(snapshot)
     return snapshot, files
@@ -168,7 +234,7 @@ def regular_snapshot(user_id: int, chat_id: str) -> tuple[dict, list[str]]:
 @router.post("/api/chats/{chat_id}/share", status_code=201)
 async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
     expected = _owned(request, chat_id=chat_id)
-    snapshot, files = regular_snapshot(request.state.user.id, chat_id)
+    snapshot, files = regular_snapshot(request.state.user.id, chat_id, body.reasoning)
     return await _store(request, body, snapshot, expected, files, chat_id=chat_id)
 
 
@@ -257,16 +323,48 @@ def _same_origin(request):
 
 def _public_share(token_hash):
     row = state.DB.execute("SELECT s.* FROM chat_shares s JOIN users u ON u.id = s.user_id"
-                            " WHERE s.token_hash = ? AND u.disabled = 0", (token_hash,)).fetchone()
+                            " WHERE s.token_hash = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)",
+                            (token_hash, clock.NOW())).fetchone()
     if row is None:
         raise _refuse()
     return row
+
+
+def _open(row, pin: str) -> "dict | None":
+    """В потоке: верен ли PIN и, если да, снимок (scrypt и расшифровка многомегабайтного шифра — мимо цикла
+    событий). Снимок не расшифровать (сменили STUDIO_DATA_KEY) — `_refuse`, как отозванную ссылку."""
+    if not security.verify_password(pin, row["pin_hash"]):
+        return None
+    try:
+        raw = row["snapshot"] if row["sealed"] is None else security.decrypt(row["sealed"])
+        return json.loads(raw)
+    except (InvalidToken, ValueError):
+        raise _refuse(404, "share_gone", "ссылка недоступна — попросите владельца создать новую") from None
+
+
+def _wrong_pin(request: Request, row, reserved: int) -> None:
+    """Неверный PIN: в журнал владельца (повторы свернёт security_log), общий счёт ссылки; FAILS_MAX — отзыв."""
+    uid, ip = row["user_id"], auth.client_ip(request)
+    detail = "code" if row["agent_id"] else "chat"
+    fails = state.DB.execute("UPDATE chat_shares SET fails = fails + 1 WHERE id = ? RETURNING fails",
+                             (row["id"],)).fetchone()[0]
+    security_log.record(uid, "share_pin_fail", detail=detail, ip=ip)
+    if fails >= FAILS_MAX:
+        state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (row["id"],))
+        security_log.record(uid, "share_locked", detail="revoked", ip=ip)
+        push.notify_later(uid, f"Ссылка «Поделиться» отключена: {FAILS_MAX} неверных PIN", "settings/other",
+                          "share-" + row["id"], title="Студия")
+        log.info("пользователь %d: ссылка отозвана после %d неверных PIN", uid, fails)
+        raise _refuse()
+    if reserved == PIN_FAILS:
+        security_log.record(uid, "share_locked", detail="pause", ip=ip)
 
 
 @router.post("/share/unlock")
 async def unlock(body: UnlockIn, request: Request):
     _same_origin(request)
     now = clock.NOW()
+    _expire()
     state.DB.execute("DELETE FROM chat_share_attempts WHERE until <= ?", (now,))
     state.DB.execute("DELETE FROM chat_share_visitors WHERE expires <= ?", (now,))
     ip_hash = security.digest(auth.client_ip(request))
@@ -282,14 +380,17 @@ async def unlock(body: UnlockIn, request: Request):
     elif row["attempts"] >= PIN_FAILS:
         raise _refuse(429, "share_locked", "слишком много попыток — подождите 15 минут")
     # Reserve before awaiting the hash: a concurrent batch cannot bypass the limit.
-    state.DB.execute("UPDATE chat_shares SET attempts = attempts + 1 WHERE id = ?", (row["id"],))
-    valid = await asyncio.to_thread(security.verify_password, body.pin, row["pin_hash"])
+    reserved = state.DB.execute("UPDATE chat_shares SET attempts = attempts + 1 WHERE id = ? RETURNING attempts",
+                                (row["id"],)).fetchone()[0]
+    snapshot = await asyncio.to_thread(_open, row, body.pin)
     current = _public_share(row["token_hash"])
     if current["id"] != row["id"]:
         raise _refuse()
-    if not valid:
+    if snapshot is None:
+        _wrong_pin(request, current, reserved)
         raise _refuse(403, "share_pin", "неверный PIN")
-    state.DB.execute("UPDATE chat_shares SET attempts = MAX(0, attempts - 1) WHERE id = ?", (row["id"],))
+    state.DB.execute("UPDATE chat_shares SET attempts = MAX(0, attempts - 1), views = views + 1, viewed = ?"
+                     " WHERE id = ?", (now, row["id"]))
     state.DB.execute("UPDATE chat_share_attempts SET attempts = MAX(0, attempts - 1) WHERE ip_hash = ?", (ip_hash,))
     access = security.new_token()
     # Bound successful visitor sessions, retaining the newest 100 per link.
@@ -297,14 +398,14 @@ async def unlock(body: UnlockIn, request: Request):
                      " WHERE share_id = ? ORDER BY expires DESC LIMIT -1 OFFSET 99)", (row["id"],))
     state.DB.execute("INSERT INTO chat_share_visitors VALUES(?,?,?)",
                      (security.digest(access), row["id"], now + VIEW_SEC))
-    return JSONResponse({"access": access, **json.loads(row["snapshot"])}, headers=PUBLIC_HEADERS)
+    return JSONResponse({"access": access, **snapshot}, headers=PUBLIC_HEADERS)
 
 
 def _visitor(access):
     row = state.DB.execute(
         "SELECT s.id, s.user_id FROM chat_share_visitors v JOIN chat_shares s ON s.id = v.share_id"
-        " JOIN users u ON u.id = s.user_id WHERE v.digest = ? AND v.expires > ? AND u.disabled = 0",
-        (security.digest(access), clock.NOW())).fetchone()
+        " JOIN users u ON u.id = s.user_id WHERE v.digest = ? AND v.expires > ? AND u.disabled = 0"
+        " AND (s.expires IS NULL OR s.expires > ?)", (security.digest(access), clock.NOW(), clock.NOW())).fetchone()
     if row is None:
         raise _refuse()
     return row
