@@ -770,8 +770,10 @@ def test_export_txt_md_docx(studio):
 
 def test_to_chat_attaches_markdown(studio, monkeypatch):
     add_gateway(studio)
+    studio.gw.ocr_hold = True                   # иначе документ иногда готов раньше проверки 409
     sid = post_files(studio, [("Отчёт.pdf", scan_pdf("ink"))]).json()["id"]
     assert studio.c.post(f"/api/ocr/{sid}/attachments").status_code == 409
+    studio.gw.ocr_hold = False
     wait_ocr(studio, sid, {"done"})
     r = studio.c.post(f"/api/ocr/{sid}/attachments")
     assert r.status_code == 201, r.text
