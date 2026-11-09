@@ -5,9 +5,13 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 33
+VERSION = 35
 
-SHARES_33 = """CREATE TABLE chat_shares(
+#: причина отказа ответа чата словами (chat._finish): после перечитывания видно, почему ответа нет; прежний код
+#: столбец не читает (выбирает по именам или `*` со словарём строк)
+CHAT_35 = "ALTER TABLE messages ADD COLUMN error TEXT;"
+
+SHARES_33 ="""CREATE TABLE chat_shares(
        id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
        chat_id TEXT REFERENCES chats ON DELETE CASCADE,
        agent_id INTEGER REFERENCES agents ON DELETE CASCADE, project TEXT, session_id TEXT, engine TEXT,
@@ -452,7 +456,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + CHAT_35
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -536,6 +540,10 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     31: CHAT_31,
     32: S06_32,
     33: SHARES_33,
+    # номер 34 выдан другой группе правок: при слиянии здесь встанет её шаг (пустой — только чтобы ветка мигрировала)
+    34: "",
+    # причина отказа ответа чата
+    35: CHAT_35,
 }
 
 

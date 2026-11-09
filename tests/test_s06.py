@@ -120,7 +120,7 @@ def test_ocr_uses_native_image_and_markdown_without_slot_release(studio, s06):
 
 def test_step_32_preserves_connections_and_defaults(env):
     connection = db.connect(env.db_path)
-    connection.executescript(db.SCHEMA.removesuffix(db.SHARES_33).removesuffix(db.S06_32) + "\nPRAGMA user_version=31;")
+    connection.executescript(db.SCHEMA.removesuffix(db.CHAT_35).removesuffix(db.SHARES_33).removesuffix(db.S06_32) + "\nPRAGMA user_version=31;")
     connection.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
     connection.execute("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created)"
                        " VALUES(1,1,'Keep','openai','https://test.invalid/v1',x'1234','[]',0)")

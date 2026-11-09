@@ -110,6 +110,31 @@ def test_switching_chats_while_sending_clears_the_sent_text_and_chips(browser, l
     assert result['values']['state'] == ['Draft of B', 0]
 
 
+@pytest.mark.parametrize('width', [320, 1280])
+def test_busy_card_shows_the_wait_and_do_not_wait_ends_it(browser, live, width):
+    """Шлюз отвечает 503: под ответом «жду карту · м:сс» и «Не ждать»; нажатие — ответ-ошибка словами, и они же
+    после перечитывания диалога."""
+    phone = width == 320
+    live.gw.chat_error = (503, {'error': {'message': 'slot busy'}})
+    last = "[...document.querySelectorAll('#messages .msg.assistant')].pop()"
+    try:
+        result = browser.drive(live.url+'/', [*signin(), ('wait', READY), *open_new_chat(mobile=phone),
+            ('type', '#chat-input', 'Wait for the card'), ('click', '#send'),
+            ('wait', f"{last}?.querySelector('.msg-meta').textContent.startsWith('жду карту · ')"),
+            ('wait', f"!{last}.querySelector('.msg-nowait').hidden"),
+            ('eval', 'overflow', 'document.documentElement.scrollWidth <= document.documentElement.clientWidth'),
+            ('click', '#messages .msg.assistant .msg-nowait'),
+            ('wait', f"{last}.querySelector('.msg-meta').textContent === 'карта занята — ждать не стали'"),
+            ('eval', 'hidden', f"{last}.querySelector('.msg-nowait').hidden"),
+            ('eval', 'reload', 'location.reload(); true'),
+            ('wait', f"document.querySelectorAll('#messages .msg').length === 2 && {last}.querySelector('.msg-meta').textContent === 'карта занята — ждать не стали'")],
+            width=width, mobile=phone)
+    finally:
+        live.gw.chat_error = None
+    assert not result.get('failed'), result
+    assert result['values']['overflow'] is True and result['values']['hidden'] is True
+
+
 def test_late_recovery_does_not_replace_another_chat_or_its_draft(browser, live):
     hold = """(() => {
       const real=window.fetch;

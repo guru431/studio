@@ -265,7 +265,7 @@ def test_agent_snapshot_fetches_all_pages_and_is_readable_without_bridge(studio)
 
 def test_share_schema_migration_keeps_original_chats_and_is_idempotent(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
+    conn.executescript(db.SCHEMA.removesuffix(db.CHAT_35).removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'Keep',0,0)")
     db.migrate(conn)
