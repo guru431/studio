@@ -1475,6 +1475,8 @@ body.solo { display: grid; place-items: center; padding: 16px; }
 .code-chat-actions { display: flex; flex: none; gap: 4px; margin-left: auto; }
 .code-status-bar .icon-btn { width: 32px; height: 36px; }
 .code-chat-actions:empty { display: none; }
+.code-reload { flex: none; }
+.code-reload[hidden] { display: none; }
 .code-msg.user .code-fork { display: block; margin-top: 6px; font-size: calc(11px * var(--font-scale, 1)); }
 .code-subagents-dialog { width: min(900px, calc(100vw - 24px)); }
 .code-subagent-row, .code-worktree-row { display: block; width: 100%; margin: 5px 0; text-align: left; overflow-wrap: anywhere; }

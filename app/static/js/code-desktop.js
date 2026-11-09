@@ -170,8 +170,6 @@ export function desktopView(host, { locked }) {
     screen.width = 1;
     screen.height = 1;
     stage.hidden = true;
-    text.value = '';
-    clipboard.value = '';
     for (const control of modifierButtons.values()) control.setAttribute('aria-pressed', 'false');
   }
 
@@ -203,6 +201,8 @@ export function desktopView(host, { locked }) {
       void finish();
     }
     clearScreen();
+    text.value = '';             // конец сеанса — набранное и полученный буфер не остаются (смена монитора их бережёт)
+    clipboard.value = '';
     buttons();
     if (message) say(message, error);
   }

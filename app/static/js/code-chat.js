@@ -18,7 +18,9 @@
  * - во время хода — steer; чужое окно сначала забирает управление через claim. Codex/Claude получают
  *   уточнение в текущем клиенте, OpenCode — очередь до конца ответа. Отказ turn 409 running и 504 timeout — live;
  * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
- *   пока страница видна; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
+ *   пока страница видна; live без компьютера — поток ожидания (offline {wait: true}), его online открывает live
+ *   сразу; ошибка загрузки истории — слова и «Повторить» (#code-reload) в строке статуса, сбой связи, моста
+ *   или шлюза — ещё и повтор через RETRY_MS; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
  *   PIN — снова сюда; ответ, пришедший после ухода с чата, никуда не уводит;
  * - страница ушла с экрана — свой поток она снимает (push от сервера уходит, только если чат никто не
  *   смотрит), вернулась — снова live: снимок догонит ход, ход на машине от этого не прерывается.
@@ -139,7 +141,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const messageViews = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
-  let renderedHistory = null;     // снимок и узлы хвоста: неизменившаяся история сохраняет раскрытие и выделение
+  let opened = false;            // история хоть раз загрузилась (и запрошено состояние сессии)
+  let loadError = null;          // слова последней ошибки загрузки в строке статуса
+  let renderedHistory = null;    // снимок и узлы хвоста: неизменившаяся история сохраняет раскрытие и выделение
   let attention = null;
   let markingRead = false;
   let interactions = 0;
@@ -228,6 +232,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
+  const reloadButton = el('button', { type: 'button', id: 'code-reload', class: 'btn btn-sm code-reload', hidden: true,
+    title: 'Загрузить чат заново' }, 'Повторить');
+  reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
   const sharing = shareMenu(host, { id: 'code-share-chat', request: api, failed: (err) => {
     if (err.code === 'closed') closed();
@@ -235,7 +242,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   } });
   sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: endpoint('/share'), export: endpoint('/export') });
   actions.append(sharing.button);
-  const statusBar = el('div', { class: 'code-status-bar' }, activity, actions,
+  const statusBar = el('div', { class: 'code-status-bar' }, activity, reloadButton, actions,
     changedFiles.button, context.cacheButton, contextBox, usage.button);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
@@ -1210,7 +1217,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         finish(data);
         return true;
       case 'offline':
+        if (data.wait === true) {     // live без компьютера: поток ждёт online, без опроса
+          setRunning(false);
+          paintActivity('offline');
+          showStatus(WAITING);
+          return false;
+        }
         waitForComputer();
+        return true;
+      case 'online':                  // компьютер вернулся — история и live сразу (поток его ожидания кончился)
+        if (status.textContent === WAITING) showStatus('');
+        reload(true);
         return true;
       case 'closed':
         closed();
@@ -1283,17 +1300,24 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       else {
         showStatus(words(err));
         if (err.code === 'network' || err.status >= 500) later(RETRY_MS);
+        else reloadButton.hidden = false;      // само не повторится — «Повторить»
       }
       return;
     }
+    reloadButton.hidden = opened;
     if (status.textContent === WAITING) showStatus('');
     await follow(response, own);
   }
 
-  async function loadHistory(thenLive, preserveScroll = false) {
+  /** История заново. true — сама открыла live или отправила Git-действие, false — готово без этого, undefined —
+   * не загрузилась или её обогнала более новая загрузка. Первая удачная загрузка (opened) — даже если не
+   * thenLive: первую обогнали (возвращение на экран) или она упала — запрашивает состояние сессии, без него
+   * «Отправить» и выбор модели остаются выключенными. */
+  async function loadHistory(thenLive, preserveScroll = false, passive = false) {
     const previousScroll = preserveScroll ? scroller?.scrollTop : 0;
     const followed = !preserveScroll || stuck();
     const revision = ++historyRevision;
+    const first = thenLive || !opened;
     const snapshot = thenLive && historyCache.get(historyKey);
     const cached = snapshot?.page;
     if (cached) {
@@ -1315,15 +1339,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (thenLive && verify) await verify;
       if (!alive) return;
       if (thenLive && cached?.total > 0) settings = loadState();
-      page = await api('GET', endpoint());
+      page = await api('GET', endpoint(), undefined, passive ? { headers: { 'x-studio-passive': '1' } } : {});
     } catch (err) {
       if (!alive) return;
       if (err.code === 'closed') closed();
       else if (err.status === 404 && err.code === 'not_found') gone();
-      else showStatus(words(err));
+      else if (revision === historyRevision) loadFailed(err);
       return;
     }
     if (!alive || revision !== historyRevision) return;
+    loadRecovered();
     const serial = JSON.stringify([page.start, page.total, page.items]);
     historyCache.delete(historyKey);
     historyCache.set(historyKey, { page, serial, bytes: serial.length * 4 });
@@ -1333,7 +1358,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       cacheBytes -= historyCache.get(key).bytes;
       historyCache.delete(key);
     }
-    if (thenLive && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
+    if (first && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     const offset = renderedHistory ? feed.children.length - renderedHistory.nodes.length : -1;
     const unchanged = renderedHistory?.serial === serial && offset >= 0 && (offset === 0 || start < page.start)
       && renderedHistory.nodes.every((node, index) => feed.children[offset + index] === node);
@@ -1354,9 +1379,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (thenLive) {
       if (settings) await settings;
       if (!settings || page.total === 0) await loadState();
-    }
+    } else if (first && resolving && !stateRequest) await loadState();
     await Promise.all([...pendingPaints]);
     if (!alive || revision !== historyRevision) return;
+    opened = true;
     attention = page.attention || null;
     historyLoading = false;
     updateControls();
@@ -1375,11 +1401,41 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         paintNavigation();
       }
     });
-    if (thenLive && gitAction) {
+    if (first && gitAction) {
       const prompt = gitAction;
       gitAction = null;
       submit(prompt);
-    } else if (thenLive) openLive();
+      return true;
+    }
+    if (thenLive) openLive();
+    return thenLive;
+  }
+
+  /** Ошибка загрузки истории: слова и «Повторить»; связь, сбой моста или шлюза — повтор сам через RETRY_MS. */
+  function loadFailed(err) {
+    loadError = err.code === 'offline' ? WAITING : words(err);
+    showStatus(loadError);
+    if (err.code === 'offline') paintActivity('offline');
+    reloadButton.hidden = false;
+    if (['offline', 'network', 'timeout'].includes(err.code) || err.status >= 500) {
+      clearTimeout(retry);
+      retry = alive && document.visibilityState !== 'hidden' ? setTimeout(() => reload(true), RETRY_MS) : null;
+    }
+  }
+
+  function loadRecovered() {
+    reloadButton.hidden = true;
+    if (loadError && status.textContent === loadError) showStatus('');
+    loadError = null;
+  }
+
+  /** «Повторить» (или повтор по таймеру — фоновая просьба): история, затем live, если она его не открыла. */
+  async function reload(passive = false) {
+    clearTimeout(retry);
+    retry = null;
+    if (!passive) acted = Date.now();
+    reloadButton.hidden = true;
+    if (await loadHistory(false, opened, passive) === false) openLive(passive);
   }
 
   /* ---- действия ----------------------------------------------------------------- */
@@ -1591,8 +1647,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     } else if (!sending) {
       acted = Date.now();
       if (external && waitingForRelease) claimSession();
-      await loadHistory(false, true);
-      openLive();
+      if (!(await loadHistory(false, true))) openLive();
     }
   }
   document.addEventListener('visibilitychange', onVisibility);

@@ -180,7 +180,8 @@ def test_someone_elses_agent_is_404_before_the_bridge(studio):
         body = BODIES[(method, path)]
         r = studio.c.request(method, "/".join(parts), **({} if body is None else {"json": body}))
         assert (r.status_code, detail(r)["code"]) == (404, "not_found"), (method, path, r.text)
-    assert set(routes) == set(BODIES)            # и в таблице нет строк маршрутов, которых уже нет
+        assert detail(r).get("computer") is True, (method, path)   # страница отличает его от «нет файла/сессии»
+    assert set(routes) == set(BODIES)           # и в таблице нет строк маршрутов, которых уже нет
     assert m.requests == []
     assert state.DB.execute("SELECT count(*) FROM code_chats").fetchone()[0] == 0
 
@@ -325,6 +326,7 @@ def test_closed_foreign_session_does_not_come_back_as_ghost(studio):
     count = lambda: state.DB.execute("SELECT count(*) FROM code_chats").fetchone()[0]       # noqa: E731
     r = studio.c.patch(url(aid, "projects", ALPHA, "chats", other), json={"state": "closed"})
     assert (r.status_code, detail(r)["code"]) == (404, "not_found")
+    assert "computer" not in detail(r)
     assert count() == 0
     assert studio.c.patch(url(aid, "projects", ALPHA, "chats", B), json={"state": "closed"}).status_code == 200
     new = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
@@ -836,9 +838,33 @@ def test_lost_link_ends_streams_with_offline(studio):
     no_watchers(studio)
     r = studio.c.post(chat_url(aid, "answer"), json={"request_id": "r1", "decision": "allow"})
     assert (r.status_code, detail(r)) == (409, {"code": "offline", "message": "компьютер не на связи"})
-    r = studio.c.get(chat_url(aid, "live"))
-    assert (r.status_code, detail(r)["code"]) == (409, "offline")
     assert not bridge.WATCHERS
+
+
+def test_live_waits_for_the_computer_and_ends_online_when_it_returns(studio, monkeypatch):
+    """`live` без канала — поток ожидания: `offline {wait: true}`, пинги и `online`, как только мост вернулся;
+    просьб мосту при этом нет. Сессия кончилась во время ожидания — `closed`."""
+    monkeypatch.setattr(claude_code, "PING_SEC", 0.01)
+    aid, m, link = setup(studio)
+    fake_bridge.drop(studio, link)
+    before = len(m.requests)
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        events = events_of(r.iter_lines())
+        assert next(events) == ("offline", {"wait": True})
+        assert next(events) == ("ping", None)
+        fake_bridge.connect(studio, aid, m)
+        assert [e for e in events if e[0] != "ping"] == [("online", {})]
+    no_watchers(studio)
+    assert len(m.requests) == before
+    link = studio.c.portal.call(lambda: bridge.LINKS[aid])
+    fake_bridge.drop(studio, link)
+    with studio.c.stream("GET", chat_url(aid, "live")) as r:
+        events = events_of(r.iter_lines())
+        assert next(events) == ("offline", {"wait": True})
+        studio.c.post("/logout")
+        assert [e for e, _ in events if e != "ping"] == ["closed"]
+    no_watchers(studio)
 
 
 def test_answer_needs_no_memory_of_the_card(studio):
