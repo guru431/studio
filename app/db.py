@@ -5,7 +5,27 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 32
+VERSION = 33
+
+SHARES_33 = """CREATE TABLE chat_shares(
+       id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       chat_id TEXT REFERENCES chats ON DELETE CASCADE,
+       agent_id INTEGER REFERENCES agents ON DELETE CASCADE, project TEXT, session_id TEXT, engine TEXT,
+       token_hash TEXT NOT NULL UNIQUE, token_enc BLOB NOT NULL, pin_hash TEXT NOT NULL,
+       snapshot TEXT NOT NULL, created REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+       attempt_until REAL NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX chat_shares_chat ON chat_shares(chat_id);
+CREATE UNIQUE INDEX chat_shares_agent ON chat_shares(agent_id, project, session_id, engine);
+CREATE TABLE chat_share_visitors(
+       digest TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES chat_shares ON DELETE CASCADE,
+       expires REAL NOT NULL);
+CREATE INDEX chat_share_visitors_share ON chat_share_visitors(share_id);
+CREATE TABLE chat_share_files(
+       share_id TEXT NOT NULL REFERENCES chat_shares ON DELETE CASCADE,
+       media_id TEXT NOT NULL REFERENCES media ON DELETE CASCADE,
+       PRIMARY KEY(share_id, media_id));
+CREATE TABLE chat_share_attempts(ip_hash TEXT PRIMARY KEY, attempts INTEGER NOT NULL, until REAL NOT NULL);
+"""
 
 S06_32 = "ALTER TABLE connections ADD COLUMN s06 INTEGER NOT NULL DEFAULT 0;"
 
@@ -432,7 +452,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -515,6 +535,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     30: NTFY_30,
     31: CHAT_31,
     32: S06_32,
+    33: SHARES_33,
 }
 
 

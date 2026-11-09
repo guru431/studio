@@ -65,6 +65,7 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
+import { SHARE_ICON, shareDialog } from './chat-share.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
@@ -112,6 +113,7 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  share: SHARE_ICON,
 };
 
 const jobs = new Map();          // id диалога → ответ, который читает эта вкладка
@@ -459,8 +461,9 @@ function build(view, ctx) {
     'aria-expanded': 'false' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
   const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', hidden: true });
   const connName = el('span', { class: 'chat-conn' });
+  const share = iconButton('share', 'Поделиться чатом', { id: 'chat-share', hidden: true });
   const head = el('header', { class: 'head chat-head' }, toggle,
-    el('div', { class: 'model-wrap' }, chip, modelMenu), connName);
+    el('div', { class: 'model-wrap' }, chip, modelMenu), connName, share);
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -489,6 +492,9 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
+  share.addEventListener('click', () => {
+    if (chatId) shareDialog(root, `/api/chats/${chatId}/share`);
+  });
 
   /* выдвижная панель списка (≤ 760px) */
   function panel(open) {
@@ -539,11 +545,13 @@ function build(view, ctx) {
   }
 
   function openItemMenu(li, item) {
+    const share = el('button', { type: 'button', class: 'menu-item chat-share' }, 'Поделиться чатом');
     const rename = el('button', { type: 'button', class: 'menu-item chat-rename' }, 'Переименовать');
     const remove = el('button', { type: 'button', class: 'menu-item chat-delete btn-danger' }, 'Удалить');
     rename.addEventListener('click', () => { closeItemMenu(); renameDialog(item); });
     remove.addEventListener('click', () => { closeItemMenu(); deleteDialog(item); });
-    li.append(el('div', { class: 'chat-menu', role: 'menu' }, rename, remove));
+    share.addEventListener('click', () => { closeItemMenu(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`); });
+    li.append(el('div', { class: 'chat-menu', role: 'menu' }, share, rename, remove));
     menuFor = li;
   }
 
@@ -1178,6 +1186,7 @@ function build(view, ctx) {
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
     chatId = id;
+    share.hidden = !chatId;
     chat = null;
     needsReload = false;
     failures = 0;
@@ -1358,6 +1367,7 @@ function build(view, ctx) {
       const created = await api('POST', '/api/chats', draft || {});
       ++opened;
       chatId = created.id;
+      share.hidden = false;
       chat = { chat: created, messages: [] };
       draft = null;
       history.replaceState(history.state, '', `#/chat/${created.id}`);

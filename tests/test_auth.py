@@ -249,7 +249,8 @@ def test_api_answers_are_not_cached(studio):
 
 
 ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html", "/robots.txt",
-             "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico", "/api/agent/enroll"}
+             "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico", "/api/agent/enroll",
+             "/share", "/share/unlock", "/share/check", "/share/file"}
 
 
 def test_pages_answer_head_and_robots_are_turned_away(studio):
