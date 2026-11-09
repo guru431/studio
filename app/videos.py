@@ -91,6 +91,8 @@ SEND_STALE_SEC = 900
 RESUME_GIVEUP_SEC = 3600
 #: начало работы службы (recover): строка SENDING старше — её запрос оборвала остановка
 BOOT = 0.0
+#: «Ещё варианты» ролика — не больше стольких сразу
+REPEAT_MAX = 4
 
 #: задачи наблюдателя: id подключения → задача его роликов (одна на подключение)
 WATCHING: "dict[int | None, asyncio.Task]" = {}
@@ -396,6 +398,53 @@ def _attach(video_id: str, gateway_id: str, answer: dict) -> bool:
         (gateway_id, status if status in ACTIVE else "queued", min(100, max(0, _int(answer.get("progress"), 0))),
          _text(answer.get("detail"), "в очереди"), _text(answer.get("prompt_source"), None),
          _int(answer.get("seed"), None), video_id)).rowcount == 1
+
+
+def _asked_prompt(row) -> str:
+    """Промпт запроса ролика: свой шаг цепочки (снимок запроса; столбец prompt шлюз заменяет придуманным),
+    у строк без цепочки — столбец, если промпт не придумал шлюз."""
+    if row["chain"]:
+        steps = json.loads(row["chain"])
+        if steps and steps[-1].get("kind") == "video":
+            return steps[-1].get("prompt") or ""
+    return row["prompt"] if row["prompt_source"] in (None, "given") else ""
+
+
+class RepeatIn(BaseModel):
+    count: int = Field(default=1, ge=1, le=REPEAT_MAX)
+
+
+@router.post("/{video_id}/repeat", status_code=201)
+async def repeat_video(video_id: str, request: Request):
+    """«Повторить» (count 1) и «Ещё варианты» (2–REPEAT_MAX): тот же исходник, промпт, длительность, качество и
+    дорисовка, подключение ролика и новый seed студии у каждого. Промпт — тот, что был в запросе: свой
+    (`given`) повторяется, придуманный шлюзом — снова на усмотрение шлюза. Задания уходят шлюзу по одному
+    (очередь — у шлюза); отказ после первого — уже принятые остаются, в ответе `message` словами."""
+    uid = request.state.user.id
+    row = _row(uid, video_id)
+    try:
+        body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
+    except ValidationError:
+        raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
+    conn = _video_connection(uid, row["connection_id"])
+    try:
+        image = await forms.photo(uid, None, row["source_media_id"], VIDEO_PIXELS)
+    except UploadError as e:
+        raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
+    operations.check(uid)
+    clip = VideoIn(prompt=_asked_prompt(row), seconds=row["seconds"], quality=row["quality"], smooth=bool(row["smooth"]))
+    made, message = [], None
+    for _ in range(body.count):
+        try:
+            made.append(await _send(uid, conn, image, row["source_media_id"], clip, owned=False))
+        except HTTPException as e:
+            if not made:
+                raise
+            message = e.detail.get("message") if isinstance(e.detail, dict) else str(e.detail)
+            break
+    log.info("ролик %s: повтор — %d из %d", video_id[:8], len(made), body.count)
+    rows = [state.DB.execute("SELECT * FROM videos WHERE id = ?", (v,)).fetchone() for v in made]
+    return {"items": [_out(r) for r in rows if r is not None], "message": message}
 
 
 @router.get("")

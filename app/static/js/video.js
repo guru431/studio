@@ -13,7 +13,8 @@
  * Раздел без модели (ctx.hint): лента и просмотр — как всегда, вместо поля промпта — подсказка.
  * #/video?id=<id> («Открыть» в «В работе», jobs.js): готовый — просмотр, иначе — его карточка; в уже
  * открытом разделе — update, без пересборки (промпт и фото-источник целы); созданный ролик зовёт
- * jobs.kick(). Текст сервера — только textContent. */
+ * jobs.kick(). «Повторить» и «Ещё варианты» (2–4) у законченного ролика — POST /api/videos/<id>/repeat:
+ * тот же кадр, промпт и параметры, новый seed. Текст сервера — только textContent. */
 import { api } from './api.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
@@ -303,6 +304,52 @@ function build(view, ctx) {
     return button('Удалить', { class: `${cls} card-delete` }, () => remove(item).catch((err) => { error.textContent = words(err); }));
   }
 
+  /* «Повторить» и «Ещё варианты»: тот же кадр, промпт, длительность и качество, seed — новый у каждого
+   * (POST /api/videos/<id>/repeat). Новые ролики — в начало ленты; отказ после первого — словами. */
+  async function repeat(item, count, control, after = () => {}) {
+    control.disabled = true;
+    error.textContent = '';
+    try {
+      const out = await api('POST', `/api/videos/${encodeURIComponent(item.id)}/repeat`, { count });
+      kick();
+      if (!alive) return;
+      for (const made of out.items) feed.prepend(made);
+      if (out.message) error.textContent = `Сделано ${out.items.length} из ${count}: ${out.message}`;
+      after();
+    } catch (err) {
+      if (alive) error.textContent = words(err);
+      throw err;
+    } finally {
+      control.disabled = false;
+    }
+  }
+
+  function repeatButton(item, cls, after) {
+    return button('Повторить', { class: `${cls} card-repeat`, title: 'Тот же кадр, промпт и параметры, новый seed' },
+      (event) => repeat(item, 1, event.currentTarget, after).catch(() => {}));
+  }
+
+  function variantsButton(item, cls, after) {
+    return button('Ещё варианты', { class: `${cls} card-variants` }, () => chooseVariants(item, after));
+  }
+
+  function chooseVariants(item, after = () => {}) {
+    const count = el('select', { id: 'video-variants-count', 'aria-label': 'Сколько вариантов' },
+      ...[2, 3, 4].map((n) => el('option', { value: String(n) }, String(n))));
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const go = button('Сделать', { class: 'btn btn-accent', id: 'video-variants-go' });
+    const dialog = openDialog(root, { id: 'video-variants-dialog', title: 'Ещё варианты',
+      body: [el('p', {}, 'Тот же кадр, промпт, длительность и качество; seed у каждого ролика — новый.'),
+        el('label', {}, 'Роликов: ', count), fail], actions: [go] });
+    go.addEventListener('click', () => {
+      fail.textContent = '';
+      repeat(item, Number(count.value), go, () => {
+        dialog.close();
+        after();
+      }).catch((err) => { fail.textContent = words(err); });
+    });
+  }
+
   /** «Промпты»: цепочки в записи ленты нет — она из GET /api/videos/<id>. */
   function chainButton(item) {
     return button('Промпты', { class: 'btn btn-sm card-chain' }, async (event) => {
@@ -329,9 +376,13 @@ function build(view, ctx) {
         poster: posterOf(item), src: media(item.media_id) }));
       body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
       acts.append(button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
+        repeatButton(item, 'btn btn-sm'), variantsButton(item, 'btn btn-sm'),
         button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
+    } else if (RUNNING.has(item.state)) {
+      acts.append(cancelButton(item, 'btn btn-sm'));
+      node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
     } else {
-      acts.append(RUNNING.has(item.state) ? cancelButton(item, 'btn btn-sm') : deleteButton(item, 'btn btn-sm btn-danger'));
+      acts.append(repeatButton(item, 'btn btn-sm'), deleteButton(item, 'btn btn-sm btn-danger'));
       node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
     }
     body.append(el('p', { class: 'video-meta' }, metaText(item)));
@@ -349,7 +400,8 @@ function build(view, ctx) {
       return node;
     }
     const over = overlay(item);
-    over.append(RUNNING.has(item.state) ? cancelButton(item, 'btn-link') : deleteButton(item, 'btn-link'));
+    if (RUNNING.has(item.state)) over.append(cancelButton(item, 'btn-link'));
+    else over.append(repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link'));
     node.append(el('div', { class: 'video-stage' }, still(item), over));
     return node;
   }
@@ -369,7 +421,8 @@ function build(view, ctx) {
     el('p', { class: 'cell-prompt', title: item.prompt || '' }, item.prompt || SOURCES[item.prompt_source] || ''),
     el('span', { class: 'cell-meta' }, el('span', {}, clipParams(item)), el('span', {}, seedText(item)),
       el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, done ? save : busy ? cancelButton(item, 'btn-link') : deleteButton(item, 'btn-link')));
+    el('span', { class: 'cell-act' }, ...(done ? [save] : busy ? [cancelButton(item, 'btn-link')]
+      : [repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link')])));
     return node;
   }
 
@@ -393,6 +446,8 @@ function build(view, ctx) {
     dialog.append(el('div', { class: 'viewer-top' }, close), el('div', { class: 'viewer-stage' }, player),
       el('div', { class: 'viewer-bar' }, el('p', { class: 'viewer-meta' }, metaText(item)), chain, missing,
         el('div', { class: 'viewer-actions' }, act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
+          repeatButton(item, 'btn btn-sm act-repeat', () => dialog.close()),
+          variantsButton(item, 'btn btn-sm act-variants', () => dialog.close()),
           act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {

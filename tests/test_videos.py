@@ -842,6 +842,60 @@ def test_video_from_history_image(studio):
     assert unknown.status_code == 404 and len(studio.gw.video_forms) == 1
 
 
+def test_repeat_and_more_variants_send_the_same_clip_with_new_seeds(studio, monkeypatch):
+    """«Повторить» и «Ещё варианты»: тот же исходник истории (не копия), свой промпт, длительность,
+    качество и дорисовка; seed — новый от студии у каждого; придуманный шлюзом промпт не повторяется."""
+    add_gateway(studio)
+    first = create_video(studio, prompt=PROMPT, seconds="7", quality="high", smooth="false").json()
+    seeds = iter(range(100, 110))
+    monkeypatch.setattr(videos.secrets, "randbelow", lambda _n: next(seeds))
+    one = studio.c.post(f"/api/videos/{first['id']}/repeat", json={})
+    assert one.status_code == 201, one.text
+    more = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 3})
+    assert more.status_code == 201 and more.json()["message"] is None
+    made = one.json()["items"] + more.json()["items"]
+    assert [v["seed"] for v in made] == [100, 101, 102, 103]
+    assert {(v["source_media_id"], v["prompt"], v["seconds"], v["quality"], v["smooth"]) for v in made} == {
+        (first["source_media_id"], PROMPT, 7, "high", False)}
+    forms_ = studio.gw.video_forms
+    assert [f[0] for f in forms_[1:]] == [{"model": videos.VIDEO_MODEL, "prompt": PROMPT, "seconds": "7",
+                                           "quality": "high", "smooth": "false", "seed": str(s)} for s in range(100, 104)]
+    assert all(f[1] == forms_[0][1] for f in forms_[1:]) and media_rows() == 1
+    # промпт придумал шлюз (столбец prompt — его) — повтор снова просит придумать; у строки без цепочки — так же
+    auto = create_video(studio).json()
+    state.DB.execute("UPDATE videos SET prompt_source = 'auto', prompt = 'she turns' WHERE id = ?", (auto["id"],))
+    assert studio.c.post(f"/api/videos/{auto['id']}/repeat", json={"count": 1}).status_code == 201
+    assert "prompt" not in studio.gw.video_forms[-1][0]
+    state.DB.execute("UPDATE videos SET chain = NULL WHERE id = ?", (auto["id"],))
+    assert studio.c.post(f"/api/videos/{auto['id']}/repeat", json={"count": 1}).status_code == 201
+    assert "prompt" not in studio.gw.video_forms[-1][0]
+    assert studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 5}).status_code == 422
+    assert studio.c.post(f"/api/videos/{'0' * 32}/repeat", json={}).status_code == 404
+    assert len(studio.gw.video_forms) == 8
+
+
+def test_more_variants_stop_at_the_first_refusal_and_keep_what_was_accepted(studio):
+    add_gateway(studio)
+    first = create_video(studio).json()
+    posts = []
+
+    async def create(request):
+        if request.method != "POST":
+            return await studio.gw.builtin(request)
+        posts.append(1)
+        if len(posts) >= 2:
+            return httpx.Response(429, json={"error": {"message": "очередь полна"}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/slot/videos"] = create
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 4})
+    assert r.status_code == 201 and len(r.json()["items"]) == 1 and len(posts) == 2
+    assert "очередь роликов полна" in r.json()["message"]
+    assert len(studio.c.get("/api/videos").json()["items"]) == 2           # отказанная строка не осталась
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 2})
+    assert r.status_code == 429 and "очередь роликов полна" in r.json()["detail"]["message"]
+
+
 def test_users_see_only_their_videos(studio):
     add_gateway(studio)                                                # owner
     mine = create_video(studio).json()["id"]
