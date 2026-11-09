@@ -1,7 +1,7 @@
 # CLAUDE.md — studio
 
 Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и восемью
-разделами (Чат, Фото, Видео, Речь, Разговоры, Сканы, Перевод, Агенты), плюс пакетные скрипты для Windows и Linux —
+разделами (Чат, Агенты, Фото, Видео, Разговоры, Озвучка, Сканы, Перевод), плюс пакетные скрипты для Windows и Linux —
 клиенты API картинок и видео LLM-шлюза srvllm. Что умеет и как пользоваться — [README.md](README.md); главная спека —
 [2026-10-19-studio-pwa-design](docs/superpowers/specs/2026-10-19-studio-pwa-design.md); как устроено по областям —
 [docs/architecture/](docs/architecture/README.md); названия интерфейса — [docs/glossary.md](docs/glossary.md).
@@ -63,6 +63,11 @@
   и `tests/test_client_parity.py` гоняют обе; `-PromptsFile` = `--prompts-file`); `deploy/*` — LF (`.gitattributes`).
 - Защита входа от перебора — паузы на пару «логин + адрес» и на адрес; растущая задержка ответа параллельные
   попытки не тормозит — на неё не полагаться.
+- **Единственные источники на странице**: имена, группы, подсказки и порядок разделов — только `sections-meta.js`
+  (сервер `sections.NAMES`, `push.TITLE` сверяет `tests/test_sections_meta.py`); SVG-значки — только `icons.js`
+  (локальные `ICONS` запрещены тестом); меню — `menu.js`; тема и акцент — `appearance.js`; цвета тем — один
+  `light-dark()` при `color-scheme` (`[data-theme]` меняет только `color-scheme`); `:hover` — только внутри
+  `@media (hover: hover)`. Сторожат `tests/test_css_tokens.py`, `tests/test_sections_meta.py`.
 
 ## Карта модулей (`app/`)
 
@@ -74,11 +79,13 @@
 | Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports` | [sharing-export](docs/architecture/sharing-export.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history` | [media](docs/architecture/media.md) |
-| Речь | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
+| Речь (раздел «Озвучка», «Разговоры», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
 | Сканы и перевод | `ocr`, `ocr_render`, `translate`, `translate_text`, `translate_spot` | [ocr-translate](docs/architecture/ocr-translate.md) |
 | Поиск, задания, уведомления | `search`, `jobs`, `push`, `ntfy` | [search](docs/architecture/search.md), [notifications](docs/architecture/notifications.md) |
 | «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop` | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md) |
 | Мост `agent/` | `studio_agent/*`, правила — [agent/CLAUDE.md](agent/CLAUDE.md) | [agent-bridge](docs/architecture/agent-bridge.md) |
+| Страница: общее | `app/static/js/`: `app.js` (роутер, рельс `buildRail`, `announce`), `sections-meta.js` (реестр разделов), `icons.js` (значки), `menu.js` (меню и панели), `appearance.js` (тема, акцент, плотность, шрифт, масштаб), `settings.js`, `account-security.js` (сессии, аварийный выход, журнал), `mobile-navigation.js`; `theme.js` — до модулей | [shell](docs/architecture/shell.md), [security-lock](docs/architecture/security-lock.md) |
+| Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-inbox.js` (входящие), `code-workspace.js`, `code-files.js`, `code-git.js`, `code-picker.js` и др. | [agents-workspace](docs/architecture/agents-workspace.md) |
 
 Фронтенд без сборки — `app/static/` (модули ES, библиотеки копией в `static/vendor/`, без CDN; importmap с SHA-CSP,
 снимок статики в памяти — после правки статики служба и тестовый процесс требуют перезапуска). Протокол моста —
@@ -194,6 +201,11 @@ verify-backup и восстановление, Apache) — [deploy-host](docs/ar
   `import main` на Python хоста (3.13).
 - Роутер ставит метку `{entry: n}`: раздел меняет адрес через `history.replaceState(history.state, …)`, не `null`.
 - Плашка пути «Агентов» — `#code-place`; `#code-path` — путь папки «Файлов».
+- Меню — popover (`menu.js`): в тестах открытое — `:popover-open`, а не `hidden`; Escape закрывает только верхнее меню
+  и до обработчиков раздела не доходит. Меню аватара — панель без `role="menu"`.
+- Переименование раздела — только в реестре (`sections-meta.js`, `sections.NAMES`): id и адрес остаются (`#/speech` —
+  «Озвучка»); старые адреса настроек — через `settings.js` `OLD_IDS` (`other` → `security`, `dictation` → `input`).
+- На хосте разработки Chromium сообщает `prefers-reduced-motion: reduce`: сценарии анимаций это учитывают.
 - PDF экспорта: дочернему Chromium `HOME`/`XDG_*` — во временный каталог (у службы HOME `/nonexistent`).
 - Python 3.14: `settle` тестов после `gather` уступает цикл `asyncio.sleep(0)`, иначе `while TASKS` зацикливается.
 - Мобильная `.code-panel` — `align-self: stretch` (WebKit иначе обрезает проекты).
