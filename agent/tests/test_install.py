@@ -139,6 +139,33 @@ def test_install_ps1_installs_into_programs_from_archive(tmp_path):
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY)
 
 
+def test_install_refuses_a_bridge_running_from_a_self_update_release(tmp_path):
+    """После самообновления мост работает из `Programs\\studio-agent\\releases\\release-*` (updater.py)."""
+    src = archive(tmp_path / "Downloads" / "studio-agent")
+    local = tmp_path / "Local"
+    target = local / "Programs" / "studio-agent"
+    release = target / "releases" / "release-abc123"
+    release.mkdir(parents=True)
+    (release / "studio_agent.pyw").write_text("", encoding="utf-8")
+    other = local / "Programs" / "studio-agent-old"                    # чужая папка с похожим именем — не мост
+    other.mkdir(parents=True)
+    neighbour = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",
+                                  str(other / "studio_agent.pyw")])
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",
+                                str(release / "studio_agent.pyw")])
+    try:
+        install(src, local, success=False)
+        assert running.poll() is None and not (target / "install.ps1").exists()
+        running.terminate()
+        running.wait(timeout=10)
+        install(src, local)
+        assert (target / "install.ps1").is_file()
+    finally:
+        for process in (running, neighbour):
+            if process.poll() is None:
+                process.kill()
+
+
 def test_install_moves_an_enabled_autostart_to_the_installed_copy(tmp_path):
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, autostart.VALUE, 0, winreg.REG_SZ, autostart.command())   # включён git-копией

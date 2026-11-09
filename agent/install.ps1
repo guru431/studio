@@ -23,9 +23,11 @@ function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
 
 function Assert-BridgeStopped([string]$Dir) {
     # Both the venv launcher and base Python include this script path. Never terminate either.
-    $script = Join-Path $Dir 'studio_agent.pyw'
+    # Самообновлённый мост работает из releases\release-* этой же папки (updater.py) — он тоже «запущен».
+    $root = [regex]::Escape([IO.Path]::GetFullPath($Dir).TrimEnd('\'))
+    $script = $root + '\\(?:releases\\[^\\"]+\\)?studio_agent\.pyw'
     $found = @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
-        Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($script, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        Where-Object { $_.CommandLine -and $_.CommandLine -match $script })
     if ($found.Count) {
         throw 'Мост запущен. Обновление не выполнено: дождитесь завершения заданий, выберите «Выйти» в трее и запустите установку снова.'
     }
