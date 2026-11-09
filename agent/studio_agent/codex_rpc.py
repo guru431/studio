@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, chrome, limits
+from . import VERSION, chrome, jobs, limits
 
 RPC_SEC = 25
 
@@ -54,6 +54,7 @@ class Client:
         self.path, self.cwd, self.spawn = path, cwd, spawn
         self.process = None
         self.reader = None
+        self.job = None
         self.pending = {}
         self.methods = {}
         self.inbox = asyncio.Queue()
@@ -67,6 +68,8 @@ class Client:
                                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                         stderr=asyncio.subprocess.DEVNULL, limit=limits.FRAME_MAX,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
+        # MCP-серверы и шеллы CLI — в его job: disconnect не оставит их сиротами.
+        self.job = jobs.attach(getattr(self.process, "pid", None))
         self.reader = asyncio.create_task(self._read())
         try:
             await self.request("initialize", {"clientInfo": {"name": "studio_agent", "title": "Studio Agent",
@@ -129,6 +132,9 @@ class Client:
                 with contextlib.suppress(ProcessLookupError):
                     self.process.kill()
                 await self.process.wait()
+        if self.job is not None:
+            self.job.close()  # оставшиеся потомки CLI завершаются вместе с job
+            self.job = None
         if self.reader is not None:
             self.reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
