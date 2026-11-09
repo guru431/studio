@@ -52,10 +52,21 @@ def shell(engine, live, cookie, *, width=1280, height=900, touch=False, scheme="
     return context, page
 
 
-#: Контраст WCAG: цвет переднего плана к фону — по вычисленным браузером цветам (токены и настоящие правила)
-CONTRAST = """mode => {
+def cookie_for(live, login, theme="auto"):
+    """Своя учётка теста: выбор акцента и темы не задевает соседние тесты модуля."""
+    live.add_user(login, theme=theme)
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    assert signed.status_code == 303
+    return "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+
+
+#: Контраст WCAG: цвет переднего плана к фону — по вычисленным браузером цветам (токены и настоящие правила);
+#: аргумент — тема или [тема, акцент учётки]
+CONTRAST = """arg => {
+  const [mode, accent] = Array.isArray(arg) ? arg : [arg, null];
   const root = document.documentElement;
   if (mode === 'auto') delete root.dataset.theme; else root.dataset.theme = mode;
+  if (accent) root.dataset.accent = accent; else delete root.dataset.accent;
   const host = document.createElement('div'); host.id = 'probe'; document.body.append(host);
   // [r, g, b, a] в 0…1: rgb(), rgba(), color(srgb r g b / a) (так браузер отдаёт color-mix), transparent
   const parse = c => {
@@ -78,7 +89,8 @@ CONTRAST = """mode => {
   for (const fg of ['--text-1', '--text-2', '--accent', '--danger', '--success', '--warn'])
     for (const bg of surfaces) pair(`${fg} / ${bg}`, token(fg), token(bg), 4.5);
   for (const [fg, bg] of [['--on-accent', '--accent'], ['--on-primary', '--primary'], ['--on-danger', '--danger'],
-                          ['--on-record', '--record']]) pair(`${fg} / ${bg}`, token(fg), token(bg), 4.5);
+                          ['--on-record', '--record'], ['--accent', '--accent-soft'], ['--text-1', '--accent-soft']])
+    pair(`${fg} / ${bg}`, token(fg), token(bg), 4.5);
   for (const bg of ['--surface-0', '--surface-1', '--surface-2', '--surface-side']) {
     pair(`--field-border / ${bg}`, token('--field-border'), token(bg), 3);
     pair(`--focus / ${bg}`, token('--focus'), token(bg), 3);
@@ -129,6 +141,76 @@ def test_palette_and_real_controls_have_minimum_contrast(engine, live, cookie, m
     assert result["body"] == body, result["body"]
     failed = [p for p in result["pairs"] if p["ratio"] < p["need"]]
     assert not failed, failed
+
+
+#: акценты учётки — как profile.ACCENTS и appearance.js ACCENTS (сверяет test_css_tokens.py)
+ACCENTS = ["orange", "blue", "violet", "rose"]
+
+
+@pytest.mark.parametrize("accent", ACCENTS)
+def test_every_accent_keeps_the_contrast_in_both_themes_and_the_auto_branch(engine, live, cookie, accent):
+    """Акцент меняет --accent/--primary (и --accent-soft) — каждая пара не ниже 4,5:1 (рамка фокуса и состояния — 3:1)
+    в светлой, тёмной и обеих ветках «как на устройстве»; кнопки берут цвет акцента."""
+    context, page = shell(engine, live, cookie)
+    with context:
+        for mode, scheme, body in MODES:
+            page.emulate_media(color_scheme=scheme)
+            result = page.evaluate(CONTRAST, [mode, accent])
+            assert result["body"] == body, (mode, scheme, result["body"])
+            failed = [p for p in result["pairs"] if p["ratio"] < p["need"]]
+            assert not failed, (mode, scheme, failed)
+        colors = page.evaluate("""accent => { const root = document.documentElement; root.dataset.theme = 'light';
+          const probe = a => { if (a) root.dataset.accent = a; else delete root.dataset.accent;
+            const b = document.createElement('button'); b.className = 'btn btn-accent'; document.body.append(b);
+            const c = getComputedStyle(b).backgroundColor; b.remove(); return c; };
+          return [probe(null), probe(accent)]; }""", accent)
+    assert (colors[0] == colors[1]) == (accent == "orange"), colors
+
+
+def test_appearance_page_saves_the_accent_and_previews_both_themes(engine, live):
+    """«Настройки → Оформление»: карточки тем с образцом в своих цветах при любой теме страницы; акцент — радиокнопкой
+    (стрелки), сразу на <html>, в учётку и в localStorage для раннего theme.js; «Компактно» — этого устройства."""
+    cookie = cookie_for(live, f"accent-{engine.browser_type.name}", theme="dark")
+    context, page = shell(engine, live, cookie, width=393, height=852, route="#/settings/appearance")
+    with context:
+        page.locator("#appearance-accent-orange").wait_for(state="attached")
+        cards = page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('.theme-card')].map(c =>
+          [c.dataset.preview, getComputedStyle(c.querySelector('.theme-sample')).backgroundColor]))""")
+        checked = page.evaluate("[...document.querySelectorAll('.theme-card input, .accent-choice input')]"
+                                ".filter(i => i.checked).map(i => i.id)")
+        page.locator("label.accent-choice:has(> #appearance-accent-blue)").click()
+        page.wait_for_function("() => document.documentElement.dataset.accent === 'blue'")
+        page.focus("#appearance-accent-blue")                 # Safari нажатием на подпись фокус не переносит
+        page.keyboard.press("ArrowRight")                     # стрелка в группе радиокнопок — следующий акцент
+        page.wait_for_function("() => document.documentElement.dataset.accent === 'violet'")
+        page.wait_for_function("() => document.querySelector('#appearance-save-status').textContent.includes('сохранено')")
+        saved = page.evaluate("fetch('/api/me').then(r => r.json()).then(m => [m.accent, localStorage.getItem('studio-accent')])")
+        page.locator("label.segment-option:has(> #appearance-density-compact)").click()
+        density = page.evaluate("""() => [document.documentElement.dataset.density, localStorage.getItem('studio-density'),
+          getComputedStyle(document.documentElement).getPropertyValue('--h-md').trim()]""")
+        fits = page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.reload()
+        page.locator('html[data-ready="1"]').wait_for(state="attached")
+        kept = page.evaluate("""() => [document.documentElement.dataset.accent, document.documentElement.dataset.density,
+          document.querySelector('#appearance-accent-violet')?.checked]""")
+    assert cards == {"light": "rgb(251, 250, 247)", "dark": "rgb(27, 27, 27)", "auto": "rgb(251, 250, 247)"}, cards
+    assert checked == ["appearance-theme-dark", "appearance-accent-orange"], checked
+    assert saved == ["violet", "violet"] and density == ["compact", "compact", "32px"] and fits
+    assert kept == ["violet", "compact", True], kept
+
+
+def test_dark_theme_raises_menus_with_a_lighter_border_not_a_shadow(engine, live, cookie):
+    """Тёмная тема: поднятое (меню аватара) — светлее поверхность и светлая рамка второго слоя тени; светлая — тень."""
+    context, page = shell(engine, live, cookie)
+    with context:
+        page.locator("#avatar").click()
+        probe = """mode => { document.documentElement.dataset.theme = mode;
+          const m = getComputedStyle(document.querySelector('#menu'));
+          return [m.boxShadow, m.backgroundColor, getComputedStyle(document.body).backgroundColor]; }"""
+        light, dark = page.evaluate(probe, "light"), page.evaluate(probe, "dark")
+    assert light[0].startswith("rgba(31, 29, 26, 0.1)") and dark[0].startswith("rgba(0, 0, 0, 0)"), (light, dark)
+    assert "rgb(87, 83, 76)" in dark[0] and "rgb(87, 83, 76)" not in light[0], (light, dark)   # --line-raised
+    assert dark[1] == "rgb(38, 38, 38)" and dark[2] == "rgb(27, 27, 27)", dark
 
 
 def test_keyboard_focus_ring_is_visible_on_icon_buttons_and_upload_labels(engine, live, cookie):

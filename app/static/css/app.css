@@ -16,10 +16,8 @@
   /* текст — 4,5:1 к любой поверхности; --line — декоративные разделители, --field-border — рамки полей (3:1) */
   --text-1: light-dark(#1f1d1a, #ececec); --text-2: light-dark(#625d54, #a3a3a3);
   --line: light-dark(#e3dfd6, #3b3833); --field-border: light-dark(#7f786c, #858079);
-  --accent: light-dark(#a34505, #ffad70); --on-accent: light-dark(#ffffff, #111111);
-  --accent-soft: light-dark(#fff0e4, #38291f); --focus: var(--accent);
-  /* главное действие раздела — один цвет: «Отправить», «Создать», OK PIN, «+» вкладки */
-  --primary: light-dark(#c45100, #ffad70); --on-primary: light-dark(#ffffff, #111111);
+  /* --accent, --accent-soft и --primary (главное действие) — от акцента учётки, ниже у [data-accent] */
+  --on-accent: light-dark(#ffffff, #111111); --focus: var(--accent); --on-primary: light-dark(#ffffff, #111111);
   --danger: light-dark(#b42318, #f87171); --on-danger: light-dark(#ffffff, #111111);
   /* состояния: работает — success, ждёт — warn, не прочитано — accent; caution — «оранжевый» уровень (графика, 3:1) */
   --success: light-dark(#237348, #3ecf8e); --warn: light-dark(#785200, #d7ba7d); --caution: light-dark(#b45309, #f28c38);
@@ -31,8 +29,11 @@
   --code-name: light-dark(#1a6e2e, #7ee787); --code-section: light-dark(#005cc5, #58a6ff);
   --code-bullet: light-dark(#735c0f, #f2cc60); --code-addition: light-dark(#1a6e2e, #aff5b4);
   --code-deletion: light-dark(#b31d28, #ffdcd7);
-  --shadow-1: 0 4px 14px light-dark(rgba(31, 29, 26, .1), rgba(0, 0, 0, .4));     /* меню, всплывающие списки */
-  --shadow-2: 0 10px 30px light-dark(rgba(31, 29, 26, .12), rgba(0, 0, 0, .5));   /* окна, выезжающие панели */
+  /* возвышение: в светлой — тень; в тёмной тень на #1b1b1b не видна — поднятое выделяет светлая рамка
+   * --line-raised (вторым слоем той же тени) и светлее поверхность (--surface-1 над --surface-0) */
+  --line-raised: light-dark(transparent, #57534c);
+  --shadow-1: 0 4px 14px light-dark(rgba(31, 29, 26, .1), transparent), 0 0 0 1px var(--line-raised);     /* меню, списки */
+  --shadow-2: 0 10px 30px light-dark(rgba(31, 29, 26, .12), transparent), 0 0 0 1px var(--line-raised);   /* окна, панели */
   --backdrop: light-dark(rgba(31, 29, 26, .35), rgba(0, 0, 0, .6));
 
   /* шкалы: размер текста умножается на --font-scale один раз — здесь; мельче 11 px подписи не бывают */
@@ -66,6 +67,20 @@
   accent-color: var(--accent); }
 [data-theme="light"] { color-scheme: light; }
 [data-theme="dark"] { color-scheme: dark; }
+/* акцент учётки (appearance.js ACCENTS, profile.ACCENTS): на <html> — для всей студии, на образце в «Оформлении» —
+ * для него одного; оранжевый — умолчание (без атрибута). Главное действие раздела — один цвет --primary:
+ * «Отправить», «Создать», OK PIN, «+» вкладки. Каждая пара проверена на 4,5:1 (test_ui_design_tokens.py). */
+:root, [data-accent="orange"] { --accent: light-dark(#a34505, #ffad70); --accent-soft: light-dark(#fff0e4, #38291f);
+  --primary: light-dark(#c45100, #ffad70); }
+[data-accent="blue"] { --accent: light-dark(#1f5bb8, #8ab4f8); --accent-soft: light-dark(#e8f0fd, #1d2a3d);
+  --primary: light-dark(#1f5bb8, #8ab4f8); }
+[data-accent="violet"] { --accent: light-dark(#6a3fb5, #c4a7ff); --accent-soft: light-dark(#f1ebfd, #2c2340);
+  --primary: light-dark(#6a3fb5, #c4a7ff); }
+[data-accent="rose"] { --accent: light-dark(#ad2457, #ff8fb5); --accent-soft: light-dark(#fdeaf1, #3d1f2a);
+  --primary: light-dark(#ad2457, #ff8fb5); }
+/* «Компактно» (appearance.js, это устройство): ниже кнопки и меньше просветы; --h-touch (цель касания) прежняя */
+[data-density="compact"] { --h-sm: 28px; --h-icon: 30px; --h-md: 32px;
+  --space-5: 8px; --space-6: 10px; --space-7: 12px; --space-8: 16px; --space-9: 20px; }
 /* «Повышенная контрастность» системы: разделители — как рамки полей, второстепенный текст темнее */
 @media (prefers-contrast: more) {
   :root { --line: var(--field-border); --text-2: light-dark(#4a463f, #c4c4c4); }
@@ -73,14 +88,54 @@
 
 /* ---- основа ---------------------------------------------------------------- */
 
+/* «Настройки → Оформление» (appearance.js): шрифт и масштаб этого устройства */
 .appearance-controls { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:var(--space-4) var(--space-6);
-  padding:var(--space-5) var(--space-6); border-block:1px solid var(--line); margin-block:var(--space-2); width:230px; max-width:100%; min-width:0; }
-.appearance-controls label { display:flex; gap:var(--space-6); align-items:center; font-size:var(--fs-sm); }
+  margin-bottom:var(--space-6); width:360px; max-width:100%; min-width:0; }
+.appearance-controls label { display:flex; gap:var(--space-6); align-items:center; font-size:var(--fs-md); }
 .appearance-controls label:first-child, #appearance-font { grid-column:1 / -1; }
 .appearance-controls output { margin-left:auto; color:var(--text-2); font-variant-numeric:tabular-nums; }
-#appearance-font { width:100%; }
-#appearance-scale { background:var(--surface-1); border:1px solid var(--field-border); border-radius:var(--r-sm); padding:3px; }
-.appearance-controls .btn-link { grid-column:1 / -1; justify-self:end; font-size:var(--fs-xs); }
+#appearance-font { width:100%; min-height:calc(var(--h-touch) / var(--ui-scale, 1)); }
+#appearance-scale { width:auto; }
+.appearance-controls .btn-link { grid-column:1 / -1; justify-self:start; min-height:calc(var(--h-touch) / var(--ui-scale, 1)); }
+.appearance-device .segment { width:min(100%, 360px); margin-bottom:var(--space-4); }
+.scope-note { font-weight:600; }
+.appearance-save { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-4); margin-top:var(--space-6); }
+.appearance-save .status { margin:0; }
+.appearance-save .status:empty { display:none; }
+.appearance-mobile-nav { display:none; }
+/* карточки темы: образец сообщения, кода и кнопок в цветах своей темы (color-scheme карточки выбирает ветку
+ * light-dark() токенов; «Как на устройстве» — по устройству) */
+.theme-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:var(--space-6); margin-bottom:var(--space-7); }
+.theme-card { display:flex; flex-direction:column; gap:var(--space-4); padding:var(--space-4); border:2px solid var(--line);
+  border-radius:var(--r-card); cursor:pointer; color:var(--text-1); }
+.theme-card:has(input:checked) { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.theme-card:has(input:checked) .theme-card-name::after { content:' ✓'; color:var(--accent); }
+.theme-card-name { font-size:var(--fs-md); font-weight:600; }
+.theme-card[data-preview="light"] .theme-sample { color-scheme:light; }
+.theme-card[data-preview="dark"] .theme-sample { color-scheme:dark; }
+.theme-card[data-preview="auto"] .theme-sample { color-scheme:light dark; }
+.theme-sample { display:flex; flex-direction:column; gap:var(--space-3); padding:var(--space-5); border-radius:var(--r-control);
+  background:var(--surface-0); color:var(--text-1); border:1px solid var(--line); font-size:var(--fs-xs); line-height:1.35; }
+.theme-sample-own { align-self:flex-end; max-width:85%; padding:var(--space-2) var(--space-4); border-radius:var(--r-control); background:var(--surface-3); }
+.theme-sample-reply { color:var(--text-1); }
+.theme-sample-code { padding:var(--space-2) var(--space-4); border-radius:var(--r-sm); background:var(--surface-2); font-family:var(--mono); color:var(--text-1); }
+.theme-sample-kw { color:var(--code-keyword); }
+.theme-sample-str { color:var(--code-string); }
+.theme-sample-buttons { display:flex; gap:var(--space-3); }
+.theme-sample-buttons > span { padding:var(--space-1) var(--space-4); border-radius:var(--r-sm); border:1px solid var(--line); }
+.theme-sample-buttons > .theme-sample-primary { background:var(--primary); color:var(--on-primary); border-color:transparent; font-weight:600; }
+.theme-sample-plain { background:var(--surface-2); color:var(--text-1); }
+/* акцент учётки: образец цвета в своём data-accent и имя; выбранный — рамка и ✓ */
+.accent-choices { display:flex; flex-wrap:wrap; gap:var(--space-4); }
+.accent-choice { display:flex; align-items:center; gap:var(--space-4); min-height:calc(var(--h-touch) / var(--ui-scale, 1));
+  padding:0 var(--space-6) 0 var(--space-4); border:2px solid var(--line); border-radius:var(--r-pill); cursor:pointer; font-size:var(--fs-md); }
+.accent-choice:has(input:checked) { border-color:var(--accent); font-weight:600; }
+.accent-choice:has(input:checked)::after { content:'✓'; color:var(--accent); }
+.accent-swatch { width:22px; height:22px; border-radius:50%; background:var(--primary); box-shadow:inset 0 0 0 1px var(--field-border); }
+/* «Настройки»: корень — две группы, «Разделы» и «Учётка» */
+.settings-group { margin:var(--space-6) 0 var(--space-2); padding:0 var(--space-6); color:var(--text-2); font-size:var(--fs-xs);
+  font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.settings-group:first-child { margin-top:0; }
 .code-image.code-file { width:auto; height:auto; min-width:120px; max-width:240px; min-height:48px;
   padding:var(--space-5) 30px var(--space-5) var(--space-5); background:var(--surface-2); border-radius:var(--r-control); }
 .code-attachment-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; font-size:var(--fs-xs); }
@@ -209,18 +264,25 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
   color: var(--text-1); text-align: left; text-decoration: none; font-size:var(--fs-md); }
 .menu-item:focus-visible { background: var(--surface-2); }
 @media (hover: hover) { .menu-item:hover { background: var(--surface-2); } }
-/* тема (app.js): значок того, что включит нажатие, и слово */
-.menu-theme { display: flex; align-items: center; gap: var(--space-4); }
-.menu-theme svg.ico { width: 18px; height: 18px; color: var(--text-2); }
-.theme-controls { display:grid; gap:var(--space-3); padding:var(--space-3) var(--space-5); }
-.theme-controls label { max-width:230px; }
-#theme-mode { width:100%; min-width:0; background:var(--surface-1); border:1px solid var(--field-border); border-radius:var(--r-sm); padding:var(--space-3); }
-#theme-save-status { margin:0; max-width:230px; font-size:var(--fs-xs); overflow-wrap:anywhere; }
-.menu :is(.menu-item, select, .btn-link, input[type="range"]) { min-height:calc(var(--h-touch) / var(--ui-scale, 1)); }
-.menu .btn-link { white-space:normal; }
-.menu .appearance-controls { width:250px; }
+/* сегмент (тема в меню аватара, плотность в «Оформлении»): радиокнопки .sr, подпись — кнопка сегмента; выбранное —
+ * заливка акцентом и толстая рамка (не только фон) */
+.segment { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0; padding: var(--space-1); min-width: 0;
+  border: 1px solid var(--field-border); border-radius: var(--r-control); background: var(--surface-0); }
+.segment legend { float: left; width: 100%; padding: 0 var(--space-2) var(--space-2); color: var(--text-2); font-size: var(--fs-xs); }
+.segment-option { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: center;
+  min-height: calc(var(--h-touch) / var(--ui-scale, 1)); padding: 0 var(--space-5); border-radius: var(--r-sm);
+  color: var(--text-1); font-size: var(--fs-md); cursor: pointer; }
+@media (hover: hover) { .segment-option:hover { background: var(--surface-2); } }
+.segment-option:has(input:checked) { background: var(--primary); color: var(--on-primary); font-weight: 600; }
+/* меню аватара (app.js): тема — сегментом под именем, состояние сохранения под ним */
+.menu-theme { margin: var(--space-3) var(--space-3) var(--space-2); border: 0; padding: 0; background: none; }
+.menu-theme .segment-option { border: 1px solid var(--field-border); }
+.menu-status { margin: 0 var(--space-5) var(--space-2); max-width: 260px; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.menu-status:empty { display: none; }
+.menu-sep { margin: var(--space-2) 0; border: 0; border-top: 1px solid var(--line); }
+.menu :is(.menu-item, .btn-link) { min-height: calc(var(--h-touch) / var(--ui-scale, 1)); }
+.menu .btn-link { white-space: normal; margin-left: var(--space-3); }
 #rail .mobile-more { display:none; }
-.mobile-nav-configure { display:none; }
 .mobile-sections { width:min(440px, calc(100 * var(--vw) - 24px));
   max-height:calc(100 * var(--dvh) - 24px); }
 .mobile-sections-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-6); }
@@ -248,7 +310,7 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 
 /* телефон: рельс — нижние вкладки, аватар — в шапке раздела */
 @media (max-width: 760px) {
-  .mobile-nav-configure { display:flex; }
+  .appearance-mobile-nav { display: block; }
   :root { --tabs-h: calc(74px + env(safe-area-inset-bottom, 0px)); }
   #rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-nav); width: auto; height: auto;
     flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; overflow: visible;

@@ -143,7 +143,7 @@ def test_delivery_is_json_with_deep_link_and_errors_do_not_expose_secrets(ntfy_r
     assert request.headers['host'] == 'psh.example.net' and request.headers['authorization'] == 'Bearer tk-private'
     assert request.extensions['sni_hostname'] == 'psh.example.net'
     assert json.loads(request.content) == {"topic": "private-topic", "title": "Студия", "message": "Проверка уведомлений Studio: ntfy подключён",
-                                          "click": "https://testserver/#/settings/other", "priority": 4}
+                                          "click": "https://testserver/#/settings/notifications", "priority": 4}
     for code in [302, 401, 403, 500]:
         s.gw.ntfy_status = code
         r = s.c.post('/api/me/ntfy/test')

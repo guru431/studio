@@ -1,4 +1,4 @@
-"""«Настройки → Прочее»: сессии с «Завершить», журнал безопасности и аварийный выход на 320 и 1280 px.
+"""«Настройки → Защита»: сессии с «Завершить», журнал безопасности и аварийный выход на 320 и 1280 px.
 Аварийный выход стирает только HTTP-кэш (Clear-Site-Data: "cache"): кэш оболочки offline и localStorage живы."""
 import time
 
@@ -15,7 +15,7 @@ SHELL = "caches.keys().then(keys => keys.some(k => k.startsWith('studio-shell-')
 @pytest.mark.parametrize('width', [320, 1280])
 def test_admin_password_reset_notice_leads_to_security_and_journal_shows_collapsed_failures(browser, live, width, tmp_path):
     """После сброса пароля администратором: окно-совет один раз (закрытие снимает флаг на сервере), «Открыть
-    «Безопасность»» ведёт в «Прочее»; свёрнутые неудачи в журнале — одной строкой «×N»."""
+    «Защиту»» ведёт в «Защиту»; свёрнутые неудачи в журнале — одной строкой «×N»."""
     login = f'password-reset-{width}'
     uid = live.add_user(login)
     conn = db.connect(live.db_path)
@@ -29,7 +29,7 @@ def test_admin_password_reset_notice_leads_to_security_and_journal_shows_collaps
         ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),
         ('screenshot', str(tmp_path / f'password-reset-{width}.png'), '#password-reset-dialog'),
         ('click', '#password-reset-open'),
-        ('wait', "location.hash === '#/settings/other' && !document.querySelector('#password-reset-dialog')"),
+        ('wait', "location.hash === '#/settings/security' && !document.querySelector('#password-reset-dialog')"),
         ('wait', "document.querySelector('#security-events li[data-kind=login_fail]')"),
         ('eval', 'row', "document.querySelector('#security-events li[data-kind=login_fail]').textContent"),
         ('wait', "fetch('/api/me').then(r => r.json()).then(m => m.password_reset === null)")],
@@ -53,7 +53,7 @@ def test_sessions_journal_and_emergency_exit(browser, live, width, tmp_path):
     rows = "document.querySelectorAll('#sessions .session').length"
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), ('wait', SHELL),
         ('eval', 'flag', "localStorage.setItem('studio-test-flag', '1'); true"),
-        *go('settings/other'), ('wait', f'{rows} === 2'),
+        *go('settings/security'), ('wait', f'{rows} === 2'),
         ('eval', 'listed', "[...document.querySelectorAll('#sessions .session-device')].map(n => n.textContent)"),
         ('wait', "document.querySelector('#security-events li[data-kind=login]')"),
         ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),

@@ -1,9 +1,17 @@
 """Контраст, увеличенный текст и сохранение оформления в настоящем браузере."""
 import pytest
 
-from test_ui_browser import READY, browser, live, signin
+from test_ui_browser import READY, browser, go, live, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+
+
+def large_font(back='chat'):
+    """Размер шрифта 150% — в «Настройки → Оформление» (настройка этого устройства), затем раздел `back`."""
+    return [*go('settings/appearance'), ('wait', "document.querySelector('#appearance-font')"),
+            ('eval', 'font', "document.querySelector('#appearance-font').value = '150';"
+                             "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))"),
+            *go(back), ('wait', f"document.querySelector('#rail [data-section={back}][aria-current=page]')")]
 
 
 NAV_GEOMETRY = """(() => {
@@ -22,9 +30,7 @@ NAV_GEOMETRY = """(() => {
 
 
 def test_mobile_labels_do_not_overlap_at_large_font(browser, live):
-    r = browser.drive(live.url + '/', [*signin(), ('wait', READY),
-        ('eval', 'font', "document.querySelector('#appearance-font').value = '150';"
-                         "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))"),
+    r = browser.drive(live.url + '/', [*signin(), ('wait', READY), *large_font(),
         ('idle',), ('eval', 'geometry', NAV_GEOMETRY)], width=320, mobile=True)
     assert not r.get('failed'), r
     geometry = r['values']['geometry']
@@ -66,21 +72,20 @@ def test_failed_theme_save_survives_profile_refresh(browser, live, failure):
         ('eval', 'inject', "window.realFetch = window.fetch; window.fetch = (url, opts) =>"
             " url === '/api/me' && opts?.method === 'PATCH'"
             f" ? {refusal} : window.realFetch(url, opts)"),
-        ('click', '#avatar'), ('click', '#theme-toggle'), ('idle',),
+        ('click', '#avatar'), ('click', '#menu-theme label:has(> #menu-theme-dark)'), ('idle',),
         ('eval', 'changed', "document.documentElement.dataset.theme"),
         ('eval', 'status', "document.querySelector('#theme-save-status')?.textContent || ''"),
         ('eval', 'refresh', "document.dispatchEvent(new Event('visibilitychange'))"), ('idle',),
         ('eval', 'afterRefresh', "document.documentElement.dataset.theme"),
         ('eval', 'restore', 'window.fetch = window.realFetch'), ('click', '#theme-save-retry'),
-        ('wait', "document.querySelector('#theme-save-status').textContent.includes('сохранена')"),
+        ('wait', "document.querySelector('#theme-save-status').textContent.includes('сохранено')"),
         ('eval', 'saved', "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
-        ('eval', 'auto', "document.querySelector('#theme-mode').value = 'auto';"
-                        "document.querySelector('#theme-mode').dispatchEvent(new Event('change'))"),
+        ('click', '#menu-theme label:has(> #menu-theme-auto)'),
         ('wait', "!document.documentElement.hasAttribute('data-theme')"
-                 " && document.querySelector('#theme-save-status').textContent.includes('сохранена')"),
+                 " && document.querySelector('#theme-save-status').textContent.includes('сохранено')"),
         ('eval', 'savedAuto', "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
         ('eval', 'reload', 'location.reload()'), ('wait', READY),
-        ('eval', 'restoredAuto', "document.querySelector('#theme-mode').value === 'auto'"
+        ('eval', 'restoredAuto', "document.querySelector('#menu-theme-auto').checked"
                                " && localStorage.getItem('studio-theme') === null")], width=320, mobile=True)
     assert not r.get('failed'), r
     assert r['values']['changed'] == r['values']['afterRefresh'] == 'dark', r['values']
@@ -94,9 +99,7 @@ def test_failed_theme_save_survives_profile_refresh(browser, live, failure):
 def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme, tmp_path):
     login = f'nav-{width}-{theme}'
     uid = live.add_user(login, theme=theme)
-    steps = [*signin(login), ('wait', READY),
-        ('eval', 'font', "document.querySelector('#appearance-font').value = '150';"
-                         "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))")]
+    steps = [*signin(login), ('wait', READY), *large_font()]
     if width < 760:
         steps += [('click', '#mobile-more'),
             ('eval', 'remaining', "[...document.querySelectorAll('#mobile-section-links a')].map(e => e.dataset.section)"),
@@ -154,9 +157,7 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'allTabs', visible),
         ('eval', 'mode', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')"),
         ('eval', 'moreHidden', "document.querySelector('#mobile-more').getBoundingClientRect().width === 0"),
-        ('eval', 'largeFont', "document.querySelector('#appearance-font').value = '150';"
-                             "document.querySelector('#appearance-font').dispatchEvent(new Event('input'))"),
-        ('idle',), ('eval', 'geometry', NAV_GEOMETRY),
+        *large_font(), ('idle',), ('eval', 'geometry', NAV_GEOMETRY),
         ('eval', 'buttonRow', "[...document.querySelectorAll('#rail a.tab')].map(t => {const b=t.getBoundingClientRect(); return {top:b.top, width:b.width, height:b.height, iconTop:t.querySelector('svg').getBoundingClientRect().top};})"),
         ('eval', 'overflow', 'document.documentElement.scrollWidth > innerWidth'),
         ('screenshot', str(tmp_path / f'all-tabs-{width}-{theme}.png')),
@@ -165,9 +166,11 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'reload', 'location.reload()'),
         ('wait', f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
         ('eval', 'kept', visible),
-        ('click', '#avatar'), ('click', '#mobile-nav-configure'),
+        *go('settings/appearance'), ('click', '#appearance-mobile-nav-open'),
         ('click', '#mobile-nav-mode-compact'), ('click', '#mobile-nav-save'),
-        ('click', '#mobile-sections-close'), ('idle',),
+        ('click', '#mobile-sections-close'), ('wait', "!document.querySelector('#mobile-sections').open"),
+        ('eval', 'focusBack', "document.activeElement.id"), *go('translate'),
+        ('wait', "document.querySelector('#mobile-more').getAttribute('aria-current') === 'page'"),
         ('eval', 'compact', visible),
         ('eval', 'moreActive', "document.querySelector('#mobile-more-label').textContent"),
         ('eval', 'compactGeometry', NAV_GEOMETRY),
@@ -182,16 +185,22 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
     assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
     assert all(button['width'] >= width / 8 - 1 and button['height'] >= 44 for button in values['buttonRow'])
     assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
+    assert values['focusBack'] == 'appearance-mobile-nav-open'
     assert values['moreActive'] == 'Ещё: Перевод'
     assert all(label['hit'] for label in values['compactGeometry']['labels'])
 
 
 @pytest.mark.parametrize('width', [320, 1280])
 def test_theme_menu_targets_remain_usable_at_small_scale(browser, live, width):
-    r = browser.drive(live.url + '/', [*signin(), ('wait', READY), ('click', '#avatar'),
+    r = browser.drive(live.url + '/', [*signin(), ('wait', READY), *go('settings/appearance'),
+        ('wait', "document.querySelector('#appearance-scale')"),
         ('eval', 'scale', "const scale = document.querySelector('#appearance-scale');"
                           "scale.value = '50'; scale.dispatchEvent(new Event('change'))"), ('idle',),
-        ('eval', 'targets', "[...document.querySelectorAll('#menu .menu-item, #theme-mode, #appearance-controls .btn-link')]"
+        ('eval', 'device', "[...document.querySelectorAll('#appearance-controls .btn-link, .segment-option, .accent-choice')]"
+            ".filter(e => e.getBoundingClientRect().width).map(e => ({label:e.textContent.trim(),"
+            "height:e.getBoundingClientRect().height}))"),
+        ('click', '#avatar'), ('wait', "!document.querySelector('#menu').hidden"),
+        ('eval', 'targets', "[...document.querySelectorAll('#menu .menu-item, #menu .segment-option')]"
             ".filter(e => e.getBoundingClientRect().width).map(e => ({label:e.textContent.trim(),"
             "height:e.getBoundingClientRect().height}))"),
         ('eval', 'inside', "(() => { const b = document.querySelector('#menu').getBoundingClientRect();"
@@ -199,6 +208,7 @@ def test_theme_menu_targets_remain_usable_at_small_scale(browser, live, width):
         width=width, mobile=width < 760)
     assert not r.get('failed'), r
     assert r['values']['inside'] and all(target['height'] >= 44 for target in r['values']['targets']), r['values']
+    assert len(r['values']['targets']) >= 5 and all(target['height'] >= 44 for target in r['values']['device']), r['values']
 
 
 def test_profile_read_started_during_theme_save_cannot_roll_back_success(browser, live):
@@ -220,10 +230,10 @@ def test_profile_read_started_during_theme_save_cannot_roll_back_success(browser
       return true;
     })()"""
     r = browser.drive(live.url + '/', [*signin('theme-save-refresh-race'), ('wait', READY),
-        ('eval', 'inject', inject), ('click', '#avatar'), ('click', '#theme-toggle'),
+        ('eval', 'inject', inject), ('click', '#avatar'), ('click', '#menu-theme label:has(> #menu-theme-dark)'),
         ('eval', 'refresh', "document.dispatchEvent(new Event('visibilitychange'))"),
         ('wait', '!!window.releaseThemeGet'), ('eval', 'save', 'window.releaseThemePatch()'),
-        ('wait', "document.querySelector('#theme-save-status').textContent.includes('сохранена')"),
+        ('wait', "document.querySelector('#theme-save-status').textContent.includes('сохранено')"),
         ('eval', 'lateRead', 'window.releaseThemeGet()'), ('idle',),
         ('eval', 'theme', 'document.documentElement.dataset.theme'),
         ('eval', 'serverTheme', "window.originalFetch('/api/me').then(r => r.json()).then(m => m.theme)")])

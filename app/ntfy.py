@@ -138,6 +138,6 @@ async def delete_settings(request: Request):
 
 @router.post("/test", status_code=204)
 async def test_settings(request: Request):
-    await notify(request.state.user.id, "Проверка уведомлений Studio: ntfy подключён", "settings/other",
+    await notify(request.state.user.id, "Проверка уведомлений Studio: ntfy подключён", "settings/notifications",
                  title="Студия", test=True, digest=request.state.digest)
     return Response(status_code=204)

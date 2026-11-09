@@ -74,12 +74,32 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def device_look(page, *, font=None, scale=None):
+    """Шрифт и масштаб этого устройства — касаниями в «Настройки → Оформление»; затем прежний адрес."""
+    back = page.url
+    page.goto(back.split('/#')[0] + '/#/settings/appearance')
+    page.locator('#appearance-scale').wait_for()
+    if font is not None:
+        page.locator('#appearance-font').evaluate("(slider, v) => {slider.value = v; slider.dispatchEvent(new Event('input'));}",
+                                                  str(font))
+    if scale is not None:
+        page.locator('#appearance-scale').select_option(str(scale))
+    page.goto(back)
+
+
+def open_mobile_nav_editor(page):
+    """Настройка нижней панели из «Настройки → Оформление» (в меню аватара её больше нет)."""
+    page.goto(page.url.split('/#')[0] + '/#/settings/appearance')
+    page.locator('#appearance-mobile-nav-open').tap()
+
+
 @pytest.mark.parametrize('iphone', [(320, 740), (393, 852)], indirect=True)
 def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     from test_ui_mobile_navigation import NAV_GEOMETRY
 
     page, _ = iphone
-    page.locator('#appearance-font').evaluate("slider => {slider.value = '150'; slider.dispatchEvent(new Event('input'));}")
+    device_look(page, font=150)
+    page.locator("#code-projects li[data-pid]").first.wait_for()
     for theme in ('light', 'dark'):
         page.evaluate('theme => {document.documentElement.dataset.theme = theme;}', theme)
         for section in ('video', 'speech', 'transcribe', 'ocr', 'translate'):
@@ -92,8 +112,7 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
             geometry = page.evaluate(NAV_GEOMETRY)
             assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels'])
             fits(page)
-    page.locator('#avatar').tap()
-    page.locator('#mobile-nav-configure').tap()
+    open_mobile_nav_editor(page)
     page.locator('#mobile-nav-mode-all').tap()
     page.locator('#mobile-nav-save').tap()
     pw.expect(page.locator('#mobile-sections')).not_to_be_visible()
@@ -104,14 +123,15 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     page.locator('#rail a[data-section=video]').tap()
     pw.expect(page.locator('#rail a[data-section=video]')).to_have_attribute('aria-current', 'page')
     page.reload()
-    page.locator('#mobile-nav-configure').wait_for(state='attached')
+    page.locator('#mobile-more').wait_for(state='attached')
     pw.expect(page.locator('#rail a.tab:visible')).to_have_count(8)
-    page.locator('#avatar').tap()
-    page.locator('#mobile-nav-configure').tap()
+    open_mobile_nav_editor(page)
     page.locator('#mobile-nav-mode-compact').tap()
     page.locator('#mobile-nav-save').tap()
     page.locator('#mobile-sections-close').tap()
     pw.expect(page.locator('#rail a.tab:visible')).to_have_count(3)
+    pw.expect(page.locator('#appearance-mobile-nav-open')).to_be_focused()
+    page.goto(page.url.split('/#')[0] + '/#/video')
     pw.expect(page.locator('#mobile-more')).to_have_attribute('aria-current', 'page')
     fits(page)
 
@@ -170,6 +190,8 @@ def test_touch_targets_reach_44px_and_phone_scale_stays_readable(iphone):
     page.reload()
     page.locator('#code-projects li[data-pid]').first.wait_for()
     assert page.evaluate("document.documentElement.style.zoom") == '0.75'
+    page.goto(page.url.split('/#')[0] + '/#/settings/appearance')
+    page.locator('#appearance-scale').wait_for()
     allowed = page.locator('#appearance-scale option:not([disabled])').evaluate_all('o => o.map(e => e.value)')
     assert allowed == ['75', '80', '85', '90', '95', '100'] and page.locator('#appearance-scale').input_value() == '75'
     fits(page)
@@ -179,14 +201,15 @@ def test_touch_targets_reach_44px_and_phone_scale_stays_readable(iphone):
 def test_settings_direct_link_and_reload_reveal_inherited_visibility(iphone):
     source, _ = iphone
     with source.context.new_page() as page:
-        page.goto(source.url.split('/#')[0] + '/#/settings/other')
+        page.goto(source.url.split('/#')[0] + '/#/settings/other')     # прежний адрес «Прочего» — на «Защиту»
+        pw.expect(page).to_have_url(source.url.split('/#')[0] + '/#/settings/security')
         for reload in (False, True):
             if reload:
                 page.reload()
-            for selector in ('#timezone', '#lock-timeout-unit'):
+            for selector in ('#pw-current', '#lock-timeout-unit'):
                 pw.expect(page.locator(selector)).to_be_visible()
                 assert page.locator(selector).evaluate('node => getComputedStyle(node).visibility') == 'visible'
-            page.locator('#timezone').select_option('UTC')
+            page.locator('#lock-timeout-unit').select_option('60')
             fits(page)
         page.evaluate("""async () => {
           const {api} = await import('/static/js/api.js');
@@ -196,11 +219,11 @@ def test_settings_direct_link_and_reload_reveal_inherited_visibility(iphone):
         }""")
         page.reload()
         pw.expect(page.locator('#lock-pin')).to_be_visible()
-        pw.expect(page.locator('#timezone')).not_to_be_visible()
+        pw.expect(page.locator('#pw-current')).not_to_be_visible()
         for digit in '2580':
             page.locator(f'#lock-pin [data-digit="{digit}"]').tap()
         page.locator('#lock-pin-ok').tap()
-        pw.expect(page.locator('#timezone')).to_be_visible()
+        pw.expect(page.locator('#pw-current')).to_be_visible()
         pw.expect(page.locator('#lock-timeout-unit')).to_be_visible()
 
 
@@ -570,11 +593,9 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
         {"id": f"m-{i}", "role": "user" if i % 2 == 0 else "assistant",
          "text": f"Запрос {i}" if i % 2 == 0 else "Ответ.\n\n" * 50, "steps": [], "time": T0 + i}
         for i in range(6)]
+    device_look(page, scale=scale)
     page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
     page.locator('#code-chat[data-loaded="1"]').wait_for()
-    page.locator('#avatar').tap()
-    page.locator('#appearance-scale').select_option(str(scale))
-    page.locator('#avatar').tap()
     page.locator('#code-chat-scroll').evaluate('node => node.scrollTop = node.scrollHeight')
     for direction, number in [('up', 4), ('up', 2), ('up', 0), ('down', 2), ('down', 4)]:
         button = page.locator(f'#code-message-{direction}')
@@ -790,12 +811,9 @@ def test_return_reveals_chat_before_lock_network_and_preserves_messages(iphone):
 @pytest.mark.parametrize("scale,font", [(100, 85), (80, 100), (75, 85)])
 def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone, scale, font, tmp_path):
     page, aid = iphone
+    device_look(page, font=font, scale=scale)
     page.goto(page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
     page.locator('#code-chat[data-loaded="1"]').wait_for()
-    page.locator('#avatar').tap()
-    page.locator('#appearance-font').fill(str(font))
-    page.locator('#appearance-scale').select_option(str(scale))
-    page.locator('#avatar').tap()
     page.locator('#code-text').tap()
     page.locator('#code-text').fill('Длинный черновик ' * 100)
     geometry = page.evaluate("""() => {
