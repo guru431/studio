@@ -244,6 +244,23 @@ def test_repeated_failures_collapse_into_one_counted_row(studio):
     assert all("first" in i for i in items)
 
 
+def test_a_failure_collapsed_between_pages_is_not_skipped(studio, monkeypatch):
+    """Ревью R4: страницы журнала — по id; свёртка повтора меняет строку на месте, id прежний, и «Показать ещё»
+    событие не теряет."""
+    uid = owner(studio)
+    monkeypatch.setattr(account, "EVENTS_PAGE", 2)
+    security_log.record(uid, "login_fail", detail="login", ip="203.0.113.5")
+    security_log.record(uid, "logout")
+    security_log.record(uid, "logout")
+    first = studio.c.get("/api/me/security-events").json()
+    assert [i["kind"] for i in first["items"]] == ["logout", "logout"]
+    studio.clock[0] += 10
+    security_log.record(uid, "login_fail", detail="login", ip="203.0.113.5")
+    rest = studio.c.get(f"/api/me/security-events?before={first['next']}").json()["items"]
+    assert [(i["kind"], i["count"]) for i in rest] == [("login_fail", 2), ("login", 1)]
+    assert rest[0]["created"] == rest[0]["first"] + 10
+
+
 def test_failure_flood_from_many_addresses_does_not_evict_other_events(studio, monkeypatch):
     """Подбор с разных адресов не сворачивается — его держит квота NOISY_MAX, а входы и прочее остаются."""
     uid = owner(studio)

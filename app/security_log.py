@@ -32,7 +32,8 @@ DETAIL_MAX = 32
 KEEP_SEC = 180 * 86400
 KEEP_MAX = 1000
 #: неудачи, которые подбор шлёт сотнями: повтор того же вида, подробности, адреса и сессии за COLLAPSE_SEC с
-#: прошлого — не новая строка, а +1 к `count` прежней (она встаёт наверх журнала, `first` — время первой). Разные
+#: прошлого — не новая строка, а +1 к `count` прежней на месте (id прежний: журнал листается по id; `created` —
+#: время последней, `first` — первой). Разные
 #: адреса — разные строки, поэтому ещё и квота: строк этих видов не больше NOISY_MAX, лишние уходят старшими, и подбор
 #: с тысяч адресов не вытеснит за KEEP_MAX входы, отпирания и прочие события
 NOISY = frozenset({"login_fail", "share_pin_fail"})
@@ -65,19 +66,19 @@ def record(user_id: int, kind: str, *, detail: "str | None" = None, digest: "str
     now = clock.NOW()
     detail = detail[:DETAIL_MAX] if detail else None
     session = handle(digest) if digest else None
-    count, first = 1, None
     if kind in NOISY:
         prev = state.DB.execute(
             "SELECT id, count, COALESCE(first, created) AS first FROM security_events WHERE user_id = ? AND kind = ?"
             " AND detail IS ? AND session IS ? AND ip IS ? AND created >= ? ORDER BY id DESC LIMIT 1",
             (user_id, kind, detail, session, ip, now - COLLAPSE_SEC)).fetchone()
-        if prev is not None:      # без await между: удаление и вставка — одним шагом цикла событий
-            state.DB.execute("DELETE FROM security_events WHERE id = ?", (prev["id"],))
-            count, first = prev["count"] + 1, prev["first"]
+        if prev is not None:      # на месте: id прежний — страница журнала по id (account.py) повтор не теряет
+            state.DB.execute("UPDATE security_events SET count = count + 1, first = COALESCE(first, created),"
+                             " created = ? WHERE id = ?", (now, prev["id"]))
+            return
     # учётку могли удалить, пока шла проверка (scrypt в потоке): тогда записывать некому
     state.DB.execute("INSERT INTO security_events(user_id, created, kind, detail, device, session, ip, count, first)"
-                     " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
-                     (user_id, now, kind, detail, device, session, ip, count, first, user_id))
+                     " SELECT ?, ?, ?, ?, ?, ?, ?, 1, NULL WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
+                     (user_id, now, kind, detail, device, session, ip, user_id))
     if kind in NOISY:
         marks = ", ".join("?" * len(NOISY))
         state.DB.execute(f"DELETE FROM security_events WHERE user_id = ? AND kind IN ({marks}) AND id <= (SELECT id"
