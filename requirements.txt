@@ -10,4 +10,5 @@ cryptography==50.0.2
 pypdf==6.21.1
 # рендер страниц PDF для распознавания (app/ocr_render.py): wheel с PDFium внутри, manylinux для 3.13
 pypdfium2==5.14.0
+markdown-it-py==4.0.0
 webauthn==3.0.1

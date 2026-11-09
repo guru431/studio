@@ -658,6 +658,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
+    converter_bytes = b'# Shared converter fixture\n'
+    (repo / 'deploy' / 'md2pdf.sha256').write_text(hashlib.sha256(converter_bytes).hexdigest() + '\n', encoding='utf-8')
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*git, "init", "-q"], check=True, timeout=20)
     subprocess.run([*git, "add", "."], check=True, timeout=20)
@@ -665,12 +667,15 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     # Функции сильнее PATH: Git Bash добавляет свои /usr/bin и /mingw64/bin перед Windows PATH.
     # Даже при ошибке заглушки адрес зарезервирован для документации, ключа SSH нет.
     env = {**os.environ, "PROBE": tmp_path.as_posix(), "STUDIO_SSH": "nobody@192.0.2.1",
+           "STUDIO_MD2PDF_SOURCE": (tmp_path / "md2pdf.py").as_posix(),
            "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix(),
            "STUDIO_URL": "https://studio.example.net",
            "STUDIO_PYTHON": Path(sys.executable).as_posix()}
+    (tmp_path / 'md2pdf.py').write_bytes(converter_bytes)
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
                '*"cat > "*"studio-agent-setup.exe"*) cat > "$PROBE/setup.exe" ;; '
+               '*"cat > "*"deploy/md2pdf.py"*) cat > "$PROBE/converter.py" ;; '
                '*) cat >/dev/null ;; esac; }; '
                'curl() { printf 200; }; source "$0"')
 
@@ -694,6 +699,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "ssh-calls").is_file()
     assert (tmp_path / "setup.exe").read_bytes().startswith(b"MZ")
+    assert (tmp_path / "converter.py").read_bytes() == converter_bytes
     with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
@@ -702,6 +708,11 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
         assert all(n.startswith("studio-agent/") for n in names)
         cmd = archive.read("studio-agent/install.cmd")
         assert cmd.count(b"\r\n") == cmd.count(b"\n") > 0
+    calls = (tmp_path / 'ssh-calls').read_bytes()
+    (tmp_path / 'md2pdf.py').write_bytes(b'# unexpected converter\n')
+    r = deploy()
+    assert r.returncode == 1 and 'версия md2pdf.py не совпала' in r.stderr
+    assert (tmp_path / 'ssh-calls').read_bytes() == calls
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():

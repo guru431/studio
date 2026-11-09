@@ -49,6 +49,7 @@ import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
+import { shareMenu } from './chat-share.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const NONE = 'Компьютеров пока нет.';
@@ -192,6 +193,12 @@ function layout() {
   const body = el('div', { class: 'code-body' });
   const backdrop = el('div', { class: 'code-backdrop', hidden: true });
   const root = el('div', { class: 'code-ws' }, el('section', { class: 'code-main' }, top, statusBox, body), backdrop);
+  const share = shareMenu(root, { id: 'code-share-chat', failed: (err) =>
+    failed(err, proj?.aid, ui.body.querySelector('#code-status') || shownStatus) });
+  share.button.hidden = true;
+  const viewActions = el('div', { class: 'code-view-actions' });
+  views.replaceWith(viewActions);
+  viewActions.append(views, share.button);
   toggle.addEventListener('click', () => panelOpen(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panelOpen(false));
   root.addEventListener('pointerdown', onAct);
@@ -200,7 +207,7 @@ function layout() {
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
   ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches,
-    repoStatus, statusBox, body, backdrop };
+    repoStatus, statusBox, body, backdrop, share };
 }
 
 /** Компьютеров нет: панели нет, справа во всю ширину подсказка, как подключить. */
@@ -218,6 +225,8 @@ function empty() {
 
 /** Переключатели вида и плашка пути: key — вид открытого проекта, null — проекта нет. */
 function frame(key) {
+  ui.share.set(null);
+  ui.share.button.hidden = key !== 'chat';
   ui.place.hidden = key === null;
   ui.views.hidden = key === null;
   ui.repoStatus.hidden = key === null || !ui.repoStatus.textContent;
@@ -468,6 +477,7 @@ function remember(aid, pid, key) {
 /** Отказ запроса: closed — поле PIN этого компьютера в панели (с `file` — после PIN к этому файлу), offline — словами
  * из «Текстов», прочее — словами. */
 function failed(err, aid, status, file = null) {
+  if (['closed', 'not_found', 'offline'].includes(err?.code)) ui?.share.set(null);
   if (['closed', 'not_found'].includes(err?.code)) document.dispatchEvent(new Event('studio-code-clear'));
   if (err && err.code === 'closed') {
     if (proj && String(proj.aid) === String(aid)) {
@@ -586,6 +596,9 @@ async function chat(mine, p, id, agent, section, status) {
   ui.statusBox.replaceChildren();            // у чата своя строка #code-status
   const fresh = freshChat === id;
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
+  const suffix = row?.engine && row.engine !== 'claude' ? `?engine=${row.engine}` : '';
+  const chatUrl = `${base(p.aid, p.pid)}/chats/${id}`;
+  ui.share.set({ title: row?.title || 'Чат', share: `${chatUrl}/share${suffix}`, export: `${chatUrl}/export${suffix}` });
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title,
     git: p.repo, gitAction,
@@ -865,6 +878,7 @@ export function update(context) {
 }
 
 export function unmount() {
+  ui?.share.unmount();
   gen += 1;
   if (view) view.unmount();
   view = null;

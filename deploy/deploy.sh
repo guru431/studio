@@ -57,6 +57,11 @@ if [ ! -x "$PYTHON" ]; then PYTHON=$D/.venv/Scripts/python.exe; fi
 [ -x "$PYTHON" ] || die "нет Python среды проекта; задайте STUDIO_PYTHON"
 # Validate the profile before building an installer or contacting the host.
 "$PYTHON" "$D/deploy/render-profile.py" --check
+MD2PDF_SOURCE=${STUDIO_MD2PDF_SOURCE:-$HOME/.claude/bin/md2pdf.py}
+[ -s "$MD2PDF_SOURCE" ] || die "нет общего md2pdf.py; задайте STUDIO_MD2PDF_SOURCE"
+md2pdf_expected=$(git -C "$D" show HEAD:deploy/md2pdf.sha256 | tr -d '\r\n')
+md2pdf_actual=$(sha256sum "$MD2PDF_SOURCE" | cut -d' ' -f1)
+[ "$md2pdf_actual" = "$md2pdf_expected" ] || die "версия md2pdf.py не совпала с deploy/md2pdf.sha256"
 
 package=$(mktemp -d)
 trap 'rm -rf -- "$package"' EXIT
@@ -75,6 +80,8 @@ echo "==> код $(git -C "$D" rev-parse --short HEAD) → $HOST:$R"
 git -C "$D" -c core.autocrlf=false archive --format=tar HEAD "${PARTS[@]}" \
     | "$PYTHON" "$D/deploy/render-profile.py" \
     | "${SSH[@]}" "sudo tar -xf - -C $R/.incoming"
+# Shared converter is delivered byte-for-byte, like the generated bridge artifacts.
+"${SSH[@]}" "sudo sh -c 'cat > $R/.incoming/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
 echo "==> мост $(git -C "$D" rev-parse --short HEAD) → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent"
 for file in studio-agent.zip studio-agent-setup.exe; do

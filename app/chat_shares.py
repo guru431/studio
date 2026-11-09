@@ -139,10 +139,8 @@ async def chat_share(chat_id: str, request: Request):
     return _out(_owned(request, chat_id=chat_id))
 
 
-@router.post("/api/chats/{chat_id}/share", status_code=201)
-async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
-    row = chat._chat_row(request.state.user.id, chat_id)
-    expected = _owned(request, chat_id=chat_id)
+def regular_snapshot(user_id: int, chat_id: str) -> tuple[dict, list[str]]:
+    row = chat._chat_row(user_id, chat_id)
     atts = chat._attachments(chat_id)
     files, messages = [], []
     for message in chat._messages(chat_id):
@@ -150,13 +148,21 @@ async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
         for a in atts.get(message["id"], []):
             # Missing/deleted source files are never turned into broader media access.
             if state.DB.execute("SELECT 1 FROM media WHERE id = ? AND user_id = ?",
-                                (a["media_id"], request.state.user.id)).fetchone():
+                                (a["media_id"], user_id)).fetchone():
                 files.append(a["media_id"])
                 attachments.append({"file": a["media_id"], "name": a["name"], "kind": a["kind"]})
         messages.append({"role": message["role"], "text": message["content"], "attachments": attachments,
                          "reasoning": message["reasoning"], "status": message["status"]})
-    return await _store(request, body, {"title": row["title"] or "Чат", "messages": messages},
-                        expected, files, chat_id=chat_id)
+    snapshot = {"title": row["title"] or "Чат", "messages": messages}
+    _encode(snapshot)
+    return snapshot, files
+
+
+@router.post("/api/chats/{chat_id}/share", status_code=201)
+async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
+    expected = _owned(request, chat_id=chat_id)
+    snapshot, files = regular_snapshot(request.state.user.id, chat_id)
+    return await _store(request, body, snapshot, expected, files, chat_id=chat_id)
 
 
 @router.delete("/api/chats/{chat_id}/share", status_code=204)
@@ -181,10 +187,8 @@ async def agent_share(aid: int, pid: str, session_id: str, request: Request):
     return _out(_owned(request, **source))
 
 
-@router.post("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=201)
-async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn, request: Request):
-    source = _agent_source(request, aid, pid, session_id)
-    expected = _owned(request, **source)
+async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, title: str) -> dict:
+    _agent_source(request, aid, pid, session_id)
     pages, before, total_size, count = [], None, 0, 0
     while True:
         data = await claude_code.ask(request, aid, "history", project=pid, chat=session_id, before=before, limit=100)
@@ -211,7 +215,17 @@ async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn,
                                        for step in (steps if isinstance(steps, list) else []) if isinstance(step, dict)],
                              "images": [{key: image[key] for key in ("mime", "name", "data") if key in image}
                                         for image in (images if isinstance(images, list) else []) if isinstance(image, dict)]})
-    return await _store(request, body, {"title": body.title, "messages": messages}, expected, **source)
+    snapshot = {"title": title, "messages": messages}
+    _encode(snapshot)
+    return snapshot
+
+
+@router.post("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=201)
+async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn, request: Request):
+    source = _agent_source(request, aid, pid, session_id)
+    expected = _owned(request, **source)
+    snapshot = await agent_snapshot(request, aid, pid, session_id, body.title)
+    return await _store(request, body, snapshot, expected, **source)
 
 
 @router.delete("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=204)
