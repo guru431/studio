@@ -12,6 +12,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 SOURCE = 'C:/Users/owner/.codex/visualizations/2026/11/08/thread/dashboard.html'
 MARKER = 'visualize' + json.dumps({'path': SOURCE, 'mode': 'wide', 'title': 'Панель'}) + ''
 FRAGMENT = '''<button id="increment" onclick="this.textContent=Number(this.textContent)+1">0</button>
+<i data-lucide="check" id="icon"></i>
 <p id="isolation"></p><script>
 try { parent.document.body.dataset.compromised = '1'; }
 catch { document.querySelector('#isolation').textContent = 'isolated'; }
@@ -37,9 +38,9 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             if desktop_browser.browser_type.name == 'firefox':
                 context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
                     'httpOnly': True, 'sameSite': 'Lax'} for key, value in signed.cookies.items()])
-            # Keep the test independent of external CDN availability.
-            context.route('https://unpkg.com/**', lambda route: route.fulfill(
-                content_type='application/javascript', body='globalThis.lucide={createIcons(){}};'))
+            # Внешняя сеть недоступна сценарию: lucide должен прийти из /static/vendor студии.
+            context.route(lambda url: not url.startswith(live.url) and not url.startswith(('data:', 'blob:', 'about:')),
+                          lambda route: route.abort())
             page = context.new_page()
             page.set_default_timeout(10000)
             errors, requests = [], []
@@ -55,6 +56,7 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             opener.press('Enter')
             frame = page.frame_locator('#code-visualization iframe')
             frame.locator('#isolation').get_by_text('isolated', exact=True).wait_for()
+            frame.locator('svg.lucide').wait_for()          # значок нарисован копией студии под CSP 'self'
             frame.locator('#increment').click()
             assert frame.locator('#increment').inner_text() == '1'
             assert page.locator('body').get_attribute('data-compromised') is None
@@ -79,6 +81,8 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             page.locator('#code-chat[data-loaded="1"]').wait_for()
             page.locator('.code-visualization-open').last.wait_for()
             assert not any('/Users/owner/' in request or 'dashboard.html' in request for request in requests)
+            assert '/static/vendor/lucide.min.js' in ' '.join(requests)
+            assert all(request.startswith((live.url, 'data:', 'blob:', 'about:')) for request in requests), requests
             assert len(context.pages) == 1 and not errors
     finally:
         channel.stop()

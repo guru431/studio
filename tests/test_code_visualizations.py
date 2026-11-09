@@ -28,6 +28,20 @@ def test_html_preview_is_private_bounded_and_sandboxed(studio, caplog):
     assert 'sandbox allow-scripts' in csp and 'allow-same-origin' not in csp
     assert "connect-src data: blob:" in csp and "form-action 'none'" in csp
     assert 'view.html' not in caplog.text
+    # Документ без lucide ничего не грузит сам: ни своей копии, ни CDN.
+    assert '<script src=' not in frame.text and 'unpkg' not in frame.text
+
+
+def test_lucide_comes_from_the_studio_and_only_when_the_fragment_uses_it(studio):
+    aid, machine, endpoint = ready(studio)
+    machine.projects['alpha']['files']['icons.html'] = b'<i data-lucide="check"></i>'
+    token = studio.c.post(endpoint, json={'source': 'icons.html'}).json()['token']
+    frame = studio.c.get(endpoint + '/' + token)
+    assert f'<script src="{code_visualizations.LUCIDE}"></script>' in frame.text and 'unpkg' not in frame.text
+    assert "'self'" in frame.headers['content-security-policy'].split('script-src')[1].split(';')[0]
+    studio.c.post('/logout')
+    script = studio.c.get(code_visualizations.LUCIDE)            # статика открыта и фрейму без cookie
+    assert script.status_code == 200 and b'lucide 1.17.0' in script.content[:100]
 
 
 def test_ticket_expires_is_bound_to_session_and_rechecks_computer(studio):

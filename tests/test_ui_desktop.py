@@ -178,14 +178,20 @@ def test_desktop_compact_start_fit_zoom_and_resize(desktop_browser, live, tmp_pa
             page.locator('#code-desktop-tools-toggle').click()
             page.locator('#code-desktop-text').wait_for()
             check_fit()
+            page.locator('#code-desktop-text').fill('Набранный текст')
+            page.locator('#code-desktop-clipboard').fill('Полученный буфер')
             page.locator('#code-desktop-tools-toggle').click()
             page.set_viewport_size({'width': height, 'height': width})
             page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
             check_fit()
+            fields = "() => ['#code-desktop-text', '#code-desktop-clipboard'].map(s => document.querySelector(s).value)"
             page.locator('#code-desktop-monitor').select_option('1')
             page.wait_for_function("() => document.querySelector('#code-desktop-screen').height === 160")
             check_fit()
+            # Смена монитора — новый кадр, а не новый сеанс: набранное и полученный буфер остаются.
+            assert page.evaluate(fields) == ['Набранный текст', 'Полученный буфер']
             page.locator('#code-desktop-disconnect').click()
+            assert page.evaluate(fields) == ['', '']
             assert not page.locator('#code-desktop-text').is_visible()
             assert not page.locator('#code-desktop-fit').is_visible()
             page.wait_for_function("() => document.querySelector('#code-desktop-connect').disabled === false")
