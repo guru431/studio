@@ -1,12 +1,13 @@
 """«В работе» (спека 2026-10-21-studio-jobs-panel): свои задания всех разделов одним списком.
 
 `GET /api/jobs?since=<время>` → `{now, running, finished, push}` (`push` — подписка этой сессии). Идущие — картинки `working`,
-`cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`,
+`cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`/`queued`,
 распознавания и переводы `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
 не старше JOBS_RECENT_SEC, не больше FINISHED_MAX (чат сюда не попадает: ответ виден в диалоге).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
-в тот же миг, не теряется, повтор страница отсекает по id.
+в тот же миг, не теряется, повтор страница отсекает по id. У идущих — `cancel`: адрес отмены своего раздела
+(чат — остановка ответа), им пользуется «Отменить» панели; блокировка раздела закрывает его, как любой запрос.
 
 Только база (строки своего `user_id`, индексы `*_user_created` и `messages_streaming`) и память
 модулей (`detail` идущих — те же слова, что у раздела). Ни одного запроса к шлюзу. Журнал — ничего:
@@ -34,11 +35,19 @@ STATES = {"done": "done", "error": "error", "failed": "error", "cancelled": "can
 TERMINAL = tuple(STATES)
 
 
+#: «Отменить» идущей и ждущей строки — обычный адрес отмены раздела (защита раздела — та же: 423)
+CANCEL = {"photo": "/api/images/{}/cancel", "video": "/api/videos/{}/cancel", "transcribe": "/api/transcripts/{}/cancel",
+          "ocr": "/api/ocr/{}/cancel", "translate": "/api/translate/{}/cancel", "speech": "/api/speeches/{}/cancel"}
+
+
 def _item(section: str, row, title: str, detail: str, href: str) -> dict:
     finished = row["finished"]
     state_ = STATES.get(row["state"], "running") if finished is not None else "running"
-    return {"section": section, "id": row["id"], "state": state_, "title": title, "detail": detail,
-            "started": row["created"], "finished": finished, "href": href}
+    out = {"section": section, "id": row["id"], "state": state_, "title": title, "detail": detail,
+           "started": row["created"], "finished": finished, "href": href}
+    if finished is None:
+        out["cancel"] = CANCEL[section].format(row["id"])
+    return out
 
 
 def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*") -> tuple[list, list]:
@@ -77,12 +86,13 @@ def _video(uid: int, after: float) -> list:
 
 
 def _transcribe(uid: int, after: float) -> list:
-    going, done = _rows("transcripts", uid, ("working",), after)
+    going, done = _rows("transcripts", uid, ("working", "queued"), after)
     out = []
     for row in going + done:
         job = transcripts.JOBS.get(row["id"])
         # этап без своего времени: время одно — общее, его считает страница
-        detail = job.stage if job is not None and row["finished"] is None else row["detail"]
+        detail = (job.stage if job is not None and row["finished"] is None
+                  else transcripts.waiting(row) if row["state"] == "queued" else row["detail"])
         out.append(_item("transcribe", row, f"Расшифровка «{row['name']}»", detail, f"transcribe?id={row['id']}"))
     return out
 
@@ -110,11 +120,12 @@ def _translate(uid: int, after: float) -> list:
 
 
 def _speech(uid: int, after: float) -> list:
-    going, done = _rows("speeches", uid, ("working",), after)
+    going, done = _rows("speeches", uid, ("working", "queued"), after)
     out = []
     for row in going + done:
         job = speeches.JOBS.get(row["id"])
-        detail = job.stage if job is not None and row["finished"] is None else row["detail"]
+        detail = (job.stage if job is not None and row["finished"] is None
+                  else speeches.waiting(row) if row["state"] == "queued" else row["detail"])
         text = row["text"]
         head = text if len(text) <= SPEECH_TITLE else text[:SPEECH_TITLE].rstrip() + "…"
         out.append(_item("speech", row, f"Озвучка · {head}", detail, f"speech?id={row['id']}"))
@@ -132,7 +143,8 @@ def _chat(uid: int) -> list:
         detail = "пишет ответ" if live is not None and live.content else "жду ответ модели"
         out.append({"section": "chat", "id": row["id"], "state": "running",
                     "title": f"Ответ · {row['title'] or 'новый диалог'}", "detail": detail,
-                    "started": row["created"], "finished": None, "href": f"chat/{row['chat_id']}"})
+                    "started": row["created"], "finished": None, "href": f"chat/{row['chat_id']}",
+                    "cancel": f"/api/chats/{row['chat_id']}/stop"})
     return out
 
 

@@ -194,22 +194,54 @@ def test_restart_marks_running_as_interrupted(studio):
     assert tuple(row) == ("error", transcripts.INTERRUPTED)
 
 
-def test_one_running_per_user_and_history_wipe_takes_all(studio, env, fake_audio, monkeypatch):
+def test_uploads_queue_up_and_history_wipe_takes_all(studio, env, fake_audio, monkeypatch):
+    """Очередь вместо 409: идёт одна запись, ждущих — до QUEUE_MAX («в очереди · N»), следующая — 409 busy;
+    стирание истории снимает и идущую, и ждущие."""
     add_gateway(studio)
     monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
     studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
     first = upload(studio).json()["id"]
+    wait_tr(studio, first, {"working"})
+    waiting = [upload(studio).json() for _ in range(transcripts.QUEUE_MAX)]
+    assert [w["state"] for w in waiting] == ["queued"] * transcripts.QUEUE_MAX
+    assert [w["detail"] for w in waiting] == [f"в очереди · {n}" for n in range(1, transcripts.QUEUE_MAX + 1)]
     r = upload(studio)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == transcripts.QUEUE_MAX + 1
     assert studio.c.delete(f"/api/transcripts/{first}").status_code == 409        # идущую — сначала отменить
+    assert studio.c.delete(f"/api/transcripts/{waiting[0]['id']}").status_code == 409   # и ждущую
+    # ждущую можно снять: остальные сдвигаются
+    assert studio.c.post(f"/api/transcripts/{waiting[0]['id']}/cancel").json() == {"state": "cancelled"}
+    assert studio.c.get(f"/api/transcripts/{waiting[1]['id']}").json()["detail"] == "в очереди · 1"
     assert studio.c.delete("/api/history").status_code == 200
     assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
-    assert transcripts.JOBS == {}                     # и задание стёртой истории не держится в памяти
+    assert transcripts.JOBS == {} and transcripts.RUNNERS == {}   # и задание стёртой истории не держится в памяти
 
 
-def test_two_uploads_finishing_together_start_only_one_job(studio, monkeypatch):
+def test_queued_records_run_in_turn_and_survive_a_restart(studio, fake_audio):
+    """Ждущие идут по одной в порядке загрузки; перезапуск службы делает идущую «прервано», а ждущие
+    продолжаются после старта (resume), не теряясь молча."""
     add_gateway(studio)
+    ids = [upload(studio, name=f"r{n}.m4a").json()["id"] for n in range(3)]
+    done = [wait_tr(studio, tid, {"done", "error"}) for tid in ids]
+    assert [d["state"] for d in done] == ["done"] * 3
+    assert [d["finished"] for d in done] == sorted(d["finished"] for d in done)
+    uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
+    for tid, st in (("w1", "working"), ("q1", "queued")):
+        state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state,"
+                         " detail, created) SELECT ?, user_id, connection_id, model, name, source_media_id, ?, ?, ?"
+                         " FROM transcripts WHERE id = ?", (tid, st, st, T0 + 1, ids[0]))
+    studio.c.__exit__(None, None, None)                                # служба остановилась
+    studio.c.__enter__()                                               # и запустилась снова
+    assert studio.c.get("/api/transcripts/w1").json()["detail"] == transcripts.INTERRUPTED
+    assert wait_tr(studio, "q1", {"done", "error"})["state"] == "done"
+    assert uid
+
+
+def test_two_uploads_finishing_together_respect_the_queue_limit(studio, monkeypatch):
+    add_gateway(studio)
+    monkeypatch.setattr(transcripts, "QUEUE_MAX", 1)
     uid = state.DB.execute("SELECT id FROM users").fetchone()[0]
     save_stream = media.save_stream
 
@@ -240,16 +272,14 @@ def test_two_uploads_finishing_together_start_only_one_job(studio, monkeypatch):
         request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)), stream=stream,
                                   headers={"content-type": "audio/mp4"})
         results = await asyncio.gather(transcripts.upload(request), transcripts.upload(request), return_exceptions=True)
-        jobs = list(transcripts.JOBS.values())
         try:
-            assert len(jobs) == 1
             assert sum(isinstance(r, dict) for r in results) == 1
             error, = (r for r in results if isinstance(r, HTTPException))
             assert error.status_code == 409 and error.detail["code"] == "busy"
             assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 1
             assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 1
         finally:
-            await transcripts._cancel(jobs)
+            await transcripts.stop_user(uid)
 
     studio.c.portal.call(scenario)
 
