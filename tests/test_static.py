@@ -170,6 +170,11 @@ def test_service_worker_resubscribes_when_the_browser_changes_the_push_subscript
     assert "fetch('/api/me')" in handler and "'x-studio-csrf': csrf" in handler
     assert re.search(r"fetch\('/api/me/push', \{ method: 'POST'", handler) and "sub.toJSON()" in handler
     assert "sub.unsubscribe()" in handler
+    # запертая студия (423): подписку не снимать — её отправит страница после отпирания (push-sync.js)
+    assert "err.status === 423" in handler and "push: 'resync'" in handler
+    sync = (STATIC / "js" / "push-sync.js").read_text(encoding="utf-8")
+    assert "data.push === 'resync'" in sync and "api('POST', '/api/me/push', sub.toJSON())" in sync
+    assert "setupPushSync()" in (STATIC / "js" / "app.js").read_text(encoding="utf-8")
     settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
     assert "r.pushManager.getSubscription()" in settings and "PUSH_READY_SEC = 10" in settings
 

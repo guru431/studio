@@ -163,7 +163,8 @@ def test_security_journal_records_logins_unlocks_and_links_without_secrets(studi
     state.DB.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES ('c', ?, 't', 0, 0)", (uid,))
     assert studio.c.post("/api/chats/c/share", json={"pin": "0123"}).status_code == 201
     assert studio.c.delete("/api/chats/c/share").status_code == 204
-    assert kinds(uid) == ["login_fail", "login", "unlock_fail", "unlock", "unlock_fail", "share_create", "share_revoke"]
+    assert kinds(uid) == ["login_fail", "login", "pin_set", "unlock_fail", "unlock", "unlock_fail", "share_create",
+                          "share_revoke"]
     page = studio.c.get("/api/me/security-events").json()
     assert [i["kind"] for i in page["items"]][:2] == ["share_revoke", "share_create"] and page["next"] is None
     first = page["items"][-1]
@@ -203,6 +204,73 @@ def test_security_journal_keeps_a_bounded_recent_tail(studio, monkeypatch):
     assert len(page["items"]) == 2 and page["next"] is not None
     rest = studio.c.get(f"/api/me/security-events?before={page['next']}").json()
     assert len(rest["items"]) == 1
+
+
+def test_repeated_failures_collapse_into_one_counted_row(studio):
+    uid = owner(studio)
+    for _ in range(3):
+        assert login(studio, "owner", "wrong-password", ip="203.0.113.5").status_code == 401
+    auth.FAILS.clear()
+    assert login(studio, "owner", "wrong-password", ip="203.0.113.6").status_code == 401
+    security_log.record(uid, "logout")
+    studio.clock[0] += security_log.COLLAPSE_SEC + 1
+    auth.FAILS.clear()
+    assert login(studio, "owner", "wrong-password", ip="203.0.113.5").status_code == 401
+    rows = state.DB.execute("SELECT kind, ip, count, first, created FROM security_events WHERE user_id = ? ORDER BY id",
+                            (uid,)).fetchall()
+    assert [(r["kind"], r["ip"], r["count"]) for r in rows] == [
+        ("login", "10.77.48.5", 1), ("login_fail", "203.0.113.5", 3), ("login_fail", "203.0.113.6", 1),
+        ("logout", None, 1), ("login_fail", "203.0.113.5", 1)]
+    assert rows[1]["first"] < rows[1]["created"] or rows[1]["first"] == rows[1]["created"]
+    items = studio.c.get("/api/me/security-events").json()["items"]
+    assert {(i["kind"], i["count"]) for i in items} >= {("login_fail", 3)}
+    assert all("first" in i for i in items)
+
+
+def test_failure_flood_from_many_addresses_does_not_evict_other_events(studio, monkeypatch):
+    """Подбор с разных адресов не сворачивается — его держит квота NOISY_MAX, а входы и прочее остаются."""
+    uid = owner(studio)
+    monkeypatch.setattr(security_log, "KEEP_MAX", 10)
+    monkeypatch.setattr(security_log, "NOISY_MAX", 4)
+    security_log.record(uid, "pin_set")
+    for n in range(50):
+        security_log.record(uid, "share_pin_fail" if n % 2 else "login_fail", detail="chat", ip=f"198.51.100.{n}")
+    left = kinds(uid)
+    assert left[:2] == ["login", "pin_set"] and len(left) == 6
+    assert sum(k in security_log.NOISY for k in left) == 4
+
+
+def test_pin_and_passkey_changes_are_journaled(studio):
+    from test_screenlock import add_key
+    uid = owner(studio)
+    assert studio.c.put("/api/me/pin", json={"pin": "1234", "password": "password-123"}).status_code == 200
+    assert studio.c.delete("/api/me/pin").status_code == 204
+    add_key(studio)
+    key_id = studio.c.get("/api/passkeys").json()["items"][0]["id"]
+    assert studio.c.delete(f"/api/passkeys/{key_id}").status_code == 204
+    assert kinds(uid)[1:] == ["pin_set", "pin_delete", "passkey_add", "passkey_delete"]
+    row = state.DB.execute("SELECT session, ip FROM security_events WHERE kind = 'passkey_add'").fetchone()
+    assert row["session"] == security_log.handle(current(studio)) and row["ip"]
+
+
+def test_admin_password_reset_offers_the_owner_an_emergency_exit(studio):
+    """Сброс пароля администратором: владелец после входа видит `password_reset` (и событие в журнале) до
+    «Понятно» или аварийного выхода; администратору флаг не показывается."""
+    uid = make_user(studio, "owner")
+    make_user(studio, "boss", is_admin=True)
+    signin(studio, "boss")
+    assert studio.c.patch(f"/api/admin/users/{uid}", json={"password": "new-password-456"}).status_code == 200
+    assert "password_reset" not in str(studio.c.get("/api/admin/users").json())
+    assert login(studio, "owner", "new-password-456").status_code == 303
+    studio.c.headers[auth.CSRF_HEADER] = studio.c.get("/api/me").json()["csrf"]
+    me = studio.c.get("/api/me").json()
+    assert me["password_reset"] == studio.clock[0]
+    assert kinds(uid)[-2:] == ["password_reset", "login"]
+    assert studio.c.delete("/api/me/password-reset").status_code == 204
+    assert studio.c.get("/api/me").json()["password_reset"] is None
+    state.DB.execute("UPDATE users SET password_reset = 1 WHERE id = ?", (uid,))
+    assert studio.c.post("/api/me/emergency", json={"password": "new-password-456"}).status_code == 204
+    assert state.DB.execute("SELECT password_reset FROM users WHERE id = ?", (uid,)).fetchone()[0] is None
 
 
 def test_security_journal_survives_history_wipe_and_is_in_the_export(studio):

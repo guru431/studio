@@ -221,7 +221,7 @@ def test_ntfy_receives_agent_and_job_events_without_webpush_and_channels_are_ind
 
 def test_schema_29_adds_settings_without_enabling_or_changing_existing_accounts(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29) + '\nPRAGMA user_version = 28;')
+    conn.executescript(db.SCHEMA.removesuffix(db.SHARES_37).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29) + '\nPRAGMA user_version = 28;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES (1,'u','U','h',0)")
     db.migrate(conn)
     db.migrate(conn)
@@ -233,7 +233,7 @@ def test_schema_29_adds_settings_without_enabling_or_changing_existing_accounts(
 
 def test_schema_30_preserves_credentials_but_turns_off_all_devices_and_separates_topics(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30) + '\nPRAGMA user_version = 29;')
+    conn.executescript(db.SCHEMA.removesuffix(db.SHARES_37).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30) + '\nPRAGMA user_version = 29;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES (1,'u','U','h',0)")
     for digest in ['device-a', 'device-b']:
         conn.execute('INSERT INTO sessions(digest,user_id,csrf,expires,renewed) VALUES (?,1,?,?,?)',

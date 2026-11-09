@@ -132,7 +132,8 @@ def blocks(request, uid: int, digest: str) -> bool:
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin",
                              "/api/me/sessions", "/api/me/security-events"))
-            or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency")
+            or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
+                        "/api/me/password-reset")
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
                 and request.method != "GET")
             or (head == "connections" and path.endswith("/token") and protected(row, "chat")))

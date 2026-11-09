@@ -1,6 +1,9 @@
-/* One current snapshot per chat. Every creation rotates both the link and viewer access. */
+/* One current snapshot per chat. Every creation rotates both the link and viewer access.
+ * Окно владельца: PIN, срок ссылки (1/7/30 дней или бессрочно, по умолчанию 7), у обычного чата — показывать ли
+ * рассуждение модели (по умолчанию нет); у созданной — срок, открытия, последний просмотр и неверные PIN. */
 import { api } from './api.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { dateTime } from './time.js';
+import { button, el, field, openDialog, plural, words } from './ui.js';
 
 export const SHARE_ICON = '<path d="M8 9H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2M12 15V3m-4 4 4-4 4 4"/>';
 
@@ -99,29 +102,61 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
   } };
 }
 
+/** Срок ссылки (chat_shares.DAYS): неделя по умолчанию, бессрочная — только явным выбором. */
+const LIFETIMES = [['1', '1 день'], ['7', '7 дней'], ['30', '30 дней'], ['', 'Бессрочно']];
+
+function when(ts) {
+  return dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Сведения ссылки для владельца: срок, открытия по PIN и неверные PIN (их предел отключает ссылку). */
+function facts(out) {
+  return [out.expires ? `действует до ${when(out.expires)}` : 'бессрочная',
+    `открыта ${out.views || 0} ${plural(out.views || 0, ['раз', 'раза', 'раз'])}`
+      + (out.viewed ? `, последний — ${when(out.viewed)}` : ''),
+    `неверных PIN: ${out.fails || 0}`].join(' · ');
+}
+
 export function shareDialog(host, endpoint, title = 'Чат', request = api) {
   const pin = el('input', { id: 'chat-share-pin', class: 'input', type: 'password', inputmode: 'numeric',
     pattern: '[0-9]{4}', minlength: '4', maxlength: '4', autocomplete: 'off', required: true, disabled: true });
   const error = el('p', { class: 'error', role: 'alert' });
   const link = el('input', { id: 'chat-share-link', class: 'input', readonly: true, 'aria-label': 'Ссылка на чат' });
   const copy = button('Копировать ссылку', { id: 'chat-share-copy' });
-  const output = el('div', { hidden: true }, field('Ссылка для чтения', link, 'share-link'), copy);
+  const info = el('p', { class: 'muted small', id: 'chat-share-facts' });
+  const broken = el('p', { class: 'error', id: 'chat-share-broken', hidden: true },
+    'Ссылку больше не открыть: ключ данных студии сменили. Создайте новую или отключите эту.');
+  const linkBox = el('div', {}, field('Ссылка для чтения', link, 'share-link'), copy);
+  const output = el('div', { hidden: true }, linkBox, broken, info);
   const save = button('Создать ссылку', { id: 'chat-share-create', type: 'submit', class: 'btn btn-accent', disabled: true });
   const revoke = button('Отключить ссылку', { id: 'chat-share-revoke', class: 'btn btn-danger', hidden: true });
-  const form = el('form', {}, field('PIN доступа · 4 цифры', pin, 'share-pin'), save);
+  const days = el('select', { id: 'chat-share-days', class: 'input', disabled: true },
+    ...LIFETIMES.map(([value, label]) => el('option', { value, selected: value === '7' }, label)));
+  // рассуждение модели есть только у обычного чата; в ссылку — лишь по явному выбору
+  const regular = endpoint.startsWith('/api/chats/');
+  const reasoning = el('input', { type: 'checkbox', id: 'chat-share-reasoning', disabled: true });
+  const form = el('form', {}, field('PIN доступа · 4 цифры', pin, 'share-pin'), field('Срок ссылки', days, 'share-days'),
+    regular ? el('label', { class: 'check' }, reasoning, 'Показать рассуждение модели') : null, save);
   const dialog = openDialog(host, { id: 'chat-share-dialog', title: 'Поделиться чатом', cancelText: 'Закрыть',
     body: [el('p', {}, 'Получатель увидит снимок всей переписки и вложения, только для чтения. '
       + 'При каждом открытии нужен PIN этого чата. Передайте его отдельно от ссылки.'),
-    el('p', { class: 'muted small' }, 'Новая ссылка отключит прежнюю. Новые сообщения в снимок не добавляются.'),
+    el('p', { class: 'muted small' }, 'Новая ссылка отключит прежнюю. Новые сообщения в снимок не добавляются. '
+      + 'Снимок хранится зашифрованным и удаляется по истечении срока; после 50 неверных PIN ссылка отключится сама.'),
     form, output, error], actions: [revoke] });
   let busy = true;
   const state = (out) => {
     copy.textContent = 'Копировать ссылку';
     output.hidden = revoke.hidden = !out.enabled;
     link.value = out.url || '';
+    linkBox.hidden = out.enabled && !out.url;
+    broken.hidden = !(out.enabled && !out.url);
+    info.textContent = out.enabled ? facts(out) : '';
     save.textContent = out.enabled ? 'Создать новую ссылку' : 'Создать ссылку';
   };
-  const pending = (value) => { busy = value; save.disabled = revoke.disabled = pin.disabled = value; };
+  const pending = (value) => {
+    busy = value;
+    save.disabled = revoke.disabled = pin.disabled = days.disabled = reasoning.disabled = value;
+  };
   request('GET', endpoint).then((out) => {
     if (dialog.isConnected) state(out);
   }).catch((err) => {
@@ -142,7 +177,8 @@ export function shareDialog(host, endpoint, title = 'Чат', request = api) {
     error.textContent = '';
     pending(true);
     try {
-      const out = await request('POST', endpoint, { pin: pin.value, title });
+      const out = await request('POST', endpoint, { pin: pin.value, title,
+        days: days.value ? Number(days.value) : null, ...(regular ? { reasoning: reasoning.checked } : {}) });
       if (!dialog.isConnected) return;
       pin.value = '';
       state(out);

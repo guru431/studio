@@ -79,25 +79,31 @@ self.addEventListener('push', (event) => {
 
 /* Браузер сменил подписку push сам (служба push её обновила или отозвала): новую — серверу той же сессии, иначе
  * push тихо кончится. Cookie сессии запрос работника несёт сам; CSRF — из GET /api/me, как у страницы. Нет новой
- * подписки в событии — подписаться заново ключом VAPID сервера. Не дошла (сессия кончилась или заперта, сети нет) —
- * новую снять: флажок «Настроек» сверяется с подпиской браузера (settings.js pushBox) и покажет, что push выключен. */
+ * подписки в событии — подписаться заново ключом VAPID сервера. Студия заперта (423: запертой сессии смена подписки
+ * закрыта — иначе она увела бы уведомления) — подписку оставить и сказать открытым окнам: страница (push-sync.js)
+ * сверит её с сервером и отправит после отпирания, а без открытого окна — при следующем запуске. Иной отказ (сессия
+ * кончилась, сети нет) — новую снять: флажок «Настроек» сверяется с подпиской браузера (settings.js pushBox). */
 self.addEventListener('pushsubscriptionchange', (event) => {
-  const json = (r) => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+  const check = (r) => {
+    if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+    return r;
   };
   event.waitUntil((async () => {
     let sub = event.newSubscription || null;
     try {
       if (!sub) {
-        const { key } = await fetch('/api/me/push').then(json);
+        const { key } = await fetch('/api/me/push').then(check).then((r) => r.json());
         sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
       }
-      const { csrf } = await fetch('/api/me').then(json);
-      const r = await fetch('/api/me/push', { method: 'POST', body: JSON.stringify(sub.toJSON()),
-        headers: { 'content-type': 'application/json', 'x-studio-csrf': csrf } });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    } catch {
+      const { csrf } = await fetch('/api/me').then(check).then((r) => r.json());
+      check(await fetch('/api/me/push', { method: 'POST', body: JSON.stringify(sub.toJSON()),
+        headers: { 'content-type': 'application/json', 'x-studio-csrf': csrf } }));
+    } catch (err) {
+      if (err && err.status === 423) {
+        const windows = await self.clients.matchAll({ type: 'window' }).catch(() => []);
+        for (const w of windows) w.postMessage({ push: 'resync' });
+        return;
+      }
       if (sub) await sub.unsubscribe().catch(() => false);
     }
   })());

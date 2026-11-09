@@ -1,9 +1,12 @@
 """Chat links grant read access to one snapshot after a fresh, rate-limited PIN check."""
 import asyncio
+import dataclasses
+import json
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 
 import auth
 import chat_shares
@@ -263,9 +266,121 @@ def test_agent_snapshot_fetches_all_pages_and_is_readable_without_bridge(studio)
     assert unlock(studio, token).status_code == 404
 
 
+def _row(chat_id='chat'):
+    return state.DB.execute('SELECT * FROM chat_shares WHERE chat_id = ?', (chat_id,)).fetchone()
+
+
+def test_snapshot_is_encrypted_and_previous_code_reads_only_a_placeholder(studio):
+    """FINDINGS «Снимки ссылок … открытым текстом»: переписка — только шифром STUDIO_DATA_KEY; в прежнем столбце —
+    JSON-заглушка, которую прежний код (откат) отдаст вместо снимка, не упав."""
+    endpoint, _ = regular(studio)
+    _, token = create(studio, endpoint)
+    row = _row()
+    assert b'Private' not in row['sealed'] and 'Private' not in row['snapshot']
+    assert 'Private answer' in security.decrypt(row['sealed'])
+    old = json.loads(row['snapshot'])                      # как прежний unlock: {"access": …, **snapshot}
+    assert old == chat_shares.PLACEHOLDER and isinstance(old['messages'], list)
+    assert unlock(studio, token).json()['messages'][1]['text'] == '**Private answer**'
+
+
+def test_plaintext_snapshots_from_before_the_step_are_sealed_at_start(studio):
+    endpoint, _ = regular(studio)
+    _, token = create(studio, endpoint)
+    plain = json.dumps({'title': 'T', 'messages': [{'role': 'user', 'text': 'Old secret', 'attachments': []}]})
+    state.DB.execute('UPDATE chat_shares SET snapshot = ?, sealed = NULL', (plain,))   # так пишет прежний код
+    assert chat_shares.seal() == 1 and chat_shares.seal() == 0
+    row = _row()
+    assert 'Old secret' not in row['snapshot'] and 'Old secret' in security.decrypt(row['sealed'])
+    assert unlock(studio, token).json()['messages'][0]['text'] == 'Old secret'
+
+
+def test_changed_data_key_makes_links_unavailable_without_a_server_error(studio, monkeypatch):
+    endpoint, _ = regular(studio)
+    _, token = create(studio, endpoint)
+    monkeypatch.setattr(state, 'CFG', dataclasses.replace(state.CFG, data_key=Fernet.generate_key().decode()))
+    r = unlock(studio, token)
+    assert r.status_code == 404 and r.json()['detail']['code'] == 'share_gone'
+    assert state.DB.execute('SELECT count(*) FROM chat_share_visitors').fetchone()[0] == 0
+    out = studio.c.get(endpoint)
+    assert out.status_code == 200 and out.json()['enabled'] is True and out.json()['url'] is None
+    assert chat_shares.seal() == 0                         # нечитаемое не перешифровывается и не падает
+    assert studio.c.delete(endpoint).status_code == 204
+
+
+def test_reasoning_is_left_out_of_a_link_unless_the_owner_includes_it(studio):
+    endpoint, uid = regular(studio)
+    state.DB.execute("UPDATE messages SET reasoning = 'Private draft' WHERE id = 'chat-a'")
+    _, token = create(studio, endpoint)
+    assert 'Private draft' not in security.decrypt(_row()['sealed'])
+    assert unlock(studio, token).json()['messages'][1]['reasoning'] is None
+    r = studio.c.post(endpoint, json={'pin': '0123', 'reasoning': True})
+    token = urlsplit(r.json()['url']).fragment
+    assert unlock(studio, token).json()['messages'][1]['reasoning'] == 'Private draft'
+    # выгрузка (chat_exports) по-прежнему берёт полный снимок
+    assert chat_shares.regular_snapshot(uid, 'chat')[0]['messages'][1]['reasoning'] == 'Private draft'
+
+
+def test_link_lifetime_defaults_to_a_week_and_expired_links_are_deleted(studio):
+    endpoint, _ = regular(studio)
+    out, token = create(studio, endpoint)
+    assert out['expires'] == out['created'] + 7 * 86400
+    access = unlock(studio, token).json()['access']
+    for days in (2, 0, -1, '7', True):
+        assert studio.c.post(endpoint, json={'pin': '0123', 'days': days}).status_code == 422
+    studio.clock[0] += 7 * 86400 + 1
+    assert studio.c.post('/share/check', json={'access': access}).status_code == 404
+    assert unlock(studio, token).status_code == 404
+    assert state.DB.execute('SELECT count(*) FROM chat_shares').fetchone()[0] == 0
+    assert studio.c.get(endpoint).json() == {'enabled': False}
+    forever = studio.c.post(endpoint, json={'pin': '0123', 'days': None}).json()
+    assert forever['expires'] is None
+    studio.clock[0] += 3650 * 86400
+    assert unlock(studio, urlsplit(forever['url']).fragment).status_code == 200
+    signin(studio, 'owner')                                # сессия владельца за десять лет истекла
+    one =studio.c.post(endpoint, json={'pin': '0123', 'days': 1}).json()
+    assert one['expires'] == studio.clock[0] + 86400
+    assert studio.c.post(endpoint, json={'pin': '0123', 'days': 30}).json()['expires'] == studio.clock[0] + 30 * 86400
+
+
+def test_owner_sees_views_last_view_and_wrong_pins(studio):
+    endpoint, _ = regular(studio)
+    _, token = create(studio, endpoint)
+    out = studio.c.get(endpoint).json()
+    assert (out['views'], out['viewed'], out['fails']) == (0, None, 0)
+    assert unlock(studio, token, '9999').status_code == 403
+    studio.clock[0] += 5
+    assert unlock(studio, token).status_code == 200
+    out = studio.c.get(endpoint).json()
+    assert (out['views'], out['viewed'], out['fails']) == (1, studio.clock[0], 1)
+
+
+def test_wrong_pins_are_journaled_and_the_total_limit_revokes_the_link(studio, monkeypatch):
+    """FINDINGS «PIN из 4 цифр без общего предела попыток»: окно 15 минут не сбрасывает общий счёт — FAILS_MAX
+    неверных PIN отзывают ссылку, владельцу — уведомление без содержимого и `share_locked` в журнале."""
+    import push
+    endpoint, uid = regular(studio)
+    _, token = create(studio, endpoint)
+    sent = []
+    monkeypatch.setattr(push, 'notify_later', lambda *args, **kw: sent.append((args, kw)))
+    monkeypatch.setattr(chat_shares, 'FAILS_MAX', 7)
+    for n in range(7):
+        if n == chat_shares.PIN_FAILS:
+            studio.clock[0] += chat_shares.LOCK_SEC + 1   # пауза ссылки кончилась, общий счёт — нет
+        assert unlock(studio, token, '9999', **{'X-Forwarded-For': '198.51.100.7'}).status_code in (403, 404)
+    assert state.DB.execute('SELECT count(*) FROM chat_shares').fetchone()[0] == 0
+    assert unlock(studio, token).status_code == 404
+    rows = state.DB.execute("SELECT kind, detail, ip, count FROM security_events WHERE user_id = ? AND kind LIKE 'share_%'"
+                            " ORDER BY id", (uid,)).fetchall()
+    fails = [r for r in rows if r['kind'] == 'share_pin_fail']
+    assert len(fails) == 1 and (fails[0]['count'], fails[0]['ip']) == (7, '198.51.100.7')
+    assert [tuple(r)[:2] for r in rows if r['kind'] == 'share_locked'] == [('share_locked', 'pause'), ('share_locked', 'revoked')]
+    assert len(sent) == 1 and sent[0][0][0] == uid
+    assert 'Private' not in str(sent) and '0123' not in str(sent) and token not in str(sent)
+
+
 def test_share_schema_migration_keeps_original_chats_and_is_idempotent(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
+    conn.executescript(db.SCHEMA.removesuffix(db.SHARES_37).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'Keep',0,0)")
     db.migrate(conn)

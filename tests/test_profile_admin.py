@@ -68,7 +68,8 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["timezone"] == "Europe/Moscow"
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
-                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout"}
+                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset"}
+    assert me["password_reset"] is None
 
 
 def test_timezone_is_persisted_per_account_without_changing_other_preferences(studio):
