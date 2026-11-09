@@ -52,6 +52,16 @@ function show(host, item, choice, photo, onCreated) {
     el('label', { class: 'edit-brush' }, 'Размер кисти', brush), clear,
     el('p', { class: 'muted small' }, 'Закрасьте нужную часть фото пальцем или мышью. Пиксели вне выделения будут взяты из исходника без изменений.'));
   const error = el('p', { id: 'edit-error', class: 'error', role: 'alert' });
+  // как image_upload.normalize_image (рамка) и Image.thumbnail Pillow (сторона по соотношению): правка идёт
+  // по копии не больше 2048 по стороне и 2 Мп
+  const w = photo.naturalWidth, h = photo.naturalHeight, aspect = w / h;
+  const scale = Math.min(1, 2048 / w, 2048 / h, Math.sqrt(2 * 1024 * 1024 / (w * h)));
+  let x = Math.max(1, Math.floor(w * scale)), y = Math.max(1, Math.floor(h * scale));
+  const near = (n, err) => Math.max(1, err(Math.ceil(n)) < err(Math.floor(n)) ? Math.ceil(n) : Math.floor(n));
+  if (x / y >= aspect) x = near(y * aspect, (n) => Math.abs(aspect - n / y));
+  else y = near(x / aspect, (n) => (n === 0 ? 0 : Math.abs(aspect - x / n)));
+  const sizeTip = el('p', { id: 'edit-size-tip', class: 'muted small', hidden: scale >= 1 },
+    `Фото будет уменьшено до ${x}×${y}.`);
   const promptBox = fieldBox(prompt);
   const submit = button('Применить изменения', { class: 'btn btn-accent', id: 'edit-submit' });
   const dialog = openDialog(host, { id: 'editor', title: 'Изменить фотографию', actions: [submit], body: [
@@ -63,7 +73,7 @@ function show(host, item, choice, photo, onCreated) {
       : lustify
         ? 'Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.'
         : 'FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.'),
-    strengthLabel, seriesBox,
+    sizeTip, strengthLabel, seriesBox,
     el('label', { class: 'check', hidden: !gateway }, local, 'Изменить только выделенную область'),
     tools, error))] });
 

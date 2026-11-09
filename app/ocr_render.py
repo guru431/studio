@@ -11,7 +11,6 @@
 """
 import io
 import threading
-import warnings
 
 import pypdfium2
 import pypdfium2.raw as pdfium_c
@@ -134,12 +133,14 @@ def render_page(data: bytes, index: int) -> bytes:
 
 def check_photo(raw: bytes) -> str:
     """Только заголовок: PNG, JPEG или WebP (иначе 415) не больше VIDEO_PIXELS (иначе 413). Итог —
-    формат Pillow (PHOTO_FORMATS)."""
+    формат Pillow (PHOTO_FORMATS).
+
+    Без warnings.catch_warnings: фильтр предупреждений общий на процесс, а здесь поток — перекрывшиеся
+    вызовы оставили бы «ошибку» на весь процесс. Предел — проверка пикселей по заголовку ниже; предупреждение
+    Pillow (больше MAX_IMAGE_PIXELS) ловится, если фильтр «ошибка» всё же стоит (копия image_upload)."""
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as image:
-                fmt, pixels = image.format, image.width * image.height
+        with Image.open(io.BytesIO(raw)) as image:
+            fmt, pixels = image.format, image.width * image.height
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise ScanError(PHOTO_TOO_BIG, 413) from None
     except (UnidentifiedImageError, OSError, ValueError):
@@ -156,15 +157,13 @@ def photo_png(raw: bytes) -> bytes:
 
     Декодирование — как image_upload.normalize_image, но с пределом MAX_SIDE: тот ужимает до
     ~2 Мп для шлюза картинок, а распознаванию нужна страница в 2200 точек (спека, 6.2)."""
-    check_photo(raw)
+    check_photo(raw)                     # не больше VIDEO_PIXELS — предупреждения Pillow здесь не бывает
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as image:
-                if image.format == "JPEG":
-                    image.draft("RGB", (MAX_SIDE, MAX_SIDE))   # декодер сразу уменьшает в 2–8 раз
-                image.load()
-                image = ImageOps.exif_transpose(image).convert("RGB")
+        with Image.open(io.BytesIO(raw)) as image:
+            if image.format == "JPEG":
+                image.draft("RGB", (MAX_SIDE, MAX_SIDE))   # декодер сразу уменьшает в 2–8 раз
+            image.load()
+            image = ImageOps.exif_transpose(image).convert("RGB")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
         raise ScanError(NOT_PHOTO, 415) from None

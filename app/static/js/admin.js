@@ -340,7 +340,7 @@ function storageBlock() {
     refresh.disabled = true;
     note.textContent = '';
     try {
-      const { share, backup, pending } = await api('GET', '/api/admin/storage');
+      const { share, backup, pending, orphans } = await api('GET', '/api/admin/storage');
       const shareText = share.state === 'ok' ? `доступна, свободно ${sizeText(share.free)} из ${sizeText(share.total)}`
         : share.message;
       const backupText = backup.state === 'ok'
@@ -349,7 +349,10 @@ function storageBlock() {
       const [queue] = queueText(pending);
       list.replaceChildren(...line('share', 'Шара', shareText, share.state !== 'ok'),
         ...line('backup', 'Копия базы', backupText, backup.state !== 'ok' || backup.age > STALE_SEC),
-        ...line('queue', 'Удаление', queue, false));
+        ...line('queue', 'Удаление', queue, false),
+        ...line('orphans', 'Файлы без записи', !orphans ? 'проверки ещё не было'
+          : orphans.found === null ? `проверка пропущена ${momentText(orphans.at)}: база новее кода`
+            : `${momentText(orphans.at)}: удалено — ${orphans.found}`, orphans && orphans.found === null));
     } catch (err) {
       note.textContent = words(err);
     } finally {
