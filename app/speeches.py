@@ -28,6 +28,7 @@ import audio
 import clock
 import connections
 import db
+import documents
 import media
 import operations
 import push
@@ -306,7 +307,7 @@ async def stop() -> None:
 async def create(body: SpeechIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    text = body.text.strip()
+    text = documents.nfc(body.text).strip()           # текст идёт в поиск (search_speeches_*), как у документов
     if not text or len(text) > TEXT_MAX:
         raise HTTPException(422, {"code": "text", "message": f"текст — от 1 до {TEXT_MAX} знаков"})
     conn, model = sections.resolve(uid, "speech", body.connection_id, body.model)

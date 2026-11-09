@@ -177,6 +177,16 @@ def test_too_big_or_unknown_upload_leaves_nothing(studio, env, fake_audio, monke
     assert files(env) == before and not list((env.db_path.parent / "tmp").iterdir())
 
 
+def test_name_and_speech_text_are_found_by_search_in_nfc(studio, fake_audio):
+    """Имя из архива macOS (NFD: «и» + U+0306) — в NFC: поиск по составному «й» его находит."""
+    add_gateway(studio)
+    decomposed = "Чаи\u0306ковскии\u0306.m4a"
+    r = upload(studio, name=decomposed)
+    assert r.json()["name"] == "Чайковский.m4a"
+    found = studio.c.post("/api/search", json={"q": "Чайковский"}).json()
+    assert any(i.get("section") == "transcribe" for i in found["items"]), found
+
+
 def test_type_comes_from_the_name_when_the_browser_gives_none(studio, fake_audio):
     add_gateway(studio)
     r = upload(studio, name="call.mp3", mime="application/octet-stream")
@@ -362,8 +372,8 @@ def test_edit_is_checked_in_words(studio, fake_audio):
                  {"texts": {"0": "я" * (len("Здравствуйте.") + transcripts.EDIT_TEXT_MAX + 1)}},
                  {"texts": {"0": "\n\x0b\t"}}, {"names": {"Собеседник 3": "x"}},
                  {"names": {"Собеседник 1": "Иван\nПетров"}}, {"names": {"Собеседник 1": " "}},
-                 {"names": {"Собеседник 1": "Ив\x0bан"}}, {"names": {"Собеседник 1": "Иван Петров"}},
-                 {"names": {"Собеседник 1": "Иван Петров"}},
+                 {"names": {"Собеседник 1": "Ив\x0bан"}}, {"names": {"Собеседник 1": "Иван\u2028Петров"}},
+                 {"names": {"Собеседник 1": "Иван\u2029Петров"}},
                  {"names": {"Собеседник 1": "я" * (transcripts.NAME_EDIT_MAX + 1)}}):
         r = edit(studio, tid, **body)
         assert r.status_code == 422 and r.json()["detail"]["code"] == "input", body

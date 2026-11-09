@@ -382,7 +382,8 @@ def start_backfill() -> asyncio.Task:
 # ---- API -------------------------------------------------------------------
 
 def _name(raw: str) -> str:
-    name = unquote(raw or "").strip().replace("\x00", "")[:NAME_MAX]
+    # NFC: имя идёт в поиск (search_transcripts_*), разложенное «й» из архива macOS иначе не находилось бы
+    name = documents.nfc(unquote(raw or "")).strip().replace("\x00", "")[:NAME_MAX]
     return name or "запись"
 
 
