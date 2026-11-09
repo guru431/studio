@@ -192,7 +192,8 @@ def test_avatar_menu_and_logout(browser, live, width):
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     items = r["values"]["items"]
-    assert items[0] in THEME_WORDS and items[1:] == ["Настройки", "Панель", "Выход"] and r["values"]["inside"]
+    assert items[0] in THEME_WORDS and items[1:] == ["Нижняя панель", "Настройки", "Панель", "Выход"]
+    assert r["values"]["inside"]
     assert not problems(r), problems(r)
 
 
@@ -417,7 +418,8 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
         width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["kinds"] == ["OpenAI-совместимый", "Шлюз srvllm"]
+    assert v["kinds"] == ["OpenAI-совместимый", "Шлюз srvllm", "Шлюз s06 · Qwen, WhisperX, PaddleOCR",
+                          "Cleaner · защита данных"]
     assert "/v1" in v["placeholder"]
     assert v["link"] == ["Облако", live.cloud.base_url, "из браузера"] and v["chatBefore"] is False
     assert v["default"] == [True, "cloud-chat", True] and not v["overflow"]
@@ -7151,7 +7153,8 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     assert v["label"] == "Push на этом устройстве"
     assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода"
                          " Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий."
-                         " Идут через серверы Apple или Google — содержимое зашифровано, но факт и время им видны."
+                         " Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано,"
+                         " но факт и время им видны."
                          " На iPhone — только у студии, добавленной на экран «Домой».")
     assert v["before"] is False and v["status"] == "Push включён на этом устройстве" and v["fits"] is True
     assert v["calls"] == [["subscribe", True, v["server"]["key"]]] and v["server"]["subscribed"] is True
