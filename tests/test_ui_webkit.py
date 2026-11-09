@@ -1,6 +1,7 @@
 """Раздел «Код» в WebKit: касания и геометрия iPhone, не только узкое окно Chromium."""
 
 import hashlib
+import threading
 from pathlib import Path
 
 import httpx
@@ -358,7 +359,7 @@ def test_project_opens_by_tapping_empty_area_of_either_line(iphone):
 
 
 @pytest.mark.parametrize("iphone", [(320, 740), (393, 852), (852, 393)], indirect=True)
-def test_git_popup_fits_and_respects_busy_chat(iphone, tmp_path):
+def test_git_popup_fits_and_respects_busy_chat(iphone, tmp_path, monkeypatch):
     page, aid = iphone
     machine = page.studio_machine
     base = page.url.split('/#')[0] + f"/#/code/{aid}/{pid('alpha')}"
@@ -374,9 +375,26 @@ def test_git_popup_fits_and_respects_busy_chat(iphone, tmp_path):
     for button in buttons.all():
         pw.expect(button).to_be_enabled()
     machine.script = [{"k": "text", "text": "Готово"}, {"k": "done", "status": "done"}]
-    page.locator('#code-git-commit').tap()
+    turn_arrived, accept_turn = threading.Event(), threading.Event()
+    handle = machine.handle
+
+    def delayed_turn(req):
+        if req['op'] == 'turn':
+            turn_arrived.set()
+            assert accept_turn.wait(10), 'тест не разрешил приём хода'
+        return handle(req)
+
+    monkeypatch.setattr(machine, 'handle', delayed_turn)
+    try:
+        page.locator('#code-git-commit').tap()
+        pw.expect(page.locator('#code-feed .code-msg.user')).to_have_count(1)
+        assert turn_arrived.wait(5), 'ход не дошёл до моста'
+        assert not [r for r in machine.requests if r['op'] == 'turn']
+    finally:
+        accept_turn.set()
+    wait_for(lambda: len([r for r in machine.requests if r['op'] == 'turn']) == 1)
+    pw.expect(page.locator('#code-feed')).to_contain_text('Готово')
     page.locator('#code-chat[data-loaded="1"][data-running="0"]').wait_for()
-    pw.expect(page.locator('#code-feed .code-msg.user')).to_have_count(1)
     [first] = [r for r in machine.requests if r['op'] == 'turn']
     assert first['chat'] not in (CODE_CHAT_A, CODE_CHAT_B) and first['project'] == pid('alpha')
     machine.script = [{"k": "text", "text": "В работе"}]

@@ -107,12 +107,12 @@ def test_new_tab_session_history_starts_at_top_after_long_chat(browser, live, wi
     })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("eval", "longChat", "document.querySelector('#view').scrollTop > 1000"),
+            ("eval", "longChat", "document.querySelector('#code-chat-scroll').scrollTop > 1000"),
             ("eval", "add", "document.querySelector('#code-tab-add').click(); true"),
             ("wait", "document.querySelectorAll('#code-tab-menu li[data-chat]').length === 60"),
             ("eval", "top", top),
             *code_tab_click(CODE_CHAT_A),
-            ("eval", "chatBottom", """(() => { const view = document.querySelector('#view');
+            ("eval", "chatBottom", """(() => { const view = document.querySelector('#code-chat-scroll');
               return view.scrollHeight - view.clientHeight - view.scrollTop < 2; })()"""),
             ("eval", "addAgain", "document.querySelector('#code-tab-add').click(); true"),
             ("wait", "document.querySelector('#code-chats')?.getAttribute('aria-busy') === 'false'"),
@@ -394,17 +394,29 @@ def test_session_picker_uses_cached_titles_and_search_while_refreshing(browser, 
     assert not problems(result), problems(result)
 
 
-def test_locked_reload_needs_only_one_lock_state_request(browser, live):
+@pytest.mark.parametrize("embedded_state", [True, False], ids=["embedded", "fallback"])
+def test_locked_reload_uses_initial_state_without_duplicate_requests(browser, live, monkeypatch, embedded_state):
+    import auth
     from test_ui_browser import LOCK_OPEN, PIN_SHOWN, PHONE, known_refusals, phone_with_pin, pin_locked, tap
 
-    login = "pin-start-once"
+    if not embedded_state:
+        render_page = auth.page
+
+        def without_lock_state(*args, **kwargs):
+            return render_page(*args, **kwargs).replace('data-lock-state="{{lock_state}}"', '')
+
+        monkeypatch.setattr(auth, "page", without_lock_state)
+    login = "pin-start-once-embedded" if embedded_state else "pin-start-once-fallback"
     live.add_user(login)
+    expected_reads = 0 if embedded_state else 1
     gate = """(() => { const real = window.fetch; window.lockReads = 0; window.blockLockReads=true;
       window.fetch = (url, options) => {
-        if (new URL(String(url),location.href).pathname === '/api/lock' && ++window.lockReads > 1 && window.blockLockReads
-          && performance.getEntriesByType('navigation')[0]?.type === 'reload') return new Promise(() => {});
+        if (new URL(String(url),location.href).pathname === '/api/lock'
+          && performance.getEntriesByType('navigation')[0]?.type === 'reload'
+          && ++window.lockReads > EXPECTED_READS && window.blockLockReads) return new Promise(() => {});
         return real(url, options);
       }; return true; })()"""
+    gate = gate.replace("EXPECTED_READS", str(expected_reads))
     result = browser.drive(live.url + "/", [*phone_with_pin(login), *pin_locked(),
         ("eval", "reload", "location.reload(); true"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN} && {PIN_SHOWN}"),
@@ -412,7 +424,7 @@ def test_locked_reload_needs_only_one_lock_state_request(browser, live):
         *tap("2580"), ("click", "#lock-pin-ok"),
         ("wait", f"!{LOCK_OPEN} && {READY}")], init=gate, **PHONE)
     assert not result.get("failed"), result
-    assert result["values"]["reads"] == 1
+    assert result["values"]["reads"] == expected_reads
     assert not known_refusals(problems(result), 423), problems(result)
 
 

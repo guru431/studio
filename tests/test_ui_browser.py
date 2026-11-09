@@ -5586,14 +5586,17 @@ def test_start_without_the_profile_opens_without_a_reload(browser, live, way):
 
 
 def test_cold_start_mark_takes_the_csrf_first(browser, live):
-    """Холодный старт без связи (GET /api/lock и профиль упали), возвращение на экран: отметка берёт CSRF
-    из GET /api/lock и доходит до сервера, а не получает 403; студия открывается тем же возвращением."""
+    """Холодный старт без профиля и возвращение: отметки получают CSRF из HTML или GET /api/lock
+    и доходят до сервера без 403; студия открывается тем же возвращением."""
     login = "mark-cold"
     live.add_user(login)
     r = browser.drive(live.url + "/", [*cold_start_offline(login), show(), ("wait", f"window.marks.length > 0 && {READY}"),
         ("eval", "marks", "window.marks")], init=FAIL_GETS)
     assert not r.get("failed"), r
-    assert r["values"]["marks"] == [200]
+    # Старт со снимком HTML и возвращение вкладки могут отправить по отметке;
+    # каждая должна получить CSRF до отправки, независимо от их числа.
+    marks = r["values"]["marks"]
+    assert marks and all(status == 200 for status in marks), marks
     assert not problems(r), problems(r)
 
 
