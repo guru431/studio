@@ -199,14 +199,17 @@ async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
     return content.strip()
 
 
-async def release(conn) -> bool:
+async def release(conn, busy=None) -> bool:
     """Освобождение слота ocr: `POST /pages/ocr-release {}`. 409 — slot-gate ещё считает страницу
     (свою или чужую): повтор через RETRY_SEC до RELEASE_RETRIES раз. Ошибки — в журнал, не наружу.
+    `busy()` истинна после паузы — слот взял новый документ: повтора нет (освободил бы его посреди страниц).
     Итог — снимать ли запись LEASED: True — слот освобождён или этим снимком его не освободить никогда
     (адрес убран из списка, подключение сменилось или удалено — аренда кончится сама); False — повторить потом."""
     if conn.kind != "srvllm":
         return True
     for attempt in range(RELEASE_RETRIES + 1):
+        if attempt and busy is not None and busy():
+            return False
         try:
             r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr-release",
                                        timeout=RELEASE_TIMEOUT_SEC, json={})
@@ -476,7 +479,7 @@ async def _settle() -> None:
     for url, conn in list(LEASED.items()):
         if _scanning():                              # начался документ — слот его
             return
-        if await release(conn) and LEASED.get(url) is conn and not _scanning():
+        if await release(conn, _scanning) and LEASED.get(url) is conn and not _scanning():
             del LEASED[url]
 
 

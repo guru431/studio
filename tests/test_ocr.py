@@ -397,6 +397,39 @@ def test_release_keeps_the_lease_of_a_document_started_meanwhile(studio):
     assert ocr_releases(studio) == 2 and ocr.LEASED == {}
 
 
+def test_release_retry_stops_when_a_document_starts_meanwhile(studio, monkeypatch):
+    """409 release конца документа Алисы, пауза перед повтором — за неё в студии появился документ Боба:
+    повтора нет (он освободил бы слот посреди нового документа), запись LEASED — концу документа Боба."""
+    uid, conn = gateway_user(studio)
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    uid_b, conn_b = gateway_user(studio)
+    codes = [409, 200]
+
+    async def release(request):
+        studio.gw.releases.append((None, request.headers.get("authorization")))
+        return httpx.Response(codes.pop(0), json={})
+    studio.gw.on["/pages/ocr-release"] = release
+    real, started = clock.SLEEP, []
+
+    async def pause(seconds):
+        if seconds == ocr.RETRY_SEC and not started:
+            source = await media.save_async(uid_b, scan_pdf("ink"), "application/pdf", NAME)
+            started.append(ocr.create(uid_b, conn_b, "hunyuan-ocr", NAME, origin="section", source_media_id=source,
+                                      pages=[{"n": 1, "state": "waiting", "media_id": None, "text": None}]))
+        await real(seconds)
+    monkeypatch.setattr(clock, "SLEEP", pause)
+    assert wait_scan(studio, pdf_scan(studio, uid, conn, "ink"))["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS and started)
+    assert ocr_releases(studio) == 1 and ocr.LEASED != {}
+    on_loop(studio, ocr.kick, uid_b)
+    assert wait_scan(studio, started[0])["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert ocr_releases(studio) == 2 and ocr.LEASED == {}
+    assert [p for p in paths(studio) if p.startswith("/pages/")] == [
+        "/pages/ocr", "/pages/ocr-release", "/pages/ocr", "/pages/ocr-release"]
+
+
 def test_queue_runs_one_at_a_time_and_caps_at_five(studio):
     uid, conn = gateway_user(studio)
     studio.gw.ocr_hold = True
