@@ -186,6 +186,9 @@ def test_context_deletion_retries_with_original_address_and_credential(protected
     remote.down = False
     studio.c.delete(f"/api/connections/{remote.conn_id}")
     studio.c.portal.call(cleaner.purge)
+    assert not remote.deleted                       # сбой отложил повтор
+    studio.clock[0] += cleaner.RETRY_MAX_SEC
+    studio.c.portal.call(cleaner.purge)
     assert remote.deleted[0][0].startswith("http://10.77.1.15:4000/api/v1/chats/")
     assert remote.deleted[0][1] == "Bearer ck_synthetic"
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions").fetchone()[0] == 0
@@ -211,6 +214,74 @@ def test_revoked_cleanup_key_is_backed_off_and_pending_is_visible(protected):
     studio.c.portal.call(cleaner.purge)
     assert len(remote.deleted) == 1
     assert studio.c.get("/api/me/storage").json()["cleaner_pending"] == 1
+
+
+def queue_deletion(uid, base_url, queued, token="ck_synthetic", n=1):
+    import security
+    for i in range(n):
+        state.DB.execute("INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued)"
+                         " VALUES (?, ?, ?, ?, ?, ?)", (f"{base_url}-{queued}-{i}", uid, f"r{i}", base_url,
+                                                       token if isinstance(token, bytes) else security.encrypt(token),
+                                                       queued + i))
+
+
+def test_unreachable_address_does_not_hold_the_head_of_the_deletion_queue(protected, monkeypatch):
+    """Находка 2026-11-09: десять старейших строк недоступного адреса навсегда стояли в голове очереди."""
+    studio, remote = protected
+    state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",
+                     (json.dumps(["10.77.1.15:4000", "10.77.1.16:4000"]),))
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.host)
+        if request.url.host == "10.77.1.16":
+            raise httpx.ConnectError("offline")
+        return httpx.Response(204)
+
+    monkeypatch.setattr(state.HTTP._transport, "handler", handler)
+    now = studio.clock[0]
+    queue_deletion(remote.uid, "http://10.77.1.16:4000", now - 600, n=10)
+    queue_deletion(remote.uid, "http://10.77.1.15:4000", now - 100)
+    studio.c.portal.call(cleaner.purge)
+    assert calls == ["10.77.1.16", "10.77.1.15"]      # один запрос на недоступный адрес за проход
+    left = state.DB.execute("SELECT base_url, retry_at FROM cleaner_deletions").fetchall()
+    assert {r["base_url"] for r in left} == {"http://10.77.1.16:4000"} and len(left) == 10
+    assert all(r["retry_at"] == now + 600 for r in left)  # пауза — сколько ждёт старейшая строка
+    studio.c.portal.call(cleaner.purge)
+    assert len(calls) == 2
+    studio.clock[0] = now + 601
+    studio.c.portal.call(cleaner.purge)
+    assert len(calls) == 3
+    pause = state.DB.execute("SELECT MIN(retry_at) FROM cleaner_deletions").fetchone()[0] - studio.clock[0]
+    assert pause == 1201                                 # пауза растёт вместе с ожиданием
+    stalled = studio.c.get("/api/me/storage").json()
+    assert stalled["cleaner_pending"] == 10
+    assert stalled["cleaner_stalled"] == [{"base_url": "http://10.77.1.16:4000", "count": 10}]
+
+
+def test_unlisted_address_and_undecryptable_key_are_postponed_for_a_day(protected, monkeypatch):
+    studio, remote = protected
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.host)
+        return httpx.Response(204)
+
+    monkeypatch.setattr(state.HTTP._transport, "handler", handler)
+    now = studio.clock[0]
+    queue_deletion(remote.uid, "http://10.77.1.99:4000", now - 10, n=3)       # убран из списка
+    queue_deletion(remote.uid, "http://10.77.1.15:4000", now - 5, token=b"not-a-fernet-token")
+    make_user(studio, "other")
+    other = state.DB.execute("SELECT id FROM users WHERE login = 'other'").fetchone()[0]
+    queue_deletion(other, "http://10.77.1.98:4000", now - 1)
+    studio.c.portal.call(cleaner.purge)
+    assert calls == []
+    rows = state.DB.execute("SELECT user_id, retry_at FROM cleaner_deletions").fetchall()
+    assert len(rows) == 5 and all(r["retry_at"] == now + cleaner.REFUSED_SEC for r in rows)
+    shown = studio.c.get("/api/me/storage").json()
+    assert shown["cleaner_pending"] == 4                 # чужая строка не считается и адрес не виден
+    assert shown["cleaner_stalled"] == [{"base_url": "http://10.77.1.15:4000", "count": 1},
+                                        {"base_url": "http://10.77.1.99:4000", "count": 3}]
 
 
 def test_connection_requires_server_route_and_cannot_expose_browser_token(protected):

@@ -217,28 +217,79 @@ async def redact(conn, resource, item_id, text):
     return result["sanitized"]
 
 
+#: Удалений за проход. Строки берутся с запасом: строки отложенного в этом проходе адреса запросов не тратят.
+PURGE_CALLS = 10
+PURGE_ROWS = 100
+#: Повтор после сбоя — через столько, сколько удаление уже ждёт (повторы удваивают паузу), в этих пределах;
+#: счётчика попыток в схеме нет.
+RETRY_MIN_SEC = 60
+RETRY_MAX_SEC = 3600
+#: Адрес убран из списка администратора или копия ключа не расшифровывается (сменён `STUDIO_DATA_KEY`):
+#: сам не пройдёт — раз в сутки.
+REFUSED_SEC = 86400
+
+
+def _pause(row) -> float:
+    return min(max(clock.NOW() - row["queued"], RETRY_MIN_SEC), RETRY_MAX_SEC)
+
+
 async def purge():
-    rows = state.DB.execute("SELECT * FROM cleaner_deletions WHERE retry_at <= ? ORDER BY queued LIMIT 10",
-                            (clock.NOW(),)).fetchall()
+    """Любая неудача откладывает строку (`retry_at`), так что недоступный адрес не держит голову очереди;
+    сбой сети, отказ списка и 401/403/429 откладывают весь адрес, и прочие его строки в проходе не запрашиваются."""
+    rows = state.DB.execute("SELECT * FROM cleaner_deletions WHERE retry_at <= ? ORDER BY queued LIMIT ?",
+                            (clock.NOW(), PURGE_ROWS)).fetchall()
+    postponed, calls = set(), 0
+
+    def later(row, seconds, whole_address=False):
+        if whole_address:
+            postponed.add(row["base_url"])
+            state.DB.execute("UPDATE cleaner_deletions SET retry_at = ? WHERE base_url = ? AND retry_at <= ?",
+                             (clock.NOW() + seconds, row["base_url"], clock.NOW()))
+        else:
+            state.DB.execute("UPDATE cleaner_deletions SET retry_at = ? WHERE id = ?", (clock.NOW() + seconds, row["id"]))
+
     for row in rows:
+        if row["base_url"] in postponed:
+            continue
+        if calls >= PURGE_CALLS:
+            break
         conn = connections.Connection(0, row["user_id"], "Cleaner", "openai", row["base_url"], frozenset(), True,
                                       server_only=True, cleaner=True)
         try:
+            token = security.decrypt(row["token_enc"])
+        except (InvalidToken, ValueError):
+            later(row, REFUSED_SEC)
+            continue
+        calls += 1
+        try:
             response = await upstream.request(
                 conn, "DELETE", f'{row["base_url"]}/api/v1/chats/{row["remote_id"]}', keyless=True,
-                headers={"Authorization": f'Bearer {security.decrypt(row["token_enc"])}'},
-                timeout=httpx.Timeout(10),
+                headers={"Authorization": f"Bearer {token}"}, timeout=httpx.Timeout(10),
             )
-            if response.status_code in (204, 404):
-                state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
-            elif response.status_code in (401, 403, 429):
-                # Cleaner throttles bad keys by source address. Do not lock out active Studio users
-                # by repeatedly retrying revoked cleanup credentials on the same host.
-                state.DB.execute("UPDATE cleaner_deletions SET retry_at = ? WHERE base_url = ?",
-                                 (clock.NOW() + 3600, row["base_url"]))
-                break
-        except (httpx.HTTPError, upstream.UpstreamRefused, ValueError, InvalidToken):
+        except upstream.UpstreamRefused:
+            later(row, REFUSED_SEC, whole_address=True)
             continue
+        except httpx.HTTPError:
+            later(row, _pause(row), whole_address=True)
+            continue
+        except ValueError:
+            later(row, _pause(row))
+            continue
+        if response.status_code in (204, 404):
+            state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
+        elif response.status_code in (401, 403, 429):
+            # Cleaner throttles bad keys by source address. Do not lock out active Studio users
+            # by repeatedly retrying revoked cleanup credentials on the same host.
+            later(row, 3600, whole_address=True)
+        else:
+            later(row, _pause(row))
+
+
+def stalled(user_id: int) -> list[dict]:
+    """Свои отложенные после неудачи удаления по адресам — для «Хранилища»; чужие строки не считаются."""
+    return [{"base_url": r["base_url"], "count": r["n"]} for r in state.DB.execute(
+        "SELECT base_url, COUNT(*) AS n FROM cleaner_deletions WHERE user_id = ? AND retry_at > ?"
+        " GROUP BY base_url ORDER BY base_url", (user_id, clock.NOW()))]
 
 
 async def sweep():

@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 import auth
+import cleaner_client
 import code_actions
 import history
 import media
@@ -225,6 +226,7 @@ async def get_storage(request: Request):
     pending = state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions WHERE user_id = ?", (uid,)).fetchone()[0]
     if pending:
         result["cleaner_pending"] = pending
+        result["cleaner_stalled"] = cleaner_client.stalled(uid)
     return result
 
 
