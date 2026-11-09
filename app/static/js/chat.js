@@ -916,7 +916,19 @@ function build(view, ctx) {
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
-        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null);
+        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null,
+      // скан вложения кончился с нераспознанными страницами: тот же документ — снова в очередь, текст — его итог
+      a.rescan ? button('Распознать заново', { class: 'btn btn-sm att-rescan' }, async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await api('POST', `/api/attachments/${encodeURIComponent(a.id)}/ocr`);
+          kick();
+          notice.textContent = '';
+        } catch (err) {
+          notice.textContent = words(err);
+        }
+        reload();
+      }) : null);
   }
 
   function messageNode(m, last) {
@@ -1554,7 +1566,8 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(false);
     loadList();
-    if (job.lost || job.tooled) reload();          // источники ответа — с сервера
+    // источники ответа и после ошибки — «Распознать заново» у вложений: с сервера
+    if (job.lost || job.tooled || job.message.status === 'error') reload();
   }
 
   /* события */
