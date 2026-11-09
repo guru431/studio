@@ -18,6 +18,10 @@
   `bridge._online`: `("online", None)` наблюдателям компьютера, только при подключении без прежнего канала;
   `claude_code._events` завершает им поток; страница по `online` сразу грузит историю и live.
 - `claude_code.own_agent`: 404 несёт `computer: true` — страница отличает пропавший компьютер от `not_found` файла.
+- `POST /api/code/agents/{aid}/projects/{pid}/seen {items: [{chat, attention}]}` (1–200 элементов;
+  `claude_code.project_seen`, модели `claude_code.ProjectSeen` / `claude_code.ChatMark`) — «Отметить прочитанными»
+  проекта: проверки как у `chat_seen` (свой компьютер, живой PIN, CSRF), снимаются только переданные ревизии этого
+  проекта.
 - Вопрос/разрешение субагента: в `ask` и `snapshot.asks` необязательное `subtask` (≤ 200 знаков); сервер поле
   пропускает, страница пишет «Подзадача · <имя>».
 
@@ -122,7 +126,9 @@
   `jobs.js` не показывает локальное уведомление. Переключатель — «Push на этом устройстве»; схема базы прежняя.
   Рабочее место (спека 2026-10-29-studio-code-workspace, шаг схемы 20 `db.CODE_20`) — `workspace`:
   `GET /api/code/workspace` — документ `{panel, place {aid, pid, view}, projects [{aid, pid, tabs, active}]}`
-  (проекты по убыванию `touched`), `PATCH` — одно действие `{op: open|close|place|panel, aid, pid?, chat?, view?}`
+  (проекты по убыванию `touched`), `PATCH` — одно действие `{op: open|close|place|panel|move, aid, pid?, chat?, view?,
+  index?}` (`move` — `workspace.Action`, `workspace._move`: `index` 0…`TABS_MAX`−1, дальше конца — в конец; активная,
+  вид, `touched` и порядок проектов не меняются; вкладки нет — ничего; `code-workspace.js::apply` повторяет то же)
   одной транзакцией к тому, что в базе (не документ целиком: устаревшее устройство не затирает чужие вкладки и не
   возвращает стёртое), ответ — новый документ; таблицы `code_tabs` (вкладки проекта JSON-списком UUID, активная,
   `touched`; каскад от `agents`) и `code_place` (компьютер панели, открытый проект и вид; отзыв компьютера — `NULL`,

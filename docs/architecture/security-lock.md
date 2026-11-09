@@ -78,7 +78,7 @@
 - Сброс пароля администратором: `users.password_reset` + событие `password_reset` в журнал владельца (без адреса
   администратора); `GET /api/me.password_reset` — после входа владелец один раз видит окно «Открыть «Безопасность»»;
   закрытие снимает флаг (`DELETE /api/me/password-reset`), аварийный выход — тоже. Администратор флага не видит.
-- Страница — `account-security.js`: `sessionsBlock`, `emergencyBlock`, `securityEventsBlock` в «Настройки → Прочее»
+- Страница — `account-security.js`: `sessionsBlock`, `emergencyBlock`, `securityEventsBlock` в «Настройки → Защита»
   после блокировки.
 
 ## Ловушки

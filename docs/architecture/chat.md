@@ -55,7 +55,7 @@
 (страница — `web.public`, без текста для модели; выгрузка — целиком), в следующих ходах — блоками `<web>`
 `history_block` в сообщении пользователя, без ролей `tool`; ключ — `users.exa_key` шифром, `PUT/DELETE
 /api/me/exa-key` в `profile`, `verify-backup` считает `exa_keys`; ход, что даст модели Exa при расшифровке в истории
-новее `chats.web_consent`, — 409 `external_web` без `web_ok`; страница — `chat.js`, ключ — «Прочее» → «Интернет» в
+новее `chats.web_consent`, — 409 `external_web` без `web_ok`; страница — `chat.js`, ключ — «Ввод и интернет» → «Интернет» в
 `settings.js`.
 
 Правила адресов Exa и YouTube (исключение из списка разрешённых):
