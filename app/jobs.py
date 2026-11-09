@@ -50,14 +50,19 @@ def _item(section: str, row, title: str, detail: str, href: str) -> dict:
     return out
 
 
-def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*") -> tuple[list, list]:
-    """Идущие и готовые после `after` строки таблицы истории пользователя."""
+def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*",
+          hidden: tuple[str, tuple] = ("", ())) -> tuple[list, list]:
+    """Идущие и готовые после `after` строки таблицы истории пользователя; `hidden` — подзапрос id, которых
+    не показывать, и его аргументы (`lock_policy.hidden_scans`)."""
+    sub, sub_args = hidden
+    skip = f" AND id NOT IN ({sub})" if sub else ""
     marks = ", ".join("?" * len(running))
-    going = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({marks})"
-                             " ORDER BY created DESC", (uid, *running)).fetchall()
+    going = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({marks}){skip}"
+                             " ORDER BY created DESC", (uid, *running, *sub_args)).fetchall()
     ends = ", ".join("?" * len(TERMINAL))
     done = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({ends}) AND finished >= ?"
-                            " ORDER BY finished DESC LIMIT ?", (uid, *TERMINAL, after, FINISHED_MAX)).fetchall()
+                            f"{skip} ORDER BY finished DESC LIMIT ?",
+                            (uid, *TERMINAL, after, *sub_args, FINISHED_MAX)).fetchall()
     return going, done
 
 
@@ -97,8 +102,9 @@ def _transcribe(uid: int, after: float) -> list:
     return out
 
 
-def _ocr(uid: int, after: float) -> list:
-    going, done = _rows("scans", uid, ocr.RUNNING, after)
+def _ocr(uid: int, after: float, hidden: set) -> list:
+    # сканы закрытых чата и перевода — одним подзапросом, как у ленты «Сканов» и поиска (опрос частый)
+    going, done = _rows("scans", uid, ocr.RUNNING, after, hidden=lock_policy.hidden_scans(uid, hidden))
     out = []
     for row in going + done:
         job = ocr.JOBS.get(row["id"])
@@ -153,10 +159,9 @@ async def list_jobs(request: Request, since: "float | None" = None):
     uid, now = request.state.user.id, clock.NOW()
     after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
     hidden = lock_policy.hidden(request.state.digest)
-    items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after)
+    items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after, hidden)
              + _translate(uid, after) + _speech(uid, after))
-    items = [i for i in items if i["section"] not in hidden
-             and not (i["section"] == "ocr" and hidden and lock_policy.scan_sections(uid, i["id"]) & hidden)]
+    items = [i for i in items if i["section"] not in hidden]
     running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)
     subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ? UNION ALL"
