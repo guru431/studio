@@ -892,7 +892,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         *go("settings/other"), ("wait", "document.querySelector('#export-open')"),
         ("click", "#export-open"), ("wait", is_open("#export-dialog")),
         ("eval", "boxes", f"{boxes}.map((b) => [b.value, b.checked])"),
-        ("eval", "labels", f"{boxes}.slice(-2).map((b) => b.closest('label').textContent)"),
+        ("eval", "labels", f"{boxes}.slice(-3).map((b) => b.closest('label').textContent)"),
         ("eval", "none", f"{boxes}.forEach((b) => {{ b.checked = false; }})"),
         ("click", "#export-prepare"), ("wait", "document.querySelector('#export-error').textContent"),
         ("eval", "empty", "document.querySelector('#export-error').textContent"),
@@ -906,8 +906,8 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
-                                              "translate", "code", "agents")]
-    assert v["labels"] == ["Агенты: чаты", "Агенты: подключения"]
+                                              "translate", "code", "agents", "security")]
+    assert v["labels"] == ["Агенты: чаты", "Агенты: подключения", "Журнал безопасности"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
