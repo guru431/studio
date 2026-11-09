@@ -970,7 +970,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
                                               "translate", "code", "agents", "security")]
     assert v["labels"] == ["Агенты: чаты", "Агенты: подключения", "Журнал безопасности"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
@@ -8588,6 +8588,8 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
             ("click", "#code-more"), ("wait", f"{count} === 42"), ("eval", "first2", first),
             ("eval", "shown2", "!document.querySelector('#code-more').hidden"),
             *remaining, ("eval", "first3", first),
+            # кнопка прячется после отрисовки последней страницы — кадром позже подсчёта сообщений
+            ("wait", "document.querySelector('#code-more').hidden"),
             ("eval", "shown3", "!document.querySelector('#code-more').hidden")], width=320, mobile=True)
     finally:
         sb.stop()

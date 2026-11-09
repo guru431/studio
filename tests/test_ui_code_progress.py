@@ -236,7 +236,9 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             assert page.locator('.code-step[open]').count() == 0
             page.reload()
             page.locator('#code-chat[data-loaded="1"]').wait_for()
-            assert changed.locator('.code-changed-count').inner_text() == '≥1'
+            # после перезагрузки счёт сперва из истории, затем — из живого снимка хода (неполный список — «≥»)
+            page.wait_for_function("() => document.querySelector('#code-changed-files .code-changed-count')"
+                                   "?.textContent === '≥1'")
             page.locator('.code-step[data-id="cmd"]').wait_for()
             assert page.locator('.code-step[open]').count() == 0
             page.locator('.code-step[data-id="cmd"] summary').click()
