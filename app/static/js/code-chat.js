@@ -45,6 +45,7 @@ import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
 import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
+import { shareMenu } from './chat-share.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -226,6 +227,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const actions = el('div', { class: 'code-chat-actions' });
+  const sharing = shareMenu(host, { id: 'code-share-chat', request: api, failed: (err) => {
+    if (err.code === 'closed') closed();
+    else showStatus(words(err));
+  } });
+  sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: endpoint('/share'), export: endpoint('/export') });
+  actions.append(sharing.button);
   const statusBar = el('div', { class: 'code-status-bar' }, activity, actions,
     changedFiles.button, context.cacheButton, contextBox, usage.button);
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
@@ -900,6 +907,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** Компьютер закрыт для сессии — к PIN (code.js запомнит этот чат); с чата уже ушли — никуда. */
   function closed() {
+    sharing.set(null);
     historyCache.clear();
     if (alive) toPin();
   }
@@ -1593,6 +1601,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     focus() { if (alive) focusDesktop(text); },
     unmount() {
       alive = false;
+      sharing.unmount();
       visualizations.unmount();
       unsubscribeGit?.();
       context.unmount();

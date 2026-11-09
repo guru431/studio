@@ -1,4 +1,4 @@
-"""The iOS-style share menu sits beside Chat and downloads whole conversations."""
+"""The iOS-style share menu sits in the chat status bar and downloads whole conversations."""
 from pathlib import Path
 
 import pytest
@@ -13,7 +13,7 @@ from test_ui_webkit import pw
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 
-@pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320)])
+@pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320), (True, 852)])
 def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mobile, width, tmp_path):
     if mobile and focus_browser.browser_type.name == 'firefox':
         pytest.skip('Playwright не эмулирует мобильный Firefox')
@@ -24,7 +24,7 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
     machine = code_free_machine({CODE_CHAT_A: code_session('Экспорт чата', messages=messages)})
     aid, bridge = code_online(live, 'owner', machine)
     try:
-        with focus_browser.new_context(viewport={'width': width, 'height': 900}, is_mobile=mobile,
+        with focus_browser.new_context(viewport={'width': width, 'height': 393 if width == 852 else 900}, is_mobile=mobile,
                                        has_touch=mobile, extra_http_headers={'Cookie': cookie}) as context:
             if focus_browser.browser_type.name == 'firefox':
                 context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
@@ -34,11 +34,12 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
             trigger = page.locator('#code-share-chat')
             pw.expect(trigger).to_be_enabled()
-            assert page.locator('#code-status-bar #code-share-chat').count() == 0
-            chat = page.locator('#code-tab-chat').bounding_box()
+            assert page.locator('.code-status-bar #code-share-chat').count() == 1
+            assert page.locator('.code-project-tools #code-share-chat').count() == 0
             button = trigger.bounding_box()
-            assert button['x'] >= chat['x'] + chat['width']
-            assert abs(button['y'] + button['height']/2 - chat['y'] - chat['height']/2) < 4
+            status = page.locator('.code-status-bar').bounding_box()
+            assert status['x'] <= button['x'] and button['x'] + button['width'] <= status['x'] + status['width'] + 1
+            assert abs(button['y'] + button['height']/2 - status['y'] - status['height']/2) < 4
             repo = page.locator('#code-repo-status')
             pw.expect(repo).to_be_visible()
             status_box = repo.bounding_box()
@@ -60,6 +61,9 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             trigger.click()
             menu = page.locator('#code-share-chat-menu')
             pw.expect(menu).to_be_visible()
+            box = menu.bounding_box()
+            assert box['x'] >= 0 and box['y'] >= 0
+            assert box['x'] + box['width'] <= width and box['y'] + box['height'] <= page.viewport_size['height']
             assert menu.locator('[role="menuitem"]').all_text_contents() == [
                 'Поделиться ссылкой', 'Скачать PDF', 'Скачать Markdown']
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -89,8 +93,11 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             pw.expect(page.locator('#chat-share-dialog')).to_be_visible()
             pw.expect(page.locator('#chat-share-pin')).to_have_value('')
             page.locator('#chat-share-dialog .dialog-close').click()
+            trigger.click()
+            pw.expect(menu).to_be_visible()
             page.locator('#code-tab-files').click()
             pw.expect(trigger).not_to_be_visible()
+            pw.expect(menu).to_have_count(0)
     finally:
         bridge.stop()
         client.close()
