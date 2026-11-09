@@ -704,7 +704,8 @@ def _picture(data: bytes) -> str:
         raise too_big
     # без warnings.catch_warnings: фильтр предупреждений общий на процесс, а здесь поток — параллельные
     # задания перепутали бы его. Бомбу отсекает предел пикселей по заголовку; больше двух
-    # MAX_IMAGE_PIXELS Pillow отказывает сам ещё в Image.open
+    # MAX_IMAGE_PIXELS Pillow отказывает сам ещё в Image.open. Предупреждение — тоже предел: фильтр «ошибка»
+    # может остаться на процесс от перекрывшихся catch_warnings копии image_upload (находка 2026-11-09)
     try:
         with Image.open(io.BytesIO(data)) as image:
             if image.format not in RESULT_TYPES:
@@ -713,7 +714,7 @@ def _picture(data: bytes) -> str:
                 raise too_big
             image.load()
             return RESULT_TYPES[image.format]
-    except Image.DecompressionBombError:
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise too_big from None
     except (OSError, ValueError, SyntaxError, EOFError):
         raise JobError("not_image", NOT_PICTURE) from None
