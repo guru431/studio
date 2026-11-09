@@ -16,7 +16,8 @@
 
 - История — в базе (`/var/lib/studio/studio.db`) и на шаре (`/mnt/storage/SharedData/studio`), в
   журнал — ничего: промпты, ключи, пароли, тексты, картинки и имена файлов не пишутся.
-- Анонимны только `/health`, `/login`, `/logout`, `/robots.txt` и оболочка PWA; всё `/api/*` —
+- Анонимны `/health`, `/login`, `/logout`, `/robots.txt`, PIN-вход `/share` и оболочка PWA;
+  `/share/*` — отдельные PIN/read-токены без доступа к учётке (`chat_shares.py`). Всё `/api/*` —
   через сессию и CSRF (`auth.guard`). Пользователь видит только своё. Запертой сессии телефона
   (блокировка, `app/screenlock.py`) — 423 на всё, кроме `auth.SCREEN_LOCK_PATHS`.
 - Служба слушает только unix-сокет `/run/studio/web.sock` за Apache debian

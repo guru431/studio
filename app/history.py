@@ -68,7 +68,7 @@ async def _delete_all(user_id: int) -> int:
         # scan_pages и translation_parts — каскадом; code_chats — отметки студии, сессии остаются на машинах;
         # code_tabs и code_place — рабочее место раздела: номера сессий — тоже история (спека code-workspace 6.8);
         # agents, agent_events и push_subs — не история (спека claude-code 6.1)
-        for table in ("images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
+        for table in ("chat_shares", "images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
                       "code_tabs", "code_place", "media"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         state.DB.execute("COMMIT")

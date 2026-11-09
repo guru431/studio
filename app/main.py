@@ -1,9 +1,11 @@
 """Студия на https://studio.example.com (спека docs/superpowers/specs/2026-10-19-studio-pwa-design.md).
 
 Служба слушает только unix-сокет за Apache. Анонимны `/health`, `/login` (страница и вход),
-`/logout`, `/robots.txt` (роботам — ничего) и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
+`/logout`, `/robots.txt` (роботам — ничего), PIN-вход `/share` и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
 `/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
 `/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
+Публичные `/share/unlock`, `/share/check`, `/share/file` проверяют отдельные PIN/read-токены;
+доступа к API учётки они не дают, секреты несут только телом запроса, ответы не кэшируются.
 Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
 
 У HTML-ответов — CSP с хешем единственной доверенной importmap (`CSP`); у всех — nosniff и Referrer-Policy.
@@ -29,6 +31,7 @@ import audio
 import auth
 import bridge
 import chat
+import chat_shares
 import cleaner_client as cleaner
 import checks
 import claude_code
@@ -121,9 +124,11 @@ async def lifespan(_app):
 
 
 async def headers(request: Request, call_next):
-    response = await call_next(request)
+    response = await chat_shares.public_guard(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers.setdefault("Referrer-Policy", "same-origin")
+    if request.url.path == "/share" or request.url.path.startswith("/share/"):
+        response.headers.update(chat_shares.PUBLIC_HEADERS)
     if response.headers.get("content-type", "").startswith("text/html"):
         response.headers.setdefault("Content-Security-Policy", CSP)
     if request.url.path.startswith("/static/"):
@@ -149,6 +154,7 @@ app.include_router(presets.router)          # раньше images: /api/images/p
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
+app.include_router(chat_shares.router)
 app.include_router(dictation.router)
 app.include_router(transcripts.router)
 app.include_router(ocr.router)
