@@ -261,6 +261,12 @@ UUID нового чата задаёт студия, настоящий thread 
   `cli_version` (первое слово `--version`, 30 с; сбой — «встроенный в SDK»), `models_from` (`get_server_info()["models"]`
   без `default` → `{"id", "label"}` и усилия в порядке `EFFORTS`), `probe` (короткий клиент в папке проектов,
   `setting_sources` user/project/local, ≤ 60 с, `disconnect` и при сбое; stderr Claude Code отбрасывается).
+- `claude_sdk` — штатный `ClaudeSDKClient`; с 0.16.2 ссылка `anyio` только внутри модуля
+  транспорта SDK 0.2.174 заменена адаптером, добавляющим `CREATE_NO_WINDOW` к обоим запускам
+  (проверке версии и основному CLI). Сам модуль AnyIO и его `open_process` не меняются;
+  окружение, потоки, отмена и очистка остаются в SDK. Все три точки создания клиентов
+  (`app`, `cli`, `turns`) импортируют его отсюда. Контракт обоих запусков — `test_claude_sdk.py`,
+  настоящий `pythonw.exe` с консольным CLI без вызова модели — `test_claude_sdk_integration.py`.
 - `events` — `clip` (строки на любой глубине — до `CLIP` знаков с «…»), `bound` (событие `step`, `result`, `ask` больше
   `EVENT_MAX` 1 МиБ в ASCII-JSON — `input`/`text`/`questions` до `CLIP_TIGHT` 2000, всё ещё больше — `input` пометкой
   `HIDDEN`; шаг снимка хранится уже урезанным, CLI получает ввод целиком), `text_of` (текст блоков содержимого,

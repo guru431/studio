@@ -10,9 +10,8 @@ import logging
 import threading
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeSDKClient
-
 from . import autostart, cli, enroll, setup, store, theme, updater
+from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
 from .opencode import OpenCodeRunner
 from .agent import Agent, read_has_pin

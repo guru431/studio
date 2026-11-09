@@ -9,9 +9,10 @@ import re
 import subprocess
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions
 
 from . import VERSION, limits
+from .claude_sdk import ClaudeSDKClient
 
 log = logging.getLogger(__name__)
 
