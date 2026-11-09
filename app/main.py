@@ -99,6 +99,7 @@ async def lifespan(_app):
     ocr.recover()
     translate.recover()
     speeches.recover()
+    videos.recover()
     state.HTTP = state.make_http()
     state.CLEANER_HTTP = state.make_cleaner_http()
     loops = ([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
