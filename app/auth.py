@@ -390,7 +390,7 @@ async def check_password(name: str, password: str, ip: str, source: str = "login
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса
         return row["id"]
-    if row is not None:
+    if row is not None and not ok:    # верный пароль, сменённый за время scrypt (`still_valid`), — не неудача
         security_log.record(row["id"], "login_fail", detail=source, ip=ip)
     fails = _login_fails(name)
     if fails > LOCK_FAILS:
