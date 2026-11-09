@@ -28,6 +28,7 @@
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
  * только textContent и markdown.js. */
 import { api } from './api.js';
+import { icon as svgIcon } from './icons.js';
 import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
@@ -39,13 +40,9 @@ const TOO_LARGE = 'Файл больше 2 МиБ — не открываетс�
 const BINARY = 'Двоичный файл — не открывается';
 const NO_CHANGES = 'Изменений нет';
 const NOT_GIT = 'Не репозиторий git';
-const FOLDER_ICON = '<path d="M3 6.5h6l2 2h10V19H3z"/>';
-const FILE_ICON = '<path d="M6 3h8l4 4v14H6zM14 3v4h4"/>';
 
-function icon(paths) {
-  const span = el('span', { class: 'code-file-icon', 'aria-hidden': 'true' });
-  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${paths}</svg>`;    // константы выше
-  return span;
+function icon(name) {
+  return el('span', { class: 'code-file-icon', 'aria-hidden': 'true' }, svgIcon(name));
 }
 
 function parentOf(path) {
@@ -397,13 +394,13 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       el('span', { class: `code-file-meta code-file-${key}`, 'data-column': key })]));
     const row = el('button', { type: 'button', class: `code-file-item${item.dir ? ' dir' : ''}`,
       style: `--tree-depth: ${path.split('/').length - 1}` }, el('span', { class: 'code-file-label' }, chevron,
-      icon(item.dir ? FOLDER_ICON : FILE_ICON), el('span', { class: 'code-file-name' }, item.name), badge), ...Object.values(cells));
+      icon(item.dir ? 'folder' : 'file'), el('span', { class: 'code-file-name' }, item.name), badge), ...Object.values(cells));
     const li = el('li', { 'data-name': item.name, 'data-path': path, role: 'treeitem',
       'aria-label': item.name, class: item.dir ? 'dir' : null }, row);
     const node = { path, item, row, badge, li, cells };
     nodes.set(path, node);
     if (operations) {
-      const menu = button('⋯', { class: 'code-file-menu', 'aria-label': `Действия: ${item.name}`,
+      const menu = button(svgIcon('more'), { class: 'code-file-menu', 'aria-label': `Действия: ${item.name}`,
         title: 'Действия с файлом или папкой', 'aria-haspopup': 'dialog' }, () => actionsMenu(path, node.item.dir));
       li.classList.add('has-actions');
       li.append(menu);
@@ -547,8 +544,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     showPath(path, true);
     const status = el('p', { id: 'code-file-status', class: 'code-file-status', 'aria-live': 'polite' });
     const bar = el('div', { class: 'code-file-bar' });
-    if (operations) bar.append(button('⋯', { class: 'btn btn-sm', id: 'code-open-file-actions',
-      'aria-label': 'Действия с открытым файлом' }, () => actionsMenu(path, false)));
+    if (operations) bar.append(button(svgIcon('more'), { class: 'btn btn-sm', id: 'code-open-file-actions',
+      'aria-label': 'Действия с открытым файлом', title: 'Действия с открытым файлом' }, () => actionsMenu(path, false)));
     file.replaceChildren(bar, status);
     file.hidden = false;
     view.classList.add('has-file');

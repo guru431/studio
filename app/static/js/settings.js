@@ -41,6 +41,7 @@ import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
+import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
@@ -276,8 +277,7 @@ function day(ts) {
   return dateOnly(ts, { day: 'numeric', month: 'long' });
 }
 
-const LOCK_SECTIONS = { chat: 'Чат', photo: 'Фото', video: 'Видео', transcribe: 'Разговоры', speech: 'Речь',
-  ocr: 'Сканы', translate: 'Перевод', code: 'Агенты' };
+const LOCK_SECTIONS = Object.fromEntries(sectionPairs());
 
 /** Пользователь задаёт время в удобных единицах; сервер всегда получает целое число секунд. */
 function timeoutField(id, seconds, max) {
@@ -614,9 +614,9 @@ export function queueText(pending) {
 /* «Выгрузить мою историю»: окно с галочками разделов (все отмечены) → «Подготовить» (POST /api/me/export,
  * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
-const EXPORT_SECTIONS = [['chat', 'Чат'], ['photo', 'Фото'], ['video', 'Видео'], ['speech', 'Речь'],
-  ['transcribe', 'Разговоры'], ['voices', 'Голоса озвучки'], ['ocr', 'Распознавание'], ['translate', 'Перевод'],
-  ['code', 'Агенты: чаты'], ['agents', 'Агенты: подключения'], ['security', 'Журнал безопасности']];
+const EXPORT_SECTIONS = [...sectionPairs(['chat', 'photo', 'video', 'transcribe', 'speech']), ['voices', 'Голоса озвучки'],
+  ...sectionPairs(['ocr', 'translate']), ['code', `${NAMES.code}: чаты`], ['agents', `${NAMES.code}: подключения`],
+  ['security', 'Журнал безопасности']];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
@@ -1128,14 +1128,14 @@ function voicesBlock(host) {
 /* ---- разделы ---------------------------------------------------------------------- */
 
 /** Разделы — в порядке рельса; «Учётка» — личные группы. Прежние адреса — на новые места. */
-const RAIL_ORDER = ['chat', 'code', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate'];
+const RAIL_ORDER = RAIL_SECTIONS.map((s) => s.id);                 // порядок рельса — из реестра разделов
 const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, cleaner: 'Очистка данных · Cleaner', code: 'Агенты', appearance: 'Оформление',
+  const names = { ...SECTION_NAMES, cleaner: 'Очистка данных · Cleaner', code: NAMES.code, appearance: 'Оформление',
     security: 'Защита', notifications: 'Уведомления', data: 'Данные', input: other ? 'Ввод и интернет' : 'Голосовой ввод' };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
   const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];

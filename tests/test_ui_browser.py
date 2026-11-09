@@ -648,7 +648,7 @@ def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, 
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         # в чипе «модель» раздела «Фото» — только Lustify
         *go("photo"), ("wait", FEED_READY), ("click", "#chip-model"),
-        ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .chip-option')].map(o => o.textContent)")],
+        ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .menu-option')].map(o => o.textContent)")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     assert r["values"]["saved"] == ["lustify"] and not r["values"]["overflow"]
@@ -709,7 +709,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     v = r["values"]
     assert v["groups"] == ["Разделы", "Учётка"]
     assert v["nav"] == [["chat", "Чат"], ["code", "Агенты"], ["photo", "Фото"], ["video", "Видео"],
-                        ["transcribe", "Разговоры"], ["speech", "Речь"], ["ocr", "Сканы"], ["translate", "Перевод"],
+                        ["transcribe", "Разговоры"], ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"],
                         ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["security", "Защита"],
                         ["notifications", "Уведомления"], ["data", "Данные"], ["input", "Ввод и интернет"]]
     assert v["records"] == "Разговоры" and v["scans"] == "Сканы"
@@ -2078,9 +2078,9 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
             ("click", "#chip-model"), ("click", f"#chip-model-menu [data-value$=':{model}']"),
-            ("click", "#photo-menu-toggle"), ("wait", "!document.querySelector('#photo-menu').hidden"),
-            ("eval", "menu", "[...document.querySelectorAll('#photo-menu .menu-item')].map(e => e.textContent.trim())"),
-            ("press", "Escape"), ("wait", "document.querySelector('#photo-menu').hidden"),
+            ("click", "#photo-menu-toggle"), ("wait", "document.querySelector('#photo-menu').matches(':popover-open')"),
+            ("eval", "menu", "[...document.querySelectorAll('#photo-menu .menu-option')].map(e => e.textContent.trim())"),
+            ("press", "Escape"), ("wait", "!document.querySelector('#photo-menu').matches(':popover-open')"),
             put_file("#describe-file", png_of(64, 48, "blue"), "source.png"),
             ("wait", described),
             ("eval", "descriptionLength", "document.querySelector('#describe-text').value.length"),
@@ -2291,9 +2291,9 @@ def test_photo_layout_fits_390(browser, live):
         ("eval", "aboveTabs", "document.querySelector('#photo-composer').getBoundingClientRect().bottom"
                               " <= document.querySelector('#rail').getBoundingClientRect().top"),
         ("eval", "chips", f"({inside})('#photo-composer .chip, #photo-go')"),
-        ("click", "#chip-size"), ("wait", "!document.querySelector('#chip-size-menu').hidden"),
-        ("eval", "sizeMenu", f"({inside})('#chip-size-menu .chip-option')"),
-        ("eval", "sizes", "[...document.querySelectorAll('#chip-size-menu .chip-option')].map(e => e.textContent)"),
+        ("click", "#chip-size"), ("wait", "document.querySelector('#chip-size-menu').matches(':popover-open')"),
+        ("eval", "sizeMenu", f"({inside})('#chip-size-menu .menu-option')"),
+        ("eval", "sizes", "[...document.querySelectorAll('#chip-size-menu .menu-option')].map(e => e.textContent)"),
         ("click", "#chip-size-menu [data-value=landscape]"),
         ("eval", "sizeChip", "document.querySelector('#chip-size').textContent"),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
@@ -2536,7 +2536,7 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
-    """Все разделы остаются в исходном порядке; на телефоне — основные и «Ещё», подписи целиком, страница
+    """Все разделы — в порядке реестра (sections-meta.js); на телефоне — основные и «Ещё», подписи целиком, страница
     без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
     «В работе», профиль), место прежней кнопки темы отдано заголовку."""
     fits = """[...document.querySelectorAll('#rail .tab > span:last-child, #mobile-more-label')]
@@ -2561,8 +2561,8 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    expected = (["Чат", "Фото", "Агенты", "Ещё"] if width < 760 else
-                ["Чат", "Фото", "Видео", "Речь", "Разговоры", "Сканы", "Перевод", "Агенты"])
+    expected = (["Чат", "Агенты", "Фото", "Ещё"] if width < 760 else
+                ["Чат", "Агенты", "Фото", "Видео", "Разговоры", "Озвучка", "Сканы", "Перевод"])
     assert [name for name, _, _ in r["values"]["fits"]] == expected
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
@@ -2629,23 +2629,23 @@ def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
     login = f"vmenu{width}"
     live.add_user(login)
     menu = "document.querySelector('#photo-view + .view-menu')"
-    state = (f"[{menu}.hidden, document.querySelector('#photo-view').getAttribute('aria-expanded'),"
+    state = (f"[!{menu}.matches(':popover-open'), document.querySelector('#photo-view').getAttribute('aria-expanded'),"
              " document.activeElement.id]")
     # значок кнопки — тот же, что у пункта вида
     shows = "document.querySelector('#photo-view svg').innerHTML === document.querySelector('#photo-view-{0} svg').innerHTML"
     r = browser.drive(live.url + "/", [*photo_screen(login),
-        ("eval", "button", f"[{menu}.hidden, document.querySelector('#photo-view').getAttribute('aria-haspopup'),"
+        ("eval", "button", f"[!{menu}.matches(':popover-open'), document.querySelector('#photo-view').getAttribute('aria-haspopup'),"
                            f" {shows.format('tiles')}]"),
-        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"),
+        ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"),
         ("eval", "items", f"[...{menu}.children].map(b => [b.id, b.getAttribute('role'), b.getAttribute('aria-checked'),"
                           " b.textContent.trim(), !!b.querySelector('svg')])"),
         ("eval", "inside", f"(() => {{ const b = {menu}.getBoundingClientRect();"
                            f" return b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight && {NO_OVERFLOW}; }})()"),
         ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "chosen", state), ("eval", "shows", shows.format("table")),
-        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"), ("press", "Escape"),
+        ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"), ("press", "Escape"),
         ("eval", "escaped", state),
-        ("click", "#photo-view"), ("wait", f"!{menu}.hidden"), ("click", ".photo .head h1"),
+        ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"), ("click", ".photo .head h1"),
         ("eval", "outside", state)],
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
@@ -2736,7 +2736,7 @@ def test_photo_selection_deletes_the_picked_and_keeps_the_rest(browser, live, wi
         ("eval", "viewer", "!!document.querySelector('#viewer')"),
         ("eval", "count", text_of("#photo-select-count")),
         ("eval", "picked", picked()),
-        ("click", "#photo-view"), ("wait", "!document.querySelector('#photo-view-menu').hidden"),
+        ("click", "#photo-view"), ("wait", "document.querySelector('#photo-view-menu').matches(':popover-open')"),
         ("eval", "menuIn", menu_in), ("click", "#photo-view-table"),
         ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
         ("eval", "pickedTable", picked()),
@@ -2996,7 +2996,7 @@ def test_photo_selection_leaves_an_open_chip_menu_to_itself(browser, live):
     меню и отмечает её. Вне режима карточка — свой слой (галочка строки не выше шапки таблицы), картинка
     не перетаскивается (долгое нажатие в Chrome на Android)."""
     live.add_user("selmenu")
-    menu_open = "!document.querySelector('#chip-size-menu').hidden"
+    menu_open = "document.querySelector('#chip-size-menu').matches(':popover-open')"
     r = browser.drive(live.url + "/", [*photo_screen("selmenu", cards=2), ("wait", done_cards(2)),
         ("eval", "isolated", f"getComputedStyle(document.querySelector('{nth(1)}')).isolation"),
         ("eval", "drag", f"getComputedStyle(document.querySelector('{nth(1, 'img')}')).webkitUserDrag"),
@@ -3187,7 +3187,7 @@ def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
             ("type", "#photo-prompt", "серия котов"),
-            ("click", "#chip-series"), ("wait", "!document.querySelector('#chip-series-menu').hidden"),
+            ("click", "#chip-series"), ("wait", "document.querySelector('#chip-series-menu').matches(':popover-open')"),
             ("eval", "noStrength", "document.querySelector('#photo-series-panel [data-vary=strength]').hidden"),
             ("click", "#photo-series-panel [data-count='3']"),
             ("eval", "label", text_of("#chip-series")),
@@ -3237,7 +3237,7 @@ def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, 
         set_value("#photo-series-to", "0.3"), ("eval", "narrow", values),
         set_value("#photo-series-to", "0.75"),
         # меню серии открыто над полем (чип — в строке под ним): закрыть, как человек, прежде чем писать
-        ("press", "Escape"), ("wait", "document.querySelector('#chip-series-menu').hidden"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#chip-series-menu').matches(':popover-open')"),
         ("type", "#photo-prompt", "акварель"), ("click", "#photo-go"), ("wait", done_cards(3)),
         # «Изменить»: серия по силе, с кистью — без серии
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
@@ -3277,7 +3277,7 @@ def test_photo_preset_saves_and_applies(browser, live):
         ("type", "#photo-prompt", "портрет у окна"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=landscape]"),
         set_value("#photo-strength", "0.6"),
-        ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu').hidden"),
+        ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu').matches(':popover-open')"),
         ("eval", "empty", text_of("#chip-preset-menu .preset-list")),
         ("click", "#preset-save"), ("wait", is_open("#preset-dialog")),
         ("eval", "checks", "[document.querySelector('#preset-with-prompt').checked, !!document.querySelector('#preset-with-seed')]"),
@@ -3639,10 +3639,10 @@ def test_video_layout_fits_390(browser, live, ready_clips):
         ("eval", "aboveTabs", "document.querySelector('#video-composer').getBoundingClientRect().bottom"
                               " <= document.querySelector('#rail').getBoundingClientRect().top"),
         ("eval", "inside", f"({inside})('#video-composer .chip, #video-go, #video-source-clear, {CLIP}, {CLIP} .btn')"),
-        ("click", "#chip-quality"), ("wait", "!document.querySelector('#chip-quality-menu').hidden"),
-        ("eval", "menu", f"({inside})('#chip-quality-menu .chip-option')"),
-        ("eval", "qualities", "[...document.querySelectorAll('#chip-quality-menu .chip-option')].map(e => e.textContent)"),
-        ("press", "Escape"), ("wait", "document.querySelector('#chip-quality-menu').hidden"),
+        ("click", "#chip-quality"), ("wait", "document.querySelector('#chip-quality-menu').matches(':popover-open')"),
+        ("eval", "menu", f"({inside})('#chip-quality-menu .menu-option')"),
+        ("eval", "qualities", "[...document.querySelectorAll('#chip-quality-menu .menu-option')].map(e => e.textContent)"),
+        ("press", "Escape"), ("wait", "!document.querySelector('#chip-quality-menu').matches(':popover-open')"),
         set_value("#video-seconds", "31"), ("click", "#video-go"),
         ("wait", "document.querySelector('#video-error').textContent.length > 0"),
         ("eval", "error", "document.querySelector('#video-error').textContent"),
@@ -5301,7 +5301,8 @@ def test_pin_settings_save_sections_and_both_timers(browser, live, width, tmp_pa
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["policy"] == [["chat", "photo", "code"], 600] and v["checked"] == [True, True, True]
+    # порядок — как на рельсе (реестр разделов `sections-meta.js`)
+    assert v["policy"] == [["chat", "code", "photo"], 600] and v["checked"] == [True, True, True]
     assert v["timer"] == "10" and v["computer"] == 7200 and v["fit"] is True and v["passwordKept"] is True
     assert not problems(r), problems(r)
 
@@ -5369,10 +5370,12 @@ def test_password_opens_and_a_reload_stays_locked(browser, live):
     live.add_user(login)
     r = browser.drive(live.url + "/", [*locked_phone(login), ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {LOCK_OPEN}"),
-        ("eval", "section", settled("document.querySelector('#view').children.length")),
+        # раздел под замком не рисуется: в #view — только заглушка «Загрузка…» из разметки
+        ("eval", "section", settled("document.querySelectorAll('#view > :not(.view-loading)').length")),
         ("click", "#lock-use-password"), ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"),
         ("wait", f"!{LOCK_OPEN} && {READY}"),
-        ("eval", "after", "document.querySelector('#view').children.length > 0"), ("eval", "me", ME_STATUS)], **PHONE)
+        ("eval", "after", "document.querySelectorAll('#view > :not(.view-loading)').length > 0"),
+        ("eval", "me", ME_STATUS)], **PHONE)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["section"] == 0 and v["after"] is True and v["me"] == 200
@@ -7438,7 +7441,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
+    assert v["tabs"] == ["chat", "code", "photo", "video", "transcribe", "speech", "ocr", "translate"]
     assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)

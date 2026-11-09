@@ -37,6 +37,8 @@
  * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me } from './api.js';
+import { icon } from './icons.js';
+import { actionMenu } from './menu.js';
 import { timeOnly } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
@@ -55,21 +57,8 @@ const FILE_ACCEPT = '.pdf,.docx,.txt,.md';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
 const FORMATS = [['txt', 'Текст .txt'], ['docx', 'Word .docx']];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
-const ICONS = {
-  text: '<path d="M5 6h14M5 12h14M5 18h9"/>',
-  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
-  photo: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
-  swap: '<path d="M5 8h14l-3-3M19 16H5l3 3"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-};
 
 let screen = null;
-
-function icon(name) {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
 
 /** 300000 → «300 000». */
 function grouped(n) {
@@ -163,8 +152,8 @@ function build(view, ctx) {
   const sourceText = el('div', { class: 'tl-source-text', hidden: true });
   const fileInput = el('input', { type: 'file', id: 'tl-file-input', class: 'sr', accept: FILE_ACCEPT });
   const photoInput = el('input', { type: 'file', id: 'tl-photo-input', class: 'sr', accept: PHOTO_ACCEPT });
-  const fileBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('file'), 'Файл', fileInput);
-  const photoBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('photo'), 'Фото', photoInput);
+  const fileBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('doc'), 'Файл', fileInput);
+  const photoBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('camera'), 'Фото', photoInput);
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
   const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go' }, 'Перевести');
   const bar = el('div', { class: 'composer-bar' },
@@ -178,16 +167,10 @@ function build(view, ctx) {
   const outText = document.createTextNode('');   // перевод одним текстовым узлом: растёт — дописывается
   const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': 'Перевод' }, outText);
   const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, 'Копировать');
-  const formats = el('div', { class: 'tr-formats tl-formats', hidden: true }, ...FORMATS.map(([key, label]) => {
-    const b = el('button', { type: 'button', class: 'btn btn-sm', 'data-format': key }, label);
-    b.addEventListener('click', () => {
-      formats.hidden = true;
-      download(key);
-    });
-    return b;
-  }));
-  const exportBtn = el('button', { type: 'button', id: 'tl-export', class: 'btn btn-sm', 'aria-haspopup': 'true' }, 'Скачать ▾');
-  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, el('div', { class: 'tr-download-wrap' }, exportBtn, formats));
+  const formats = actionMenu('Скачать ▾', { id: 'tl-export', cls: 'tl-formats', entries: FORMATS.map(([key, label]) => [label,
+    { 'data-format': key }, () => download(key)]) });
+  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, formats);
+  const exportBtn = formats.querySelector('#tl-export');
   const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, stop, cont), output, acts);
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
@@ -278,13 +261,13 @@ function build(view, ctx) {
       const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': 'Убрать' }, icon('x'));
       x.addEventListener('click', clearLeft);
       if (pending) {
-        chip.replaceChildren(icon(pending.photo ? 'photo' : 'file'), el('span', { class: 'att-name' }, pending.file.name), x);
+        chip.replaceChildren(icon(pending.photo ? 'camera' : 'doc'), el('span', { class: 'att-name' }, pending.file.name), x);
       } else if (shown) {
         const name = shown.media_id
           ? el('a', { class: 'att-name', href: `/api/media/${encodeURIComponent(shown.media_id)}`, target: '_blank',
             rel: 'noopener' }, shown.name)
           : el('span', { class: 'att-name' }, shown.name);
-        chip.replaceChildren(icon(shown.kind === 'photo' ? 'photo' : 'file'), name, x);
+        chip.replaceChildren(icon(shown.kind === 'photo' ? 'camera' : 'doc'), name, x);
       }
     }
     if (shown) {
@@ -584,7 +567,7 @@ function build(view, ctx) {
     const from = item.kind === 'file' ? item.name : item.source_head || item.name;
     const meta = el('span', { class: `tl-meta${item.state === 'error' ? ' error' : ''}` }, metaText(item));
     const opener = el('button', { type: 'button', class: 'tl-open' },
-      el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'photo' : 'file'),
+      el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'camera' : 'doc'),
         el('b', { class: 'tl-pair' }, pair(item)), meta),
       el('span', { class: 'tl-from' }, from || ''),
       item.text_head ? el('span', { class: 'tl-to muted' }, item.text_head) : null);
@@ -723,7 +706,6 @@ function build(view, ctx) {
       error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
     }
   });
-  exportBtn.addEventListener('click', () => { formats.hidden = !formats.hidden; });
 
   paintCount();
   paintLeft();

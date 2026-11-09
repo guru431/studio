@@ -31,6 +31,7 @@
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api as request, me } from './api.js';
+import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { codeChoices, codePicker } from './code-picker.js';
 import { fieldBox } from './field.js';
@@ -434,7 +435,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function paintImages() {
     attachments.replaceChildren(...images.map((image) => {
       const remove = el('button', { type: 'button', class: 'icon-btn code-image-remove',
-        'aria-label': `Убрать ${image.name}`, disabled: sending }, '×');
+        'aria-label': `Убрать ${image.name}`, title: 'Убрать', disabled: sending }, icon('x'));
       remove.addEventListener('click', () => {
         images = images.filter((i) => i !== image);
         keepImages();

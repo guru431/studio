@@ -34,41 +34,26 @@ import { choose, current as look, follow, paintSave, retrySave, setupAppearance 
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
+import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
+import { icon as svgIcon } from './icons.js';
 
-const HINTS = {
-  chat: 'Чтобы писать в чат, выберите модель в настройках раздела «Чат»',
-  photo: 'Чтобы генерировать фото, выберите модель в настройках раздела «Фото»',
-  video: 'Чтобы делать видео, выберите модель в настройках раздела «Видео»',
-  transcribe: 'Чтобы расшифровывать записи, выберите модель в настройках раздела «Разговоры»',
-  speech: 'Чтобы озвучивать текст, выберите модель в настройках раздела «Речь»',
-  ocr: 'Чтобы распознавать сканы, выберите модель в настройках раздела «Сканы»',
-  translate: 'Чтобы переводить, выберите модель в настройках раздела «Перевод»',
+const LOADERS = {
+  chat: () => import('./chat.js'),
+  photo: () => import('./photo.js'),
+  video: () => import('./video.js'),
+  speech: () => import('./speech.js'),
+  transcribe: () => import('./transcribe.js'),
+  ocr: () => import('./ocr.js'),
+  translate: () => import('./translate.js'),
+  code: () => import('./code.js'),
+  search: () => import('./search.js'),
+  settings: () => import('./settings.js'),
+  admin: () => import('./admin.js'),
 };
-const ICONS = {
-  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
-  photo: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
-  video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
-  wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  transcribe: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
-  speech: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
-  ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>',
-  translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
-  code: '<path d="M4 6l5 5-5 5M11 18h9"/>',
-};
-
-const SECTIONS = {
-  chat: { title: 'Чат', load: () => import('./chat.js') },
-  photo: { title: 'Фото', load: () => import('./photo.js') },
-  video: { title: 'Видео', load: () => import('./video.js') },
-  speech: { title: 'Речь', load: () => import('./speech.js') },
-  transcribe: { title: 'Разговоры', load: () => import('./transcribe.js') },
-  ocr: { title: 'Распознавание', load: () => import('./ocr.js') },
-  translate: { title: 'Перевод', load: () => import('./translate.js') },
-  code: { title: 'Агенты', load: () => import('./code.js') },
-  search: { title: 'Поиск', load: () => import('./search.js') },
-  settings: { title: 'Настройки', load: () => import('./settings.js') },
-  admin: { title: 'Панель', admin: true, load: () => import('./admin.js') },
-};
+/** Экраны оболочки: имя — из реестра разделов (sections-meta.js), загрузка — модуль раздела. */
+const SECTIONS = Object.fromEntries(Object.entries(LOADERS).map(([id, load]) =>
+  [id, { title: sectionName(id), admin: id === 'admin', load }]));
+const HINTS = Object.fromEntries(SECTION_LIST.filter((s) => s.hint).map((s) => [s.id, s.hint]));
 
 const view = document.getElementById('view');
 const preloadSection = document.getElementById('theme-start')?.preloadSection || (() => {});
@@ -78,6 +63,7 @@ let current = null;      // { section, module }
 let renders = 0;         // номер последнего перехода: медленная загрузка раздела не перебьёт новый
 let entries = 0;         // номера меток записей истории ({ entry: n } в history.state) — для hold() раздела
 let mobileNavigation = null;
+let announced = false;   // первая отрисовка: фокус остаётся у страницы
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -87,9 +73,7 @@ function el(tag, attrs = {}, ...children) {
 }
 
 function icon(name) {
-  const box = el('span', { class: 'badge', 'aria-hidden': 'true' });
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24">${ICONS[name]}</svg>`;   // разметка — константа выше
-  return box;
+  return el('span', { class: 'badge', 'aria-hidden': 'true' }, svgIcon(name));
 }
 
 function head(title) {
@@ -184,6 +168,7 @@ async function render() {
     retry.addEventListener('click', render);
     view.replaceChildren(head(SECTIONS[route.section].title), notice('wait', err.message, 'empty'), retry);
     revealView();
+    announce(route.section);
     return;
   }
   if (mine !== renders) return;
@@ -216,6 +201,44 @@ async function render() {
   current = { section: route.section, module };
   module.mount(view, ctx);
   revealView();
+  announce(route.section);
+}
+
+/** Показан новый раздел: имя во вкладке браузера и фокус на его заголовке — диктор слышит, куда перешли
+ * (WCAG 2.4.2, 2.4.3). Фокус — кадром позже и только если раздел не взял его сам (поле ввода на компьютере,
+ * ui.js focusDesktop) и он не внутри раздела; первая отрисовка страницы фокус не трогает. */
+function announce(section) {
+  document.title = `${SECTIONS[section].title} — Студия`;
+  if (!announced) { announced = true; return; }
+  const mine = renders;
+  requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (mine !== renders || view.inert || (active && active !== document.body && view.contains(active))
+      || document.querySelector('dialog[open]')) return;
+    const target = view.querySelector('h1') || view;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
+  });
+}
+
+/** Вкладки рельса — из реестра разделов, группами; у «Агентов» — число работающих сессий и точка входящих
+ * (code-activity.js). Подпись — и текстом, и в aria-label: на узком экране в режиме «все разделы» видны
+ * только значки (app.css). */
+function buildRail() {
+  const rail = document.getElementById('rail');
+  const spacer = rail.querySelector('.spacer');
+  let group = null;
+  for (const s of SECTION_LIST) {
+    const glyph = s.id === 'code'
+      ? el('span', { class: 'tab-icon' }, svgIcon(s.id),
+        el('span', { id: 'code-running-count', class: 'tab-count', 'aria-hidden': 'true', hidden: '' }),
+        el('span', { id: 'code-inbox-dot', class: 'tab-dot', 'aria-hidden': 'true', hidden: '' }))
+      : svgIcon(s.id);
+    const tab = el('a', { class: group !== null && s.group !== group ? 'tab group-start' : 'tab', href: `#/${s.id}`,
+      'data-section': s.id, 'aria-label': s.name }, glyph, el('span', {}, s.name));
+    group = s.group;
+    rail.insertBefore(tab, spacer);
+  }
 }
 
 function openMenu(open) {
@@ -263,6 +286,7 @@ function setupMenu() {
 }
 
 async function start() {
+  buildRail();
   // Публичный код выбранного раздела можно получать параллельно с профилем, до показа любых данных.
   if (parse(location.hash).section === 'code') SECTIONS.code.load().catch(() => {});
   const worker = 'serviceWorker' in navigator

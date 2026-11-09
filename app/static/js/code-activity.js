@@ -3,6 +3,7 @@
  * Фоновый fetch не вызывает экран отпирания защищённого раздела. Скрытая страница
  * и простой более 30 минут останавливают опрос, как у панели проектов. */
 import { me } from './api.js';
+import { NAMES } from './sections-meta.js';
 
 const POLL_MS = 20000;
 const activity = new Map();
@@ -27,7 +28,7 @@ function paint() {
   dot.hidden = !unread;
   const parts = [total ? `Запущенных сессий: ${total}` : '', asking ? `ждут ответа: ${asking}` : '',
     unread ? `не прочитано: ${unread}` : ''].filter(Boolean);
-  const label = parts.length ? `Агенты · ${parts.join(' · ')}` : 'Агенты';
+  const label = parts.length ? `${NAMES.code} · ${parts.join(' · ')}` : NAMES.code;
   tab.setAttribute('aria-label', label);
   tab.title = parts.length ? `${label} · нажмите на число, чтобы открыть «Входящие»` : label;
 }

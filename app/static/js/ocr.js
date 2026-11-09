@@ -1,4 +1,4 @@
-/* Раздел «Распознавание» (#/ocr) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
+/* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
  * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx), «В чат ▾», «Удалить»; идущий — состояние
@@ -18,6 +18,9 @@
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me } from './api.js';
+import { icon } from './icons.js';
+import { actionMenu } from './menu.js';
+import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
@@ -32,19 +35,8 @@ const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', 'Текст .txt'], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
 const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Кратко пересказать'], ['translate', 'Перевести']];
-const ICONS = {
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  list: '<path d="M4 6h16M4 12h16M4 18h16"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-};
 
 let screen = null;
-
-function icon(name) {
-  const box = document.createElement('span');
-  box.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;   // константы выше
-  return box.firstChild;
-}
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -88,7 +80,7 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Документы',
     'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'));
-  const title = el('h1', {}, 'Распознавание');
+  const title = el('h1', {}, NAMES.ocr);
   const head = el('header', { class: 'head' }, toggle, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
@@ -162,18 +154,9 @@ function build(view, ctx) {
     });
   }
 
+  /** «Скачать ▾» и «В чат ▾» — общий компонент меню (menu.js actionMenu). */
   function menu(id, cls, label, entries) {
-    const box = el('div', { class: `tr-formats ${cls}`, hidden: true }, ...entries.map(([key, text, attr, fn]) => {
-      const b = el('button', { type: 'button', class: 'btn btn-sm', [attr]: key }, text);
-      b.addEventListener('click', () => {
-        box.hidden = true;
-        fn(key);
-      });
-      return b;
-    }));
-    const open = el('button', { type: 'button', class: 'btn btn-sm', id, 'aria-haspopup': 'true' }, label);
-    open.addEventListener('click', () => { box.hidden = !box.hidden; });
-    return el('div', { class: 'tr-download-wrap' }, open, box);
+    return actionMenu(label, { id, cls, entries: entries.map(([key, text, attr, fn]) => [text, { [attr]: key }, () => fn(key)]) });
   }
 
   function openViewer(page) {
@@ -284,7 +267,7 @@ function build(view, ctx) {
 
   function paintView() {
     const item = docs.current;
-    title.textContent = item ? item.name : 'Распознавание';
+    title.textContent = item ? item.name : NAMES.ocr;
     if (!item) {
       shownId = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите документ в списке.'

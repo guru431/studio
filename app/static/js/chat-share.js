@@ -2,26 +2,25 @@
  * Окно владельца: PIN, срок ссылки (1/7/30 дней или бессрочно, по умолчанию 7), у обычного чата — показывать ли
  * рассуждение модели (по умолчанию нет); у созданной — срок, открытия, последний просмотр и неверные PIN. */
 import { api } from './api.js';
+import { svg } from './icons.js';
+import { menuItem, popupMenu } from './menu.js';
 import { dateTime } from './time.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
-export const SHARE_ICON = '<path d="M8 9H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2M12 15V3m-4 4 4-4 4 4"/>';
 
-/** Native popover supplies outside/Escape dismissal; menu keys work across pointer and touch. */
+/** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню. */
 export function shareMenu(host, { id, request = api, failed = () => {} }) {
   const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': 'Поделиться и экспортировать чат',
     title: 'Поделиться и экспортировать чат', 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
-  trigger.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${SHARE_ICON}</svg>`;
-  const menu = el('div', { id: `${id}-menu`, class: 'chat-share-menu', popover: 'auto', role: 'menu',
-    'aria-label': 'Поделиться чатом' });
-  trigger.setAttribute('aria-controls', menu.id);
+  trigger.innerHTML = svg('share');   // константа icons.js
+  const menu = el('div', { id: `${id}-menu`, class: 'chat-share-menu', role: 'menu', 'aria-label': 'Поделиться чатом' });
   host.append(menu);
   let context = null;
   let controller = null;
   let busy = false;
-  const close = () => { if (menu.matches(':popover-open')) menu.hidePopover(); };
+  const close = () => popup.close();
   const items = [['link', 'Поделиться ссылкой'], ['pdf', 'Скачать PDF'], ['md', 'Скачать Markdown']].map(([key, label]) => {
-    const item = button(label, { class: 'menu-item', role: 'menuitem', 'data-action': key, tabindex: '-1' });
+    const item = menuItem(label, { attrs: { 'data-action': key } });
     item.addEventListener('click', async () => {
       const current = context;
       if (!current || busy) return;
@@ -54,40 +53,7 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
     return item;
   });
   menu.append(...items);
-  const open = (last = false) => {
-    if (!context || busy || menu.matches(':popover-open')) return;
-    const box = trigger.getBoundingClientRect();
-    menu.style.top = '8px';
-    menu.style.left = '8px';
-    menu.style.right = 'auto';
-    menu.showPopover();
-    const { width, height } = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(box.right - width, innerWidth - width - 8))}px`;
-    menu.style.top = `${box.bottom + height + 6 <= innerHeight - 8
-      ? box.bottom + 6 : Math.max(8, box.top - height - 6)}px`;
-    (last ? items.at(-1) : items[0]).focus({ preventScroll: true });
-  };
-  trigger.addEventListener('click', () => menu.matches(':popover-open') ? close() : open());
-  trigger.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      open(event.key === 'ArrowUp');
-    }
-  });
-  menu.addEventListener('keydown', (event) => {
-    const here = items.indexOf(document.activeElement);
-    let next;
-    if (event.key === 'ArrowDown') next = (here + 1) % items.length;
-    else if (event.key === 'ArrowUp') next = (here + items.length - 1) % items.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = items.length - 1;
-    else if (event.key === 'Escape' || event.key === 'Tab') { close(); trigger.focus({ preventScroll: true }); }
-    else return;
-    if (event.key !== 'Tab') event.preventDefault();
-    if (next !== undefined) items[next].focus({ preventScroll: true });
-  });
-  menu.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(menu.matches(':popover-open'))));
-  window.addEventListener('resize', close);
+  const popup = popupMenu(trigger, menu, { align: 'end', blocked: () => !context || busy });
   return { button: trigger, set(value) {
     if (context?.share === value?.share && context?.export === value?.export && context?.title === value?.title) return;
     close();
@@ -96,9 +62,8 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
     context = value;
     trigger.disabled = !context || busy;
   }, unmount() {
-    close(); host.querySelector('#chat-share-dialog')?.close(); controller?.abort(); context = null;
-    window.removeEventListener('resize', close);
-    menu.remove();
+    host.querySelector('#chat-share-dialog')?.close(); controller?.abort(); context = null;
+    popup.unmount();
   } };
 }
 

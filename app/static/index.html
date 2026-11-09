@@ -24,14 +24,7 @@
 <body class="shell">
 <nav id="rail" aria-label="Разделы">
   <img class="logo" src="/static/icons/icon.svg" alt="">
-  <a class="tab" href="#/chat" data-section="chat"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg><span>Чат</span></a>
-  <a class="tab" href="#/photo" data-section="photo"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg><span>Фото</span></a>
-  <a class="tab" href="#/video" data-section="video"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/></svg><span>Видео</span></a>
-  <a class="tab" href="#/speech" data-section="speech"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Речь</span></a>
-  <a class="tab" href="#/transcribe" data-section="transcribe"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg><span>Разговоры</span></a>
-  <a class="tab" href="#/ocr" data-section="ocr"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></svg><span>Сканы</span></a>
-  <a class="tab" href="#/translate" data-section="translate"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/></svg><span>Перевод</span></a>
-  <a class="tab" href="#/code" data-section="code"><span class="tab-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l5 5-5 5M11 18h9"/></svg><span id="code-running-count" class="tab-count" aria-hidden="true" hidden></span><span id="code-inbox-dot" class="tab-dot" aria-hidden="true" hidden></span></span><span>Агенты</span></a>
+  <!-- вкладки разделов строит app.js из реестра sections-meta.js -->
   <span class="spacer"></span>
   <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></a>
   <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M15.5 16.5l2 2 3.5-4"/></svg><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
@@ -52,7 +45,7 @@
   <hr class="menu-sep">
   <form method="post" action="/logout"><button class="menu-item" id="menu-logout" type="submit">Выйти</button></form>
 </div>
-<main id="view"></main>
+<main id="view"><p class="view-loading" role="status">Загрузка…</p></main>
 <dialog id="jobs-panel" class="jobs-panel" aria-labelledby="jobs-title">
   <div class="jobs-sheet">
     <div class="jobs-head"><h2 id="jobs-title">В работе</h2><button id="jobs-close" class="btn-link" type="button">Закрыть</button></div>
@@ -71,12 +64,13 @@
   <h1 id="lock-title">Студия заперта</h1>
   <button id="lock-open" class="btn btn-accent" type="button">Открыть</button>
   <div id="lock-pin" class="lock-pin" hidden>
-    <div id="lock-pin-dots" class="lock-pin-dots" aria-label="Набранные цифры PIN"></div>
+    <div id="lock-pin-dots" class="lock-pin-dots" aria-hidden="true"></div>
+    <p id="lock-pin-count" class="sr" role="status" aria-live="polite"></p>
     <div class="lock-pin-pad">
       <button type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
       <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
       <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
-      <button id="lock-pin-back" type="button" aria-label="Стереть">⌫</button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
+      <button id="lock-pin-back" type="button" aria-label="Стереть" title="Стереть"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7z"/><path d="M12 9l5 6M17 9l-5 6"/></svg></button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
     </div>
   </div>
   <button id="lock-use-password" class="btn-link" type="button">Открыть паролем</button>
