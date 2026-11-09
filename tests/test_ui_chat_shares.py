@@ -52,6 +52,10 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             pw.expect(pin).to_be_enabled()
             if mobile:
                 pw.expect(pin).not_to_be_focused()
+            # срок — неделя по умолчанию, рассуждение модели — только явным выбором
+            pw.expect(page.locator('#chat-share-days')).to_have_value('7')
+            pw.expect(page.locator('#chat-share-reasoning')).not_to_be_checked()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             pin.fill('123')
             page.locator('#chat-share-create').click()
             pw.expect(page.locator('#chat-share-link')).not_to_be_visible()
@@ -61,6 +65,8 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             pw.expect(link).to_be_visible()
             url = link.input_value()
             assert '/share#' in url
+            pw.expect(page.locator('#chat-share-facts')).to_contain_text('действует до')
+            pw.expect(page.locator('#chat-share-facts')).to_contain_text('открыта 0 раз')
             page.locator('#chat-share-copy').click()
             assert page.evaluate('window.copiedShare') == url
             page.locator('#chat-share-dialog .dialog-close').click()
@@ -105,6 +111,14 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
                 reader.locator('#share-pin').fill('0123')
                 reader.locator('#share-open').click()
                 pw.expect(reader.locator('#shared-chat')).to_be_visible()
+                # владелец видит открытия и неверные PIN
+                page.locator('#chat-share-dialog .dialog-close').click()
+                page.locator('#chat-share').click()
+                page.locator('#chat-share-menu [data-action="link"]').click()
+                facts = page.locator('#chat-share-facts')
+                pw.expect(facts).to_contain_text('открыта 3 раза, последний')
+                pw.expect(facts).to_contain_text('неверных PIN: 1')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 # Revocation is checked immediately on returning to the tab.
                 page.locator('#chat-share-revoke').click()
                 pw.expect(page.locator('#chat-share-link')).not_to_be_visible()
@@ -141,6 +155,8 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
             page.locator('#code-share-chat-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')
             pw.expect(pin).to_be_enabled()
+            assert page.locator('#chat-share-reasoning').count() == 0     # у агентских чатов рассуждения нет
+            pw.expect(page.locator('#chat-share-days')).to_have_value('7')
             pin.fill('4567')
             page.locator('#chat-share-create').click()
             pw.expect(page.locator('#chat-share-link')).to_be_visible()

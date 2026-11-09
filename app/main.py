@@ -90,6 +90,7 @@ async def lifespan(_app):
     state.CFG = config.load()
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
+    chat_shares.seal()                           # снимки ссылок открытым текстом (до шага 37, откат) — шифром
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     chat_exports.clean_tmp()
     audio.clean_tmp()

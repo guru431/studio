@@ -110,7 +110,8 @@ def _me(request: Request) -> dict:
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
-                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions FROM users WHERE id = ?",
+                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions,"
+                           " password_reset FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -121,7 +122,9 @@ def _me(request: Request) -> dict:
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
             "code_quick_actions": json.loads(row["code_quick_actions"]) if row["code_quick_actions"] is not None else code_actions.DEFAULTS,
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
-            "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"]}
+            "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
+            # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
+            "password_reset": row["password_reset"]}
 
 
 @router.get("/me")
