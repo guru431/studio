@@ -254,6 +254,26 @@ def test_models_are_probed_before_the_first_link(make, configured, root):
     assert states[-1] == "online"
 
 
+def test_the_core_is_ready_before_the_slow_cli_version_check(make, configured):
+    """Метка готовности обновления (`_built`) не ждёт `claude --version` (до 30 с при первом запуске под
+    антивирусом): иначе хелпер видел `unconfirmed` и автозапуск оставался на прежней копии."""
+    gate = threading.Event()
+
+    def slow(path):
+        gate.wait(5)
+        return "2.3.1"
+
+    ctrl = make(cli_version=slow)
+    ctrl.start()
+    try:
+        until(lambda: ctrl._built.is_set())
+        assert ctrl.state != "online"                          # знакомство — уже с версией
+    finally:
+        gate.set()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.links[0].hello["cc_version"] == "2.3.1"
+
+
 def test_models_are_probed_again_every_hour(make, configured):
     gate, pauses = asyncio.Event(), []
 

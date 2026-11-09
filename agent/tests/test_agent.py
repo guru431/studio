@@ -79,6 +79,49 @@ async def test_configurable_pin_timeout_is_checked_on_open_and_each_request(agen
     assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
 
 
+async def test_passive_requests_check_the_pin_timer_without_extending_it(agent_with_pin):
+    """Фоновые опросы студии (`passive: true`) не держат компьютер открытым: срок идёт от действий владельца."""
+    agent = agent_with_pin
+    assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
+    agent.open._now.t += 300
+    assert (await agent.handle(req("activity", idle_sec=600, passive=True)))[0]["ok"]
+    assert (await agent.handle(req("open", pin=None, idle_sec=600, passive=True)))[0]["ok"]
+    agent.open._now.t += 300
+    assert (await agent.handle(req("activity", idle_sec=600, passive=True)))[0]["ok"]  # ровно срок — ещё открыт
+    agent.open._now.t += 1
+    assert (await agent.handle(req("activity", idle_sec=600, passive=True)))[0]["code"] == "closed"
+    assert (await agent.handle(req("activity", idle_sec=600)))[0]["code"] == "closed"
+
+
+async def test_owner_requests_still_extend_the_pin_timer(agent_with_pin):
+    agent = agent_with_pin
+    assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
+    agent.open._now.t += 500
+    assert (await agent.handle(req("activity", idle_sec=600, passive=False)))[0]["ok"]
+    agent.open._now.t += 500
+    assert (await agent.handle(req("activity", idle_sec=600)))[0]["ok"]
+
+
+@pytest.mark.parametrize("frame", [
+    {"op": "no_such_op"},
+    {"op": "project_summary", "project": "not-a-pid"},
+    {"op": "files", "project": "0" * 16, "path": "../outside"},
+    {"op": "desktop_status", "unexpected": 1},
+    {"op": "activity", "passive": "yes"},
+])
+async def test_rejected_requests_do_not_extend_the_pin_timer(agent_with_pin, frame):
+    agent = agent_with_pin
+    assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
+    agent.open._now.t += 500
+    assert (await agent.handle(req(session=SESSION, idle_sec=600, **frame)))[0]["code"] == "invalid"
+    agent.open._now.t += 200
+    assert (await agent.handle(req("activity", idle_sec=600)))[0]["code"] == "closed"
+
+
+async def test_closed_session_is_reported_before_the_request_shape(agent):
+    assert (await agent.handle(req("no_such_op")))[0]["code"] == "closed"
+
+
 @pytest.mark.parametrize("value", [True, 0, 59, 604801, None, "600"])
 async def test_invalid_pin_timeout_never_opens_the_computer(agent_with_pin, value):
     response = (await agent_with_pin.handle(req("open", pin="2468", idle_sec=value)))[0]
@@ -175,7 +218,8 @@ def test_hello(agent):
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
-                             "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True}
+                             "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
+                             "passive_requests": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

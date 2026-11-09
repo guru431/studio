@@ -41,11 +41,15 @@ class Config:
             self.projects_legacy_root = self.projects_root
 
     def set_project_roots(self, roots: list[str]) -> None:
-        """Порядок папок — порядок добавления; один настоящий путь указывается только один раз."""
+        """Порядок папок — порядок добавления; один настоящий путь указывается только один раз.
+
+        Хранится настоящий путь (`realpath`): junction, symlink, `subst` и подключённый сетевой диск (`\\\\сервер\\…`)
+        не расходятся между проверками и не зависят от буквы диска в сеансе моста. id проектов не меняются:
+        они считаются от настоящего пути и прежде."""
         unique, seen = [], set()
         for root in roots:
-            path = os.path.normpath(root.strip()) if root.strip() else ""
-            key = os.path.normcase(os.path.realpath(path)) if path else ""
+            path = os.path.realpath(os.path.normpath(root.strip())) if root.strip() else ""
+            key = os.path.normcase(path) if path else ""
             if key and key not in seen:
                 seen.add(key)
                 unique.append(path)

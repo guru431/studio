@@ -2,6 +2,8 @@
 import ctypes
 import json
 import os
+import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -23,6 +25,29 @@ def wait_old(pid: int, timeout: int = 120000) -> bool:
         return kernel.WaitForSingleObject(handle, timeout) == 0
     finally:
         kernel.CloseHandle(handle)
+
+
+def prune(stage: Path, plan: dict, autostart: str = '') -> None:
+    """После подтверждённого запуска — текущий выпуск и один предыдущий (откатная копия `old_repo`), остальные
+    `releases\\release-*` прочь: у каждого своя среда в сотни МиБ. Не трогаются: всё вне `releases`, ссылки,
+    выпуск без итога своего хелпера (`_update_result` — ещё готовится или ждёт запуска) и выпуск, который
+    запускает автозапуск."""
+    base = stage.parent
+    if base.name != 'releases' or not stage.name.startswith('release-'):
+        return
+    keep = {os.path.normcase(os.path.realpath(path)) for path in (stage, plan['old_repo'])}
+    command = os.path.normcase(autostart)
+    for item in base.iterdir():
+        try:
+            if (not item.name.startswith('release-')
+                    or os.lstat(item).st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                    or not item.is_dir() or os.path.normcase(os.path.realpath(item)) in keep
+                    or not (item / '_update_result').is_file()
+                    or os.path.normcase(str(item)) + os.sep in command):
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(item, ignore_errors=True)
 
 
 def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, sleep=time.sleep) -> str:
@@ -51,16 +76,23 @@ def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, 
             # Сохраняем прежний выбор автозапуска; чужое значение не перезаписываем.
             import winreg
             key = r'Software\Microsoft\Windows\CurrentVersion\Run'
+            autostart = ''
             try:
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
                     value, _ = winreg.QueryValueEx(k, 'StudioAgent')
+                    autostart = value if isinstance(value, str) else ''
                     old = Path(plan['old_repo'])
                     expected = f'"{old / ".venv/Scripts/pythonw.exe"}" "{old / "studio_agent.pyw"}"'
                     if isinstance(value, str) and os.path.normcase(value.strip()) == os.path.normcase(expected):
                         command = f'"{stage / ".venv/Scripts/pythonw.exe"}" "{stage / "studio_agent.pyw"}"'
                         winreg.SetValueEx(k, 'StudioAgent', 0, winreg.REG_SZ, command)
+                        autostart = command
             except OSError:
                 pass
+            try:
+                prune(stage, plan, autostart)
+            except OSError:
+                pass  # уборка не мешает подтверждённому обновлению
             return 'complete'
         if new.poll() is not None:
             return rollback()

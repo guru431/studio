@@ -781,12 +781,14 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   return {
     visible,
+    /** После конца задания, не по действию владельца: фоновая просьба, срок PIN компьютера не продлевает. */
     async updateSummary(aid, pid) {
       const agent = items.find((a) => a.id === Number(aid));
       if (!agent?.project_summary || selected !== Number(aid)) return;
       const mine = gen;
       try {
-        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary?refresh=true`);
+        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary?refresh=true`, undefined,
+          { headers: { 'x-studio-passive': '1' } });
         if (!alive || mine !== gen) return;
         summaries.get(selected)?.set(pid, { ...data, readAt: performance.now() });
         const row = body.querySelector(`li[data-pid="${pid}"]`);

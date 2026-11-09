@@ -98,7 +98,7 @@ function preview(input) {
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
   openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
-    { ...options, headers: { 'x-studio-window': WINDOW } });
+    { ...options, headers: { ...options.headers, 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
   const assistant = ENGINE_NAMES[engine];
@@ -1235,9 +1235,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return controller;
   }
 
+  /** Повтор по таймеру — фоновая просьба: срок PIN компьютера не продлевает. */
   function later(ms) {
     clearTimeout(retry);
-    retry = alive && document.visibilityState !== 'hidden' ? setTimeout(openLive, ms) : null;
+    retry = alive && document.visibilityState !== 'hidden' ? setTimeout(() => openLive(true), ms) : null;
   }
 
   /** Хода нет: live снова через IDLE_POLL_SEC — пока владелец недавно что-то делал в чате. */
@@ -1267,12 +1268,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!ended && alive && !own.signal.aborted) later(AGAIN_MS);
   }
 
-  async function openLive() {
+  async function openLive(passive = false) {
     if (!alive || document.visibilityState === 'hidden') return;
     const own = take();
     let response;
     try {
-      response = await api('GET', endpoint('/live'), undefined, { signal: own.signal });
+      response = await api('GET', endpoint('/live'), undefined,
+        { signal: own.signal, ...(passive ? { headers: { 'x-studio-passive': '1' } } : {}) });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;

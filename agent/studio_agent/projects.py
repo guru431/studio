@@ -140,8 +140,10 @@ class Catalog:
                 try:
                     attrs = path.lstat()
                     forbidden = HIDDEN | stat.FILE_ATTRIBUTE_REPARSE_POINT
+                    # `path` — настоящий путь (`catalog`), корень сверяется тоже настоящим: корень-ссылка, `subst`
+                    # и подключённый сетевой диск иначе давали «нет такого проекта» видимому проекту.
                     if (not stat.S_ISDIR(attrs.st_mode) or attrs.st_file_attributes & forbidden
-                            or not any(_key(path.parent) == _key(root) and inside(root, path)
+                            or not any(_key(path.parent) == _key(root) and inside(os.path.realpath(root), path)
                                        for root in roots(config))):
                         break
                     return path

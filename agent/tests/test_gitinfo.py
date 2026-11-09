@@ -29,21 +29,73 @@ def test_parse_keeps_at_most_git_files_max(monkeypatch):
     assert [f["path"] for f in gitinfo.parse(out)["files"]] == ["a", "b"]
 
 
+SAFE = ["-c", "core.fsmonitor=false", "-c", "log.showSignature=false"]
+
+
 def test_status_runs_git_without_shell_window_and_locks(monkeypatch, tmp_path):
     seen = {}
 
     def run(args, **kw):
+        if "config" in args:
+            return subprocess.CompletedProcess(args, 1, b"", b"")  # фильтров в конфиге нет
         seen.update(args=args, **kw)
         return subprocess.CompletedProcess(args, 0, b"# branch.head main\0", b"")
 
     monkeypatch.setattr(subprocess, "run", run)
     assert gitinfo.status(tmp_path)["branch"] == "main"
-    assert seen["args"] == ["git", "-C", str(tmp_path), "status", "--porcelain=v2", "--branch", "-z"]
+    assert seen["args"] == ["git", "-C", str(tmp_path), *SAFE, "status", "--ignore-submodules=dirty",
+                            "--porcelain=v2", "--branch", "-z"]
     assert seen["env"]["GIT_OPTIONAL_LOCKS"] == "0" and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert seen["env"]["PATH"] == os.environ["PATH"]
     assert seen["env"]["GIT_CEILING_DIRECTORIES"] == os.path.realpath(tmp_path.parent)  # выше проекта не искать
     assert seen["timeout"] == 25 and seen["capture_output"] is True
     assert seen["creationflags"] == subprocess.CREATE_NO_WINDOW and not seen.get("shell")
+
+
+def test_status_switches_off_filter_drivers_of_the_repository_config(monkeypatch, tmp_path):
+    """Драйверы из конфига репозитория (local/worktree, с include) гасятся; драйверы системы и владельца — нет."""
+    calls = []
+    scopes = (b"system\0filter.lfs.clean\ngit-lfs clean -- %f\0local\0filter.evil.clean\ntouch x; cat\0"
+              b"worktree\0filter.My Driver.process\nrun\0global\0filter.own.smudge\nown\0")
+
+    def run(args, **kw):
+        calls.append(args)
+        if "config" in args:
+            assert args[args.index("config"):] == ["config", "--show-scope", "-z", "--get-regexp",
+                                                   r"^filter\..*\.(clean|smudge|process)$"]
+            return subprocess.CompletedProcess(args, 0, scopes, b"")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    gitinfo.run(tmp_path, ["status", "-z"])
+    status = calls[-1]
+    for name in ("evil", "My Driver"):
+        for key, value in (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false")):
+            assert f"filter.{name}.{key}={value}" in status
+    assert not any("lfs" in arg or ".own." in arg for arg in status)
+    assert status[-3:] == ["status", "--ignore-submodules=dirty", "-z"]
+    calls.clear()
+    gitinfo.run(tmp_path, ["log", "-1"])                      # прочие команды фильтров не запускают
+    assert calls == [["git", "-C", str(tmp_path), *SAFE, "log", "-1"]]
+
+
+@pytest.mark.parametrize("answer", [
+    subprocess.CompletedProcess([], 129, b"", b"usage"),                      # git без --show-scope
+    subprocess.CompletedProcess([], 0, b"local\0filter.a=b.clean\nx\0", b""),  # имя не выразить через -c
+    subprocess.CompletedProcess([], 0, b"local\0filter.\xff.clean\nx\0", b""),
+])
+def test_status_is_not_read_when_the_filter_config_cannot_be_checked(monkeypatch, tmp_path, answer):
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        return answer
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert gitinfo.run(tmp_path, ["status"]).returncode != 0
+    assert len(calls) == 1                                    # сам статус не запускался
+    with pytest.raises(errors.Refused):
+        gitinfo.status(tmp_path)
 
 
 @pytest.mark.parametrize("outcome", ["fail", "missing"])

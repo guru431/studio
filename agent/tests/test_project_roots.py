@@ -61,6 +61,59 @@ def test_roots_and_projects_do_not_duplicate_or_follow_junctions(tmp_path):
         projects.find_project(cfg, projects.pid("outside"))
 
 
+def test_a_root_behind_a_junction_finds_its_projects(tmp_path):
+    """Корень — junction (`D:\\Projects` → `E:\\src`) в прежнем config.json: проекты видны и открываются."""
+    real = tmp_path / "real"
+    (real / "demo").mkdir(parents=True)
+    alias = tmp_path / "alias"
+    _winapi.CreateJunction(str(real), str(alias))
+    cfg = store.Config(projects_roots=[str(alias)])  # прежняя запись, без нормализации при сохранении
+    rows = projects.Catalog().list(cfg)
+    assert rows == [{"pid": projects.pid("demo"), "name": "demo"}]
+    assert projects.Catalog().find(cfg, rows[0]["pid"]) == real / "demo"
+    assert projects.find_project(cfg, rows[0]["pid"]) == real / "demo"
+    assert projects.parent_root(cfg, real / "demo") == str(real)
+
+
+def test_saved_roots_are_the_real_paths(tmp_path):
+    """Окно и консоль сохраняют настоящий путь: ссылка или подменённый диск не расходятся между проверками."""
+    real = tmp_path / "real"
+    (real / "demo").mkdir(parents=True)
+    alias = tmp_path / "alias"
+    _winapi.CreateJunction(str(real), str(alias))
+    cfg = store.Config()
+    cfg.set_project_roots([str(alias) + "\\"])
+    assert cfg.projects_roots == [str(real)] and cfg.projects_root == str(real)
+    assert cfg.projects_legacy_root == str(real)
+    # id проектов прежней записи (через ссылку) не меняются: pid исходной папки — по имени.
+    old = store.Config(projects_roots=[str(alias)])
+    assert projects.list_projects(old) == projects.list_projects(cfg)
+
+
+@pytest.mark.integration
+def test_a_subst_drive_root_finds_its_projects(tmp_path):
+    """Корень на диске `subst` (так же ведёт себя подключённый сетевой диск): realpath — настоящая папка."""
+    import os
+    import string
+    import subprocess
+
+    (tmp_path / "demo").mkdir()
+    used = {d for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")}
+    free = next((d for d in reversed(string.ascii_uppercase[3:]) if d not in used), None)
+    if free is None:
+        pytest.skip("нет свободной буквы диска")
+    subprocess.run(["subst", f"{free}:", str(tmp_path)], check=True, capture_output=True)
+    try:
+        cfg = store.Config(projects_roots=[f"{free}:\\"])
+        rows = projects.Catalog().list(cfg)
+        assert [row["name"] for row in rows] == ["demo"]
+        assert projects.Catalog().find(cfg, rows[0]["pid"]) == Path(os.path.realpath(tmp_path / "demo"))
+        cfg.set_project_roots([f"{free}:\\"])
+        assert cfg.projects_roots == [os.path.realpath(tmp_path)]
+    finally:
+        subprocess.run(["subst", f"{free}:", "/d"], capture_output=True)
+
+
 @pytest.mark.parametrize("roots", [[], [""], "C:/projects", [1], [None]])
 def test_setup_rejects_invalid_root_lists(roots):
     assert setup.folder_errors(setup.folders({"projects_roots": roots})) == [setup.NO_FOLDER]
