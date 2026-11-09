@@ -15,11 +15,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, CLINotFoundError, HookMatcher,
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent)
 
 from . import attachments as attachment_input
 from . import cli, events, image_input, limits, permissions, sessions, store, timeline
+from .claude_sdk import ClaudeSDKClient
 from .errors import Refused
 
 log = logging.getLogger(__name__)
