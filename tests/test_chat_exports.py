@@ -158,6 +158,29 @@ def test_pdf_html_disables_raw_html_and_all_image_fetches():
     assert 'table' in parsed.tags and '&lt;iframe' in output
 
 
+def test_md2pdf_second_parse_keeps_the_safe_html_as_one_block():
+    """md2pdf parses chat.md again as CommonMark with raw HTML: no blank line may end the block."""
+    from markdown_it import MarkdownIt
+    import html as htmllib
+    import re
+
+    code = 'line1\n\n![x](http://10.77.1.15:4000/slot)\n# comment\n\n  \ndef f(*args, **kw): *x*\n\n'
+    text = chat_exports.markdown({'title': 'Чат', 'messages': [
+        {'role': 'user', 'text': f'```\n{code}```\n\n> цитата\n>\n> ```\n> a\n>\n> ![q](http://evil.invalid/q)\n> ```\n\n'
+                                 '| A | B |\n|---|---|\n| `x` | ![t](http://t.invalid/t) |\n\n'
+                                 '- один\n\n- два\n\n      отступ\n\n      ![i](http://i.invalid/i)\n'},
+        {'role': 'assistant', 'text': 'ok', 'reasoning': 'шаг\n\n![r](http://r.invalid/r)\n# заголовок\n',
+         'steps': [{'tool': 'Bash', 'input': {'command': 'echo'}, 'text': 'out\n\n![s](https://s.invalid/s)\n*курсив*'}]}]})
+    first = chat_exports._safe_html(text)
+    parser = MarkdownIt('commonmark', {'html': True, 'typographer': False}).enable('table').enable('strikethrough')
+    second = parser.render(first)
+    assert second == first
+    assert '<img' not in second and second.count('<h1>') == 1 and '<em>' not in second
+    blocks = [htmllib.unescape(b) for b in re.findall(r'<pre[^>]*><code[^>]*>(.*?)</code></pre>', second, re.S)]
+    assert code in blocks
+    assert 'шаг\n\n![r](http://r.invalid/r)\n# заголовок\n\n' in blocks
+
+
 def test_markdown_tool_fences_preserve_nested_code_and_attachment_names():
     result = chat_exports.markdown({'title': 'Чат', 'messages': [
         {'role': 'assistant', 'text': '**Ответ**', 'steps': [

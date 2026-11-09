@@ -397,6 +397,100 @@ def test_release_keeps_the_lease_of_a_document_started_meanwhile(studio):
     assert ocr_releases(studio) == 2 and ocr.LEASED == {}
 
 
+def test_release_retry_stops_when_a_document_starts_meanwhile(studio, monkeypatch):
+    """409 release конца документа Алисы, пауза перед повтором — за неё в студии появился документ Боба:
+    повтора нет (он освободил бы слот посреди нового документа), запись LEASED — концу документа Боба."""
+    uid, conn = gateway_user(studio)
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    uid_b, conn_b = gateway_user(studio)
+    codes = [409, 200]
+
+    async def release(request):
+        studio.gw.releases.append((None, request.headers.get("authorization")))
+        return httpx.Response(codes.pop(0), json={})
+    studio.gw.on["/pages/ocr-release"] = release
+    real, started = clock.SLEEP, []
+
+    async def pause(seconds):
+        if seconds == ocr.RETRY_SEC and not started:
+            source = await media.save_async(uid_b, scan_pdf("ink"), "application/pdf", NAME)
+            started.append(ocr.create(uid_b, conn_b, "hunyuan-ocr", NAME, origin="section", source_media_id=source,
+                                      pages=[{"n": 1, "state": "waiting", "media_id": None, "text": None}]))
+        await real(seconds)
+    monkeypatch.setattr(clock, "SLEEP", pause)
+    assert wait_scan(studio, pdf_scan(studio, uid, conn, "ink"))["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS and started)
+    assert ocr_releases(studio) == 1 and ocr.LEASED != {}
+    on_loop(studio, ocr.kick, uid_b)
+    assert wait_scan(studio, started[0])["state"] == "done"
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert ocr_releases(studio) == 2 and ocr.LEASED == {}
+    assert [p for p in paths(studio) if p.startswith("/pages/")] == [
+        "/pages/ocr", "/pages/ocr-release", "/pages/ocr", "/pages/ocr-release"]
+
+
+def test_retry_page_recognizes_only_that_page_again(studio):
+    """«Повторить страницу»: только эта `failed` — снова в очередь, PNG страницы — прежний (не рисуется и не
+    сохраняется заново), итог документа — со всеми страницами."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_replies = [(200, answer("Обрывок", "length"))]
+    sid = pdf_scan(studio, uid, conn, "ink", "ink")
+    row = wait_scan(studio, sid)
+    assert row["state"] == "done" and row["text"] == TEXT
+    media_before = on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM media").fetchone()[0])
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 2}).status_code == 409      # не failed
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1})
+    assert r.status_code == 202 and r.json()["state"] in ocr.RUNNING
+    row = wait_scan(studio, sid)
+    assert (row["state"], row["done_pages"], row["text"]) == ("done", 2, f"{TEXT}\n\n{TEXT}")
+    assert [(p["state"], p["detail"]) for p in page_rows(studio, sid)] == [("done", None), ("done", None)]
+    assert len(studio.gw.ocr_requests) == 3
+    assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM media").fetchone()[0]) == media_before
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).json()["detail"]["code"] == "nothing"
+
+
+def test_retry_refuses_a_running_or_foreign_document(studio):
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    sid = pdf_scan(studio, uid, conn, "ink")
+    try:
+        wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+        r = studio.c.post(f"/api/ocr/{sid}/retry", json={})
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "running"
+    finally:
+        studio.gw.ocr_hold = False
+    wait_scan(studio, sid)
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 404
+
+
+def test_recognize_again_after_an_error_continues_the_waiting_pages(studio, monkeypatch):
+    """Отказ документа (карта занята дольше срока) — «Распознать заново»: нераспознанные страницы снова в
+    очереди, у документа из чата текст вложения пересобирается его итогом."""
+    uid, conn = gateway_user(studio)
+    monkeypatch.setattr(ocr, "WAIT_MAX_SEC", 30)
+    studio.gw.ocr_replies = [(503, {"error": "занято"})] * 3
+    att = on_loop(studio, lambda: state.DB.execute(
+        "INSERT INTO attachments(id, user_id, kind, name, media_id, created) VALUES ('a1', ?, 'document', 'с.pdf', 'm', 0)"
+        " RETURNING id", (uid,)).fetchone()[0])
+    sid = pdf_scan(studio, uid, conn, "ink", origin="chat", attachment_id=att)
+    assert wait_scan(studio, sid)["state"] == "error"
+    assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]).startswith(
+        "[скан не распознан: карта занята")
+    studio.gw.ocr_hold = True
+    try:
+        assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 202
+        assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]) is None
+    finally:
+        studio.gw.ocr_hold = False
+    row = wait_scan(studio, sid)
+    assert (row["state"], row["text"]) == ("done", TEXT)
+    assert on_loop(studio, lambda: state.DB.execute("SELECT text FROM attachments").fetchone()[0]) == (
+        f"Страница 1\n\n{TEXT}")
+
+
 def test_queue_runs_one_at_a_time_and_caps_at_five(studio):
     uid, conn = gateway_user(studio)
     studio.gw.ocr_hold = True

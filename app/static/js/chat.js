@@ -213,6 +213,12 @@ async function readServer(job, response) {
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
         job.scan = data;                           // ответ ждёт распознавания скана — плашка до первого текста
         notify(job, false);
+      } else if (event === 'wait' && data) {       // {seconds} — ждём карту (503 шлюза), {} — шлюз принял запрос
+        job.scan = null;
+        job.wait = Number.isFinite(data.seconds) ? Date.now() - data.seconds * 1000 : null;
+        notify(job, false);
+      } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
+        break;
       } else if (event === 'tool' && data && typeof data.kind === 'string') {
         thinkEnd(job);                             // крутится одно: инструмент, а не «Думает…»
         job.scan = null;
@@ -910,7 +916,19 @@ function build(view, ctx) {
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
-        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null);
+        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null,
+      // скан вложения кончился с нераспознанными страницами: тот же документ — снова в очередь, текст — его итог
+      a.rescan ? button('Распознать заново', { class: 'btn btn-sm att-rescan' }, async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await api('POST', `/api/attachments/${encodeURIComponent(a.id)}/ocr`);
+          kick();
+          notice.textContent = '';
+        } catch (err) {
+          notice.textContent = words(err);
+        }
+        reload();
+      }) : null);
   }
 
   function messageNode(m, last) {
@@ -931,9 +949,20 @@ function build(view, ctx) {
       steps.open = true;
       steps.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
+    // ответ ждёт карту (503 шлюза): «Не ждать» — один узел на сообщение, перерисовка счётчика его не пересоздаёт
+    const nowait = button('Не ждать', { class: 'btn btn-sm msg-nowait', hidden: true }, async () => {
+      nowait.disabled = true;
+      try {
+        await api('POST', `/api/chats/${chatId}/nowait`);
+      } catch (err) {
+        if (err.code !== 'state') notice.textContent = words(err);   // state — уже не ждёт
+      } finally {
+        nowait.disabled = false;
+      }
+    });
     const node = el('div', { class: 'msg assistant' }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, md, steps, meta, actions));
-    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, actions, last, shown: null });
+      el('div', { class: 'msg-body' }, badge, think, md, steps, meta, nowait, actions));
+    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null });
     paint(m);
     return node;
   }
@@ -1040,7 +1069,11 @@ function build(view, ctx) {
     }
     let text = '';
     let kind = '';
-    if (m.status === 'streaming') {
+    // карта занята (503 шлюза): своя вкладка — событие `wait`, ответ, который читает не она, — `wait` с сервера
+    const waiting = m.status === 'streaming' && (job ? job.wait != null : Number.isFinite(m.wait));
+    p.nowait.hidden = !waiting;
+    if (waiting) text = `жду карту · ${job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)}`;
+    else if (m.status === 'streaming') {
       // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке
       if (job) text = job.tool || job.scan || job.first || job.thinkFrom ? '' : `загружаю модель · ${elapsed(job.started)}`;
       else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
@@ -1135,10 +1168,12 @@ function build(view, ctx) {
     } else if ((remoteStream() || otherTab()) && !jobs.has(chatId)) poll = setTimeout(reload, POLL_MS);
   }
 
+  /* отправка принята: она уходит из поля, даже если открыт уже другой диалог (поле общее) — чипы по самим
+     объектам, текст — только тот же, что ушёл (набранное заново остаётся) */
   function acknowledgeTurn(attempt) {
-    if (pendingTurn !== attempt) return;
-    pendingTurn = null;
-    if (chatId !== attempt.id || attempt.regenerate) return;
+    if (pendingTurn === attempt) pendingTurn = null;
+    if (attempt.regenerate || attempt.acknowledged) return;
+    attempt.acknowledged = true;
     if (input.value === attempt.text) { input.value = ''; autosize(); }
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
@@ -1197,7 +1232,6 @@ function build(view, ctx) {
     chat = null;
     needsReload = false;
     failures = 0;
-    pendingTurn = null;
     historyRead?.controller.abort();
     historyRead = null;
     draftWeb = false;
@@ -1532,7 +1566,8 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(false);
     loadList();
-    if (job.lost || job.tooled) reload();          // источники ответа — с сервера
+    // источники ответа и после ошибки — «Распознать заново» у вложений: с сервера
+    if (job.lost || job.tooled || job.message.status === 'error') reload();
   }
 
   /* события */
