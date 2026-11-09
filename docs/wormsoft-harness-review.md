@@ -1,6 +1,7 @@
 # Wormsoft Harness 0.1.30: что полезно для Студии
 
 Дата анализа: 2026-10-31. Источник: временная копия `Wormsoft_Harness_0.1.30_source/`.
+В репозиторий она не входит: пути ниже вида `src/…` — внутри той копии, а не ссылки.
 
 После анализа реализован пакет studio-agent 0.8.0: `@`-подсказки, диффы, ограниченный поиск по содержимому,
 очередь с паузой и редактированием, штатное ветвление Claude/Codex, чтение их подзадач и создание Git-worktree
@@ -29,9 +30,9 @@
 | Интерфейс | Vue, Pinia, Vite; также Electron | PWA, JavaScript без сборки; отдельный Windows-мост |
 | Модели | Собственный каталог и подключения по API | В «Агентах» — настройки и доступ установленных помощников; обычный чат имеет свои подключения |
 
-Это видно в [AgentLoop.ts](../Wormsoft_Harness_0.1.30_source/src/backend/agent/AgentLoop.ts),
-[ModelRuntime.ts](../Wormsoft_Harness_0.1.30_source/src/backend/models/ModelRuntime.ts),
-[package.json](../Wormsoft_Harness_0.1.30_source/package.json) и нашем
+Это видно в `src/backend/agent/AgentLoop.ts`,
+`src/backend/models/ModelRuntime.ts`,
+`package.json` Harness и нашем
 [app/claude_code.py](../app/claude_code.py).
 Описание пакета ещё упоминает pi.dev, но текущий код уже содержит собственный runtime.
 Vue-компоненты нельзя вставить в наш фронтенд без адаптации.
@@ -50,11 +51,11 @@ Vue-компоненты нельзя вставить в наш фронтен�
 
 **1. Подсказки `@файл` и список реально доступных `/команд`.**
 
-У Harness есть [FileIndexService](../Wormsoft_Harness_0.1.30_source/src/backend/projects/FileIndexService.ts):
+У Harness есть FileIndexService (`src/backend/projects/FileIndexService.ts`):
 локальный обход, исключения для служебных каталогов, предел 5000 файлов, кэш на 30 секунд,
 до 50 результатов с нечётким поиском. Выбор в композере вставляет относительный путь в текст,
 а не загружает содержимое файла. Интерфейс —
-[ComposerAutocomplete.vue](../Wormsoft_Harness_0.1.30_source/src/frontend/components/ComposerAutocomplete.vue).
+`src/frontend/components/ComposerAutocomplete.vue`.
 
 Для Студии: индекс строит мост в границах выбранного проекта; браузер получает только подсказки.
 Не обходить внешние ссылки, учитывать исключённые и чувствительные файлы, явно обозначать неполный
@@ -68,9 +69,9 @@ Vue-компоненты нельзя вставить в наш фронтен�
 
 **2. Диффы и понятные заголовки шагов.**
 
-У Harness [ToolDiffView.vue](../Wormsoft_Harness_0.1.30_source/src/frontend/components/chat/ToolDiffView.vue)
+У Harness `src/frontend/components/chat/ToolDiffView.vue`
 показывает добавленные и удалённые строки, номера и ограниченный по высоте блок;
-[toolShortInfo.ts](../Wormsoft_Harness_0.1.30_source/src/frontend/utils/toolShortInfo.ts)
+`src/frontend/utils/toolShortInfo.ts`
 выбирает короткую сводку аргументов для каждого инструмента.
 В Студии [stepNode](../app/static/js/code-chat.js) сейчас раскрывает JSON ввода и текст результата.
 
@@ -80,16 +81,16 @@ Vue-компоненты нельзя вставить в наш фронтен�
 У Codex изменения уже попадают в `input.changes`, у Claude доступны аргументы Edit/Write.
 Нужны одинаковый live/history-вид и обычный текстовый вариант для неизвестных инструментов.
 
-Парсер [editDiff.ts](../Wormsoft_Harness_0.1.30_source/src/frontend/utils/editDiff.ts) рассчитан на
+Парсер `src/frontend/utils/editDiff.ts` рассчитан на
 свой формат `+N/-M`, а не на любой Git unified diff. Он также показывает содержимое `write`
 целиком как добавленные строки: это не доказательство, что существующий файл был только дополнен.
 При адаптации различать точный дифф, создание файла и доступный только новый текст.
 
 **3. Поиск по содержимому агентных чатов.**
 
-[ChatSearchService](../Wormsoft_Harness_0.1.30_source/src/backend/search/ChatSearchService.ts)
+ChatSearchService (`src/backend/search/ChatSearchService.ts`)
 ищет по названиям и транскриптам, выдаёт до 50 чатов и трёх фрагментов на чат.
-В [SessionEntryRepository](../Wormsoft_Harness_0.1.30_source/src/backend/database/repositories/SessionEntryRepository.ts)
+В SessionEntryRepository (`src/backend/database/repositories/SessionEntryRepository.ts`)
 есть FTS5 trigram-индекс, отдельный путь для коротких запросов и предел сканируемых результатов.
 Это реализованная функция, а не только пункт документации.
 
@@ -104,8 +105,8 @@ Vue-компоненты нельзя вставить в наш фронтен�
 **4. Очередь: исправить, удалить, продолжить после текущей задачи.**
 
 У Harness есть две очереди: вмешательство на безопасной границе выполнения и сообщение после
-полного окончания работы. [LiveSession.pauseQueue/resumeQueue](../Wormsoft_Harness_0.1.30_source/src/backend/sessions/LiveSession.ts)
-временно удерживают очередь; [queueChanges.ts](../Wormsoft_Harness_0.1.30_source/src/backend/sessions/queueChanges.ts)
+полного окончания работы. `LiveSession.pauseQueue/resumeQueue` (`src/backend/sessions/LiveSession.ts`)
+временно удерживают очередь; `src/backend/sessions/queueChanges.ts`
 атомарно применяет пакет правок и сохраняет связь сообщений с картинками.
 Пауза очереди не прерывает текущий прогон. Hold живёт в памяти, не переживает рестарт хоста.
 
@@ -118,7 +119,7 @@ Vue-компоненты нельзя вставить в наш фронтен�
 
 **5. Ветвление от конкретного сообщения.**
 
-[ChatForkService.fork](../Wormsoft_Harness_0.1.30_source/src/backend/fork/ChatForkService.ts)
+`ChatForkService.fork` (`src/backend/fork/ChatForkService.ts`)
 создаёт новый чат с историей строго до выбранного пользовательского сообщения; его текст
 попадает в поле ввода для изменения. Есть связь с родителем, список потомков и запрет на
 ветвление во время выполнения задачи.
@@ -137,9 +138,9 @@ Vue-компоненты нельзя вставить в наш фронтен�
 
 **6. Worktree как окружение чата.**
 
-[WorktreeChatService](../Wormsoft_Harness_0.1.30_source/src/backend/worktree/WorktreeChatService.ts)
+WorktreeChatService (`src/backend/worktree/WorktreeChatService.ts`)
 создаёт дочерний чат в отдельном checkout и наследует переписку;
-[WorktreeService](../Wormsoft_Harness_0.1.30_source/src/backend/worktree/WorktreeService.ts)
+WorktreeService (`src/backend/worktree/WorktreeService.ts`)
 управляет Git-worktree, ветками и необязательным переносом незакоммиченных правок.
 Это сильная функция для параллельных исправлений или сравнения двух подходов.
 
@@ -157,12 +158,12 @@ worktree. Понадобятся проверенные привязки доп�
 
 **7. Дочерние агенты как открываемые чаты.**
 
-[SubchatService](../Wormsoft_Harness_0.1.30_source/src/backend/subagents/SubchatService.ts)
+SubchatService (`src/backend/subagents/SubchatService.ts`)
 реально создаёт отдельные дочерние сессии, поддерживает sync/async-запуски, передачу результата
 родителю, лимит параллелизма, отмену и восстановление ожидающих результатов при старте.
 Для собственных подчатов вложенность ограничена одним уровнем.
 Конфигурации ролей читаются из Markdown с frontmatter
-([agents.ts](../Wormsoft_Harness_0.1.30_source/src/backend/agent/agents.ts)).
+(`src/backend/agent/agents.ts`).
 
 Перенять прежде всего дерево «родитель → дочерняя задача», статус, открытие истории и расход.
 Сейчас [sessions.normalize](../agent/studio_agent/sessions.py) пропускает сообщения дочерних
@@ -186,12 +187,12 @@ Claude-агентов, а [codex.step_of](../agent/studio_agent/codex.py) сво
 | `suggest_replies` | Удобные варианты следующего ответа на телефоне | В Harness это системный инструмент с управлением окончанием хода; нужна поддержка CLI, простого UI недостаточно |
 | Асинхронные внешние задания | Запуск из автоматизации, ID задания, статус, таймаут, доставка итога | Отдельный авторизованный API; не копировать передачу промпта в GET или обход подтверждений |
 
-Реализации: [MCP tools](../Wormsoft_Harness_0.1.30_source/src/backend/mcp/tools.ts),
-[UpdateService](../Wormsoft_Harness_0.1.30_source/src/backend/updates/UpdateService.ts),
-[DocumentProcessingService](../Wormsoft_Harness_0.1.30_source/src/backend/documents/DocumentProcessingService.ts),
-[LlmRetryService](../Wormsoft_Harness_0.1.30_source/src/backend/sessions/LlmRetryService.ts),
-[useHotkeys](../Wormsoft_Harness_0.1.30_source/src/frontend/composables/useHotkeys.ts),
-[AsyncCallService](../Wormsoft_Harness_0.1.30_source/src/backend/async/AsyncCallService.ts).
+Реализации: `src/backend/mcp/tools.ts`,
+`src/backend/updates/UpdateService.ts`,
+`src/backend/documents/DocumentProcessingService.ts`,
+`src/backend/sessions/LlmRetryService.ts`,
+`src/frontend/composables/useHotkeys.ts`,
+`src/backend/async/AsyncCallService.ts`.
 Это дополнительные кандидаты, а не согласованный план реализации.
 
 **Что уже есть у нас и не является новым заимствованием.**
@@ -227,7 +228,7 @@ Claude-агентов, а [codex.step_of](../agent/studio_agent/codex.py) сво
 - Внешний control plane и Taskpad-флоу как обязательную часть Студии. В копии есть контракт
   интеграции, но это не исходники полного удалённого сервиса или готовый универсальный планировщик.
 
-Предыдущие решения о черновиках и избранном сверены с [IDEAS-archive.md](../IDEAS-archive.md).
+Предыдущие решения о черновиках и избранном сверены с архивом идей (`IDEAS-archive.md`, вне Git).
 Старую архивную запись об отказе от push нельзя трактовать как текущее отсутствие push:
 более поздняя реализация уже описана в README и присутствует в проекте.
 
