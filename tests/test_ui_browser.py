@@ -8035,7 +8035,9 @@ def test_code_turn_streams_text_and_steps(browser, live):
             ("eval", "saved", f"localStorage.setItem('studio-code-choice:{aid}',"
                               " JSON.stringify({ model: 'sonnet', effort: 'high' }))"),
             *code_chat(aid, CODE_CHAT_A),
-            ("eval", "labels", "[...document.querySelectorAll('.code-pick')].filter(l => !l.hidden).map((l) => l.firstChild.textContent)"),
+            # на 320 px поверх трёх выборов — компактная кнопка `#code-settings-pick` (её проверяет test_ui_code_picker)
+            ("eval", "labels", "[...document.querySelectorAll('.code-pick:not(.code-settings-pick)')]"
+                               ".filter(l => !l.hidden).map((l) => l.firstChild.textContent)"),
             ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
                                 ".map((o) => [o.value, o.textContent]))"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
