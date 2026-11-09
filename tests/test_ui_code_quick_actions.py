@@ -40,7 +40,7 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
             set_value("#code-text", "Начать работу"), ("click", "#code-send"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
             ("eval", "delivery", """(() => {
-              const rights = document.querySelector('#code-access').closest('label').getBoundingClientRect();
+              const rights = document.querySelector('#code-access').closest('.code-pick').getBoundingClientRect();
               const delivery = document.querySelector('#code-delivery').getBoundingClientRect();
               return delivery.left >= rights.right && Math.abs(delivery.top - rights.top) < 2
                 && !!document.querySelector('#code-composer #code-delivery');

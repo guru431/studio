@@ -30,6 +30,7 @@
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api as request, me } from './api.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
+import { codePicker } from './code-picker.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -184,6 +185,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const delivery = el('select', { id: 'code-delivery', class: 'chip code-delivery',
     'aria-label': 'Когда передать сообщение' },
     el('option', { value: 'steer' }, 'Уточнить сейчас'), el('option', { value: 'queue' }, 'После текущей задачи'));
+  const picks = new Map();
   const context = contextView(host, { chat, engine, project,
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
@@ -262,9 +264,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const sessionNotice = el('div', { id: 'code-session-notice', class: 'code-session-notice', hidden: true, role: 'status' },
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   const pick = (label, select) => {
-    select.setAttribute('aria-label', label);
-    return el('label', { class: 'code-pick chip' }, el('span', { class: 'code-pick-name' }, label),
-      el('span', { class: 'code-pick-value', 'aria-hidden': 'true' }, select.selectedOptions[0].textContent), select);
+    const view = codePicker(host, label, select);
+    picks.set(select, view);
+    return view.root;
   };
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
@@ -309,13 +311,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   paintImages();
 
   function paintPicks() {
-    for (const select of [model, effort, access, delivery]) {
-      const label = select.closest('.code-pick');
-      if (!label) continue;
-      const value = select.selectedOptions[0]?.textContent || DEFAULT;
-      label.querySelector('.code-pick-value').textContent = value;
-      label.title = value;
-    }
+    for (const view of picks.values()) view.update();
   }
 
   function paintSettings(data) {
@@ -345,6 +341,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     stateRequest = own;
     resolving = true;
     model.disabled = effort.disabled = access.disabled = true;
+    paintPicks();
     send.disabled = true;
     try {
       const data = await api('POST', endpoint('/state'), { model: model.value || null, effort: effort.value || null,
@@ -740,6 +737,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending || resolving || historyLoading || !settingsReady;
     paintQuickActions();
     model.disabled = effort.disabled = access.disabled = resolving || historyLoading || running;
+    paintPicks();
     const label = running ? (engine === 'opencode' ? 'Отправить после ответа' : 'Отправить уточнение') : 'Отправить';
     send.title = label;
     send.setAttribute('aria-label', label);
@@ -1602,6 +1600,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     unmount() {
       alive = false;
       sharing.unmount();
+      for (const view of picks.values()) view.unmount();
       visualizations.unmount();
       unsubscribeGit?.();
       context.unmount();
