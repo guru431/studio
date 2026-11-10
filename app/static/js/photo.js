@@ -900,7 +900,7 @@ function build(view, ctx) {
 
   function autosize() {
     prompt.style.height = 'auto';
-    // пустое — в одну строку, как при открытии: длинная подсказка на телефоне иначе растянула бы рамку до двух
+    // Пустое поле сохраняет три строки из общих стилей, непустое растёт по содержимому.
     if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
   }
 

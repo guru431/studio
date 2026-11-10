@@ -4096,8 +4096,8 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
     v = r["values"]
     for name, tools in (("photo", 3), ("chat", 3), ("video", 3)):
         empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
-        # Общая высота держит колонку из трёх кнопок и не прыгает после первой буквы.
-        assert 90 <= empty[0] <= 96, (name, empty)
+        # Начальные три строки держат колонку кнопок и не прыгают после первой буквы.
+        assert 72 <= empty[0] <= 76, (name, empty)
         hint, height = v[f"{name}-hint"]
         assert name == "chat" or hint <= height, (name, v[f"{name}-hint"], empty)
         assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)

@@ -378,16 +378,16 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 label { font-size:var(--fs-sm); color: var(--text-2); }
 
 /* основные поля разделов: одна рамка и размеры; длинное содержимое прокручивается внутри неё */
-.composer { flex: none; display: flex; flex-direction: column; gap: var(--space-4); width: calc(100% - 2 * var(--space-7)); max-width: 900px;
+.composer { flex: none; display: flex; flex-direction: column; gap: var(--space-2); width: calc(100% - 2 * var(--space-7)); max-width: 900px;
   align-self: center; min-width: 0; min-height: 0; max-height: 75%; overflow: auto; overscroll-behavior: contain;
-  margin: 0 var(--space-7) var(--space-7); padding: var(--space-5) var(--space-6);
+  margin: 0 var(--space-7) var(--space-7); padding: var(--space-3) var(--space-4);
   background: var(--surface-1); border: 1px solid var(--field-border); border-radius: var(--r-menu); }
-.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(25 * var(--dvh)); padding: var(--space-2) 0; border: 0; outline: none;
+.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(25 * var(--dvh)); padding: var(--space-1) 0; border: 0; outline: none;
   background: none; color: var(--text-1); font: inherit; font-size: var(--fs-lg); resize: none; line-height: 1.45; }
-.composer > .field-box { flex: none; min-height: calc(90px + 2 * var(--space-1)); }
-.composer > .field-box > textarea { min-height: calc(90px + 2 * var(--space-1)); }
+.composer > .field-box { flex: none; }
+.composer > .field-box > textarea { min-height: calc(3lh + 2 * var(--space-1)); } /* три строки с текущим шрифтом */
 .composer > .composer-bar { position: sticky; bottom: 0; z-index: var(--z-raised); background: var(--surface-1);
-  box-shadow: 0 var(--space-6) 0 var(--surface-1); }
+  box-shadow: 0 var(--space-3) 0 var(--surface-1); }
 /* строка под полем: слева параметры (переносятся внутри себя), справа главная кнопка — на последней их строке */
 .composer-bar { flex: none; display: flex; align-items: flex-end; gap: var(--space-3); }
 .composer-opts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
@@ -396,7 +396,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   .composer { width: calc(100% - 2 * var(--space-6)); margin: 0 var(--space-6) var(--space-6); }
 }
 @media (pointer: coarse) {
-  .composer { padding-right: max(var(--space-6), calc((var(--h-touch) / var(--ui-scale, 1) - 30px) / 2)); }
+  .composer { padding-right: max(var(--space-4), calc((var(--h-touch) / var(--ui-scale, 1) - 28px) / 2)); }
 }
 @media (max-width: 420px) { .composer-opts .toggle-word { display: none; } }   /* «Интернет», «Рассуждение» — значком */
 
@@ -612,8 +612,10 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .field-tools .icon-btn:not(.mic.on) { width: 30px; height: 30px; }
 .field-tools .icon-btn svg.ico { width: 17px; height: 17px; }
 .field-tools .mic.on { height: 30px; }
-.composer .field-tools { width: 30px; }
-.composer .field-tools .mic.on { width: 30px; height: 40px; padding: var(--space-1); flex-direction: column; gap: 0; border-radius: var(--r-control); }
+.composer .field-tools { width: 28px; gap: 0; }
+.composer .field-tools .icon-btn:not(.mic.on) { width: 28px; height: 24px; }
+#view .composer .field-tools .icon-btn::after { top: 0; bottom: 0; } /* соседние кнопки колонки не перехватывают касание */
+.composer .field-tools .mic.on { width: 28px; height: 40px; padding: var(--space-1); flex-direction: column; gap: 0; border-radius: var(--r-control); }
 .composer .mic-time { font-size: var(--fs-2xs); line-height: 12px; }
 .composer .attach.on { color: var(--accent); background: var(--accent-soft); }
 .field-tools .chip { padding: 0 9px; font-size:var(--fs-xs); font-weight: 600; }

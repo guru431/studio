@@ -1305,7 +1305,7 @@ function build(view, ctx) {
 
   function autosize() {
     input.style.height = 'auto';
-    // пустое — в одну строку: подсказка, не влезшая в строку, иначе растянула бы рамку до двух
+    // Пустое поле сохраняет три строки из общих стилей, непустое растёт по содержимому.
     if (input.value) input.style.height = `${input.scrollHeight}px`;
   }
 
