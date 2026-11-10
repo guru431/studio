@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import codex_progress, codex_rpc, diffs, events, limits, metadata, permissions, sessions, store, timeline
+from . import codex_progress, codex_rpc, diffs, events, history_images, limits, metadata, permissions, sessions, store, timeline
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -204,9 +204,11 @@ def normalize(turns):
         answer = None
         for item_index, item in enumerate(turn.get("items", [])):
             if item.get("type") == "userMessage":
-                text = "\n".join(c.get("text", "[изображение]") for c in item.get("content", [])
-                                 if isinstance(c, dict) and c.get("type") in ("text", "image", "localImage"))
+                content = item.get("content", [])
+                text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
+                images = history_images.references(content)
                 out.append({"id": item["id"], "role": "user", "text": text, "steps": [], "time": None,
+                            **({"images": images} if images else {}),
                             **({"forkable": False} if item_index else {})})
                 answer = None
                 continue
@@ -524,6 +526,22 @@ class CodexRunner(Runner):
         end = min(before, total) if before is not None else total
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end], budget=512 * 1024)
         return {"items": page, "start": end - len(page), "total": total, "engine": "codex"}
+
+    async def history_image(self, project, chat, message_id, index):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        try:
+            source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
+        except codex_rpc.RpcError as error:
+            if error.not_found:
+                raise Refused("not_found", "нет такого чата") from None
+            raise
+        if not same_project(source.get("cwd"), project):
+            raise Refused("not_found")
+        for turn in source.get("turns", []):
+            for message in turn.get("items", []):
+                if message.get("type") == "userMessage" and message.get("id") == message_id:
+                    return await asyncio.to_thread(history_images.payload, message.get("content"), index, "codex", project)
+        raise Refused("not_found", "Сообщение отсутствует в этом чате")
 
     async def fork_chat(self, project, chat, before=None):
         target = await asyncio.to_thread(self.aliases.target, project, chat)

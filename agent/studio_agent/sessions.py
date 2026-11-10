@@ -9,7 +9,7 @@ from pathlib import Path
 
 from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
 
-from . import diffs, limits, permissions, timeline
+from . import diffs, history_images, limits, permissions, timeline
 from .errors import Refused
 from .events import clip, text_of
 
@@ -59,9 +59,12 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
                         changes = diffs.for_tool(step["tool"], step["input"]) if not step["error"] else []
                         if changes:
                             step["changes"] = changes
-            text = text_of(content)
-            if text:
-                items.append({"id": m.uuid, "role": "user", "text": text, "steps": [], "time": None})
+            images = history_images.references(content)
+            text = text_of([block for block in content if not isinstance(block, dict) or block.get("type") != "image"]
+                           if images and isinstance(content, list) else content)
+            if text or images:
+                items.append({"id": m.uuid, "role": "user", "text": text, "steps": [], "time": None,
+                              **({"images": images} if images else {})})
                 answer = None
         elif m.type == "assistant":
             if answer is None:
@@ -163,6 +166,15 @@ def history(project: Path, chat: str, before: int | None, limit: int, *, index=N
     end = total if before is None else max(0, min(before, total))
     page = fit(items[max(0, end - limit):end], budget=512 * 1024)
     return {"items": page, "start": end - len(page), "total": total}
+
+
+def history_image(project, chat, message_id, index):
+    """Изображение только сообщения главного агента в выбранной сессии проекта."""
+    for message in get_session_messages(chat, directory=str(project)):
+        if message.uuid == message_id and message.type == "user" and message.parent_tool_use_id is None:
+            content = message.message.get("content") if isinstance(message.message, dict) else None
+            return history_images.payload(content, index, "claude", project)
+    raise Refused("not_found", "Сообщение отсутствует в этом чате")
 
 
 def exists(project: Path, chat: str) -> bool:

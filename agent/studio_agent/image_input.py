@@ -8,6 +8,15 @@ from .limits import IMAGE_COUNT as COUNT, IMAGE_MAX as FILE_MAX, IMAGES_MAX as T
 MIMES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 
+def mime_of(raw):
+    """Допустимый растровый формат по сигнатуре; окончательно изображение проверяет декодер Студии."""
+    signatures = {"image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+                  "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+                  "image/webp": raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
+                  "image/gif": raw.startswith((b"GIF87a", b"GIF89a"))}
+    return next((mime for mime, matched in signatures.items() if matched), None)
+
+
 def validate(images):
     """Проверка на машине обязательна: сервер не может подставить URL или локальный путь."""
     if not isinstance(images, list) or len(images) > COUNT:
@@ -26,11 +35,7 @@ def validate(images):
         total += len(raw)
         if len(raw) > FILE_MAX or total > TOTAL_MAX:
             raise Refused("too_large", "изображения больше предела: 5 МиБ на файл, 8 МиБ всего")
-        matches = {"image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
-                   "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
-                   "image/webp": raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
-                   "image/gif": raw.startswith((b"GIF87a", b"GIF89a"))}
-        if not matches[image["mime"]]:
+        if mime_of(raw) != image["mime"]:
             raise Refused("invalid", "формат изображения не совпадает с содержимым")
 
 

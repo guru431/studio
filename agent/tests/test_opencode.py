@@ -136,6 +136,21 @@ async def test_probe_models_and_all_efforts_without_prompt_deletes_only_temporar
     assert runner.fake.deleted == [SESSION] and all(c.closed for c in runner.fake.clients)
 
 
+async def test_history_images_load_from_the_same_owned_session_and_release_the_rpc(runner):
+    from test_image_input import PNG
+
+    runner.aliases.put(runner.project, CHAT, SESSION)
+    runner.fake.history = [{"sessionUpdate": "user_message_chunk", "messageId": "u",
+                            "content": {"type": "image", "mimeType": PNG["mime"], "data": PNG["data"]}}]
+    page = await runner.history(runner.project, CHAT, None, 30)
+    message = page["items"][0]
+    assert message["images"] == [{"index": 0, "name": "Изображение 1"}]
+    assert await runner.history_image(runner.project, CHAT, message["id"], 0) == PNG
+    with pytest.raises(Refused, match="not_found"):
+        await runner.history_image(runner.project, CHAT, "foreign", 0)
+    assert all(client.closed for client in runner.fake.clients)
+
+
 async def test_external_sessions_map_to_uuid_keep_project_and_history(runner, home):
     rows = await runner.chats(runner.project)
     assert len(rows) == 1

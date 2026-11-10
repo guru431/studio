@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
@@ -35,6 +35,7 @@ OPS = {
     "activity": (),
     "chats": ("project", "refresh"),
     "history": ("project", "chat", "before", "limit"),
+    "history_image": ("project", "chat", "message_id", "index"),
     "state": ("project", "chat", "model", "effort", "access"),
     "turn": ("project", "chat", "text", "model", "effort", "access"),
     "steer": ("project", "chat", "text"),
@@ -128,7 +129,7 @@ class Agent:
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
-                 "passive_requests": True}
+                 "passive_requests": True, "history_images": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -315,7 +316,10 @@ class Agent:
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
         if name == "message_id":
-            return value is None or isinstance(value, str) and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value)
+            return (value is None and op == "chat_fork" or isinstance(value, str)
+                    and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value))
+        if name == "index":
+            return type(value) is int and 0 <= value < history_images.COUNT
         if name == "project":
             return isinstance(value, str) and ID.fullmatch(value) is not None
         if name == "chat":
@@ -530,6 +534,16 @@ class Agent:
         parts = await asyncio.gather(*(read(name, backend) for name, backend in backends
                                       if backend is not None and (name == 'claude' or backend.catalog is not None)))
         return {"items": [item for rows, _ in parts for item in rows], "complete": all(ok for _, ok in parts)}
+
+    async def _op_history_image(self, frame, after):
+        project = await self._project(frame)
+        if frame.get("engine", "claude") == "claude":
+            data = await asyncio.to_thread(sessions.history_image, project, frame["chat"], frame["message_id"], frame["index"])
+        else:
+            data = await self._runner(frame).history_image(project, frame["chat"], frame["message_id"], frame["index"])
+        if not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
+            raise Refused("closed")
+        return data
 
     async def _op_history(self, frame, after):
         project = await self._project(frame)

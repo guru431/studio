@@ -150,6 +150,11 @@ class SubagentId(BaseModel):
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
+class HistoryImage(BaseModel):
+    message_id: str = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f]+$")
+    index: StrictInt = Field(ge=0, lt=32)
+
+
 class TurnImage(BaseModel):
     mime: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
     data: str = Field(max_length=(IMAGE_MAX + 2) // 3 * 4)
@@ -1226,6 +1231,25 @@ async def file_image(aid: int, pid: str, body: PathBody, request: Request):
     if not _session_open(request.state.digest):
         raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
     return Response(raw, media_type=mime)
+
+
+@router.post('/agents/{aid}/projects/{pid}/chats/{chat}/image')
+async def history_image(aid: int, pid: str, chat: str, body: HistoryImage, request: Request):
+    """Байты изображения принадлежащего чату сообщения; история и пути на сервере не сохраняются."""
+    own_agent(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    require_capability(aid, 'history_images')
+    data = await ask(request, aid, 'history_image', project=pid, chat=chat,
+                     message_id=body.message_id, index=body.index, passive=True)
+    if isinstance(data.get('data'), str) and len(data['data']) > (IMAGE_MAX + 2) // 3 * 4:
+        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+    raw, mime = await asyncio.to_thread(_image_bytes, data)
+    if len(raw) > IMAGE_MAX:
+        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+    if not _session_open(request.state.digest):
+        raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
+    return Response(raw, media_type=mime, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
 
 
 def _pdf_load(data: dict) -> tuple[bytes, int]:

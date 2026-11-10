@@ -54,6 +54,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/chats/1/fork"): {},
     ("GET", "/api/code/agents/1/projects/1/chats/1/subagents"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/subagent"): {"request_id": "child"},
+    ("POST", "/api/code/agents/1/projects/1/chats/1/image"): {"message_id": "m1", "index": 0},
     ("POST", "/api/code/agents/1/projects/1/files/suggest"): {"query": "a"},
     ("POST", "/api/code/agents/1/projects/1/search"): {"query": "a"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/queue"): {"request_id": "0" * 16, "version": 1, "text": "a"},
