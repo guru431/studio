@@ -178,7 +178,7 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
     assert v["settingsModels"] == ["", MODEL]
     assert v["saved"] == {"model": MODEL, "effort": "adaptive", "access": "default"}
     assert v["engine"] == "OpenCode" and v["picked"] == [MODEL, "adaptive", "default"]
-    assert v['permanent'] == ['code-changed-files', 'code-subagents', 'code-cache', 'code-context', 'code-usage']
+    assert v['permanent'] == ['code-changed-files', 'code-active-commands', 'code-subagents', 'code-cache', 'code-context', 'code-usage']
     assert v['unsupported'] and not code_requests(machine, 'subagents')
     assert v["card"] == "OpenCode просит разрешения" and v["menu"] == "OpenCode"
     assert v["claude"] == ["", "opus", "sonnet"] and v["tabs"] == ["OpenCode", "Claude Code"]
