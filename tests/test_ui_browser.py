@@ -3928,7 +3928,8 @@ def field_state(field):
       const b = box.getBoundingClientRect(); const r = f.getBoundingClientRect();
       const inside = (e) => {{ if (!e || e.hidden) return !!e; const x = e.getBoundingClientRect();
         return x.left >= b.left && x.right <= b.right && x.top >= b.top && x.bottom <= b.bottom; }};
-      const clear = box.querySelector('.field-tools .field-clear'); const en = box.querySelector('#photo-translate');
+      const clear = box.querySelector('.field-tools .field-clear');
+      const en = f.id === 'photo-prompt' ? document.querySelector('#photo-translate') : box.querySelector('#photo-translate');
       return [inside(box.querySelector('.field-tools .mic')), inside(clear), clear.hidden,
         document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === f, en ? en.hidden : null]; }})()"""
 
@@ -3988,7 +3989,7 @@ BAR = """((go) => { const g = document.querySelector(go); const bar = g.closest(
 
 @pytest.mark.parametrize("width", [320, 390])
 def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width):
-    """320 и 390 px: у чата 📎, «Интернет», «Рассуждение» и ↑ — одной строкой (слова кнопок — только в подписях);
+    """320 и 390 px: у чата «Интернет», «Рассуждение» и ↑ — одной строкой (слова кнопок — только в подписях);
     у фото, видео и озвучки главная кнопка справа на строке последнего чипа; поля seed нет; у чипа качества —
     название параметра."""
     login = f"bars{width}"
@@ -3998,7 +3999,7 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width
       const link = chat.links.find(l => l.connection.kind === 'srvllm');
       await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['local-gemma-abl'] }});
       return true; }})()"""
-    line = """[...document.querySelectorAll('#composer .attach, #web-toggle, #think-toggle, #send')].map(e => {
+    line = """[...document.querySelectorAll('#web-toggle, #think-toggle, #send')].map(e => {
       const b = e.getBoundingClientRect(); return Math.round(b.top + b.height / 2); })"""
     words = "[...document.querySelectorAll('#web-toggle, #think-toggle')].map(e => [e.getAttribute('aria-label'), e.offsetWidth < 50])"
     r = browser.drive(live.url + "/", [*photo_screen(login),
@@ -4033,7 +4034,7 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width
     assert quality == "576p" and smooth == "плавно" and "32 к/с" in smooth_title
     assert v["qualityName"] == ["Качество: Обычно 576p"] * 2
     assert v["qualityHigh"] == ["720p", "Качество: Высоко 720p"]
-    assert len(v["chat"]) == 4 and max(v["chat"]) - min(v["chat"]) <= 2, v["chat"]
+    assert len(v["chat"]) == 3 and max(v["chat"]) - min(v["chat"]) <= 2, v["chat"]
     assert v["words"] == [["Интернет", True], ["Рассуждение", True]]
     assert v["goHeight"] == 34 and not v["overflow"]
     assert not problems(r), problems(r)
@@ -4067,7 +4068,7 @@ def geo_steps(name, field, scope):
 
 @pytest.mark.parametrize("width", [320, 390])
 def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, width):
-    """Чат, фото, видео: с первой буквой появляются «очистить» (и «EN» у фото) — в ряд с микрофоном, рамка поля
+    """Чат, фото, видео: с первой буквой появляется «очистить» над скрепкой и микрофоном, рамка поля
     не меняет высоту, значки в рамке, середина поля свободна. «Очистить» шлёт `input`: поле чата сжимается
     обратно, счётчик озвучки — «0 / 2000», поиск — снова в ожидании."""
     login = f"oneline{width}"
@@ -4093,14 +4094,14 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=True, height=760)
     assert not r.get("failed"), r
     v = r["values"]
-    for name, tools in (("photo", 3), ("chat", 2), ("video", 2)):
+    for name, tools in (("photo", 3), ("chat", 3), ("video", 3)):
         empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
-        # у фото и видео на телефоне поле — под подсказку целиком (две строки, у видео уже 360 px — три), у чата — в одну
-        assert empty[0] <= {"chat": 34, "photo": 50, "video": 72 if width < 360 else 50}[name], (name, empty)
+        # Общая высота держит колонку из трёх кнопок и не прыгает после первой буквы.
+        assert 90 <= empty[0] <= 96, (name, empty)
         hint, height = v[f"{name}-hint"]
         assert name == "chat" or hint <= height, (name, v[f"{name}-hint"], empty)
         assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)
-        assert empty[1:4] == [1, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
+        assert empty[1:4] == [2, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
     assert v["chatTall"] > v["chat-empty"][4] + 20 and abs(v["chatBack"] - v["chat-empty"][4]) <= 1, (v["chatTall"], v["chatBack"])
     assert v["speechTyped"] == "3 / 2000" and v["speechCleared"] == "0 / 2000"
     assert v["searchCleared"] == "" and not v["overflow"]
@@ -6513,8 +6514,8 @@ def translator(live):
 @pytest.mark.parametrize("width", [320, 1280])
 def test_translate_text_goes_right_and_into_history(browser, live, translator, width):
     """«Hello» → «Перевести»: справа «Привет», строка истории «EN → RU», слева «Определить язык · английский».
-    Модель — умолчание раздела (локальная — без пометки, облачная — « · облако»). Широко окна рядом, на 320 px —
-    друг под другом и без горизонтальной прокрутки."""
+    Модель — умолчание раздела (локальная — без пометки, облачная — « · облако»).
+    Результат и история над закреплённым вводом, без горизонтальной прокрутки."""
     login = f"tl-text{width}"
     live.add_user(login)
     translator.chat_script = [["При", "вет"]]
@@ -6533,7 +6534,7 @@ def test_translate_text_goes_right_and_into_history(browser, live, translator, w
         ("eval", "auto", "document.querySelector('#tl-source').selectedOptions[0].textContent"),
         ("eval", "placed", """(() => { const l = document.querySelector('.tl-left').getBoundingClientRect();
           const r = document.querySelector('.tl-right').getBoundingClientRect();
-          return [l.bottom <= r.top + 0.5, l.right <= r.left + 0.5]; })()"""),
+          return r.top < l.top; })()"""),
         ("eval", "fits", NO_OVERFLOW)],
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
@@ -6543,7 +6544,7 @@ def test_translate_text_goes_right_and_into_history(browser, live, translator, w
     assert v["count"] == "5 / 300 000"
     assert v["pair"] == "EN → RU" and v["row"] == ["Hello", "Привет", "true"]
     assert v["auto"] == "Определить язык · английский"
-    assert v["placed"] == ([True, False] if width == 320 else [False, True])
+    assert v["placed"] is True
     assert v["fits"] is True
     sent = [b for b in translator.chat_requests if b.get("stream")][-1]
     assert sent["model"] == "local-gemma-abl" and sent["messages"][-1]["content"] == "Hello"
@@ -6594,7 +6595,7 @@ def test_translate_file_shows_source_and_translation(browser, live, translator):
         put_files("#tl-file-input", [("Записка.docx", docx(["Hello world."]))], DOCX_MIME),
         ("wait", "!document.querySelector('#tl-chip').hidden"),
         ("eval", "chosen", "[document.querySelector('#tl-chip').textContent,"
-                           " document.querySelector('#tl-input').closest('.field-box').hidden]"),
+                           " document.querySelector('#tl-input').hidden]"),
         ("click", "#tl-go"),
         ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Привет, мир.'"),
         ("eval", "tid", f"{TL_DONE}.dataset.id"),

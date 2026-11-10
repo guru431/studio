@@ -50,8 +50,10 @@ export function statusActions(host, bar, activity, actions, fixed) {
     const pinned = [...fixed.children].filter(node => node.tagName === 'BUTTON' && !node.hidden);
     const sizes = measure([...available.map(item => item.button), ...pinned, more]);
     const preferred = sizes.slice(available.length, -1);
-    const gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
-    const fixedGap = parseFloat(getComputedStyle(fixed).columnGap) || 0;
+    controls.style.removeProperty('column-gap');
+    fixed.style.removeProperty('column-gap');
+    let gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
+    let fixedGap = parseFloat(getComputedStyle(fixed).columnGap) || 0;
     const actionGap = parseFloat(getComputedStyle(actions).columnGap) || 0;
     const budget = bar.clientWidth / 2;
     const naturalFixed = preferred.reduce((sum, size) => sum + size.width, 0) + fixedGap * (pinned.length - 1);
@@ -67,7 +69,26 @@ export function statusActions(host, bar, activity, actions, fixed) {
     const minimum = pinned.map((button, index) => Math.min(preferred[index].width,
       button.classList.contains('code-cache') || button.classList.contains('code-usage') ? 32
         : button.classList.contains('code-context') ? 28 : 24));
-    if (hidden) moreWidth = Math.min(moreWidth, Math.max(24,
+    if (minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1)
+        + (hidden ? 24 + gap : 0) > budget) {
+      gap = fixedGap = 1;
+      controls.style.columnGap = fixed.style.columnGap = '1px';
+      for (const [index, button] of pinned.entries()) {
+        minimum[index] = Math.min(minimum[index], button.classList.contains('code-cache') || button.classList.contains('code-usage')
+          ? 28 : button.classList.contains('code-context') ? 24 : 20);
+      }
+    }
+    const compact = minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1)
+      + (hidden ? 20 + gap : 0) > budget;
+    controls.dataset.compact = String(compact);
+    if (compact) {
+      gap = fixedGap = 0;
+      controls.style.columnGap = fixed.style.columnGap = '0px';
+      for (const [index, button] of pinned.entries()) minimum[index] = Math.min(minimum[index],
+        button.classList.contains('code-cache') ? 26 : button.classList.contains('code-usage') ? 24
+          : button.classList.contains('code-context') ? 22 : 18);
+    }
+    if (hidden) moreWidth = Math.min(moreWidth, Math.max(20,
       budget - minimum.reduce((sum, width) => sum + width, 0) - fixedGap * (pinned.length - 1) - gap));
     const fixedRoom = budget - inlineWidth(shown) - (hidden ? moreWidth : 0) - gap * (Number(shown > 0) + Number(hidden > 0));
     const minimumSum = minimum.reduce((sum, width) => sum + width, 0);

@@ -1,10 +1,9 @@
 /* Поле ввода со значками (спека 2026-10-27-studio-ui-tidy, 4.4): чат, фото, «Изменить», видео, озвучка, поиск.
  *
- * fieldBox(field, { mic, clear, tools }) → { box, error }: box — `div.field-box`, в нём поле и справа значки
- * `div.field-tools`: «очистить» (`.field-clear`), затем `tools` (у фото — «EN»), последним микрофон
- * (attachMic). У многострочного поля (озвучка, «Изменить») значки — колонкой сверху вниз; у однострочного
- * (rows=1: чат, фото, видео; класс `one-line`) и у input поиска — рядом, прижаты к низу, чтобы высота рамки
- * не менялась с появлением «очистить». «Очистить» и `tools` видны, только если в поле есть текст: по событию
+ * fieldBox(field, { mic, clear, attach, tools, fit }) → { box, error }: box — `div.field-box`, в нём поле и справа значки
+ * `div.field-tools`: «очистить» (`.field-clear`), прикрепление `attach`, затем `tools`, микрофон
+ * (attachMic). В основных `.composer` значки всегда колонкой; у input поиска — рядом.
+ * «Очистить» и `tools` видны, только если в поле есть текст: по событию
  * `input` и при любой записи `field.value` кодом раздела (ответ модели, перевод, пресет, отправка) — иначе
  * значок «очистить» оставался бы у пустого поля. Нажатие «очистить» — пустое поле, событие `input` (раздел
  * пересчитает высоту, счётчик, поиск), фокус в поле; у поля только для чтения (перевод «EN») — ничего.
@@ -14,7 +13,7 @@ import { el } from './ui.js';
 
 const CLEAR = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
-export function fieldBox(field, { mic = true, clear = true, tools = [] } = {}) {
+export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false } = {}) {
   const error = el('div', { class: 'field-error' });
   const column = el('div', { class: 'field-tools' });
   const shown = [...tools];
@@ -32,10 +31,15 @@ export function fieldBox(field, { mic = true, clear = true, tools = [] } = {}) {
     column.append(button);
     shown.unshift(button);
   }
+  if (attach) column.append(attach);
   column.append(...tools);
   if (mic) column.append(attachMic(field, error));
   const paint = () => {
     for (const node of shown) node.hidden = !field.value;
+    if (fit && field.tagName === 'TEXTAREA' && field.rows === 1 && field.isConnected) {
+      field.style.height = 'auto';
+      if (field.value) field.style.height = `${field.scrollHeight}px`;
+    }
   };
   // запись value кодом раздела события input не шлёт — значки следят и за ней
   const own = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value');
@@ -43,8 +47,7 @@ export function fieldBox(field, { mic = true, clear = true, tools = [] } = {}) {
     set(next) { own.set.call(this, next); paint(); } });
   field.addEventListener('input', paint);
   paint();
-  // однострочное поле (чат, фото, видео) — значки в ряд, иначе колонка выше поля и рамка прыгала бы на первой букве
-  const box = el('div', { class: field.rows === 1 ? 'field-box one-line' : 'field-box' }, field, column);
+  const box = el('div', { class: 'field-box' }, field, column);
   box.addEventListener('click', (event) => { if (event.target === box) field.focus(); });   // пустое место рамки
   return { box, error };
 }

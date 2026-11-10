@@ -3,11 +3,11 @@
  * Шапка — «Перевод» и выбор модели #tl-model («подключение · модель» из отмеченных раздела, GET /api/sections;
  * нелокальная по `local_models` — « · облако»): выбор живёт в памяти экрана, по умолчанию — умолчание раздела,
  * и уходит в каждый запрос (`connection_id`, `model`). Ниже — языки (#tl-source с «Определить язык» первым,
- * ⇄ #tl-swap, #tl-target), два окна (широко — рядом, ≤ 760 px — друг под другом) и история.
+ * ⇄ #tl-swap, #tl-target) в нижнем composer; над ним прокручиваются результат и история.
  *
- * Левое окно — поле fieldBox (#tl-input, «очистить», микрофон) или плашка #tl-chip: выбранный файл или снимок
+ * Нижний composer — поле fieldBox (#tl-input, колонка «очистить», скрепка, микрофон) или плашка #tl-chip: файл/снимок
  * (имя, крестик #tl-chip-x — назад к полю) либо исходник открытой записи-файла (имя — ссылка на файл
- * /api/media/<id>, под ней текст). Под окном — «Файл» (#tl-file-input), «Фото» (#tl-photo-input), счётчик
+ * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
  * #tl-export (.txt, .docx).
@@ -38,7 +38,7 @@
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me } from './api.js';
 import { icon } from './icons.js';
-import { actionMenu } from './menu.js';
+import { actionMenu, menuItem, popupMenu } from './menu.js';
 import { timeOnly } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
@@ -145,20 +145,27 @@ function build(view, ctx) {
   const langRow = el('div', { class: 'tl-langs' }, source, swap, target);
 
   /* левое окно */
-  const input = el('textarea', { id: 'tl-input', class: 'tl-input', rows: '8', 'aria-label': 'Текст для перевода',
+  const input = el('textarea', { id: 'tl-input', rows: '1', 'aria-label': 'Текст для перевода',
     placeholder: 'Введите или вставьте текст' });
-  const textBox = fieldBox(input);
   const chip = el('div', { id: 'tl-chip', class: 'att-chip tl-chip', hidden: true });
   const sourceText = el('div', { class: 'tl-source-text', hidden: true });
   const fileInput = el('input', { type: 'file', id: 'tl-file-input', class: 'sr', accept: FILE_ACCEPT });
   const photoInput = el('input', { type: 'file', id: 'tl-photo-input', class: 'sr', accept: PHOTO_ACCEPT });
-  const fileBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('doc'), 'Файл', fileInput);
-  const photoBtn = el('label', { class: 'btn btn-sm tl-pick' }, icon('camera'), 'Фото', photoInput);
+  const attach = el('button', { type: 'button', class: 'icon-btn attach', id: 'tl-attach',
+    'aria-label': 'Прикрепить файл или фото', title: 'Прикрепить файл или фото', hidden: !!ctx.hint }, icon('clip'));
+  const attachMenu = el('div', { class: 'tr-formats', id: 'tl-attach-menu', role: 'menu', 'aria-label': 'Прикрепить' });
+  const attachPopup = popupMenu(attach, attachMenu, { side: 'above' });
+  attachMenu.append(menuItem('Файл', { onSelect: () => { attachPopup.close(true); fileInput.click(); } }),
+    menuItem('Фото', { onSelect: () => { attachPopup.close(true); photoInput.click(); } }));
+  const textBox = fieldBox(input, { attach, fit: true });
+  const sourceContent = el('div', { class: 'tl-source-content', hidden: true }, chip, sourceText);
+  textBox.box.prepend(sourceContent);
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
   const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go' }, 'Перевести');
   const bar = el('div', { class: 'composer-bar' },
-    el('div', { class: 'composer-opts' }, ...(ctx.hint ? [count] : [fileBtn, photoBtn, count])), ctx.hint ? null : goBtn);
-  const left = el('div', { class: 'tl-pane tl-left' }, textBox.box, textBox.error, chip, sourceText, bar);
+    el('div', { class: 'composer-opts' }, count), ctx.hint ? null : goBtn);
+  const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
+    ...(ctx.hint ? [] : [fileInput, photoInput, attachMenu]));
 
   /* правое окно */
   const status = el('p', { id: 'tl-status', class: 'tl-status small', 'aria-live': 'polite' });
@@ -178,10 +185,9 @@ function build(view, ctx) {
   const empty = el('p', { class: 'muted small' }, 'Здесь появятся ваши переводы');
   const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, 'Показать ещё');
   more.addEventListener('click', () => docs.more());
-  const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, langRow,
-    el('div', { class: 'tl-panes' }, left, right), error,
+  const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, right, error,
     el('section', { class: 'tl-past', 'aria-label': 'История переводов' }, el('h2', {}, 'История'), list));
-  view.append(head, body);
+  view.append(el('div', { class: 'translate' }, head, body, left));
 
   /* модель и языки */
   function chosen() {
@@ -250,7 +256,10 @@ function build(view, ctx) {
   /** Левое окно: поле, плашка выбранного файла или исходник открытой записи-файла. */
   function paintLeft() {
     const shown = !pending && rec && rec.kind !== 'text' ? rec : null;
-    textBox.box.hidden = !!(pending || shown);
+    input.hidden = !!(pending || shown);
+    sourceContent.hidden = !(pending || shown);
+    textBox.box.querySelector('.field-clear').hidden = !!(pending || shown) || !input.value;
+    textBox.box.querySelector('.mic').hidden = !!(pending || shown);
     count.hidden = !!(pending || shown);
     sourceText.hidden = !shown || (shown.kind === 'photo' && photoMode === 'overlay');
     chip.hidden = !(pending || shown);

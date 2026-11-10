@@ -120,6 +120,9 @@ def test_project_search_is_first_in_sorting_panel_and_keeps_project_links_visibl
             pw.expect(page.locator('#code-project-sort-open')).to_be_focused()
             trigger = page.locator('#code-project-sort-open')
             trigger.tap() if width == 320 else trigger.click()
+            pw.expect(search).not_to_be_focused()
+            assert page.evaluate("!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)")
+            search.tap() if width == 320 else search.click()
             pw.expect(search).to_be_focused()
             # В Safari открытие клавиатуры меняет visualViewport, затем прокручивает документ.
             # Настольная автоматизация не открывает клавиатуру iOS: воспроизводим её события явно.

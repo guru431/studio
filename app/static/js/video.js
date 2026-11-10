@@ -79,14 +79,14 @@ function build(view, ctx) {
     selection.button, layout.node);
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
-  const pick = el('label', { class: 'video-pick', id: 'video-pick' }, icon('clip'),
-    el('span', {}, 'Фото для ролика — выбрать с устройства'), file);
+  const pick = el('label', { class: 'icon-btn attach', id: 'video-pick', title: 'Фото для ролика — выбрать с устройства' }, icon('clip'),
+    el('span', { class: 'sr' }, 'Фото для ролика — выбрать с устройства'), file);
   const sourceImg = el('img', { alt: 'Фото для ролика' });
   const sourceName = el('span', { class: 'video-source-name' });
   const sourceClear = el('button', { type: 'button', class: 'icon-btn', id: 'video-source-clear', 'aria-label': 'Убрать фото',
     title: 'Убрать фото' }, icon('x'));
   const chosen = el('div', { class: 'video-chosen', hidden: true }, sourceImg, sourceName, sourceClear);
-  const sourceBox = el('div', { id: 'video-source', class: 'video-source' }, pick, chosen);
+  const sourceBox = el('div', { id: 'video-source', class: 'video-source', hidden: true }, chosen);
   const photoPrompt = el('textarea', { id: 'video-photo-prompt', class: 'input', rows: '3',
     'aria-label': 'Описание исходного фото', maxlength: '24000' });
   const photoContext = el('details', { id: 'video-photo-context', hidden: true },
@@ -113,7 +113,7 @@ function build(view, ctx) {
   const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': 'Модель', hidden: true });
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, 'Оживить');
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
-  const promptBox = fieldBox(prompt);
+  const promptBox = fieldBox(prompt, { attach: pick });
   const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, photoContext, promptBox.box, promptBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, chipSeconds,
       el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth), go));
@@ -187,7 +187,8 @@ function build(view, ctx) {
     photoContext.hidden = !photoPrompt.value;
     photoContext.open = false;
     paintPromptHint();
-    pick.hidden = !!source;
+    pick.classList.toggle('on', !!source);
+    sourceBox.hidden = !source;
     chosen.hidden = !source;
     if (source) {
       sourceImg.src = source.url;

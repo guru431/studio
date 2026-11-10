@@ -52,6 +52,7 @@ import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
 import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
+import { commandsView } from './code-commands.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -362,12 +363,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
-  const children = agent?.subagents && engine !== 'opencode' ? subagentView(host, { endpoint }) : null;
-  if (children) {
-    statusFixed.prepend(children.button);
-    actions.append(changedFiles.button);
-  } else statusFixed.prepend(changedFiles.button);
-  if (context.cacheButton.hidden) statusFixed.prepend(sharing.button);
+  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && engine !== 'opencode' });
+  const children = subtaskControl.button.disabled ? null : subtaskControl;
+  const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
+  statusFixed.prepend(changedFiles.button, commands.button, subtaskControl.button);
+  if (context.cacheButton.hidden) {
+    context.cacheButton.hidden = false;
+    context.cacheButton.disabled = true;
+    context.cacheButton.title = 'Помощник не сообщает сведения о кэше';
+    context.cacheButton.setAttribute('aria-label', context.cacheButton.title);
+    context.cacheButton.removeAttribute('aria-haspopup');
+  }
   const statusControls = statusActions(host, statusBar, activity, actions, statusFixed);
   const deliveryPick = pick('Когда передать сообщение', delivery);
   deliveryPick.hidden = true;
@@ -1170,6 +1176,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Событие потока; true — поток кончился. */
   function handle(event, data) {
     if (['turn', 'snapshot', 'done'].includes(event)) children?.refresh();
+    if (['turn', 'snapshot', 'step', 'step_update', 'result', 'idle', 'done'].includes(event)) {
+      queueMicrotask(() => { if (alive) commands.update(running ? turn?.models : []); });
+    }
     switch (event) {
       case 'turn':
         foreign = false;
@@ -1780,7 +1789,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       changedFiles.unmount();
       hints?.unmount();
       queue.unmount();
-      children?.unmount();
+      subtaskControl.unmount();
+      commands.unmount();
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       scroller?.removeEventListener('scroll', paintNavigation);

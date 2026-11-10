@@ -247,7 +247,8 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             assert page.locator('.code-step[open]').count() == 0
             page.locator('.code-step[data-id="cmd"] summary').click()
             page.get_by_text('12 passed', exact=False).wait_for()
-            assert 'Выполняются команды: 2' in page.locator('.code-progress-summary').last.inner_text()
+            assert page.locator('#code-active-commands .code-active-count').inner_text() == '2'
+            assert page.locator('.code-progress-processes').count() == 0
             assert page.evaluate('window.unsafe !== true')
             run = machine.running[CODE_CHAT_A]
             run['rest'] = [
