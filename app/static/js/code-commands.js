@@ -1,0 +1,51 @@
+/* Активные Shell/Bash-команды текущего хода: счётчик и раскрываемые шаги в панели статуса. */
+import { el } from './ui.js';
+import { icon } from './icons.js';
+import { popupPanel } from './menu.js';
+
+export function commandsView(host, { stepNode, repaint }) {
+  const count = el('span', { class: 'code-active-count', 'aria-hidden': 'true' }, '0');
+  const button = el('button', { type: 'button', id: 'code-active-commands', class: 'icon-btn', hidden: true,
+    'aria-label': 'Выполняемые команды: 0', title: 'Выполняемые команды: 0' }, icon('code'), count);
+  const body = el('div', { class: 'code-command-list' });
+  const panel = el('div', { id: 'code-command-menu', class: 'code-command-menu' },
+    el('p', { class: 'small muted' }, 'Выполняемые команды'), body);
+  host.append(panel);
+  const popup = popupPanel(button, panel, { label: 'Выполняемые команды', side: 'above', align: 'end' });
+  let models = [];
+  const nodes = new Map();
+  function render() {
+    const active = new Set(models.map(model => String(model.id)));
+    for (const [id, entry] of nodes) if (!active.has(id)) { entry.node.remove(); nodes.delete(id); }
+    for (const model of models) {
+      const id = String(model.id);
+      const previous = nodes.get(id);
+      if (!previous || previous.model !== model) {
+        const node = stepNode(model);
+        nodes.set(id, { model, node });
+        if (previous) {
+          const focused = previous.node.contains(document.activeElement);
+          node.open = previous.node.open;
+          previous.node.replaceWith(node);
+          if (focused) node.querySelector('summary')?.focus({ preventScroll: true });
+        } else body.append(node);
+      } else repaint(previous.node);
+    }
+  }
+  panel.addEventListener('beforetoggle', event => { if (event.newState === 'open') render(); });
+  button.addEventListener('click', () => { if (popup.isOpen()) body.querySelector('summary')?.focus({ preventScroll: true }); });
+  return {
+    button,
+    update(steps) {
+      models = (steps || []).filter(step => step.status === 'running' && ['Shell', 'Bash'].includes(step.tool));
+      count.textContent = String(models.length);
+      button.hidden = !models.length;
+      const label = `Выполняемые команды: ${models.length}`;
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      if (!models.length) { popup.close(); nodes.clear(); body.replaceChildren(); }
+      else if (popup.isOpen()) render();
+    },
+    unmount() { popup.close(); nodes.clear(); panel.remove(); },
+  };
+}

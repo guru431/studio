@@ -163,11 +163,11 @@ export function popupMenu(trigger, menu, { blocked, fill = null, side = 'below',
 /** Панель у кнопки (popover без role="menu"): для формы — серия картинок. Tab ходит по полям; фокус ушёл из панели —
  * она закрывается; Escape закрывает только её и возвращает фокус на кнопку. */
 export function popupPanel(trigger, panel, { label, side = 'below', align = 'start', blocked,
-  followViewport = false } = {}) {
+  followViewport = false, autoFocus = true } = {}) {
   panel.setAttribute('role', 'dialog');
   if (label) panel.setAttribute('aria-label', label);
   const box = popover(trigger, panel, { side, align, blocked, kind: 'dialog', followViewport,
-    after: () => (panel.querySelector('[aria-checked="true"]:not([hidden])')
+    after: () => autoFocus && (panel.querySelector('[aria-checked="true"]:not([hidden])')
       || panel.querySelector('button:not([disabled]):not([hidden]), input:not([disabled])'))?.focus({ preventScroll: true }) });
   panel.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;

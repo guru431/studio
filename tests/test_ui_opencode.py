@@ -155,6 +155,8 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
             ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "chat", "location.hash.split('/').at(-1)"),
             ("eval", "engine", "document.querySelector('.code-tab[aria-selected=true] .code-tab-engine').textContent"),
+            ("eval", "permanent", "[...document.querySelectorAll('.code-status-fixed > button')].filter(b=>!b.hidden).map(b=>b.id)"),
+            ("eval", "unsupported", "document.querySelector('#code-subagents').disabled && document.querySelector('#code-cache').disabled"),
             ("eval", "picked", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value, document.querySelector('#code-access').value]"),
             *code_send("Проверь проект"), ("wait", "document.querySelector('.code-ask-yes')"),
             ("eval", "card", "document.querySelector('.code-ask-title').textContent"),
@@ -176,6 +178,8 @@ def test_opencode_defaults_new_chat_permissions_and_session_menu(browser, live):
     assert v["settingsModels"] == ["", MODEL]
     assert v["saved"] == {"model": MODEL, "effort": "adaptive", "access": "default"}
     assert v["engine"] == "OpenCode" and v["picked"] == [MODEL, "adaptive", "default"]
+    assert v['permanent'] == ['code-changed-files', 'code-subagents', 'code-cache', 'code-context', 'code-usage']
+    assert v['unsupported'] and not code_requests(machine, 'subagents')
     assert v["card"] == "OpenCode просит разрешения" and v["menu"] == "OpenCode"
     assert v["claude"] == ["", "opus", "sonnet"] and v["tabs"] == ["OpenCode", "Claude Code"]
     assert v["fits"]

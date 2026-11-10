@@ -53,14 +53,14 @@ function build(view, ctx) {
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
-  const text = el('textarea', { id: 'speech-text', rows: '3', maxlength: String(TEXT_MAX), 'aria-label': 'Текст для озвучки',
+  const text = el('textarea', { id: 'speech-text', rows: '1', maxlength: String(TEXT_MAX), 'aria-label': 'Текст для озвучки',
     placeholder: 'Текст, который нужно озвучить' });
   const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': 'Модель' });
   const voiceBox = el('span', { class: 'sp-voice' });
   const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, 'Озвучить');
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
-  const textBox = fieldBox(text);
+  const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer' }, textBox.box, textBox.error, hint,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, voiceBox, count), go));
   const main = el('section', { class: 'split-main' }, head, error, body, ctx.hint ? ctx.hint('hint-bar') : form);

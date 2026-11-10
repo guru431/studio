@@ -108,7 +108,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       return el('label', { class: 'code-project-sort-option' }, radio, el('span', {}, option.textContent));
     }));
   const sortPanel = el('div', { id: 'code-project-sort-menu', class: 'code-project-sort-menu' }, search, sortOptions);
-  const sortPopup = popupPanel(sortBox, sortPanel, { label: 'Поиск и сортировка проектов', side: 'above', followViewport: true });
+  const sortPopup = popupPanel(sortBox, sortPanel, { label: 'Поиск и сортировка проектов', side: 'above',
+    followViewport: true, autoFocus: false });
   const footer = el('div', { class: 'code-panel-footer', hidden: true }, sortBox, sort, sortPanel, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
@@ -883,7 +884,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   return {
     visible,
-    search() { sortPopup.open(); search.focus(); },
+    search() { sortPopup.open(); search.focus({ preventScroll: true }); },
     /** После конца задания, не по действию владельца: фоновая просьба, срок PIN компьютера не продлевает. */
     async updateSummary(aid, pid) {
       const agent = items.find((a) => a.id === Number(aid));

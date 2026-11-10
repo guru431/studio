@@ -26,9 +26,8 @@ export function progressView({ onChanges, openChild } = {}) {
     const files = [...new Map((changes?.files || edits).filter((row) => typeof row?.path === 'string')
       .map((row) => [row.path, { path: row.path, added: row.added, removed: row.removed }])).values()];
     const agents = explicit.agents || [...new Map(steps.flatMap((step) => step.agents || []).map((row) => [row.id, row])).values()];
-    const processes = steps.filter((step) => step.status === 'running' && ['Shell', 'Bash'].includes(step.tool));
     const plan = Array.isArray(explicit.plan) ? explicit.plan : [];
-    const value = JSON.stringify([files, agents, processes.map((s) => [s.id, s.process_id]), plan, changes, edits]);
+    const value = JSON.stringify([files, agents, plan, changes, edits]);
     if (value === serial) return;
     serial = value;
     fileState = { files, changes: changes?.diff ? patchFiles(changes.diff, changes.truncated) : edits,
@@ -41,7 +40,6 @@ export function progressView({ onChanges, openChild } = {}) {
       const failed = agents.filter((row) => ['failed', 'errored'].includes(row.status)).length;
       labels.push(`Субагенты: ${agents.length} · ${active} в работе · ${done} готово${failed ? ` · ошибок: ${failed}` : ''}`);
     }
-    if (processes.length) labels.push(`Выполняются команды: ${processes.length}`);
     if (plan.length) labels.push(`План: ${plan.filter((row) => row.status === 'completed').length}/${plan.length}`);
     root.hidden = !labels.length;
     summary.textContent = labels.join(' · ');
@@ -57,8 +55,6 @@ export function progressView({ onChanges, openChild } = {}) {
         button.addEventListener('click', () => openChild?.(row));
         return button;
       })));
-      if (processes.length) blocks.push(el('div', { class: 'code-progress-processes' }, ...processes.map((step) =>
-        el('div', {}, `${step.process_id ? `Процесс ${step.process_id} · ` : ''}${step.input?.command || step.tool}`))));
       body.replaceChildren(...blocks.filter(Boolean));
     };
     if (details.open) render();

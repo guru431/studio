@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from . import VERSION, store
+from . import VERSION, store, update_helper
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -23,6 +23,15 @@ VERSION_RE = re.compile(r'[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}')
 PACKAGE_MAX = 16 * 1024 * 1024
 UNPACKED_MAX = 64 * 1024 * 1024
 REPO = Path(__file__).resolve().parent.parent
+
+
+async def cleanup_releases(*, repo=None, sleep=asyncio.sleep):
+    """Уборка новым кодом после подтверждённого запуска; helper перехода ещё может быть старой версии."""
+    stage = Path(repo) if repo is not None else REPO
+    for _ in range(240):
+        if await asyncio.to_thread(update_helper.cleanup_started, stage):
+            return
+        await sleep(0.5)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

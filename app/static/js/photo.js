@@ -123,8 +123,8 @@ function build(view, ctx) {
   const prompt = el('textarea', { id: 'photo-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': 'Промпт',
     placeholder: 'Опишите картинку: кто, где, свет, ракурс, стиль' });
   const file = el('input', { type: 'file', id: 'photo-file', class: 'sr', accept: ACCEPT });
-  const chipPhoto = el('label', { class: 'chip', id: 'chip-photo', title: 'Исходное фото' }, icon('clip'),
-    el('span', {}, 'фото'), file);
+  const chipPhoto = el('label', { class: 'icon-btn attach', id: 'chip-photo', title: 'Исходное фото' }, icon('clip'),
+    el('span', { class: 'sr' }, 'Исходное фото'), file);
   const chipModel = chipMenu('chip-model', [], () => choiceKey(choice), (value) => {
     choice = (choices.find((c) => c[0] === value) || [])[2] || null;
     paintSource();
@@ -143,12 +143,12 @@ function build(view, ctx) {
   const seriesMenu = el('div', { class: 'series-menu', id: 'chip-series-menu' }, series.panel);
   popupPanel(chipSeries, seriesMenu, { label: 'Серия картинок', side: 'above' });
   const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say });
-  const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate' }, 'EN');
+  const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate', hidden: true }, 'EN');
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, 'Создать');
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
-  const promptBox = fieldBox(prompt, { tools: [chipTranslate] });
+  const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, promptBox.box, promptBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, chipPhoto, chipModel.wrap, chipSize.wrap,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, chipModel.wrap, chipSize.wrap, chipTranslate,
       el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu), presets.wrap), go));
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);

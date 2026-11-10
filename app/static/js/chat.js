@@ -473,9 +473,9 @@ function build(view, ctx) {
     'aria-label': 'Рассуждение', title: THINK_TITLE, hidden: true }, icon('bulb'),
   el('span', { class: 'toggle-word' }, 'Рассуждение'));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
-  const inputBox = fieldBox(input);
+  const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, clip, webToggle, thinkToggle), send, stop),
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, webToggle, thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);

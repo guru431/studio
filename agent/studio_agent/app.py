@@ -10,7 +10,7 @@ import logging
 import threading
 from pathlib import Path
 
-from . import autostart, cli, enroll, setup, store, theme, updater
+from . import autostart, cli, enroll, setup, store, theme, update_helper, updater
 from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
 from .opencode import OpenCodeRunner
@@ -509,10 +509,12 @@ class Controller:
         if self.on_update_quit is not None:
             agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit)
         agent.on_pin_locked = self._pin_changed
+        await asyncio.to_thread(update_helper.acquire_runtime_lease, updater.REPO)
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())
         activity = asyncio.create_task(self._activity_loop())
+        cleanup = asyncio.create_task(updater.cleanup_releases())
         first = asyncio.create_task(self._relink_task())
         await self._quit.wait()
         update_task = agent.updater.task if agent.updater is not None else None
@@ -521,9 +523,10 @@ class Controller:
             await asyncio.gather(update_task, return_exceptions=True)
         prober.cancel()
         activity.cancel()
+        cleanup.cancel()
         for task in [first, *self._relinks]:
             task.cancel()
-        await asyncio.gather(prober, activity, first, *self._relinks, return_exceptions=True)
+        await asyncio.gather(prober, activity, cleanup, first, *self._relinks, return_exceptions=True)
         await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
         await agent.desktop.close()

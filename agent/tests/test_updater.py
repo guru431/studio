@@ -206,6 +206,8 @@ def test_confirmed_update_keeps_the_current_and_the_previous_release_only(tmp_pa
     import _winapi
     import winreg
 
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(update_helper, 'running_releases', lambda base: set())
     base = tmp_path / 'Programs' / 'studio-agent' / 'releases'
     names = ['release-old', 'release-run', 'release-stale', 'release-preparing', 'release-new']
     for name in names:

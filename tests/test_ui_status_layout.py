@@ -46,7 +46,8 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
                     .filter(n=>!n.hidden).map(n=>n.getBoundingClientRect());
                   const visible=[...controls.querySelectorAll('button')].filter(n=>!n.hidden && n.getClientRects().length);
                   const rects=visible.map(n=>n.getBoundingClientRect());
-                  return {round:Math.abs(circle.width-circle.height)<1, minimum:fixed.length>=4,
+                  return {round:Math.abs(circle.width-circle.height)<1, minimum:fixed.length>=5,
+                    files:!!controls.querySelector('.code-status-fixed > #code-changed-files'),
                     half:rects.every(r=>r.left>=bar.left+bar.width/2-1 && r.right<=bar.right+1),
                     separate:rects.every((r,i)=>!i || r.left>=rects[i-1].right-1)};
                 }""")
@@ -56,27 +57,23 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
             page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
             more = page.locator('#code-status-more')
             if width == 600:
-                assert page.locator('.code-status-controls .code-chat-actions > button:visible').count() >= 1
-                assert page.locator('#code-status-menu .code-chat-actions > button').count() >= 1
+                assert page.locator('.code-chat-actions > button:not([hidden])').count() == 2
             if more.is_visible():
                 more.tap() if width < 760 and engine != 'firefox' else more.click()
                 panel = page.locator('#code-status-menu:popover-open')
                 panel.wait_for()
                 assert panel.locator('.code-status-action-label:visible').count() == panel.locator('.code-chat-actions > button:visible').count()
                 assert all(panel.locator('.code-status-action-label:visible').all_text_contents())
+                assert panel.locator('#code-changed-files').count() == 0
                 page.screenshot(path=str(tmp_path / f'status-menu-{engine}-{width}.png'))
-                changed = panel.locator('#code-changed-files')
-                if changed.count():
-                    assert changed.locator('.code-status-action-label').inner_text() == 'Изменённые файлы последнего ответа'
-                    assert changed.locator('.code-changed-count').inner_text() == '5'
-                    assert changed.evaluate("node => {const b=node.getBoundingClientRect(), c=node.querySelector('.code-changed-count').getBoundingClientRect();"
-                        "return c.top>=b.top && c.bottom<=b.bottom && c.right<=b.right && c.left>=b.left;}")
-                    changed.click()
-                    page.locator('#code-changed-dialog').wait_for()
-                    assert page.locator('.code-changed-file').count() == 5
-                    page.locator('#code-changed-dialog .dialog-close').click()
             page.keyboard.press('Escape')
             page.keyboard.press('Escape')
+            changed = page.locator('.code-status-fixed > #code-changed-files')
+            assert changed.locator('.code-changed-count').inner_text() == '5'
+            changed.tap() if width < 760 and engine != 'firefox' else changed.click()
+            page.locator('#code-changed-dialog').wait_for()
+            assert page.locator('.code-changed-file').count() == 5
+            page.locator('#code-changed-dialog .dialog-close').click()
             page.locator('#code-image-input').set_input_files({'name': 'example.png', 'mimeType': 'image/png', 'buffer': PNG_REAL})
             page.locator('#code-text').fill('Длинное уточнение к изображению.\n' * 25)
             for height in [850, 580]:
