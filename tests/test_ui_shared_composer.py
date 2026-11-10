@@ -38,6 +38,18 @@ def test_main_composers_share_styles_and_remain_below_scrolling_content(engine, 
                 if common is None:
                     common = styles
                 assert styles == common, (section, styles, common)
+                input_field.fill('Строка\nСтрока\nСтрока')
+                three = input_field.evaluate('e=>{const s=getComputedStyle(e),f=e.closest(".composer"),c=getComputedStyle(f);'
+                    'return {height:e.clientHeight,line:parseFloat(s.lineHeight),padding:parseFloat(s.paddingTop)+parseFloat(s.paddingBottom),'
+                    'form:f.getBoundingClientRect().height,top:parseFloat(c.paddingTop),side:parseFloat(c.paddingLeft),gap:parseFloat(c.rowGap)};}')
+                assert abs(three['height'] - (3 * three['line'] + three['padding'])) <= 2, (section, three)
+                assert three['top'] <= 6 and three['side'] <= 8 and three['gap'] <= 4, (section, three)
+                if section.startswith('code/'):
+                    form.screenshot(path=str(tmp_path / f'composer-three-lines-{width}.png'))
+                input_field.fill('Строка\nСтрока\nСтрока\nСтрока')
+                assert form.evaluate('f=>f.getBoundingClientRect().height') >= three['form'] + three['line'] - 3, section
+                input_field.fill('')
+                assert input_field.evaluate('e=>e.clientHeight') <= three['height'] + 1, section
                 input_field.fill('Проверка')
                 assert form.evaluate('f => {const t=f.querySelector(".field-tools"),c=[...t.children].filter(e=>!e.hidden);'
                     'return getComputedStyle(t).flexDirection==="column" && c.every((e,i)=>!i || '
