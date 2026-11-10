@@ -23,6 +23,7 @@
  * PIN живёт только в поле и переменной обработчика, после ответа поле очищается. Текст сервера — только textContent. */
 import { api, me } from './api.js';
 import { icon } from './icons.js';
+import { popupPanel } from './menu.js';
 import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
@@ -74,7 +75,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
-  const sort = el('select', { id: 'code-project-sort', class: 'input', 'aria-label': 'Сортировка проектов' },
+  const sort = el('select', { id: 'code-project-sort', hidden: true, 'aria-label': 'Сортировка проектов' },
     ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
       ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные'],
       ['public', 'Сначала публичные'], ['private', 'Сначала приватные']]
@@ -85,7 +86,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if ([...sort.options].some((option) => option.value === saved)) sort.value = saved;
   } catch { /* Закрытое хранилище не мешает пользоваться панелью. */ }
   const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
-  const sortBox = el('label', { class: 'input code-project-sort' }, sortText, sort);
+  const sortBox = el('button', { type: 'button', id: 'code-project-sort-open', class: 'input code-project-sort',
+    'aria-label': 'Поиск и сортировка проектов' }, sortText);
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
     title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
@@ -93,7 +95,21 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
     placeholder: 'Поиск проектов', 'aria-label': 'Поиск проектов', autocomplete: 'off', maxlength: '200',
     'aria-keyshortcuts': 'Control+K' });
-  const footer = el('div', { class: 'code-panel-footer', hidden: true }, search, sortBox, refresh, updated);
+  const sortOptions = el('fieldset', { id: 'code-project-sort-options', class: 'code-project-sort-options' },
+    el('legend', {}, 'Сортировка'), ...[...sort.options].map((option) => {
+      const radio = el('input', { type: 'radio', name: 'code-project-order', value: option.value,
+        checked: option.selected });
+      radio.addEventListener('change', () => {
+        if (!radio.checked) return;
+        sort.value = radio.value;
+        sort.dispatchEvent(new Event('change'));
+        sortPopup.close(true);
+      });
+      return el('label', { class: 'code-project-sort-option' }, radio, el('span', {}, option.textContent));
+    }));
+  const sortPanel = el('div', { id: 'code-project-sort-menu', class: 'code-project-sort-menu' }, search, sortOptions);
+  const sortPopup = popupPanel(sortBox, sortPanel, { label: 'Поиск и сортировка проектов', side: 'above' });
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sortBox, sort, sortPanel, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
@@ -242,6 +258,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   function filterProjects() {
     const words = searchable(search.value).split(/\s+/).filter(Boolean);
+    sortText.textContent = sort.selectedOptions[0].textContent + (words.length ? ' · Поиск' : '');
     const listBox = body.querySelector('#code-projects');
     if (!listBox) return;
     let found = 0;
@@ -259,9 +276,14 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   search.addEventListener('input', filterProjects);
   search.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && search.value) {
+      event.preventDefault();
       event.stopPropagation();          // Escape сначала очищает поиск, а не закрывает панель телефона
       search.value = '';
       filterProjects();
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      sortPopup.close(true);
     }
   });
 
@@ -454,7 +476,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   sort.addEventListener('change', () => {
-    sortText.textContent = sort.selectedOptions[0].textContent;
+    for (const radio of sortOptions.querySelectorAll('input')) radio.checked = radio.value === sort.value;
+    sortText.textContent = sort.selectedOptions[0].textContent + (search.value.trim() ? ' · Поиск' : '');
     sortProjects();
     visible();
     try { localStorage.setItem(sortKey, sort.value); } catch { /* Выбор действует в открытой панели. */ }
@@ -860,6 +883,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   return {
     visible,
+    search() { sortPopup.open(); search.focus(); },
     /** После конца задания, не по действию владельца: фоновая просьба, срок PIN компьютера не продлевает. */
     async updateSummary(aid, pid) {
       const agent = items.find((a) => a.id === Number(aid));
@@ -886,6 +910,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     agents: () => loaded,
     unmount() {
       alive = false;
+      sortPopup.close();
       observer.disconnect();
       cancelAnimationFrame(summaryFrame);
       for (const controller of requests) controller.abort();

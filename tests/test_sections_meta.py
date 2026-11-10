@@ -10,7 +10,7 @@ import sections
 
 STATIC = APP / "static"
 JS = STATIC / "js"
-ORDER = ["chat", "code", "photo", "video", "transcribe", "speech", "ocr", "translate"]
+ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
 
 
 def registry():
@@ -22,7 +22,7 @@ def registry():
 def test_rail_order_is_grouped_and_names_match_the_server():
     rows = registry()
     assert [sid for sid, _, _ in rows] == ORDER
-    assert [group for *_, group in rows] == [1, 1, 2, 2, 3, 3, 4, 4]
+    assert [group for *_, group in rows] == [1, 2, 2, 3, 3, 4, 4, 5]
     names = {sid: name for sid, name, _ in rows}
     for sid, name in sections.NAMES.items():
         if sid in names:

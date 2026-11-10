@@ -34,9 +34,10 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
             trigger = page.locator('#code-share-chat')
             pw.expect(trigger).to_be_enabled()
-            assert page.locator('.code-status-bar #code-share-chat').count() == 1
+            assert page.locator('.code-status-bar #code-share-chat, #code-status-menu #code-share-chat').count() == 1
             assert page.locator('.code-project-tools #code-share-chat').count() == 0
-            button = trigger.bounding_box()
+            overflow = not trigger.is_visible()
+            button = (page.locator('#code-status-more') if overflow else trigger).bounding_box()
             status = page.locator('.code-status-bar').bounding_box()
             assert status['x'] <= button['x'] and button['x'] + button['width'] <= status['x'] + status['width'] + 1
             assert abs(button['y'] + button['height']/2 - status['y'] - status['height']/2) < 4
@@ -47,6 +48,12 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             assert 0 <= git_tab['x'] - status_box['x'] - status_box['width'] <= 12
             assert abs(status_box['y'] + status_box['height']/2 - git_tab['y'] - git_tab['height']/2) < 4
             assert 'M12 15V3' in trigger.locator('path').get_attribute('d')
+            def open_share():
+                if not trigger.is_visible():
+                    page.locator('#code-status-more').click()
+                trigger.click()
+            if overflow:
+                page.locator('#code-status-more').click()
             if not mobile:
                 trigger.focus()
                 page.keyboard.press('ArrowDown')
@@ -58,7 +65,7 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
                 page.keyboard.press('Escape')
                 pw.expect(trigger).to_be_focused()
                 pw.expect(trigger).to_have_attribute('aria-expanded', 'false')
-            trigger.click()
+            open_share()
             menu = page.locator('#code-share-chat-menu')
             pw.expect(menu).to_be_visible()
             box = menu.bounding_box()
@@ -80,7 +87,7 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             assert 'Сообщение 0' in text and '**Последний ответ**' in text
             assert text.count('## Пользователь\n') + text.count('## Помощник\n') == 135
             pw.expect(trigger).to_be_enabled()
-            trigger.click()
+            open_share()
             with page.expect_download(timeout=60000) as saved_pdf:
                 menu.locator('[data-action="pdf"]').click()
             pdf = saved_pdf.value
@@ -88,12 +95,12 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             reader = PdfReader(pdf.path())
             content = '\n'.join(p.extract_text() for p in reader.pages)
             assert 'Сообщение 0' in content and 'Последний ответ' in content and 'Работает' in content
-            trigger.click()
+            open_share()
             menu.locator('[data-action="link"]').click()
             pw.expect(page.locator('#chat-share-dialog')).to_be_visible()
             pw.expect(page.locator('#chat-share-pin')).to_have_value('')
             page.locator('#chat-share-dialog .dialog-close').click()
-            trigger.click()
+            open_share()
             pw.expect(menu).to_be_visible()
             page.locator('#code-tab-files').click()
             pw.expect(trigger).not_to_be_visible()

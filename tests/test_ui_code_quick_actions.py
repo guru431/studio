@@ -27,11 +27,11 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
       const padding = parseFloat(getComputedStyle(view).paddingBottom);
       const toolbar = document.querySelector('.code-status-bar');
       const history = document.querySelector('.code-chat-history');
-      const buttons = ['#code-fork-chat', '#code-subagents', '#code-context', '#code-usage'].map(s => document.querySelector(s));
+      const buttons = ['#code-subagents', '#code-cache', '#code-context', '#code-usage'].map(s => document.querySelector(s));
       return { bottom: Math.abs(composer.bottom - rect.bottom + padding) < 20,
         navigationLast: history.lastElementChild === document.querySelector('.code-message-nav'),
         toolbar: !!toolbar && buttons.every(b => toolbar.contains(b)) && !toolbar.closest('form'),
-        icons: buttons.slice(0, 2).every(b => b.querySelector('svg') && b.getAttribute('aria-label')),
+        icons: !!buttons[0].querySelector('svg') && !!buttons[0].getAttribute('aria-label'),
         order: buttons.every((b,i) => !i || b.getBoundingClientRect().left >= buttons[i-1].getBoundingClientRect().right),
         fits: document.documentElement.scrollWidth <= innerWidth };
     })()"""
@@ -41,9 +41,7 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
             set_value("#code-text", "Начать работу"), ("click", "#code-send"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
             ("eval", "delivery", """(() => {
-              // Уже 760 px права — в общей кнопке #code-settings-pick: доставка идёт за ней.
-              const rights = (innerWidth < 760 ? document.querySelector('#code-settings-pick')
-                : document.querySelector('#code-access').closest('.code-pick')).getBoundingClientRect();
+              const rights = document.querySelector('#code-access').closest('.code-pick').getBoundingClientRect();
               const delivery = document.querySelector('#code-delivery').getBoundingClientRect();
               return delivery.left >= rights.right && Math.abs(delivery.top - rights.top) < 2
                 && !!document.querySelector('#code-composer #code-delivery');
@@ -62,7 +60,7 @@ def test_empty_chat_composer_and_status_toolbar_stay_at_bottom(browser, live, wi
         server.stop()
     assert not result.get("failed"), result
     values = result["values"]
-    assert all(values["empty"].values()), values
+    assert all(values["empty"].values()), str(values)
     assert all(values["working"].values()) and all(values["scrolled"].values()), values
     assert values["delivery"] and values["oldBottom"] and values["reopenedBottom"], values
     assert not problems(result), problems(result)

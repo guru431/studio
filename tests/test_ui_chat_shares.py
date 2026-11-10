@@ -151,6 +151,9 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
                                      'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
             page = context.new_page()
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            if not page.locator('#code-share-chat').is_visible():
+                page.locator('#code-status-more').click()
             page.locator('#code-share-chat').click()
             page.locator('#code-share-chat-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')

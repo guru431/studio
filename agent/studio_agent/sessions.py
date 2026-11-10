@@ -89,31 +89,42 @@ def _size(value) -> int:
 def _shrink(item: dict, budget: int) -> dict:
     """Одиночный элемент больше бюджета: строки шагов — до 2000 знаков, затем шаги с начала прочь, затем начало текста."""
     item = dict(item)
-    # После обрезки текста позиции сегментов неверны; большие сводки также уступают место ответу.
-    item.pop("timeline", None)
+    # Сводки уступают место ответу, но порядок текста и команд сохраняется и в большой истории.
     item.pop("progress", None)
     steps = [clip(s, STEP_MAX) for s in item["steps"]]
     item = dict(item, steps=steps)
     if _size(item) <= budget:
         return item
+
+    def shortened(text, kept, *, cut=0, prefix=""):
+        result = dict(item, text=prefix + text, steps=kept)
+        if "timeline" in item:
+            result["timeline"] = timeline.tail(item["timeline"], kept, cut=cut, prefix=prefix)
+        return result
+
     head = STEPS_CUT + "\n" if steps else ""
-    bare = dict(item, text=head + item["text"], steps=[])
-    sizes = [_size(s) + 2 for s in steps]  # с разделителем «, »
+    bare = shortened(item["text"], [], prefix=head)
+    references = {part["id"]: _size(part) + 2 for part in item.get("timeline", []) if part.get("kind") == "step"}
+    sizes = [_size(s) + 2 + references.get(s["id"], 0) for s in steps]  # с разделителями массивов
     base, rest, drop = _size(bare), sum(sizes), 0
     while drop < len(steps) and base + rest > budget:
         rest -= sizes[drop]
         drop += 1
     if base + rest <= budget:
-        return dict(bare, steps=steps[drop:])
+        return shortened(item["text"], steps[drop:], prefix=head)
     # Шагов не осталось, а текст всё больше бюджета — его хвост, что влезает.
     head += HEAD_CUT + "\n"
-    room = budget - _size(dict(bare, text=head))
     text = item["text"]
-    n = max(0, min(len(text), room))
-    over = _size(text[len(text) - n:]) - 2 - room
-    if over > 0:  # каждый знак — не меньше байта: убрать over знаков хватит
-        n = max(0, n - over)
-    return dict(bare, text=head + text[len(text) - n:] if n else head)
+    left, right = 0, min(len(text), budget)
+    while left < right:
+        n = (left + right + 1) // 2
+        candidate = shortened(text[-n:], [], cut=timeline.width(text[:-n]), prefix=head)
+        if _size(candidate) <= budget:
+            left = n
+        else:
+            right = n - 1
+    return shortened(text[-left:] if left else "", [],
+                     cut=timeline.width(text[:-left] if left else text), prefix=head)
 
 
 def fit(items: list[dict], budget: int = limits.HISTORY_BUDGET) -> list[dict]:

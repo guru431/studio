@@ -606,9 +606,9 @@ function build(view, ctx) {
       })];
     // без модели раздела «Изменить» и «Повторить» не начать — их нет; «Описать» решает шлюз раздела
     const actions = el('div', { class: 'viewer-actions' }, ctx.hint ? null : starts[0],
-      act('Оживить', 'act-animate', () => {
+      act('Создать видео', 'act-animate', () => {
         dialog.close();
-        ctx.navigate(`video?source=${encodeURIComponent(item.media_id)}`);
+        ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
       ctx.hint ? null : starts[1], starts[2],
       act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),

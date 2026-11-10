@@ -231,25 +231,29 @@ function segment(name, legend, options, value, onChange) {
   return box;
 }
 
-/** Размер текста, масштаб и плотность — только этого устройства; применяются без перезагрузки. */
-export function deviceLookBlock() {
+/** Один набор размера текста и масштаба для меню аватара и «Оформления». Выборы сразу согласованы. */
+export function deviceSizeControls(prefix = 'appearance') {
   const root = document.documentElement;
-  const font = el('input', { id: 'appearance-font', type: 'range', min: '85', max: '150', step: '5', value: '100' });
+  const font = el('input', { id: `${prefix}-font`, type: 'range', min: '85', max: '150', step: '5', value: '100' });
   // сенсорный экран — не мельче 75%: цели касания и подписи иначе меньше пальца; мышь — до 50% (theme.js — тот же предел)
   const floor = matchMedia('(pointer: coarse)').matches ? 75 : 50;
-  const scale = el('select', { id: 'appearance-scale', class: 'input' }, ...SCALES.map((n) =>
+  const scale = el('select', { id: `${prefix}-scale`, class: 'input' }, ...SCALES.map((n) =>
     el('option', { value: n, disabled: n < floor }, `${n}%`)));
-  const fontValue = el('output', { for: 'appearance-font' });
-  const density = segment('appearance-density', 'Плотность', [['normal', 'Обычно'], ['compact', 'Компактно']],
-    read(DENSITY_KEY) === 'compact' ? 'compact' : 'normal', (value) => {
-      if (value === 'compact') root.dataset.density = 'compact';
-      else delete root.dataset.density;
-      store(DENSITY_KEY, value === 'compact' ? 'compact' : null);
-    });
-  const reset = el('button', { type: 'button', class: 'btn-link', id: 'appearance-reset' }, 'Сбросить шрифт и масштаб');
-  font.value = String(Math.max(85, Math.min(150, Number(read('studio-font-size')) || 100)));
-  scale.value = String(Math.max(floor, Number(read('studio-ui-scale')) || 100));
-  if (!scale.value) scale.value = '100';
+  const fontValue = el('output', { for: font.id });
+  const reset = el('button', { type: 'button', class: 'btn-link', id: `${prefix}-reset` }, 'Сбросить шрифт и масштаб');
+  const controls = el('div', { class: 'appearance-controls', id: `${prefix}-size-controls`,
+    role: 'group', 'aria-label': 'Шрифт и масштаб · это устройство' },
+    el('label', { for: font.id }, 'Размер шрифта', fontValue), font,
+    el('label', { for: scale.id }, 'Масштаб интерфейса'), scale, reset);
+  follow(controls, () => {
+    // Применённые размеры главнее хранилища: закрытый localStorage не откатывает выбор в открытом окне.
+    font.value = String(Math.max(85, Math.min(150, Number(root.style.getPropertyValue('--font-scale')) * 100
+      || Number(read('studio-font-size')) || 100)));
+    scale.value = String(Math.max(floor, Math.round(Number(root.style.getPropertyValue('--ui-scale')) * 100)
+      || Number(read('studio-ui-scale')) || 100));
+    if (!scale.value) scale.value = '100';
+    fontValue.textContent = `${font.value}%`;
+  });
   function apply() {
     root.style.setProperty('--font-scale', Number(font.value) / 100);
     root.style.setProperty('--ui-scale', Number(scale.value) / 100);
@@ -257,16 +261,26 @@ export function deviceLookBlock() {
     fontValue.textContent = `${font.value}%`;
     store('studio-font-size', font.value);
     store('studio-ui-scale', scale.value);
+    changed();
   }
   font.addEventListener('input', apply);
   scale.addEventListener('change', apply);
   reset.addEventListener('click', () => { font.value = scale.value = '100'; apply(); });
-  fontValue.textContent = `${font.value}%`;
+  return controls;
+}
+
+/** Размер текста, масштаб и плотность — только этого устройства; применяются без перезагрузки. */
+export function deviceLookBlock() {
+  const root = document.documentElement;
+  const density = segment('appearance-density', 'Плотность', [['normal', 'Обычно'], ['compact', 'Компактно']],
+    read(DENSITY_KEY) === 'compact' ? 'compact' : 'normal', (value) => {
+      if (value === 'compact') root.dataset.density = 'compact';
+      else delete root.dataset.density;
+      store(DENSITY_KEY, value === 'compact' ? 'compact' : null);
+    });
   return el('section', { class: 'block appearance-device' }, el('h2', {}, 'Вид на этом устройстве'),
     el('p', { class: 'muted small scope-note' }, 'Это устройство — в других браузерах и на других устройствах свой выбор.'),
-    el('div', { class: 'appearance-controls', id: 'appearance-controls' },
-      el('label', { for: font.id }, 'Размер шрифта', fontValue), font,
-      el('label', { for: scale.id }, 'Масштаб интерфейса'), scale, reset),
+    el('div', { id: 'appearance-controls' }, deviceSizeControls()),
     density,
     el('p', { class: 'muted small' }, '«Компактно» — ниже кнопки и меньше просветы: больше строк в «Агентах» и лентах. '
       + 'Цели касания на сенсорном экране не меньше 44 px.'));

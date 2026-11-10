@@ -165,15 +165,19 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             page.locator('#code-subagents-dialog .dialog-actions button').click()
             changed = page.locator('#code-changed-files')
             assert changed.locator('.code-changed-count').inner_text() == '2'
-            assert changed.evaluate("node => node.closest('.code-status-bar').contains(document.querySelector('#code-cache'))")
-            assert page.locator('.code-progress-file').count() == 0
-            for theme in ['light', 'dark']:
-                page.evaluate("theme => { document.documentElement.dataset.theme = theme; document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
+            assert changed.evaluate("node => !!node.closest('.code-status-bar, #code-status-menu')")
+            def open_changed():
+                if not changed.is_visible():
+                    page.locator('#code-status-more').click()
                 if width == 320:
                     changed.tap()
                 else:
                     changed.focus()
                     changed.press('Enter')
+            assert page.locator('.code-progress-file').count() == 0
+            for theme in ['light', 'dark']:
+                page.evaluate("theme => { document.documentElement.dataset.theme = theme; document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
+                open_changed()
                 dialog = page.locator('#code-changed-dialog')
                 assert dialog.locator('.code-changed-file').count() == 2
                 assert dialog.locator('.code-changes').count() == 0
@@ -210,14 +214,14 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             page.locator('#code-send').click()
             page.locator('.code-step[data-id="cmd"]').wait_for()
             assert changed.locator('.code-changed-count').inner_text() == '0'
-            changed.click()
+            open_changed()
             assert 'Изменённых файлов нет' in page.locator('#code-changed-dialog').inner_text()
             page.locator('#code-changed-dialog .dialog-close').click()
             page.locator('#code-toggle-steps').click()
             assert page.locator('.code-step[open]').count() == 2
             page.get_by_text('12 passed', exact=False).wait_for()
             assert page.locator('.code-step[data-id="cmd"]').get_attribute('data-state') == 'running'
-            changed.click()
+            open_changed()
             run = machine.running[CODE_CHAT_A]
             run['rest'] = [{'k': 'step', 'id': 'next-cmd', 'tool': 'Shell', 'input': {'command': 'check'},
                             'status': 'running'},

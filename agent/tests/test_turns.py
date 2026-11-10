@@ -59,7 +59,10 @@ def runner(home, f, sent):
     return Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=f)
 
 
-async def test_turn_streams_text_steps_and_ends_done(home, project):
+async def test_turn_streams_text_steps_and_ends_done(home, project, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    for name in cli.SUBAGENT_LIMITS:
+        monkeypatch.delenv(name, raising=False)
     sent, f = [], FakeFactory([delta("При"), delta("вет"), assistant(tool_use("t1", "Read", {"file_path": "a"})),
                                user(tool_result("t1", "ok")), result_ok()])
     r = runner(home, f, sent)
@@ -76,6 +79,7 @@ async def test_turn_streams_text_steps_and_ends_done(home, project):
     assert opts.setting_sources == ["user", "project", "local"]
     assert opts.cwd == project and opts.include_partial_messages is True and opts.model is None
     assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"} and opts.stderr is not None
+    assert opts.system_prompt == {"type": "preset", "preset": "claude_code"}
     assert opts.permission_mode is None and opts.can_use_tool is not None
     assert opts.extra_args == {"chrome": None} and opts.tools is None and opts.disallowed_tools == []
     hook = opts.hooks["PreToolUse"][0]

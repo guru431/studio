@@ -25,6 +25,51 @@ def test_followup_position_counts_published_events_in_utf16():
     assert feed.position() is None
 
 
+async def test_subagent_list_merges_live_states_with_completed_history(runner):
+    from unittest.mock import AsyncMock
+
+    old = "01999999-2222-7333-8444-777777777777"
+    t = _Turn(runner.project, "a" * 16, CHAT, "turn")
+    t.progress["agents"] = [{"id": CHILD, "title": "/root/current", "status": "running"}]
+    runner._turns[CHAT] = t
+    runner._metadata = AsyncMock(return_value={"thread": {"cwd": str(runner.project), "turns": [{"items": [
+        {"type": "subAgentActivity", "agentThreadId": old, "kind": "completed"},
+        {"type": "subAgentActivity", "agentThreadId": CHILD, "kind": "completed"}]}]}})
+    children = (await runner.subagents(runner.project, CHAT))["items"]
+    assert {row["id"]: row["status"] for row in children} == {old: "completed", CHILD: "running"}
+    assert children[-1]["title"] == "/root/current"
+
+
+async def test_subagent_archive_cache_coalesces_reads_but_live_state_and_expiry_stay_current(runner):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    now = [100.0]
+    runner.now = lambda: now[0]
+    runner._metadata = AsyncMock(return_value={"thread": {"cwd": str(runner.project), "turns": []}})
+    await asyncio.gather(runner.subagents(runner.project, CHAT), runner.subagents(runner.project, CHAT))
+    assert runner._metadata.await_count == 1
+    t = _Turn(runner.project, "a" * 16, CHAT, "turn")
+    t.progress["agents"] = [{"id": CHILD, "title": "Подзадача", "status": "running"}]
+    runner._turns[CHAT] = t
+    assert (await runner.subagents(runner.project, CHAT))["items"][0]["status"] == "running"
+    t.progress["agents"][0]["status"] = "completed"
+    assert (await runner.subagents(runner.project, CHAT))["items"][0]["status"] == "completed"
+    assert runner._metadata.await_count == 1
+    now[0] += codex.CHILDREN_CACHE_SEC
+    await runner.subagents(runner.project, CHAT)
+    assert runner._metadata.await_count == 2
+
+
+def test_agent_history_keeps_all_children_and_live_summary_prioritizes_active_ones():
+    items = [{"type": "subAgentActivity", "agentThreadId": f"01999999-2222-7333-8444-{index:012d}",
+              "kind": "completed"} for index in range(codex_progress.AGENTS_MAX + 5)]
+    items.append({"type": "subAgentActivity", "agentThreadId": CHILD, "kind": "started"})
+    summary = codex_progress.children(items)
+    assert len(summary) == codex_progress.AGENTS_MAX and summary[0]["id"] == CHILD
+    assert len(codex_progress.children(items, limit=None)) == len(items)
+
+
 async def test_stream_output_status_diff_agents_plan_and_reconnect_share_one_snapshot(runner):
     t = _Turn(runner.project, "a" * 16, CHAT, "turn")
     runner._turns[CHAT] = t
@@ -85,7 +130,8 @@ def test_output_and_partial_snapshot_are_bounded_and_do_not_keep_invalid_offsets
     item = {"text": "x" * 30000, "steps": t.feed.steps, "timeline": [{"kind": "text", "start": 0, "end": 30000}],
             "progress": {"changes": codex_progress.patch_summary(PATCH * 100)}}
     [small] = sessions.fit([item], 4000)
-    assert "timeline" not in small and "progress" not in small
+    assert small["timeline"][-1]["end"] == timeline.width(small["text"])
+    assert "progress" not in small
     assert len(json.dumps([small], ensure_ascii=True)) <= 4000
     changes = codex_progress.patch_summary(PATCH + "x" * codex_progress.DIFF_MAX)
     assert changes["truncated"] and len(changes["diff"]) == codex_progress.DIFF_MAX

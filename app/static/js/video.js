@@ -7,7 +7,8 @@
  * шагов) догружает GET /api/videos/<id>.
  *
  * Ролик: POST /api/videos (форма: файл `image` с устройства или `source_media_id` — фото, пришедшее
- * из раздела «Фото» адресом #/video?source=<media_id>). Ведёт ролик наблюдатель службы; идущие
+ * из раздела «Фото» адресом #/video?photo=<image_id>, с описанием исходного фото как контекстом;
+ * прежний #/video?source=<media_id> тоже принимается). Ведёт ролик наблюдатель службы; идущие
  * ролики ленты (queued, in_progress) страница опрашивает GET /api/videos/<id> раз в POLL_MS — и
  * найденные после перезагрузки тоже. Роликов может идти несколько: очередь — у шлюза.
  * Раздел без модели (ctx.hint): лента и просмотр — как всегда, вместо поля промпта — подсказка.
@@ -37,6 +38,7 @@ const QUALITIES = [['fast', 'Быстро 480p'], ['standard', 'Обычно 576
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
 const SOURCES = { given: 'свой промпт', auto: 'придуман по фото', fallback: 'запасной промпт' };
 const RUNNING = new Set(['queued', 'in_progress']);
+const MOTION_HINT = 'Опишите движение в кадре; пусто — движение придумает gemma-abl';
 
 let screen = null;
 
@@ -58,6 +60,8 @@ function build(view, ctx) {
   let smooth = true;
   let source = null;             // { file, url } с устройства или { mediaId, url } из раздела «Фото»
   let submitting = false;
+  let loadingSource = false;
+  let sourceVersion = 0;         // смена фото и уход из раздела делают ответ переноса устаревшим
   const running = new Map();     // id → { item, at, timer } — идущие ролики ленты
   let alive = true;
 
@@ -83,8 +87,13 @@ function build(view, ctx) {
     title: 'Убрать фото' }, icon('x'));
   const chosen = el('div', { class: 'video-chosen', hidden: true }, sourceImg, sourceName, sourceClear);
   const sourceBox = el('div', { id: 'video-source', class: 'video-source' }, pick, chosen);
+  const photoPrompt = el('textarea', { id: 'video-photo-prompt', class: 'input', rows: '3',
+    'aria-label': 'Описание исходного фото', maxlength: '24000' });
+  const photoContext = el('details', { id: 'video-photo-context', hidden: true },
+    el('summary', { class: 'small muted' }, 'Описание исходного фото'),
+    el('p', { class: 'small muted' }, 'Передаётся вместе с описанием движения. Можно изменить или очистить.'), photoPrompt);
   const prompt = el('textarea', { id: 'video-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': 'Промпт движения',
-    placeholder: 'Опишите движение в кадре; пусто — движение придумает gemma-abl' });
+    placeholder: MOTION_HINT });
   const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: '2', value: '5',
     'aria-label': 'Длительность, секунд: от 1 до 30', autocomplete: 'off' });
   const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: 'Длительность: 1–30 с' }, seconds,
@@ -105,7 +114,7 @@ function build(view, ctx) {
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, 'Оживить');
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
   const promptBox = fieldBox(prompt);
-  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, promptBox.box, promptBox.error,
+  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, photoContext, promptBox.box, promptBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, chipSeconds,
       el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth), go));
   const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
@@ -167,14 +176,59 @@ function build(view, ctx) {
 
   /* фото-источник */
   function setSource(next) {
+    sourceVersion += 1;
+    loadingSource = false;
+    go.disabled = submitting;
+    go.textContent = 'Оживить';
+    error.textContent = '';
     if (source && source.file) URL.revokeObjectURL(source.url);
     source = next;
+    photoPrompt.value = source?.photoPrompt || '';
+    photoContext.hidden = !photoPrompt.value;
+    photoContext.open = false;
+    paintPromptHint();
     pick.hidden = !!source;
     chosen.hidden = !source;
     if (source) {
       sourceImg.src = source.url;
       sourceName.textContent = source.file ? 'Фото с устройства' : 'Фото из ленты';
     } else sourceImg.removeAttribute('src');
+  }
+
+  function paintPromptHint() {
+    prompt.placeholder = photoPrompt.value.trim() ? 'Опишите движение в кадре; описание фото уже добавлено' : MOTION_HINT;
+  }
+
+  /** Перенос читает только свою запись через обычный API; тексты остаются в памяти страницы,
+   * URL содержит лишь id. Ошибка и смена источника не оставляют прежнее фото для отправки. */
+  async function transfer(query) {
+    const photoId = query.get('photo');
+    const mediaId = query.get('source');
+    if (!photoId && !mediaId) return;
+    history.replaceState(history.state, '', '#/video');
+    setSource(null);
+    if (!photoId) {
+      setSource({ mediaId, url: media(mediaId, '?thumb=1') });
+      return;
+    }
+    loadingSource = true;
+    go.disabled = true;
+    go.textContent = 'Перенос фото…';
+    const version = sourceVersion;
+    try {
+      const item = await api('GET', `/api/images/${encodeURIComponent(photoId)}`);
+      if (!alive || version !== sourceVersion) return;
+      if (item.state !== 'done' || !item.media_id) throw new Error('Фото ещё не готово для видео');
+      setSource({ mediaId: item.media_id, url: media(item.media_id, '?thumb=1'), photoPrompt: item.prompt });
+    } catch (err) {
+      if (alive && version === sourceVersion) error.textContent = err.code === 'gone' ? 'Фото удалено или недоступно' : words(err);
+    } finally {
+      if (alive && version === sourceVersion) {
+        loadingSource = false;
+        go.disabled = submitting;
+        go.textContent = 'Оживить';
+      }
+    }
   }
 
   /* карточки ленты */
@@ -522,7 +576,11 @@ function build(view, ctx) {
     const body = new FormData();
     if (source.file) body.append('image', source.file, source.file.name);
     else body.append('source_media_id', source.mediaId);
-    body.append('prompt', prompt.value.trim());
+    const context = photoPrompt.value.trim();
+    const motion = prompt.value.trim();
+    const text = context ? `Описание исходного фото:\n${context}\n\nДвижение в видео:\n${motion || 'Естественное движение в кадре.'}` : motion;
+    if (text.length > PROMPT_MAX) throw new Error('Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото.');
+    body.append('prompt', text);
     body.append('seconds', String(Number(sec)));
     body.append('quality', quality);
     body.append('smooth', String(smooth));
@@ -535,7 +593,7 @@ function build(view, ctx) {
   }
 
   async function submit() {
-    if (submitting) return;
+    if (submitting || loadingSource) return;
     error.textContent = '';
     let body;
     try {
@@ -554,7 +612,7 @@ function build(view, ctx) {
       error.textContent = words(err);
     } finally {
       submitting = false;
-      go.disabled = false;
+      go.disabled = loadingSource;
     }
   }
 
@@ -578,6 +636,7 @@ function build(view, ctx) {
     setSource(null);
   });
   prompt.addEventListener('input', autosize);
+  photoPrompt.addEventListener('input', paintPromptHint);
   prompt.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -590,13 +649,15 @@ function build(view, ctx) {
   });
 
   paintQuality();
-  const fromPhoto = ctx.query && ctx.query.get('source');
-  setSource(fromPhoto ? { mediaId: fromPhoto, url: media(fromPhoto, '?thumb=1') } : null);
+  setSource(null);
+  transfer(ctx.query);
 
   return {
     follow,
+    transfer,
     destroy() {
       alive = false;
+      sourceVersion += 1;
       selection.destroy();
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);
@@ -612,7 +673,10 @@ export function mount(view, ctx) {
 
 /** Переход внутри открытого раздела (#/video?id=…): только ?id — промпт, фото-источник и выделение целы. */
 export function update(ctx) {
-  if (screen) screen.follow(ctx.query.get('id'));
+  if (screen) {
+    screen.follow(ctx.query.get('id'));
+    screen.transfer(ctx.query);
+  }
 }
 
 export function unmount() {

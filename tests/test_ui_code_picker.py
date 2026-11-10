@@ -1,5 +1,4 @@
-"""Session choice menus preserve settings, keyboard access and mobile/zoom geometry.
-Below 760 px the three choices are one button «model · effort · access» with a menu of three groups."""
+"""Отдельные параметры хода: клавиатура, касания и геометрия при размере текста и масштабе."""
 import httpx
 import pytest
 
@@ -56,7 +55,7 @@ def styles(page, scale, font, theme):
     }""", {"scale": scale, "font": font, "theme": theme})
 
 
-@pytest.mark.parametrize("width", [760, 1280])
+@pytest.mark.parametrize("width", [320, 393, 760, 1280])
 def test_choices_fit_and_support_keyboard_touch_and_lifecycle(focus_browser, live, width, tmp_path):
     engine = focus_browser.browser_type.name
     bridge, context, page, mobile = open_chat(focus_browser, live, width, f"choice-{engine}-{width}")
@@ -65,12 +64,14 @@ def test_choices_fit_and_support_keyboard_touch_and_lifecycle(focus_browser, liv
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             pw.expect(page.locator("#code-effort-pick")).to_be_enabled()
-            pw.expect(page.locator("#code-settings-pick")).to_be_hidden()   # полный ряд от 760 px
+            pw.expect(page.locator("#code-settings-pick")).to_have_count(0)
+            for name in ("model", "effort", "access"):
+                pw.expect(page.locator(f"#code-{name}-pick")).to_be_visible()
             for scale, font in [(1, 1), (.8, 1.5), (.5, .85)]:
                 for theme in ("light", "dark"):
                     styles(page, scale, font, theme)
                     trigger = page.locator("#code-effort-pick")
-                    trigger.click()
+                    trigger.tap() if mobile else trigger.click()
                     menu = page.locator("#code-effort-menu")
                     pw.expect(menu).to_be_visible()
                     geometry = page.evaluate(GEOMETRY, "code-effort-menu")
@@ -104,72 +105,6 @@ def test_choices_fit_and_support_keyboard_touch_and_lifecycle(focus_browser, liv
             page.locator("#code-effort-pick").click()
             page.locator("#code-tab-add").click()
             pw.expect(page.locator("#code-effort-menu")).to_have_count(0)
-            assert not errors, errors
-    finally:
-        bridge.stop()
-
-
-@pytest.mark.parametrize("width", [320, 393])
-def test_narrow_screen_has_one_settings_button_with_three_groups(focus_browser, live, width, tmp_path):
-    """Узкий экран: одна кнопка «модель · усилие · права» вместо трёх; меню — три группы с теми же пунктами,
-    стрелки по всем пунктам, Home/End, Escape и Tab возвращают фокус на кнопку; выбор пишет те же select."""
-    engine = focus_browser.browser_type.name
-    bridge, context, page, mobile = open_chat(focus_browser, live, width, f"choice-narrow-{engine}-{width}")
-    tap = (lambda locator: locator.tap()) if mobile else (lambda locator: locator.click())
-    try:
-        with context:
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            trigger = page.locator("#code-settings-pick")
-            pw.expect(trigger).to_be_enabled()
-            for name in ("model", "effort", "access"):
-                pw.expect(page.locator(f"#code-{name}-pick")).to_be_hidden()
-            menu = page.locator("#code-settings-menu")
-            for scale, font in [(1, 1), (.8, 1.5), (.5, .85)]:
-                for theme in ("light", "dark"):
-                    styles(page, scale, font, theme)
-                    tap(trigger)
-                    pw.expect(menu).to_be_visible()
-                    geometry = page.evaluate(GEOMETRY, "code-settings-menu")
-                    if scale == 1:
-                        page.screenshot(path=str(tmp_path / f"settings-{width}-{theme}.png"))
-                    assert geometry["menuFits"] and geometry["controlsFit"] and geometry["pageFits"] and geometry["viewportScale"] == 1, geometry
-                    groups = menu.get_by_role("group")
-                    assert [groups.nth(i).get_attribute("aria-labelledby") for i in range(groups.count())] == [
-                        "code-settings-code-model", "code-settings-code-effort", "code-settings-code-access"]
-                    tap(menu.get_by_role("group", name="Усилие").get_by_role("menuitemradio", name="Очень высокое xhigh", exact=True))
-                    pw.expect(page.locator("#code-effort")).to_have_value("xhigh")
-                    pw.expect(menu).not_to_be_visible()
-                    pw.expect(trigger).to_contain_text("xhigh")
-                    assert page.evaluate("document.activeElement.id !== 'code-text'")
-            styles(page, 1, 1, "light")
-            assert " · " in trigger.inner_text() and trigger.get_attribute("aria-label").startswith("Настройки хода:")
-            trigger.focus()
-            page.keyboard.press("ArrowDown")                 # открывает; фокус — на выбранной модели
-            page.keyboard.press("End")                       # последний пункт — последняя группа (права)
-            page.keyboard.press("Enter")
-            pw.expect(page.locator("#code-access")).to_have_value("danger-full-access")
-            pw.expect(trigger).to_be_focused()
-            page.keyboard.press("ArrowUp")                   # открывает с последнего пункта
-            page.keyboard.press("Home")
-            for _ in range(4):                               # 3 пункта модели, затем группа усилия: стрелки сквозь группы
-                page.keyboard.press("ArrowDown")
-            page.keyboard.press("Enter")
-            pw.expect(page.locator("#code-effort")).to_have_value("low")
-            tap(trigger)
-            page.keyboard.press("Escape")
-            pw.expect(menu).not_to_be_visible()
-            pw.expect(trigger).to_be_focused()
-            tap(trigger)
-            page.keyboard.press("Tab")
-            pw.expect(menu).not_to_be_visible()
-            tap(trigger)
-            page.touchscreen.tap(width - 2, 2) if mobile else page.mouse.click(width - 2, 2)
-            pw.expect(menu).not_to_be_visible()
-            tap(trigger)
-            pw.expect(menu).to_be_visible()
-            page.evaluate("document.querySelector('#code-tab-add').click()")   # меню выше «+» на узком экране
-            pw.expect(page.locator("#code-settings-menu")).to_have_count(0)
             assert not errors, errors
     finally:
         bridge.stop()

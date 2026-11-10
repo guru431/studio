@@ -33,7 +33,7 @@
 import { api as request, me } from './api.js';
 import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
-import { codeChoices, codePicker } from './code-picker.js';
+import { codePicker } from './code-picker.js';
 import { fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -50,6 +50,7 @@ import { subagentView } from './code-subagents.js';
 import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
+import { statusActions } from './code-status-bar.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -261,14 +262,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   reloadButton.insertAdjacentHTML('afterbegin', '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>');
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
-  const sharing = shareMenu(host, { id: 'code-share-chat', request: api, failed: (err) => {
+  const sharing = shareMenu(actions, { id: 'code-share-chat', request: api, failed: (err) => {
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
   sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: endpoint('/share'), export: endpoint('/export') });
   actions.append(sharing.button);
-  const statusBar = el('div', { class: 'code-status-bar' }, activity, reloadButton, actions,
-    changedFiles.button, context.cacheButton, contextBox, usage.button);
+  actions.append(reloadButton);
+  const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);
+  const statusBar = el('div', { class: 'code-status-bar' });
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
   for (const action of me?.code_quick_actions || []) {
@@ -300,13 +302,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     picks.set(select, view);
     return view.root;
   };
-  // Узкий экран (< 760 px) — одна кнопка «модель · усилие · права» вместо трёх (CSS), те же select.
-  const choices = codeChoices(host, 'Настройки хода', [['Модель', model], ['Усилие', effort], ['Права', access]]);
-  picks.set('choices', choices);
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        choices.root, pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
+        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
       stop, send));
   host.dataset.engine = engine;
   scroller.append(
@@ -362,7 +361,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     actions.append(copy);
   }
   const children = agent?.subagents && engine !== 'opencode' ? subagentView(host, { endpoint }) : null;
-  if (children) actions.append(children.button);
+  if (children) {
+    statusFixed.prepend(children.button);
+    actions.append(changedFiles.button);
+  } else statusFixed.prepend(changedFiles.button);
+  if (context.cacheButton.hidden) statusFixed.prepend(sharing.button);
+  const statusControls = statusActions(host, statusBar, activity, actions, statusFixed);
   const deliveryPick = pick('Когда передать сообщение', delivery);
   deliveryPick.hidden = true;
   access.closest('.code-pick').after(deliveryPick);
@@ -517,6 +521,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /* ---- лента -------------------------------------------------------------------- */
 
+  let followTail = true;
+  let lastScrollTop = scroller.scrollTop;
+  let followFrame = null;
+
   function stuck() {
     return !scroller || scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }
@@ -577,12 +585,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!target) {
       if (direction > 0) {
         messageTarget = null;
+        followTail = true;
         scroller.scrollTop = scroller.scrollHeight;
         paintNavigation();
       }
       return;
     }
     messageTarget = target;
+    followTail = false;
     scrollByViewportPixels(target.getBoundingClientRect().top - messageTop());
     messageScrollTop = scroller.scrollTop;
     paintNavigation();
@@ -590,10 +600,39 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** Правка ленты: была внизу — остаётся внизу. */
   function grow(change) {
-    const was = !messageTarget && stuck();
+    trackScroll();
+    const was = !messageTarget && followTail;
     change();
-    if (was && scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (was && scroller) {
+      scroller.scrollTop = scroller.scrollHeight;
+      lastScrollTop = scroller.scrollTop;
+    }
   }
+
+  function trackScroll() {
+    const gap = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+    const tolerance = Math.max(160, Math.min(320, scroller.clientHeight / 2));
+    if (gap <= tolerance && !messageTarget) followTail = true;
+    else if (scroller.scrollTop < lastScrollTop - 2) followTail = false;
+    lastScrollTop = scroller.scrollTop;
+  }
+
+  // Markdown, раскрытие деталей и изменение высоты поля заканчиваются после события потока.
+  // Их перерисовка тоже держит конец, пока владелец не ушёл читать далеко вверх.
+  const tailObserver = new ResizeObserver(() => {
+    trackScroll();
+    if (followFrame !== null || historyLoading || !followTail || messageTarget) return;
+    followFrame = requestAnimationFrame(() => {
+      followFrame = null;
+      trackScroll();
+      if (alive && !historyLoading && followTail && !messageTarget) {
+        scroller.scrollTop = scroller.scrollHeight;
+        lastScrollTop = scroller.scrollTop;
+      }
+    });
+  });
+  tailObserver.observe(feed);
+  tailObserver.observe(scroller);
 
   function stepNode(s) {
     const stepInput = () => s.input && typeof s.input === 'object' ? s.input : null;
@@ -1127,6 +1166,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** Событие потока; true — поток кончился. */
   function handle(event, data) {
+    if (['turn', 'snapshot', 'done'].includes(event)) children?.refresh();
     switch (event) {
       case 'turn':
         foreign = false;
@@ -1154,6 +1194,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const t = current();
         if (data.settings) acceptSettings(data.settings);
         paintContext(data.context);
+        children?.update(data.progress?.agents, true);
         clearTimeout(paintTimer);
         paintTimer = null;
         t.models = Array.isArray(data.steps) ? data.steps : [];
@@ -1246,6 +1287,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         return false;
       }
       case 'progress':
+        children?.update(data.agents, true);
         grow(() => current().view.progress.update(data, current().models));
         return false;
       case 'step_update':
@@ -1656,6 +1698,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   });
   next.addEventListener('click', () => jumpMessage(1));
   scroller?.addEventListener('scroll', paintNavigation, { passive: true });
+  scroller.addEventListener('scroll', trackScroll, { passive: true });
   window.addEventListener('resize', paintNavigation);
   const feedObserver = new MutationObserver(() => { paintNavigation(); paintQuickActions(); });
   feedObserver.observe(feed, { childList: true });
@@ -1724,6 +1767,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       alive = false;
       askObserver.disconnect();
       sharing.unmount();
+      statusControls.unmount();
       for (const view of picks.values()) view.unmount();
       visualizations.unmount();
       unsubscribeGit?.();
@@ -1736,6 +1780,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       scroller?.removeEventListener('scroll', paintNavigation);
+      scroller.removeEventListener('scroll', trackScroll);
+      tailObserver.disconnect();
+      if (followFrame !== null) cancelAnimationFrame(followFrame);
       scroller?.removeEventListener('scroll', markRead);
       window.removeEventListener('resize', paintNavigation);
       for (const event of ['pointerdown', 'wheel', 'keydown']) workspace?.removeEventListener(event, interacted);

@@ -534,27 +534,28 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
 
     before = position()
     controls = page.locator('.code-panel-footer').evaluate("""footer => {
-      const select=footer.querySelector('select'), sort=select.closest('label').getBoundingClientRect();
-      const button=footer.querySelector('button'), refresh=button.getBoundingClientRect();
+      const sort=footer.querySelector('#code-project-sort-open').getBoundingClientRect();
+      const button=footer.querySelector('#code-project-refresh'), refresh=button.getBoundingClientRect();
       const updated=footer.querySelector('p').getBoundingClientRect();
       return {sameLine:Math.abs(sort.top-refresh.top)<1 && sort.right<refresh.left,
         compact:sort.height<=34 && refresh.height<=34 && refresh.width<=34 && button.scrollWidth<=button.clientWidth,
         smallLabel:parseFloat(getComputedStyle(footer.querySelector('.code-project-sort-text')).fontSize)<=11,
-        noAutozoom:parseFloat(getComputedStyle(select).fontSize)>=16,
         dateBelow:updated.top>=Math.max(sort.bottom, refresh.bottom),
         heights:[sort.height,refresh.height], widths:[sort.width,refresh.width],
         tops:[sort.top,refresh.top,updated.top]};
     }""")
-    assert all(controls[key] for key in ('sameLine', 'compact', 'dateBelow', 'smallLabel', 'noAutozoom')), controls
+    assert all(controls[key] for key in ('sameLine', 'compact', 'dateBelow', 'smallLabel')), controls
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
     for value, label, name in [('private', 'Сначала приватные', 'beta'), ('public', 'Сначала публичные', 'alpha')]:
-        page.locator('#code-project-sort').select_option(value)
+        page.locator('#code-project-sort-open').tap()
+        page.locator(f'#code-project-sort-options input[value={value}]').check()
         pw.expect(page.locator('.code-project-sort-text')).to_have_text(label)
         pw.expect(page.locator('#code-projects li').first).to_have_attribute('data-pid', pid(name))
     page.screenshot(path=str(tmp_path / f'visibility-webkit-{page.viewport_size["width"]}.png'))
-    page.locator('#code-project-sort').select_option('findings')
+    page.locator('#code-project-sort-open').tap()
+    page.locator('#code-project-sort-options input[value=findings]').check()
     pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
     pw.expect(button).to_be_enabled()
     page.evaluate("""() => {
@@ -835,11 +836,10 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
     page.locator('#code-text').blur()
     fits(page)
     page.screenshot(path=str(tmp_path / f'focused-{scale}-{font}.png'))
-    # Телефон: модель, усилие и права — одна кнопка #code-settings-pick (code-picker.js codeChoices).
-    page.locator('#code-settings-pick').tap()
-    page.locator('#code-settings-menu [role="group"]').nth(1).locator('[role="menuitemradio"]').nth(1).tap()
+    page.locator('#code-effort-pick').tap()
+    page.locator('#code-effort-menu [role="menuitemradio"]').nth(1).tap()
     assert page.locator('#code-effort').evaluate("""e => {
-      const trigger = document.querySelector('#code-settings-pick'), r = trigger.getBoundingClientRect();
+      const trigger = document.querySelector('#code-effort-pick'), r = trigger.getBoundingClientRect();
       return trigger.querySelector('.code-pick-value').textContent.includes(e.selectedOptions[0].textContent)
         && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2).closest('button') === trigger;
     }""")

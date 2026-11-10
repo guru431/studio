@@ -34,6 +34,22 @@ def append_step(message, step):
     message.setdefault("timeline", []).append({"kind": "step", "id": step["id"]})
 
 
+def tail(parts, steps, *, cut=0, prefix=""):
+    """После сжатия оставить ссылки на уцелевшие шаги и пересчитать UTF-16 позиции текста."""
+    kept = {step["id"] for step in steps}
+    offset = width(prefix)
+    out = []
+    text_part(out, 0, offset)
+    for part in parts:
+        if part.get("kind") == "step":
+            if part["id"] in kept:
+                out.append(dict(part))
+        elif part.get("kind") == "text" and part["end"] > cut:
+            text_part(out, max(part["start"], cut) - cut + offset, part["end"] - cut + offset,
+                      block=part.get("block"), phase=part.get("phase"))
+    return out
+
+
 def compact(message):
     """Обычный ответ без чередования не нуждается в дополнительном поле протокола."""
     parts = message.get("timeline", [])

@@ -19,6 +19,8 @@ from .turns import Runner, _Ask
 log = logging.getLogger(__name__)
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 SCAN_EVERY_SEC = 600  # полный обход сессий проекта для сверки готового индекса — не чаще
+CHILDREN_CACHE_SEC = 10
+CHILDREN_CACHE_MAX = 32
 
 
 def same_project(left, right) -> bool:
@@ -256,6 +258,8 @@ class CodexRunner(Runner):
         self._usage_lock = asyncio.Lock()
         self._histories = metadata.HistoryIndex()
         self._history_paths = {}
+        self._children_cache = {}
+        self._children_lock = asyncio.Lock()
         # Сверка готового индекса сессий полным обходом: задачи, сессии вне индекса, ID из индекса.
         self._scans, self._full, self._indexed, self._scanned = {}, {}, {}, {}
 
@@ -565,11 +569,25 @@ class CodexRunner(Runner):
 
     async def subagents(self, project, chat):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
-        source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
-        if not same_project(source.get("cwd"), project):
-            raise Refused("not_found")
-        children = codex_progress.children([item for turn in source.get("turns", []) for item in turn.get("items", [])])
-        return {"items": [row for row in children if row["id"] != target]}
+        key = (str(project), target)
+        async with self._children_lock:
+            cached = self._children_cache.get(key)
+            if cached is None or not 0 <= self.now() - cached[0] < CHILDREN_CACHE_SEC:
+                source = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": True})).get("thread", {})
+                if not same_project(source.get("cwd"), project):
+                    raise Refused("not_found")
+                children = codex_progress.children([item for turn in source.get("turns", []) for item in turn.get("items", [])], limit=None)
+                self._children_cache.pop(key, None)
+                self._children_cache[key] = (self.now(), children)
+                while len(self._children_cache) > CHILDREN_CACHE_MAX:
+                    self._children_cache.pop(next(iter(self._children_cache)))
+            else:
+                children = cached[1]
+        rows = {row["id"]: dict(row) for row in children}
+        current = self._turns.get(chat)
+        if current is not None and current.project == project:
+            rows.update({row["id"]: dict(row) for row in current.progress.get("agents", [])})
+        return {"items": [row for row in rows.values() if row["id"] != target]}
 
     async def subagent_history(self, project, chat, child):
         if child not in {row["id"] for row in (await self.subagents(project, chat))["items"]}:
@@ -1005,6 +1023,7 @@ class CodexRunner(Runner):
         await super().close(final=final, hold=hold)
         self._histories.clear()
         self._history_paths.clear()
+        self._children_cache.clear()
         scans = list(self._scans.values())
         for task in scans:
             task.cancel()

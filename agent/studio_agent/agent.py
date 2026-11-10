@@ -452,7 +452,8 @@ class Agent:
             return await self.codex.subagents(project, frame["chat"])
         if frame.get("engine") == "opencode":
             raise Refused("unsupported", "OpenCode ACP не предоставляет историю дочерних агентов")
-        return await asyncio.to_thread(subagents.list_children, project, frame["chat"])
+        return await asyncio.to_thread(subagents.list_children, project, frame["chat"], choices=self.runner.choices,
+                                       live=self.runner.children(frame["project"], frame["chat"]))
 
     async def _op_subagent_history(self, frame, after):
         project = await self._project(frame)
