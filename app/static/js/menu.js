@@ -25,7 +25,9 @@ export function placePopup(menu, trigger, { side = 'below', align = 'start' } = 
   menu.style.left = `${(left + EDGE) / zoom}px`;
   menu.style.top = `${(top + EDGE) / zoom}px`;
   menu.style.bottom = 'auto';
-  try { menu.showPopover({ source: trigger }); } catch { menu.showPopover(); }
+  if (!menu.matches(':popover-open')) {
+    try { menu.showPopover({ source: trigger }); } catch { menu.showPopover(); }
+  }
   const box = trigger.getBoundingClientRect(), size = menu.getBoundingClientRect();
   const x = align === 'end' ? box.right - size.width : box.left;
   const above = box.top - size.height - GAP, below = box.bottom + GAP;
@@ -36,7 +38,8 @@ export function placePopup(menu, trigger, { side = 'below', align = 'start' } = 
   if (up) {
     // над кнопкой — низом к ней: панель, что растёт (серия: ползунок «до»), растёт вверх, а не на кнопку
     menu.style.top = 'auto';
-    menu.style.bottom = `${(innerHeight - box.top + GAP) / zoom}px`;
+    const bottom = Math.min(box.top - GAP, top + height - EDGE);
+    menu.style.bottom = `${(innerHeight - bottom) / zoom}px`;
   } else {
     menu.style.top = `${Math.max(top + EDGE, y) / zoom}px`;
   }
@@ -44,7 +47,8 @@ export function placePopup(menu, trigger, { side = 'below', align = 'start' } = 
 
 /** Popover у кнопки: общий каркас меню и панели — открыть/закрыть, aria-expanded, нажатие кнопки при открытом
  * закрывает, прокрутка страницы, смена размера и уход со страницы закрывают. */
-function popover(trigger, node, { side, align, blocked = () => false, before = () => {}, after = () => {}, kind }) {
+function popover(trigger, node, { side, align, blocked = () => false, before = () => {}, after = () => {}, kind,
+  followViewport = false }) {
   node.setAttribute('popover', 'auto');
   node.classList.add('popup-menu');
   if (!node.id && trigger.id) node.id = `${trigger.id}-menu`;
@@ -61,15 +65,19 @@ function popover(trigger, node, { side, align, blocked = () => false, before = (
   // прокрутка закрывает, только если сдвинула кнопку: лента чата, что дописывается под открытым меню, — нет
   const scrolled = (event) => {
     const target = event.target;
-    if (target === document || (target instanceof Node && !node.contains(target) && target.contains(trigger))) close();
+    if (target === document || (target instanceof Node && !node.contains(target) && target.contains(trigger))) moved();
   };
   const hidden = () => { if (document.hidden) close(); };
-  const resized = () => close();
+  const moved = () => {
+    if (followViewport && isOpen()) placePopup(node, trigger, { side, align });
+    else close();
+  };
   const listen = (on) => {
     const how = on ? 'addEventListener' : 'removeEventListener';
-    window[how]('resize', resized);
+    window[how]('resize', moved);
     window[how]('scroll', scrolled, true);
-    window.visualViewport?.[how]('resize', resized);
+    window.visualViewport?.[how]('resize', moved);
+    if (followViewport) window.visualViewport?.[how]('scroll', moved);
     document[how]('visibilitychange', hidden);
   };
   const open = (...args) => {
@@ -154,10 +162,11 @@ export function popupMenu(trigger, menu, { blocked, fill = null, side = 'below',
 
 /** Панель у кнопки (popover без role="menu"): для формы — серия картинок. Tab ходит по полям; фокус ушёл из панели —
  * она закрывается; Escape закрывает только её и возвращает фокус на кнопку. */
-export function popupPanel(trigger, panel, { label, side = 'below', align = 'start', blocked } = {}) {
+export function popupPanel(trigger, panel, { label, side = 'below', align = 'start', blocked,
+  followViewport = false } = {}) {
   panel.setAttribute('role', 'dialog');
   if (label) panel.setAttribute('aria-label', label);
-  const box = popover(trigger, panel, { side, align, blocked, kind: 'dialog',
+  const box = popover(trigger, panel, { side, align, blocked, kind: 'dialog', followViewport,
     after: () => (panel.querySelector('[aria-checked="true"]:not([hidden])')
       || panel.querySelector('button:not([disabled]):not([hidden]), input:not([disabled])'))?.focus({ preventScroll: true }) });
   panel.addEventListener('keydown', (event) => {

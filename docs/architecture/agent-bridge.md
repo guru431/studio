@@ -43,6 +43,20 @@
 | 0.15.3 | `followup.position` | §2.2 |
 | 0.16.0 | `hello.visualizations` (`visualization`) | §4 |
 | 0.17.0 | `hello.passive_requests` (`req.passive`); `ask.subtask`, `snapshot.asks[].subtask` | §16, §7 |
+| 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
+
+## 0.17.2
+
+- История Claude/Codex/OpenCode сохраняет `images: [{index, name}]` у сообщения пользователя, без base64 и путей;
+  текст сообщения больше не заменяет изображение пометкой. `index` — номер среди изображений этого сообщения,
+  от 0 до 31, `id` сообщения стабилен при повторном чтении.
+- `history_image {project, chat, message_id, index}` возвращает сохранённые в CLI байты одного изображения.
+  Новый HTTP POST `/api/code/agents/{aid}/projects/{pid}/chats/{chat}/image` принимает только `message_id`/`index`
+  в JSON. Обычные проверки учётки, CSRF, PIN и принадлежности чату действуют до чтения и повторно после него.
+  Автоматическая загрузка превью не продлевает таймер PIN. Ответ — оригинал PNG/JPEG/WebP/GIF до 5 МиБ и 16 Мп,
+  `no-store`/`nosniff`; страница истории сохраняет предел 512 КиБ. URL не загружаются; `localImage` Codex доступен
+  только внутри проекта. Сервер ничего не записывает; браузер запрашивает только видимые изображения.
+- Проверки — `agent/tests/test_history_images.py`, `tests/test_code_history_images.py`.
 
 ## 0.17.1
 

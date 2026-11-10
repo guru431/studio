@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import diffs, events, limits, opencode_rpc, permissions, sessions, store, timeline
+from . import diffs, events, history_images, limits, opencode_rpc, permissions, sessions, store, timeline
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
@@ -111,7 +111,7 @@ def step_of(update, previous=None):
     return events.bound(step)
 
 
-def normalize(updates):
+def normalize(updates, *, image_blocks=None):
     out, current, user_id = [], None, None
     for update in updates:
         kind = update.get("sessionUpdate")
@@ -121,7 +121,15 @@ def normalize(updates):
                 current = {"id": str(len(out)), "role": "user", "text": "", "steps": [], "time": None}
                 out.append(current)
             user_id = mid
-            current["text"] += text_of(update.get("content"))
+            content = update.get("content")
+            if isinstance(content, dict) and content.get("type") == "image":
+                images = current.setdefault("images", [])
+                if len(images) < history_images.COUNT:
+                    images.append(history_images.reference(len(images)))
+                    if image_blocks is not None:
+                        image_blocks.setdefault(current["id"], []).append(content)
+            else:
+                current["text"] += text_of(content)
         elif kind in ("agent_message_chunk", "tool_call", "tool_call_update"):
             if current is None or current["role"] != "assistant":
                 current = {"id": str(len(out)), "role": "assistant", "text": "", "steps": [], "time": None}
@@ -305,6 +313,19 @@ class OpenCodeRunner(Runner):
         end = min(before, total) if before is not None else total
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end], budget=512 * 1024)
         return {"items": page, "start": end - len(page), "total": total, "engine": "opencode"}
+
+    async def history_image(self, project, chat, message_id, index):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        if target is None:
+            raise Refused("not_found", "нет такого чата")
+        rpc = await self._connect(project)
+        try:
+            await self._load(rpc, project, target)
+            blocks = {}
+            await asyncio.to_thread(normalize, self._updates(rpc, target), image_blocks=blocks)
+            return await asyncio.to_thread(history_images.payload, blocks.get(message_id), index, "opencode", project)
+        finally:
+            await rpc.disconnect()
 
     async def _configure(self, rpc, target, data, model, effort):
         for key, value in (("model", model), ("effort", effort)):

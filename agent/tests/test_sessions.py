@@ -75,7 +75,7 @@ def test_normalize_blocks_errors_images_and_thinking():
             A("a1", [{"type": "thinking", "thinking": "хм"}, tool("t1", "Read", {"file_path": "x" * 30_000})]),
             U("u2", [result("t1", [text("нет файла")], error=True)])]
     items = sessions.normalize(msgs)
-    assert items[0]["text"] == "Глянь\n[изображение]"
+    assert items[0]["text"] == "Глянь" and items[0]["images"] == [{"index": 0, "name": "Изображение 1"}]
     step = items[1]["steps"][0]
     assert items[1]["text"] == "" and step["error"] is True and step["text"] == "нет файла"
     assert len(step["input"]["file_path"]) == limits.CLIP and step["input"]["file_path"].endswith("…")

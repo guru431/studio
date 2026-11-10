@@ -51,6 +51,7 @@ import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
 import { statusActions } from './code-status-bar.js';
+import { historyImages } from './code-chat-images.js';
 
 const WAITING = 'Компьютер пропал со связи — жду его';
 const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
@@ -187,6 +188,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
     'Показать раньше');
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
+  const pictures = historyImages(scroller, feed, { api, endpoint, closed: () => closed() });
   const previous = el('button', { type: 'button', id: 'code-message-up', class: 'icon-btn',
     'aria-label': 'Предыдущее моё сообщение', title: 'Предыдущее моё сообщение', disabled: true });
   const next = el('button', { type: 'button', id: 'code-message-down', class: 'icon-btn',
@@ -782,7 +784,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return el('div', { class: 'code-msg user' },
       ...(Array.isArray(m.images) ? m.images : []).map((i) => IMAGE_TYPES.has(i.mime)
         ? el('img', { class: 'code-sent-image', src: `data:${i.mime};base64,${i.data}`, alt: i.name })
-        : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
+        : agent?.history_images && typeof m.id === 'string' && Number.isInteger(i.index) && i.index >= 0
+          ? pictures.node(m.id, i) : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
     }
     const body = el('div', { class: 'code-steps code-timeline' });
     const progress = progressView({ onChanges: paintChangedFiles,
@@ -1767,6 +1770,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       alive = false;
       askObserver.disconnect();
       sharing.unmount();
+      pictures.unmount();
       statusControls.unmount();
       for (const view of picks.values()) view.unmount();
       visualizations.unmount();

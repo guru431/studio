@@ -118,7 +118,21 @@ def test_project_search_is_first_in_sorting_panel_and_keeps_project_links_visibl
             page.keyboard.press('Escape')
             pw.expect(page.locator('#code-project-sort-open')).to_have_attribute('aria-expanded', 'false')
             pw.expect(page.locator('#code-project-sort-open')).to_be_focused()
-            page.locator('#code-project-sort-open').click()
+            trigger = page.locator('#code-project-sort-open')
+            trigger.tap() if width == 320 else trigger.click()
+            pw.expect(search).to_be_focused()
+            # В Safari открытие клавиатуры меняет visualViewport, затем прокручивает документ.
+            # Настольная автоматизация не открывает клавиатуру iOS: воспроизводим её события явно.
+            page.evaluate("""() => {
+              Object.defineProperty(visualViewport, 'height', {configurable:true, get:() => 440});
+              visualViewport.dispatchEvent(new Event('resize'));
+              document.dispatchEvent(new Event('scroll'));
+            }""")
+            pw.expect(trigger).to_have_attribute('aria-expanded', 'true')
+            pw.expect(search).to_be_focused()
+            assert page.locator('#code-project-sort-menu').evaluate("node => {const r=node.getBoundingClientRect();"
+                "return r.top>=0 && r.bottom<=visualViewport.height+1;}")
+            page.evaluate("delete visualViewport.height; visualViewport.dispatchEvent(new Event('resize'))")
             page.locator('#code-project-sort-options input[value=findings]').check()
             pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
             assert page.evaluate("[...document.querySelectorAll('#code-projects .code-project a')].every(link => {"
