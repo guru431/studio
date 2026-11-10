@@ -23,7 +23,8 @@ def test_active_commands_counter_and_expandable_live_list(desktop_browser, live,
         {'k': 'step_update', 'id': 'a', 'text': 'Вывод первой команды'},
     ]
     aid, channel = code_online(live, login, machine)
-    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+    # Сервер фикстуры — локальный HTTP; загрузка системного TLS-хранилища Windows не требуется.
+    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'}, verify=False)
     cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
     try:
         with desktop_browser.new_context(viewport={'width': width, 'height': 850}, has_touch=width < 760,
@@ -36,7 +37,12 @@ def test_active_commands_counter_and_expandable_live_list(desktop_browser, live,
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
             page.locator('#code-chat[data-loaded="1"]').wait_for()
             button = page.locator('#code-active-commands')
-            assert button.is_hidden()
+            assert button.is_visible()
+            assert button.locator('.code-active-count').inner_text() == '0'
+            button.tap() if width < 760 and engine != 'firefox' else button.click()
+            panel = page.locator('#code-command-menu:popover-open')
+            panel.get_by_text('Нет выполняемых команд', exact=True).wait_for()
+            page.keyboard.press('Escape')
             page.locator('#code-text').fill('Проверь')
             page.locator('#code-send').click()
             page.wait_for_function("() => document.querySelector('#code-active-commands .code-active-count').textContent==='2'")
@@ -74,7 +80,9 @@ def test_active_commands_counter_and_expandable_live_list(desktop_browser, live,
             play({'k': 'result', 'id': 'b', 'text': 'готово', 'status': 'completed'},
                  {'k': 'result', 'id': 'read', 'text': 'готово', 'status': 'completed'},
                  {'k': 'done', 'status': 'done'})
-            page.wait_for_function("() => document.querySelector('#code-active-commands').hidden")
-            assert page.locator('#code-command-menu:popover-open').count() == 0
+            page.wait_for_function("() => document.querySelector('#code-active-commands .code-active-count').textContent==='0'")
+            assert button.is_visible()
+            panel.get_by_text('Нет выполняемых команд', exact=True).wait_for()
+            assert panel.locator('.code-step').count() == 0
     finally:
         channel.stop()

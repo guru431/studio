@@ -5,16 +5,18 @@ import { popupPanel } from './menu.js';
 
 export function commandsView(host, { stepNode, repaint }) {
   const count = el('span', { class: 'code-active-count', 'aria-hidden': 'true' }, '0');
-  const button = el('button', { type: 'button', id: 'code-active-commands', class: 'icon-btn', hidden: true,
+  const button = el('button', { type: 'button', id: 'code-active-commands', class: 'icon-btn',
     'aria-label': 'Выполняемые команды: 0', title: 'Выполняемые команды: 0' }, icon('code'), count);
   const body = el('div', { class: 'code-command-list' });
+  const empty = el('p', { class: 'small muted', role: 'status' }, 'Нет выполняемых команд');
   const panel = el('div', { id: 'code-command-menu', class: 'code-command-menu' },
-    el('p', { class: 'small muted' }, 'Выполняемые команды'), body);
+    el('p', { class: 'small muted' }, 'Выполняемые команды'), empty, body);
   host.append(panel);
   const popup = popupPanel(button, panel, { label: 'Выполняемые команды', side: 'above', align: 'end' });
   let models = [];
   const nodes = new Map();
   function render() {
+    empty.hidden = models.length > 0;
     const active = new Set(models.map(model => String(model.id)));
     for (const [id, entry] of nodes) if (!active.has(id)) { entry.node.remove(); nodes.delete(id); }
     for (const model of models) {
@@ -39,12 +41,11 @@ export function commandsView(host, { stepNode, repaint }) {
     update(steps) {
       models = (steps || []).filter(step => step.status === 'running' && ['Shell', 'Bash'].includes(step.tool));
       count.textContent = String(models.length);
-      button.hidden = !models.length;
       const label = `Выполняемые команды: ${models.length}`;
       button.title = label;
       button.setAttribute('aria-label', label);
-      if (!models.length) { popup.close(); nodes.clear(); body.replaceChildren(); }
-      else if (popup.isOpen()) render();
+      if (!models.length) { nodes.clear(); body.replaceChildren(); }
+      if (popup.isOpen()) render();
     },
     unmount() { popup.close(); nodes.clear(); panel.remove(); },
   };

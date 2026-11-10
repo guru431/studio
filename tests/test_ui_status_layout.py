@@ -20,7 +20,8 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
     machine = code_free_machine({CODE_CHAT_A: code_session('Статус', messages=[message])})
     machine.subagents = machine.chat_fork = True
     aid, channel = code_online(live, login, machine)
-    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
+    # Сервер фикстуры — локальный HTTP; загрузка системного TLS-хранилища Windows не требуется.
+    signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'}, verify=False)
     cookies = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
     try:
         with desktop_browser.new_context(viewport={'width': width, 'height': 850},
@@ -46,7 +47,7 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
                     .filter(n=>!n.hidden).map(n=>n.getBoundingClientRect());
                   const visible=[...controls.querySelectorAll('button')].filter(n=>!n.hidden && n.getClientRects().length);
                   const rects=visible.map(n=>n.getBoundingClientRect());
-                  return {round:Math.abs(circle.width-circle.height)<1, minimum:fixed.length>=5,
+                  return {round:Math.abs(circle.width-circle.height)<1, minimum:fixed.length>=6,
                     files:!!controls.querySelector('.code-status-fixed > #code-changed-files'),
                     half:rects.every(r=>r.left>=bar.left+bar.width/2-1 && r.right<=bar.right+1),
                     separate:rects.every((r,i)=>!i || r.left>=rects[i-1].right-1)};
