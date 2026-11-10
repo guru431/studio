@@ -135,6 +135,30 @@ def test_fit_drops_first_steps_of_a_single_huge_answer():
     assert item["text"] == "Ответ" and len(steps[0]["text"]) == 5000  # исходник не тронут
 
 
+@pytest.mark.parametrize("budget", [30_000, 6_000, 1_600])
+def test_fit_keeps_text_and_command_order_when_a_large_history_page_is_shrunk(budget):
+    raw = [U("question", "Сделай")]
+    for index in range(8):
+        raw.extend([A(f"a{index}", [text(f"Проверка {index} 🚀 " * 20), tool(f"t{index}", "Bash", {"command": "status"})]),
+                    U(f"r{index}", [result(f"t{index}", "вывод" * 1_000)])])
+    raw.append(A("final", [text("Готово 🚀 " * 100)]))
+    original = sessions.normalize(raw)[1]
+    before = json.dumps(original, ensure_ascii=True)
+    answer = sessions.fit([original], budget=budget)[0]
+    assert len(json.dumps([answer], ensure_ascii=True)) <= budget
+    assert json.dumps(original, ensure_ascii=True) == before
+    parts = answer.get("timeline", [])
+    assert parts, "Сжатая история должна сохранять порядок команд и комментариев"
+    assert [part["id"] for part in parts if part["kind"] == "step"] == [step["id"] for step in answer["steps"]]
+    position = 0
+    for part in parts:
+        if part["kind"] == "text":
+            assert part["start"] == position
+            assert part["end"] > part["start"]
+            position = part["end"]
+    assert position == len(answer["text"].encode("utf-16-le")) // 2
+
+
 def test_fit_keeps_what_fits():
     items = [{"id": f"u{i}", "role": "user", "text": "т", "steps": [], "time": None} for i in range(5)]
     assert sessions.fit(items) == items

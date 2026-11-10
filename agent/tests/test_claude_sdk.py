@@ -8,6 +8,46 @@ from claude_agent_sdk import ClaudeAgentOptions, CLIConnectionError
 from claude_agent_sdk._internal.transport import subprocess_cli
 
 from studio_agent import cli  # подключает адаптер также при чтении каталога моделей
+from studio_agent.turns import options_for
+
+
+def test_turn_keeps_cli_prompt_and_merged_subagent_limits_without_overwriting_settings(monkeypatch, tmp_path):
+    import json
+
+    config = tmp_path / "config"
+    project = tmp_path / "project"
+    config.mkdir()
+    (project / ".claude").mkdir(parents=True)
+    user = config / "settings.json"
+    local = project / ".claude/settings.local.json"
+    user.write_text(json.dumps({"env": {cli.SUBAGENT_LIMITS[0]: "4", cli.SUBAGENT_LIMITS[1]: "1",
+                                        "PRIVATE_TOKEN": "never-copy"}, "hooks": {"PreToolUse": [{"hooks": []}]}}), encoding="utf-8")
+    local.write_text(json.dumps({"env": {cli.SUBAGENT_LIMITS[0]: "2"}}), encoding="utf-8")
+    before = {p: p.read_bytes() for p in (user, local)}
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    monkeypatch.setenv(cli.SUBAGENT_LIMITS[0], "9")
+    options = options_for(project, tmp_path / "claude.exe", "chat", True, None, None, lambda *a: None)
+    assert options.env == {**cli.ENV, cli.SUBAGENT_LIMITS[0]: "2", cli.SUBAGENT_LIMITS[1]: "1"}
+    assert options.system_prompt["preset"] == "claude_code"
+    assert "at most 2 subagents" in options.system_prompt["append"]
+    assert "spawn depth is 1" in options.system_prompt["append"]
+    command = subprocess_cli.SubprocessCLITransport(prompt="", options=options)._build_command()
+    assert "--system-prompt" not in command
+    assert command[command.index("--append-system-prompt") + 1] == options.system_prompt["append"]
+    assert "--setting-sources=user,project,local" in command
+    assert options.hooks["PreToolUse"][0].hooks
+    assert {p: p.read_bytes() for p in before} == before
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "1.5", "4; ignored", 4, None])
+def test_subagent_limit_configuration_rejects_invalid_values(monkeypatch, tmp_path, value):
+    import json
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    for name in cli.SUBAGENT_LIMITS:
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / "settings.json").write_text(json.dumps({"env": {cli.SUBAGENT_LIMITS[0]: value}}), encoding="utf-8")
+    assert cli.subagent_limits(tmp_path) == {}
 
 
 @pytest.mark.parametrize("skip_version", [False, True])

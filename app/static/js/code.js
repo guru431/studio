@@ -195,7 +195,7 @@ function shortcut(event) {
   event.preventDefault();
   if (!proj) {
     panelOpen(true);
-    document.getElementById('code-project-search')?.focus();
+    panel?.search();
     return;
   }
   const search = document.getElementById('code-chat-search');

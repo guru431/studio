@@ -1,7 +1,7 @@
 # CLAUDE.md — studio
 
 Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и восемью
-разделами (Чат, Агенты, Фото, Видео, Разговоры, Озвучка, Сканы, Перевод), плюс пакетные скрипты для Windows и Linux —
+разделами (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты), плюс пакетные скрипты для Windows и Linux —
 клиенты API картинок и видео LLM-шлюза srvllm. Что умеет и как пользоваться — [README.md](README.md); главная спека —
 [2026-10-19-studio-pwa-design](docs/superpowers/specs/2026-10-19-studio-pwa-design.md); как устроено по областям —
 [docs/architecture/](docs/architecture/README.md); названия интерфейса — [docs/glossary.md](docs/glossary.md).
@@ -79,13 +79,13 @@
 | Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports` | [sharing-export](docs/architecture/sharing-export.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history` | [media](docs/architecture/media.md) |
-| Речь (раздел «Озвучка», «Разговоры», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
+| Речь (раздел «Озвучка», «Расшифровка», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
 | Сканы и перевод | `ocr`, `ocr_render`, `translate`, `translate_text`, `translate_spot` | [ocr-translate](docs/architecture/ocr-translate.md) |
 | Поиск, задания, уведомления | `search`, `jobs`, `push`, `ntfy` | [search](docs/architecture/search.md), [notifications](docs/architecture/notifications.md) |
 | «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop` | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md) |
 | Мост `agent/` | `studio_agent/*`, правила — [agent/CLAUDE.md](agent/CLAUDE.md) | [agent-bridge](docs/architecture/agent-bridge.md) |
 | Страница: общее | `app/static/js/`: `app.js` (роутер, рельс `buildRail`, `announce`), `sections-meta.js` (реестр разделов), `icons.js` (значки), `menu.js` (меню и панели), `appearance.js` (тема, акцент, плотность, шрифт, масштаб), `settings.js`, `account-security.js` (сессии, аварийный выход, журнал), `mobile-navigation.js`; `theme.js` — до модулей | [shell](docs/architecture/shell.md), [security-lock](docs/architecture/security-lock.md) |
-| Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-inbox.js` (входящие), `code-workspace.js`, `code-files.js`, `code-git.js`, `code-picker.js` и др. | [agents-workspace](docs/architecture/agents-workspace.md) |
+| Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-workspace.js`, `code-files.js`, `code-git.js`, `code-picker.js` и др. | [agents-workspace](docs/architecture/agents-workspace.md) |
 
 Фронтенд без сборки — `app/static/` (модули ES, библиотеки копией в `static/vendor/`, без CDN; importmap с SHA-CSP,
 снимок статики в памяти — после правки статики служба и тестовый процесс требуют перезапуска). Протокол моста —

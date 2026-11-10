@@ -27,6 +27,7 @@
 import { api, hooks, me } from './api.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
+import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { kick } from './jobs.js';
@@ -78,17 +79,20 @@ function build(view, ctx) {
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), 'Загрузить запись', input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
-  const list = el('nav', { class: 'tr-list', 'aria-label': 'Разговоры' });
+  const list = el('nav', { class: 'tr-list', 'aria-label': 'Записи' });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
   const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Разговоры',
-    'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'));
-  const title = el('h1', {}, 'Разговоры');
-  const head = el('header', { class: 'head' }, toggle, title);
+  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': 'Записи',
+    'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), 'Записи');
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload' }, icon('plus'), 'Загрузить запись');
+  upload.addEventListener('click', () => input.click());
+  const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
+  const title = el('h1', {}, NAMES.transcribe);
+  const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
-  const main = el('section', { class: 'split-main' }, head, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
+  const main = el('section', { class: 'split-main' }, head, toolbar, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
 
@@ -399,6 +403,7 @@ function build(view, ctx) {
     }
     error.textContent = '';
     input.disabled = true;
+    upload.disabled = true;
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/transcripts');
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
@@ -409,6 +414,7 @@ function build(view, ctx) {
     });
     xhr.addEventListener('loadend', async () => {
       input.disabled = false;
+      upload.disabled = false;
       progress.textContent = '';
       let answer = null;
       try {

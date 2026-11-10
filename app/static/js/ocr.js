@@ -78,13 +78,16 @@ function build(view, ctx) {
   const list = el('nav', { class: 'tr-list', 'aria-label': 'Документы' });
   const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Документы',
-    'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'));
+  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': 'Документы',
+    'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), 'Документы');
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload' }, icon('plus'), 'Загрузить скан');
+  upload.addEventListener('click', () => input.click());
+  const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
   const title = el('h1', {}, NAMES.ocr);
-  const head = el('header', { class: 'head' }, toggle, title);
+  const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
-  const main = el('section', { class: 'split-main' }, head, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
+  const main = el('section', { class: 'split-main' }, head, toolbar, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
   const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
   view.append(root);
 
@@ -336,6 +339,7 @@ function build(view, ctx) {
     }
     error.textContent = '';
     input.disabled = true;
+    upload.disabled = true;
     const form = new FormData();
     for (const file of files) form.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
@@ -346,6 +350,7 @@ function build(view, ctx) {
     });
     xhr.addEventListener('loadend', async () => {
       input.disabled = false;
+      upload.disabled = false;
       progress.textContent = '';
       let answer = null;
       try {

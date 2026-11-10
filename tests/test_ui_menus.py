@@ -105,8 +105,8 @@ def test_rail_groups_title_and_heading_focus(engine, live, cookie, width, scheme
         pw.expect(page.locator('#view h1')).to_be_focused()
         heading = page.evaluate("document.activeElement.textContent")
         page.screenshot(path=str(tmp_path / f'rail-{width}-{scheme}.png'))
-    assert tabs == [['chat', 'Чат', False], ['code', 'Агенты', False], ['photo', 'Фото', True], ['video', 'Видео', False],
-                    ['transcribe', 'Разговоры', True], ['speech', 'Озвучка', False], ['ocr', 'Сканы', True],
-                    ['translate', 'Перевод', False]]
+    assert tabs == [['chat', 'Чат', False], ['photo', 'Фото', True], ['video', 'Видео', False],
+                    ['speech', 'Озвучка', True], ['transcribe', 'Расшифровка', False], ['ocr', 'Сканы', True],
+                    ['translate', 'Перевод', False], ['code', 'Агенты', True]]
     assert all(display == ('none' if width < 760 else 'block') for display in separators), separators
     assert heading == 'Видео'

@@ -26,6 +26,7 @@ import { timeOnly } from './time.js';
 import { el, words } from './ui.js';
 import { allCodeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 import { ENGINE_NAMES } from './code-options.js';
+import { sectionName } from './sections-meta.js';
 
 export const JOBS_POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
@@ -208,6 +209,27 @@ function paint() {
   const label = `В работе${total ? `: ${total}` : ''}${agents.some((item) => item.asking) ? ', требуется ваше действие' : ''}${fresh ? ', есть готовое' : ''}`;
   badge.setAttribute('aria-label', label);
   badge.title = label;
+  const bySection = new Map();
+  for (const item of running) bySection.set(item.section, (bySection.get(item.section) || 0) + 1);
+  bySection.set('code', agents.filter((item) => item.running).length);
+  for (const link of document.querySelectorAll('#rail .tab[data-section], #mobile-section-links a[data-section]')) {
+    const mark = link.querySelector('.section-running-count');
+    if (!mark) continue;                 // рельс «Агентов» обновляет code-activity.js, включая входящие
+    const total = bySection.get(link.dataset.section) || 0;
+    mark.hidden = !total;
+    mark.textContent = total ? String(total) : '';
+    link.setAttribute('aria-label', sectionName(link.dataset.section) + (total ? ` · в работе: ${total}` : ''));
+  }
+  const moreCount = document.getElementById('mobile-running-count');
+  if (moreCount) {
+    const extra = [...document.querySelectorAll('#rail .tab.mobile-secondary')]
+      .reduce((sum, link) => sum + (bySection.get(link.dataset.section) || 0), 0);
+    moreCount.hidden = !extra;
+    moreCount.textContent = extra ? String(extra) : '';
+    const name = document.getElementById('mobile-more-label').textContent;
+    moreCount.closest('button').setAttribute('aria-label', (name === 'Ещё' ? 'Ещё · все разделы' : name)
+      + (extra ? ` · в работе: ${extra}` : ''));
+  }
   if (panel.open) renderPanel();
 }
 
@@ -356,6 +378,7 @@ export function setupJobs({ navigate }) {
   });
   document.addEventListener('studio-me', paint);
   document.addEventListener('studio-code-snapshot', paint);
+  document.addEventListener('studio-navigation', paint);
   // нажатие на уведомление при открытом окне студии: sw.js шлёт адрес записи
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {

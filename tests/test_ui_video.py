@@ -10,7 +10,8 @@ from PIL import Image
 
 from fakes import video_object
 from test_ui_browser import (CLIP, NO_OVERFLOW, READY, VIDEO_FEED_READY, add_gateway, browser, clips,  # noqa: F401
-                             is_open, live, png_of, problems, put_file, ready_clips, set_value, video_screen)
+                             NEWEST_DONE, done_cards, go, is_open, live, make_images, photo_screen,
+                             png_of, problems, put_file, ready_clips, set_value, video_screen)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -127,6 +128,106 @@ def png_bytes(w, h, color):
     out = io.BytesIO()
     Image.new("RGB", (w, h), color).save(out, "PNG")
     return out.getvalue()
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_photo_context_is_editable_bounded_and_cleared_with_a_new_source(browser, live, width):
+    login = f"vcontext{width}"
+    live.add_user(login)
+    v0 = len(live.gw.video_forms)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+        ("eval", "photo", "(window.photoId = document.querySelector('.photo-card').dataset.id)"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
+        ("wait", "document.querySelector('#video-photo-prompt')?.value === 'кот 0'"),
+        ("eval", "url", "location.hash"),
+        ("click", "#video-photo-context summary"),
+        ("eval", "long", "(document.querySelector('#video-photo-prompt').value = 'я'.repeat(4001), true)"),
+        ("click", "#video-go"), ("wait", "document.querySelector('#video-error').textContent.includes('4000')"),
+        ("eval", "bounded", NO_OVERFLOW),
+        ("type", "#video-prompt", "медленный поворот"),
+        # Внутри уже открытого видео снова переносится исходник; движение остаётся своим.
+        ("eval", "again", "(location.hash = '#/video?photo=' + window.photoId, true)"),
+        ("wait", "document.querySelector('#video-photo-prompt').value === 'кот 0'"),
+        ("eval", "motion", "document.querySelector('#video-prompt').value"),
+        ("click", "#video-source-clear"),
+        ("eval", "cleared", "[document.querySelector('#video-photo-context').hidden, document.querySelector('#video-photo-prompt').value]"),
+        put_file("#video-file", png_of(48, 64, "navy")),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48"),
+        ("click", "#video-go"), ("wait", clips("queued", 1))],
+        width=width, height=900, mobile=width == 320, timeout=20000)
+    assert not r.get("failed"), r
+    assert r["values"]["url"] == "#/video" and r["values"]["bounded"]
+    assert r["values"]["cleared"] == [True, ""] and r["values"]["motion"] == "медленный поворот"
+    assert len(live.gw.video_forms) - v0 == 1
+    assert live.gw.video_forms[-1][0]["prompt"] == "медленный поворот"
+    assert not problems(r), problems(r)
+
+
+def test_a_late_photo_transfer_cannot_replace_a_new_device_source(browser, live):
+    login = "vlatephoto"
+    live.add_user(login)
+    v0 = len(live.gw.video_forms)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
+        ("eval", "photo", "(window.photoId = document.querySelector('.photo-card').dataset.id)"),
+        *go("video"), ("wait", VIDEO_FEED_READY),
+        ("eval", "hold", """(() => { const real = window.fetch;
+          window.fetch = async (url, opts) => {
+            const response = await real(url, opts);
+            if (String(url) === '/api/images/' + window.photoId) {
+              await new Promise(resolve => { window.releasePhoto = resolve; });
+            }
+            return response;
+          }; return true; })()"""),
+        ("eval", "transfer", "(location.hash = '#/video?photo=' + window.photoId, true)"),
+        ("wait", "!!window.releasePhoto && document.querySelector('#video-go').disabled"),
+        ("eval", "loadingFits", NO_OVERFLOW),
+        put_file("#video-file", png_of(48, 64, "navy")),
+        ("wait", "document.querySelector('#video-source img')?.naturalWidth === 48"),
+        ("eval", "release", "(window.releasePhoto(), true)"), ("idle",),
+        ("eval", "source", "[document.querySelector('#video-source img').naturalWidth, document.querySelector('#video-photo-context').hidden]"),
+        ("type", "#video-prompt", "свой поворот"), ("click", "#video-go"), ("wait", clips("queued", 1))],
+        width=320, height=900, mobile=True, timeout=20000)
+    assert not r.get("failed"), r
+    assert r["values"]["source"] == [48, True] and r["values"]["loadingFits"]
+    assert len(live.gw.video_forms) - v0 == 1
+    assert live.gw.video_forms[-1][0]["prompt"] == "свой поворот"
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width, height", [(320, 740), (393, 852)])
+def test_photo_to_video_context_by_touch_in_webkit(webkit, live, ready_clips, width, height):
+    login = f"vphoto-wk{width}"
+    live.add_user(login)
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    assert signed.status_code == 303
+    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+    v0 = len(live.gw.video_forms)
+    with webkit.new_context(viewport={"width": width, "height": height}, is_mobile=True, has_touch=True,
+                            device_scale_factor=3, extra_http_headers={"Cookie": cookie}) as context:
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(live.url + "/#/settings")
+        until(page, READY)
+        page.evaluate(add_gateway()[2])
+        page.evaluate(make_images(1)[2])
+        page.evaluate("location.hash = '#/photo'")
+        until(page, done_cards(1))
+        page.locator(NEWEST_DONE).tap()
+        page.locator("#viewer .act-animate").tap()
+        until(page, "document.querySelector('#video-photo-prompt')?.value === 'кот 0'")
+        assert page.evaluate("location.hash") == "#/video"
+        assert page.evaluate("document.activeElement?.tagName") != "TEXTAREA"
+        page.locator("#video-photo-context summary").tap()
+        page.locator("#video-photo-prompt").fill("Кот у окна")
+        page.locator("#video-prompt").fill("Поворачивает голову")
+        assert page.evaluate(NO_OVERFLOW)
+        page.locator("#video-go").tap()
+        until(page, clips("done", 1))
+        assert not errors
+    assert len(live.gw.video_forms) - v0 == 1
+    assert live.gw.video_forms[-1][0]["prompt"] == "Описание исходного фото:\nКот у окна\n\nДвижение в видео:\nПоворачивает голову"
 
 
 @pytest.mark.parametrize("width, height", [(320, 740), (393, 852)])

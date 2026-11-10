@@ -1,4 +1,4 @@
-"""«Агенты» (D2): «Входящие» по значку-счётчику, плашка вопроса над полем, признаки и порядок вкладок, клавиши,
+"""«Агенты» (D2): задания через «В работе», плашка вопроса над полем, признаки и порядок вкладок, клавиши,
 поиск проектов, «Отметить прочитанными» и «был на связи» — в настоящем браузере."""
 import pytest
 
@@ -12,7 +12,7 @@ D = 'd4444444-4444-4444-8444-444444444444'
 ASK = {'request_id': 'r1', 'kind': 'permission', 'tool': 'Bash', 'input': {'command': 'ls'}}
 BADGE = "document.querySelector('#code-running-count')"
 DOT = "document.querySelector('#code-inbox-dot')"
-INBOX_OPEN = "document.querySelector('#code-inbox')?.open"
+JOBS_OPEN = "document.querySelector('#jobs-panel')?.open"
 
 
 def theme(name):
@@ -20,7 +20,7 @@ def theme(name):
 
 
 @pytest.mark.parametrize('width,shade', [(320, 'light'), (393, 'dark'), (1280, 'dark'), (1280, 'light')])
-def test_badge_opens_inbox_and_pinned_question_answers_from_any_width(browser, live, width, shade, tmp_path):
+def test_badge_opens_workspace_and_jobs_panel_opens_task_from_any_width(browser, live, width, shade, tmp_path):
     login = f'inbox-{width}-{shade}'
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session('Сессия в работе'),
@@ -33,8 +33,8 @@ def test_badge_opens_inbox_and_pinned_question_answers_from_any_width(browser, l
     aid, server = code_online(live, login, machine)
     server.send_events(pid('alpha'), C, {'k': 'done', 'status': 'done'})
     sheet = """(() => {
-      const box = document.querySelector('#code-inbox').getBoundingClientRect();
-      const rows = [...document.querySelectorAll('#code-inbox .code-inbox-row')];
+      const box = document.querySelector('#jobs-panel').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#jobs-panel .jobs-row')];
       return { inside: box.left >= 0 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 && box.top >= 0,
         noScroll: document.documentElement.scrollWidth <= innerWidth,
         touch: rows.every(r => r.getBoundingClientRect().height >= 44),
@@ -49,22 +49,17 @@ def test_badge_opens_inbox_and_pinned_question_answers_from_any_width(browser, l
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), theme(shade),
             ('wait', f"!{BADGE}.hidden && {BADGE}.textContent === '2' && !{DOT}.hidden"),
             ('eval', 'label', "document.querySelector('#rail [data-section=code]').getAttribute('aria-label')"),
-            ('click', '#code-running-count'), ('wait', INBOX_OPEN),
-            ('wait', "document.querySelectorAll('#code-inbox .code-inbox-row').length === 3"
-                     " && document.querySelector('#code-inbox .code-inbox-where').textContent.includes('alpha')"),
-            ('eval', 'stayed', "!location.hash.includes('/code')"),
-            ('eval', 'groups', "[...document.querySelectorAll('#code-inbox .code-inbox-group:not([hidden])')]"
-                               ".map(s => [s.dataset.kind, [...s.querySelectorAll('.code-inbox-title')].map(n => n.textContent)])"),
-            ('eval', 'where', "document.querySelector('#code-inbox .code-inbox-where').textContent"),
-            ('eval', 'sheet', sheet), ('screenshot', str(tmp_path / f'inbox-{width}-{shade}.png')),
-            ('press', 'Escape'), ('wait', f"!{INBOX_OPEN}"),
-            # обычное нажатие на вкладку — по-прежнему переход в раздел
-            ('click', '#rail [data-section=code] > span:last-child'),
+            ('click', '#code-running-count'),
             ('wait', "location.hash.startsWith('#/code') && !!document.querySelector('#code-panel')"),
-            ('eval', 'noSheet', f"!{INBOX_OPEN}"),
-            ('click', '#code-inbox-dot'), ('wait', INBOX_OPEN),
-            ('wait', f"!!document.querySelector(\"#code-inbox a[data-chat='{CODE_CHAT_B}']\")"),
-            ('click', f"#code-inbox a[data-chat='{CODE_CHAT_B}']"), code_loaded(CODE_CHAT_B),
+            ('eval', 'directWorkspace', "!document.querySelector('#code-inbox') && !document.querySelector('#jobs-panel').open"),
+            ('press', 'Escape'),
+            ('click', '#jobs'), ('wait', JOBS_OPEN),
+            ('wait', "document.querySelectorAll('#jobs-panel .jobs-row[data-section=code]').length === 3"),
+            ('eval', 'groups', "['asking','running','unread'].map(kind => [kind,"
+                               " [...document.querySelectorAll('#jobs-code-' + kind + ' .jobs-title')].map(n => n.textContent)])"),
+            ('eval', 'sheet', sheet), ('screenshot', str(tmp_path / f'inbox-{width}-{shade}.png')),
+            ('click', '#jobs-code-asking .jobs-open'), code_loaded(CODE_CHAT_B),
+            ('eval', 'noSheet', f"!{JOBS_OPEN}"),
             ('wait', "!document.querySelector('#code-ask-pin').hidden"),
             ('eval', 'pin', pin), ('screenshot', str(tmp_path / f'ask-pin-{width}-{shade}.png')),
             ('click', '#code-ask-pin-allow'), ('wait', "document.querySelector('#code-ask-pin').hidden")],
@@ -74,10 +69,9 @@ def test_badge_opens_inbox_and_pinned_question_answers_from_any_width(browser, l
     assert not result.get('failed'), result
     values = result['values']
     assert values['label'] == 'Агенты · Запущенных сессий: 2 · ждут ответа: 1 · не прочитано: 1'
-    assert values['stayed'] and values['noSheet']
+    assert values['directWorkspace'] and values['noSheet']
     assert values['groups'] == [['asking', ['Ждёт разрешения']], ['running', ['Сессия в работе']],
                                 ['unread', ['Готовый ответ']]]
-    assert 'Рабочий ПК' in values['where'] and 'alpha' in values['where']
     assert all(values['sheet'].values()), values['sheet']
     assert values['pin']['text'] == 'Claude Code просит разрешения: Bash'
     assert values['pin']['allow'] and values['pin']['deny'] and values['pin']['top'] and values['pin']['above']
@@ -157,10 +151,12 @@ def test_tab_marks_order_shortcuts_project_search_and_read_marks(browser, live, 
             ('wait', "document.activeElement?.id === 'code-chat-search'"),
             ('screenshot', str(tmp_path / f'tabs-{width}.png')),
             *panel,
+            ('click', '#code-project-sort-open'),
             ('wait', "!!document.querySelector('#code-project-search')?.offsetParent"),
             set_value('#code-project-search', 'GAM'), ('eval', 'found', visible_projects),
             set_value('#code-project-search', 'нет такого'), ('eval', 'none', "!!document.querySelector('#code-project-none')"),
             set_value('#code-project-search', ''), ('eval', 'all', f"{visible_projects}.length"),
+            ('press', 'Escape'),
             ('wait', f"!!document.querySelector(\"#code-projects li[data-pid='{pid('alpha')}'] .code-project-read\")"),
             ('eval', 'readLabel', f"document.querySelector(\"#code-projects li[data-pid='{pid('alpha')}'] .code-project-read\").textContent"),
             ('screenshot', str(tmp_path / f'panel-{width}.png')),
@@ -183,8 +179,8 @@ def test_tab_marks_order_shortcuts_project_search_and_read_marks(browser, live, 
 
 
 @pytest.mark.parametrize('size', [(320, 740), (393, 852)], ids=['320', '393'])
-def test_webkit_taps_open_inbox_answer_pinned_question_and_long_press_reorders_tabs(live, size, tmp_path):
-    """Движок Safari: касание числа «Агентов», строки «Входящих» и «Разрешить» плашки; удержание вкладки пальцем
+def test_webkit_taps_open_workspace_jobs_and_pinned_question_and_long_press_reorders_tabs(live, size, tmp_path):
+    """Движок Safari: касание числа «Агентов», строки «В работе» и «Разрешить» плашки; удержание вкладки пальцем
     переставляет её (синтетические PointerEvent touch: настоящего перетаскивания пальцем Playwright WebKit не умеет)."""
     import httpx
     pw = pytest.importorskip('playwright.sync_api')
@@ -224,20 +220,24 @@ def test_webkit_taps_open_inbox_answer_pinned_question_and_long_press_reorders_t
             page.goto(live.url + '/#/chat')
             badge = page.locator('#code-running-count')
             pw.expect(badge).to_have_text('2')
+            badge.tap()
+            pw.expect(page.locator('#code-panel')).to_be_visible()
+            assert page.locator('#code-inbox').count() == 0
+            page.keyboard.press('Escape')
             for shade in ('light', 'dark'):
                 page.evaluate('shade => { document.documentElement.dataset.theme = shade; }', shade)
-                badge.tap()
-                pw.expect(page.locator('#code-inbox .code-inbox-row')).to_have_count(3)
-                geometry = page.evaluate("""() => { const r = document.querySelector('#code-inbox').getBoundingClientRect();
+                page.locator('#jobs').tap()
+                pw.expect(page.locator('#jobs-panel .jobs-row[data-section=code]')).to_have_count(3)
+                geometry = page.evaluate("""() => { const r = document.querySelector('#jobs-panel').getBoundingClientRect();
                   return r.left >= 0 && r.right <= innerWidth + 0.5 && Math.abs(r.bottom - innerHeight) < 1
                     && document.documentElement.scrollWidth <= innerWidth; }""")
                 assert geometry, shade
-                assert '/code' not in page.evaluate('location.hash')
+                assert '/code' in page.evaluate('location.hash')
                 page.screenshot(path=str(tmp_path / f'webkit-inbox-{width}-{shade}.png'))
-                page.locator('#code-inbox-close').tap()
-                pw.expect(page.locator('#code-inbox')).not_to_be_visible()
-            page.locator('#code-inbox-dot').tap()
-            page.locator(f"#code-inbox a[data-chat='{CODE_CHAT_B}']").tap()
+                page.locator('#jobs-close').tap()
+                pw.expect(page.locator('#jobs-panel')).not_to_be_visible()
+            page.locator('#jobs').tap()
+            page.locator('#jobs-code-asking .jobs-open').tap()
             pw.expect(page.locator('#code-chat')).to_have_attribute('data-loaded', '1')
             pw.expect(page.locator('#code-ask-pin')).to_be_visible()
             page.screenshot(path=str(tmp_path / f'webkit-pin-{width}.png'))

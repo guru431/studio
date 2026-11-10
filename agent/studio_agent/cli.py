@@ -29,6 +29,7 @@ SETTINGS = ["user", "project", "local"]
 DEFAULTS: dict[str, dict] = {}
 DEFAULTS_MAX = 8
 ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
+SUBAGENT_LIMITS = ("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH")
 # Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
 SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
                          "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SSE_PORT", "CLAUDE_PID", "CLAUDE_CODE_EXECPATH",
@@ -113,6 +114,37 @@ def models_from(info: dict | None) -> tuple[list[dict], list[str]]:
 
 def _drop(_line: str) -> None:
     """stderr Claude Code — прочь: в журнал он не идёт."""
+
+
+def subagent_limits(root):
+    """Только лимиты запуска из окружения и штатных настроек; личный конфиг не меняется."""
+    values = {name: os.environ.get(name) for name in SUBAGENT_LIMITS}
+    for path in [Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "settings.json",
+                 Path(root) / ".claude/settings.json", Path(root) / ".claude/settings.local.json"]:
+        try:
+            env = json.loads(path.read_text("utf-8-sig")).get("env", {})
+            if isinstance(env, dict):
+                values.update({name: env[name] for name in SUBAGENT_LIMITS if name in env})
+        except (OSError, ValueError, AttributeError):
+            pass
+    return {name: value for name, value in values.items()
+            if isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value) and int(value) > 0}
+
+
+def coding_prompt(limits):
+    """Штатный Claude Code prompt и явное планирование в пределах настроек владельца."""
+    prompt = {"type": "preset", "preset": "claude_code"}
+    instructions = []
+    if SUBAGENT_LIMITS[0] in limits:
+        instructions.append(f"Run at most {int(limits[SUBAGENT_LIMITS[0]])} subagents concurrently. "
+                            "When all slots are occupied, wait for an existing subagent to finish before spawning another; "
+                            "do not treat the limit as a reason to skip the remaining work or increase it.")
+    if SUBAGENT_LIMITS[1] in limits:
+        instructions.append(f"The maximum subagent spawn depth is {int(limits[SUBAGENT_LIMITS[1]])} "
+                            "below the main agent. Include this limit when delegating; agents at the limit must do their work directly.")
+    if instructions:
+        prompt["append"] = "\n".join(instructions)
+    return prompt
 
 
 def settings_from(info, root, context=None, *, model=None, effort=None, access=None):

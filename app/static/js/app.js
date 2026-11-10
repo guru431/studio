@@ -6,7 +6,7 @@
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
- * (#/video?source=<media_id> — «Оживить» из раздела фото; ?id=<запись> — переход к записи из
+ * (#/video?photo=<image_id> — «Создать видео» из раздела фото с контекстом; ?id=<запись> — переход к записи из
  * «В работе», jobs.js: раздел открывает её и убирает ?id из адреса). Смена id в том же разделе зовёт
  * `update(ctx)` модуля, если он его экспортирует, иначе раздел монтируется заново. Раздел с `hold()`
  * может задержать любую смену адреса (true — он сам вернул адрес и спросит; code.js — несохранённая правка).
@@ -30,7 +30,7 @@ import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
 import { cancelRecording } from './mic.js';
-import { choose, current as look, follow, paintSave, retrySave, setupAppearance } from './appearance.js';
+import { choose, current as look, deviceSizeControls, follow, paintSave, retrySave, setupAppearance } from './appearance.js';
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
@@ -222,8 +222,7 @@ function announce(section) {
 }
 
 /** Вкладки рельса — из реестра разделов, группами; у «Агентов» — число работающих сессий и точка входящих
- * (code-activity.js). Подпись — и текстом, и в aria-label: на узком экране в режиме «все разделы» видны
- * только значки (app.css). */
+ * (code-activity.js). Подпись остаётся видимой на узком экране и продублирована в aria-label. */
 function buildRail() {
   const rail = document.getElementById('rail');
   const spacer = rail.querySelector('.spacer');
@@ -233,7 +232,8 @@ function buildRail() {
       ? el('span', { class: 'tab-icon' }, svgIcon(s.id),
         el('span', { id: 'code-running-count', class: 'tab-count', 'aria-hidden': 'true', hidden: '' }),
         el('span', { id: 'code-inbox-dot', class: 'tab-dot', 'aria-hidden': 'true', hidden: '' }))
-      : svgIcon(s.id);
+      : el('span', { class: 'tab-icon' }, svgIcon(s.id),
+        el('span', { class: 'tab-count section-running-count', 'aria-hidden': 'true', hidden: '' }));
     const tab = el('a', { class: group !== null && s.group !== group ? 'tab group-start' : 'tab', href: `#/${s.id}`,
       'data-section': s.id, 'aria-label': s.name }, glyph, el('span', {}, s.name));
     group = s.group;
@@ -247,6 +247,7 @@ function openMenu(open) {
 }
 
 function setupMenu() {
+  document.getElementById('menu-device-controls').append(deviceSizeControls('menu'));
   avatar.textContent = (me.name || me.login).slice(0, 1).toUpperCase();
   document.getElementById('menu-name').textContent = me.name || me.login;
   document.getElementById('menu-login').textContent = me.login;

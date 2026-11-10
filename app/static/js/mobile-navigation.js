@@ -1,12 +1,11 @@
 /* На телефоне — все разделы либо 3–4 личных и «Ещё». На компьютере остаётся исходный рельс.
- * Порядок и имена — из реестра sections-meta.js (вкладки рельса строит app.js); по умолчанию — Чат, Агенты, Фото.
- * Сохранённый выбор — набор разделов, не порядок: смена порядка рельса его не ломает. Ниже 400 px в режиме «все»
- * видны только значки, имя — в aria-label вкладки (app.css). */
+ * Порядок и имена — из реестра sections-meta.js (вкладки рельса строит app.js); по умолчанию — Чат, Фото, Агенты.
+ * Сохранённый выбор — набор разделов, не порядок: смена порядка рельса его не ломает. Подписи видны на узком экране. */
 import { el } from './ui.js';
 import { icon } from './icons.js';
 import { NAMES } from './sections-meta.js';
 
-const DEFAULT = ['chat', 'code', 'photo'];
+const DEFAULT = ['chat', 'photo', 'code'];
 
 let openEditor = null;
 
@@ -30,7 +29,8 @@ export function setupMobileNavigation(me) {
   const label = el('span', { id: 'mobile-more-label' }, 'Ещё');
   const more = el('button', { id: 'mobile-more', class: 'mobile-more', type: 'button',
     'aria-haspopup': 'dialog', 'aria-controls': 'mobile-sections', 'aria-expanded': 'false' },
-    icon('more', 'ico mobile-more-icon'), label);
+    el('span', { class: 'tab-icon' }, icon('more', 'ico mobile-more-icon'),
+      el('span', { id: 'mobile-running-count', class: 'tab-count', 'aria-hidden': 'true', hidden: true })), label);
   rail.insertBefore(more, rail.querySelector('.spacer'));
   const close = el('button', { id: 'mobile-sections-close', class: 'btn-link', type: 'button' }, 'Закрыть');
   const links = el('nav', { id: 'mobile-section-links', 'aria-label': 'Остальные разделы' });
@@ -71,6 +71,7 @@ export function setupMobileNavigation(me) {
       if (link.dataset.section === active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
+    document.dispatchEvent(new Event('studio-navigation'));
   }
 
   function paint() {
@@ -79,7 +80,9 @@ export function setupMobileNavigation(me) {
     for (const tab of tabs) tab.classList.toggle('mobile-secondary', mode !== 'all' && !primary.includes(tab.dataset.section));
     links.replaceChildren(...tabs.filter(tab => !primary.includes(tab.dataset.section)).map(tab => {
       const link = el('a', { href: tab.getAttribute('href'), 'data-section': tab.dataset.section },
-        icon(tab.dataset.section), el('span', {}, names.get(tab.dataset.section)));
+        el('span', { class: 'section-icon' }, icon(tab.dataset.section),
+          el('span', { class: 'section-running-count', 'aria-hidden': 'true', hidden: true })),
+        el('span', {}, names.get(tab.dataset.section)));
       return link;
     }));
     setActive(active);

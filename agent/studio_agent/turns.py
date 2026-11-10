@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundError, HookMatcher,
-                              PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent)
+                              PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent,
+                              SystemMessage)
 
 from . import attachments as attachment_input
 from . import cli, events, image_input, limits, permissions, sessions, store, timeline
@@ -48,11 +49,13 @@ async def _keep_alive(_input, _tool_use_id, _context) -> dict:
 def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, model: str | None,
                 effort: str | None, can_use_tool, access: str | None = None) -> ClaudeAgentOptions:
     """Опции клиента хода: новая сессия — `session_id=chat`, существующая — `resume=chat`."""
+    limits = cli.subagent_limits(project)
     return ClaudeAgentOptions(
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
         model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]},
-        setting_sources=list(cli.SETTINGS), env=dict(cli.ENV), stderr=cli._drop, extra_args={"chrome": None})
+        setting_sources=list(cli.SETTINGS), system_prompt=cli.coding_prompt(limits),
+        env={**limits, **cli.ENV}, stderr=cli._drop, extra_args={"chrome": None})
 
 
 def _words(errors: list | None, result: str | None, subtype: str | None) -> str:
@@ -102,6 +105,7 @@ class _Turn:
     attachments: list = field(default_factory=list)
     files: attachment_input.Files = field(default_factory=attachment_input.Files)
     subtasks: dict = field(default_factory=dict)  # id потока/сессии субагента этого хода → имя (или None)
+    child_states: dict = field(default_factory=dict)  # lifecycle Claude; subtasks других движков хранит имена
 
 
 class Runner:
@@ -436,6 +440,11 @@ class Runner:
         return [{"project": t.pid, "chat": t.chat, "running": True, "asking": bool(t.asks)}
                 for t in self._turns.values()]
 
+    def children(self, pid, chat):
+        """Живые и уже завершённые подзадачи текущего хода, без чтения диска из цикла."""
+        t = self._turn(pid, chat)
+        return copy.deepcopy(list(t.child_states.values())) if t is not None else []
+
     # --- ход ---
 
     async def _attachment_text(self, t, text, items):
@@ -457,13 +466,19 @@ class Runner:
             t.attachments = []
             new, model, effort = await asyncio.to_thread(self._choose, t, model, effort)
             saved = await asyncio.to_thread(self.choices.details, t.chat)
+            remembered = saved.get("subagent_statuses")
+            t.child_states = {key: {"id": key, "title": f"Агент {key}", "status": status}
+                              for key, status in (remembered.items() if isinstance(remembered, dict) else ())
+                              if isinstance(key, str) and REQUEST_ID.fullmatch(key)
+                              and status in ("running", "completed", "failed", "stopped", "unknown")}
             t.access = t.access or saved.get("access")
             t.context = saved.get("context")
             if t.access is not None:
                 await asyncio.to_thread(self.choices.update, t.chat, access=t.access)
             if not (t.stopped or t.closing):
-                t.client = self.factory(options=options_for(t.project, self.cli_path, t.chat, new, model, effort,
-                                                            lambda tool, data, ctx: self._ask(t, tool, data, ctx), t.access))
+                options = await asyncio.to_thread(options_for, t.project, self.cli_path, t.chat, new, model, effort,
+                                                  lambda tool, data, ctx: self._ask(t, tool, data, ctx), t.access)
+                t.client = self.factory(options=options)
                 await t.client.connect()
                 await self._usage(t, model, effort)
             if not (t.stopped or t.closing):
@@ -474,6 +489,7 @@ class Runner:
                 while t.pending:
                     received_result = False
                     async for message in t.client.receive_response():
+                        self._subtask(t, message)
                         self._cache_usage(t, message)
                         for e in t.feed.events(message):
                             self._send(t, e)
@@ -508,6 +524,35 @@ class Runner:
         await self._finish(t, new and sent, failure)
         if cancelled:
             raise asyncio.CancelledError
+
+    def _subtask(self, t, message):
+        """Штатные lifecycle-события SDK; фоновые Bash-задачи в счётчик агентов не попадают."""
+        if not isinstance(message, SystemMessage) or message.subtype not in (
+                "task_started", "task_progress", "task_notification", "task_updated"):
+            return
+        data = message.data if isinstance(message.data, dict) else {}
+        child = getattr(message, "task_id", None) or data.get("task_id")
+        if not isinstance(child, str) or not REQUEST_ID.fullmatch(child):
+            return
+        previous = t.child_states.get(child)
+        kind = getattr(message, "task_type", None) or data.get("task_type")
+        if previous is None and (message.subtype != "task_started" or kind not in ("local_agent", "remote_agent", "agent", "subagent")):
+            return
+        row = dict(previous or {"id": child, "title": f"Агент {child}", "status": "running"})
+        description = getattr(message, "description", None) or data.get("description")
+        if isinstance(description, str) and description:
+            row["title"] = description[:200]
+        patch = getattr(message, "patch", None) or data.get("patch") or {}
+        status = getattr(message, "status", None) or data.get("status") or (patch.get("status") if isinstance(patch, dict) else None)
+        if status in ("running", "completed", "failed", "stopped", "killed"):
+            row["status"] = "stopped" if status == "killed" else status
+        elif message.subtype == "task_started":
+            row["status"] = "running"
+        if row == previous:
+            return
+        t.child_states[child] = row
+        t.progress["agents"] = copy.deepcopy(list(t.child_states.values()))
+        self._send(t, {"k": "progress", "agents": t.progress["agents"]})
 
     def _cache_usage(self, t, message):
         """Начало ответа главного агента обновляет оценку; повторные блоки того же ответа — нет."""
@@ -585,6 +630,11 @@ class Runner:
             if t.context:
                 with contextlib.suppress(OSError):
                     await asyncio.to_thread(self.choices.update, t.chat, context=t.context)
+            if t.child_states:
+                with contextlib.suppress(OSError):
+                    await asyncio.to_thread(self.choices.update, t.chat,
+                                           subagent_statuses={key: row["status"] if row["status"] != "running" else "unknown"
+                                                              for key, row in t.child_states.items()})
         finally:  # и при отмене посреди конца: чат не остаётся занятым
             try:
                 await asyncio.to_thread(t.files.cleanup)

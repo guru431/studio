@@ -75,7 +75,7 @@ def patch_summary(patch):
             "truncated": len(patch) > DIFF_MAX or partial}
 
 
-def children(items, previous=()):
+def children(items, previous=(), *, limit=AGENTS_MAX):
     rows = {row["id"]: dict(row) for row in previous}
     for item in items:
         if item.get("type") == "collabAgentToolCall":
@@ -100,7 +100,12 @@ def children(items, previous=()):
                 row["title"] = item["agentPath"][:200]
             row["status"] = {"started": "running", "interacted": "running", "interrupted": "shutdown",
                              "completed": "completed"}.get(item.get("kind"), "unknown")
-    return list(rows.values())[:AGENTS_MAX]
+    result = list(rows.values())
+    if limit is None or len(result) <= limit:
+        return result
+    active = {"running", "pending", "waiting", "inProgress"}
+    return ([row for row in result if row.get("status") in active]
+            + [row for row in result if row.get("status") not in active])[:limit]
 
 
 def plan(value):

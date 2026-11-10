@@ -16,7 +16,6 @@ def large_font(back='chat'):
 
 NAV_GEOMETRY = """(() => {
   const tabs = [...document.querySelectorAll('#rail .tab, #mobile-more')].filter(e => e.getBoundingClientRect().width);
-  // ниже 400 px в режиме «все» подписи скрыты (имя — в aria-label): у скрытой подписи нет геометрии
   const labels = tabs.filter(e => e.querySelector(':scope > span:last-child').getClientRects().length).map(e => {
     const node = e.querySelector(':scope > span:last-child');
     const range = document.createRange(); range.selectNodeContents(node);
@@ -131,12 +130,12 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
     values = r['values']
     assert values['services'] and not values['overflow'], values
     if width < 760:
-        assert values['remaining'] == ['video', 'transcribe', 'speech', 'ocr', 'translate']
-        assert values['activeLabel'] == 'Ещё: Разговоры'
+        assert values['remaining'] == ['video', 'speech', 'transcribe', 'ocr', 'translate']
+        assert values['activeLabel'] == 'Ещё: Расшифровка'
         assert not values['activeGeometry']['overlaps'] and all(
             label['inside'] and label['hit'] for label in values['activeGeometry']['labels']), values['activeGeometry']
-        assert values['stored'] == values['kept'] == ['transcribe', 'speech', 'ocr', 'translate']
-        assert values['reset'] == ['chat', 'code', 'photo']
+        assert values['stored'] == values['kept'] == ['speech', 'transcribe', 'ocr', 'translate']
+        assert values['reset'] == ['chat', 'photo', 'code']
         geometry = values['geometry']
         assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels']), geometry
     else:
@@ -180,17 +179,16 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'savedCompact', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')")], width=width, mobile=True)
     assert not r.get('failed'), (r.get('failed'), list(r.get('values', {})), r.get('log'))
     values = r['values']
-    assert values['allTabs'] == values['kept'] == ['chat', 'code', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate']
+    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'code']
     assert values['mode'] == 'all' and values['moreHidden'] and not values['overflow'], values
     geometry = values['geometry']
     assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels']), geometry
-    # ниже 400 px — только значки, имя раздела остаётся в aria-label
-    assert [name for name, _ in values['names']] == ['Чат', 'Агенты', 'Фото', 'Видео', 'Разговоры', 'Озвучка', 'Сканы', 'Перевод']
-    assert all(shown == (width >= 400) for _, shown in values['names']), values['names']
+    assert [name for name, _ in values['names']] == ['Чат', 'Фото', 'Видео', 'Озвучка', 'Расшифровка', 'Сканы', 'Перевод', 'Агенты']
+    assert all(shown for _, shown in values['names']), values['names']
     assert len({round(button['top']) for button in values['buttonRow']}) == 1
     assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
     assert all(button['width'] >= width / 8 - 1 and button['height'] >= 44 for button in values['buttonRow'])
-    assert values['compact'] == ['code', 'transcribe', 'speech', 'ocr'] and values['savedCompact'] == 'compact'
+    assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
     assert values['focusBack'] == 'appearance-mobile-nav-open'
     assert values['moreActive'] == 'Ещё: Перевод'
     assert all(label['hit'] for label in values['compactGeometry']['labels'])

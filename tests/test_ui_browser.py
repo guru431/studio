@@ -708,11 +708,11 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
     assert v["groups"] == ["Разделы", "Учётка"]
-    assert v["nav"] == [["chat", "Чат"], ["code", "Агенты"], ["photo", "Фото"], ["video", "Видео"],
-                        ["transcribe", "Разговоры"], ["speech", "Озвучка"], ["ocr", "Сканы"], ["translate", "Перевод"],
+    assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Озвучка"],
+                        ["transcribe", "Расшифровка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"],
                         ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["security", "Защита"],
                         ["notifications", "Уведомления"], ["data", "Данные"], ["input", "Ввод и интернет"]]
-    assert v["records"] == "Разговоры" and v["scans"] == "Сканы"
+    assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
     assert v["securityCurrent"] == "security"
     assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Аварийный выход", "Журнал безопасности"]
@@ -2306,7 +2306,7 @@ def test_photo_layout_fits_390(browser, live):
     assert v["chips"] and v["sizeMenu"] and v["viewer"]
     assert v["sizes"] == ["Портрет 832×1216", "Квадрат 1024×1024", "Альбом 1216×832"]
     assert "Альбом" in v["sizeChip"]
-    assert v["actions"] == ["Изменить", "Оживить", "Повторить с тем же seed", "Описать", "Скачать", "Удалить"]
+    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Описать", "Скачать", "Удалить"]
     assert not problems(r), problems(r)
 
 
@@ -2339,7 +2339,7 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
         ("click", "#viewer .act-animate"),
         # адрес меняется сразу, а рельс — в render по hashchange, позже: ждать обоих
-        ("wait", "location.hash.startsWith('#/video?source=')"
+        ("wait", "location.hash === '#/video' && document.querySelector('#video-photo-prompt')?.value === 'кот 1'"
                  " && document.querySelector('#rail a[aria-current=page]')?.dataset.section === 'video'"),
         ("eval", "hash", "location.hash"),
         ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
@@ -2359,7 +2359,7 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     assert len(repeat) == 1 and repeat[0][0]["seed"] == 101 and repeat[0][0]["prompt"] == "кот 1"
     assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["lustify"]
     assert any(s.startswith("DELETE /api/images/") for s in r["sent"])
-    assert v["hash"] == f"#/video?source={newest[3]}" and v["current"] == "video"
+    assert v["hash"] == "#/video" and v["current"] == "video"
     assert not problems(r), problems(r)
 
 
@@ -2561,8 +2561,8 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
     assert not r.get("failed"), r
     assert r["values"]["page"] is True
     labels = {name: (inside, whole) for name, inside, whole in r["values"]["fits"]}
-    expected = (["Чат", "Агенты", "Фото", "Ещё"] if width < 760 else
-                ["Чат", "Агенты", "Фото", "Видео", "Разговоры", "Озвучка", "Сканы", "Перевод"])
+    expected = (["Чат", "Фото", "Агенты", "Ещё"] if width < 760 else
+                ["Чат", "Фото", "Видео", "Озвучка", "Расшифровка", "Сканы", "Перевод", "Агенты"])
     assert [name for name, _, _ in r["values"]["fits"]] == expected
     assert all(inside and whole for inside, whole in labels.values()), labels
     if width < 760:
@@ -3524,7 +3524,8 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("wait", done_cards(1)),
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
         ("wait", "document.querySelector('#video-source img')?.naturalWidth > 0"),
-        ("eval", "source", "location.hash.split('source=')[1]"),
+        ("eval", "source", "document.querySelector('#video-source img').getAttribute('src').split('/').pop().split('?')[0]"),
+        ("eval", "photoPrompt", "document.querySelector('#video-photo-prompt').value"),
         set_value("#video-seconds", "7"),
         ("click", "#chip-quality"), ("click", "#chip-quality-menu [data-value=high]"),
         ("click", "#chip-smooth"),
@@ -3551,8 +3552,9 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     assert len(forms) == 1
     fields, image, _raw = forms[0]
     seed = fields.pop("seed")                                   # пусто — случайный, выбирает студия
-    assert fields == {"model": VIDEO_MODEL, "seconds": "7", "quality": "high", "smooth": "false",
-                      "prompt": "she slowly turns her head"}
+    combined = "Описание исходного фото:\nкот 0\n\nДвижение в видео:\nshe slowly turns her head"
+    assert fields == {"model": VIDEO_MODEL, "seconds": "7", "quality": "high", "smooth": "false", "prompt": combined}
+    assert v["photoPrompt"] == "кот 0"
     assert picture(image) == picture(PNG_REAL)                  # фото истории, а не файл с устройства
     item = v["items"][0]
     assert item["state"] == "done" and item["source_media_id"] == v["source"] and v["smooth"] == "false"
@@ -3562,7 +3564,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", f"seed {seed}", "Удалить"):
         assert words in v["card"], words
     assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
-    assert v["chain"] == ["кот 0", "she slowly turns her head"]
+    assert v["chain"] == ["кот 0", combined]
     assert not problems(r), problems(r)
 
 
@@ -8094,8 +8096,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
             ("eval", "saved", f"localStorage.setItem('studio-code-choice:{aid}',"
                               " JSON.stringify({ model: 'sonnet', effort: 'high' }))"),
             *code_chat(aid, CODE_CHAT_A),
-            # на 320 px поверх трёх выборов — компактная кнопка `#code-settings-pick` (её проверяет test_ui_code_picker)
-            ("eval", "labels", "[...document.querySelectorAll('.code-pick:not(.code-settings-pick)')]"
+            ("eval", "labels", "[...document.querySelectorAll('.code-pick')]"
                                ".filter(l => !l.hidden).map((l) => l.firstChild.textContent)"),
             ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
                                 ".map((o) => [o.value, o.textContent]))"),

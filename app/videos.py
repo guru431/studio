@@ -291,6 +291,10 @@ async def create_video(request: Request):
         fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, BODY_MAX),
                                                     request.headers.get("content-type", ""), max_upload=VIDEO_UPLOAD)
         source_id = fields.pop("source_media_id", None)
+        # Браузерная multipart-форма превращает LF в CRLF. Предел промпта и снимок цепочки
+        # должны считать тот же текст, который пользователь редактировал в textarea.
+        if "prompt" in fields:
+            fields["prompt"] = fields["prompt"].replace("\r\n", "\n").replace("\r", "\n")
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
         conn = _video_connection(uid, body.connection_id, body.model)
