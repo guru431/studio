@@ -5,7 +5,15 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 36
+VERSION = 37
+
+#: Краткие сведения сессии без исходного User-Agent; имя задаёт владелец, ip — последний адрес клиента.
+DEVICES_37 = """ALTER TABLE sessions ADD COLUMN browser TEXT;
+ALTER TABLE sessions ADD COLUMN os TEXT;
+ALTER TABLE sessions ADD COLUMN model TEXT;
+ALTER TABLE sessions ADD COLUMN label TEXT;
+ALTER TABLE sessions ADD COLUMN ip TEXT;
+"""
 
 #: ссылки «Поделиться» и хвосты безопасности учётки (chat_shares.py, security_log.py, account.py):
 #: - `chat_shares.sealed` — снимок шифром STUDIO_DATA_KEY (security.encrypt). В прежнем столбце `snapshot` новый код
@@ -488,7 +496,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -578,6 +586,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     35: CHAT_35,
     # ссылки «Поделиться»: снимок шифром, срок, счётчики; свёрнутые неудачи журнала; сброс пароля администратором
     36: SHARES_36,
+    37: DEVICES_37,
 }
 
 

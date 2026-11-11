@@ -112,7 +112,7 @@ def test_opencode_profile_defaults_preserve_legacy_models_and_efforts(studio):
 
 def test_step_23_preserves_old_chat_ids_engines_constraints_and_cascades(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
+    conn.executescript(db.SCHEMA.removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
                        + "\nPRAGMA user_version = 22;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'h1', 0)")

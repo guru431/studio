@@ -1,8 +1,8 @@
 /* Безопасность учётки (account.py): сессии с «Завершить», аварийный выход, журнал безопасности. Три
  * самостоятельных блока без привязки к месту в «Настройках» — их вызывает settings.js.
  *
- * Сессия — признак сервера (не дайджест и не cookie), вид устройства грубо (телефон/компьютер), когда создана,
- * последняя активность, включены ли push и ntfy. Текущую закрывает обычный «Выйти». Аварийный выход — с паролем
+ * Сессия — признак сервера (не дайджест и не cookie), своё имя, браузер, ОС, доступная модель, последний IP,
+ * время входа и активности, push и ntfy. Текущую закрывает обычный «Выйти». Аварийный выход — с паролем
  * учётки: все сессии, ссылки «Поделиться», push и ntfy, по выбору ключи компьютеров; затем страница входа.
  * Журнал — новые сверху страницами сервера, «Показать ещё» — по `next`. */
 import { api } from './api.js';
@@ -37,11 +37,44 @@ function say(node, text, kind) {
 export function sessionsBlock(host) {
   const list = el('ul', { class: 'agents sessions', id: 'sessions' });
   const note = status('sessions-status');
+  const refresh = button('Обновить', { class: 'btn btn-sm', id: 'sessions-refresh' }, () => reload());
+  let reading = 0;
+
+  function title(s) {
+    return s.label || s.model || DEVICES[s.device] || 'Устройство';
+  }
+
+  function rename(session) {
+    const input = el('input', { class: 'input', id: 'session-name', maxlength: '80', type: 'text',
+      autocomplete: 'off', value: session.label || '', placeholder: 'Например, рабочий ноутбук' });
+    const save = button('Сохранить', { class: 'btn btn-accent', id: 'session-name-save', type: 'submit', form: 'session-name-form' });
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const form = el('form', { id: 'session-name-form' }, field('Имя устройства', input, 'session-name'), fail);
+    const dialog = openDialog(host, { id: 'session-name-dialog', title: 'Назвать устройство', actions: [save], body: [
+      el('p', { tabindex: '-1', autofocus: true }, 'Имя видно на всех ваших устройствах. Оставьте поле пустым, чтобы вернуть автоматическое название.'),
+      form] });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true;
+      try {
+        await api('PATCH', `/api/me/sessions/${encodeURIComponent(session.id)}`, { label: input.value.trim() });
+        dialog.close();
+        if (await reload()) say(note, 'Имя устройства сохранено', 'ok');
+        list.querySelector(`[data-id="${session.id}"] .session-rename`)?.focus({ preventScroll: true });
+      } catch (err) {
+        fail.textContent = words(err);
+        save.disabled = false;
+      }
+    });
+  }
 
   function end(session) {
     const yes = button('Завершить', { class: 'btn btn-danger', id: 'session-end-confirm' });
     const fail = el('p', { class: 'error' });
     const dialog = openDialog(host, { id: 'session-end-dialog', title: 'Завершить сессию?', actions: [yes], body: [
+      el('p', { class: 'session-description' }, [title(session), session.browser, session.os, session.ip,
+        `сессия ${session.id.slice(0, 8)}`].filter(Boolean).join(' · ')),
       el('p', {}, 'Устройство сразу потеряет доступ, push и ntfy на нём перестанут приходить. Войти снова можно паролем.'),
       fail] });
     yes.addEventListener('click', async () => {
@@ -49,8 +82,8 @@ export function sessionsBlock(host) {
       try {
         await api('DELETE', `/api/me/sessions/${encodeURIComponent(session.id)}`);
         dialog.close();
-        say(note, 'Сессия завершена', 'ok');
-        reload();
+        if (await reload()) say(note, 'Сессия завершена', 'ok');
+        refresh.focus({ preventScroll: true });
       } catch (err) {
         fail.textContent = words(err);
         yes.disabled = false;
@@ -59,24 +92,47 @@ export function sessionsBlock(host) {
   }
 
   async function reload() {
+    const version = ++reading;
+    refresh.disabled = true;
+    list.setAttribute('aria-busy', 'true');
     try {
       const { items } = await api('GET', '/api/me/sessions');
+      if (version !== reading) return false;
+      say(note, '');
       list.replaceChildren(...items.map((s) => el('li', { class: 'agent session', 'data-id': s.id },
-        el('b', { class: 'session-device' }, s.current ? 'Это устройство' : DEVICES[s.device] || 'Устройство'),
-        el('span', { class: 'muted small session-times' },
-          `вход ${moment(s.created)} · активность ${moment(s.active)}`),
-        s.push ? el('span', { class: 'tag' }, 'push') : null,
-        s.ntfy ? el('span', { class: 'tag' }, 'ntfy') : null,
-        s.current ? null : button('Завершить', { class: 'btn btn-sm btn-danger agent-revoke session-end' }, () => end(s)))));
+        el('div', { class: 'session-info' },
+          el('div', { class: 'row' }, el('b', { class: 'session-device' }, title(s)),
+            s.current ? el('span', { class: 'tag session-current' }, 'Это устройство') : null,
+            s.push ? el('span', { class: 'tag' }, 'push') : null,
+            s.ntfy ? el('span', { class: 'tag' }, 'ntfy') : null),
+          el('p', { class: 'small session-description' },
+            [s.label ? s.model : null, s.browser, s.os].filter(Boolean).join(' · ')
+              || 'Сведения появятся, когда Студия снова откроется на этом устройстве.'),
+          el('p', { class: 'muted small session-address' }, `IP: ${s.ip || 'пока неизвестен'} · сессия ${s.id.slice(0, 8)}`),
+          el('p', { class: 'muted small session-times' },
+            el('span', {}, `Вход: ${moment(s.created)}`), el('span', {}, `Активность: ${moment(s.active)}`))),
+        el('div', { class: 'session-actions' },
+          button('Назвать', { class: 'btn btn-sm session-rename', 'aria-label': `Назвать устройство: ${title(s)}` }, () => rename(s)),
+          s.current ? null : button('Завершить', { class: 'btn btn-sm btn-danger session-end',
+            'aria-label': `Завершить сессию: ${title(s)}` }, () => end(s))))));
+      return true;
     } catch (err) {
-      say(note, words(err), 'error');
+      if (version === reading) say(note, words(err), 'error');
+      return false;
+    } finally {
+      if (version === reading) {
+        refresh.disabled = false;
+        list.setAttribute('aria-busy', 'false');
+      }
     }
   }
 
   reload();
   return el('section', { class: 'block sessions-block' }, el('h2', {}, 'Сессии'),
     el('p', { class: 'muted small' }, 'Где открыта ваша учётка. Незнакомое устройство завершите здесь, а затем смените пароль.'),
-    list, note);
+    el('p', { class: 'muted small' }, 'Браузер может скрывать модель и точную версию ОС. Задайте своё имя, чтобы различать одинаковые устройства. '
+      + 'IP может совпадать у устройств в одной сети или меняться при VPN.'),
+    list, el('div', { class: 'row' }, refresh, note));
 }
 
 /** «Аварийный выход»: с паролем учётки завершить все сессии и отозвать ссылки, по выбору — ключи компьютеров. */
