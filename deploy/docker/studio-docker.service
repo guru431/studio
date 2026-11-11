@@ -14,6 +14,3 @@ ExecStart=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f 
 ExecStop=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml stop --timeout 20
 TimeoutStartSec=150
 TimeoutStopSec=45
-
-[Install]
-WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Start Studio Docker Compose at boot
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# A failed mount dependency skips the Compose unit's own start commands.
+ExecStart=/usr/bin/systemctl start studio-docker.service
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=4min
+
+[Install]
+WantedBy=multi-user.target

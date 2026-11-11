@@ -42,7 +42,9 @@ core dumps, ограничениями памяти и процессов. `web`
   Необязательный сертификат Cleaner остаётся в `/usr/local/share/studio/`, только для чтения в контейнере.
 - Сокет: `/run/studio-docker` хоста → `/run/studio` обоих контейнеров, `0750 10001:10001`.
   `studio-docker.service` создаёт каталог при старте и запускает Compose после монтирования шары.
-  Контейнеры перезапускаются Docker; если шара отсутствует при загрузке, web отказывает до записи.
+  При загрузке `studio-docker-start.service` повторяет неудачный запуск через 15 секунд, в том числе
+  если systemd пропустил запуск Compose из-за ошибки CIFS. После успешного старта попытки прекращаются.
+  Контейнеры перезапускаются Docker; без CIFS web отказывает до записи.
 - Копия базы: `studio-backup.timer` в 04:30 → `studio-backup.service` → `manage.py backup` внутри web.
   Формат и хранение прежние: согласованная SQLite backup, 7 последних на шаре. Проверка восстановления
   — `manage.py verify-backup`: целостность, схема, расшифровка и наличие медиа.
@@ -85,7 +87,7 @@ sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy
 sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml logs --tail 30
 sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py verify-backup
 sudo systemctl start studio-backup.service
-sudo systemctl status studio-docker.service studio-backup.timer
+sudo systemctl status studio-docker-start.service studio-docker.service studio-backup.timer
 ```
 
 ## Перенос с нативной установки
@@ -111,7 +113,9 @@ sudo systemctl status studio-docker.service studio-backup.timer
 Compose с `up -d --no-build --wait`; совместимость схемы описана в [deploy-host](deploy-host.md).
 
 Для возвращения **на прежний хост** нельзя просто запустить оставленную старую базу:
-после переключения в Docker могли появиться новые записи. Остановить Docker web и его backup timer,
+после переключения в Docker могли появиться новые записи. Отключить автозапуск
+`studio-docker-start.service` и `studio-backup.timer` через `systemctl disable --now`,
+затем остановить `studio-docker.service`,
 снять согласованную копию актуальной базы и перенести её через SSH на прежний локальный диск, сохранив
 оба исходных файла и назначив владельца прежней службы. Проверить её текущим ключом, затем запустить
 прежний `studio-web`, восстановить сохранённый Unix-socket vhost, выполнить `apache2ctl -t` и reload,

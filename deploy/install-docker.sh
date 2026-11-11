@@ -86,10 +86,16 @@ if [ -n "$previous" ]; then
     ln -sfn "$previous" "$R/previous"
 fi
 install -m 0644 "$release/deploy/docker/studio-docker.service" /etc/systemd/system/studio-docker.service
+install -m 0644 "$release/deploy/docker/studio-docker-start.service" /etc/systemd/system/studio-docker-start.service
 install -m 0644 "$release/deploy/docker/studio-backup.service" /etc/systemd/system/studio-backup.service
 install -m 0644 "$release/deploy/studio-backup.timer" /etc/systemd/system/studio-backup.timer
+systemctl enable --no-reload studio-docker-start.service studio-backup.timer
+# Remove the legacy boot link only after the retrying starter is enabled.
+if [ "$(systemctl is-enabled studio-docker.service || true)" = enabled ]; then
+    systemctl disable --no-reload studio-docker.service
+fi
 systemctl daemon-reload
-systemctl enable --now studio-docker.service studio-backup.timer
+systemctl start studio-docker-start.service studio-docker.service studio-backup.timer
 if [ "$CREATE_ADMIN" = 1 ]; then
     "${compose[@]}" exec -T web python /opt/studio/app/manage.py create-admin
 fi
