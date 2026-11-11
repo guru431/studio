@@ -910,6 +910,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .hljs .hljs-deletion { color: var(--code-deletion); background-color: color-mix(in srgb, var(--danger) 12%, transparent); }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
 .md th, .md td { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); text-align: left; }
+.md :is(th, td)[align="center"] { text-align: center; }
+.md :is(th, td)[align="right"] { text-align: right; }
 .md img { max-width: 100%; border-radius: var(--r-control); }
 .md hr { border: 0; border-top: 1px solid var(--line); }
 .copy { position: absolute; top: 6px; right: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--r-control);

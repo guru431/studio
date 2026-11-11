@@ -243,6 +243,7 @@ def fingerprint(image, prompt="", seed=None, seconds=5, quality="standard", smoo
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
+@pytest.mark.integration
 def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_path):
     fake = service()
     (tmp_path / "a.png").write_bytes(b"img-a")
@@ -300,6 +301,7 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
+@pytest.mark.integration
 def test_redo_makes_everything_again_with_the_saved_auto_prompt(runner, service, tmp_path):
     """Отдельно от прогона папки: три запуска скрипта в одном тесте выходили за секунду."""
     fake = service()
@@ -475,6 +477,7 @@ def test_same_name_images_and_taken_names_keep_every_result(runner, service, tmp
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
+@pytest.mark.integration
 def test_changed_request_is_made_again(runner, service, tmp_path):
     # Пропуск — только по отпечатку: новое содержимое картинки под тем же именем — новый ролик
     fake = service()
