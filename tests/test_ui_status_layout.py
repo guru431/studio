@@ -35,10 +35,10 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
             page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
             page.locator('#code-chat[data-loaded="1"]').wait_for()
             page.wait_for_function("() => document.querySelector('#code-changed-files .code-changed-count').textContent === '5'")
-            for scale, font in [(1, 1), (1, 1.5), (.75, 1.25)]:
-                page.evaluate("({scale,font}) => {const r=document.documentElement; r.style.zoom=scale;"
+            for theme, scale, font in [('light', 1, 1), ('dark', 1, 1.5), ('light', .75, 1.25)]:
+                page.evaluate("({theme,scale,font}) => {const r=document.documentElement; r.dataset.theme=theme; r.style.zoom=scale;"
                     "r.style.setProperty('--ui-scale',scale); r.style.setProperty('--font-scale',font);}",
-                    {'scale': scale, 'font': font})
+                    {'theme': theme, 'scale': scale, 'font': font})
                 page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
                 shape = page.locator('.code-status-controls').evaluate("""controls => {
                   const bar=controls.closest('.code-status-bar').getBoundingClientRect();
@@ -47,9 +47,14 @@ def test_status_buttons_keep_shape_and_overflow_labels_and_counts(desktop_browse
                     .filter(n=>!n.hidden).map(n=>n.getBoundingClientRect());
                   const visible=[...controls.querySelectorAll('button')].filter(n=>!n.hidden && n.getClientRects().length);
                   const rects=visible.map(n=>n.getBoundingClientRect());
+                  const order=[...controls.querySelectorAll('.code-status-fixed > button')].map(n=>n.id);
+                  const counts=[...controls.querySelectorAll('.code-subagents-count, .code-active-count, .code-changed-count')]
+                    .map(n=>{const s=getComputedStyle(n); return [s.backgroundColor,s.color,s.fontSize,s.padding,s.lineHeight,s.borderRadius].join('|');});
                   return {round:Math.abs(circle.width-circle.height)<1, minimum:fixed.length>=6,
+                    order:order.join(',')==='code-subagents,code-active-commands,code-changed-files,code-cache,code-context,code-usage',
+                    counters:counts.length===3 && counts.every(s=>s===counts[0]),
                     files:!!controls.querySelector('.code-status-fixed > #code-changed-files'),
-                    half:rects.every(r=>r.left>=bar.left+bar.width/2-1 && r.right<=bar.right+1),
+                    budget:rects.every(r=>r.left>=bar.left+bar.width*.4-1 && r.right<=bar.right+1),
                     separate:rects.every((r,i)=>!i || r.left>=rects[i-1].right-1)};
                 }""")
                 assert all(shape.values()), shape

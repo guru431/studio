@@ -366,7 +366,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && engine !== 'opencode' });
   const children = subtaskControl.button.disabled ? null : subtaskControl;
   const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
-  statusFixed.prepend(changedFiles.button, commands.button, subtaskControl.button);
+  statusFixed.prepend(subtaskControl.button, commands.button, changedFiles.button);
   if (context.cacheButton.hidden) {
     context.cacheButton.hidden = false;
     context.cacheButton.disabled = true;
