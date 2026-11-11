@@ -94,8 +94,12 @@ studio). Команды ниже — из `agent/`, с отдельной сре
 инструментов; после проверки удаляется только созданная ею сессия. `tests/test_opencode.py` и `test_opencode_rpc.py`
 проверяют ACP без CLI и квоты.
 
-`timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом. Реального времени в тестах нет:
-часы — параметр `now`, паузы — параметр `sleep`. Каталог моста в тестах — фикстура `home` (`tests/conftest.py`,
+`timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом.
+`verbosity_test_cases = 1` сохраняет имя теста перед сбоем, `faulthandler_timeout = 20` выводит стеки напрямую в stderr
+до завершения процесса по таймауту, в том числе при закрытии asyncio Runner. Регрессия — `tests/test_suite_timeout.py`
+(`integration`, отдельный процесс с намеренно незавершаемой задачей).
+Реального времени в быстрых тестах нет: часы — параметр `now`, паузы — параметр `sleep`.
+Каталог моста в тестах — фикстура `home` (`tests/conftest.py`,
 `STUDIO_AGENT_HOME` во временной папке). Студия в быстрых тестах — подставная (`tests/fake_studio.py`, `websockets` на
 `127.0.0.1:0`), SDK — `tests/fake_sdk.py`. Окно и трей — без Tk: чистые функции `window`, `tray`, `theme`
 (`test_window_logic.py`, `test_tray.py`, `test_theme.py`); снимки вида — вручную. `test_pin.py` проверяет счёт и
