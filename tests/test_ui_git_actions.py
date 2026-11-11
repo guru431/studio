@@ -193,7 +193,7 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
     assert not result.get("failed"), result
     values = result["values"]
     assert values["chatHasNoActions"]
-    assert values["order"] == ['code-repo-status', 'code-tab-git', 'code-tab-files', 'code-tab-chat']
+    assert values["order"] == ['code-repo-status', 'code-tab-git', 'code-tab-files', 'code-project-access', 'code-tab-chat']
     assert values["headerFits"]
     assert all(values["toolbar"][key] for key in ("visible", "buttonsFit", "inside", "fits")), values
     assert not values["toolbar"]["scrollable"]

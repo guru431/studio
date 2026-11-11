@@ -2,7 +2,7 @@
  * место) поверх 2026-10-28-studio-claude-code-design (мост, PIN, чат, файлы).
  *
  * Раскладка строится один раз на показ раздела (mount) и живёт до unmount: слева — панель компьютеров и проектов
- * (code-panel.js), справа — строка пути, статус Git и переключатели «Git · Файлы · Чат», под ними тело; update(ctx) перерисовывает
+ * (code-panel.js), справа — строка пути, статус Git и кнопки «Git · Файлы · Доступ · Чат», под ними тело; update(ctx) перерисовывает
  * только правую часть. Компьютеров нет — панели нет, справа «Компьютеров пока нет.» и «Скачать мост» (ui.js
  * agentDownload). Списки прокручиваются в #view, открытый чат и файлы — в собственных областях.
  * Телефон (≤ 760 px): панель выезжает по ☰ (#code-panel-toggle), прячется после выбора проекта,
@@ -44,6 +44,7 @@
 import { api, me } from './api.js';
 import { svg } from './icons.js';
 import { projectGit, gitLevel, GIT_ACTIONS } from './code-git.js';
+import { projectMembers } from './project-members.js';
 import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
@@ -423,7 +424,10 @@ function enter(aid, pid) {
   const pane = (hidden) => el('div', { class: 'code-pane', hidden });
   const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
     repo: projectGit(aid, pid),
-    chatBox: pane(false), filesBox: pane(true), gitBox: pane(true) };
+    chatBox: pane(false), filesBox: pane(true), gitBox: pane(true),
+    accessButton: el('button', { type: 'button', id: 'code-project-access', class: 'chip',
+      title: 'Совместная работа', 'aria-label': 'Доступ к проекту', hidden: true }, 'Доступ') };
+  ui.views.insertBefore(p.accessButton, document.getElementById('code-tab-chat'));
   const cached = chatLists.get(cacheKey(p));
   if (cached) {
     p.items = cached;
@@ -474,6 +478,8 @@ function enter(aid, pid) {
 
 function closeProject() {
   if (!proj) return;
+  proj.members?.unmount();
+  proj.accessButton.remove();
   proj.gitActions?.unmount();
   stopPoll();
   if (proj.bar) proj.bar.unmount();
@@ -498,7 +504,14 @@ async function plaque(p) {
   } catch {
     // отказ скажет правая часть
   }
-  if (proj === p) ui.placeProject.textContent = name || 'Проект';
+  if (proj === p) {
+    ui.placeProject.textContent = name || 'Проект';
+    if (name && !agent.shared && !p.members) {
+      p.accessButton.setAttribute('aria-label', `Доступ к проекту · ${name}`);
+      p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name });
+      p.accessButton.hidden = false;
+    }
+  }
 }
 
 /** Проект и вид — в рабочее место, если там другое. */
