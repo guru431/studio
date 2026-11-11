@@ -19,7 +19,8 @@ AGENT = ROOT / "agent" / "studio_agent"
 ARCH = ROOT / "docs" / "architecture"
 AGENT_DOCS = {ROOT / "agent" / "CLAUDE.md", ARCH / "agent-bridge.md"}
 SYMBOL_DOCS = sorted({ROOT / "CLAUDE.md", *ARCH.glob("*.md"), *AGENT_DOCS})
-LINK_DOCS = sorted({*SYMBOL_DOCS, ROOT / "AGENTS.md", ROOT / "README.md", ROOT / "agent" / "README.md",
+LINK_DOCS = sorted({*SYMBOL_DOCS, ROOT / "AGENTS.md", *ROOT.glob("README*.md"),
+                    ROOT / "docs" / "guide.ru.md", ROOT / "docs" / "screenshots" / "README.md", ROOT / "agent" / "README.md",
                     ROOT / "agent" / "AGENTS.md", ROOT / "docs" / "glossary.md"})
 
 #: `имя.расширение` — файл, а не модуль с символом

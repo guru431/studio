@@ -1,0 +1,82 @@
+[
+  {
+    "file": "chat.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "agents.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "files.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "images.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "translation.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "ocr.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "appearance.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "agents-dark.png",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "theme": "dark"
+  },
+  {
+    "file": "chat-mobile.png",
+    "viewport": [
+      390,
+      844
+    ],
+    "theme": "light"
+  },
+  {
+    "file": "agents-mobile.png",
+    "viewport": [
+      390,
+      844
+    ],
+    "theme": "light"
+  }
+]
