@@ -24,9 +24,9 @@
   устройства активной учётки). Остальное `/api/*` — через сессию и CSRF (`auth.guard`); WebSocket
   `/api/agent/link` проверяет ключ сам. Пользователь видит только своё. Запертой сессии (блокировка на всех
   устройствах, `app/lock_policy.py`) — 423 на API защищённых разделов, кроме `auth.SCREEN_LOCK_PATHS`.
-- Служба слушает только unix-сокет `/run/studio/web.sock` за Apache debian
-  ([deploy/apache-vhost.conf](deploy/apache-vhost.conf)) и потому верит последнему
-  `X-Forwarded-For` — TCP-порт не открывать.
+- В Docker служба слушает только unix-сокет `/run/studio/web.sock`; nginx принимает запросы
+  только от Apache debian и сохраняет его `X-Forwarded-For`. Прямого TCP-входа в приложение нет.
+  Устройство и откат — [deploy-docker](docs/architecture/deploy-docker.md).
 - Секреты — только vault и `/etc/studio/studio.env` (`STUDIO_DATA_KEY`) на хосте, на хост — потоком
   stdin; скрипты в репозитории без ключа, копии с ключом `*.local.ps1` и `*.local.py` — в
   `.gitignore`. Основная ветка публикуется после очистки — секретов и реальных адресов в Git нет.
@@ -42,7 +42,7 @@
   `-m manual` (живая приёмка `tests/test_studio_upload_live.py` после выкладки:
   `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`, `GATEWAY_KEY_OWNER_IMAGES` из vault через `grep`,
   генерирует на карте; команда — в CLAUDE.md).
-- Выкладка: `bash deploy/deploy.sh [--new-secret] [--create-admin]` — закоммиченный HEAD на debian
-  (`ssh -p 22222 deploy@10.77.1.10`, код `/opt/services/studio`, юниты
-  [studio-web.service](deploy/studio-web.service), [studio-backup.timer](deploy/studio-backup.timer)).
+- Выкладка: `bash deploy/deploy.sh [--new-secret] [--create-admin]`, профиль `STUDIO_RUNTIME=docker` —
+  закоммиченный HEAD на Docker-хост, [compose](deploy/docker/compose.yaml), `studio-docker.service`
+  и `studio-backup.timer`; Apache остаётся HTTPS-входом. Прежний systemd-профиль сохранён для отката.
   Работающий мост из выполняемого им задания не перезапускать и не убивать: дождаться завершения заданий и выхода в трее. Закрытие Студии на телефоне задания не останавливает.

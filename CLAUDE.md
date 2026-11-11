@@ -51,8 +51,9 @@
   разрешения имён; имя — только https и только публичные адреса). Исключения — только адреса, зашитые в `web.py`
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
   и в `push.py` (`push.HOSTS`), и фиксированный HTTPS `api64.ipify.org` моста. Ключ Exa — свой у учётки, шифром.
-- **Путь к службе один — Apache debian**: служба слушает только unix-сокет `/run/studio/web.sock` и верит последнему
-  `X-Forwarded-For`; порт TCP не открывать — счёт попыток входа подделывался бы заголовком.
+- **Путь к службе один — Apache debian**: приложение в Docker слушает только unix-сокет `/run/studio/web.sock`.
+  nginx контейнера принимает запросы только от адреса Apache и передаёт его `X-Forwarded-For` без добавления своего
+  адреса. Прямого TCP-входа в приложение нет: счёт попыток входа нельзя обходить поддельным заголовком.
 - **Секреты** — vault `local-config/secrets/vault.env`, в Git — никогда; на хост — только потоком stdin (`grep … | ssh`),
   не в argv и не в вывод. Скрипты в репозитории без ключа (`$EmbeddedKey = ''`, `EMBEDDED_KEY = ""`, сторожат тесты),
   копии с ключом — `*.local.ps1`, `*.local.py` (в `.gitignore`).
@@ -90,26 +91,30 @@
 Фронтенд без сборки — `app/static/` (модули ES, библиотеки копией в `static/vendor/`, без CDN; importmap с SHA-CSP,
 снимок статики в памяти — после правки статики служба и тестовый процесс требуют перезапуска). Протокол моста —
 [2026-10-28-studio-code-bridge-protocol](docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md).
-Хранение: база SQLite `/var/lib/studio/studio.db` (локальный диск), файлы — шара (на debian
-`/mnt/storage/SharedData/studio`); токены подключений и ключи — шифром `STUDIO_DATA_KEY`, пароли и PIN — scrypt.
+Хранение: база SQLite `/var/lib/studio/studio.db` (локальный диск Docker-хоста), файлы — шара
+(`/media` внутри контейнера); токены подключений и ключи — шифром `STUDIO_DATA_KEY`, пароли и PIN — scrypt.
 
 ## Хост и выкладка
 
-Хост debian `10.77.1.10`: `ssh -i ~/.ssh/studio_deploy_key -p 22222 deploy@10.77.1.10`, passwordless sudo. Код и
-`.venv` (Python 3.13) — `/opt/services/studio`; служба `studio-web.service` от `studio` (`ProtectSystem=strict`, запись
-— только `/var/lib/studio` и шара, `MemoryMax=2G`); секрет — `/etc/studio/studio.env` (0600 root: `STUDIO_DATA_KEY=` и
-необязательная `STUDIO_CLEANER_CA=`); копия базы — `studio-backup.timer` 04:30, 7 последних на шаре; журнал —
-`sudo journalctl -u studio-web`, `-u studio-backup`. Подробно (шара `soft`, ffmpeg, yt-dlp, маршрут api.exa.ai,
-verify-backup и восстановление, Apache) — [deploy-host](docs/architecture/deploy-host.md).
+Основной запуск — Docker Compose на хосте `10.77.1.15`: контейнеры `web` и `ingress`, Python 3.13, Chromium,
+ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 10001 с корнем только для чтения и пределом 2 ГБ;
+база и медиа — внешние bind mounts, секрет — `/etc/studio/studio.env` (0600 root). `studio-docker.service`
+поднимает Compose после монтирования шары, `studio-backup.timer` в 04:30 запускает согласованную копию базы
+из контейнера; сохраняются 7 последних копий на шаре. Apache на прежнем хосте завершает HTTPS и проксирует
+на ограниченный nginx контейнера. Профиль установки — `deploy/local-profile.sh`, `STUDIO_RUNTIME=docker`.
+Подробно — [deploy-docker](docs/architecture/deploy-docker.md); прежняя нативная установка и подробности
+совместимости схемы — [deploy-host](docs/architecture/deploy-host.md).
 
-    bash deploy/deploy.sh                    # HEAD → debian, install.sh, проверка через Apache
+    bash deploy/deploy.sh                    # HEAD → Docker, install-docker.sh, проверка через Apache
     bash deploy/deploy.sh --new-secret       # заново положить STUDIO_DATA_KEY из vault
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
 
-Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt`, мост — ZIP `HEAD:agent` и EXE
-`deploy/build-agent-installer.ps1`); грязное дерево выкладываемых частей и `agent/` — отказ. `install.sh` собирает
-среду рядом, проверяет шару, md2pdf и `apache2ctl -t`, держит прежние код и среду в `.previous` до ответа `/health`;
-отказ — `service_failed` без автоматического отката. Смоук — `https://studio.example.com/health`. Windows-мост после
+Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
+`deploy/build-agent-installer.ps1`); грязное дерево выкладываемых частей и `agent/` — отказ. `install-docker.sh`
+собирает образ до смены `current`, проверяет CIFS и здоровье обоих контейнеров; неудачный образ возвращает
+предыдущий, сохраняя актуальную базу. `install-proxy.sh` проверяет конфигурацию Apache и перезагружает только
+прокси. `--prepare-only` собирает образ без запуска контейнеров и переключения прокси. Смоук —
+`https://studio.example.com/health`. Windows-мост после
 выкладки сервера не перезапускать; активный мост не завершать (Stop-Process/kill) из выполняемого им задания.
 
 ## Откат по шагам схемы

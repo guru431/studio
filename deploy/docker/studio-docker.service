@@ -1,0 +1,19 @@
+[Unit]
+Description=Studio Docker Compose
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/storage/SharedData/studio /var/lib/studio
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/services/studio
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0750 /run/studio-docker
+ExecStart=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml up -d --no-build --wait --wait-timeout 90
+ExecStop=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml stop --timeout 20
+TimeoutStartSec=150
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,99 @@
+name: studio
+
+x-common: &common
+  image: ${STUDIO_IMAGE:-studio:local}
+  user: "10001:10001"
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  ulimits:
+    core: 0
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  web:
+    <<: *common
+    # Upstreams on this host restrict their callers to host/LAN addresses. Web still has no TCP listener.
+    network_mode: host
+    # Chromium needs chroot after entering its unprivileged user namespace.
+    cap_add: [SYS_CHROOT]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./chromium-seccomp.json
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    env_file:
+      - /etc/studio/studio.env
+    environment:
+      STUDIO_DB: /var/lib/studio/studio.db
+      STUDIO_MEDIA_DIR: /media
+      STUDIO_ORIGIN: ${STUDIO_URL:?Set STUDIO_URL}
+      STUDIO_HAIRPIN_IP: ${STUDIO_HAIRPIN_IP:?Set STUDIO_HAIRPIN_IP}
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 30s
+    shm_size: 256m
+    tmpfs:
+      - /tmp:mode=1777,size=256m
+    volumes:
+      - type: bind
+        source: /var/lib/studio
+        target: /var/lib/studio
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STUDIO_MEDIA_DIR:?Set STUDIO_MEDIA_DIR}
+        target: /media
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /usr/local/share/studio
+        target: /usr/local/share/studio
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/studio-docker
+        target: /run/studio
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, python, -c, "import httpx; r=httpx.Client(transport=httpx.HTTPTransport(uds='/run/studio/web.sock')).get('http://studio-backend/health'); r.raise_for_status()"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+  ingress:
+    <<: *common
+    entrypoint: [nginx, -c, /etc/nginx/studio.conf, -g, "daemon off;"]
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "${STUDIO_BIND_IP:?Set STUDIO_BIND_IP}:${STUDIO_BACKEND_PORT:-8151}:8080"
+    mem_limit: 128m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:mode=1777,size=32m
+    volumes:
+      - type: bind
+        source: ./nginx.conf
+        target: /etc/nginx/studio.conf
+        read_only: true
+      - type: bind
+        source: /run/studio-docker
+        target: /run/studio
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health',timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 4

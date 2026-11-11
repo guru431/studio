@@ -26,7 +26,7 @@ if [ -f "$PROFILE" ]; then
 fi
 # Keep Debian paths intact when Git Bash starts native Windows helpers. Local
 # file arguments still need normal MSYS conversion; preserve caller exclusions.
-export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR"
+export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR;STUDIO_PROXY_VHOST"
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
@@ -34,18 +34,29 @@ VAULT=${STUDIO_VAULT:-/c/work/projects/local-config/secrets/vault.env}
 URL=${STUDIO_URL:-https://studio.example.com}
 R=${STUDIO_REMOTE_ROOT:-/opt/services/studio}
 PARTS=(app deploy requirements.txt)
+RUNTIME=${STUDIO_RUNTIME:-systemd}
+case "$RUNTIME" in systemd|docker) ;; *) echo 'deploy: invalid STUDIO_RUNTIME' >&2; exit 1 ;; esac
+if [ "$RUNTIME" = docker ]; then PARTS+=(.dockerignore); fi
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 -p "$PORT" "$HOST")
 
 die() { echo "deploy: $*" >&2; exit 1; }
 NEW_SECRET=0
 CREATE_ADMIN=0
+PREPARE=0
 for arg in "$@"; do
     case "$arg" in
         --new-secret) NEW_SECRET=1 ;;
         --create-admin) CREATE_ADMIN=1 ;;
+        --prepare-only) PREPARE=1 ;;
         *) die "неизвестный аргумент: $arg (есть --new-secret и --create-admin)" ;;
     esac
 done
+if [ "$PREPARE" = 1 ] && [ "$RUNTIME" != docker ]; then die '--prepare-only requires Docker'; fi
+if [ "$RUNTIME" = docker ]; then
+    [ -n "${STUDIO_BACKEND_URL:-}" ] || die 'Docker requires STUDIO_BACKEND_URL'
+    [ -n "${STUDIO_PROXY_SSH:-}" ] || die 'Docker requires STUDIO_PROXY_SSH'
+    [ -n "${STUDIO_PROXY_VHOST:-}" ] || die 'Docker requires STUDIO_PROXY_VHOST'
+fi
 
 git -C "$D" cat-file -e HEAD:agent/install.cmd 2>/dev/null \
     || die "нет agent/install.cmd в HEAD студии — архив моста едет вместе со студией"
@@ -92,6 +103,12 @@ if [ "$NEW_SECRET" = 0 ] && ! "${SSH[@]}" "sudo grep -qs '^STUDIO_DATA_KEY=' /et
     NEW_SECRET=1        # первая установка или studio.env прежней студии (подпись сессии)
 fi
 args=()
+installer=install.sh
+if [ "$RUNTIME" = docker ]; then
+    installer=install-docker.sh
+    args+=("--revision=$(git -C "$D" rev-parse HEAD)")
+    if [ "$PREPARE" = 1 ]; then args+=(--prepare-only); fi
+fi
 if [ "$NEW_SECRET" = 1 ]; then
     args+=(--secret-stdin)
     echo "==> ключ данных из vault (STUDIO_DATA_KEY)"
@@ -109,8 +126,21 @@ fi
         grep -E '^(STUDIO_ADMIN_LOGIN|STUDIO_ADMIN_PASSWORD|GATEWAY_KEY_OWNER_IMAGES)=' "$VAULT" \
             || die "нет STUDIO_ADMIN_LOGIN / STUDIO_ADMIN_PASSWORD в $VAULT"
     fi
-} | tr -d '\r' | "${SSH[@]}" "sudo bash $R/.incoming/deploy/install.sh ${args[*]:-}" \
+} | tr -d '\r' | "${SSH[@]}" "sudo bash $R/.incoming/deploy/$installer ${args[*]:-}" \
     || die "установка не прошла (вывод install.sh — выше)"
+
+if [ "$PREPARE" = 1 ]; then exit 0; fi
+if [ "$RUNTIME" = docker ]; then
+    PROXY_SSH=(ssh -T -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20
+               -p "${STUDIO_PROXY_SSH_PORT:-$PORT}" "$STUDIO_PROXY_SSH")
+    "${PROXY_SSH[@]}" 'sudo install -d -m 0700 /etc/studio'
+    git -C "$D" show HEAD:deploy/install-proxy.sh \
+        | "${PROXY_SSH[@]}" "sudo sh -c 'umask 077; cat > /etc/studio/install-proxy.sh'"
+    git -C "$D" -c core.autocrlf=false archive --format=tar HEAD deploy/apache-vhost.conf \
+        | "$PYTHON" "$D/deploy/render-profile.py" \
+        | tar -xOf - deploy/apache-vhost.conf \
+        | "${PROXY_SSH[@]}" "sudo bash /etc/studio/install-proxy.sh $STUDIO_PROXY_VHOST"
+fi
 
 echo "==> снаружи через Apache: $URL/health"
 code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$URL/health" || true)
