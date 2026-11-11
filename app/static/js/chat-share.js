@@ -2,6 +2,7 @@
  * Окно владельца: PIN, срок ссылки (1/7/30 дней или бессрочно, по умолчанию 7), у обычного чата — показывать ли
  * рассуждение модели (по умолчанию нет); у созданной — срок, открытия, последний просмотр и неверные PIN. */
 import { api } from './api.js';
+import { selectedChatHTML } from './chat-selection.js';
 import { svg } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { dateTime } from './time.js';
@@ -9,7 +10,7 @@ import { button, el, field, openDialog, plural, words } from './ui.js';
 
 
 /** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню. */
-export function shareMenu(host, { id, request = api, failed = () => {} }) {
+export function shareMenu(host, { id, content = null, request = api, failed = () => {} }) {
   const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': 'Поделиться и экспортировать чат',
     title: 'Поделиться и экспортировать чат', 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
   trigger.innerHTML = svg('share');   // константа icons.js
@@ -18,12 +19,25 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
   let context = null;
   let controller = null;
   let busy = false;
+  let selected = null;
+  const capture = () => {
+    if (menu.matches(':popover-open')) return;
+    if (document.querySelector(':popover-open') && !content?.contains(document.activeElement)) return;
+    selected = context ? selectedChatHTML(content) : null;
+    selectionItem.disabled = !selected;
+  };
+  // Capture before focus changes (also covers the Agents toolbar's overflow menu on phones).
+  const pointer = (event) => { if (!menu.contains(event.target)) capture(); };
+  const clear = () => { selected = null; selectionItem.disabled = true; };
   const close = () => popup.close();
-  const items = [['link', 'Поделиться ссылкой'], ['pdf', 'Скачать PDF'], ['md', 'Скачать Markdown']].map(([key, label]) => {
+  const items = [['link', 'Поделиться ссылкой'], ['pdf', 'Скачать PDF'],
+    ['selection', 'Скачать выделенное в PDF'], ['md', 'Скачать Markdown']].map(([key, label]) => {
     const item = menuItem(label, { attrs: { 'data-action': key } });
     item.addEventListener('click', async () => {
       const current = context;
       if (!current || busy) return;
+      const fragment = key === 'selection' ? selected : null;
+      if (key === 'selection' && !fragment) return;
       close();
       if (key === 'link') { shareDialog(host, current.share, current.title, request); return; }
       busy = true;
@@ -31,12 +45,14 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
       trigger.setAttribute('aria-busy', 'true');
       controller = new AbortController();
       try {
-        const response = await request('POST', current.export, { format: key, title: current.title }, { signal: controller.signal });
+        const format = key === 'selection' ? 'pdf' : key;
+        const response = await request('POST', current.export, { format, title: current.title,
+          ...(fragment ? { selection: fragment } : {}) }, { signal: controller.signal });
         const blob = await response.blob();
         if (context !== current || !trigger.isConnected) return;
         const href = URL.createObjectURL(blob);
         const name = (current.title || 'Чат').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_').slice(0, 100);
-        const download = el('a', { href, download: `${name}.${key}` });
+        const download = el('a', { href, download: `${name}${fragment ? ' — выделенное' : ''}.${format}` });
         document.body.append(download);
         download.click();
         download.remove();
@@ -52,16 +68,29 @@ export function shareMenu(host, { id, request = api, failed = () => {} }) {
     });
     return item;
   });
+  const selectionItem = items[2];
+  selectionItem.disabled = true;
+  selectionItem.title = 'Выделите текст в ленте чата, затем откройте это меню';
   menu.append(...items);
+  document.addEventListener('selectionchange', capture);
+  document.addEventListener('pointerdown', pointer, true);
+  document.addEventListener('visibilitychange', clear);
+  document.addEventListener('studio-code-clear', clear);
   const popup = popupMenu(trigger, menu, { align: 'end', blocked: () => !context || busy });
   return { button: trigger, set(value) {
     if (context?.share === value?.share && context?.export === value?.export && context?.title === value?.title) return;
     close();
     host.querySelector('#chat-share-dialog')?.close();
     controller?.abort();
+    clear();
     context = value;
     trigger.disabled = !context || busy;
   }, unmount() {
+    clear();
+    document.removeEventListener('selectionchange', capture);
+    document.removeEventListener('pointerdown', pointer, true);
+    document.removeEventListener('visibilitychange', clear);
+    document.removeEventListener('studio-code-clear', clear);
     host.querySelector('#chat-share-dialog')?.close(); controller?.abort(); context = null;
     popup.unmount();
   } };

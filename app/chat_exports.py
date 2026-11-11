@@ -14,10 +14,11 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from markdown_it import MarkdownIt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import chat
 import chat_shares
+from chat_export_selection import selection_html
 import claude_code
 import media
 import state
@@ -31,6 +32,13 @@ PDF_MAX_BYTES = 32 * 1024 * 1024
 class ExportIn(BaseModel):
     format: Literal["md", "pdf"]
     title: str = Field(default="Чат", max_length=200)
+    selection: str | None = Field(default=None, min_length=1, max_length=1_000_000)
+
+    @model_validator(mode="after")
+    def selection_format(self):
+        if self.selection is not None and self.format != "pdf":
+            raise ValueError("selection requires PDF")
+        return self
 
 
 def _plain(value) -> str:
@@ -67,6 +75,10 @@ def _safe_html(markdown_text: str) -> str:
     parser.renderer.rules["image"] = lambda tokens, idx, options, env: html.escape(tokens[idx].content)
     body = parser.render(markdown_text)
     body = body.replace('<pre>', '<pre style="white-space:pre-wrap;overflow-wrap:anywhere">')
+    return _html_block(body)
+
+
+def _html_block(body: str) -> str:
     # md2pdf parses this file again as CommonMark with raw HTML: the <div> block ends at the first
     # blank line, and the rest would become Markdown again (images fetched, code re-formatted).
     # Newlines inside <pre> become character references; blank lines elsewhere are insignificant.
@@ -90,14 +102,14 @@ def clean_tmp() -> None:
             shutil.rmtree(path)
 
 
-def render_pdf(text: str) -> bytes:
+def render_pdf(text: str, *, selection: bool = False) -> bytes:
     tool = converter()
     if not tool.is_file():
         raise HTTPException(503, {"code": "pdf_unavailable", "message": "экспорт PDF ещё не настроен"})
     with tempfile.TemporaryDirectory(prefix="chat-export-", dir=state.CFG.tmp_dir) as folder:
         root = Path(folder)
         source, target = root / "chat.md", root / "chat.pdf"
-        source.write_text(_safe_html(text), encoding="utf-8")
+        source.write_text(_html_block(selection_html(text)) if selection else _safe_html(text), encoding="utf-8")
         source.chmod(0o600)
         env = os.environ.copy()
         env.pop("STUDIO_DATA_KEY", None)
@@ -125,12 +137,13 @@ def render_pdf(text: str) -> bytes:
 
 async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, check):
     uid = request.state.user.id
-    text = markdown(snapshot)
+    text = body.selection if body.selection is not None else markdown(snapshot)
     if body.format == "pdf":
         if uid in RUNNING or len(RUNNING) >= 2:
             raise HTTPException(429, {"code": "export_busy", "message": "PDF уже готовится — подождите"})
         RUNNING.add(uid)
-        task = asyncio.create_task(asyncio.to_thread(render_pdf, text))
+        task = asyncio.create_task(asyncio.to_thread(render_pdf, text, **(
+            {"selection": True} if body.selection is not None else {})))
         try:
             try:
                 raw = await asyncio.shield(task)
@@ -152,7 +165,11 @@ async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, 
 
 @router.post("/api/chats/{chat_id}/export")
 async def export_chat(chat_id: str, body: ExportIn, request: Request):
-    snapshot, _ = chat_shares.regular_snapshot(request.state.user.id, chat_id)
+    if body.selection is None:
+        snapshot, _ = chat_shares.regular_snapshot(request.state.user.id, chat_id)
+    else:
+        row = chat._chat_row(request.state.user.id, chat_id)
+        snapshot = {"title": row["title"] or "Чат", "messages": []}
 
     async def check():
         chat._chat_row(request.state.user.id, chat_id)
@@ -162,10 +179,14 @@ async def export_chat(chat_id: str, body: ExportIn, request: Request):
 
 @router.post("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/export")
 async def export_agent_chat(aid: int, pid: str, session_id: str, body: ExportIn, request: Request):
-    snapshot = await chat_shares.agent_snapshot(request, aid, pid, session_id, body.title)
-
     async def check():
         claude_code.own_agent(request, aid)
         await claude_code.ask(request, aid, "history", project=pid, chat=session_id, before=None, limit=1)
+
+    if body.selection is None:
+        snapshot = await chat_shares.agent_snapshot(request, aid, pid, session_id, body.title)
+    else:
+        await check()
+        snapshot = {"title": body.title, "messages": []}
 
     return await _file(snapshot, body, request, "code", check)
