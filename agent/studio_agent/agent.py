@@ -62,6 +62,12 @@ OPS = {
     "git": ("project",),
 }
 
+# Новая операция получает доступ соавтора только после явного включения в контракт.
+SHARED_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image",
+    "state", "turn", "steer", "queue_edit", "queue_pause", "claim", "watch", "answer", "stop",
+    "files", "file_stats", "file_operation", "file_suggestions", "chat_search", "chat_fork",
+    "subagents", "subagent_history", "read", "raw", "visualization", "save", "git"})
+
 
 def read_has_pin(pins: PinStore) -> bool:
     """Задан ли PIN (DPAPI — звать в потоке); `pin.bin` не читается (сброс пароля Windows, порча) — `True`:
@@ -129,7 +135,7 @@ class Agent:
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
-                 "passive_requests": True, "history_images": True}
+                 "passive_requests": True, "history_images": True, "project_sharing": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -212,9 +218,18 @@ class Agent:
         passive = frame.get("passive", False)
         if type(passive) is not bool:
             raise Refused("invalid")
+        scope = frame.get("shared_projects")
+        if scope is not None:
+            if (not isinstance(scope, list) or not 1 <= len(scope) <= 1000
+                    or any(not isinstance(p, str) or not ID.fullmatch(p) for p in scope)):
+                raise Refused("invalid")
+            # Разрешение выдаёт аутентифицированный сервер на каждую просьбу. PIN компьютера не открываем.
+            if op not in SHARED_OPS or (op not in ("projects", "activity") and
+                    ("project" not in OPS[op] or frame.get("project") not in scope)):
+                raise Refused("closed")
         if op == "open":
             return await self._open(session, frame.get("pin"), idle_sec, passive=passive)
-        if not self.open.alive(session, idle_sec):
+        if scope is None and not self.open.alive(session, idle_sec):
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
@@ -247,11 +262,14 @@ class Agent:
         if op.startswith("desktop_"):
             self._desktop_fields(op, frame)
         # Продлевает только принятая просьба владельца: неизвестные и отклонённые по виду — нет.
-        if not passive:
+        if not passive and scope is None:
             self.open.touch(session, idle_sec)
         if op.startswith("desktop_"):
             return await self._desktop_request(op, frame)
         result = await getattr(self, "_op_" + op)(frame, after)
+        if scope is not None and op in ("projects", "activity"):
+            key = "pid" if op == "projects" else "project"
+            result = {**result, "items": [i for i in result.get("items", []) if i.get(key) in scope]}
         if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
             self._metadata.invalidate(frame.get("project"))
         return result
@@ -541,7 +559,7 @@ class Agent:
             data = await asyncio.to_thread(sessions.history_image, project, frame["chat"], frame["message_id"], frame["index"])
         else:
             data = await self._runner(frame).history_image(project, frame["chat"], frame["message_id"], frame["index"])
-        if not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
+        if frame.get("shared_projects") is None and not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
             raise Refused("closed")
         return data
 
@@ -653,7 +671,7 @@ class Agent:
     async def _op_visualization(self, frame, after):
         project = await self._project(frame)
         result = await asyncio.to_thread(visualizations.read, project, frame["source"])
-        if not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
+        if frame.get("shared_projects") is None and not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
             raise Refused("closed")
         return result
 

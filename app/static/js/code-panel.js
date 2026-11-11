@@ -30,6 +30,7 @@ import { attemptsLeft } from './lock.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
+import { projectMembers } from './project-members.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
 const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
@@ -118,6 +119,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let infoIntent = null; // Окна открываются только отдельными кнопками сведений и рабочего стола.
   let infoKind = 'info';
   const viewers = new Map();
+  let memberPanels = [];
   async function showViewer(agent, kind) {
     try {
       if (!viewers.has(kind)) {
@@ -557,7 +559,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const seen = !agent.online && Number.isFinite(agent.last_seen)
         ? el('span', { class: 'code-agent-seen muted' }, lastSeenText(agent.last_seen)) : null;
       if (seen) row.title = seen.textContent;
-      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row, button, info, remote, seen, note);
+      if (agent.shared) row.title = 'Совместные проекты';
+      return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row,
+        ...(agent.shared ? [el('span', { class: 'muted small' }, 'Совместные')] : [button, info, remote]), seen, note);
     }));
   }
 
@@ -722,6 +726,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (!alive || mine !== gen) return;
     mode = 'projects';
     projectItems = found;
+    for (const panel of memberPanels) panel.unmount();
+    memberPanels = [];
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project-name', title: p.name, href: `#/code/${agent.id}/${p.pid}` }, p.name);
       const row = el('div', { class: 'code-project' },
@@ -734,6 +740,12 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           el('span', { class: 'code-project-state unread', hidden: true }),
           el('span', { class: 'code-project-count' })),
         el('span', { class: 'code-project-summary' }));
+      if (!agent.shared) {
+        const access = el('button', { class: 'btn code-project-access', type: 'button',
+          'aria-label': `Доступ к проекту · ${p.name}`, title: 'Совместная работа' }, 'Доступ');
+        row.querySelector('.code-project-heading').append(access);
+        memberPanels.push(projectMembers(root, access, agent.id, p));
+      }
       link.addEventListener('click', (event) => {
         if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
           && !event.shiftKey && !event.altKey) event.preventDefault();
@@ -911,6 +923,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     agents: () => loaded,
     unmount() {
       alive = false;
+      for (const panel of memberPanels) panel.unmount();
       sortPopup.close();
       observer.disconnect();
       cancelAnimationFrame(summaryFrame);

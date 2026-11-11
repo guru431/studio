@@ -1,5 +1,7 @@
 # «Агенты» на сервере
 
+Доступ другому пользователю к выбранному проекту — [совместная работа](project-collaboration.md).
+
 Раздел называется «Агенты» (адреса `#/code` и `/api/code/*` — прежние, модуль — `claude_code.py`). Канал — протокол
 [2026-10-28-studio-code-bridge-protocol](../superpowers/specs/2026-10-28-studio-code-bridge-protocol.md); мост —
 [agent-bridge.md](agent-bridge.md); страница — [agents-workspace.md](agents-workspace.md).

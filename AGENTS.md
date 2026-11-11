@@ -22,7 +22,8 @@
   чужой `Origin` — 403, PIN с паузами и общим пределом, read-токен без прав учётки) и `auth.OPEN_API`:
   `/api/agent/enroll` (логин и пароль с паузами `/login`) и `/api/agent/package` (Bearer-ключ действующего
   устройства активной учётки). Остальное `/api/*` — через сессию и CSRF (`auth.guard`); WebSocket
-  `/api/agent/link` проверяет ключ сам. Пользователь видит только своё. Запертой сессии (блокировка на всех
+  `/api/agent/link` проверяет ключ сам. Пользователь видит своё и явно выданные проекты «Агентов»
+  (`project_access.py`, [совместная работа](docs/architecture/project-collaboration.md)). Запертой сессии (блокировка на всех
   устройствах, `app/lock_policy.py`) — 423 на API защищённых разделов, кроме `auth.SCREEN_LOCK_PATHS`.
 - В Docker служба слушает только unix-сокет `/run/studio/web.sock`; nginx принимает запросы
   только от Apache debian и сохраняет его `X-Forwarded-For`. Прямого TCP-входа в приложение нет.

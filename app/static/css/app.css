@@ -1379,6 +1379,16 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-project a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 2px; }
 .code-project[aria-current="page"] { background: var(--surface-1); font-weight: 600; }
 .code-project-heading { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.code-project-access { flex: none; min-height: 32px; font-size: var(--fs-xs); padding: 3px 7px; }
+.project-members { width: 360px; padding: var(--space-4); overflow: auto; }
+.project-members h3 { margin-top: 0; overflow-wrap: anywhere; }
+.project-members form { display: grid; gap: var(--space-2); }
+.project-members input { min-width: 0; font-size: max(16px, 1em); }
+.project-members-list { list-style: none; padding: 0; }
+.project-members-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-block: var(--space-2); }
+.project-members-list li span { overflow-wrap: anywhere; min-width: 0; }
+.project-members .btn { min-height: 44px; }
+@media (pointer: coarse) { .code-project-access { min-height: 44px; } }
 .code-project-title { display: flex; align-items: baseline; gap: var(--space-2); flex: 1; min-width: 0; }
 .code-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-project-count { flex: none; color: var(--text-2); font-size:var(--fs-xs); font-variant-numeric: tabular-nums; }

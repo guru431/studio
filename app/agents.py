@@ -28,6 +28,7 @@ import agent_release
 import bridge
 import clock
 import security
+import project_access
 import state
 
 log = logging.getLogger("studio")
@@ -114,8 +115,11 @@ async def download(request: Request):
 @router.get("/api/agents")
 async def list_agents(request: Request):
     release = await asyncio.to_thread(agent_release.release, AGENT_ZIP)
-    rows = state.DB.execute("SELECT id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
-                            " WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
+    rows = state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
+                            " WHERE user_id = ? OR id IN (SELECT m.agent_id FROM project_members m"
+                            " JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = a.user_id"
+                            " WHERE m.user_id = ? AND u.disabled = 0) ORDER BY created, id",
+                            (request.state.user.id, request.state.user.id))
     items = []
     for r in rows:
         link = bridge.LINKS.get(r["id"])
@@ -146,6 +150,10 @@ async def list_agents(request: Request):
                       "worktrees": hello.get("worktrees", False),
                       "subscription_usage": hello.get("subscription_usage", False),
                       **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
+        items[-1]["project_sharing"] = hello.get("project_sharing", False)
+        if r["user_id"] != request.state.user.id:
+            items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False,
+                             computer_info=False, desktop=False, subscription_usage=False, worktrees=False)
     return {"items": items}
 
 

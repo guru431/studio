@@ -618,7 +618,7 @@ async function chat(mine, p, id, agent, section, status) {
   const listing = chatsOf(p);
   const cached = p.info.get(id);
   try {
-    if (cached) await api('GET', `${base(p.aid)}/access`);
+    if (cached) await api('GET', `${base(p.aid)}/access?project=${p.pid}`);
     if (mine !== gen) return;
     [name, row, { chatView }] = await Promise.all([projectName(p),
       cached || listing.then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null),

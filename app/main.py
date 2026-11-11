@@ -51,6 +51,7 @@ import ocr
 import ntfy
 import presets
 import profile
+import project_access
 import release
 import push
 import screenlock
@@ -179,6 +180,7 @@ app.include_router(agents.router)
 app.include_router(bridge.router)
 app.include_router(workspace.router)
 app.include_router(claude_code.router)
+app.include_router(project_access.router)
 app.include_router(desktop.router)
 app.include_router(code_usage.router)
 app.include_router(code_activity.router)

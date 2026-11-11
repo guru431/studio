@@ -49,6 +49,7 @@ import code_visualizations
 import lock_policy
 import ocr_render
 import operations
+import project_access
 import state
 
 log = logging.getLogger("studio")
@@ -247,16 +248,12 @@ def _refuse(status: int, code: str, message: str, **extra) -> HTTPException:
     return HTTPException(status, {"code": code, "message": message, **extra})
 
 
-def own_agent(request: Request, aid: int) -> sqlite3.Row:
+def own_agent(request: Request, aid: int, *, shared: bool = False, pid: str | None = None) -> sqlite3.Row:
     """Компьютер учётки запроса, иначе 404 с `computer: true` — страница отличает его от `not_found` моста (нет
     файла, сессии). Его зовёт каждый маршрут раздела — заодно уходит память PDF по сроку."""
     _expire_pdfs()
     code_visualizations.expire()
-    row = state.DB.execute("SELECT id, name, has_pin FROM agents WHERE id = ? AND user_id = ?",
-                           (aid, request.state.user.id)).fetchone()
-    if row is None:
-        raise _refuse(404, "not_found", "нет такого компьютера", computer=True)
-    return row
+    return project_access.agent(request.state.user.id, aid, pid or request.path_params.get("pid"), shared=shared)
 
 
 def check_pid(pid: str) -> str:
@@ -288,6 +285,14 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
     `hello.passive_requests` идёт с `passive: true`: он проверяет срок PIN компьютера, не продлевая его.
     Заголовок может только ужесточить доступ, поэтому ему можно верить."""
     passive = passive or request.headers.get("x-studio-passive") == "1"
+    pid = args.get("project") or request.path_params.get("pid")
+    agent = project_access.agent(request.state.user.id, aid, pid, shared=op in ("projects", "activity"))
+    scope = None
+    if agent["user_id"] != request.state.user.id:
+        scope = project_access.projects(request.state.user.id, aid)
+        if op not in ("projects", "activity") and pid is None:
+            raise _refuse(404, "not_found", "нет такого компьютера", computer=True)
+        args["shared_projects"] = [pid] if pid is not None else scope
     if "chat" in args:
         window = request.headers.get("x-studio-window")
         if window is not None:
@@ -306,6 +311,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         link = bridge.LINKS.get(aid)
         if link is None:
             raise bridge.Offline()  # без знакомства поддержку таймера не проверить: ждать возвращения моста
+        if scope is not None and not link.hello.get("project_sharing"):
+            raise _refuse(409, "unsupported", "владелец должен обновить агент для совместной работы")
         timeout = state.DB.execute("SELECT computer_pin_timeout FROM users WHERE id = ?",
                                    (request.state.user.id,)).fetchone()[0]
         if link.hello.get("pin_timeout"):
@@ -319,6 +326,13 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         # Keeping that result on the computer does not authorize delivery to this request.
         if not _session_open(request.state.digest):
             raise _refuse(409, "closed", "Сеанс Студии закрыт")
+        if scope is not None:
+            project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
+            if op in ("projects", "activity"):
+                allowed = project_access.projects(request.state.user.id, aid)
+                key = "pid" if op == "projects" else "project"
+                data = {**data, "items": [i for i in data.get("items", [])
+                        if isinstance(i, dict) and i.get(key) in allowed]}
         return data
     except bridge.Offline:
         error = _refuse(409, "offline", "компьютер не на связи")
@@ -330,6 +344,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
                  else _refuse(status, e.code, e.message, **e.extra))
     if not _session_open(request.state.digest):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
+    if scope is not None:
+        project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
     if not quiet:
         _warn(request, aid, op, error)
     raise error
@@ -339,8 +355,9 @@ def chat_engine(request: Request, aid: int, chat: str | None = None) -> str:
     selected = request.query_params.get("engine")
     if selected is not None and selected not in ACCESS:
         raise _refuse(422, "engine", "неверный помощник")
+    agent = own_agent(request, aid)
     row = state.DB.execute("SELECT engine FROM code_chats WHERE user_id = ? AND agent_id = ? AND session_id = ?",
-                           (request.state.user.id, aid, chat)).fetchone() if chat is not None else None
+                           (agent["user_id"], aid, chat)).fetchone() if chat is not None else None
     if row is not None:
         if selected is not None and selected != row["engine"]:
             raise _refuse(409, "engine", "чат принадлежит другому помощнику")
@@ -362,7 +379,10 @@ def _event(request: Request, agent: sqlite3.Row, kind: str) -> None:
 
 @router.post("/agents/{aid}/open", status_code=204)
 async def open_agent(aid: int, body: Open, request: Request):
-    agent = own_agent(request, aid)
+    agent = own_agent(request, aid, shared=True)
+    if agent["user_id"] != request.state.user.id:
+        await ask(request, aid, "projects")
+        return Response(status_code=204)
     try:
         await ask(request, aid, "open", pin=body.pin)
     except HTTPException as e:
@@ -375,7 +395,7 @@ async def open_agent(aid: int, body: Open, request: Request):
 
 @router.get("/agents/{aid}/projects")
 async def projects(aid: int, request: Request):
-    own_agent(request, aid)
+    own_agent(request, aid, shared=True)
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
     return {"items": [{"pid": i["pid"], "name": i["name"]} for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
@@ -385,9 +405,13 @@ async def projects(aid: int, request: Request):
 @router.get("/agents/{aid}/access", status_code=204)
 async def agent_access(aid: int, request: Request):
     """Свежая проверка PIN перед показом снимка; не читает каталоги сессий или файлы."""
-    own_agent(request, aid)
+    pid = request.query_params.get("project") or request.path_params.get("pid")
+    if pid is not None:
+        check_pid(pid)
+    own_agent(request, aid, shared=True, pid=pid)
     link = bridge.LINKS.get(aid)
-    await ask(request, aid, "activity" if link and link.hello.get("project_activity") else "projects", quiet=True)
+    await ask(request, aid, "activity" if link and link.hello.get("project_activity") else "projects", quiet=True,
+              **({"project": pid} if pid else {}))
     return Response(status_code=204)
 
 
@@ -579,8 +603,9 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
             raise _refuse(502, "bridge", "Мост не создал независимый чат")
         check_chat(child)
         operations.check(request.state.user.id)
+        operations.check(agent["user_id"])
         state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
-                         " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, child, now, now, engine))
+                         " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (agent["user_id"], aid, pid, child, now, now, engine))
     except BaseException:
         # Резерв занят до await для параллельных просьб; неудачная попытка его возвращает.
         if now in recent:
@@ -595,14 +620,14 @@ async def chats(aid: int, pid: str, request: Request):
     """Сессии машины с отметками студии; открытые строки `code_chats` проекта без сессии на машине (новый чат
     без хода) — тоже, закрытые — нет: сессию, что Claude Code вычистил по сроку, список не воскрешает «Новым
     чатом». Открытые, затем закрытые, внутри — новые сверху."""
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     refresh = request.query_params.get("refresh") == "true" or request.headers.get('x-studio-refresh') == 'true'
     data = await ask(request, aid, "chats", project=pid, refresh=refresh)
     found = data.get("items")
     marks = {r["session_id"]: r for r in state.DB.execute(
         "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ?",
-        (aid, request.state.user.id))}
+        (aid, agent["user_id"])) if r["project"] == pid}
     items, seen = [], set()
     for i in (found if isinstance(found, list) else []):
         # чат не UUID страница не откроет (422 на каждом маршруте), а кусок пути лёг бы в адрес её запроса
@@ -636,6 +661,7 @@ async def new_chat(aid: int, pid: str, request: Request):
     `session_start` (история подключений неудаляема) — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""
     operations.check(request.state.user.id)
     agent = own_agent(request, aid)
+    operations.check(agent["user_id"])
     check_pid(pid)
     engine = chat_engine(request, aid)
     if engine != "claude":
@@ -648,7 +674,7 @@ async def new_chat(aid: int, pid: str, request: Request):
         raise _refuse(429, "too_many", TOO_MANY)
     recent.append(now)
     state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
-                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (request.state.user.id, aid, pid, chat, now, now, engine))
+                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (agent["user_id"], aid, pid, chat, now, now, engine))
     _event(request, agent, "session_start")
     return JSONResponse({"chat": chat, "engine": engine}, status_code=201)
 
@@ -658,14 +684,15 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
     """Своя строка есть — только она, без моста. Нет — строка заводится, лишь если сессия есть на машине
     (`history` с `limit` 1: нет — 404 `not_found`, закрыт компьютер — `closed`): иначе любая сессия без PIN
     писала бы отметки без предела, а закрытая чужая сессия, вычищенная на машине, стала бы «призраком»."""
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
-    uid = request.state.user.id
+    uid = agent["user_id"]
+    operations.check(request.state.user.id)
     operations.check(uid)
     engine = chat_engine(request, aid, chat)
     if state.DB.execute("UPDATE code_chats SET state = ?, updated = ? WHERE user_id = ? AND agent_id = ?"
-                        " AND session_id = ?", (body.state, clock.NOW(), uid, aid, chat)).rowcount == 0:
+                        " AND session_id = ? AND project = ?", (body.state, clock.NOW(), uid, aid, chat, pid)).rowcount == 0:
         await ask(request, aid, "history", project=pid, chat=chat, before=None, limit=1)
         operations.check(uid)
         now = clock.NOW()
@@ -680,7 +707,7 @@ def _new_chat(request: Request, aid: int, pid: str, chat: str, e: HTTPException)
     """Мост не знает чата, а студия его завела («Новый чат», хода ещё не было — сессии на машине нет)."""
     return e.detail["code"] == "not_found" and state.DB.execute(
         "SELECT 1 FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ? AND session_id = ?",
-        (request.state.user.id, aid, pid, chat)).fetchone() is not None
+        (own_agent(request, aid)["user_id"], aid, pid, chat)).fetchone() is not None
 
 
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}")
@@ -756,13 +783,30 @@ def _session_open(digest: str) -> bool:
             and not lock_policy.locked(digest, "code"))
 
 
-async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, digest: str):
+def _stream_open(digest: str, access: tuple[int, str] | None) -> bool:
+    if not _session_open(digest):
+        return False
+    if access is None:
+        return True
+    row = state.DB.execute("SELECT user_id FROM sessions WHERE digest = ?", (digest,)).fetchone()
+    try:
+        project_access.agent(row[0], *access)
+        return True
+    except HTTPException:
+        return False
+
+
+async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, digest: str,
+                  access: tuple[int, str] | None = None):
     """События SSE из очереди наблюдателя: `event: <k>`, данные — событие без `k`; без событий `PING_SEC` —
     `: ping`. Конец — `done`, `offline` (канал пропал: ход на мосте, может, и жив, но вестей не будет), `online`
     (канал появился — поток, что ждал компьютер) или `closed` (сессия студии заперлась, отперлась, вышла или истекла). После отпирания доступ к компьютеру
     проверяется заново; оставшийся срок PIN сохраняется. Свою сессию поток сверяет на каждом тике пинга
     и на событиях не чаще `CHECK_SEC`.
     Поток `live` до первого `snapshot` пропускает прочие события: мост шлёт снимок после них, они в нём есть."""
+    if access is not None and not _stream_open(digest, access):
+        yield _sse("closed", {})
+        return
     if first is not None:
         yield _sse(*first)
     waiting, checked = live, clock.NOW()
@@ -772,9 +816,9 @@ async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, d
         except TimeoutError:
             kind, e = "ping", None
         now = clock.NOW()
-        if kind == "ping" or (kind == "ev" and now - checked >= CHECK_SEC):
+        if access is not None or kind == "ping" or (kind == "ev" and now - checked >= CHECK_SEC):
             checked = now
-            if not _session_open(digest):
+            if not _stream_open(digest, access):
                 kind = "closed"
         if kind == "ping":
             yield ": ping\n\n"
@@ -802,8 +846,12 @@ class _Watch(StreamingResponse):
     застать ответ в `send` или ещё до первого куска (тела генератора не было вовсе) — как `chat._EventStream`."""
 
     def __init__(self, aid: int, chat: str, q: bridge.Watch, digest: str, first: tuple[str, dict] | None = None,
-                 live: bool = False):
-        super().__init__(_events(q, first, live, digest), media_type="text/event-stream", headers=SSE_HEADERS)
+                 live: bool = False, pid: str | None = None):
+        owner = state.DB.execute("SELECT a.user_id = s.user_id FROM agents a JOIN sessions s ON s.digest = ?"
+                                 " WHERE a.id = ?", (digest, aid)).fetchone()
+        access = (aid, pid) if pid and (owner is None or not owner[0]) else None
+        super().__init__(_events(q, first, live, digest, access),
+                         media_type="text/event-stream", headers=SSE_HEADERS)
         self.aid, self.chat, self.q = aid, chat, q
 
     async def __call__(self, scope, receive, send) -> None:
@@ -891,7 +939,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,
-                  first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}))
+                  first=("turn", {"turn": turn_id if isinstance(turn_id, str) else None}), pid=pid)
 
 
 class Claim(BaseModel):
@@ -954,7 +1002,7 @@ async def live(aid: int, pid: str, chat: str, request: Request):
             q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
             if aid in bridge.LINKS:                  # вернулся, пока шёл отказ: ждать нечего
                 q.put_nowait(("online", None))
-            return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True)
+            return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True, pid=pid)
         if not _new_chat(request, aid, pid, chat, e):
             _warn(request, aid, "watch", e)
             raise
@@ -963,7 +1011,7 @@ async def live(aid: int, pid: str, chat: str, request: Request):
         if q is not None:
             bridge.unwatch(aid, chat, q)
         return StreamingResponse(_idle(), media_type="text/event-stream", headers=SSE_HEADERS)
-    return _Watch(aid, chat, q, request.state.digest, live=True)
+    return _Watch(aid, chat, q, request.state.digest, live=True, pid=pid)
 
 
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/answer", status_code=204)
@@ -1228,6 +1276,7 @@ async def file_image(aid: int, pid: str, body: PathBody, request: Request):
     check_pid(pid)
     data = await ask(request, aid, 'raw', project=pid, path=check_path(body.path))
     raw, mime = await asyncio.to_thread(_image_bytes, data)
+    own_agent(request, aid)
     if not _session_open(request.state.digest):
         raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
     return Response(raw, media_type=mime)
@@ -1247,6 +1296,7 @@ async def history_image(aid: int, pid: str, chat: str, body: HistoryImage, reque
     raw, mime = await asyncio.to_thread(_image_bytes, data)
     if len(raw) > IMAGE_MAX:
         raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+    own_agent(request, aid)
     if not _session_open(request.state.digest):
         raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
     return Response(raw, media_type=mime, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
@@ -1284,12 +1334,14 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
         _, data, pages, _ = kept
     else:
         data, pages = await _pdfium(_pdf_load, await ask(request, aid, "raw", project=pid, path=path))
-        PDFS[uid] = (key, data, pages, now)
     if body.page > pages:
         raise _refuse(404, "page", NO_PAGE)
     png = await _pdfium(ocr_render.render_page, data, body.page - 1)
+    own_agent(request, aid)
     if not _session_open(request.state.digest):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
+    if kept is None or kept[0] != key:
+        PDFS[uid] = (key, data, pages, now)
     return Response(png, media_type="image/png", headers={"X-Studio-Pages": str(pages)})
 
 
