@@ -79,6 +79,37 @@ async def test_configurable_pin_timeout_is_checked_on_open_and_each_request(agen
     assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]
 
 
+async def test_shared_requests_are_scoped_without_opening_the_computer(agent_with_pin, root):
+    agent = agent_with_pin
+    (root / "private").mkdir()
+    (root / "demo" / "a.txt").write_text("shared", encoding="utf-8")
+    scope = [projects.pid("demo")]
+    response = (await agent.handle(req("projects", shared_projects=scope)))[0]
+    assert response["ok"] and [i["name"] for i in response["data"]["items"]] == ["demo"]
+    response = (await agent.handle(req("read", shared_projects=scope, project=scope[0], path="a.txt")))[0]
+    assert response["ok"] and response["data"]["text"] == "shared"
+    assert not agent.open.alive(SESSION)
+    assert (await agent.handle(req("projects")))[0]["code"] == "closed"
+    assert agent.hello()["project_sharing"] is True
+
+
+@pytest.mark.parametrize("op,fields", [
+    ("read", {"project": "f" * 16, "path": "a.txt"}),
+    ("computer_info", {}), ("desktop_status", {}), ("agent_update", {}), ("usage", {}), ("open", {"pin": "2468"}),
+    ("worktrees", {"project": projects.pid("demo")}),
+    ("worktree_create", {"project": projects.pid("demo"), "query": "branch"}),
+])
+async def test_shared_scope_cannot_authorize_other_projects_or_machine_operations(agent_with_pin, op, fields):
+    result = (await agent_with_pin.handle(req(op, shared_projects=[projects.pid("demo")], **fields)))[0]
+    assert not result["ok"] and result["code"] == "closed"
+
+
+@pytest.mark.parametrize("scope", [[], "a" * 16, ["bad"], [None]])
+async def test_invalid_shared_scope_does_not_bypass_pin(agent_with_pin, scope):
+    result = (await agent_with_pin.handle(req("projects", shared_projects=scope)))[0]
+    assert not result["ok"] and result["code"] == "invalid"
+
+
 async def test_passive_requests_check_the_pin_timer_without_extending_it(agent_with_pin):
     """Фоновые опросы студии (`passive: true`) не держат компьютер открытым: срок идёт от действий владельца."""
     agent = agent_with_pin
@@ -219,7 +250,7 @@ def test_hello(agent):
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                              "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
-                             "passive_requests": True, "history_images": True}
+                             "passive_requests": True, "history_images": True, "project_sharing": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

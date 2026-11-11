@@ -89,7 +89,7 @@ def test_session_labels_are_scoped_persistent_clearable_and_protected(studio, ca
 
 def test_schema_37_keeps_existing_sessions_and_supports_old_inserts(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.DEVICES_37) + "\nPRAGMA user_version=36;")
+    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37) + "\nPRAGMA user_version=36;")
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO sessions(digest,user_id,csrf,expires,renewed,active) VALUES('d',1,'c',900,1,5)")
     db.migrate(conn)

@@ -44,6 +44,7 @@
 | 0.16.0 | `hello.visualizations` (`visualization`) | §4 |
 | 0.17.0 | `hello.passive_requests` (`req.passive`); `ask.subtask`, `snapshot.asks[].subtask` | §16, §7 |
 | 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
+| 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 
 ## 0.17.3
 

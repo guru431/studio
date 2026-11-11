@@ -14,12 +14,13 @@
 import json
 from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, StrictInt, model_validator
 
 import claude_code
 import clock
 import operations
+import project_access
 import state
 
 router = APIRouter(prefix="/api/code")
@@ -50,66 +51,84 @@ def doc(user_id: int) -> dict:
     """Документ рабочего места: `panel`, `place` (компьютер отозван — `null`), проекты по убыванию `touched`."""
     place = state.DB.execute("SELECT panel_id, agent_id, project, view FROM code_place WHERE user_id = ?",
                              (user_id,)).fetchone()
-    rows = state.DB.execute("SELECT agent_id, project, tabs, active FROM code_tabs WHERE user_id = ?"
-                            " ORDER BY touched DESC, rowid DESC", (user_id,))
-    return {"panel": place and place["panel_id"],
+    rows = state.DB.execute("SELECT agent_id, project, tabs, active, touched, rowid AS position FROM code_tabs WHERE user_id = ?"
+                            " UNION ALL SELECT agent_id, project, tabs, active, touched, rowid FROM code_member_tabs"
+                            " WHERE user_id = ? ORDER BY touched DESC, position DESC", (user_id, user_id))
+    def allowed(aid, pid=None):
+        if aid is None:
+            return False
+        try:
+            project_access.agent(user_id, aid, pid, shared=True)
+            return True
+        except HTTPException:
+            return False
+    return {"panel": place["panel_id"] if place and allowed(place["panel_id"]) else None,
             "place": ({"aid": place["agent_id"], "pid": place["project"], "view": place["view"]}
-                      if place and place["agent_id"] is not None else None),
+                      if place and allowed(place["agent_id"], place["project"]) else None),
             "projects": [{"aid": r["agent_id"], "pid": r["project"], "tabs": json.loads(r["tabs"]),
-                          "active": r["active"]} for r in rows]}
+                          "active": r["active"]} for r in rows if allowed(r["agent_id"], r["project"])]}
 
 
-def _tabs(aid: int, pid: str) -> "tuple[list[str], str | None] | None":
-    row = state.DB.execute("SELECT tabs, active FROM code_tabs WHERE agent_id = ? AND project = ?",
-                           (aid, pid)).fetchone()
+def _table(uid: int, aid: int) -> str:
+    owner = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()
+    return "code_tabs" if owner and owner[0] == uid else "code_member_tabs"
+
+
+def _tabs(uid: int, aid: int, pid: str) -> "tuple[list[str], str | None] | None":
+    row = state.DB.execute(f"SELECT tabs, active FROM {_table(uid, aid)} WHERE user_id = ? AND agent_id = ? AND project = ?",
+                           (uid, aid, pid)).fetchone()
     return None if row is None else (json.loads(row["tabs"]), row["active"])
 
 
 def _open(uid: int, aid: int, pid: str, chat: str) -> None:
     """Вкладка — в конец ряда, если её нет, и активна; проект — открытый (вид «Чат»)."""
-    tabs, _ = _tabs(aid, pid) or ([], None)
+    table = _table(uid, aid)
+    tabs, _ = _tabs(uid, aid, pid) or ([], None)
     if chat not in tabs:
         tabs.append(chat)
         del tabs[:max(0, len(tabs) - TABS_MAX)]         # новая — в конце и активна: уходят самые левые
-    state.DB.execute("INSERT INTO code_tabs(user_id, agent_id, project, tabs, active, touched) VALUES (?, ?, ?, ?, ?, ?)"
-                     " ON CONFLICT(agent_id, project) DO UPDATE SET tabs = excluded.tabs, active = excluded.active,"
+    state.DB.execute(f"INSERT INTO {table}(user_id, agent_id, project, tabs, active, touched) VALUES (?, ?, ?, ?, ?, ?)"
+                     " ON CONFLICT DO UPDATE SET tabs = excluded.tabs, active = excluded.active,"
                      " touched = excluded.touched", (uid, aid, pid, json.dumps(tabs), chat, clock.NOW()))
-    state.DB.execute("DELETE FROM code_tabs WHERE user_id = ? AND rowid NOT IN (SELECT rowid FROM code_tabs"
+    state.DB.execute(f"DELETE FROM {table} WHERE user_id = ? AND rowid NOT IN (SELECT rowid FROM {table}"
                      " WHERE user_id = ? ORDER BY touched DESC, rowid DESC LIMIT ?)", (uid, uid, PROJECTS_MAX))
     _place(uid, aid, pid, "chat")
 
 
-def _close(aid: int, pid: str, chat: str) -> None:
+def _close(uid: int, aid: int, pid: str, chat: str) -> None:
     """Вкладка уходит; активная — соседняя справа, иначе слева; последняя — проект без вкладок. Чужая — ничего."""
-    tabs, active = _tabs(aid, pid) or ([], None)
+    table = _table(uid, aid)
+    tabs, active = _tabs(uid, aid, pid) or ([], None)
     if chat not in tabs:
         return
     i = tabs.index(chat)
     del tabs[i]
     if not tabs:
-        state.DB.execute("DELETE FROM code_tabs WHERE agent_id = ? AND project = ?", (aid, pid))
+        state.DB.execute(f"DELETE FROM {table} WHERE user_id = ? AND agent_id = ? AND project = ?", (uid, aid, pid))
         return
     if active == chat:
         active = tabs[min(i, len(tabs) - 1)]
-    state.DB.execute("UPDATE code_tabs SET tabs = ?, active = ? WHERE agent_id = ? AND project = ?",
-                     (json.dumps(tabs), active, aid, pid))
+    state.DB.execute(f"UPDATE {table} SET tabs = ?, active = ? WHERE user_id = ? AND agent_id = ? AND project = ?",
+                     (json.dumps(tabs), active, uid, aid, pid))
 
 
-def _move(aid: int, pid: str, chat: str, index: int) -> None:
+def _move(uid: int, aid: int, pid: str, chat: str, index: int) -> None:
     """Вкладка — на место index (дальше конца — в конец); активная и `touched` прежние. Чужая — ничего."""
-    tabs, _ = _tabs(aid, pid) or ([], None)
+    tabs, _ = _tabs(uid, aid, pid) or ([], None)
     if chat not in tabs:
         return
     tabs.remove(chat)
     tabs.insert(min(index, len(tabs)), chat)
-    state.DB.execute("UPDATE code_tabs SET tabs = ? WHERE agent_id = ? AND project = ?", (json.dumps(tabs), aid, pid))
+    state.DB.execute(f"UPDATE {_table(uid, aid)} SET tabs = ? WHERE user_id = ? AND agent_id = ? AND project = ?",
+                     (json.dumps(tabs), uid, aid, pid))
 
 
 def _place(uid: int, aid: int, pid: str, view: str) -> None:
     state.DB.execute("INSERT INTO code_place(user_id, agent_id, project, view) VALUES (?, ?, ?, ?)"
                      " ON CONFLICT(user_id) DO UPDATE SET agent_id = excluded.agent_id, project = excluded.project,"
                      " view = excluded.view", (uid, aid, pid, view))
-    state.DB.execute("UPDATE code_tabs SET touched = ? WHERE agent_id = ? AND project = ?", (clock.NOW(), aid, pid))
+    state.DB.execute(f"UPDATE {_table(uid, aid)} SET touched = ? WHERE user_id = ? AND agent_id = ? AND project = ?",
+                     (clock.NOW(), uid, aid, pid))
 
 
 def _panel(uid: int, aid: int) -> None:
@@ -126,7 +145,7 @@ async def get_workspace(request: Request):
 async def patch_workspace(body: Action, request: Request):
     uid = request.state.user.id
     operations.check(uid)
-    claude_code.own_agent(request, body.aid)
+    claude_code.own_agent(request, body.aid, shared=body.op == "panel", pid=body.pid)
     if body.pid is not None:
         claude_code.check_pid(body.pid)
     if body.chat is not None:
@@ -136,11 +155,11 @@ async def patch_workspace(body: Action, request: Request):
         if body.op == "open":
             _open(uid, body.aid, body.pid, body.chat)
         elif body.op == "close":
-            _close(body.aid, body.pid, body.chat)
+            _close(uid, body.aid, body.pid, body.chat)
         elif body.op == "place":
             _place(uid, body.aid, body.pid, body.view)
         elif body.op == "move":
-            _move(body.aid, body.pid, body.chat, body.index)
+            _move(uid, body.aid, body.pid, body.chat, body.index)
         else:
             _panel(uid, body.aid)
         state.DB.execute("COMMIT")

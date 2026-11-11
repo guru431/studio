@@ -96,6 +96,7 @@ class FakeMachine:
         self.update_state = 'idle'
         self.update_version = None
         self.context = None
+        self.project_sharing = True
 
     @property
     def hello(self) -> dict:
@@ -107,7 +108,7 @@ class FakeMachine:
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
-                                           "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images")
+                                           "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -123,12 +124,18 @@ class FakeMachine:
             if op == "open":
                 data = self._open(req)
             else:
-                if req.get("session") not in self.open_sessions:
+                scope = req.get("shared_projects")
+                if scope is not None and op not in ("projects", "activity") and req.get("project") not in scope:
+                    raise Refused("closed")
+                if scope is None and req.get("session") not in self.open_sessions:
                     raise Refused("closed", "компьютер закрыт")
                 handler = getattr(self, f"_op_{op}", None) if isinstance(op, str) else None
                 if handler is None:
                     raise Refused("invalid", "неизвестная просьба")
                 data = handler(req, events)
+                if scope is not None and op in ("projects", "activity"):
+                    key = "pid" if op == "projects" else "project"
+                    data["items"] = [i for i in data.get("items", []) if i.get(key) in scope]
         except Refused as e:
             return {"t": "res", "id": req.get("id"), "ok": False, "code": e.code, "message": e.message,
                     **e.extra}, []
