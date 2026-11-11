@@ -33,6 +33,25 @@ def png(width, height) -> bytes:
     return out.getvalue()
 
 
+@pytest.fixture
+def write_gate(studio):
+    """Запись ждёт явного разрешения, даже если тестовый поток задержался.
+
+    При ошибке открываем затвор до закрытия TestClient: его executor должен закончить запись.
+    Зависимость от studio сохраняет этот порядок и при изменении аргументов теста.
+    """
+    reached, go = threading.Event(), threading.Event()
+
+    def hold():
+        reached.set()
+        go.wait()
+
+    try:
+        yield hold, reached, go
+    finally:
+        go.set()
+
+
 def test_save_and_read_back_with_ranges(studio, env):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     mid = media.save(uid, DATA, "video/mp4", "clip.mp4")
@@ -335,16 +354,12 @@ def test_files_of_a_deleted_account_wait_in_the_queue(studio, env, monkeypatch):
 
 
 @pytest.mark.parametrize("where", ["before", "between", "after"])
-def test_a_cancelled_save_leaves_no_file_without_a_row(studio, env, monkeypatch, where):
+def test_a_cancelled_save_leaves_no_file_without_a_row(studio, env, monkeypatch, where, write_gate):
     """Отмена ожидания save_async поток записи не останавливает: он дописывает оригинал и превью, а
     строки media нет. Путь ждёт в очереди удаления, проход purge не трогает его, пока поток пишет, и
     убирает после (находка аудита P2). Отмена — до записи, между оригиналом и превью, после записи."""
     uid = make_user(studio, "owner")
-    reached, go = threading.Event(), threading.Event()
-
-    def hold():
-        reached.set()
-        go.wait(5)
+    hold, reached, go = write_gate
 
     if where == "before":
         real_thumb = media._thumbnail
@@ -379,7 +394,7 @@ def test_a_cancelled_save_leaves_no_file_without_a_row(studio, env, monkeypatch,
         await media.purge()
         return written
 
-    assert len(asyncio.run(scenario())) == 2
+    assert len(studio.c.portal.call(scenario)) == 2
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert files(env.media_dir) == [] and queued() == []
 
@@ -405,16 +420,12 @@ def test_a_stream_is_queued_until_its_row_is_in(studio, env):
 
 
 @pytest.mark.parametrize("where", ["open", "write", "replace"])
-def test_a_cancelled_stream_leaves_no_file_without_a_row(studio, env, monkeypatch, where):
+def test_a_cancelled_stream_leaves_no_file_without_a_row(studio, env, monkeypatch, where, write_gate):
     """Отмена save_stream, пока шаг в потоке идёт (создание файла, запись куска, перенос на место), и
     проход очереди тут же: путь в SAVING, пока поток не кончил, — проход его не трогает, файлы
     убирает сама запись, а следующий проход — путь (хвост правки очереди удаления)."""
     uid = make_user(studio, "owner")
-    reached, go = threading.Event(), threading.Event()
-
-    def hold():
-        reached.set()
-        go.wait(5)
+    hold, reached, go = write_gate
 
     if where == "replace":
         real_replace = media.os.replace
@@ -453,25 +464,25 @@ def test_a_cancelled_stream_leaves_no_file_without_a_row(studio, env, monkeypatc
             await asyncio.sleep(0.001)
         await media.purge()
 
-    asyncio.run(scenario())
+    studio.c.portal.call(scenario)
     assert files(env.media_dir) == [] and queued() == []
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("how", ["async", "stream"])
-def test_a_stalled_share_answers_in_time_and_the_queue_takes_the_file_later(studio, env, monkeypatch, how):
+def test_a_stalled_share_answers_in_time_and_the_queue_takes_the_file_later(studio, env, monkeypatch, how, write_gate):
     """Зависшая шара: запись не дождались за SAVE_TIMEOUT_SEC — StorageError «не отвечает» сразу, а не
     502 Apache через 150 с; поток дописывает сам, проход очереди убирает записанное после него."""
     uid = make_user(studio, "owner")
     monkeypatch.setattr(media, "SAVE_TIMEOUT_SEC", 0.05)
-    go = threading.Event()
+    hold, _, go = write_gate
     if how == "async":
         real_write = media.write
-        monkeypatch.setattr(media, "write", lambda *a, **kw: (go.wait(5), real_write(*a, **kw))[1])
+        monkeypatch.setattr(media, "write", lambda *a, **kw: (hold(), real_write(*a, **kw))[1])
         save = media.save_async(uid, png(64, 64), "image/png", "p.png", thumb=True)
     else:
         real_replace = media.os.replace
-        monkeypatch.setattr(media.os, "replace", lambda src, dst: (go.wait(5), real_replace(src, dst)))
+        monkeypatch.setattr(media.os, "replace", lambda src, dst: (hold(), real_replace(src, dst)))
         save = media.save_stream(uid, chunks(DATA), "video/mp4", "clip.mp4", max_bytes=1000)
 
     async def scenario():
@@ -494,11 +505,12 @@ def test_a_stalled_share_answers_in_time_and_the_queue_takes_the_file_later(stud
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
 
 
-def test_a_stalled_share_is_a_503_in_words(studio, monkeypatch):
+def test_a_stalled_share_is_a_503_in_words(studio, monkeypatch, write_gate):
     make_user(studio, "owner"); signin(studio, "owner")
     monkeypatch.setattr(media, "SAVE_TIMEOUT_SEC", 0.05)
-    go, real_write = threading.Event(), media.write
-    monkeypatch.setattr(media, "write", lambda *a, **kw: (go.wait(5), real_write(*a, **kw))[1])
+    hold, _, go = write_gate
+    real_write = media.write
+    monkeypatch.setattr(media, "write", lambda *a, **kw: (hold(), real_write(*a, **kw))[1])
     r = studio.c.post("/api/attachments", files={"file": ("p.png", png(20, 10), "image/png")})
     go.set()
     assert r.status_code == 503 and r.json()["detail"] == {"code": "storage", "message": media.STALLED}
