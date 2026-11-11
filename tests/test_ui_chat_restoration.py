@@ -51,7 +51,7 @@ def test_status_budget_following_and_subagent_history(desktop_browser, live, wid
               const controls = document.querySelector('.code-status-controls').getBoundingClientRect();
               const pinned = [...document.querySelectorAll('.code-status-fixed > button')]
                 .filter(node => !node.hidden).map(node => node.getBoundingClientRect());
-              return {text: text.width >= bar.width / 2 - 1, controls: controls.width <= bar.width / 2 + 1,
+              return {text: text.width >= bar.width * .4 - 1, controls: controls.width <= bar.width * .6 + 1,
                 right: pinned.length >= 4 && pinned.every((r, i) => r.width > 0 && r.right <= bar.right + 1
                   && r.left >= text.right - 1 && (!i || r.left >= pinned[i - 1].right - 1)),
                 fits: document.documentElement.scrollWidth <= innerWidth};

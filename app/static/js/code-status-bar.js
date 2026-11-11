@@ -1,4 +1,4 @@
-/* Статусу — половина строки; кнопки сохраняют размер и по одной уходят в «⋯». */
+/* Статусу — 40% строки; кнопки сохраняют размер и по одной уходят в «⋯». */
 import { el } from './ui.js';
 import { icon } from './icons.js';
 import { popupPanel } from './menu.js';
@@ -55,7 +55,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
     let gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
     let fixedGap = parseFloat(getComputedStyle(fixed).columnGap) || 0;
     const actionGap = parseFloat(getComputedStyle(actions).columnGap) || 0;
-    const budget = bar.clientWidth / 2;
+    const budget = bar.clientWidth * 0.6;
     const naturalFixed = preferred.reduce((sum, size) => sum + size.width, 0) + fixedGap * (pinned.length - 1);
     const inlineWidth = count => sizes.slice(available.length - count, available.length)
       .reduce((sum, size) => sum + size.width, 0) + Math.max(0, count - 1) * actionGap;
