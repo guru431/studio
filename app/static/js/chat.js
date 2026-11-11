@@ -480,7 +480,8 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
-  const sharing = shareMenu(root, { id: 'chat-share', failed: (err) => { notice.textContent = words(err); } });
+  const sharing = shareMenu(root, { id: 'chat-share', content: scroller,
+    failed: (err) => { notice.textContent = words(err); } });
   const share = sharing.button;
   share.hidden = true;
   head.append(share);

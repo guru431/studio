@@ -6,8 +6,10 @@ import subprocess
 
 from pypdf import PdfReader
 import pytest
+from fastapi import HTTPException
 
 import chat_exports
+from chat_export_selection import selection_html
 import state
 from conftest import make_user, signin
 from test_chat_shares import regular
@@ -39,8 +41,9 @@ def test_exports_reject_unknown_formats_and_locked_sections(studio):
     assert studio.c.post('/api/chats/chat/export', json={'format': 'md'}).status_code == 423
 
 
+@pytest.mark.parametrize('selection', [None, '<p>Выделено</p>'])
 @pytest.mark.parametrize('action', ['delete_chat', 'logout', 'lock', 'disable'])
-def test_pdf_does_not_escape_a_closed_session_or_deleted_source(studio, monkeypatch, action):
+def test_pdf_does_not_escape_a_closed_session_or_deleted_source(studio, monkeypatch, action, selection):
     _, uid = regular(studio)
 
     async def invalidate():
@@ -54,15 +57,84 @@ def test_pdf_does_not_escape_a_closed_session_or_deleted_source(studio, monkeypa
         else:
             state.DB.execute('UPDATE users SET disabled=1 WHERE id=?', (uid,))
 
-    def render(_):
+    def render(_, **kwargs):
         studio.c.portal.call(invalidate)
         return b'%PDF-private document'
 
     monkeypatch.setattr(chat_exports, 'render_pdf', render)
-    response = studio.c.post('/api/chats/chat/export', json={'format': 'pdf'})
+    response = studio.c.post('/api/chats/chat/export', json={'format': 'pdf', 'selection': selection})
     assert response.status_code in (404, 409)
     assert b'private document' not in response.content
     assert not chat_exports.RUNNING
+
+
+def test_selected_pdf_uses_only_the_fragment_and_checks_ownership(studio, monkeypatch):
+    regular(studio)
+    fragment = '<h2>Выбрано</h2><p><strong>Жирный</strong> и <em>курсив</em></p>'
+    calls = []
+
+    def render(text, **kwargs):
+        calls.append((text, kwargs))
+        return b'%PDF-selected'
+
+    monkeypatch.setattr(chat_exports, 'render_pdf', render)
+    response = studio.c.post('/api/chats/chat/export', json={'format': 'pdf', 'selection': fragment})
+    assert response.status_code == 200 and response.content == b'%PDF-selected'
+    assert calls == [(fragment, {'selection': True})]
+    assert state.DB.execute('SELECT count(*) FROM chat_shares').fetchone()[0] == 0
+    assert studio.c.post('/api/chats/chat/export', json={'format': 'md', 'selection': fragment}).status_code == 422
+    assert studio.c.post('/api/chats/chat/export', json={'format': 'pdf', 'selection': 'x' * 1_000_001}).status_code == 422
+    make_user(studio, 'friend')
+    signin(studio, 'friend')
+    assert studio.c.post('/api/chats/chat/export', json={'format': 'pdf', 'selection': fragment}).status_code == 404
+    assert len(calls) == 1
+
+
+def test_selected_agent_pdf_checks_pin_without_loading_the_entire_history(studio, monkeypatch):
+    aid, machine, _ = setup(studio, pin='1357')
+    url = f'/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/export'
+
+    def render(text, **kwargs):
+        assert text == '<p>Фрагмент</p>' and kwargs == {'selection': True}
+        studio.c.portal.call(machine.open_sessions.clear)
+        return b'%PDF-private'
+
+    monkeypatch.setattr(chat_exports, 'render_pdf', render)
+    machine.requests.clear()
+    response = studio.c.post(url, json={'format': 'pdf', 'selection': '<p>Фрагмент</p>'})
+    assert response.status_code == 409 and b'%PDF-private' not in response.content
+    history = [r for r in machine.requests if r.get('op') == 'history']
+    assert history and all(r['limit'] == 1 for r in history)
+
+
+def test_selection_html_keeps_formatting_but_cannot_load_resources_or_run_code():
+    from markdown_it import MarkdownIt
+    source = '''<h2>Заголовок</h2><p><strong>Жирный</strong> <em>Курсив</em> <del>Удалено</del></p>
+<ol start="4"><li>Четвёртый<ul><li>Вложенный</li></ul></li></ol>
+<table><tbody><tr><td colspan="2" align="right" style="background:url(file:///secret)">Ячейка</td></tr></tbody></table>
+<pre><code class="hljs language-python"><span class="hljs-keyword">if</span> True:
+
+    print(&quot;Тест&quot;)
+</code></pre><a href="https://example.com/docs">Ссылка</a>
+<a href="file:///etc/passwd">Локальная</a><img src="http://127.0.0.1/private">
+<script>private-script</script><style>private-style</style><iframe src="file:///secret">private-frame</iframe>
+<svg><image href="file:///secret"/></svg><p onclick="alert(1)" class="evil">Конец</p>
+<div class="chat-export-plain">Первый
+
+Второй</div>'''
+    output = chat_exports._html_block(selection_html(source))
+    assert MarkdownIt('commonmark', {'html': True}).render(output) == output
+    for kept in ['<h2>', '<strong>', '<em>', '<del>', 'start="4"', 'colspan="2"', 'align="right"',
+                 'class="hljs-keyword"', 'href="https://example.com/docs"', 'print(&quot;Тест&quot;)']:
+        assert kept in output
+    for removed in ['file:', '127.0.0.1', '<img', '<svg', '<script', '<iframe', 'onclick',
+                    'private-script', 'private-style', 'private-frame', 'class="evil"', 'url(']:
+        assert removed not in output
+    assert 'True:&#10;&#10;    print' in output
+    assert 'Первый&#10;&#10;Второй' in output
+    with pytest.raises(HTTPException) as empty:
+        selection_html('<script>hidden</script>')
+    assert empty.value.status_code == 422
 
 
 def test_agent_export_reads_all_pages_and_checks_computer_pin_after_render(studio, monkeypatch):
@@ -86,8 +158,9 @@ def test_agent_export_reads_all_pages_and_checks_computer_pin_after_render(studi
     assert studio.c.post(url, json={'format': 'pdf'}).status_code == 409
 
 
+@pytest.mark.parametrize('selection', [False, True])
 @pytest.mark.parametrize('engine', ['codex', 'opencode'])
-def test_export_keeps_the_selected_agent_engine(studio, engine):
+def test_export_keeps_the_selected_agent_engine(studio, monkeypatch, engine, selection):
     import bridge
     from test_codex import CATALOG as CODEX
     from test_opencode import CATALOG as OPENCODE
@@ -96,10 +169,12 @@ def test_export_keeps_the_selected_agent_engine(studio, engine):
     link.hello = bridge.parse_hello(machine.hello)
     machine.projects['alpha']['chats'][A]['engine'] = engine
     url = f'/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/export'
-    response = studio.c.post(url + '?engine=' + engine, json={'format': 'md'})
+    monkeypatch.setattr(chat_exports, 'render_pdf', lambda *args, **kwargs: b'%PDF-test')
+    body = {'format': 'pdf', 'selection': '<p>Фрагмент</p>'} if selection else {'format': 'md'}
+    response = studio.c.post(url + '?engine=' + engine, json=body)
     assert response.status_code == 200
     assert all(item['engine'] == engine for item in machine.requests if item.get('op') == 'history')
-    assert studio.c.post(url, json={'format': 'md'}).status_code == 404
+    assert studio.c.post(url, json=body).status_code == 404
 
 
 def test_pdf_limit_does_not_block_markdown(studio, monkeypatch):

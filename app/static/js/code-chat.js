@@ -265,7 +265,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   reloadButton.insertAdjacentHTML('afterbegin', '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>');
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
-  const sharing = shareMenu(actions, { id: 'code-share-chat', request: api, failed: (err) => {
+  const sharing = shareMenu(actions, { id: 'code-share-chat', content: scroller, request: api, failed: (err) => {
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
