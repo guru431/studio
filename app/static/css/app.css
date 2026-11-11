@@ -675,6 +675,14 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .agent { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; min-width: 0; }
 .agent b { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .agent .agent-revoke { margin-left: auto; }
+.session { align-items: flex-start; padding: var(--space-6); border: 1px solid var(--line); border-radius: var(--r-control); }
+.session-info { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.session-info .row { flex-wrap: wrap; }
+.session-info p { margin: var(--space-3) 0 0; }
+.session-times { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); }
+.session-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.session-current { color: var(--success); }
+#session-end-dialog .session-description { overflow-wrap: anywhere; }
 .agents-block h3 { margin: var(--space-7) 0 var(--space-4); font-size:var(--fs-md); font-weight: 600; }
 .agent-events { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-2);
   font-size:var(--fs-sm); color: var(--text-2); overflow-wrap: anywhere; }

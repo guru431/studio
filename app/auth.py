@@ -22,8 +22,8 @@
   (LOCK_SEC, locked, 429 `locked`).
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся. Вход, неверный пароль
   известной учётки и выход — ещё и в журнал безопасности учётки (security_log).
-- Сессия помнит, когда создана, грубый вид устройства по User-Agent входа (`device_class`; строка UA не
-  хранится) и последнюю активность (`active`, screenlock.alive) — для списка сессий (account.py).
+- Сессия помнит время входа и активности, вид устройства, браузер, ОС, доступную модель и последний IP
+  (session_devices.py; исходный User-Agent не хранится) — для списка сессий (account.py).
 """
 import asyncio
 import base64
@@ -45,6 +45,7 @@ import lock_policy
 import operations
 import security
 import security_log
+import session_devices
 import state
 import static_assets
 
@@ -360,6 +361,7 @@ async def login(request: Request):
         if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
             state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
         value, _ = create_session(uid, device_class(request.headers.get("user-agent")))
+        session_devices.remember(security.digest(value), request.headers.get("user-agent"), ip)
         security_log.record(uid, "login", digest=security.digest(value), ip=ip)
         log.info("вход с %s: успешно", ip)
         response = RedirectResponse("/", status_code=303)

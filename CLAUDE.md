@@ -84,7 +84,7 @@ minor для возможностей, major для несовместимых �
 | Область | Модули | Подробно |
 |---|---|---|
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
-| Вход и защита | `auth`, `profile`, `screenlock`, `lock_policy`, `account`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
+| Вход и защита | `auth`, `profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports` | [sharing-export](docs/architecture/sharing-export.md) |
@@ -152,6 +152,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 34 | сессии, `security_events` | сессии без `created/device/active`; журнал не пишется | — |
 | 35 | `messages.error` | не читает; слова скана/хранилища — в `content`, как раньше | — |
 | 36 | `chat_shares.sealed`, срок, счётчики, `password_reset` | получатель видит заглушку `chat_shares.PLACEHOLDER`; срок и общий предел PIN не проверяются, содержимого нет; новые ссылки по возвращении шифрует `seal()` (бессрочные) | — |
+| 37 | браузер, ОС, модель, имя и IP сессии | столбцы не читает и не меняет; вход и завершение сессий работают | — |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.

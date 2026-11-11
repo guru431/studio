@@ -11,6 +11,12 @@
 - Сессия: `auth.create_session(user_id, device=None)` пишет `sessions.created`, `sessions.device` (`'phone'` |
   `'computer'` по `auth.device_class(ua)`; строка UA не хранится) и `sessions.active` (шаг схемы 34). `screenlock._seen`
   обновляет `active`. `auth.STALE_SEC` = `lock_policy.DEFAULT_TIMEOUT` + `lock_policy.HEARTBEAT_GRACE`.
+- Шаг схемы 37 (`db.DEVICES_37`): `session_devices.remember` при входе и `POST /api/lock/alive` сохраняет
+  краткие сведения браузера, ОС, доступную модель и последний IP из `auth.client_ip`; исходный User-Agent
+  не хранится. Неизвестные сведения — NULL, старые сессии дополняются при следующей отметке своего устройства.
+  Имя владельца — отдельный столбец `label`, автоматическое обновление его не меняет. Эти сведения не дают
+  прав доступа: браузер может скрыть/подменить их (Windows 10/11 не различаются, сокращённый Android UA
+  не раскрывает модель и точную версию ОС). Сетевые запросы для определения модели или геолокации не делаются.
 - `Clear-Site-Data: "cache"` (`auth.CLEAR_CACHE`) — у `/logout`, `DELETE /api/history` и аварийного выхода: HTTP-кэш
   (медиа — `private, max-age=86400`) стирается, кэш оболочки offline и localStorage остаются (проверено Chromium;
   Safari — нет).
@@ -57,8 +63,11 @@
 
 ## Сессии учётки, аварийный выход, журнал безопасности (`account`, `security_log`)
 
-- `GET /api/me/sessions` — сессии учётки (создана, вид устройства, активность; признак — `security_log.handle`,
-  sha256 16 hex, не дайджест). `DELETE /api/me/sessions/<признак>` — завершить (текущая — 409 `current`): строка
+- `GET /api/me/sessions` — сессии учётки (время входа и активности, тип, `browser`, `os`, `model`, `label`, `ip`;
+  признак — `security_log.handle`, sha256 16 hex, не дайджест). `PATCH /api/me/sessions/<признак> {label}` —
+  своё имя устройства до 80 символов, без управляющих символов; пустая строка возвращает автоматическое
+  название. Можно назвать текущую и другие собственные живые сессии. Защита — обычные guard, CSRF и блокировка;
+  чужая или истёкшая сессия — 404. `DELETE /api/me/sessions/<признак>` — завершить (текущая — 409 `current`): строка
   удаляется, push/ntfy уходят каскадом, `bridge.forget(..., close_computers=True)` — доступ теряется сразу.
 - `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться», push/ntfy (и шаблон
   `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents, `bridge.record('revoke')`, `bridge.drop`).

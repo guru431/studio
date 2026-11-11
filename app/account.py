@@ -1,11 +1,12 @@
 """Сессии учётки, аварийный выход и журнал безопасности владельца (IDEAS 2026-11-09 «Сессии учётки»).
 
 - `GET /api/me/sessions` — живые сессии учётки: признак (`security_log.handle`, не дайджест), когда создана,
-  последняя активность (`sessions.active`, у прежних сессий — `seen`), грубый вид устройства, включены ли push и
+  последняя активность (`sessions.active`, у прежних сессий — `seen`), тип, браузер, ОС, модель, имя и IP, push и
   ntfy этого устройства, текущая ли. Сессии, заведённые прежним кодом (откат), — без даты и вида: NULL.
 - `DELETE /api/me/sessions/<признак>` — завершить другую сессию (текущую — обычный «Выйти», 409 `current`).
   Строка уходит, а с ней каскадом push и ntfy устройства; потоки «Агентов» этой сессии получают `closed`, мостам —
   `close` её признака (`bridge.forget`): следующий её запрос — 401, уведомления ей больше не идут.
+- `PATCH /api/me/sessions/<признак> {label}` — назвать свою живую сессию (до 80 символов); пустое имя — сброс.
 - `POST /api/me/emergency {password, agents}` — аварийный выход с паролем учётки: все сессии (и текущая), все
   ссылки «Поделиться», push и ntfy всех устройств и прежний шаблон ntfy; `agents: true` — ещё и ключи
   компьютеров (как отзыв из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
@@ -19,10 +20,11 @@
 """
 import logging
 import re
+import unicodedata
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import auth
 import bridge
@@ -43,6 +45,25 @@ class Emergency(BaseModel):
     agents: StrictBool = False
 
 
+class SessionLabel(BaseModel):
+    label: str = Field(max_length=80)
+
+    @field_validator("label")
+    @classmethod
+    def clean_label(cls, value: str) -> str:
+        if any(unicodedata.category(c).startswith("C") for c in value):
+            raise ValueError("имя не должно содержать управляющие символы")
+        return value.strip()
+
+
+def _session_digest(uid: int, sid: str) -> str:
+    if HANDLE.fullmatch(sid):
+        for row in state.DB.execute("SELECT digest FROM sessions WHERE user_id = ? AND expires > ?", (uid, clock.NOW())):
+            if security_log.handle(row["digest"]) == sid:
+                return row["digest"]
+    raise HTTPException(404, {"code": "not_found", "message": "такой сессии нет — она уже завершена"})
+
+
 def _forget(user_id: int, digests: list[str]) -> None:
     """Завершённые сессии: потоки «Агентов» закрыть, мостам — снять открытый PIN, вызовы passkey — забыть."""
     for digest in digests:
@@ -56,14 +77,24 @@ async def list_sessions(request: Request):
     uid, current = request.state.user.id, request.state.digest
     rows = state.DB.execute(
         "SELECT s.digest, s.created, COALESCE(s.active, s.seen) AS active, s.device, s.mobile,"
+        " s.browser, s.os, s.model, s.label, s.ip,"
         " EXISTS (SELECT 1 FROM push_subs p WHERE p.digest = s.digest) AS push,"
         " EXISTS (SELECT 1 FROM ntfy_devices n WHERE n.digest = s.digest AND n.enabled = 1) AS ntfy"
         " FROM sessions s WHERE s.user_id = ? AND s.expires > ?", (uid, clock.NOW())).fetchall()
     items = [{"id": security_log.handle(r["digest"]), "current": r["digest"] == current, "created": r["created"],
               "active": r["active"], "device": r["device"] or ("phone" if r["mobile"] else None),
+              "browser": r["browser"], "os": r["os"], "model": r["model"], "label": r["label"], "ip": r["ip"],
               "push": bool(r["push"]), "ntfy": bool(r["ntfy"])} for r in rows]
     items.sort(key=lambda i: (not i["current"], -(i["active"] or 0)))
     return {"items": items}
+
+
+@router.patch("/sessions/{sid}", status_code=204)
+async def rename_session(sid: str, body: SessionLabel, request: Request):
+    uid = request.state.user.id
+    digest = _session_digest(uid, sid)
+    state.DB.execute("UPDATE sessions SET label = ? WHERE digest = ? AND user_id = ?", (body.label or None, digest, uid))
+    return Response(status_code=204)
 
 
 @router.delete("/sessions/{sid}", status_code=204)
@@ -71,10 +102,7 @@ async def end_session(sid: str, request: Request):
     uid, current = request.state.user.id, request.state.digest
     if sid == security_log.handle(current):
         raise HTTPException(409, {"code": "current", "message": "эту сессию закрывает «Выйти»"})
-    digest = next((r["digest"] for r in state.DB.execute("SELECT digest FROM sessions WHERE user_id = ?", (uid,))
-                   if HANDLE.fullmatch(sid) and security_log.handle(r["digest"]) == sid), None)
-    if digest is None:
-        raise HTTPException(404, {"code": "not_found", "message": "такой сессии нет — она уже завершена"})
+    digest = _session_digest(uid, sid)
     state.DB.execute("DELETE FROM sessions WHERE digest = ? AND user_id = ?", (digest, uid))
     _forget(uid, [digest])
     security_log.record(uid, "session_end", detail=sid, digest=current, ip=auth.client_ip(request))

@@ -34,6 +34,7 @@ import clock
 import lock_policy
 import security
 import security_log
+import session_devices
 import state
 
 PASSWORD_MAX = 1024
@@ -191,6 +192,8 @@ async def alive(body: Alive, request: Request):
     row = lock_policy.session(request.state.digest)
     if row is None:                  # сессию закрыли между guard и этим запросом
         raise HTTPException(401, {"code": "login", "message": "нужен вход"})
+    session_devices.remember(request.state.digest, request.headers.get("user-agent"), auth.client_ip(request),
+                             auth.device_class(request.headers.get("user-agent")))
     now = clock.NOW()
     expired = lock_policy.expired(row, now)
     if not expired and body.active:
