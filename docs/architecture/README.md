@@ -20,7 +20,8 @@
 | [agents.md](agents.md) | «Агенты» на сервере: компьютеры, канал моста, API `/api/code/*`, рабочее место |
 | [agents-workspace.md](agents-workspace.md) | «Агенты» на странице: чат, файлы, Git, панель проектов, возможности по capability |
 | [agent-bridge.md](agent-bridge.md) | Windows-мост `agent/`: модули, решения, пределы, capability → версия |
-| [deploy-host.md](deploy-host.md) | хост debian, выкладка, копия базы, откат по шагам схемы (подробно) |
+| [deploy-docker.md](deploy-docker.md) | Docker Compose, защищённый вход через Apache, переезд, копия базы и откат |
+| [deploy-host.md](deploy-host.md) | прежний нативный хост debian и откат по шагам схемы (подробно) |
 | [testing.md](testing.md) | наборы тестов, среда, живая приёмка, медленная сеть |
 
 Ссылки вида `` `модуль.символ` `` на `app/` (и на `agent/studio_agent/` в agent-bridge.md), пары

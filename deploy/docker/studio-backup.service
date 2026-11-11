@@ -1,0 +1,12 @@
+[Unit]
+Description=Studio SQLite backup from Docker
+Requires=studio-docker.service
+After=studio-docker.service
+RequiresMountsFor=/mnt/storage/SharedData/studio
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/services/studio
+ExecStart=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py backup
+TimeoutStartSec=30min
+UMask=0077

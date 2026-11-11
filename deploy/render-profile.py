@@ -12,7 +12,9 @@ import zipfile
 
 
 TEMPLATES = {"deploy/install.sh", "deploy/studio-web.service",
-             "deploy/studio-backup.service", "deploy/apache-vhost.conf"}
+             "deploy/studio-backup.service", "deploy/apache-vhost.conf",
+             "deploy/docker/host.conf", "deploy/docker/nginx.conf",
+             "deploy/docker/studio-docker.service", "deploy/docker/studio-backup.service"}
 
 
 def settings(environ):
@@ -46,6 +48,30 @@ def settings(environ):
     hairpin = environ.get("STUDIO_HAIRPIN_IP")
     if hairpin:
         ipaddress.ip_address(hairpin)
+        replacements.append(("STUDIO_HAIRPIN_IP=10.77.1.1", "STUDIO_HAIRPIN_IP=" + hairpin))
+    for name, default in [("STUDIO_PROXY_IP", "10.77.1.10"),
+                          ("STUDIO_BIND_IP", "10.77.1.15")]:
+        value = environ.get(name, default)
+        if ipaddress.ip_address(value).version != 4:
+            raise ValueError(f"Invalid {name}: use IPv4")
+        replacements.append((default, value))
+    backend = environ.get("STUDIO_BACKEND_URL")
+    if backend:
+        target = urlsplit(backend)
+        if (target.scheme != "http" or not target.hostname or target.username or target.password
+                or target.path or target.query or target.fragment or not target.port
+                or ipaddress.ip_address(target.hostname).version != 4
+                or backend != f"http://{target.hostname}:{target.port}"):
+            raise ValueError("Invalid STUDIO_BACKEND_URL")
+        replacements.append(("unix:/run/studio/web.sock|http://studio-backend", backend))
+        if target.hostname != environ.get("STUDIO_BIND_IP", "10.77.1.15"):
+            raise ValueError("STUDIO_BACKEND_URL must use STUDIO_BIND_IP")
+        replacements.append(("STUDIO_BACKEND_PORT=8151", f"STUDIO_BACKEND_PORT={target.port}"))
+    proxy_vhost = environ.get("STUDIO_PROXY_VHOST")
+    if proxy_vhost and (not re.fullmatch(r"/[A-Za-z0-9_./-]+", proxy_vhost)
+                        or ".." in PurePosixPath(proxy_vhost).parts
+                        or len(PurePosixPath(proxy_vhost).parts) < 4):
+        raise ValueError("Invalid STUDIO_PROXY_VHOST")
     return replacements, hairpin
 
 

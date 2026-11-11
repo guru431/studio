@@ -61,4 +61,6 @@ read-токен живёт только в памяти страницы, не �
   заголовков/курсива. Регрессия прогоняет вывод через markdown-it.
 - Конвертер — `chat_exports.converter`: `STUDIO_MD2PDF`, иначе `deploy/md2pdf.py` выкладки (его хеш сверяет `install.sh`
   с `deploy/md2pdf.sha256`), иначе `~/.claude/bin/md2pdf.py` (разработка; без сверки хеша). На хосте нужен Chromium
-  (`chromium` и `fonts-dejavu-core` ставит `install.sh`); два PDF сразу — два Chromium в пределах `MemoryMax=2G`.
+  (`chromium` и `fonts-dejavu-core` входят в Docker-образ, в прежней установке их ставит `install.sh`);
+  два PDF сразу — два Chromium в пределах 2 ГБ. Песочница Chromium в Docker включена:
+  [профиль seccomp и SYS_CHROOT](deploy-docker.md).

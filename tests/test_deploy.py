@@ -217,7 +217,8 @@ def test_backup_timer_runs_as_the_service_user():
 def test_secret_value_is_never_an_argument():
     """Ключ данных едет из vault потоком: в argv он виден в ps и попал бы в журнал sudo."""
     assert "grep -m1 '^STUDIO_DATA_KEY=' \"$VAULT\"" in DEPLOY_SH
-    assert "args+=(--secret-stdin)" in DEPLOY_SH and 'install.sh ${args[*]:-}' in DEPLOY_SH
+    assert "args+=(--secret-stdin)" in DEPLOY_SH and '$installer ${args[*]:-}' in DEPLOY_SH
+    assert "installer=install.sh" in DEPLOY_SH and "installer=install-docker.sh" in DEPLOY_SH
     assert "IFS= read -r line" in INSTALL
     assert re.search(r"\^STUDIO_DATA_KEY=\[A-Za-z0-9_-\]\{43\}=\$", INSTALL)        # ключ Fernet, 44 знака
 
@@ -363,7 +364,8 @@ def _bash():
     return None
 
 
-@pytest.mark.parametrize("script", ["install.sh", "deploy.sh"])
+@pytest.mark.parametrize("script", ["install.sh", "deploy.sh", "install-docker.sh", "install-proxy.sh",
+                                    "docker/entrypoint.sh"])
 def test_scripts_parse(script):
     bash = _bash()
     if not bash:
