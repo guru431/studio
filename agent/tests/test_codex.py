@@ -8,6 +8,7 @@ import pytest
 from studio_agent import codex, codex_rpc, projects
 from studio_agent.errors import Refused
 from studio_agent.turns import _Turn
+from turn_events import asking
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 THREAD = "01999999-2222-7333-8444-555555555555"
@@ -201,23 +202,6 @@ async def test_codex_cannot_silently_drop_messages_before_a_mid_turn_fork(runner
         await runner.fork_chat(runner.project, THREAD, "steered")
     assert not any(method == "thread/fork" for method, _ in runner.fake.calls)
     assert codex.normalize(runner.fake.turns)[1]["forkable"] is False
-
-
-async def asking(runner):
-    if not any(t.asks for t in runner._turns.values()):
-        ready, previous = asyncio.Event(), runner.emit
-
-        def emit(frame):
-            previous(frame)
-            if frame["e"]["k"] == "ask":
-                ready.set()
-
-        runner.emit = emit
-        try:
-            await asyncio.wait_for(ready.wait(), 2)
-        finally:
-            runner.emit = previous
-    return next(iter(next(iter(runner._turns.values())).asks))
 
 
 async def test_codex_queue_starts_a_new_turn_after_completion(runner):

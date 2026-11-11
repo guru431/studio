@@ -132,9 +132,9 @@ def test_selected_pdf_keeps_rendered_formatting_and_only_selected_text(
 5. Пятый
    - Вложенный
 
-| Колонка | Значение |
-|:---|---:|
-| Тест | Работает |
+| Колонка | Центр | По умолчанию | Значение |
+|:---|:---:|---|---:|
+| Тест | Середина | Слева | Работает |
 
 [Документация](https://example.com/docs)
 
@@ -175,8 +175,9 @@ if True:
             md = page.locator(f'#{content_id} .md').last
             pw.expect(md.locator('pre code')).to_contain_text('Сохранено')
             page.evaluate('(theme) => document.documentElement.dataset.theme = theme', theme)
-            md.locator('td:last-child, th:last-child').evaluate_all(
-                "cells => cells.forEach(cell => { cell.style.textAlign = 'right'; })")
+            assert md.locator('th, td').evaluate_all(
+                "cells => cells.map(cell => getComputedStyle(cell).textAlign)") == [
+                    'left', 'center', 'left', 'right'] * 2
             # A range wholly inside emphasis must retain that ancestor. Selecting the second list
             # item must retain its real number, and selecting inside code must retain whitespace.
             parts = page.evaluate('''async (id) => {

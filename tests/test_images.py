@@ -447,6 +447,7 @@ def test_masked_edit_preserves_source_size_and_pixels_without_forwarding_mask(st
     assert job.mask is None and job.image is None
 
 
+@pytest.mark.integration
 def test_brush_mask_of_a_picture_larger_than_2_mp_is_fitted_to_the_reduced_source(studio):
     """Находка 2026-11-09: маска редактора — по naturalWidth/Height картинки ленты (до 4096²), а исходник
     normalize_image уменьшает до ≤2 Мп: правка кистью отвечала 400 «маска … того же размера»."""
@@ -485,6 +486,7 @@ def test_brush_mask_of_a_picture_larger_than_2_mp_is_fitted_to_the_reduced_sourc
     assert r.status_code == 400 and "того же размера" in r.json()["detail"]["message"]
 
 
+@pytest.mark.integration
 def test_a_feed_picture_above_16_mp_is_a_brush_source(studio):
     """Картинка ленты допускается до RESULT_PIXELS (4096², 16,7 Мп), а normalize_image копии модуля
     переводчика — до 16 Мп: «Изменить» кистью и «Описать» такую картинку отклоняли. Студия уменьшает фото
@@ -523,6 +525,7 @@ def test_a_feed_picture_above_16_mp_is_a_brush_source(studio):
     assert r.status_code == 400 and "16 Мп" in r.json()["detail"]["message"]
 
 
+@pytest.mark.integration
 def test_a_feed_picture_above_10_mib_is_a_source(studio):
     """Файл ленты больше 10 МиБ (предел фото с устройства), но в пределах картинки ленты — тоже исходник."""
     add_gateway(studio)

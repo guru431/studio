@@ -1,7 +1,9 @@
 """Общее для тестов студии: пути проекта, окружение службы, приложение main.app."""
 import asyncio
 import math
+import os
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +14,16 @@ APP = ROOT / "app"
 CLIENT = ROOT / "client"
 DEPLOY = ROOT / "deploy"
 sys.path.insert(0, str(APP))             # модули службы импортируют друг друга по имени, как в main.py
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Каталоги/очистка pytest Studio не пересекаются с остальными проектами."""
+    if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
+        return
+    root = Path(tempfile.gettempdir()) / "studio-pytest"
+    root.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(root)
 
 
 @pytest.fixture
@@ -64,6 +76,11 @@ def pytest_xdist_make_scheduler(config, log):
     from xdist.scheduler import LoadGroupScheduling
 
     class Once(LoadGroupScheduling):
+        def _reschedule(self, node):
+            # Замена уже есть в assigned_work, но её коллекция может прийти после других событий.
+            if node in self.registered_collections:
+                super()._reschedule(node)
+
         def remove_node(self, node):
             workload = self.assigned_work.pop(node)
             pending = [(scope, nid) for scope, unit in workload.items() for nid, done in unit.items() if not done]

@@ -7,6 +7,7 @@ import pytest
 
 from studio_agent import opencode, opencode_rpc, projects
 from studio_agent.errors import Refused
+from turn_events import asking
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 SESSION = "ses_test123"
@@ -108,23 +109,6 @@ def runner(home):
     runner.catalog = {"version": "test", "models": [], "efforts": []}
     runner.fake, runner.sent, runner.project, runner.pid = factory, sent, project, projects.pid(project.name)
     return runner
-
-
-async def asking(runner):
-    ready, emit = asyncio.Event(), runner.emit
-
-    def observe(frame):
-        emit(frame)
-        if frame["e"]["k"] == "ask":
-            ready.set()
-
-    runner.emit = observe
-    try:
-        if not any(t.asks for t in runner._turns.values()):
-            await asyncio.wait_for(ready.wait(), 2)
-        return next(iter(runner._turns[CHAT].asks))
-    finally:
-        runner.emit = emit
 
 
 async def test_probe_models_and_all_efforts_without_prompt_deletes_only_temporary(runner):

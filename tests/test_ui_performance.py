@@ -21,7 +21,7 @@ def test_background_markdown_preserves_sanitization_references_code_and_selectio
       window.Worker = class extends NativeWorker { constructor(...args) { super(...args); workers++; } };
       const host = document.createElement('div'); host.className = 'md'; document.querySelector('#view').append(host);
       const block = '## Heading\n\n[Reference][ref]\n\n```python\nprint("ok")\n```\n\n'
-        + '| a | b |\n|---|---|\n| one<br>two | three |\n\n<img src=x onerror="window.__pwned=1">\n\n';
+        + '| a | b | c |\n|:---|:---:|---:|\n| one<br>two | three | four |\n\n<img src=x onerror="window.__pwned=1">\n\n';
       const text = block.repeat(80) + '[ref]: https://example.org/test\n';
       let frames = 0, watching = true;
       const tick = () => { frames++; if (watching) requestAnimationFrame(tick); }; requestAnimationFrame(tick);
@@ -32,6 +32,7 @@ def test_background_markdown_preserves_sanitization_references_code_and_selectio
       const result = { rendered, workers, frames, sameText: host.textContent === expected.textContent,
         references: host.querySelectorAll('a[href="https://example.org/test"][target="_blank"]').length,
         tables: host.querySelectorAll('td br').length, code: host.querySelectorAll('pre code .hljs-string').length,
+        alignments: [...host.querySelectorAll('th, td')].map(cell => getComputedStyle(cell).textAlign),
         copies: host.querySelectorAll('pre .copy').length,
         safe: !host.querySelector('img,script,[onerror]') && !window.__pwned,
         selectable: selection.toString().includes('Reference') && selection.toString().includes('print("ok")') };
@@ -43,6 +44,7 @@ def test_background_markdown_preserves_sanitization_references_code_and_selectio
     assert value['rendered'] and value['workers'] == 1 and value['frames'] > 1, value
     assert value['sameText'] and value['safe'] and value['selectable'], value
     assert [value[key] for key in ('references', 'tables', 'code', 'copies')] == [80] * 4, value
+    assert value['alignments'] == ['left', 'center', 'right'] * 160, value
     assert not problems(result), problems(result)
 
 

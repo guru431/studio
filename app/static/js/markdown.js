@@ -63,6 +63,11 @@ function markdownParser(html) {
       checkbox({ checked }) {
         return checked ? '☑ ' : '☐ ';
       },
+      tablecell(token) {
+        const tag = token.header ? 'th' : 'td';
+        const align = ['left', 'center', 'right'].includes(token.align) ? ` align="${token.align}"` : '';
+        return `<${tag}${align}>${this.parser.parseInline(token.tokens)}</${tag}>\n`;
+      },
       link(token) {
         const href = localFileHref(token.href);
         // Prefix a drive letter before sanitizing: DOMPurify correctly rejects a raw C: URI.
