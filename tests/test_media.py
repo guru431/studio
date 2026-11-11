@@ -487,7 +487,9 @@ def test_a_stalled_share_answers_in_time_and_the_queue_takes_the_file_later(stud
             await asyncio.sleep(0.001)
         await media.purge()
 
-    asyncio.run(scenario())
+    # Запись и очередь принадлежат циклу службы. Отдельный asyncio.run создавал второй
+    # Proactor/executor и иногда зависал уже после сценария, в Runner.close на Windows.
+    studio.c.portal.call(scenario)
     assert files(env.media_dir) == [] and queued() == []
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
 
