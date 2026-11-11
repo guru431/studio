@@ -11,6 +11,7 @@ from fastapi import HTTPException
 import auth
 import db
 import manage
+import release
 import security
 import state
 from conftest import T0, login, make_user
@@ -28,7 +29,7 @@ def csrf_in_db(s) -> str:
 
 
 def test_health_is_open_and_api_needs_login(studio):
-    assert studio.c.get("/health").json() == {"status": "ok"}
+    assert studio.c.get("/health").json() == {"status": "ok", "version": release.VERSION}
     r = studio.c.get("/api/me"); assert r.status_code == 401 and r.json()["detail"]["code"] == "login"
     assert studio.c.get("/", follow_redirects=False).headers["location"] == "/login"
 

@@ -1,5 +1,6 @@
 """Снимок компьютера по запросу владельца; сведения и ошибки не пишутся в журнал."""
 
+import ctypes
 import getpass
 import http.client
 import ipaddress
@@ -9,6 +10,22 @@ import socket
 import subprocess
 import time
 import urllib.request
+from ctypes import wintypes
+
+
+def memory_status() -> dict | None:
+    """Оперативная память без CIM, сети и дочерних процессов; подходит для окна моста."""
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("length", wintypes.DWORD), ("load", wintypes.DWORD),
+                    ("total", ctypes.c_ulonglong), ("available", ctypes.c_ulonglong),
+                    ("page_total", ctypes.c_ulonglong), ("page_available", ctypes.c_ulonglong),
+                    ("virtual_total", ctypes.c_ulonglong), ("virtual_available", ctypes.c_ulonglong),
+                    ("extended_available", ctypes.c_ulonglong)]
+
+    data = MemoryStatus(length=ctypes.sizeof(MemoryStatus))
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(data)) or not data.total:
+        return None
+    return {"total": data.total, "available": data.available}
 
 
 # Только локальные диски: недоступная сетевая шара не должна задерживать снимок.

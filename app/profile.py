@@ -19,6 +19,7 @@ import cleaner_client
 import code_actions
 import history
 import media
+import release
 import sections
 import security
 import security_log
@@ -122,7 +123,7 @@ def _me(request: Request) -> dict:
     accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "theme": row["theme"], "accent": accent if accent in ACCENTS else ACCENTS[0],
-            "timezone": row["timezone"], "views": views,
+            "timezone": row["timezone"], "views": views, "studio_version": release.VERSION,
             "default_connection_id": chat[0].id if chat else None,
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),

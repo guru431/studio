@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 import auth
 import clock
 import code_actions
+import release
 import sections
 import security
 import state
@@ -67,9 +68,11 @@ def test_me_carries_csrf_and_profile(studio):
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
     assert me["timezone"] == "Europe/Moscow"
+    assert me["studio_version"] == release.VERSION
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
-                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent"}
+                       "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
+                       "studio_version"}
     assert me["password_reset"] is None
 
 

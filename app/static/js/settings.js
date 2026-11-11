@@ -1176,6 +1176,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
   }
 
+  if (other && me?.studio_version) nav.append(el('p', { class: 'muted small', id: 'studio-version' }, `Studio ${me.studio_version}`));
+
   async function changed() {
     await reload();
     if (onChange) await onChange();

@@ -13,7 +13,7 @@ import os
 import threading
 from urllib.parse import urlsplit
 
-from . import setup, theme
+from . import VERSION, computer_info, setup, theme
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +123,13 @@ def host_of(url: str) -> str:
         return url or DASH
 
 
+def memory_row(data: dict | None) -> str:
+    if data is None:
+        return "Недоступно"
+    available, total = (data[key] / 1024 ** 3 for key in ("available", "total"))
+    return f"Доступно {available:.1f} из {total:.1f} ГБ".replace(".", ",")
+
+
 def open_main(root, controller):
     """Окно моста; открыто — поднять."""
     global _window
@@ -215,6 +222,7 @@ class MainWindow:
         self.win.bind("<FocusIn>", self.reveal_focus)
         self.body = None
         self.render()
+        self.refresh_connection_info()
         self.lift()
         if self.enrolled:
             self.refresh_pin()
@@ -391,7 +399,7 @@ class MainWindow:
         top.columnconfigure(1, weight=1)
         self._logo = ImageTk.PhotoImage(tray.icon(self.px(24)), master=self.win)
         ttk.Label(top, image=self._logo).grid(row=0, column=0, padx=(0, self.px(10)))
-        ttk.Label(top, text=TITLE, style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(top, text=f"{TITLE} {VERSION}", style="Title.TLabel").grid(row=0, column=1, sticky="w")
         if view_of(self.enrolled) == "login":
             controls = ttk.Frame(top)
             controls.grid(row=0, column=2, sticky="e", padx=(self.px(12), 0))
@@ -573,7 +581,7 @@ class MainWindow:
         box.columnconfigure(0, weight=0)
         box.columnconfigure(1, weight=1)
         head = ttk.Frame(box, style="Card.TFrame")
-        head.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
+        head.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, self.px(8)))
         d = self.px(14)
         dot = self.tk.Canvas(head, width=d, height=d, highlightthickness=0, background=self.c["panel"])
         oval = dot.create_oval(1, 1, d - 1, d - 1)
@@ -583,10 +591,10 @@ class MainWindow:
         hint = ttk.Label(box, style="Card.Muted.TLabel", wraplength=self.px(380), justify="left")
         hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
         helpers = ttk.Frame(box, style="Card.TFrame")
-        helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(12)))
+        helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(8)))
         helpers.columnconfigure(1, weight=1)
         for row, (key, label) in enumerate((("claude", "Claude Code"), ("codex", "Codex"), ("opencode", "OpenCode"))):
-            ttk.Label(helpers, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=self.px(4))
+            ttk.Label(helpers, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=self.px(1))
             line = ttk.Frame(helpers, style="Card.TFrame")
             line.grid(row=row, column=1, sticky="e", padx=(self.px(20), 0))
             size = self.px(8)
@@ -599,15 +607,20 @@ class MainWindow:
         self.show_backends()
         login = self.ctrl.login
         for i, (label, value) in enumerate((("Студия", host_of(cfg.url)), ("Вход", login or DASH),
-                                            ("Компьютер", cfg.name or DASH)), start=3):
+                                            ("Компьютер", cfg.name or DASH), ("Версия Studio", DASH),
+                                            ("Оперативная память", DASH)), start=3):
             ttk.Label(box, text=label, style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
-                                                                       padx=(0, self.px(16)), pady=self.px(2))
+                                                                       padx=(0, self.px(16)), pady=self.px(1))
             shown = ttk.Label(box, text=value, style="Card.TLabel", wraplength=self.px(280), justify="left")
-            shown.grid(row=i, column=1, sticky="w", pady=self.px(2))
+            shown.grid(row=i, column=1, sticky="w", pady=self.px(1))
             if label == "Вход":
                 self.login_value = shown
+            elif label == "Версия Studio":
+                self.studio_version_value = shown
+            elif label == "Оперативная память":
+                self.memory_value = shown
         bar = ttk.Frame(box, style="Card.TFrame")
-        bar.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(self.px(14), 0))
+        bar.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(self.px(8), 0))
         bar.columnconfigure(0, weight=1)
         self.card_problem = self.tk.StringVar()
         ttk.Label(bar, textvariable=self.card_problem, style="Card.Error.TLabel", wraplength=self.px(240)).grid(
@@ -637,6 +650,16 @@ class MainWindow:
             hint.grid_remove()
         label, style = MAIN_BUTTONS[kind]
         main.configure(text=label, style=style, command=lambda: self.main_action(kind))
+        version = self.ctrl.studio_version if self.state == "online" else None
+        self.studio_version_value.configure(text=version or ("Неизвестна" if self.state == "online" else "Нет связи"))
+
+    def refresh_connection_info(self) -> None:
+        """Снимок памяти раз в пять секунд, пока окно открыто; вызов WinAPI не создаёт процессов."""
+        if not self.alive():
+            return
+        if self.enrolled:
+            self.memory_value.configure(text=memory_row(computer_info.memory_status()))
+        self.root.after(5000, self.refresh_connection_info)
 
     def show_login(self, login: str) -> None:
         if self.login_value is not None and self.login_value.winfo_exists():

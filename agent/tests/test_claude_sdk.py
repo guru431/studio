@@ -6,9 +6,29 @@ import anyio
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, CLIConnectionError
 from claude_agent_sdk._internal.transport import subprocess_cli
+from claude_agent_sdk._internal import sessions as sdk_sessions
 
 from studio_agent import cli  # подключает адаптер также при чтении каталога моделей
 from studio_agent.turns import options_for
+
+
+def test_sdk_session_git_is_hidden_without_changing_global_subprocess(monkeypatch, tmp_path):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, f"worktree {tmp_path}\n", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert sdk_sessions._get_worktree_paths(str(tmp_path)) == [str(tmp_path)]
+    command, kwargs = calls[0]
+    assert command == ["git", "worktree", "list", "--porcelain"]
+    assert kwargs["cwd"] == str(tmp_path) and kwargs["timeout"] == 5
+    assert kwargs["capture_output"] and kwargs["text"] and not kwargs["check"]
+    assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+    assert sdk_sessions.subprocess.SubprocessError is subprocess.SubprocessError
+    subprocess.run(["unrelated.exe"])
+    assert calls[-1][1] == {}
 
 
 def test_turn_keeps_cli_prompt_and_merged_subagent_limits_without_overwriting_settings(monkeypatch, tmp_path):

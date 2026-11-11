@@ -7,6 +7,7 @@ import concurrent.futures
 import contextlib
 import dataclasses
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -88,6 +89,7 @@ class Controller:
         self.runner: Runner | None = None
         self._versioned = None  # путь `claude.exe`, чья версия — в `agent.cc_version`
         self._probed = False
+        self.studio_version: str | None = None  # только текущий канал, на диск не записывается
         self._link = None
         self._link_task: asyncio.Task | None = None
         self._gen = 0  # поколение канала: состояния прежнего канала не в счёт
@@ -448,10 +450,15 @@ class Controller:
 
     def _on_welcome(self, gen: int, frame: dict) -> None:
         """`welcome` (в цикле): логин учётки и имя компьютера → `config.json` в потоке, если сменились."""
+        if gen != self._gen:
+            return
+        version = frame.get("studio_version")
+        self.studio_version = version if isinstance(version, str) and re.fullmatch(
+            r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}", version) else None
         login, name = frame.get("login"), frame.get("name")
         login = login if isinstance(login, str) and login else None
         name = name.strip() if isinstance(name, str) and setup.name_ok(name) else None
-        if gen != self._gen or (login is None and name is None):
+        if login is None and name is None:
             return
         task = asyncio.create_task(asyncio.to_thread(self._remember, gen, login, name))
         self._background.add(task)
@@ -477,6 +484,8 @@ class Controller:
                     log.warning("подписчик логина: %s", type(e).__name__)
 
     def _set_state(self, state: str) -> None:
+        if state != "online":
+            self.studio_version = None
         if state == self.state:
             return
         self.state = state

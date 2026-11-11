@@ -40,7 +40,7 @@ export function computerView(host, { locked }) {
     row('Оперативная память', memory
       ? `Используется ${bytes(memory.used)} из ${bytes(memory.total)} (${Math.round(memory.used / memory.total * 100)}%)`
       : null);
-    if (memory) row('Доступно памяти', bytes(memory.available));
+    if (memory) row('Доступно памяти', `${bytes(memory.available)} из ${bytes(memory.total)}`);
     row('Свободное место на дисках', ...(data.disks.length ? data.disks.map((disk) =>
       disk.total === null ? `${disk.path} — нет данных`
         : `${disk.path} — ${disk.free === null ? 'нет данных о свободном месте' : `свободно ${bytes(disk.free)}`} из ${bytes(disk.total)}`) : [null]));
