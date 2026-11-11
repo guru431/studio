@@ -135,6 +135,26 @@ def make(home):
         ctrl.quit()
 
 
+def test_studio_version_follows_current_channel_and_is_not_saved(make, configured, home):
+    ctrl = make(welcomes=[{"t": "welcome", "studio_version": "0.1.0"},
+                          {"t": "welcome", "studio_version": "0.2.0"},
+                          {"t": "welcome"},
+                          {"t": "welcome", "studio_version": "bad\nversion"}])
+    before = store.load_config(home)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.studio_version == "0.1.0"
+    ctrl._on_welcome(ctrl._gen - 1, {"studio_version": "9.9.9"})
+    assert ctrl.studio_version == "0.1.0"
+    for count, expected in ((2, "0.2.0"), (3, None), (4, None)):
+        ctrl.restart_link()
+        until(lambda: len(ctrl.links) == count and ctrl.state == "online")
+        assert ctrl.studio_version == expected
+    assert store.load_config(home) == before
+    ctrl.quit()
+    assert ctrl.studio_version is None
+
+
 def form(root, **kw):
     return {"url": "https://studio.example.com", "login": "", "password": "", "name": "Рабочий",
             "projects_root": str(root), "pin": "", "pin2": "", "no_pin": False, "autostart": True, **kw}

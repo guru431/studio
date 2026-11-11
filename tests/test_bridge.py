@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import auth
 import bridge
+import release
 import security
 import state
 from conftest import T0, make_user, signin
@@ -79,7 +80,8 @@ def test_hello_brings_the_agent_online(studio):
     signin(studio, "owner")
     with link_ws(studio, key) as ws:
         ws.send_json(HELLO)
-        assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner"}
+        assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
+                                     "studio_version": release.VERSION}
         [item] = agents(studio)
         assert {k: item[k] for k in ("online", "has_pin", "cc_version", "projects_root", "models", "efforts",
                                      "last_seen")} == {
@@ -339,7 +341,8 @@ def test_lock_and_unlock_preserve_computer_pin_but_block_access_while_locked(stu
     link = connect(studio, aid, machine)
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
-    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner"}]
+    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
+                          "studio_version": release.VERSION}]
 
     def closes():
         settle(studio)
@@ -426,7 +429,8 @@ def test_welcome_carries_login(studio):
     make_user(studio, "friend")
     aid, _ = enroll(studio, login="friend", name="Ноутбук")
     link = connect(studio, aid, FakeMachine())
-    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend"}]
+    assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend",
+                          "studio_version": release.VERSION}]
 
 
 def test_hanging_close_holds_neither_the_new_link_nor_the_revoke(studio, monkeypatch):

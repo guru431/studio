@@ -1,9 +1,10 @@
-"""Настоящий pythonw и консольный CLI: оба запуска SDK остаются без консоли Windows."""
+"""Настоящий pythonw: транспорт SDK и чтение сессий не показывают консоль Windows."""
 
 import json
 import os
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
@@ -21,11 +22,13 @@ class TestCli {
 
     static void Main(string[] args) {
         bool version = Array.IndexOf(args, "-v") >= 0;
-        string phase = version ? "version" : "turn";
+        bool git = Array.IndexOf(args, "worktree") >= 0;
+        string phase = git ? "git" : version ? "version" : "turn";
         File.AppendAllText(Environment.GetEnvironmentVariable("STUDIO_TEST_CONSOLE_FILE"),
                            phase + ":" + GetConsoleWindow().ToInt64() + "\n");
-        Console.WriteLine(version ? "2.1.312 (Claude Code)" : "{\"ready\":true}");
-        if (!version) Console.ReadLine();
+        Console.WriteLine(git ? "worktree " + Directory.GetCurrentDirectory() :
+                          version ? "2.1.312 (Claude Code)" : "{\"ready\":true}");
+        if (!version && !git) Console.ReadLine();
     }
 }
 '''
@@ -39,6 +42,7 @@ import traceback
 from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions
+from claude_agent_sdk._internal import sessions
 from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from studio_agent import cli
 
@@ -54,6 +58,7 @@ async def check():
     finally:
         await transport.close()
     assert not transport.is_ready()
+    assert sessions._get_worktree_paths(str(Path(sys.argv[1]).parent)) == [str(Path(sys.argv[1]).parent)]
 
 report = {}
 try:
@@ -65,7 +70,7 @@ Path(sys.argv[2]).write_text(json.dumps(report), encoding="utf-8")
 '''
 
 
-def test_sdk_version_and_turn_have_no_console_when_started_from_pythonw(tmp_path):
+def test_sdk_transport_and_session_git_have_no_console_when_started_from_pythonw(tmp_path):
     compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
     source = tmp_path / "TestCli.cs"
     binary = tmp_path / "claude.exe"
@@ -73,12 +78,13 @@ def test_sdk_version_and_turn_have_no_console_when_started_from_pythonw(tmp_path
     built = subprocess.run([str(compiler), "/nologo", "/target:exe", f"/out:{binary}", str(source)],
                            capture_output=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
     assert built.returncode == 0, built.stdout.decode("utf-8", "replace")
+    shutil.copyfile(binary, tmp_path / "git.exe")
     gui = tmp_path / "gui.pyw"
     gui.write_text(GUI_SOURCE, encoding="utf-8")
     report = tmp_path / "report.json"
     consoles = tmp_path / "consoles.txt"
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
-           "STUDIO_TEST_CONSOLE_FILE": str(consoles)}
+           "STUDIO_TEST_CONSOLE_FILE": str(consoles), "PATH": str(tmp_path) + os.pathsep + os.environ['PATH']}
     env.pop("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", None)
     result = subprocess.run([str(Path(sys.executable).with_name("pythonw.exe")), str(gui), str(binary), str(report)],
                             cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -86,4 +92,4 @@ def test_sdk_version_and_turn_have_no_console_when_started_from_pythonw(tmp_path
     assert result.returncode == 0
     assert report.is_file(), "pythonw не создал отчёт"
     assert json.loads(report.read_text("utf-8")) == {"ok": True}
-    assert consoles.read_text("utf-8").splitlines() == ["version:0", "turn:0"]
+    assert consoles.read_text("utf-8").splitlines() == ["version:0", "turn:0", "git:0"]

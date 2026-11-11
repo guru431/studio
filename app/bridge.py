@@ -34,6 +34,7 @@ from starlette.websockets import WebSocketDisconnect
 import auth
 import clock
 import push
+import release
 import security
 import state
 import code_attention
@@ -277,7 +278,8 @@ async def attach(link: Link) -> None:
         _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
     try:
-        await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"]})
+        await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
+                         "studio_version": release.VERSION})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:

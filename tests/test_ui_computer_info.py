@@ -93,6 +93,7 @@ def test_computer_info_button_shows_snapshot_refreshes_and_keeps_project(browser
     assert values['after'] == [values['before'], True]
     for text in ('Имя компьютера', 'WORKSTATION', 'Имя пользователя', 'test-worker', 'Внешний IP', '8.8.8.8',
                  'Внутренние IP', '10.77.1.8', '10.8.0.4', 'Windows 11', '12 ГиБ из 16 ГиБ (75%)',
+                 '4 ГиБ из 16 ГиБ',
                  'C:\\ — свободно 100 ГиБ из 500 ГиБ', 'D:\\ — нет данных', 'C:\\work\\projects', 'D:\\Проекты'):
         assert text in values['details']
     assert len(reads) == 2

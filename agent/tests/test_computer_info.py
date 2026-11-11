@@ -8,6 +8,19 @@ from studio_agent import computer_info
 from test_agent import agent_with_pin, req, root
 
 
+def test_memory_status_reports_available_and_total_or_unavailable(monkeypatch):
+    def read(pointer):
+        data = pointer._obj
+        assert data.length == 64
+        data.total, data.available = 16 * 1024 ** 3, 4 * 1024 ** 3
+        return 1
+
+    monkeypatch.setattr(computer_info.ctypes.windll.kernel32, "GlobalMemoryStatusEx", read)
+    assert computer_info.memory_status() == {"total": 16 * 1024 ** 3, "available": 4 * 1024 ** 3}
+    monkeypatch.setattr(computer_info.ctypes.windll.kernel32, "GlobalMemoryStatusEx", lambda p: 0)
+    assert computer_info.memory_status() is None
+
+
 def test_snapshot_preserves_all_roots_and_distinguishes_unavailable_values(monkeypatch):
     monkeypatch.setattr(computer_info, '_system_data', lambda: {
         'os': 'Windows 11 Pro', 'version': '10.0.26100', 'memory_total': 16000, 'memory_free': 4000,
@@ -100,3 +113,6 @@ def test_real_windows_probe_reports_memory_disks_and_addresses():
     assert data['memory_total'] > 0 and 0 <= data['memory_free'] <= data['memory_total']
     assert data['disks'] and any(d['total'] > 0 and 0 <= d['free'] <= d['total'] for d in data['disks'])
     assert isinstance(data['internal_ips'], list) and data['internal_ips']
+    memory = computer_info.memory_status()
+    assert abs(memory['total'] - data['memory_total'] * 1024) < 1024
+    assert 0 <= memory['available'] <= memory['total']

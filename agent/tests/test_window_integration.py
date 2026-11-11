@@ -36,7 +36,7 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
     assert all(value > 0 for value in window._work_area(root)[2:])
     root.tk.call("tk", "scaling", scale * 96 / 72)
     cfg = store.Config(projects_root="C:/work/projects", max_turns=8)
-    ctrl = SimpleNamespace(state=state, config=lambda: cfg, autostart_enabled=lambda: False,
+    ctrl = SimpleNamespace(state=state, studio_version="0.1.0", config=lambda: cfg, autostart_enabled=lambda: False,
                            backend_status=lambda: {}, login="owner", pin_status=lambda: "set",
                            activity_status=lambda: {"tasks": 0, "waiting": 0, "desktop_active": False,
                                                     "quit_when_idle": False},
@@ -87,6 +87,9 @@ def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch
     store.save_config(home, store.Config(projects_root="C:/work/projects", theme="light"))
     ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
     ctrl.state = "online"
+    ctrl.studio_version = "0.1.0"
+    memory = {"available": 4 * 1024 ** 3, "total": 16 * 1024 ** 3}
+    monkeypatch.setattr(window.computer_info, "memory_status", lambda: memory)
     root = tk_root
     monkeypatch.setattr(window.MainWindow, "lift", lambda self: None)
     monkeypatch.setattr(window.MainWindow, "work", lambda self, fn, done, **kwargs: done(fn(), False))
@@ -95,6 +98,11 @@ def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch
     main.pin = "locked"
     main.show_pin()
     root.update()
+    assert main.studio_version_value.cget("text") == "0.1.0"
+    assert main.memory_value.cget("text") == "Доступно 4,0 из 16,0 ГБ"
+    memory["available"] = 0
+    main.refresh_connection_info()
+    assert main.memory_value.cget("text") == "Доступно 0,0 из 16,0 ГБ"
     assert [main.sections.tab(tab, "text") for tab in main.sections.tabs()] == [
         "Подключение", "Работа", "Настройки"]
     main.sections.focus_force()
@@ -114,6 +122,7 @@ def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch
         assert main.sections.select() == str(main.settings_page)
         assert limit.get() == "11"
     main.on_state("offline")
+    assert main.studio_version_value.cget("text") == "Нет связи"
     main.show_login("new-owner")
     assert main.sections.select() == str(main.settings_page)
     assert main.card_widgets[2].cget("text") == window.STATUS["offline"][0]

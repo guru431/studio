@@ -51,6 +51,7 @@ import ocr
 import ntfy
 import presets
 import profile
+import release
 import push
 import screenlock
 import security
@@ -145,7 +146,7 @@ async def headers(request: Request, call_next):
     return response
 
 
-app = FastAPI(title="studio", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="studio", version=release.VERSION, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.middleware("http")(auth.guard)
 app.middleware("http")(headers)
 app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), name="static-versioned")
@@ -193,7 +194,7 @@ async def invalid_request(_request: Request, _exc: RequestValidationError):
 
 @app.api_route("/health", methods=PAGE)
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": release.VERSION}
 
 
 @app.api_route("/robots.txt", methods=PAGE)

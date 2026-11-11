@@ -16,6 +16,7 @@ import time
 
 import httpx
 import pytest
+import release
 import fake_bridge
 from PIL import Image
 
@@ -666,6 +667,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
         ("press", "Escape"),
         ("eval", "go", "location.hash = '#/profile'"), ("wait", "location.hash.startsWith('#/settings')"),
         ("wait", "document.querySelector('.settings-nav a')"),
+        ("eval", "studioVersion", "document.querySelector('#studio-version')?.textContent"),
         ("eval", "nav", "[...document.querySelectorAll('.settings-nav a')].map(a => [a.dataset.section, a.textContent])"),
         ("eval", "groups", "[...document.querySelectorAll('.settings-nav .settings-group')].map(h => h.textContent)"),
         *go("settings/transcribe"), ("wait", "document.querySelector('.section-panel[data-section=transcribe] h2')"),
@@ -708,6 +710,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert r["values"]["item"] == "Настройки"
     v = r["values"]
     assert v["groups"] == ["Разделы", "Учётка"]
+    assert v["studioVersion"] == f"Studio {release.VERSION}"
     assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Озвучка"],
                         ["transcribe", "Расшифровка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"],
                         ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["security", "Защита"],
@@ -7117,7 +7120,8 @@ def test_socket_bridge_comes_online(live):
     machine = FakeMachine(pin="1234")
     sb = SocketBridge(live.url, key, machine).start()
     try:
-        assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК", "login": "owner"}
+        assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК", "login": "owner",
+                              "studio_version": release.VERSION}
         wait_for(lambda: aid in bridge.LINKS)
         assert bridge.LINKS[aid].hello["has_pin"] is True
     finally:
