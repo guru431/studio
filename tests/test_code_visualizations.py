@@ -2,6 +2,7 @@
 import bridge
 import claude_code
 import code_visualizations
+from test_media import png
 from test_code import ALPHA, detail, setup, url
 from conftest import signin
 
@@ -81,3 +82,21 @@ def test_old_bridge_and_oversized_or_revoked_results_are_rejected(studio, monkey
 
     monkeypatch.setattr(machine, '_op_visualization', revoke)
     assert detail(studio.c.post(endpoint, json={'source': 'view.html'}))['code'] == 'closed'
+
+
+def test_generated_raster_preview_uses_image_limits_and_validates_bytes(studio):
+    aid, machine, endpoint = ready(studio)
+    source = 'C:/Users/owner/.codex/generated_images/thread/view.png'
+    machine.projects['alpha']['files'][source] = png(160, 100) + b'\0' * (code_visualizations.MAX_BYTES + 1)
+    assert detail(studio.c.post(endpoint, json={'source': source}))['code'] == 'unsupported'
+    machine.visualization_images = True
+    bridge.LINKS[aid].hello['visualization_images'] = True
+    response = studio.c.post(endpoint, json={'source': source})
+    assert response.status_code == 200
+    preview = studio.c.get(endpoint + '/' + response.json()['token'])
+    assert preview.status_code == 200 and 'data:image/png;base64,' in preview.text
+    assert 'generated_images' not in preview.text and 'sandbox allow-scripts' in preview.headers['content-security-policy']
+    machine.projects['alpha']['files'][source] = b'not an image'
+    assert studio.c.post(endpoint, json={'source': source}).status_code == 415
+    machine.projects['alpha']['files'][source] = b'x' * (claude_code.IMAGE_MAX + 1)
+    assert studio.c.post(endpoint, json={'source': source}).status_code == 413

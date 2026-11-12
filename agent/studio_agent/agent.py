@@ -140,7 +140,7 @@ class Agent:
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
-                 "visualization_scope": True, "agent_update_cancel": self.updater is not None}
+                 "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):

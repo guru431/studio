@@ -251,9 +251,26 @@ def test_legacy_studio_session_becomes_visible_with_a_reversible_metadata_change
     expected = [json.loads(line) for line in original.splitlines()]
     expected[1]["entrypoint"] = "local-agent"
     assert [json.loads(line) for line in path.read_bytes().splitlines()] == expected
-    assert path.with_suffix(".studio-backup").read_bytes() == original
+    assert path.with_suffix(".studio-visibility-backup").read_bytes() == original
     assert path.stat().st_mtime_ns == stamp
     assert not sessions.make_visible(tmp_path, CHAT)
+
+
+def test_visibility_repair_matches_vscode_compact_json_field_precedence(tmp_path, monkeypatch):
+    """VS Code ищет компактный ключ по всему head, и только затем ключ с пробелом."""
+    path = tmp_path / (CHAT + ".jsonl")
+    original = b'{"type": "user", "entrypoint": "local-agent"}\n' + b'{"type":"assistant","entrypoint":"sdk-py"}\n'
+    path.write_bytes(original)
+    previous_backup = path.with_suffix('.studio-backup')
+    previous_backup.write_bytes(b'previous original')
+    monkeypatch.setattr(sessions, "_resolve_session_file_path", lambda *a: path)
+    monkeypatch.setattr(sessions, "get_session_info", lambda *a, **k: SDKSessionInfo(session_id=CHAT,
+        summary="Private", last_modified=1, tag="studio"))
+    assert sessions.make_visible(tmp_path, CHAT)
+    head = path.read_bytes()[:65536]
+    compact = head.index(b'"entrypoint":"') + len(b'"entrypoint":"')
+    assert head[compact:].split(b'"', 1)[0] == b'local-agent'
+    assert previous_backup.read_bytes() == b'previous original'
     assert not list(tmp_path.glob('.studio-session-*'))
     monkeypatch.setattr(sessions, "get_session_info", lambda *a, **k: SDKSessionInfo(session_id=CHAT,
         summary="Private", last_modified=1))
@@ -282,5 +299,5 @@ def test_session_visibility_does_not_replace_a_concurrently_changed_transcript(t
     monkeypatch.setattr(sessions.tempfile, "NamedTemporaryFile", concurrent)
     assert not sessions.make_visible(tmp_path, CHAT)
     assert path.read_bytes() == original + appended
-    assert not path.with_suffix(".studio-backup").exists()
+    assert not path.with_suffix(".studio-visibility-backup").exists()
     assert not list(tmp_path.glob('.studio-session-*'))

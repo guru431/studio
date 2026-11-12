@@ -47,6 +47,7 @@
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
 | 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
+| 0.22.0 | `hello.visualization_images` — PNG/JPEG/WebP/GIF проекта и `CODEX_HOME/generated_images` владельца через `visualization` | §4 |
 
 ## 0.20.0
 
@@ -214,9 +215,13 @@ Codex — из событий дочернего треда, его метада
 Studio создаёт пользовательские Claude-сессии с `CLAUDE_CODE_ENTRYPOINT=local-agent` и сохраняет
 `CLAUDE_AGENT_SDK_CLIENT_APP`: VS Code скрывает программные `sdk-py`/`sdk-ts`/`sdk-cli`, локальный мост виден.
 После закрытия writer `sessions.make_visible` исправляет первый `entrypoint` старого чата с тегом `studio`.
-Исходный JSONL остаётся в соседнем `<chat>.studio-backup`, дата изменения сохраняется; изменение файла во время
+С 0.22.0 первая запись сохраняется в компактном JSON: расширение VS Code ищет этот формат раньше варианта
+с пробелом и иначе может выбрать `sdk-py` из следующей строки. Уже исправленная прежней версией запись
+также нормализуется; старая `<chat>.studio-backup` остаётся нетронутой.
+Исходный JSONL остаётся в соседнем `<chat>.studio-visibility-backup`, дата изменения сохраняется; изменение файла во время
 подготовки запрещает замену. Для ручного исправления старых чатов сначала проверить отсутствие их активных CLI
-по `~/.claude/sessions/*.json` и процессам; для отката при остановленном writer вернуть JSONL из этой копии.
+по `~/.claude/sessions/*.json` и процессам; для отката при остановленном writer восстановить только
+исходное поле `entrypoint`, сохранив новые сообщения после копии.
 (мост ≥ 0.15.3) `followup.position` хранит счётчики опубликованного текста UTF-16 и начатых шагов:
 переподключение восстанавливает уточнение между теми же событиями. Урезанный снимок опускает позицию.
 

@@ -279,7 +279,8 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
                 && (!gh || gh.left >= summary.left && gh.right <= summary.right)
                 && remotes.every(r => r.left >= summary.left && r.right <= summary.right)
                 && summary.height >= lineHeight - 1 && summary.height <= lineHeight + 1
-                && Math.abs(date.top - summary.top) < 2 && row.children.length === 2;
+                && Math.abs(date.top - summary.top) < 2 && row.children.length === 2
+                && row.getBoundingClientRect().height <= 46;
             })"""),
             ("eval", "github", """[...document.querySelectorAll('.code-project-github')].map(e =>
               [e.textContent, e.dataset.gitLevel, e.title])"""),
@@ -319,9 +320,9 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["final-unpushed"] == pid("alpha"), {key: values[key] for key in ('fresh', 'reads', 'final-unpushed')}
     assert values["before"][1] and values["after"][1]
     assert abs(values["before"][0] - values["after"][0]) < 1
-    assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 изм. ↑0" in values["counts"]
+    assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 ↑0" in values["counts"]
     assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
-    assert "Git: 7 изм. ↑4" in values["fresh"] and values["reads"] == values["initialReadCount"] + 39
+    assert "Git: 7 ↑4" in values["fresh"] and values["reads"] == values["initialReadCount"] + 39
     assert values["twoLines"] and values["compactControls"]
     spin = 'none' if values["loadingList"][5] else 'spin'
     assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', spin, 'Обновляю сведения…',

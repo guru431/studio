@@ -361,7 +361,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('a', { class: 'code-project-ideas', href: `${href}?tab=files&journal=ideas`, title: `Открыть IDEAS.md · Идеи: ${value('ideas')}`,
         'aria-label': `Идеи: ${value('ideas')}` }, `И: ${value('ideas')}`), ')');
     const git = data?.git === 'not_git' ? 'Без Git'
-      : `Git: ${value('changed')} изм. ↑${value('unpushed')}`;
+      : `Git: ${value('changed')} ↑${value('unpushed')}`;
     const gh = data?.github;
     const github = gh ? remoteBadge(gh, 'GitHub') : null;
     const githubAt = data && 'github_checked_at' in data ? data.github_checked_at : data?.checked_at;

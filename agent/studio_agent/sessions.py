@@ -259,8 +259,8 @@ def mark_studio(project: Path, chat: str) -> None:
 def make_visible(project: Path, chat: str) -> bool:
     """Совместимость прежней Studio-сессии с VS Code. Звать только после остановки её writer.
 
-    Меняем первый entrypoint sdk-py, без текстов в журнале; исходный JSONL остаётся в соседней копии.
-    Новые сессии сразу создаются с entrypoint local-agent и сюда не попадают.
+    Нормализуем первый entrypoint sdk-py/local-agent, без текстов в журнале; исходный JSONL — в соседней копии.
+    Новые сессии сразу создаются с компактным entrypoint local-agent и не переписываются.
     """
     if not limits.CHAT_ID.fullmatch(chat):
         raise Refused("invalid")
@@ -283,10 +283,14 @@ def make_visible(project: Path, chat: str) -> bool:
             offset += len(line)
             continue
         if isinstance(record, dict) and "entrypoint" in record:
-            if record["entrypoint"] != "sdk-py":
+            if record["entrypoint"] not in ("sdk-py", "local-agent"):
                 return False
             record["entrypoint"] = "local-agent"
-            changed = json.dumps(record, ensure_ascii=True).encode("utf-8") + (b"\r\n" if line.endswith(b"\r\n") else b"\n")
+            # VS Code сначала ищет компактный ключ во всём head и только затем вариант с пробелом.
+            # Первая запись должна остаться компактной, иначе выбирается sdk-py из следующей строки.
+            changed = json.dumps(record, ensure_ascii=True, separators=(",", ":")).encode("utf-8") + (b"\r\n" if line.endswith(b"\r\n") else b"\n")
+            if line == changed:
+                return False
             break
         offset += len(line)
     else:
@@ -305,7 +309,7 @@ def make_visible(project: Path, chat: str) -> bool:
         current = path.stat()
         if (current.st_ino, current.st_size, current.st_mtime_ns) != (before.st_ino, before.st_size, before.st_mtime_ns):
             return False
-        backup = path.with_suffix(".studio-backup")
+        backup = path.with_suffix(".studio-visibility-backup")
         # Не перезаписываем прежнюю копию, ссылку или файл владельца с таким именем.
         try:
             with backup.open("xb") as target, path.open("rb") as source:

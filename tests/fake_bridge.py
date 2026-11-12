@@ -101,6 +101,7 @@ class FakeMachine:
         self.project_sharing = True
         self.completions = False                 # кадр досланных завершений (§18)
         self.visualization_scope = False         # участнику — только визуализации проекта (§17)
+        self.visualization_images = False
 
     @property
     def hello(self) -> dict:
@@ -113,7 +114,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope", "agent_update_cancel")
+                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -600,6 +601,8 @@ class FakeMachine:
         return {"text": self._text(data), "version": _version(data)}
 
     def _op_visualization(self, req, events):
+        if req['source'].lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+            return {'image': self._op_raw({**req, 'path': req['source']}, events)}
         return self._op_read({**req, 'path': req['source']}, events)
 
     def _op_raw(self, req, events):
