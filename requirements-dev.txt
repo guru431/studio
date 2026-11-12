@@ -1,5 +1,7 @@
 # Тесты на workstation: .venv/Scripts/python -m pip install -r requirements-dev.txt
 -r requirements.txt
+# версии службы те же, что в образе: тесты не уходят от прода
+-c constraints.txt
 pytest>=8.0
 # TestClient Starlette — на httpx2 (с httpx он устарел и выйдет из строя); отдельный модуль:
 # httpx службы и MockTransport шлюза в tests/fakes.py он не задевает
