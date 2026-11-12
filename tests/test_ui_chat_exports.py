@@ -200,7 +200,10 @@ if True:
             assert '<table>' in parts[3] and 'align="right"' in parts[3]
             crossing = page.evaluate('''async (id) => {
               const root = document.getElementById(id), user = root.querySelector('.bubble, .code-msg.user');
-              const first = [...user.childNodes].find(n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('Выбранный'));
+              // текст задания «Агентов» — внутри .code-user-text, у «Чата» — прямо в пузыре
+              const walker = document.createTreeWalker(user, NodeFilter.SHOW_TEXT);
+              let first = null;
+              while (!first && walker.nextNode()) if (walker.currentNode.textContent.includes('Выбранный')) first = walker.currentNode;
               const strong = root.querySelector('.md strong'), range = document.createRange();
               range.setStart(first, first.textContent.indexOf('Выбранный'));
               range.setEnd(strong.firstChild, strong.textContent.length);
