@@ -16,8 +16,8 @@
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
  *
  * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
- * их список с выбором, pickerList — его отрисовка на месте; dayTitle — и подпись дня этих списков и «Сканов»
- * (год — если не текущий). */
+ * их список с выбором, pickerList — его отрисовка на месте, keep и busyBlock — панель выбранной записи на месте;
+ * dayTitle — и подпись дня этих списков и «Сканов» (год — если не текущий). */
 import { api } from './api.js';
 import { calendarDay, dateOnly } from './time.js';
 import { button, el as make, words } from './ui.js';
@@ -207,14 +207,45 @@ export function pickerList(list, { cls, name, state, pick, empty, moreId }) {
       text(more, p.paging ? 'Загружаю…' : 'Показать ещё');
       nodes.push(more);
     }
-    const keep = new Set(nodes);
-    for (const child of [...list.children]) if (!keep.has(child)) child.remove();
-    let at = list.firstChild;
-    for (const node of nodes) {
-      if (node === at) at = at.nextSibling;
-      else list.insertBefore(node, at);
-    }
+    keep(list, nodes);
   };
+}
+
+/** Дети parent — nodes по порядку: лишние уходят, новые встают на место, а стоящие в том же порядке не
+ * отсоединяются (фокус, нажатие и звук плеера переживают перерисовку). */
+export function keep(parent, nodes) {
+  const wanted = new Set(nodes);
+  for (const child of [...parent.childNodes]) if (!wanted.has(child)) child.remove();
+  let at = parent.firstChild;
+  for (const node of nodes) {
+    if (node === at) at = at.nextSibling;
+    else parent.insertBefore(node, at);
+  }
+}
+
+/** Блок «идёт» выбранной записи вида createPicker: кольцо, item.detail и «Отменить» (id) — POST url/<id>/cancel,
+ * потом after(); отказ — fail(err), кнопка снова доступна. prev — блок прошлой перерисовки: для того же id
+ * меняется только текст, узлы те же (опрос не сбивает фокус на «Отменить»). Ответ — { id, box }. */
+export function busyBlock(prev, item, { id, url, fail, after }) {
+  if (!prev || prev.id !== item.id) {
+    const cancel = make('button', { type: 'button', class: 'btn btn-sm', id }, 'Отменить');
+    cancel.addEventListener('click', async () => {
+      cancel.disabled = true;
+      try {
+        await api('POST', `${url}/${item.id}/cancel`);
+      } catch (err) {
+        cancel.disabled = false;
+        fail(err);
+      }
+      after();
+    });
+    const text = make('p', {});
+    prev = { id: item.id, text, box: make('div', { class: 'tr-busy' },
+      make('span', { class: 'ring', 'aria-hidden': 'true' }), text, cancel) };
+  }
+  const shown = item.detail ?? '';
+  if (prev.text.textContent !== shown) prev.text.textContent = shown;
+  return prev;
 }
 
 export function createFeed(el, { load, render, key, quiet = null, empty = '', head = null, onChange = () => {},
