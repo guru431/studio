@@ -1,11 +1,14 @@
 """Cleaner integration: reviewed request boundary, isolation, streaming, cancellation and deletion."""
+import asyncio
 import json
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import cleaner_client as cleaner
+import clock
 import state
 from conftest import make_user, signin
 from test_chat import attach, messages, new_chat, png, sse, turn
@@ -78,6 +81,49 @@ def protected(studio, monkeypatch):
     sections.set_models(uid, "translate", cid, ["protected-model"])
     remote.conn_id, remote.uid = cid, uid
     return studio, remote
+
+
+def test_one_account_cannot_take_all_preview_tickets(studio):
+    """Предел живых билетов предпросмотра — на учётку (`USER_TICKETS`, сверх — вытесняется самый старый свой);
+    общий `TICKETS_MAX` — защита памяти, его исчерпывают только много учёток."""
+    cleaner.TICKETS.clear()
+    expires = clock.NOW() + cleaner.TICKET_SECONDS
+
+    def remember(uid, item):
+        return cleaner.remember(cleaner.Preview(uid, item, None, (), expires=expires))
+    mine = [remember(1, f"chat{n}") for n in range(cleaner.TICKETS_MAX)]
+    assert [t for t in mine if t in cleaner.TICKETS] == mine[-cleaner.USER_TICKETS:]
+    assert remember(2, "chat") in cleaner.TICKETS
+    for uid in range(3, 3 + cleaner.TICKETS_MAX // cleaner.USER_TICKETS):
+        for n in range(cleaner.USER_TICKETS):
+            if len(cleaner.TICKETS) < cleaner.TICKETS_MAX:
+                remember(uid, f"chat{n}")
+    with pytest.raises(HTTPException) as refused:
+        remember(99, "chat")
+    assert refused.value.status_code == 429
+    cleaner.TICKETS.clear()
+
+
+def test_cleaner_sweep_survives_a_failed_pass(monkeypatch, caplog):
+    """Одно исключение прохода не завершает фоновую уборку: в журнал — только тип, пауза — всегда."""
+    calls, sleeps = [], []
+
+    async def purge():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("тайное")
+
+    async def sleep(sec):
+        sleeps.append(sec)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+    monkeypatch.setattr(cleaner, "TICKETS", {})
+    monkeypatch.setattr(cleaner, "purge", purge)
+    monkeypatch.setattr(clock, "SLEEP", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cleaner.sweep())
+    assert calls == [1, 1] and sleeps == [60, 60]
+    assert "RuntimeError" in caplog.text and "тайное" not in caplog.text
 
 
 def preview(studio, cid, **kwargs):

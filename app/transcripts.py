@@ -46,6 +46,7 @@ import db
 import documents
 import exports
 import forms
+import lock_policy
 import media
 import operations
 import push
@@ -209,6 +210,7 @@ async def _runner(user_id: int) -> None:
     """Старейшая ждущая запись пользователя — в работу, по одной, пока очередь не пуста. Каждая — под своей
     эпохой (`EPOCHS`), а не под эпохой запроса, запустившего раннер: после очистки истории живой раннер
     берёт и новые записи."""
+    lock_policy.RESTRICTED.set(frozenset())          # закрытые разделы запроса, создавшего раннер, ему чужие
     while True:
         row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE user_id = ? AND state = 'queued'"
                                " ORDER BY created, id LIMIT 1", (user_id,)).fetchone()

@@ -63,6 +63,7 @@ import db
 import documents
 import exports
 import images
+import lock_policy
 import media
 import operations
 import ocr
@@ -409,10 +410,10 @@ async def _await_idle(job: Job):
     return state.DB.execute("SELECT * FROM translations WHERE id = ?", (job.id,)).fetchone()
 
 
-def _read_source(job: Job, media_id: str) -> bytes:
-    """Файл записи — в потоке; нет или шара не отвечает — отказ словами."""
+async def _read_source(job: Job, media_id: str) -> bytes:
+    """Файл записи; нет или шара не отвечает — отказ словами."""
     try:
-        return _read_media(job.user_id, media_id)
+        return await _read_media(job.user_id, media_id)
     except HTTPException as e:
         raise translate_text.TranslateError(e.detail["message"]) from None
 
@@ -432,7 +433,7 @@ async def _spot(job: Job, row):
     Текста нет — None (запись «готово» без модели); иначе — строка записи после `ocr.idle`."""
     job.stage = "распознаю снимок"
     _store(job)
-    png = await asyncio.to_thread(_read_source, job, row["source_media_id"])
+    png = await _read_source(job, row["source_media_id"])
     _check(job)
     freed_at = clock.NOW()                           # free_card — в начале borrowed
     try:
@@ -589,6 +590,7 @@ async def run(job: Job) -> None:
 
 
 async def _runner(user_id: int, lane: str) -> None:
+    lock_policy.RESTRICTED.set(frozenset())          # закрытые разделы запроса, создавшего раннер, ему чужие
     try:
         while True:
             row = state.DB.execute(f"SELECT id FROM translations WHERE user_id = ? AND state = 'queued'"
@@ -638,6 +640,7 @@ async def resume(user_id: int, tid: str) -> None:
     except HTTPException:                        # 404 gone — «такого перевода нет» для страницы, а запись есть
         raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
     conn, model = sections.resolve(user_id, "translate", row["connection_id"], row["model"])
+    operations.check(user_id)                    # стирание истории идёт: запись не возвращается в очередь
     _check_queue(user_id, lane_of(row["kind"]))
     state.DB.execute("BEGIN")
     try:
@@ -654,12 +657,41 @@ async def resume(user_id: int, tid: str) -> None:
 
 
 def recover() -> None:
-    """После перезапуска раннеров нет: ждущие и идущие — ошибка «прервано» (готовые куски — в тексте)."""
-    rows = state.DB.execute(f"SELECT id FROM translations WHERE state IN {RUNNING}").fetchall()
+    """После перезапуска раннеров нет: идущие — ошибка «прервано» (готовые куски — в тексте); ждущие остаются в
+    очереди — их продолжит `resume_queued`."""
+    rows = state.DB.execute("SELECT id FROM translations WHERE state IN ('working', 'cancelling')").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
     if rows:
         log.warning("переводы: %d прервано перезапуском", len(rows))
+
+
+def resume_queued() -> None:
+    """Старт службы (после recover и state.HTTP): ждущие записи — снова в очередь своей полосы с подключением и
+    моделью записи (`sections.resolve`, как у «Продолжить»), снимок без исходника — ещё с подключением «Сканов»;
+    отказ — ошибка записи его словами. Раннер — с поколением истории старта (`operations.snapshot`)."""
+    rows = state.DB.execute("SELECT id, user_id, kind, connection_id, model, source IS NOT NULL AS has_source"
+                            " FROM translations WHERE state = 'queued' ORDER BY created, rowid").fetchall()
+    lanes = set()
+    for row in rows:
+        uid = row["user_id"]
+        try:
+            try:
+                connections.get(uid, row["connection_id"])
+            except HTTPException:
+                raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
+            conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"])
+            reader = _photo_reader(uid)[0] if row["kind"] == "photo" and not row["has_source"] else None
+        except HTTPException as e:
+            _finish(row["id"], "error", e.detail["message"])
+            continue
+        JOBS[row["id"]] = Job(id=row["id"], user_id=uid, conn=conn, model=model, ocr_conn=reader, stage_at=clock.NOW())
+        lanes.add((uid, lane_of(row["kind"])))
+    for uid, lane in lanes:
+        with operations.restore(operations.snapshot(uid)):
+            kick(uid, lane)
+    if lanes:
+        log.info("переводы: продолжены ждущие в %d очередях", len(lanes))
 
 
 async def stop_user(user_id: int) -> None:
@@ -929,11 +961,18 @@ async def translate_file(request: Request):
     return _out(_row(uid, tid))
 
 
-def _read_media(user_id: int, media_id: str) -> bytes:
-    """Исходный файл записи — в потоке; нет — 409 gone, шара не отвечает — 503."""
+async def _read_media(user_id: int, media_id: str) -> bytes:
+    """Исходный файл записи: путь — с цикла событий (база), чтение — в потоке; нет — 409 gone, шара не
+    отвечает — 503; заперт (423) — как есть."""
     try:
-        return media.path(user_id, media_id).read_bytes()
-    except (HTTPException, FileNotFoundError):
+        file = media.path(user_id, media_id)
+    except HTTPException as e:
+        if e.status_code != 404:
+            raise
+        raise HTTPException(409, {"code": "gone", "message": FILE_GONE}) from None
+    try:
+        return await asyncio.to_thread(file.read_bytes)
+    except FileNotFoundError:
         raise HTTPException(409, {"code": "gone", "message": FILE_GONE}) from None
     except OSError:
         raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
@@ -1013,7 +1052,7 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
         if row["kind"] == "photo":                   # PNG на шаре уже повёрнут — распознает задание
             text, pages, reader = None, None, _photo_reader(uid)
         else:
-            data = await asyncio.to_thread(_read_media, uid, media_id)
+            data = await _read_media(uid, media_id)
             text, pages, reader = await _read_file(uid, row["name"], data)
             if not media.alive(uid, media_id):       # удалён, пока читали
                 raise HTTPException(409, {"code": "gone", "message": FILE_GONE})

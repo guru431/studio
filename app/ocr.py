@@ -88,6 +88,7 @@ CANCELLING = "отменяю"
 CANCELLED = "отменено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
+NO_CONNECTION = "подключения документа больше нет — загрузите документ заново"
 UNREADABLE = "страница не читается — файл повреждён"
 EMPTY = "на странице не найден текст"
 
@@ -466,11 +467,18 @@ async def _page_text(job: Job, png: bytes) -> str:
             _store(job)
 
 
-def _read(user_id: int, media_id: str) -> bytes:
-    """Файл документа — в потоке; файла нет — _Missing, шара не отвечает — OcrError."""
+async def _read(user_id: int, media_id: str) -> bytes:
+    """Файл документа: путь — с цикла событий (база), чтение — в потоке; строки media или файла нет — _Missing,
+    шара не отвечает — OcrError, прочий отказ (423 заперто) — OcrError его словами, а не «удалён»."""
     try:
-        return media.path(user_id, media_id).read_bytes()
-    except (HTTPException, FileNotFoundError):
+        file = media.path(user_id, media_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise _Missing("файл документа удалён") from None
+        raise OcrError(e.detail["message"]) from None
+    try:
+        return await asyncio.to_thread(file.read_bytes)
+    except FileNotFoundError:
         raise _Missing("файл документа удалён") from None
     except OSError:
         raise OcrError("хранилище недоступно") from None
@@ -479,7 +487,7 @@ def _read(user_id: int, media_id: str) -> bytes:
 async def _recognize_pages(job: Job, row) -> str:
     """Страницы `waiting` по порядку; итог — текст документа."""
     stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
-    source = await asyncio.to_thread(_read, job.user_id, row["source_media_id"]) if row["source_media_id"] else None
+    source = await _read(job.user_id, row["source_media_id"]) if row["source_media_id"] else None
     waiting = state.DB.execute("SELECT n, media_id FROM scan_pages WHERE scan_id = ? AND state = 'waiting' ORDER BY n",
                                (job.id,)).fetchall()
     for page in waiting:
@@ -488,7 +496,7 @@ async def _recognize_pages(job: Job, row) -> str:
         drawn = None                                      # PNG страницы PDF, уже нарисованный (повтор — `retry`)
         if source is not None and page["media_id"]:
             try:
-                drawn = await asyncio.to_thread(_read, job.user_id, page["media_id"])
+                drawn = await _read(job.user_id, page["media_id"])
             except _Missing:                              # файла нет — нарисовать заново; шара не отвечает —
                 pass                                      # отказ документа, прежний PNG остаётся
         try:
@@ -497,8 +505,7 @@ async def _recognize_pages(job: Job, row) -> str:
             elif source is not None:
                 png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
             else:
-                png = await asyncio.to_thread(ocr_render.photo_png,
-                                              await asyncio.to_thread(_read, job.user_id, page["media_id"]))
+                png = await asyncio.to_thread(ocr_render.photo_png, await _read(job.user_id, page["media_id"]))
         except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
             png = None
         if png is not None and source is not None and drawn is None:
@@ -618,6 +625,9 @@ async def run(job: Job) -> None:
 
 
 async def _runner(user_id: int) -> None:
+    # задача создана запросом и унаследовала его закрытые разделы (`auth.guard`): раннеру они чужие — свой файл
+    # документа он читает при любой защите (контекст задачи — копия, запрос это не трогает)
+    lock_policy.RESTRICTED.set(frozenset())
     try:
         while True:
             row = state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND state = 'queued'"
@@ -654,13 +664,38 @@ async def request_cancel(user_id: int, scan_id: str) -> str:
 
 
 def recover() -> None:
-    """После перезапуска раннеров нет: ждущие и идущие — ошибка «прервано перезапуском», у
-    документов из чата — пометка во вложении."""
-    rows = state.DB.execute(f"SELECT id FROM scans WHERE state IN {RUNNING}").fetchall()
+    """После перезапуска раннеров нет: идущие — ошибка «прервано перезапуском», у документов из чата — пометка во
+    вложении. Ждущие остаются в очереди — их продолжит `resume_queued`; кроме сканов вложений уже отправленного
+    хода чата: его ответ `chat.recover` пометил прерванным, а ждущие сканы прерванного хода отменяются, как при
+    «Остановить»."""
+    rows = state.DB.execute(
+        "SELECT id FROM scans s WHERE state IN ('working', 'cancelling') OR (state = 'queued' AND origin = 'chat'"
+        " AND EXISTS (SELECT 1 FROM attachments a WHERE a.id = s.attachment_id AND a.message_id IS NOT NULL))").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
     if rows:
         log.warning("распознавания: %d прервано перезапуском", len(rows))
+
+
+def resume_queued() -> None:
+    """Старт службы (после recover и state.HTTP): ждущие документы — снова в очередь своего пользователя с
+    подключением документа (его нет — ошибка словами), раннер — с поколением истории старта
+    (`operations.snapshot`): очистка истории после него их сохранение запрещает."""
+    rows = state.DB.execute("SELECT id, user_id, connection_id FROM scans WHERE state = 'queued'"
+                            " ORDER BY created, rowid").fetchall()
+    for row in rows:
+        try:
+            conn = connections.get(row["user_id"], row["connection_id"])
+        except HTTPException:
+            _finish(row["id"], "error", NO_CONNECTION)
+            continue
+        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, stage_at=clock.NOW())
+    users = {JOBS[row["id"]].user_id for row in rows if row["id"] in JOBS}
+    for uid in users:
+        with operations.restore(operations.snapshot(uid)):
+            kick(uid)
+    if users:
+        log.info("распознавания: продолжены ждущие у %d пользователей", len(users))
 
 
 async def stop_user(user_id: int) -> None:
