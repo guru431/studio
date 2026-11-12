@@ -33,6 +33,7 @@ import manage
 import media
 import operations
 import profile
+import push
 import sections
 import security
 import security_log
@@ -250,7 +251,7 @@ async def get_storage():
     if PROBE is None or PROBE.done():
         PROBE = _start_probe(state.CFG.media_dir)
     files, since = media.waiting()
-    out = {"pending": {"files": files, "since": since}, "orphans": media.orphans()}
+    out = {"pending": {"files": files, "since": since}, "orphans": media.orphans(), "check": _last_check()}
     probe = asyncio.wrap_future(PROBE)
     done, _ = await asyncio.wait({probe}, timeout=PROBE_SEC)
     if not done:
@@ -292,9 +293,65 @@ async def start_backup_check(admin: auth.User = Depends(auth.require_admin)):
     global CHECK
     if CHECK is not None and not CHECK.done():
         raise HTTPException(409, {"code": "running", "message": "проверка копии уже идёт"})
+    loop = asyncio.get_running_loop()
     CHECK = _daemon("studio-backup-check", _check_backup)
+    # итог — и в settings, как у ночной проверки (с цикла событий: state.DB — его соединение)
+    CHECK.add_done_callback(lambda done: loop.call_soon_threadsafe(_record_panel_check, done))
     log.info("администратор %d: проверка копии базы", admin.id)
     return {"state": "running"}
+
+
+def _record_panel_check(done: concurrent.futures.Future) -> None:
+    """Итог проверки из панели — последним итогом; администратор видит его сам, уведомлять не о чем.
+    Отказ самой проверки (CHECK_FAILED) — без чисел, не записывается."""
+    result = None if done.cancelled() or done.exception() else done.result()
+    if result is not None and result is not CHECK_FAILED:
+        manage.record_check(state.DB, result, notified=True)
+
+
+def _last_check() -> "dict | None":
+    """Последний записанный итог проверки новейшей копии (ночной или из панели) с возрастом; None — не было."""
+    last = manage.last_check(state.DB)
+    return None if last is None else {k: last[k] for k in ("ok", "problems", "at", "backup_at")} | {
+        "age": clock.NOW() - last["at"]}
+
+
+#: как часто служба смотрит итог ночной проверки копии (его пишет manage.py verify-backup другим процессом)
+CHECK_WATCH_SEC = 900
+CHECK_NOTICE = "Копия базы не поднимается: проблем — {}. Подробности — «Администрирование» → «Хранилище»"
+
+
+def notify_failed_check() -> int:
+    """Провальный итог, о котором ещё не сообщали, — push и ntfy активным администраторам, один раз:
+    отметка `notified` ставится сравнением с прочитанным значением, новый итог между чтением и отметкой
+    достанется следующему проходу. Возвращает число уведомлённых."""
+    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (manage.CHECK_KEY,)).fetchone()
+    last = json.loads(row["value"]) if row else None
+    if last is None or last["notified"]:
+        return 0
+    marked = json.dumps(last | {"notified": True})
+    if state.DB.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?",
+                        (marked, manage.CHECK_KEY, row["value"])).rowcount != 1:
+        return 0
+    admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
+    for uid in admins:
+        push.notify_later(uid, CHECK_NOTICE.format(last["problems"]), "admin", "backup-check", title="Студия")
+    log.warning("backup-check: копия не поднимается, уведомлены администраторы (%d)", len(admins))
+    return len(admins)
+
+
+async def _watch_checks() -> None:
+    while True:
+        try:
+            notify_failed_check()
+        except Exception as e:                    # noqa: BLE001 — наблюдение не должно вставать
+            log.warning("backup-check: сбой наблюдения (%s)", type(e).__name__)
+        await clock.SLEEP(CHECK_WATCH_SEC)
+
+
+def start_check_watch() -> asyncio.Task:
+    """Первый проход — сразу: провал, записанный, пока служба не работала, сообщается после старта."""
+    return asyncio.create_task(_watch_checks())
 
 
 @router.get("/backup-check")

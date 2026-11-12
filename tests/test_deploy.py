@@ -210,7 +210,11 @@ def test_backup_timer_runs_as_the_service_user():
     for name in ("User", "Group", "EnvironmentFile", "Environment"):
         assert directives(BACKUP, name) == directives(UNIT, name), name
     assert directives(BACKUP, "Type") == ["oneshot"]
-    assert directives(BACKUP, "ExecStart") == ["/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py backup"]
+    manage_py = "/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py"
+    assert directives(BACKUP, "ExecStart") == [f"{manage_py} backup", f"{manage_py} verify-backup"]
+    docker = [s.rsplit("/manage.py ", 1)[1]
+              for s in directives((DEPLOY / "docker" / "studio-backup.service").read_text(encoding="utf-8"), "ExecStart")]
+    assert docker == ["backup", "verify-backup"]           # ночная проверка — сразу после удачной копии
     assert directives(TIMER, "OnCalendar") == ["*-*-* 04:30"] and directives(TIMER, "Persistent") == ["true"]
     assert "WantedBy=timers.target" in TIMER
     assert "systemctl enable --now --quiet studio-backup.timer" in INSTALL

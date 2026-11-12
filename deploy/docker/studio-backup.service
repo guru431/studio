@@ -8,5 +8,7 @@ RequiresMountsFor=/mnt/storage/SharedData/studio
 Type=oneshot
 WorkingDirectory=/opt/services/studio
 ExecStart=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py backup
+# Only after a successful copy: its short result goes to settings, a failure is pushed to admins.
+ExecStart=/usr/bin/docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py verify-backup
 TimeoutStartSec=30min
 UMask=0077

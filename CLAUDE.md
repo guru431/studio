@@ -111,7 +111,8 @@ minor для возможностей, major для несовместимых �
 ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 10001 с корнем только для чтения и пределом 2 ГБ;
 база и медиа — внешние bind mounts, секрет — `/etc/studio/studio.env` (0600 root). `studio-docker.service`
 поднимает Compose после монтирования шары, `studio-backup.timer` в 04:30 запускает согласованную копию базы
-из контейнера; сохраняются 7 последних копий на шаре. Apache на прежнем хосте завершает HTTPS и проксирует
+из контейнера и её проверку `verify-backup` (итог — в `settings`, провал — push администраторам); сохраняются
+7 последних копий на шаре. Apache на прежнем хосте завершает HTTPS и проксирует
 на ограниченный nginx контейнера. Профиль установки — `deploy/local-profile.sh`, `STUDIO_RUNTIME=docker`.
 Подробно — [deploy-docker](docs/architecture/deploy-docker.md); прежняя нативная установка и подробности
 совместимости схемы — [deploy-host](docs/architecture/deploy-host.md).
