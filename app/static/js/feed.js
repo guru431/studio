@@ -176,12 +176,14 @@ export function pickerList(list, { cls, name, state, pick, empty, moreId }) {
     const { items, current } = p;
     const nodes = [];
     const seen = new Set();
+    const shownDays = new Set();
     let last = '';
     for (const item of items) {
       const label = dayTitle(item.created);
       if (label !== last) {
         if (!days.has(label)) days.set(label, make('p', { class: 'tr-group' }, label));
         nodes.push(days.get(label));
+        shownDays.add(label);
         last = label;
       }
       const { id } = item;
@@ -201,6 +203,7 @@ export function pickerList(list, { cls, name, state, pick, empty, moreId }) {
       nodes.push(r.node);
     }
     for (const id of [...rows.keys()]) if (!seen.has(id)) rows.delete(id);
+    for (const label of [...days.keys()]) if (!shownDays.has(label)) days.delete(label);
     if (!items.length) nodes.push(none);
     else if (!p.done) {
       more.disabled = p.paging;
