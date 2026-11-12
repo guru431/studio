@@ -428,6 +428,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .hint.hint-bar .badge svg { width: 20px; height: 20px; }
 .hint.hint-bar p { flex: 1 1 200px; }
 .split-main .hint.hint-bar { margin-top: var(--space-6); }
+/* «Студия обновилась» (stale.js): страница со статикой прежней выкладки — сверху, поверх раздела */
+.update-bar { position: fixed; z-index: var(--z-menu); top: calc(var(--space-4) + env(safe-area-inset-top, 0px)); left: 50%;
+  transform: translateX(-50%); width: max-content; max-width: calc(100 * var(--vw) - 2 * var(--space-6)); display: flex;
+  flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-4) var(--space-6);
+  padding: var(--space-4) var(--space-6); border-radius: var(--r-card); background: var(--surface-1); color: var(--text-1);
+  box-shadow: var(--shadow-2); }
 
 /* ---- страницы настроек: профиль и панель --------------------------------------- */
 
@@ -1006,7 +1012,7 @@ label.chip { cursor: pointer; }
 /* значки icons.js вместо текстовых символов (×, ⋯, ↻, ⓘ, ⏻) — по размеру прежнего символа */
 :is(.code-tab-close, .code-image-remove) svg.ico { width: 14px; height: 14px; }
 :is(#code-project-refresh, .code-agent-info, .code-file-menu, #code-open-file-actions, #code-desktop-disconnect,
-  #code-desktop-close) svg.ico { width: 16px; height: 16px; }
+  #code-desktop-close, .link-menu) svg.ico { width: 16px; height: 16px; }
 #code-project-refresh > span, .code-agent-info > span { display: inline-grid; place-items: center; }
 
 /* просмотр во весь экран */

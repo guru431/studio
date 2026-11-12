@@ -44,6 +44,26 @@ def test_every_section_has_an_icon_and_no_module_keeps_its_own_table():
         assert not re.search(r"^(export )?const ICONS = ", text, re.M), path.name
 
 
+def test_login_returns_only_to_screens_the_router_knows():
+    """auth.PAGE_SECTIONS (куда вернуть после входа) — те же экраны, что LOADERS роутера app.js."""
+    import auth
+    loaders = re.findall(r"^  (\w+): \(\) => import\(", (JS / "app.js").read_text(encoding="utf-8"), re.M)
+    assert loaders and tuple(loaders) == auth.PAGE_SECTIONS
+
+
+def test_svg_markup_lives_only_in_icons_js():
+    """Ни строк `<svg`, ни путей рисунка вне icons.js: копии расходились с набором (размер «Стопа», пути «Повторить»
+    и скрепки). Значки кнопок index.html ставят app.js и lock.js; сторонние библиотеки (vendor/) — не наши."""
+    markup = re.compile(r"<svg|viewBox|<path |<rect |<circle ")
+    for path in [*JS.glob("*.js"), *STATIC.glob("*.html")]:
+        if path.name == "icons.js":
+            continue
+        found = markup.search(path.read_text(encoding="utf-8"))
+        assert found is None, (path.name, found and found.group(0))
+    # символ-кнопка «⋯» — значок more и слова в aria-label
+    assert "button('⋯'" not in (JS / "settings.js").read_text(encoding="utf-8")
+
+
 def test_old_names_are_gone_from_the_interface():
     """«Речь» стала «Озвучкой», раздел #/ocr везде «Сканы», «Панель» администратора — «Администрирование»."""
     for path in [*JS.glob("*.js"), *STATIC.glob("*.html")]:

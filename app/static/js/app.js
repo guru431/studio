@@ -36,6 +36,7 @@ import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
+import { lazy } from './stale.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -54,6 +55,9 @@ const LOADERS = {
 const SECTIONS = Object.fromEntries(Object.entries(LOADERS).map(([id, load]) =>
   [id, { title: sectionName(id), admin: id === 'admin', load }]));
 const HINTS = Object.fromEntries(SECTION_LIST.filter((s) => s.hint).map((s) => [s.id, s.hint]));
+/** Клавиши разделов (sectionKey): на macOS Option+цифра вводит символы — там Control+Option. */
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const HOTKEY = MAC ? 'Control+Alt+' : 'Alt+';
 
 const view = document.getElementById('view');
 const preloadSection = document.getElementById('theme-start')?.preloadSection || (() => {});
@@ -189,10 +193,10 @@ async function render() {
   }
   let module;
   try {
-    module = await SECTIONS[route.section].load();
-  } catch {
+    module = await lazy(SECTIONS[route.section].load);
+  } catch (err) {               // прежняя версия статики после выкладки — плашка «Студия обновилась» (stale.js)
     module = { mount(node) { node.replaceChildren(head(SECTIONS[route.section].title),
-      notice('wait', 'Раздел не загрузился. Проверьте связь и обновите страницу.', 'empty')); }, unmount() {} };
+      notice('wait', err.message, 'empty')); }, unmount() {} };
   }
   if (mine !== renders) return;
   cancelRecording();                            // запись голоса прежнего раздела не переживает его
@@ -225,6 +229,11 @@ function announce(section) {
  * (code-activity.js). Подпись остаётся видимой на узком экране и продублирована в aria-label. */
 function buildRail() {
   const rail = document.getElementById('rail');
+  const search = document.getElementById('search-open');
+  search.append(svgIcon('search'));
+  search.setAttribute('aria-keyshortcuts', `${HOTKEY}/`);
+  search.title = `Поиск · ${HOTKEY}/`;
+  document.getElementById('jobs').prepend(svgIcon('jobs'));
   const spacer = rail.querySelector('.spacer');
   let group = null;
   for (const s of SECTION_LIST) {
@@ -234,11 +243,31 @@ function buildRail() {
         el('span', { id: 'code-inbox-dot', class: 'tab-dot', 'aria-hidden': 'true', hidden: '' }))
       : el('span', { class: 'tab-icon' }, svgIcon(s.id),
         el('span', { class: 'tab-count section-running-count', 'aria-hidden': 'true', hidden: '' }));
+    const keys = `${HOTKEY}${SECTION_LIST.indexOf(s) + 1}`;
     const tab = el('a', { class: group !== null && s.group !== group ? 'tab group-start' : 'tab', href: `#/${s.id}`,
-      'data-section': s.id, 'aria-label': s.name }, glyph, el('span', {}, s.name));
+      'data-section': s.id, 'aria-label': s.name, 'aria-keyshortcuts': keys, title: `${s.name} · ${keys}` },
+      glyph, el('span', {}, s.name));
     group = s.group;
     rail.insertBefore(tab, spacer);
   }
+}
+
+/** Клавиши разделов на компьютере: Alt+1…8 — разделы в порядке рельса (реестр sections-meta.js), Alt+/ — «Поиск»;
+ * на macOS — Control+Option (Option+цифра там вводит символы). По event.code — работают и в русской раскладке.
+ * Не срабатывают в открытом окне (dialog), при наборе IME, с Shift/Meta (и Ctrl вне macOS: Ctrl+Alt — это AltGr) и в
+ * contenteditable. В обычном поле работают: Alt+цифра текста не вводит, а поле задания «Агентов» и «Чата» держит фокус.
+ * Клавиши «Агентов» (code.js shortcut: Ctrl+Alt+←/→, Ctrl+K) с этими не пересекаются. */
+function sectionKey(event) {
+  if (event.defaultPrevented || event.isComposing || event.repeat || !event.altKey || event.shiftKey || event.metaKey
+    || event.ctrlKey !== MAC) return;
+  if (document.querySelector('dialog[open]')
+    || (event.target instanceof Element && event.target.closest('[contenteditable]:not([contenteditable="false"])'))) return;
+  const digit = /^Digit([1-9])$/.exec(event.code);
+  const target = event.code === 'Slash' ? document.getElementById('search-open')
+    : digit ? document.querySelectorAll('#rail a.tab[data-section]')[Number(digit[1]) - 1] : null;
+  if (!target) return;
+  event.preventDefault();
+  location.hash = target.getAttribute('href');
 }
 
 function openMenu(open) {
@@ -339,6 +368,7 @@ async function enter(worker) {
   setupJobs({ navigate });
   mobileNavigation = setupMobileNavigation(me);
   window.addEventListener('hashchange', render);
+  document.addEventListener('keydown', sectionKey);
   await render();
   setupCodeActivity();
   await worker;

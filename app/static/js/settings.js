@@ -41,6 +41,7 @@ import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { recordingName, startRecording } from './mic.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
+import { icon } from './icons.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
 
 export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
@@ -1331,7 +1332,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         await changed();
       }),
       button('Удалить подключение', { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)));
-    const menu = button('⋯', { class: 'btn btn-sm link-menu', 'aria-label': 'Ещё', 'aria-expanded': 'false' }, () => {
+    const menu = button(icon('more'), { class: 'btn btn-sm link-menu', 'aria-label': 'Ещё', title: 'Ещё',
+      'aria-expanded': 'false' }, () => {
       actions.hidden = !actions.hidden;
       menu.setAttribute('aria-expanded', String(!actions.hidden));
     });

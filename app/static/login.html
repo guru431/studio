@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
 <script src="/static/theme.js?v={{v}}"></script>
+<script src="/static/login.js?v={{v}}" defer></script>
 </head>
 <body class="solo">
 <form class="solo-card" method="post" action="/login">
@@ -25,6 +26,7 @@
   <input class="input" id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required autofocus>
   <label for="password">Пароль</label>
   <input class="input" id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+  <input type="hidden" id="next" name="next">
   <p class="error" role="alert">{{error}}</p>
   <button class="btn btn-accent" id="submit" type="submit">Войти</button>
 </form>
