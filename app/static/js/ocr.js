@@ -22,7 +22,7 @@ import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
-import { createPicker, pickerList } from './feed.js';
+import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
 import { el, openDialog, plural, words } from './ui.js';
@@ -62,6 +62,7 @@ function build(view, ctx) {
   let picked = false;          // документ выбрали сами (список, загрузка): ?id из адреса его не перебивает
   let shownId = null;          // документ, чья страница сейчас в листалке
   let at = 0;                  // номер показанной страницы (с 0)
+  let busy = null;             // блок «идёт» выбранного документа (feed.busyBlock): опрос меняет в нём только текст
   const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
     show() {
@@ -252,24 +253,16 @@ function build(view, ctx) {
     title.textContent = item ? item.name : NAMES.ocr;
     if (!item) {
       shownId = null;
+      busy = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите документ в списке.'
         : 'Загрузите PDF-скан или фото страниц — студия распознает текст.'));
       return;
     }
     const nodes = [];
-    if (RUNNING.has(item.state)) {
-      const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-cancel' }, 'Отменить');
-      cancel.addEventListener('click', async () => {
-        cancel.disabled = true;
-        try {
-          await api('POST', `/api/ocr/${item.id}/cancel`);
-        } catch (err) {
-          error.textContent = words(err);
-        }
-        refresh();
-      });
-      nodes.push(el('div', { class: 'tr-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('p', {}, item.detail), cancel));
+    busy = RUNNING.has(item.state) ? busyBlock(busy, item, { id: 'ocr-cancel', url: '/api/ocr',
+      fail: (err) => { error.textContent = words(err); }, after: refresh }) : null;
+    if (busy) {
+      nodes.push(busy.box);
     } else if (item.state !== 'done') {
       nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
     }
@@ -303,7 +296,7 @@ function build(view, ctx) {
     }
     if (acts.children.length) nodes.push(acts);
     nodes.push(...pageView(item));
-    body.replaceChildren(...nodes);
+    keep(body, nodes);
   }
 
   /* загрузка */

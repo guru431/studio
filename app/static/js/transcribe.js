@@ -29,7 +29,7 @@ import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
-import { createPicker, pickerList } from './feed.js';
+import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -63,6 +63,7 @@ export function asText(segments) {
 function build(view, ctx) {
   let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
+  let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
   let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
   const records = createPicker({ url: '/api/transcripts', size: PAGE, pollMs: POLL_MS,
@@ -288,24 +289,16 @@ function build(view, ctx) {
     title.textContent = item ? item.name : 'Расшифровка';
     if (!item) {
       editing = null;
+      busy = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите запись в списке.'
         : 'Загрузите запись разговора — студия расшифрует её по собеседникам.'));
       return;
     }
     const nodes = [];
-    if (RUNNING.has(item.state)) {
-      const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-cancel' }, 'Отменить');
-      cancel.addEventListener('click', async () => {
-        cancel.disabled = true;
-        try {
-          await api('POST', `/api/transcripts/${item.id}/cancel`);
-        } catch (err) {
-          error.textContent = words(err);
-        }
-        refresh();
-      });
-      nodes.push(el('div', { class: 'tr-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('p', {}, item.detail), cancel));
+    busy = RUNNING.has(item.state) ? busyBlock(busy, item, { id: 'tr-cancel', url: '/api/transcripts',
+      fail: (err) => { error.textContent = words(err); }, after: refresh }) : null;
+    if (busy) {
+      nodes.push(busy.box);
     } else if (item.state !== 'done') {
       nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
     }
@@ -369,7 +362,7 @@ function build(view, ctx) {
         nodes.push(el('div', { class: 'tr-edit-bar' }, save, cancel));
       }
     }
-    body.replaceChildren(...nodes);
+    keep(body, nodes);
     for (const area of body.querySelectorAll('.tr-edit-text')) grow(area);
     playing();
   }
