@@ -135,6 +135,24 @@ def seal() -> int:
     return len(rows)
 
 
+def disown() -> int:
+    """При старте: ссылки на агентские чаты, созданные не владельцем компьютера (участник проекта прежним кодом
+    или до отката), — прочь. Владелец их не видел и не мог отключить, а уникальный индекс `chat_shares_agent`
+    не давал ему поделиться тем же чатом."""
+    gone = state.DB.execute("DELETE FROM chat_shares WHERE agent_id IS NOT NULL AND user_id IS NOT"
+                            " (SELECT user_id FROM agents WHERE id = chat_shares.agent_id)").rowcount
+    if gone:
+        log.info("ссылки «Поделиться»: удалено ссылок участников на чужие компьютеры — %d", gone)
+    return gone
+
+
+def _own_computer(request: Request, aid: int) -> None:
+    """Ссылку на агентский чат создаёт и отзывает только владелец компьютера: участник проекта видит его чаты,
+    но публиковать их наружу от своего имени не может (CLAUDE.md «Пользователь видит своё и явно выданные…»)."""
+    if claude_code.own_agent(request, aid)["user_id"] != request.state.user.id:
+        raise _refuse(403, "owner_only", "ссылкой на чат проекта делится только владелец компьютера")
+
+
 def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, session_id=None, engine=None):
     _expire()
     return state.DB.execute(
@@ -171,7 +189,7 @@ async def _store(request: Request, body: ShareIn, snapshot: dict, expected, file
     if source.get("agent_id"):
         await claude_code.ask(request, source["agent_id"], "history", project=source["project"],
                               chat=source["session_id"], before=None, limit=1)
-        claude_code.own_agent(request, source["agent_id"])
+        _own_computer(request, source["agent_id"])
     _owner_open(request, "code" if source.get("agent_id") else "chat")
     if source.get("chat_id"):
         chat._chat_row(request.state.user.id, source["chat_id"])
@@ -297,6 +315,7 @@ async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, 
 @router.post("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=201)
 async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn, request: Request):
     source = _agent_source(request, aid, pid, session_id)
+    _own_computer(request, aid)
     expected = _owned(request, **source)
     snapshot = await agent_snapshot(request, aid, pid, session_id, body.title)
     return await _store(request, body, snapshot, expected, **source)
@@ -305,6 +324,7 @@ async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn,
 @router.delete("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=204)
 async def revoke_agent_share(aid: int, pid: str, session_id: str, request: Request):
     source = _agent_source(request, aid, pid, session_id)
+    _own_computer(request, aid)
     row = _owned(request, **source)
     if row:
         state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (row["id"],))

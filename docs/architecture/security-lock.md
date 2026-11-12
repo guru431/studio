@@ -69,14 +69,18 @@
   название. Можно назвать текущую и другие собственные живые сессии. Защита — обычные guard, CSRF и блокировка;
   чужая или истёкшая сессия — 404. `DELETE /api/me/sessions/<признак>` — завершить (текущая — 409 `current`): строка
   удаляется, push/ntfy уходят каскадом, `bridge.forget(..., close_computers=True)` — доступ теряется сразу.
-- `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться», push/ntfy (и шаблон
-  `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents, `bridge.record('revoke')`, `bridge.drop`).
+- `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться» (и на чаты своих компьютеров),
+  всегда — выдачи проектов своих компьютеров (`project_access.granted`, `project_access.drop`,
+  `project_access.wake`), push/ntfy (и шаблон `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents,
+  `bridge.record('revoke')`, `bridge.drop`).
 - `GET /api/me/security-events?before=` — журнал `security_events` (шаг 34; `kind` без CHECK, каскад от учётки).
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
   (password|pin|passkey), `pin_exhausted`, смена пароля, `session_end`, `emergency`, `pin_set`, `pin_delete`,
   `passkey_add`, `passkey_delete`, `password_reset`, `share_create`, `share_revoke`, `share_pin_fail`,
-  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest). Адрес — открыто, как
+  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
+  `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
+  подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.
 - Шумные неудачи `security_log.NOISY` (`login_fail`, `share_pin_fail`) сворачиваются в пределах
   `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), `created` —

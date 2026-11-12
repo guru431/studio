@@ -3,7 +3,8 @@
  *
  * Сессия — признак сервера (не дайджест и не cookie), своё имя, браузер, ОС, доступная модель, последний IP,
  * время входа и активности, push и ntfy. Текущую закрывает обычный «Выйти». Аварийный выход — с паролем
- * учётки: все сессии, ссылки «Поделиться», push и ntfy, по выбору ключи компьютеров; затем страница входа.
+ * учётки: все сессии, ссылки «Поделиться», доступы участников к проектам, push и ntfy, по выбору ключи компьютеров;
+ * затем страница входа.
  * Журнал — новые сверху страницами сервера, «Показать ещё» — по `next`. */
 import { api } from './api.js';
 import { dateTime } from './time.js';
@@ -15,7 +16,8 @@ const EVENTS = { login: 'вход', login_fail: 'неверный пароль',
   emergency: 'аварийный выход', share_create: 'ссылка создана', share_revoke: 'ссылка отозвана',
   share_pin_fail: 'неверный PIN ссылки', share_locked: 'ссылка остановлена', pin_set: 'PIN задан',
   pin_delete: 'PIN убран', passkey_add: 'ключ добавлен', passkey_delete: 'ключ удалён',
-  password_reset: 'пароль сброшен администратором' };
+  password_reset: 'пароль сброшен администратором', project_member_add: 'доступ к проекту выдан',
+  project_member_remove: 'доступ к проекту отозван' };
 const DETAILS = { password: 'паролем', pin: 'PIN', passkey: 'ключом', bridge: 'мост', login: '', chat: 'чат',
   code: 'агенты', agents: 'и компьютеры', pause: 'на 15 минут', revoked: '— отключена' };
 
@@ -150,7 +152,8 @@ export function emergencyBlock(host) {
     const yes = button('Выйти везде', { class: 'btn btn-danger solid', id: 'emergency-confirm' });
     const fail = el('p', { class: 'error' });
     const dialog = openDialog(host, { id: 'emergency-dialog', title: 'Выйти на всех устройствах?', actions: [yes], body: [
-      el('p', {}, 'Все сессии, включая эту, завершатся; ссылки «Поделиться» отключатся; push и ntfy придётся включить заново.'
+      el('p', {}, 'Все сессии, включая эту, завершатся; ссылки «Поделиться» отключатся; участники потеряют доступ к '
+        + 'проектам ваших компьютеров; push и ntfy придётся включить заново.'
         + (agents.checked ? ' Компьютеры будут отвязаны — мосты войдут снова только с паролем.' : '')),
       fail] });
     yes.addEventListener('click', async () => {
@@ -167,7 +170,7 @@ export function emergencyBlock(host) {
   });
   return el('section', { class: 'block emergency-block' }, el('h2', {}, 'Аварийный выход'),
     el('p', { class: 'muted small' }, 'Если телефон или пароль могли попасть в чужие руки: завершает все сессии, '
-      + 'отключает ссылки «Поделиться», push и ntfy. История и настройки остаются.'),
+      + 'отключает ссылки «Поделиться», доступ участников к проектам, push и ntfy. История и настройки остаются.'),
     field('Пароль учётки', password, 'emergency-password'),
     el('label', { class: 'check' }, agents, 'Отозвать и ключи компьютеров (агенты)'),
     el('div', { class: 'row' }, start, note));
@@ -184,7 +187,7 @@ export function passwordResetNotice(me, navigate) {
       el('p', {}, `Пароль вашей учётки сбросил администратор ${moment(me.password_reset)}. Если вы об этом не просили, `
         + 'кто-то мог войти в учётку.'),
       el('p', {}, 'Проверьте «Сессии» и сделайте «Аварийный выход»: он завершит все сессии, отключит ссылки '
-        + '«Поделиться», push и ntfy.')] });
+        + '«Поделиться», доступ участников к проектам, push и ntfy.')] });
   open.addEventListener('click', () => {
     dialog.close();
     navigate('settings/security');
