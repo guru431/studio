@@ -466,11 +466,18 @@ async def _page_text(job: Job, png: bytes) -> str:
             _store(job)
 
 
-def _read(user_id: int, media_id: str) -> bytes:
-    """Файл документа — в потоке; файла нет — _Missing, шара не отвечает — OcrError."""
+async def _read(user_id: int, media_id: str) -> bytes:
+    """Файл документа: путь — с цикла событий (база), чтение — в потоке; строки media или файла нет — _Missing,
+    шара не отвечает — OcrError, прочий отказ (423 заперто) — OcrError его словами, а не «удалён»."""
     try:
-        return media.path(user_id, media_id).read_bytes()
-    except (HTTPException, FileNotFoundError):
+        file = media.path(user_id, media_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise _Missing("файл документа удалён") from None
+        raise OcrError(e.detail["message"]) from None
+    try:
+        return await asyncio.to_thread(file.read_bytes)
+    except FileNotFoundError:
         raise _Missing("файл документа удалён") from None
     except OSError:
         raise OcrError("хранилище недоступно") from None
@@ -479,7 +486,7 @@ def _read(user_id: int, media_id: str) -> bytes:
 async def _recognize_pages(job: Job, row) -> str:
     """Страницы `waiting` по порядку; итог — текст документа."""
     stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
-    source = await asyncio.to_thread(_read, job.user_id, row["source_media_id"]) if row["source_media_id"] else None
+    source = await _read(job.user_id, row["source_media_id"]) if row["source_media_id"] else None
     waiting = state.DB.execute("SELECT n, media_id FROM scan_pages WHERE scan_id = ? AND state = 'waiting' ORDER BY n",
                                (job.id,)).fetchall()
     for page in waiting:
@@ -488,7 +495,7 @@ async def _recognize_pages(job: Job, row) -> str:
         drawn = None                                      # PNG страницы PDF, уже нарисованный (повтор — `retry`)
         if source is not None and page["media_id"]:
             try:
-                drawn = await asyncio.to_thread(_read, job.user_id, page["media_id"])
+                drawn = await _read(job.user_id, page["media_id"])
             except _Missing:                              # файла нет — нарисовать заново; шара не отвечает —
                 pass                                      # отказ документа, прежний PNG остаётся
         try:
@@ -497,8 +504,7 @@ async def _recognize_pages(job: Job, row) -> str:
             elif source is not None:
                 png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
             else:
-                png = await asyncio.to_thread(ocr_render.photo_png,
-                                              await asyncio.to_thread(_read, job.user_id, page["media_id"]))
+                png = await asyncio.to_thread(ocr_render.photo_png, await _read(job.user_id, page["media_id"]))
         except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
             png = None
         if png is not None and source is not None and drawn is None:
@@ -618,6 +624,9 @@ async def run(job: Job) -> None:
 
 
 async def _runner(user_id: int) -> None:
+    # задача создана запросом и унаследовала его закрытые разделы (`auth.guard`): раннеру они чужие — свой файл
+    # документа он читает при любой защите (контекст задачи — копия, запрос это не трогает)
+    lock_policy.RESTRICTED.set(frozenset())
     try:
         while True:
             row = state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND state = 'queued'"

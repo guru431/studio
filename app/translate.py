@@ -63,6 +63,7 @@ import db
 import documents
 import exports
 import images
+import lock_policy
 import media
 import operations
 import ocr
@@ -409,10 +410,10 @@ async def _await_idle(job: Job):
     return state.DB.execute("SELECT * FROM translations WHERE id = ?", (job.id,)).fetchone()
 
 
-def _read_source(job: Job, media_id: str) -> bytes:
-    """Файл записи — в потоке; нет или шара не отвечает — отказ словами."""
+async def _read_source(job: Job, media_id: str) -> bytes:
+    """Файл записи; нет или шара не отвечает — отказ словами."""
     try:
-        return _read_media(job.user_id, media_id)
+        return await _read_media(job.user_id, media_id)
     except HTTPException as e:
         raise translate_text.TranslateError(e.detail["message"]) from None
 
@@ -432,7 +433,7 @@ async def _spot(job: Job, row):
     Текста нет — None (запись «готово» без модели); иначе — строка записи после `ocr.idle`."""
     job.stage = "распознаю снимок"
     _store(job)
-    png = await asyncio.to_thread(_read_source, job, row["source_media_id"])
+    png = await _read_source(job, row["source_media_id"])
     _check(job)
     freed_at = clock.NOW()                           # free_card — в начале borrowed
     try:
@@ -589,6 +590,7 @@ async def run(job: Job) -> None:
 
 
 async def _runner(user_id: int, lane: str) -> None:
+    lock_policy.RESTRICTED.set(frozenset())          # закрытые разделы запроса, создавшего раннер, ему чужие
     try:
         while True:
             row = state.DB.execute(f"SELECT id FROM translations WHERE user_id = ? AND state = 'queued'"
@@ -930,11 +932,18 @@ async def translate_file(request: Request):
     return _out(_row(uid, tid))
 
 
-def _read_media(user_id: int, media_id: str) -> bytes:
-    """Исходный файл записи — в потоке; нет — 409 gone, шара не отвечает — 503."""
+async def _read_media(user_id: int, media_id: str) -> bytes:
+    """Исходный файл записи: путь — с цикла событий (база), чтение — в потоке; нет — 409 gone, шара не
+    отвечает — 503; заперт (423) — как есть."""
     try:
-        return media.path(user_id, media_id).read_bytes()
-    except (HTTPException, FileNotFoundError):
+        file = media.path(user_id, media_id)
+    except HTTPException as e:
+        if e.status_code != 404:
+            raise
+        raise HTTPException(409, {"code": "gone", "message": FILE_GONE}) from None
+    try:
+        return await asyncio.to_thread(file.read_bytes)
+    except FileNotFoundError:
         raise HTTPException(409, {"code": "gone", "message": FILE_GONE}) from None
     except OSError:
         raise HTTPException(503, {"code": "storage", "message": "хранилище недоступно"}) from None
@@ -1014,7 +1023,7 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
         if row["kind"] == "photo":                   # PNG на шаре уже повёрнут — распознает задание
             text, pages, reader = None, None, _photo_reader(uid)
         else:
-            data = await asyncio.to_thread(_read_media, uid, media_id)
+            data = await _read_media(uid, media_id)
             text, pages, reader = await _read_file(uid, row["name"], data)
             if not media.alive(uid, media_id):       # удалён, пока читали
                 raise HTTPException(409, {"code": "gone", "message": FILE_GONE})

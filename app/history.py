@@ -81,9 +81,11 @@ async def _delete_all(user_id: int) -> int:
         raise
     # и ответ хода без фото, начатого, пока удалялись файлы: его диалога уже нет, а модель держала бы
     # карту до конца ответа, который некуда сохранить; и раннеры «Перевода» и «Сканов»: задание, попавшее в очередь
-    # мимо барьера, слало бы куски стёртой записи модели
+    # мимо барьера, слало бы куски стёртой записи модели (у «Сканов» — только живой раннер: release фоном второй
+    # раз не нужен)
     await chat.stop_user(user_id)
     await translate.stop_user(user_id)
-    await ocr.stop_user(user_id)
+    if user_id in ocr.RUNNERS:
+        await ocr.stop_user(user_id)
     log.info("история пользователя %d удалена", user_id)
     return media.pending(user_id)
