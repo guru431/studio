@@ -164,7 +164,7 @@ async def test_external_writer_can_be_left_running_while_explicitly_forking_its_
     assert result == {'available': True, 'forked': True}
     assert runner.aliases.target(runner.project, THREAD) == FORK
     assert runner.fake.writers == {THREAD: other}
-    assert ('thread/fork', {'threadId': THREAD}) in runner.fake.calls
+    assert ('thread/fork', {'threadId': THREAD, 'excludeTurns': True}) in runner.fake.calls
     assert not any(method in ('turn/start', 'turn/interrupt') for method, _ in runner.fake.calls)
 
 

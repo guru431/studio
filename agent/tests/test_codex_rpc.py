@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from studio_agent import codex_rpc, limits
 from studio_agent.codex_rpc import Client, RpcError
 
 
@@ -48,7 +49,7 @@ class Writer:
 
 class Process:
     def __init__(self):
-        self.stdout = asyncio.StreamReader()
+        self.stdout = asyncio.StreamReader(limit=limits.FRAME_MAX)  # как у spawn в `Client.connect`
         self.stdin = Writer(self)
         self.sent = []
 
@@ -123,3 +124,61 @@ async def test_eof_and_rpc_error_fail_pending_requests_without_exposing_body():
     assert await client.inbox.get() is None
     await client.disconnect()
     assert not client.methods
+
+
+async def _connected():
+    process = Process()
+
+    async def spawn(*args, **kwargs):
+        return process
+
+    client = Client(Path("codex.exe"), Path("C:/project"), spawn=spawn)
+    await client.connect()
+    return client, process
+
+
+async def _asked(client, process, method):
+    task = asyncio.create_task(client.request(method, {}))
+    await asyncio.sleep(0)
+    return task, process.sent[-1]["id"]
+
+
+async def test_history_line_longer_than_link_frame_is_read():
+    """`thread/read` всей истории — одна строка больше `limits.FRAME_MAX`: читается, канал живёт."""
+    client, process = await _connected()
+    task, rid = await _asked(client, process, "thread/read")
+    image = "data:image/png;base64," + "A" * (limits.FRAME_MAX + limits.MIB)
+    process.stdout.feed_data(json.dumps({"id": rid, "result": {"thread": {"image": image}}}).encode() + b"\n")
+    assert len((await task)["thread"]["image"]) == len(image)
+    assert await client.request("model/list", {}) == {"data": []}
+    await client.disconnect()
+
+
+@pytest.mark.parametrize("order", ["head", "tail"])
+async def test_line_over_limit_fails_only_its_request(monkeypatch, order):
+    """Длиннее `codex_rpc.LINE_MAX` — `too_large` ожидающему (id в начале или в конце строки);
+    прочие запросы и уведомления идут дальше, `transport` нет."""
+    monkeypatch.setattr(codex_rpc, "LINE_MAX", 4096)
+    monkeypatch.setattr(codex_rpc, "CHUNK", 1000)  # строка приходит кусками, перевод — внутри куска
+    client, process = await _connected()
+    big, rid = await _asked(client, process, "thread/read")
+    small, other = await _asked(client, process, "thread/list")
+    body = '"result":{"turns":"' + "x" * 10_000 + '"}'
+    line = f'{{"id":{rid},{body}}}' if order == "head" else f'{{{body},"id":{rid}}}'
+    process.stdout.feed_data(line.encode() + b"\n" + json.dumps({"id": other, "result": {"data": []}}).encode()
+                             + b'\n{"method":"thread/started","params":{}}\n')
+    with pytest.raises(RpcError) as error:
+        await big
+    assert error.value.too_large and not error.value.transport and error.value.method == "thread/read"
+    assert await small == {"data": []}
+    assert (await client.inbox.get())["method"] == "thread/started"
+    assert await client.request("model/list", {}) == {"data": []}
+    await client.disconnect()
+
+
+async def test_lines_split_chunks_and_keep_last_line_without_newline(monkeypatch):
+    monkeypatch.setattr(codex_rpc, "CHUNK", 3)
+    stream = asyncio.StreamReader()
+    stream.feed_data(b'{"a":1}\n\n{"b":2}')
+    stream.feed_eof()
+    assert [bytes(line) async for line in codex_rpc.lines(stream)] == [b'{"a":1}', b"", b'{"b":2}']
