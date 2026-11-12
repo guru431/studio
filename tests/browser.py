@@ -96,6 +96,9 @@ def launch(profile: Path):
     with errlog.open("wb") as err:
         proc = subprocess.Popen(
             [path, "--headless", "--disable-gpu", "--no-sandbox",
+             # Edge 157 из повышенного процесса перезапускает себя без повышения уже без наших флагов
+             # (не headless, без порта DevTools) и выходит с кодом 0; флаг запрещает перезапуск.
+             "--do-not-de-elevate",
              # Без поиска прокси и фоновых служб браузера: с ними отдельные запуски ждали по 15 с.
              "--no-proxy-server", "--no-first-run", "--disable-extensions",
              "--disable-background-networking", "--disable-component-update", "--disable-sync",
