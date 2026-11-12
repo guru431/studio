@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $compiler)) { throw 'Для сборки нуж
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
-    foreach ($name in @('install.ps1', 'studio_agent.pyw', 'requirements.txt', 'studio_agent/__init__.py')) {
+    foreach ($name in @('install.ps1', 'studio_agent.pyw', 'requirements.txt', 'constraints.txt', 'studio_agent/__init__.py')) {
         if ($null -eq $zip.GetEntry("studio-agent/$name")) { throw "В пакете нет $name" }
     }
 } finally { $zip.Dispose() }

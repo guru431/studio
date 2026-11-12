@@ -1,7 +1,8 @@
 # Docker Compose: установка, перенос и восстановление
 
 Основной запуск с 2026-11-11 — два контейнера из одного образа: `web` (FastAPI, Unix-сокет) и
-`ingress` (nginx). Образ включает Python 3.13, зависимости из `requirements.txt`, ffmpeg, Chromium,
+`ingress` (nginx). Образ включает Python 3.13, зависимости из `requirements.txt` с закреплёнными
+транзитивными пакетами `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`), ffmpeg, Chromium,
 закреплённый yt-dlp, общий `md2pdf.py` с проверкой SHA-256 и EXE/ZIP Windows-моста из того же HEAD.
 Работающие Windows-мосты при выкладке не перезапускаются: их каналы переподключаются сами.
 

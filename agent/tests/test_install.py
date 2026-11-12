@@ -22,7 +22,7 @@ TEST_ROOT = r"Software\studio-agent-test"
 RUN_KEY = TEST_ROOT + r"\Run"  # настоящий Run установка в тестах не трогает
 IGNORED = ["tests/test_app.py", ".claude/claude-switch.ps1", "CLAUDE.md", "AGENTS.md", "FINDINGS.md",
            "FINDINGS-archive.md", "IDEAS.md", "pytest.ini", "requirements-dev.txt", ".gitignore", ".gitattributes"]
-SHIPPED = ["install.cmd", "install.ps1", "requirements.txt", "studio_agent.pyw", "README.md", "studio_agent/app.py",
+SHIPPED = ["install.cmd", "install.ps1", "requirements.txt", "constraints.txt", "studio_agent.pyw", "README.md", "studio_agent/app.py",
            "studio_agent/theme.py"]
 
 

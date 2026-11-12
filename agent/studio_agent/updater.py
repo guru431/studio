@@ -128,7 +128,7 @@ def prepare(h: Path, release: dict) -> Path:
         commands = [
             [sys._base_executable, '-m', 'venv', str(stage / '.venv')],
             [str(stage / '.venv/Scripts/python.exe'), '-m', 'pip', 'install', '--disable-pip-version-check',
-             '-q', '-r', str(stage / 'requirements.txt')],
+             '-q', '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
             [str(stage / '.venv/Scripts/python.exe'), '-c', 'import studio_agent.app'],
         ]
         for command in commands:
