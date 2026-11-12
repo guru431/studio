@@ -718,7 +718,8 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
     assert v["securityCurrent"] == "security"
-    assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Аварийный выход", "Журнал безопасности"]
+    assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
+                             "Журнал безопасности"]
     assert v["appearance"] == ["Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
                            "Это устройство — в других браузерах и на других устройствах свой выбор.",
@@ -999,7 +1000,8 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     finally:
         copy.unlink()
     assert not r.get("failed"), r
-    share, backup, queue, orphans = r["values"]["lines"]
+    share, backup, check, queue, orphans = r["values"]["lines"]
+    assert check[0] == "check" and check[1].startswith("ещё не было") and check[2] is False   # ночная ещё не шла
     assert orphans[0] == "orphans" and orphans[2] is False
     assert orphans[1] == "проверки ещё не было" or ": удалено — " in orphans[1]
     assert share[0] == "share" and share[1].startswith("доступна, свободно ") and share[2] is False
@@ -3313,7 +3315,8 @@ def test_photo_preset_saves_and_applies(browser, live):
         ("wait", f"!{is_open('#preset-delete-dialog')}"), ("idle",),
         ("click", "#chip-preset"), ("wait", "!document.querySelector('#chip-preset-menu .preset-apply')"),
         ("eval", "gone", text_of("#chip-preset-menu .preset-list")), ("press", "Escape"),
-        # пресет прежнего кода с seed: применяется всё, кроме seed
+        # пресет прежнего кода с seed: применяется всё, кроме seed (поле пустое: иначе черновик вернёт «свой текст»)
+        set_value("#photo-prompt", ""),
         ("eval", "old", old), *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
         *go("photo"), ("wait", FEED_READY), ("eval", "spy", SPY),
         ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
@@ -8428,8 +8431,9 @@ CODE_TURN_TIMEOUT = """(() => { const real = window.fetch; window.fetch = (u, o)
 
 
 def test_code_turn_running_and_timeout_open_live(browser, live):
-    """«Отправить» отвергнут: 409 running (ход уже начат в другом месте) и 504 timeout (ход, может быть, начат) —
-    слова и live: страница показывает идущий ход снимком; задание остаётся в поле."""
+    """«Отправить» отвергнут: 409 running (ход уже начат в другом месте) — слова и live: страница показывает
+    идущий ход снимком, задание остаётся в поле. 504 timeout (ход, может быть, начат) — страница сверяет историю:
+    ход там есть — live без слов об ошибке, задание ушло из поля (повтор не начнёт его второй раз)."""
     from fake_bridge import pid
     login = "code-busy"
     live.add_user(login)
@@ -8461,11 +8465,12 @@ def test_code_turn_running_and_timeout_open_live(browser, live):
         machine.script = [{"k": "text", "text": "Начал"}]
         r = browser.drive(live.url + f"/#/{here}", [("wait", READY), code_loaded(CODE_CHAT_A),
             ("eval", "timeout", CODE_TURN_TIMEOUT), *code_send("Долгое"), ("wait", shown.format(text="Начал")),
+            ("wait", "document.querySelector('#code-text').value === ''"),
             ("eval", "status", "document.querySelector('#code-status').textContent")], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
-    assert r["values"]["status"] == "Компьютер не ответил"
+    assert r["values"]["status"] != "Компьютер не ответил"
     assert [q["text"] for q in code_requests(machine, "turn")] == ["Моё", "Долгое"]     # «Где-то ещё» — мимо студии
     assert not known_refusals(problems(r), 409), problems(r)
 
