@@ -93,6 +93,7 @@ async def lifespan(_app):
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
     chat_shares.seal()                           # снимки ссылок открытым текстом (до шага 37, откат) — шифром
+    chat_shares.disown()                         # ссылки участников на чужие компьютеры (прежний код, откат) — прочь
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     search.compose_once(state.DB)                # раз на базу: прежние тела индекса — в NFC
     chat_exports.clean_tmp()

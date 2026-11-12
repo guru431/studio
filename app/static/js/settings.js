@@ -3,7 +3,7 @@
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
  * «Агенты» — умолчания чатов и компьютеры) и «Очистка данных · Cleaner». «Учётка»: «Оформление» (тема и акцент
  * учётки, шрифт, масштаб, плотность и нижняя панель этого устройства, часовой пояс — appearance.js),
- * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, аварийный выход и журнал безопасности —
+ * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, доступы и ссылки, аварийный выход и журнал безопасности —
  * account-security.js), «Уведомления» (push, ntfy), «Данные» (хранилище, выгрузка, удаление истории),
  * «Ввод и интернет» (голосовой ввод, ключ Exa). Прежние адреса (`other` — «Прочее», `dictation`) ведут
  * на новые (OLD_IDS). Справа — выбранный раздел: его
@@ -28,7 +28,7 @@
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
-import { emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
+import { accessBlock, emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { accountLookBlock, deviceLookBlock } from './appearance.js';
 import { openMobileNavigationEditor } from './mobile-navigation.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
@@ -878,7 +878,8 @@ function notifyBlock() {
  * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
 const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
-  open: 'открыт', pin_ok: 'открыт PIN', pin_fail: 'неверный PIN', session_start: 'новый чат' };
+  open: 'открыт', pin_ok: 'открыт PIN', pin_fail: 'неверный PIN', session_start: 'новый чат',
+  member_add: 'доступ к проекту выдан', member_remove: 'доступ к проекту отозван' };
 
 function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   const list = el('ul', { class: 'agents', id: 'agents' });
@@ -950,16 +951,26 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
 
+/** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —
+ * с их файлами, образцы голосов, ссылки «Поделиться» и рабочее место «Агентов». */
+function wipeWhat() {
+  const sections = RAIL_SECTIONS.filter((s) => s.id !== 'code').map((s) => `«${s.name}»`).join(', ');
+  return `Удалятся безвозвратно: вся история разделов ${sections} вместе с файлами, образцы голосов, все ссылки `
+    + `«Поделиться», а в разделе «${NAMES.code}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, `
+    + 'Codex и OpenCode хранятся на компьютерах и останутся.';
+}
+
 function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
-    const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.'
-      + ' Чаты Claude Code, Codex и OpenCode хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
+    const text = el('p', {}, wipeWhat());
+    const kept = el('p', { class: 'muted small' }, 'Подключения, пресеты и ключи останутся, как и настройки, компьютеры, '
+      + 'выданные доступы к проектам и журнал безопасности.');
     const fail = el('p', { class: 'error' });
     const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
-    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, fail],
+    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, kept, fail],
       actions: [next, confirm] });
     next.addEventListener('click', () => {
       text.textContent = 'Точно? Отменить удаление нельзя.';
@@ -984,7 +995,8 @@ function wipeBlock(host, onWiped) {
     });
   });
   return el('section', { class: 'block' }, el('h2', {}, 'История'),
-    el('p', { class: 'muted small' }, 'Чаты, фото и видео этого профиля. Подключения не удаляются.'),
+    el('p', { class: 'muted small' }, 'История всех разделов с файлами, образцы голосов и ссылки «Поделиться» этого '
+      + 'профиля. Подключения, пресеты и ключи не удаляются.'),
     el('div', { class: 'row' }, start, note));
 }
 
@@ -1445,7 +1457,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'security') {
-      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), emergencyBlock(host), securityEventsBlock());
+      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
+        securityEventsBlock());
       return;
     }
     if (shown === 'notifications') {

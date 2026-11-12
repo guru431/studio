@@ -1,13 +1,15 @@
-/* Безопасность учётки (account.py): сессии с «Завершить», аварийный выход, журнал безопасности. Три
- * самостоятельных блока без привязки к месту в «Настройках» — их вызывает settings.js.
+/* Безопасность учётки (account.py): сессии с «Завершить», доступы и ссылки, аварийный выход, журнал безопасности.
+ * Самостоятельные блоки без привязки к месту в «Настройках» — их вызывает settings.js.
  *
  * Сессия — признак сервера (не дайджест и не cookie), своё имя, браузер, ОС, доступная модель, последний IP,
  * время входа и активности, push и ntfy. Текущую закрывает обычный «Выйти». Аварийный выход — с паролем
- * учётки: все сессии, ссылки «Поделиться», push и ntfy, по выбору ключи компьютеров; затем страница входа.
+ * учётки: все сессии, ссылки «Поделиться», доступы участников к проектам, push и ntfy, по выбору ключи компьютеров;
+ * затем страница входа.
  * Журнал — новые сверху страницами сервера, «Показать ещё» — по `next`. */
 import { api } from './api.js';
+import { sectionName } from './sections-meta.js';
 import { dateTime } from './time.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const DEVICES = { phone: 'Телефон', computer: 'Компьютер' };
 const EVENTS = { login: 'вход', login_fail: 'неверный пароль', logout: 'выход', unlock: 'открыто',
@@ -15,9 +17,10 @@ const EVENTS = { login: 'вход', login_fail: 'неверный пароль',
   emergency: 'аварийный выход', share_create: 'ссылка создана', share_revoke: 'ссылка отозвана',
   share_pin_fail: 'неверный PIN ссылки', share_locked: 'ссылка остановлена', pin_set: 'PIN задан',
   pin_delete: 'PIN убран', passkey_add: 'ключ добавлен', passkey_delete: 'ключ удалён',
-  password_reset: 'пароль сброшен администратором' };
+  password_reset: 'пароль сброшен администратором', project_member_add: 'доступ к проекту выдан',
+  project_member_remove: 'доступ к проекту отозван' };
 const DETAILS = { password: 'паролем', pin: 'PIN', passkey: 'ключом', bridge: 'мост', login: '', chat: 'чат',
-  code: 'агенты', agents: 'и компьютеры', pause: 'на 15 минут', revoked: '— отключена' };
+  code: 'агенты', agents: 'и компьютеры', pause: 'на 15 минут', revoked: '— отключена', all: '— все' };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -135,6 +138,108 @@ export function sessionsBlock(host) {
     list, el('div', { class: 'row' }, refresh, note));
 }
 
+/** «Доступы и ссылки» (GET /api/me/access): участники проектов ваших компьютеров — и к папкам, которых уже нет, — и
+ * ваши ссылки «Поделиться». «Отозвать» по строке, «Отозвать всё» — после подтверждения. Имя проекта — от моста, когда
+ * компьютер на связи и открыт PIN; иначе — начало id проекта. */
+export function accessBlock(host) {
+  const members = el('ul', { class: 'agents access-list', id: 'access-members', 'aria-label': 'Участники проектов' });
+  const shares = el('ul', { class: 'agents access-list', id: 'access-shares', 'aria-label': 'Ссылки «Поделиться»' });
+  const note = status('access-status');
+  const refresh = button('Обновить', { class: 'btn btn-sm', id: 'access-refresh' }, () => reload());
+  const all = button('Отозвать всё', { class: 'btn btn-sm btn-danger', id: 'access-revoke-all', hidden: true },
+    () => revokeAll());
+  let reading = 0;
+  let busy = false;
+
+  function project(item) {
+    if (item.missing) return `папка не найдена (проект ${item.project.slice(0, 8)})`;
+    return item.name ? `«${item.name}»` : `проект ${item.project.slice(0, 8)}`;
+  }
+
+  const controls = () => [refresh, all, ...members.querySelectorAll('button'), ...shares.querySelectorAll('button')];
+
+  async function act(request, message) {
+    if (busy) return;
+    busy = true;
+    for (const node of controls()) node.disabled = true;
+    try {
+      await request();
+      if (await reload()) say(note, message, 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      busy = false;
+      for (const node of controls()) node.disabled = false;
+    }
+  }
+
+  function memberRow(m) {
+    const where = `${m.computer} · ${project(m)}`;
+    return el('li', { class: 'agent session access-member', 'data-project': m.project },
+      el('div', { class: 'session-info' },
+        el('div', { class: 'row' }, el('b', {}, m.login), m.disabled ? el('span', { class: 'tag' }, 'заблокирован') : null,
+          m.missing ? el('span', { class: 'tag access-missing' }, 'папки нет') : null),
+        el('p', { class: 'small' }, where),
+        el('p', { class: 'muted small' }, `Выдан ${moment(m.created)}`)),
+      el('div', { class: 'session-actions' }, button('Отозвать', { class: 'btn btn-sm btn-danger access-revoke',
+        'aria-label': `Отозвать доступ: ${m.login}, ${where}` }, () => act(() => api('DELETE',
+        `/api/me/access/members/${m.computer_id}/${encodeURIComponent(m.project)}/${m.user_id}`), 'Доступ отозван'))));
+  }
+
+  function shareRow(s) {
+    const title = s.kind === 'chat' ? s.title || 'Чат' : `${s.computer} · ${project(s)}`;
+    const facts = [sectionName(s.kind), s.expires ? `до ${moment(s.expires)}` : 'бессрочная',
+      `открыта ${s.views || 0} ${plural(s.views || 0, ['раз', 'раза', 'раз'])}`,
+      s.fails ? `неверных PIN: ${s.fails}` : null].filter(Boolean).join(' · ');
+    return el('li', { class: 'agent session access-share', 'data-id': s.id },
+      el('div', { class: 'session-info' }, el('b', {}, title), el('p', { class: 'muted small' }, facts),
+        el('p', { class: 'muted small' }, `Создана ${moment(s.created)}`)),
+      el('div', { class: 'session-actions' }, button('Отключить', { class: 'btn btn-sm btn-danger access-revoke',
+        'aria-label': `Отключить ссылку: ${title}` }, () => act(() => api('DELETE',
+        `/api/me/access/shares/${encodeURIComponent(s.id)}`), 'Ссылка отключена'))));
+  }
+
+  function revokeAll() {
+    const yes = button('Отозвать всё', { class: 'btn btn-danger solid', id: 'access-revoke-all-confirm' });
+    const dialog = openDialog(host, { id: 'access-revoke-all-dialog', title: 'Отозвать все доступы и ссылки?',
+      actions: [yes], body: [el('p', {}, 'Участники потеряют доступ к проектам ваших компьютеров, все ссылки '
+        + '«Поделиться» отключатся. Вернуть их можно, только выдав доступ и создав ссылки заново.')] });
+    yes.addEventListener('click', () => {
+      dialog.close();
+      act(() => api('DELETE', '/api/me/access'), 'Все доступы и ссылки отозваны').then(() => refresh.focus({ preventScroll: true }));
+    });
+  }
+
+  async function reload() {
+    const version = ++reading;
+    refresh.disabled = true;
+    try {
+      const data = await api('GET', '/api/me/access');
+      if (version !== reading) return false;
+      say(note, '');
+      members.replaceChildren(...(data.members.length ? data.members.map(memberRow)
+        : [el('li', { class: 'muted small' }, 'Проекты ваших компьютеров никому не открыты.')]));
+      shares.replaceChildren(...(data.shares.length ? data.shares.map(shareRow)
+        : [el('li', { class: 'muted small' }, 'Ссылок нет.')]));
+      all.hidden = !data.members.length && !data.shares.length;
+      return true;
+    } catch (err) {
+      if (version === reading) say(note, words(err), 'error');
+      return false;
+    } finally {
+      if (version === reading) refresh.disabled = false;
+    }
+  }
+
+  reload();
+  return el('section', { class: 'block access-block' }, el('h2', {}, 'Доступы и ссылки'),
+    el('p', { class: 'muted small' }, 'Кому открыты проекты ваших компьютеров и какие чаты доступны по ссылке. Доступ '
+      + 'привязан к имени папки: удаление или переименование папки его не снимает — отзовите его здесь.'),
+    el('h3', {}, 'Участники проектов'), members,
+    el('h3', {}, 'Ссылки «Поделиться»'), shares,
+    el('div', { class: 'row' }, refresh, all, note));
+}
+
 /** «Аварийный выход»: с паролем учётки завершить все сессии и отозвать ссылки, по выбору — ключи компьютеров. */
 export function emergencyBlock(host) {
   const password = el('input', { class: 'input', id: 'emergency-password', type: 'password',
@@ -150,7 +255,8 @@ export function emergencyBlock(host) {
     const yes = button('Выйти везде', { class: 'btn btn-danger solid', id: 'emergency-confirm' });
     const fail = el('p', { class: 'error' });
     const dialog = openDialog(host, { id: 'emergency-dialog', title: 'Выйти на всех устройствах?', actions: [yes], body: [
-      el('p', {}, 'Все сессии, включая эту, завершатся; ссылки «Поделиться» отключатся; push и ntfy придётся включить заново.'
+      el('p', {}, 'Все сессии, включая эту, завершатся; ссылки «Поделиться» отключатся; участники потеряют доступ к '
+        + 'проектам ваших компьютеров; push и ntfy придётся включить заново.'
         + (agents.checked ? ' Компьютеры будут отвязаны — мосты войдут снова только с паролем.' : '')),
       fail] });
     yes.addEventListener('click', async () => {
@@ -167,7 +273,7 @@ export function emergencyBlock(host) {
   });
   return el('section', { class: 'block emergency-block' }, el('h2', {}, 'Аварийный выход'),
     el('p', { class: 'muted small' }, 'Если телефон или пароль могли попасть в чужие руки: завершает все сессии, '
-      + 'отключает ссылки «Поделиться», push и ntfy. История и настройки остаются.'),
+      + 'отключает ссылки «Поделиться», доступ участников к проектам, push и ntfy. История и настройки остаются.'),
     field('Пароль учётки', password, 'emergency-password'),
     el('label', { class: 'check' }, agents, 'Отозвать и ключи компьютеров (агенты)'),
     el('div', { class: 'row' }, start, note));
@@ -184,7 +290,7 @@ export function passwordResetNotice(me, navigate) {
       el('p', {}, `Пароль вашей учётки сбросил администратор ${moment(me.password_reset)}. Если вы об этом не просили, `
         + 'кто-то мог войти в учётку.'),
       el('p', {}, 'Проверьте «Сессии» и сделайте «Аварийный выход»: он завершит все сессии, отключит ссылки '
-        + '«Поделиться», push и ntfy.')] });
+        + '«Поделиться», доступ участников к проектам, push и ntfy.')] });
   open.addEventListener('click', () => {
     dialog.close();
     navigate('settings/security');

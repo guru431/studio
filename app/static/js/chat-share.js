@@ -37,7 +37,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
       const current = context;
       if (!current || busy) return;
       const fragment = key === 'selection' ? selected : null;
-      if (key === 'selection' && !fragment) return;
+      if ((key === 'selection' && !fragment) || (key === 'link' && !current.share)) return;
       close();
       if (key === 'link') { shareDialog(host, current.share, current.title, request); return; }
       busy = true;
@@ -84,6 +84,8 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
     controller?.abort();
     clear();
     context = value;
+    // без `share` — только экспорт: участник проекта видит чаты владельца, но ссылкой делится владелец
+    items[0].hidden = !context?.share;
     trigger.disabled = !context || busy;
   }, unmount() {
     clear();
