@@ -47,6 +47,15 @@
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
 
+## 0.20.0
+
+- Codex: stdout app-server читается кусками (`codex_rpc.lines`), без предела строки `readline`: ответ
+  `thread/read` со всей историей и картинками бывает больше кадра канала. Строка длиннее `codex_rpc.LINE_MAX`
+  (256 МиБ) в памяти не копится: по её началу или концу находится id ответа, этот запрос получает
+  `RpcError(too_large=True)`, `codex.CodexRunner._metadata` отдаёт `too_large` «Чат Codex слишком большой для
+  чтения мостом», не перезапуская общий процесс; прочие запросы и уведомления идут дальше. `thread/resume` и
+  `thread/fork`, чьи ответы нужны только ради id и cwd, — с `excludeTurns: true`. Проверки — `tests/test_codex_rpc.py`.
+
 ## 0.17.3
 
 - Уборка выпусков сохраняет текущий, `old_repo`, автозапуск и используемые процессами копии; цель проверяется

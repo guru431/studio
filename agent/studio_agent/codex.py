@@ -283,7 +283,8 @@ class CodexRunner(Runner):
                 raise
             if not same_project(data.get("thread", {}).get("cwd"), project):
                 raise Refused("not_found")
-            data = await rpc.request("thread/fork" if fork else "thread/resume", {"threadId": target})
+            # Нужны только id и cwd; история целиком одной строкой бывает в сотни МиБ (`excludeTurns`).
+            data = await rpc.request("thread/fork" if fork else "thread/resume", {"threadId": target, "excludeTurns": True})
             opened = data.get("thread", {}).get("id")
             if not isinstance(opened, str) or not limits.CHAT_ID.fullmatch(opened) or not same_project(
                     data.get("thread", {}).get("cwd"), project) or (fork and opened == target):
@@ -367,6 +368,8 @@ class CodexRunner(Runner):
             except BaseException as e:
                 # Ответ живого сервера (not_found нового чата и прочие RpcError) процесс не гасит:
                 # перезапуск задержал бы под `_meta_lock` все чтения Codex. Закрывают обрыв, срок, отмена.
+                if isinstance(e, codex_rpc.RpcError) and e.too_large:
+                    raise Refused("too_large", "Чат Codex слишком большой для чтения мостом") from None
                 if isinstance(e, codex_rpc.RpcError) and not e.transport:
                     raise
                 if self._meta is not None:
@@ -565,7 +568,7 @@ class CodexRunner(Runner):
             if index == 0:
                 return {"chat": str(uuid.uuid4()), "draft": draft}
             last_turn = turns[index - 1]["id"]
-        result = await self._metadata(project, "thread/fork", {"threadId": target, "cwd": str(project),
+        result = await self._metadata(project, "thread/fork", {"threadId": target, "cwd": str(project), "excludeTurns": True,
                                       **({"lastTurnId": last_turn} if last_turn is not None else {})})
         fork = result.get("thread", {})
         tid = fork.get("id")
@@ -697,7 +700,7 @@ class CodexRunner(Runner):
                 data = await rpc.request("thread/read", {"threadId": target})
                 if not same_project(data.get("thread", {}).get("cwd"), t.project):
                     raise Refused("not_found")
-                data = await rpc.request("thread/resume", {"threadId": target, **params})
+                data = await rpc.request("thread/resume", {"threadId": target, "excludeTurns": True, **params})
             else:
                 data = await rpc.request("thread/start", params)
             thread = data["thread"]
