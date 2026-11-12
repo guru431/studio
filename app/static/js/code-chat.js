@@ -791,7 +791,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       ...(Array.isArray(m.images) ? m.images : []).map((i) => IMAGE_TYPES.has(i.mime)
         ? el('img', { class: 'code-sent-image', src: `data:${i.mime};base64,${i.data}`, alt: i.name })
         : agent?.history_images && typeof m.id === 'string' && Number.isInteger(i.index) && i.index >= 0
-          ? pictures.node(m.id, i) : el('span', { class: 'code-sent-file' }, i.name)), typeof m.text === 'string' ? m.text : '', branch);
+          ? pictures.node(m.id, i) : el('span', { class: 'code-sent-file' }, i.name)),
+      el('span', { class: 'code-user-text' }, typeof m.text === 'string' ? m.text : ''), branch);
     }
     const body = el('div', { class: 'code-steps code-timeline' });
     const progress = progressView({ onChanges: paintChangedFiles,
@@ -914,7 +915,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (data.sent) { sentFollowups.add(data.id); queuedInputs.get(draftKey)?.delete(data.id); }
     if (agent?.queue_edit && data.mode === 'queue' && !data.sent && !sentFollowups.has(data.id)) queue.add(data);
     if (followups.has(data.id)) return followups.get(data.id);
-    const node = messageNode({ role: 'user', text: data.text });
+    const node = messageNode({ role: 'user', text: data.text, images: data.images,
+      id: data.image_message_id, forkable: false });
     node.dataset.followup = data.id;
     followups.set(data.id, node);
     return node;
@@ -1245,7 +1247,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         updateControls();
         for (const item of data.items || []) {
           const node = followups.get(item.id);
-          if (node) node.textContent = item.text;
+          if (node) node.querySelector('.code-user-text').textContent = item.text;
           const saved = queuedInputs.get(draftKey)?.get(item.id);
           if (saved) saved.value = item.input_text ?? item.text;
         }

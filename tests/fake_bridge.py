@@ -372,6 +372,12 @@ class FakeMachine:
                 "position": {"text": len(run.get("text", "").encode("utf-16-le", errors="surrogatepass")) // 2,
                              "steps": len(run.get("steps", []))},
                 **({"version": 1, "input_text": req["text"]} if self.queue_edit and mode == 'queue' else {})}
+        if req.get("images"):
+            message = f"followup:{identifier}"
+            item.update(image_message_id=message, images=[
+                {"index": index, "name": f"Изображение {index + 1}"} for index, _ in enumerate(req["images"])])
+            self._chat(req).setdefault("image_data", {}).update(
+                {(message, index): image for index, image in enumerate(req["images"])})
         run["followups"].append(item)
         events.append(self._ev(req["chat"], {"k": "followup", **item}))
         return {"mode": mode, "id": item['id']}

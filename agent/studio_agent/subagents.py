@@ -68,12 +68,12 @@ def list_children(project, chat, *, choices=None, live=()):
     saved = saved if isinstance(saved, dict) else {}
     rows = {aid: {"id": aid, "title": f"Агент {aid}", "status": saved.get(aid, "unknown")}
             for aid in claude_agent_sdk.list_subagents(chat, directory=str(project))}
-    live_ids = {row["id"] for row in live}
-    for aid, status in _transcript_statuses(project, chat, rows.keys() - live_ids).items():
-        if status == "completed" or rows[aid]["status"] not in ("failed", "stopped"):
-            rows[aid]["status"] = status
     for row in live:
         rows[row["id"]] = dict(row)
+    unfinished = {aid for aid, row in rows.items() if row["status"] != "running"}
+    for aid, status in _transcript_statuses(project, chat, unfinished).items():
+        if status == "completed" or rows[aid]["status"] not in ("failed", "stopped"):
+            rows[aid]["status"] = status
     return {"items": list(rows.values())}
 
 

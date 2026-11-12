@@ -1,6 +1,7 @@
 """Изображения истории: только ссылки в странице, байты — отдельной защищённой просьбой."""
 
 import base64
+from collections import OrderedDict
 from pathlib import Path
 
 from . import files, image_input
@@ -8,6 +9,38 @@ from .errors import Refused
 
 COUNT = 32
 KINDS = ("image", "localImage", "input_image")
+
+
+class LiveImages:
+    """Байты уточнений до чтения штатной истории; только память моста, общий предел 32 МиБ."""
+
+    def __init__(self, budget=32 * 1024 * 1024):
+        self.budget = budget
+        self._items = OrderedDict()
+        self._size = 0
+
+    def remember(self, *, project, chat, message, images):
+        for index, image in enumerate(images):
+            key = (str(project), chat, message, index)
+            previous = self._items.pop(key, None)
+            if previous is not None:
+                self._size -= len(previous["data"])
+            self._items[key] = {"mime": image["mime"], "data": image["data"]}
+            self._size += len(image["data"])
+            while self._size > self.budget and self._items:
+                self._size -= len(self._items.popitem(last=False)[1]["data"])
+
+    def get(self, project, chat, message, index):
+        key = (str(project), chat, message, index)
+        image = self._items.get(key)
+        if image is not None:
+            self._items.move_to_end(key)
+            return dict(image)
+        return None
+
+    def clear(self):
+        self._items.clear()
+        self._size = 0
 
 
 def blocks(content):

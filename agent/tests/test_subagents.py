@@ -1,11 +1,13 @@
 """Список подзадач сохраняет завершённые записи и принимает живые lifecycle-события SDK."""
 
+import asyncio
 import json
 
 import pytest
 from claude_agent_sdk._internal.message_parser import parse_message
 
-from fake_sdk import FakeFactory, result_ok
+from fake_sdk import FakeClient, FakeFactory, assistant, result, result_ok, text
+from claude_agent_sdk import ResultMessage
 from studio_agent import sessions, store, subagents
 from studio_agent.turns import Runner, _Turn
 
@@ -44,16 +46,178 @@ async def test_claude_subagent_lifecycle_streams_terminal_status_and_persists_on
     assert {row["id"]: row["status"] for row in children} == {"old": "unknown", "child": status}
 
 
-async def test_background_subagent_is_not_persisted_as_forever_running(home, project):
-    factory = FakeFactory([lifecycle("task_started", description="Фоновая проверка", task_type="local_agent"), result_ok()])
-    runner = Runner(lambda frame: None, choices=store.Choices(home), cli_path=None, factory=factory)
+class BackgroundClient(FakeClient):
+    """Как SDK: каждый receive_response читает следующий ответ до первого ResultMessage."""
+
+    def __init__(self, *, options):
+        super().__init__(options, [])
+        self.items = asyncio.Queue()
+        self.queried = asyncio.Queue()
+        self.results = asyncio.Queue()
+        self.stopped_tasks = []
+
+    async def query(self, value):
+        await super().query(value)
+        self.queried.put_nowait(value)
+
+    async def receive_response(self):
+        while True:
+            message = await self.items.get()
+            yield message
+            if isinstance(message, ResultMessage):
+                self.results.put_nowait(message)
+                return
+
+    async def stop_task(self, task_id):
+        self.stopped_tasks.append(task_id)
+
+
+@pytest.fixture
+async def background(home, project):
+    sent = []
+    factory = []
+
+    def create(**kwargs):
+        client = BackgroundClient(**kwargs)
+        factory.append(client)
+        ready.set()
+        return client
+
+    ready = asyncio.Event()
+    runner = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=create)
+    runner.start(project, PID, CHAT, "Задание", None, None)
+    turn = runner._turns[CHAT]
+    await ready.wait()
+    client = factory[0]
+    await client.queried.get()
+    try:
+        yield runner, client, turn, sent
+    finally:
+        if not turn.task.done():
+            turn.task.cancel()
+        await asyncio.gather(turn.task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("kind", ["local_agent", "local_workflow"])
+async def test_background_work_survives_parent_result_until_its_final_response(background, kind):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", task_type=kind, description="Фоновая проверка"))
+    client.items.put_nowait(result_ok())
+    await client.results.get()
+    assert CHAT in runner.live() and not turn.finishing and not client.disconnected
+    assert not any(frame["e"]["k"] == "done" for frame in sent)
+    client.items.put_nowait(lifecycle("task_updated", patch={"status": "completed"}))
+    client.items.put_nowait(assistant(text("Итог фоновой проверки")))
+    client.items.put_nowait(result_ok())
+    await turn.task
+    assert client.disconnected and turn.pending == 0
+    assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
+    assert any(f["e"].get("text") == "Итог фоновой проверки" for f in sent)
+
+
+async def test_workflow_children_stream_through_hooks_and_queue_waits_for_the_workflow(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", "workflow", task_type="local_workflow", description="Проверка"))
+    for child in ("first", "second"):
+        hook = client.options.hooks["SubagentStart"][0].hooks[0]
+        assert await hook({"hook_event_name": "SubagentStart", "agent_id": child,
+                           "agent_type": "workflow-subagent"}, None, {}) == {}
+    queued = await runner.steer(PID, CHAT, "Следующее задание", [], mode="queue")
+    client.items.put_nowait(result_ok())
+    await client.results.get()
+    assert client.queried.empty()
+    running, frames = await runner.watch(PID, CHAT)
+    assert running and {r["id"] for r in frames[0]["e"]["progress"]["agents"]} == {"first", "second"}
+    assert {r["status"] for r in runner.children(PID, CHAT)} == {"running"}
+    for child in ("first", "second"):
+        client.items.put_nowait(lifecycle("task_updated", child, patch={"status": "completed"}))
+    client.items.put_nowait(lifecycle("task_notification", "workflow", status="completed",
+                                    output_file="private", summary="private"))
+    client.items.put_nowait(result_ok())
+    assert await client.queried.get() == "Следующее задание"
+    client.items.put_nowait(result_ok())
+    await turn.task
+    assert runner.choices.details(CHAT)["subagent_statuses"] == {"first": "completed", "second": "completed"}
+    assert any(f["e"] == {"k": "followup_sent", "id": queued["id"]} for f in sent)
+
+
+async def test_stopping_an_idle_parent_stops_its_background_work_without_waiting_for_another_result(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", task_type="local_agent", description="Проверка"))
+    client.items.put_nowait(result_ok())
+    await client.results.get()
+    await runner.stop(PID, CHAT)
+    await asyncio.gather(turn.task, return_exceptions=True)
+    assert client.stopped_tasks == ["child"] and client.disconnected
+    assert runner.choices.details(CHAT)["subagent_statuses"] == {"child": "stopped"}
+    assert sent[-1]["e"]["status"] == "stopped"
+
+
+async def test_background_completion_during_interrupt_does_not_cancel_disconnect(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", task_type="local_agent", description="Проверка"))
+    client.items.put_nowait(result_ok())
+    await client.results.get()
+    disconnecting, release = asyncio.Event(), asyncio.Event()
+    original = client.disconnect
+
+    async def disconnect():
+        disconnecting.set()
+        await release.wait()
+        await original()
+
+    async def interrupt():
+        client.items.put_nowait(lifecycle("task_updated", patch={"status": "completed"}))
+        client.items.put_nowait(result_ok())
+        await disconnecting.wait()
+
+    client.disconnect = disconnect
+    client.interrupt = interrupt
+    try:
+        await runner.stop(PID, CHAT)
+        assert turn.finishing
+        release.set()
+        await turn.task
+        assert client.disconnected and sent[-1]["e"]["status"] == "stopped"
+    finally:
+        release.set()
+
+
+async def test_background_stream_ending_without_completion_is_an_error(home, project):
+    sent = []
+    factory = FakeFactory([lifecycle("task_started", task_type="local_workflow", description="Проверка"), result_ok()])
+    runner = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=factory)
     runner.start(project, PID, CHAT, "Задание", None, None)
     await settle(runner)
-    assert runner.choices.details(CHAT)["subagent_statuses"] == {"child": "unknown"}
-    factory.script = [lifecycle("task_updated", patch={"status": "completed"}), result_ok()]
-    runner.start(project, PID, CHAT, "Продолжай", None, None)
-    await settle(runner)
-    assert runner.choices.details(CHAT)["subagent_statuses"] == {"child": "completed"}
+    assert sent[-1]["e"]["status"] == "error" and factory.clients[0].disconnected
+
+
+async def test_background_error_finishes_the_turn_and_releases_the_client(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", task_type="local_workflow", description="Проверка"))
+    client.items.put_nowait(result("error_during_execution", is_error=True, result="Ошибка проверки"))
+    await turn.task
+    assert client.disconnected and sent[-1]["e"]["status"] == "error"
+
+
+async def test_followup_image_is_in_the_live_snapshot_without_inline_bytes_and_survives_done(background):
+    from test_image_input import PNG
+
+    runner, client, turn, sent = background
+    followup = await runner.steer(PID, CHAT, "Посмотри скриншот", [PNG])
+    await client.queried.get()
+    _, frames = await runner.watch(PID, CHAT)
+    item = frames[0]["e"]["followups"][0]
+    assert item["id"] == followup["id"]
+    assert item["images"] == [{"index": 0, "name": "Изображение 1"}]
+    assert PNG["data"] not in json.dumps(frames)
+    assert runner.live_image(turn.project, CHAT, item["image_message_id"], 0) == PNG
+    client.items.put_nowait(result_ok())
+    client.items.put_nowait(result_ok())
+    await turn.task
+    assert runner.live_image(turn.project, CHAT, item["image_message_id"], 0) == PNG
+    await runner.close(final=True)
+    assert runner.live_image(turn.project, CHAT, item["image_message_id"], 0) is None
 
 
 def test_live_subagents_exist_before_the_first_transcript_and_history_keeps_completed(home, tmp_path, monkeypatch):

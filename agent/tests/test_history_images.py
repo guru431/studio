@@ -114,3 +114,27 @@ async def test_invalid_history_image_identifiers_are_refused_before_read(agent, 
     monkeypatch.setattr(sessions, "history_image", lambda *a: pytest.fail("неверный ввод дошёл до чтения"))
     frame = req("history_image", project=projects.pid("demo"), chat=CHAT, message_id="user", index=0)
     assert (await agent.handle({**frame, **change}))[0]["code"] == "invalid"
+
+
+def test_live_image_cache_is_bounded_and_scoped_to_project_chat_and_message(tmp_path):
+    cache = history_images.LiveImages(budget=len(PNG["data"]) * 2)
+    for message in ("first", "second"):
+        cache.remember(project=tmp_path, chat=CHAT, message=message, images=[PNG])
+    assert cache.get(tmp_path, CHAT, "first", 0) == PNG
+    cache.remember(project=tmp_path, chat=CHAT, message="third", images=[PNG])
+    assert cache.get(tmp_path, CHAT, "second", 0) is None
+    assert cache.get(tmp_path / "other", CHAT, "first", 0) is None
+    assert cache.get(tmp_path, "other-chat", "first", 0) is None
+    assert cache.get(tmp_path, CHAT, "first", 1) is None
+    cache.clear()
+    assert cache.get(tmp_path, CHAT, "first", 0) is None
+
+
+async def test_live_followup_image_uses_the_same_pin_guard_before_native_history(agent, root, monkeypatch):
+    project = root / "demo"
+    agent.runner._live_images.remember(project=project, chat=CHAT, message="followup:picture", images=[PNG])
+    frame = req("history_image", project=projects.pid("demo"), chat=CHAT, message_id="followup:picture", index=0)
+    monkeypatch.setattr(sessions, "history_image", lambda *a: pytest.fail("живое изображение потеряно"))
+    assert (await agent.handle(frame))[0]["code"] == "closed"
+    await opened(agent)
+    assert (await agent.handle(frame))[0]["data"] == PNG

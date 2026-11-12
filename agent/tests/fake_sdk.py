@@ -63,6 +63,7 @@ class FakeClient:
     def __init__(self, options, script, fail=None):
         self.options = options
         self.script = list(script)
+        self._messages = iter(self.script)
         self.fail = fail
         self.decisions = []
         self.queries = []
@@ -79,7 +80,7 @@ class FakeClient:
         self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])
 
     async def receive_response(self):
-        for item in self.script:
+        for item in self._messages:
             await asyncio.sleep(0)
             if self.interrupted:
                 break
@@ -95,6 +96,8 @@ class FakeClient:
                 self.decisions.append(await self.options.can_use_tool(tool, data, ctx))
                 continue
             yield item
+            if isinstance(item, ResultMessage):
+                return
         if self.interrupted:
             yield result("error_during_execution", is_error=True)
 

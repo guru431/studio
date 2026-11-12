@@ -555,10 +555,12 @@ class Agent:
 
     async def _op_history_image(self, frame, after):
         project = await self._project(frame)
-        if frame.get("engine", "claude") == "claude":
-            data = await asyncio.to_thread(sessions.history_image, project, frame["chat"], frame["message_id"], frame["index"])
-        else:
-            data = await self._runner(frame).history_image(project, frame["chat"], frame["message_id"], frame["index"])
+        data = self._runner(frame).live_image(project, frame["chat"], frame["message_id"], frame["index"])
+        if data is None:
+            if frame.get("engine", "claude") == "claude":
+                data = await asyncio.to_thread(sessions.history_image, project, frame["chat"], frame["message_id"], frame["index"])
+            else:
+                data = await self._runner(frame).history_image(project, frame["chat"], frame["message_id"], frame["index"])
         if frame.get("shared_projects") is None and not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
             raise Refused("closed")
         return data
