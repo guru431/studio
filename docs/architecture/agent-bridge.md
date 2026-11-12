@@ -56,6 +56,11 @@
   `RpcError(too_large=True)`, `codex.CodexRunner._metadata` отдаёт `too_large` «Чат Codex слишком большой для
   чтения мостом», не перезапуская общий процесс; прочие запросы и уведомления идут дальше. `thread/resume` и
   `thread/fork`, чьи ответы нужны только ради id и cwd, — с `excludeTurns: true`. Проверки — `tests/test_codex_rpc.py`.
+- Codex `step_update` вывода команды — `codex.CodexRunner._step_output`: не чаще `codex.STEP_UPDATE_SEC` (0.25) на
+  шаг, первая дельта сразу, остальные — одной отложенной отправкой последнего состояния (каждый кадр несёт весь
+  хвост до `limits.CLIP`, а очередь канала общая с ответами просьб). `result` шага снимает отложенное и уходит
+  сразу; конец хода досылает отложенное до `done` (`codex.CodexRunner._output_done`). Формат кадра прежний; у
+  Claude и OpenCode `step_update` нет. Проверки — `tests/test_codex_progress.py`.
 - Досланные завершения (§18): `agent.Agent.emit` — конец хода, который `link.Link.send` не принял (канала нет), —
   в `agent.Agent.missed`; писатель умершего канала возвращает туда же неотправленные кадры. После `welcome` с
   `completions` кадр `agent.Agent.completions` уходит первым. Только память, без текстов. Сервер —
