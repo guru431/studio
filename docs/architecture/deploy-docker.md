@@ -117,6 +117,21 @@ sudo systemctl start studio-backup.service
 sudo systemctl status studio-docker-start.service studio-docker.service studio-backup.timer
 ```
 
+Приёмка YouTube после выкладки или смены версии yt-dlp — выгрузка субтитров одного публичного ролика внутри `web`
+с окружением службы (`web._env`) и аргументами `web.youtube`, без загрузки видео; `/tmp` контейнера — tmpfs.
+Ожидается строка `ok` и файл `.vtt`; предупреждение yt-dlp об отсутствии JS-рантайма (deno в образе нет) —
+сведение для решения владельца, не отказ. `VIDEO` — id любого публичного ролика с субтитрами:
+
+```bash
+VIDEO=jNQXAC9IVRw
+sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web \
+  env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME=/nonexistent sh -c '
+    yt-dlp --version
+    yt-dlp --ignore-config --no-playlist --no-cache-dir --skip-download --write-subs --write-auto-subs \
+      --sub-langs "en.*,ru.*" --sub-format vtt -o "/tmp/yt-check.%(ext)s" "https://www.youtube.com/watch?v=$1"
+    ls -l /tmp/yt-check.*.vtt && echo ok; rm -f /tmp/yt-check.*' yt-check "$VIDEO"
+```
+
 ## Перенос с нативной установки
 
 1. Подключить **тот же** каталог медиа на новом хосте, проверить CIFS и запись от uid 10001. Скопировать

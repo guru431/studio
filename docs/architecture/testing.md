@@ -31,6 +31,8 @@ Chrome уже подключён через расширение; дополни
 аренды), «Перевод» на `local-gemma-abl` — текст, одностраничный PDF со слоем и снимок вывески (блоки с рамками,
 перевод gemma-abl без ожидания аренды `ocr`, затем `/pages/ocr-release` — 200); удаляет только своё и освобождает карту. Без `STUDIO_ADMIN_*` эта часть пропускается; с `GATEWAY_KEY_OWNER_IMAGES` — ещё шлюз
 напрямую (`STUDIO_LIVE_GATEWAY`) и `client/studio-batch.local.ps1`.
+Субтитры YouTube живая приёмка не трогает: их проверяет отдельная команда внутри контейнера `web`
+([deploy-docker](deploy-docker.md#выкладка), после списка команд compose).
 
 **`STUDIO_ADMIN_PASSWORD` в vault — пароль восстановления, не рабочий:** владелец входит своим
 (решение 2026-10-20, `local-config/project-knowledge-base.yaml` → `api_keys.studio_admin`), поэтому вход
