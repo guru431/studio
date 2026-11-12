@@ -107,6 +107,12 @@ const pendingInputs = new Map(); // до подтверждения, что CLI 
 /** Квитанции отправки (`${aid}/${chat}` → { id, value, images }): исход не известен (обрыв связи) — тот же текст и
  * те же картинки уходят с тем же `request_id`, и сервер второй раз ход не начнёт; правка — новый id. */
 const sendIds = new Map();
+// блокировка экрана стирает черновики, как у полей разделов (drafts.js); поле на экране остаётся как есть.
+// Квитанции `sendIds` остаются: без них повтор после обрыва связи начал бы ход второй раз.
+document.addEventListener('studio-locked', () => {
+  for (const key of [...drafts.keys()]) drafts.delete(key);
+  for (const key of [...imageDrafts.keys()]) imageDrafts.delete(key);
+});
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
 const WINDOW = crypto.randomUUID().replaceAll('-', '');
 

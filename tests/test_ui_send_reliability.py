@@ -302,15 +302,41 @@ def test_section_drafts_survive_switching_and_go_on_send_and_lock(chromium, live
 
         page.locator(chat).fill("Секрет до блокировки")
         visit(page, "translate", translate)
-        page.evaluate("""async () => { const m = await import('/static/js/api.js');
-          await m.api('POST', '/api/me/screen-lock', { enabled: true, timeout: 600 });
-          await m.api('POST', '/api/lock/now');
-          m.api('GET', '/api/me'); }""")                 # 423 — экран блокировки, запрос ждёт отпирания
-        page.locator("#lock[open]").wait_for()
-        if page.locator("#lock-use-password").is_visible():
-            page.locator("#lock-use-password").click()
-        page.locator("#lock-password").fill("password-123")
-        page.locator("#lock-password-go").click()
-        page.locator("#lock[open]").wait_for(state="detached")
+        lock_and_unlock(page)
         visit(page, "chat", chat)
         pw.expect(page.locator(chat)).to_have_value("")
+
+
+def lock_and_unlock(page):
+    page.evaluate("""async () => { const m = await import('/static/js/api.js');
+      await m.api('POST', '/api/me/screen-lock', { enabled: true, timeout: 600 });
+      await m.api('POST', '/api/lock/now');
+      m.api('GET', '/api/me'); }""")                     # 423 — экран блокировки, запрос ждёт отпирания
+    page.locator("#lock[open]").wait_for()
+    if page.locator("#lock-use-password").is_visible():
+        page.locator("#lock-use-password").click()
+    page.locator("#lock-password").fill("password-123")
+    page.locator("#lock-password-go").click()
+    page.locator("#lock[open]").wait_for(state="detached")
+
+
+def test_agent_drafts_go_on_screen_lock(chromium, live):
+    """Черновик чата «Агентов» переживает уход в другой раздел, но не блокировку экрана — как черновики разделов."""
+    login = "agent-drafts-lock"
+    live.add_user(login)
+    aid, bridge = code_online(live, login, code_free_machine({CODE_CHAT_A: code_session("Чат")}))
+    try:
+        with opened(chromium, live, login, 1280) as page:
+            code_page(page, live, aid)
+            page.locator("#code-text").fill("Черновик задания")
+            page.evaluate("() => { location.hash = '#/translate'; }")
+            page.locator("#tl-input").wait_for()
+            code_page(page, live, aid)
+            pw.expect(page.locator("#code-text")).to_have_value("Черновик задания")
+            page.evaluate("() => { location.hash = '#/translate'; }")
+            page.locator("#tl-input").wait_for()
+            lock_and_unlock(page)
+            code_page(page, live, aid)
+            pw.expect(page.locator("#code-text")).to_have_value("")
+    finally:
+        bridge.stop()
