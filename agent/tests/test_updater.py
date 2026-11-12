@@ -25,6 +25,7 @@ def bundle(path, version='99.0.0', extra=None, prefix=''):
         archive.writestr(prefix + 'studio_agent/__init__.py', f'VERSION = "{version}"\n')
         archive.writestr(prefix + 'studio_agent.pyw', '')
         archive.writestr(prefix + 'requirements.txt', '')
+        archive.writestr(prefix + 'constraints.txt', '')
         if extra is not None:
             info = zipfile.ZipInfo(extra)
             info.filename = extra  # ZipInfo.__init__ на Windows нормализует разделители.
@@ -339,6 +340,7 @@ def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tm
         source.writestr('studio-agent/studio_agent/__init__.py', 'VERSION = "99.0.0"\n')
         source.writestr('studio-agent/studio_agent/app.py', '')
         source.writestr('studio-agent/requirements.txt', '')
+        source.writestr('studio-agent/constraints.txt', '')
         source.writestr('studio-agent/studio_agent.pyw',
             'import os\nfrom pathlib import Path\n'
             f'with open({str(trace)!r}, "a") as out: out.write("new\\n")\n'
