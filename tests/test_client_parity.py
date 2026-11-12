@@ -8,9 +8,12 @@
 прежней версии, строки журнала и промпты с U+2028 / VT / FF / NEL (копия с веба) — .NET
 `ReadAllLines` и `Get-Content` режут строки только по CR/LF, так же должна и Python-версия.
 """
+import shutil
+
 import pytest
 
-from clients import RUNNERS
+from clients import RUNNERS, local_copy_drift, ps_encoding, run_client
+from conftest import CLIENT
 from test_studio_batch_client import images                                   # noqa: F401 (фикстура)
 from test_studio_batch_client import run_script as run_batch
 from test_studio_video_client import HEADER, MODEL, fingerprint, service       # noqa: F401 (фикстура)
@@ -82,3 +85,46 @@ def test_batch_clients_read_the_same_prompts_on_edge_inputs(runner, images, tmp_
     lines = (out / "manifest.tsv").read_bytes().decode().split("\n")
     assert lines[1:] == ["1-1\t001-01_turn_left_s5.png\t5\tportrait\tlustify\tturn left",
                          "2-1\t002-01_plain_s5.png\t5\tportrait\tlustify\tplain", ""]
+
+
+GATEWAY = "http://gw.example.net:4000/slot"
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+@pytest.mark.parametrize("name", ["studio-batch", "studio-video"])
+def test_make_local_embeds_the_key_and_the_gateway_address(runner, name, tmp_path):
+    """После очистки публикации адрес шлюза в скрипте — пример: копия, где вписан только ключ, по умолчанию
+    не работала. -GatewayUrl вписывает адрес умолчанием -Url; остальные строки — как у скрипта."""
+    for suffix in (".ps1", ".py"):
+        shutil.copy(CLIENT / (name + suffix), tmp_path / (name + suffix))
+    (tmp_path / "vault.env").write_text('OTHER=x\nGATEWAY_KEY_OWNER_IMAGES="sk-owner-1"\n', encoding="utf-8")
+
+    r = run_client(runner, tmp_path / (name + ".ps1"),
+                   ["-MakeLocal", "-VaultPath", str(tmp_path / "vault.env"), "-GatewayUrl", GATEWAY + "/"])
+
+    out = r.stdout.decode(ps_encoding() if runner == "ps" else "utf-8", "replace")
+    assert r.returncode == 0, out + r.stderr.decode("utf-8", "replace")
+    assert b"sk-owner-1" not in r.stdout + r.stderr and GATEWAY in out
+    suffix = ".ps1" if runner == "ps" else ".py"
+    script, local = CLIENT / (name + suffix), tmp_path / (name + ".local" + suffix)
+    assert local_copy_drift(script, local) == []
+    text = local.read_bytes().decode("utf-8-sig")
+    if runner == "ps":
+        assert "$EmbeddedKey = 'sk-owner-1'" in text and f"[string]$Url = '{GATEWAY}'," in text
+    else:
+        assert "\nEMBEDDED_KEY = 'sk-owner-1'\n" in text and f"\nURL = '{GATEWAY}'\n" in text
+
+
+def test_local_copy_drift_ignores_only_the_key_and_the_address(tmp_path):
+    script, local = tmp_path / "s.ps1", tmp_path / "s.local.ps1"
+    lines = ["param(", "    [Parameter(ParameterSetName = 'Run')][string]$Url = 'http://10.77.1.15:4000/slot',", ")",
+             "$EmbeddedKey = ''", "Write-Host 1"]
+    script.write_bytes(b"\xef\xbb\xbf" + "\r\n".join(lines).encode())
+    copy = [*lines]
+    copy[1], copy[3] = copy[1].replace("10.77.1.15", "gw"), "$EmbeddedKey = 'secret'"
+    local.write_text("\n".join(copy), encoding="utf-8")
+    assert local_copy_drift(script, local) == []
+    local.write_text("\n".join([*copy[:4], "Write-Host 2"]), encoding="utf-8")
+    assert local_copy_drift(script, local) == [5]
+    local.write_text("\n".join(copy[:4]), encoding="utf-8")
+    assert local_copy_drift(script, local) == [5]

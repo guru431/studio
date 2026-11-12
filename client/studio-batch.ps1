@@ -14,7 +14,7 @@
   тем же seed.
 
   Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
-    powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal
+    powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal [-GatewayUrl http://<шлюз>:4000/slot]
   Рядом появится studio-batch.local.ps1 (в .gitignore) — дальше запускайте её; её можно
   переносить на другие компьютеры как есть. Ключ на один запуск — параметром -Token.
 
@@ -60,6 +60,9 @@
   Собрать рядом studio-batch.local.ps1 с ключом GATEWAY_KEY_OWNER_IMAGES из vault и выйти.
 .PARAMETER VaultPath
   Файл vault для -MakeLocal.
+.PARAMETER GatewayUrl
+  Адрес шлюза (база API, как -Url): -MakeLocal впишет его в копию умолчанием -Url. Без него — нынешнее
+  умолчание -Url этого скрипта.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal
@@ -83,7 +86,8 @@ param(
     [Parameter(ParameterSetName = 'Run')][string]$Url = 'http://10.77.1.15:4000/slot',
     [Parameter(ParameterSetName = 'Run')][string]$Token = '',
     [Parameter(ParameterSetName = 'MakeLocal', Mandatory = $true)][switch]$MakeLocal,
-    [Parameter(ParameterSetName = 'MakeLocal')][string]$VaultPath = 'C:\work\projects\local-config\secrets\vault.env'
+    [Parameter(ParameterSetName = 'MakeLocal')][string]$VaultPath = 'C:\work\projects\local-config\secrets\vault.env',
+    [Parameter(ParameterSetName = 'MakeLocal')][string]$GatewayUrl = ''
 )
 # Строка-заглушка ключа: в репозитории пусто, -MakeLocal вписывает ключ в локальную копию.
 $EmbeddedKey = ''
@@ -107,9 +111,21 @@ if ($MakeLocal) {
     if ($slot.Count -ne 1) { throw "В $PSCommandPath не найдена строка-заглушка ключа (`$EmbeddedKey = '')" }
     $text = $source.Substring(0, $slot[0].Index) + "`$EmbeddedKey = '" + $key.Replace("'", "''") + "'" +
         $source.Substring($slot[0].Index + $slot[0].Length)
+    $what = 'ключ вписан'
+    if ($GatewayUrl) {
+        if ($GatewayUrl -notmatch '^https?://[^\s''"`]+$') {
+            throw "Адрес шлюза — http(s)://хост[:порт]/путь без пробелов и кавычек: $GatewayUrl"
+        }
+        $GatewayUrl = $GatewayUrl.TrimEnd('/')
+        $urlSlot = [Regex]::Matches($text, "(?m)^(\s*\[Parameter\(ParameterSetName = 'Run'\)\]\[string\]\`$Url = )'(?:[^']|'')*'")
+        if ($urlSlot.Count -ne 1) { throw "В $PSCommandPath не найдена строка умолчания -Url" }
+        $text = $text.Substring(0, $urlSlot[0].Index) + $urlSlot[0].Groups[1].Value + "'" + $GatewayUrl + "'" +
+            $text.Substring($urlSlot[0].Index + $urlSlot[0].Length)
+        $what = "ключ и адрес шлюза $GatewayUrl вписаны"
+    }
     $target = Join-Path $PSScriptRoot 'studio-batch.local.ps1'
     [IO.File]::WriteAllText($target, $text, (New-Object Text.UTF8Encoding $true))
-    Write-Host "Готово: $target — ключ вписан (файл в .gitignore). Дальше запускайте его."
+    Write-Host "Готово: $target — $what (файл в .gitignore). Дальше запускайте его."
     return
 }
 

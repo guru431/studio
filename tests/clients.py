@@ -43,6 +43,22 @@ def py_args(args):
             for a in args]
 
 
+# Строки, которые -MakeLocal / --make-local вписывает в копию: ключ и умолчание адреса шлюза.
+LOCAL_LINES = re.compile(r"^(\$EmbeddedKey = |EMBEDDED_KEY = |URL = "
+                         r"|\s*\[Parameter\(ParameterSetName = 'Run'\)\]\[string\]\$Url = )")
+
+
+def local_copy_drift(script, local):
+    """Номера строк (с 1), где копия с ключом расходится с отслеживаемым скриптом, — кроме строк ключа и
+    адреса. Пусто — копия собрана из этой версии. Текст строк не возвращается: в копии ключ."""
+    ours, theirs = (p.read_bytes().decode("utf-8-sig").splitlines() for p in (script, local))
+    drift = [n for n, (a, b) in enumerate(zip(ours, theirs), start=1)
+             if a != b and not (LOCAL_LINES.match(a) and LOCAL_LINES.match(b))]
+    if len(ours) != len(theirs):
+        drift.append(min(len(ours), len(theirs)) + 1)
+    return drift
+
+
 def run_client(kind, script, args):
     """script — путь к .ps1; Python-версия лежит рядом под тем же именем с .py."""
     if kind == "ps":
