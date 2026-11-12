@@ -66,6 +66,7 @@ import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
 import { enterSends, fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
@@ -514,6 +515,8 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
+  const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
+  if (input.value) autosize();
   const sharing = shareMenu(root, { id: 'chat-share', content: scroller,
     failed: (err) => { notice.textContent = words(err); } });
   const share = sharing.button;
@@ -1221,6 +1224,7 @@ function build(view, ctx) {
     if (pendingTurn === attempt) pendingTurn = null;
     if (attempt.regenerate || attempt.acknowledged) return;
     attempt.acknowledged = true;
+    inputDraft.sent(attempt.text);                     // ушли из раздела до подтверждения — черновиком не вернётся
     if (input.value === attempt.text) { input.value = ''; autosize(); }
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
@@ -1702,6 +1706,7 @@ function build(view, ctx) {
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
+      inputDraft.save();
       sharing.unmount();
       alive = false;
       historyRead?.controller.abort();
