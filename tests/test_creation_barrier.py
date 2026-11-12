@@ -144,6 +144,73 @@ def test_a_transcript_uploaded_while_history_is_wiped_is_rejected_and_its_file_r
     assert state.DB.execute("SELECT count(*) FROM media WHERE user_id = ?", (uid,)).fetchone()[0] == 0
 
 
+def wipe_held(studio, monkeypatch):
+    """«Удалить всю историю» в другом потоке, остановленная на удалении файлов (барьер держится): итог —
+    (будущее ответа стирания, отпустить удаление)."""
+    uid = owner_id()
+    studio.c.portal.call(media.save_async, uid, b"old", "text/plain", "old.txt")
+    cleaning, release_cleanup = threading.Event(), threading.Event()
+    real_remove = media.remove_files
+
+    def held_remove(rows):
+        cleaning.set()
+        assert release_cleanup.wait(5)
+        return real_remove(rows)
+
+    monkeypatch.setattr(media, "remove_files", held_remove)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    wiping = executor.submit(studio.c.delete, "/api/history")
+    executor.shutdown(wait=False)
+    assert cleaning.wait(5)
+    return wiping, release_cleanup.set
+
+
+def test_continue_of_a_translation_during_the_wipe_is_refused(studio, monkeypatch):
+    """«Продолжить» перевода, пока стирание истории удаляет файлы, — 409 `history_changed`, как прочие пути
+    постановки в очередь, а не `queued` у записи, которую сейчас сотрут."""
+    import translate
+    import translate_text
+    from test_translate import THREE, failing_second, start, wait_row
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    add_gateway(studio)
+    failing_second(studio)
+    tid = start(studio, THREE)
+    assert wait_row(studio, tid)["state"] == "error"
+    studio.gw.on.clear()
+    wiping, release = wipe_held(studio, monkeypatch)
+    try:
+        result = studio.c.post(f"/api/translate/{tid}/continue")
+    finally:
+        release()
+    assert result.status_code == 409 and result.json()["detail"]["code"] == "history_changed", result.text
+    assert wiping.result(timeout=5).status_code == 200
+    assert state.DB.execute("SELECT count(*) FROM translations").fetchone()[0] == 0
+    assert translate.RUNNERS == {} and translate.JOBS == {}
+
+
+def test_a_translation_queued_past_the_barrier_is_stopped_after_the_wipe(studio, monkeypatch):
+    """Задание, попавшее в очередь «Перевода» мимо барьера, пока удалялись файлы, после COMMIT не продолжает
+    слать куски стёртой записи модели: стирание в конце снова останавливает раннеры «Перевода» и «Сканов»."""
+    import translate
+    from test_translate import gateway_conn, hold_chat, file_job
+    uid, conn = gateway_conn(studio)
+    held = hold_chat(studio)
+    wiping, release = wipe_held(studio, monkeypatch)
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(operations, "check", lambda user_id: None)          # путь без барьера
+            tid = file_job(studio, uid, conn)
+        assert (uid, "file") in translate.RUNNERS
+    finally:
+        release()
+    try:
+        assert wiping.result(timeout=5).status_code == 200
+        assert state.DB.execute("SELECT count(*) FROM translations WHERE id = ?", (tid,)).fetchone()[0] == 0
+        assert translate.RUNNERS == {} and translate.JOBS == {}
+    finally:
+        held[0] = False
+
+
 # ---- очереди на пользователя: эпоха — у задания, а не у раннера ------------------------
 
 def owner_id() -> int:
