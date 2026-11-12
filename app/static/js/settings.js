@@ -951,16 +951,26 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
     el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
 }
 
+/** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —
+ * с их файлами, образцы голосов, ссылки «Поделиться» и рабочее место «Агентов». */
+function wipeWhat() {
+  const sections = RAIL_SECTIONS.filter((s) => s.id !== 'code').map((s) => `«${s.name}»`).join(', ');
+  return `Удалятся безвозвратно: вся история разделов ${sections} вместе с файлами, образцы голосов, все ссылки `
+    + `«Поделиться», а в разделе «${NAMES.code}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, `
+    + 'Codex и OpenCode хранятся на компьютерах и останутся.';
+}
+
 function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
   const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
-    const text = el('p', {}, 'Все чаты, фото и видео удалятся безвозвратно. Подключения и настройки останутся.'
-      + ' Чаты Claude Code, Codex и OpenCode хранятся на компьютерах — студия забудет только свои отметки, сами сессии останутся.');
+    const text = el('p', {}, wipeWhat());
+    const kept = el('p', { class: 'muted small' }, 'Подключения, пресеты и ключи останутся, как и настройки, компьютеры, '
+      + 'выданные доступы к проектам и журнал безопасности.');
     const fail = el('p', { class: 'error' });
     const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
-    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, fail],
+    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, kept, fail],
       actions: [next, confirm] });
     next.addEventListener('click', () => {
       text.textContent = 'Точно? Отменить удаление нельзя.';
@@ -985,7 +995,8 @@ function wipeBlock(host, onWiped) {
     });
   });
   return el('section', { class: 'block' }, el('h2', {}, 'История'),
-    el('p', { class: 'muted small' }, 'Чаты, фото и видео этого профиля. Подключения не удаляются.'),
+    el('p', { class: 'muted small' }, 'История всех разделов с файлами, образцы голосов и ссылки «Поделиться» этого '
+      + 'профиля. Подключения, пресеты и ключи не удаляются.'),
     el('div', { class: 'row' }, start, note));
 }
 
