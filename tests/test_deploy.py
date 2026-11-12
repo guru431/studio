@@ -840,6 +840,50 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     assert (tmp_path / 'ssh-calls').read_bytes() == calls
 
 
+def _symlink_bash(tmp_path):
+    """Git Bash создаёт настоящие ссылки только с MSYS=winsymlinks:nativestrict (иначе — копию)."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    env = {**os.environ, "MSYS": "winsymlinks:nativestrict"}
+    (tmp_path / "probe-target").mkdir()
+    probe = subprocess.run([bash, "-c", 'ln -s "$1/probe-target" "$1/probe" && [ -L "$1/probe" ]', "x",
+                            tmp_path.as_posix()], env=env, capture_output=True, timeout=20)
+    if probe.returncode:
+        pytest.skip("нет прав на символические ссылки")
+    return bash, env
+
+
+@pytest.mark.parametrize("first", [True, False], ids=["first-install", "update"])
+def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
+    """Без `current` `readlink -f` возвращал сам путь с кодом 0: неудачный первый запуск делал `current`
+    ссылкой на себя. Неудачное обновление возвращает прежний релиз."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    (root / "releases").mkdir(parents=True)
+    (root / ".incoming-x").mkdir()
+    if not first:
+        (root / "releases" / "old").mkdir()
+        subprocess.run([bash, "-c", 'ln -s "$1/releases/old" "$1/current"', "x", root.as_posix()], env=env, check=True,
+                       timeout=20)
+    start = INSTALL_DOCKER.index('release="$R/releases/')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("    exit 1\nfi\n", start) + len("    exit 1\nfi\n")]
+    # Первый `up` (новый релиз) не проходит проверку здоровья, повторный (прежний релиз) — проходит.
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x; REVISION={'a' * 40}\n"
+             'docker() { echo "docker $*" >> "$R/calls"; if [ "$6" = up ]; then'
+             ' [ -e "$R/failed" ] && return 0; touch "$R/failed"; return 1; fi; }\n')
+    r = subprocess.run([bash, "-c", stubs + block], env=env, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 1 and "new release failed health checks" in r.stderr, r
+    release = next(p for p in (root / "releases").iterdir() if p.name != "old")
+    target = release if first else root / "releases" / "old"
+    same = subprocess.run([bash, "-c", '[ -d "$1/current" ] && [ "$1/current" -ef "$2" ]',
+                           "x", root.as_posix(), target.as_posix()], env=env, timeout=20)
+    assert same.returncode == 0, "current → не тот релиз"
+    calls = (root / "calls").read_text().splitlines()
+    assert ("previous image restored" in r.stderr) is not first
+    assert calls[-1].endswith("stop --timeout 20") is first
+
+
 def test_install_brings_ffmpeg_before_the_code_swap():
     """Звук студии — ffmpeg debian: не встал — прежний код работает, а не новый без ffmpeg."""
     install = (DEPLOY / "install.sh").read_text(encoding="utf-8")

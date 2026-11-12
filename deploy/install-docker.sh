@@ -72,7 +72,11 @@ if [ "$PREPARE" = 1 ]; then
 fi
 
 release="$R/releases/$REVISION-$(date -u +%Y%m%dT%H%M%S)"
-previous=$(readlink -f "$R/current" || true)
+previous=
+if [ -L "$R/current" ]; then previous=$(readlink -f "$R/current" || true); fi
+# Without this check a missing current resolved to its own path and a failed first start linked
+# current to itself.
+[ -d "$previous" ] || previous=
 mv "$NEW" "$release"
 ln -s "$release" "$R/.current-next"
 mv -Tf "$R/.current-next" "$R/current"
