@@ -239,7 +239,7 @@ def test_admin_secrets_travel_by_stdin_only():
 
 def test_install_and_deploy_ship_the_same_parts():
     parts = {re.search(r"^PARTS=\((.*)\)$", text, re.M).group(1) for text in (INSTALL, DEPLOY_SH)}
-    assert parts == {"app deploy requirements.txt"}
+    assert parts == {"app deploy requirements.txt constraints.txt"}
     assert "URL=${STUDIO_URL:-https://studio.example.com}" in DEPLOY_SH and '"$URL/health"' in DEPLOY_SH
 
 
@@ -281,6 +281,89 @@ def test_requirements_are_exact_pins():
     lines = [line for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
              if line and not line.startswith("#")]
     assert lines and all(re.fullmatch(r"[A-Za-z0-9._-]+(\[[a-z,]+\])?==\S+", line) for line in lines), lines
+
+
+def _requirements(path: Path) -> list:
+    from packaging.requirements import Requirement
+    return [Requirement(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith(("#", "-"))]
+
+
+def _constraints(path: Path) -> dict:
+    """Каждая строка — `имя==версия`, имя — один раз."""
+    from packaging.utils import canonicalize_name
+    pins = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#"):
+            assert re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9.+!]+", line), line
+            name, version = line.split("==")
+            assert canonicalize_name(name) not in pins, line
+            pins[canonicalize_name(name)] = version
+    return pins
+
+
+def unpinned_dependencies(roots, pins: dict, environments: list) -> set:
+    """Имена замыкания `roots`, которых нет в `pins`. Зависимости — из метаданных пакетов, установленных
+    в среде тестов, маркеры — целевых сред (любой из них достаточно); пакет, которого здесь нет (uvloop
+    под Windows), проверяется только сам."""
+    import importlib.metadata
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+    todo, seen, missing = list(roots), set(), set()
+    while todo:
+        req = todo.pop()
+        name = canonicalize_name(req.name)
+        if name not in pins:
+            missing.add(name)
+            continue
+        if (name, frozenset(req.extras)) in seen:
+            continue
+        seen.add((name, frozenset(req.extras)))
+        try:
+            requires = importlib.metadata.requires(req.name) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for spec in map(Requirement, requires):
+            if spec.marker is None or any(spec.marker.evaluate({**env, "extra": extra})
+                                          for env in environments for extra in {"", *req.extras}):
+                todo.append(spec)
+    return missing
+
+
+LINUX_313 = {"sys_platform": "linux", "platform_system": "Linux", "os_name": "posix", "platform_machine": "x86_64",
+             "python_version": "3.13", "python_full_version": "3.13.0", "implementation_name": "cpython",
+             "platform_python_implementation": "CPython"}
+
+
+def test_constraints_pin_the_whole_dependency_closure():
+    """Закреплены были только прямые пакеты: starlette, pydantic, anyio, websockets сервера и mcp, anyio,
+    jsonschema моста брались свежими в момент сборки слоя pip или обновления моста на каждой машине."""
+    from packaging.utils import canonicalize_name
+    for folder in (ROOT, ROOT / "agent"):
+        pins = _constraints(folder / "constraints.txt")
+        roots = _requirements(folder / "requirements.txt")
+        for req in roots:                                   # прямые — те же версии, что в requirements.txt
+            assert pins.get(canonicalize_name(req.name)) == str(req.specifier)[2:], req
+    # Замыкание сервера — по метаданным этой среды (requirements-dev ставит requirements.txt); моста —
+    # в наборе agent/ (agent/tests/test_constraints.py), его пакетов в среде сервера нет.
+    assert unpinned_dependencies(_requirements(ROOT / "requirements.txt"), _constraints(ROOT / "constraints.txt"),
+                                 [LINUX_313]) == set()
+
+
+def test_every_pip_install_uses_the_constraints():
+    assert "pip install --no-cache-dir -r requirements.txt -c constraints.txt " in DOCKERFILE
+    assert "COPY requirements.txt constraints.txt ./" in DOCKERFILE
+    assert "!constraints.txt" in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert '-r "$NEW/requirements.txt" -c "$NEW/constraints.txt"' in INSTALL
+    assert 'cat "$NEW/requirements.txt" "$NEW/constraints.txt" | sha256sum' in INSTALL      # штамп среды
+    updater = (ROOT / "agent" / "studio_agent" / "updater.py").read_text(encoding="utf-8")
+    assert "'-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')" in updater
+    install = (ROOT / "agent" / "install.ps1").read_text(encoding="utf-8-sig")
+    assert "'-r', (Join-Path $repo 'requirements.txt'), '-c', (Join-Path $repo 'constraints.txt')" in install
+    assert "'constraints.txt'" in (DEPLOY / "build-agent-installer.ps1").read_text(encoding="utf-8-sig")
+    attributes = subprocess.run(["git", "-C", str(ROOT), "check-attr", "export-ignore", "agent/constraints.txt"],
+                                capture_output=True, text=True, timeout=20).stdout
+    assert attributes.endswith(": unspecified\n"), attributes          # едет в ZIP моста
 
 
 def test_deploy_files_have_lf_endings():
@@ -594,6 +677,7 @@ def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
         (base / "agent").mkdir()
         (base / "agent" / "studio-agent.zip").write_text(text)
         (base / "requirements.txt").write_text("a==1\n", newline="\n")
+        (base / "constraints.txt").write_text("b==2\n", newline="\n")
     fake, log = tmp_path / "python", tmp_path / "log"
     fake.write_text(FAKE_PY, newline="\n")
     if old_venv is not None:
@@ -603,7 +687,7 @@ def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
     start = INSTALL.index("# Среда Python")
     block = INSTALL[start:INSTALL.index('rm -rf "$NEW"\n', start) + len('rm -rf "$NEW"\n')]
     script = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming; OLD=$R/.previous\n"
-              "PARTS=(app deploy requirements.txt)\n"
+              "PARTS=(app deploy requirements.txt constraints.txt)\n"
               "python3() { case \"$1\" in -V) echo 'Python 3.13.5' ;; -m) mkdir -p \"$3/bin\"; cp \"$FAKE\" \"$3/bin/python\" ;; esac; }\n"
               "chown() { :; }; chmod() { :; }; install() { mkdir -p \"${@: -1}\"; }\n"
               + _function("restore") + block + then)
@@ -617,7 +701,7 @@ def _stamp(venv) -> str:
     return (venv / ".studio-requirements").read_text().strip()
 
 
-SAME = hashlib.sha256(b"a==1\n").hexdigest() + " Python 3.13.5"
+SAME = hashlib.sha256(b"a==1\nb==2\n").hexdigest() + " Python 3.13.5"
 
 
 @pytest.mark.integration                   # bash с заглушками: 1–3 с на Windows (каждый mv — процесс)
@@ -627,7 +711,7 @@ def test_install_swaps_a_fresh_environment_and_restore_brings_the_old_one_back(t
     assert r.returncode == 0 and "swapped" in r.stdout, r.stderr
     new_py = root.as_posix() + "/.incoming/.venv/bin/python"
     assert calls == [f"{new_py} -m pip install --quiet --disable-pip-version-check --root-user-action=ignore "
-                     f"-r {root.as_posix()}/.incoming/requirements.txt",
+                     f"-r {root.as_posix()}/.incoming/requirements.txt -c {root.as_posix()}/.incoming/constraints.txt",
                      f"{new_py} -m compileall -q {root.as_posix()}/.incoming/app"]
     assert (root / "app" / "f").read_text() == "old"           # откат: прежний код
     assert (root / "agent" / "studio-agent.zip").read_text() == "old"     # и прежний архив моста
@@ -677,6 +761,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
+    (repo / "constraints.txt").write_text("# constraints\n")
     converter_bytes = b'# Shared converter fixture\n'
     (repo / 'deploy' / 'md2pdf.sha256').write_text(hashlib.sha256(converter_bytes).hexdigest() + '\n', encoding='utf-8')
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]

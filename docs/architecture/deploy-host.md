@@ -82,7 +82,7 @@
     bash deploy/deploy.sh --new-secret       # заново положить STUDIO_DATA_KEY из vault
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
 
-Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt`); грязное
+Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt`); грязное
 дерево выкладываемых частей и `agent/` — отказ. С ним едут установщик EXE и ZIP обновления моста:
 `git archive --format=zip --prefix=studio-agent/ HEAD:agent` → `.incoming/agent/studio-agent.zip`, строка
 `==> мост <хеш>` того же коммита студии. До первого SSH `deploy/build-agent-installer.ps1` собирает
@@ -95,7 +95,8 @@
 `GATEWAY_KEY_OWNER_IMAGES` и через `install.sh --admin-stdin` отдаёт в `manage.py create-admin`
 (`systemd-run --pipe` от `studio` с окружением юнита); повтор безопасен, новый пароль гасит сессии.
 `install.sh` до подмены кода собирает новую среду Python рядом (`.incoming/.venv`; только если
-сменились `requirements.txt` или `python3` — штамп `.venv/.studio-requirements`), переносит её на
+сменились `requirements.txt`, `constraints.txt` (транзитивные пакеты, `pip -c`) или `python3` — штамп
+`.venv/.studio-requirements`), переносит её на
 место вместе с кодом, держит прежние код и среду в `.previous` до ответа `/health` от www-data
 через сокет, ставит юниты копии базы и включает таймер. Отказ `systemctl restart` и молчание `/health`
 идут одним путём `service_failed` — status, журнал и строки отката, без автоматического отката; таймер

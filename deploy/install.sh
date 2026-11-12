@@ -18,7 +18,7 @@ ENV_FILE=/etc/studio/studio.env
 UNIT=studio-web.service
 SOCK=/run/studio/web.sock
 MEDIA=/mnt/storage/SharedData/studio
-PARTS=(app deploy requirements.txt)
+PARTS=(app deploy requirements.txt constraints.txt)
 
 SECRET=0
 ADMIN=0
@@ -99,20 +99,20 @@ command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — ч
 }
 
 # Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
-# Собирается в $NEW/.venv, только если сменились requirements.txt или python3 (штамп в самой
+# Собирается в $NEW/.venv, только если сменились requirements.txt, constraints.txt или python3 (штамп в самой
 # среде; не сменились — действующая остаётся, её никто не трогал), и переезжает на место вместе с
 # кодом; прежняя уходит в $OLD, откат возвращает и её. Упал pip — недособранная среда убрана,
 # прежние код и среда не тронуты. Переезд ломает абсолютный shebang скриптов bin/ — поэтому служба,
 # копия базы и manage.py запускаются интерпретатором среды (`.venv/bin/python -m …`), pip — тоже.
 STAMP=.studio-requirements
-want="$(sha256sum < "$NEW/requirements.txt" | cut -d' ' -f1) $(python3 -V 2>&1)"
+want="$(cat "$NEW/requirements.txt" "$NEW/constraints.txt" | sha256sum | cut -d' ' -f1) $(python3 -V 2>&1)"
 SWAP=("${PARTS[@]}" agent)      # архив моста (agent/) переезжает и откатывается вместе с кодом
 PY=$R/.venv/bin/python
 if ! [ -x "$PY" ] || [ "$(cat "$R/.venv/$STAMP" 2>/dev/null)" != "$want" ]; then
     rm -rf "$NEW/.venv"
     python3 -m venv "$NEW/.venv"
     if ! "$NEW/.venv/bin/python" -m pip install --quiet --disable-pip-version-check --root-user-action=ignore \
-            -r "$NEW/requirements.txt"; then
+            -r "$NEW/requirements.txt" -c "$NEW/constraints.txt"; then
         rm -rf "$NEW/.venv"
         echo "ОШИБКА: pip не поставил зависимости — прежние код и среда не тронуты" >&2
         exit 1

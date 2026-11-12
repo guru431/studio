@@ -121,7 +121,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
     bash deploy/deploy.sh --refresh-base     # Docker: образ без кэша — свежие база и пакеты Debian сразу
 
-Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
+Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
 `deploy/build-agent-installer.ps1`); грязное дерево выкладываемых частей и `agent/` — отказ. `install-docker.sh`
 собирает образ до смены `current`, проверяет CIFS и здоровье обоих контейнеров; неудачный образ возвращает
 предыдущий, сохраняя актуальную базу. `install-proxy.sh` проверяет конфигурацию Apache и перезагружает только
