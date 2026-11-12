@@ -54,6 +54,8 @@ FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10
 CALL_SEC = 30
 WATCH_MAX = 1000
+COMPLETIONS_MAX = 50  # досланных завершений в кадре (протокол §18)
+COMPLETION_AGE_MAX = 7 * 24 * 3600  # давность конца хода, с: старше — время отметки по этому пределу
 STOP_SEC = 2
 MESSAGE_MAX = 300
 CODE_MAX = 40
@@ -208,7 +210,7 @@ def parse_hello(frame: dict) -> dict:
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "metadata_cache", "file_stats", "file_operations",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info", "desktop", "visualizations",
-                       "passive_requests", "history_images", "project_sharing"):
+                       "passive_requests", "history_images", "project_sharing", "completions"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -278,8 +280,9 @@ async def attach(link: Link) -> None:
         _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
     try:
+        # `completions` — студия принимает кадр досланных завершений (протокол §18); старый мост поле не читает.
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
-                         "studio_version": release.VERSION})
+                         "studio_version": release.VERSION, "completions": True})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:
@@ -350,8 +353,29 @@ def deliver(link: Link, frame: dict) -> None:
         for q in list(WATCHERS.get((link.agent_id, frame["chat"]), ())):
             _put_event(link.agent_id, frame["chat"], q, frame["e"])
         _push(link, frame)
+    elif t == "completions" and link.hello.get("completions"):
+        _completions(link, frame)
     else:
         raise ProtocolError("t")
+
+
+def _completions(link: Link, frame: dict) -> None:
+    """Ходы, кончившиеся без канала (протокол §18): отметка «непрочитано» и push — как у живого `done`. Строки
+    `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет."""
+    if LINKS.get(link.agent_id) is not link:
+        return
+    items = frame.get("items")
+    if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
+            isinstance(i, dict) and i.get("status") in DONE_WORDS and type(i.get("ago")) is int and i["ago"] >= 0
+            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
+        log.warning("агент %d: неверные досланные завершения", link.agent_id)
+        return
+    for item in items:
+        finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
+        code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
+        _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                     "e": {"k": "done", "status": item["status"]}})
+    log.info("агент %d: досланных завершений %d", link.agent_id, len(items))
 
 
 #: повод push → слова тела (тексты сервера плана)
