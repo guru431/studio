@@ -124,17 +124,40 @@ sudo systemctl status studio-docker-start.service studio-docker.service studio-b
 
 Приёмка YouTube после выкладки или смены версии yt-dlp — выгрузка субтитров одного публичного ролика внутри `web`
 с окружением службы (`web._env`) и аргументами `web.youtube`, без загрузки видео; `/tmp` контейнера — tmpfs.
-Ожидается строка `ok` и файл `.vtt`; предупреждение yt-dlp об отсутствии JS-рантайма (deno в образе нет) —
-сведение для решения владельца, не отказ. `VIDEO` — id любого публичного ролика с субтитрами:
+Штатный код выбирает одну дорожку, скачивает её и разбирает VTT; проверка требует непустого текста.
+Ожидается строка `ok` с языком и числом знаков, без содержимого субтитров. Ошибка или превышение
+суммарного срока двух вызовов yt-dlp завершает команду ненулевым кодом. `VIDEO` — id любого публичного
+ролика с субтитрами; временный каталог удаляется и при отказе:
 
 ```bash
 VIDEO=jNQXAC9IVRw
 sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web \
-  env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME=/nonexistent sh -c '
-    yt-dlp --version
-    yt-dlp --ignore-config --no-playlist --no-cache-dir --skip-download --write-subs --write-auto-subs \
-      --sub-langs "en.*,ru.*" --sub-format vtt -o "/tmp/yt-check.%(ext)s" "https://www.youtube.com/watch?v=$1"
-    ls -l /tmp/yt-check.*.vtt && echo ok; rm -f /tmp/yt-check.*' yt-check "$VIDEO"
+  env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME=/nonexistent \
+  python - "$VIDEO" <<'PY'
+import asyncio
+import sys
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, "/opt/studio/app")
+import state
+import web
+
+
+async def check():
+    with tempfile.TemporaryDirectory(prefix="yt-check-") as folder:
+        state.CFG = SimpleNamespace(tmp_dir=Path(folder))
+        url = f"https://www.youtube.com/watch?v={sys.argv[1]}"
+        result = await asyncio.wait_for(web.youtube(url), 2 * web.YTDLP_TIMEOUT_SEC + 5)
+        body = result["text"].partition("\n\n")[2]
+        if not body.strip():
+            raise RuntimeError("empty subtitles")
+        print(f"ok lang={result['lang']} chars={len(body)}")
+
+
+asyncio.run(check())
+PY
 ```
 
 ## Перенос с нативной установки

@@ -253,6 +253,7 @@ def _link_problems(doc: Path) -> list[str]:
     return problems
 
 
+@pytest.mark.xdist_group("docs")  # общий AST-кэш, без повторного разбора пакета в каждом worker
 @pytest.mark.parametrize("doc", SYMBOL_DOCS, ids=lambda p: p.relative_to(ROOT).as_posix())
 def test_code_references_in_docs_exist(doc):
     assert _symbol_problems(doc) == []

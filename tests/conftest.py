@@ -10,6 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from tools.pytest_support import new_event_loop
+
 APP = ROOT / "app"
 CLIENT = ROOT / "client"
 DEPLOY = ROOT / "deploy"
@@ -185,7 +188,8 @@ def studio(env, schema_db, monkeypatch):
     clear_push()
     if not env.db_path.exists():
         shutil.copyfile(schema_db, env.db_path)
-    with TestClient(main.app, base_url="https://testserver") as client:
+    with TestClient(main.app, base_url="https://testserver",
+                   backend_options={"loop_factory": new_event_loop}) as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
     screenlock.CHALLENGES.clear()

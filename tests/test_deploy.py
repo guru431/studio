@@ -570,6 +570,7 @@ def test_install_accepts_only_the_optional_public_ca_setting(tmp_path, extra, va
     assert key not in result.stdout + result.stderr
 
 
+@pytest.mark.integration  # настоящий bash и несколько файловых процессов: > 1 с на Windows
 def test_data_key_rotation_preserves_the_public_cleaner_ca(tmp_path):
     from cryptography.fernet import Fernet
     old, new = Fernet.generate_key().decode(), Fernet.generate_key().decode()
