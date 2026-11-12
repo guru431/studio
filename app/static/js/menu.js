@@ -94,6 +94,13 @@ function popover(trigger, node, { side, align, blocked = () => false, before = (
     if (was) close();
     else open();
   });
+  // фокус остался на кнопке (панель без autoFocus): Escape закрывает только этот popover, не панель раздела под ним
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !isOpen()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close(true);
+  });
   // beforetoggle — синхронно с открытием и закрытием (и light dismiss): aria-expanded без запаздывания
   node.addEventListener('beforetoggle', (event) => {
     const shown = event.newState === 'open';
