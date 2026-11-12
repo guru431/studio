@@ -43,6 +43,31 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     assert chat in [i["chat"] for i in studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]]
 
 
+def test_member_visualization_by_absolute_path_needs_a_bridge_that_scopes_it(studio):
+    """Мост до 0.20.0 открывает участнику и общий каталог визуализаций Codex (HTML всех проектов владельца):
+    без `hello.visualization_scope` участнику — только относительный путь; владельцу — как раньше."""
+    aid, machine, link, _, _ = share(studio)
+    machine.projects["alpha"]["files"]["v.html"] = b"<p>alpha</p>"
+    link.hello["visualizations"] = True
+    absolute = "C:\\Users\\owner\\.codex\\visualizations\\2026\\11\\08\\thread\\other.html"
+    signin(studio, "friend")
+    before = len(machine.requests)
+    for source in (absolute, "//server/share/v.html", "/v.html"):
+        response = studio.c.post(url(aid, "projects", ALPHA, "visualization"), json={"source": source})
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "unsupported"
+    assert len(machine.requests) == before
+    response = studio.c.post(url(aid, "projects", ALPHA, "visualization"), json={"source": "v.html"})
+    assert response.status_code == 200 and machine.requests[-1]["shared_projects"] == [ALPHA]
+    link.hello["visualization_scope"] = True
+    studio.c.post(url(aid, "projects", ALPHA, "visualization"), json={"source": absolute})
+    assert machine.requests[-1]["source"] == absolute                   # проверяет новый мост
+    signin(studio, "owner")
+    studio.c.post(url(aid, "open"), json={"pin": "2468"})
+    del link.hello["visualization_scope"]
+    studio.c.post(url(aid, "projects", ALPHA, "visualization"), json={"source": absolute})
+    assert machine.requests[-1]["source"] == absolute and "shared_projects" not in machine.requests[-1]
+
+
 def test_member_cannot_reach_other_projects_or_manage_computer_or_members(studio):
     aid, machine, _, _, base = share(studio)
     signin(studio, "friend")

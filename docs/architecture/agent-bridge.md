@@ -46,7 +46,7 @@
 | 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
-| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions` | §18 |
+| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope` | §18, §17 |
 
 ## 0.20.0
 
@@ -61,6 +61,10 @@
   хвост до `limits.CLIP`, а очередь канала общая с ответами просьб). `result` шага снимает отложенное и уходит
   сразу; конец хода досылает отложенное до `done` (`codex.CodexRunner._output_done`). Формат кадра прежний; у
   Claude и OpenCode `step_update` нет. Проверки — `tests/test_codex_progress.py`.
+- `visualization` участника (`shared_projects`, §17): `visualizations.read` с `codex_home=False` — только проект,
+  общий каталог визуализаций Codex (HTML тредов всех проектов владельца) — `outside`. Тред по пути не сверяется:
+  раскладка каталога Codex не контракт. `hello.visualization_scope`; старому мосту сервер передаёт от участника
+  только относительный путь. Проверки — `tests/test_visualizations.py`, `../tests/test_project_access.py`.
 - Досланные завершения (§18): `agent.Agent.emit` — конец хода, который `link.Link.send` не принял (канала нет), —
   в `agent.Agent.missed`; писатель умершего канала возвращает туда же неотправленные кадры. После `welcome` с
   `completions` кадр `agent.Agent.completions` уходит первым. Только память, без текстов. Сервер —
@@ -155,7 +159,7 @@
 `visualizations.py` читает только UTF-8 `.html` ≤2 МиБ: относительный/абсолютный путь внутри
 проекта или абсолютный путь под `${CODEX_HOME:-~/.codex}/visualizations`. Никаких прочих
 файлов профиля; обход `..`, ADS и выход через junction запрещены, junction самого каталога
-визуализаций тоже. После чтения ядро повторно проверяет открытую PIN-сессию.
+визуализаций тоже. Участнику совместного проекта (мост ≥ 0.20.0) — только путь внутри проекта. После чтения ядро повторно проверяет открытую PIN-сессию.
 Файлы не копируются и не журналируются. Проверки — `tests/test_visualizations.py`.
 
 (мост ≥ 0.15.0) `timeline.py` сохраняет порядок текстовых сегментов и инструментов. Текст единственный,

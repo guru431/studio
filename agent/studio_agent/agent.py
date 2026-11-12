@@ -138,7 +138,8 @@ class Agent:
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
-                 "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True}
+                 "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
+                 "visualization_scope": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -704,7 +705,8 @@ class Agent:
 
     async def _op_visualization(self, frame, after):
         project = await self._project(frame)
-        result = await asyncio.to_thread(visualizations.read, project, frame["source"])
+        result = await asyncio.to_thread(visualizations.read, project, frame["source"],
+                                         codex_home=frame.get("shared_projects") is None)
         if frame.get("shared_projects") is None and not self.open.alive(frame["session"], frame.get("idle_sec", limits.OPEN_IDLE_SEC)):
             raise Refused("closed")
         return result

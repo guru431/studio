@@ -98,6 +98,7 @@ class FakeMachine:
         self.context = None
         self.project_sharing = True
         self.completions = False                 # кадр досланных завершений (§18)
+        self.visualization_scope = False         # участнику — только визуализации проекта (§17)
 
     @property
     def hello(self) -> dict:
@@ -110,7 +111,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions")
+                                           "completions", "visualization_scope")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))

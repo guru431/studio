@@ -1079,9 +1079,13 @@ class VisualizationBody(BaseModel):
 
 @router.post("/agents/{aid}/projects/{pid}/visualization")
 async def visualization(aid: int, pid: str, body: VisualizationBody, request: Request):
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     require_capability(aid, "visualizations")
+    # Мост до `hello.visualization_scope` открывает участнику и общий каталог визуализаций Codex с HTML всех
+    # проектов владельца: ему — только относительный путь, файл внутри проекта (протокол §17).
+    if agent["user_id"] != request.state.user.id and re.match(r"[A-Za-z]:|[\\/]", body.source):
+        require_capability(aid, "visualization_scope")
     data = await ask(request, aid, "visualization", project=pid, source=body.source)
     text = _strings(data, "text")["text"]
     try:
