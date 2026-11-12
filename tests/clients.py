@@ -18,16 +18,17 @@ RUNNERS = [pytest.param("ps", marks=pytest.mark.integration), "py"]
 UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 
-def ps_encoding():
-    """Кодировка вывода PowerShell в трубу — кодовая страница консоли: дочерний powershell
-    наследует консоль процесса тестов (ночной прогон идёт под 65001, ручной — под 866).
-    Консоли нет (0) — дочерний получит новую с умолчанием, то есть OEM."""
-    try:
-        import ctypes
-        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
-    except (ImportError, AttributeError, OSError):
-        return "utf-8"      # не Windows: pwsh пишет UTF-8
-    return f"cp{cp}" if cp else "oem"
+# Windows PowerShell пишет в трубу кодовой страницей унаследованной консоли (ручной прогон — 866, ночной — 65001):
+# в 866 нет «—» и «→», и он сам меняет их на «-» и «\x1a» — декодированием этого не вернуть. Поэтому скрипт
+# запускается из -Command, где вывод сперва переключён на UTF-8; коды выхода — как у -File: exit N скрипта,
+# 1 при исключении или ошибке разбора (-Command сам вернул бы 0).
+PS_WRAP = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; & {script} {args}; $ok = $?; "
+           "if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}; if (-not $ok) {{ exit 1 }}; exit 0")
+PS_PARAM = re.compile(r"-[A-Z]\w*")
+
+
+def ps_literal(text):
+    return "'" + text.replace("'", "''") + "'"
 
 
 def flat(text):
@@ -60,12 +61,14 @@ def local_copy_drift(script, local):
 
 
 def run_client(kind, script, args):
-    """script — путь к .ps1; Python-версия лежит рядом под тем же именем с .py."""
+    """script — путь к .ps1; Python-версия лежит рядом под тем же именем с .py. Вывод обеих — UTF-8."""
     if kind == "ps":
         ps = shutil.which("powershell") or shutil.which("pwsh")
         if not ps:
             pytest.skip("нет powershell — прогон скрипта пропущен")
+        command = PS_WRAP.format(script=ps_literal(str(script)),
+                                 args=" ".join(a if PS_PARAM.fullmatch(a) else ps_literal(a) for a in args))
         return subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                               "-File", str(script), *args], capture_output=True, timeout=25)
+                               "-Command", command], capture_output=True, timeout=25)
     return subprocess.run([sys.executable, str(script.with_suffix(".py")), *py_args(args)],
                           capture_output=True, timeout=25, env=UTF8_ENV)
