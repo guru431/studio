@@ -93,10 +93,11 @@ TestClient; отдельная проверка в `tests/test_suite_timeout.py`
 через `asyncio.sleep(0)`: Python 3.14 завершает `gather` готовых задач синхронно, а callback
 `TASKS.discard` ещё стоит в очереди. Без уступки `while TASKS` зацикливается и pytest-timeout
 убивает worker; регрессия с уже готовой задачей и последующей работой — `tests/test_task_settle.py`.
-Клиентские скрипты (`tests/clients.py`): вывод `[ps]`-вариантов декодируется кодовой страницей консоли
-процесса тестов (`clients.ps_encoding`: дочерний powershell пишет в трубу ею, ночной прогон идёт под
-65001); проверка — `cmd /c "chcp 65001 >nul && .venv\Scripts\python.exe -m pytest -q -m integration
-tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие настоящую паузу `PollSec`, и разбор скриптов
+Клиентские скрипты (`tests/clients.py`): `[ps]`-варианты запускаются через `-Command`-обёртку
+`clients.PS_WRAP`, которая переключает вывод на UTF-8 и сохраняет коды выхода `-File`: иначе Windows PowerShell
+пишет в трубу кодовой страницей унаследованной консоли, а в 866 нет «—» и «→» — тесты зависели бы от того, кто
+их запускает. Проверка — те же тесты из Git Bash (866) и под `cmd /c "chcp 65001 >nul && .venv\Scripts\python.exe
+-m pytest -q -m integration tests/test_studio_batch_client.py -n0"`. Сценарии, ждущие настоящую паузу `PollSec`, и разбор скриптов
 парсером PowerShell — `integration` (секунды). Три сценария видео-клиента с несколькими запусками
 процесса (папка, повтор и изменённый запрос) также `integration` в обеих версиях: при одновременных
 наборах `main`/`agent` Python-варианты занимали 1,07–1,49 с. Остальные Python-сценарии остаются быстрыми.
