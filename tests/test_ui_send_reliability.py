@@ -219,3 +219,48 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
         pw.expect(answer.locator(".msg-save")).to_have_count(0)
         pw.expect(answer.locator(".msg-meta")).to_have_text("")
         assert page.evaluate(last_saved) == ["done", "Облако на связи."]
+
+
+@pytest.mark.parametrize("touch,width", [(True, 320), (False, 1280)])
+def test_enter_breaks_the_line_on_touch_screens_and_sends_on_desktop(engine, live, touch, width):
+    """Экранной клавиатуре нечем набрать Shift+Enter: на сенсорном экране Enter в «Чате» и «Агентах» — перенос
+    строки (`enterkeyhint="enter"`), отправка — кнопкой; на компьютере Enter отправляет (`enterkeyhint="send"`)."""
+    login = f"enter-{engine.browser_type.name}-{width}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат")})
+    aid, bridge = code_online(live, login, machine)
+    try:
+        with opened(engine, live, login, width, touch=touch) as page:
+            add_cloud(page, live)
+            field = page.locator("#chat-input")
+            pw.expect(field).to_have_attribute("enterkeyhint", "enter" if touch else "send")
+            field.click()
+            page.keyboard.type("первая")
+            page.keyboard.press("Enter")
+            if touch:
+                page.keyboard.type("вторая")
+                pw.expect(field).to_have_value("первая\nвторая")
+                pw.expect(page.locator("#messages .msg")).to_have_count(0)
+                page.locator("#send").click()
+                pw.expect(page.locator("#messages .msg.user")).to_have_text("первая\nвторая")
+            else:
+                pw.expect(page.locator("#messages .msg.user")).to_have_text("первая")
+                pw.expect(field).to_have_value("")
+
+            machine.script = [DONE]
+            code_page(page, live, aid)
+            text = page.locator("#code-text")
+            pw.expect(text).to_have_attribute("enterkeyhint", "enter" if touch else "send")
+            text.click()
+            page.keyboard.type("задание")
+            page.keyboard.press("Enter")
+            if touch:
+                page.keyboard.type("дальше")
+                pw.expect(text).to_have_value("задание\nдальше")
+                page.wait_for_timeout(300)
+                assert machine.turns == 0
+            else:
+                until(page, lambda: machine.turns == 1)
+                pw.expect(text).to_have_value("")
+    finally:
+        bridge.stop()

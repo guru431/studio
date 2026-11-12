@@ -65,7 +65,7 @@ import { api, me, unknownOutcome } from './api.js';
 import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
@@ -1654,12 +1654,7 @@ function build(view, ctx) {
     autosize();
     dropWaiting();
   });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(input, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit(false);
