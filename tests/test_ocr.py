@@ -22,6 +22,7 @@ import history
 import media
 import ocr
 import ocr_render
+import operations
 import state
 from conftest import add_gateway, make_user, signin
 from scans import photo, scan_pdf
@@ -654,6 +655,32 @@ def test_queued_scans_survive_a_restart(studio):
     on_loop(studio, ocr.resume_queued)
     row = scan_row(studio, orphan)
     assert (row["state"], row["detail"]) == ("error", ocr.NO_CONNECTION) and len(studio.gw.ocr_requests) == sent
+
+
+def test_a_queued_scan_keeps_its_own_epoch_not_the_runner_one(studio):
+    """Раннер, запущенный в прежней эпохе истории, сохраняет PNG страниц документа, поставленного после её
+    смены, под эпохой этого документа (`operations.capture`), а не своей: без этого — «сбой службы» 409."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    first = pdf_scan(studio, uid, conn, "ink", kick=False)
+
+    def kick_in_old_epoch():
+        with operations.restore(operations.snapshot(uid)):
+            ocr.kick(uid)
+    on_loop(studio, kick_in_old_epoch)
+    try:
+        wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+        async def bump():                                # поколение сменилось, а раннер ещё жив
+            with operations.barrier(uid):
+                pass
+        on_loop(studio, bump)
+        later = pdf_scan(studio, uid, conn, "ink")
+    finally:
+        studio.gw.ocr_hold = False
+    assert wait_scan(studio, first)["state"] == "done"
+    row = wait_scan(studio, later)
+    assert (row["state"], row["text"]) == ("done", TEXT), row["detail"]
 
 
 def test_stop_user_stops_the_runner(studio):

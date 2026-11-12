@@ -125,6 +125,7 @@ class Job:
     cancel: bool = False          # «Отменить»: доделать идущую страницу, выбросить, освободить карту
     stopped: bool = False         # stop_user: раннер оборван, итог — «отменено»
     called: bool = False          # звал шлюз: после документа — release слота ocr
+    epoch: "tuple | None" = None  # эпоха постановки (`operations.capture`): раннер исполняет документ под ней
 
 
 #: документы в очереди и в работе (снимок подключения — для раннера); кончившееся уходит
@@ -356,7 +357,7 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[sid] = Job(id=sid, user_id=user_id, conn=conn, stage_at=now)
+    JOBS[sid] = Job(id=sid, user_id=user_id, conn=conn, stage_at=now, epoch=operations.capture(user_id))
     log.info("распознавание %s: в очереди, %d стр.", sid[:8], len(pages))
     return sid
 
@@ -381,8 +382,7 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     try:
         conn = connections.get(user_id, row["connection_id"])
     except HTTPException:
-        raise HTTPException(409, {"code": "no_connection", "message": (
-            "подключения документа больше нет — загрузите документ заново")}) from None
+        raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
     operations.check(user_id)
     if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                         (user_id,)).fetchone()[0] >= QUEUE_MAX:
@@ -402,7 +402,8 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW())
+    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW(),
+                        epoch=operations.capture(user_id))
     log.info("распознавание %s: заново, %d стр.", scan_id[:8], len(numbers))
 
 
@@ -638,7 +639,10 @@ async def _runner(user_id: int) -> None:
             if job is None:                          # снимка подключения нет — такого быть не должно
                 _finish(row["id"], "error", INTERRUPTED)
                 continue
-            await run(job)
+            # под эпохой документа, а не запроса, запустившего раннер: живой раннер берёт и поставленные после
+            # очистки истории
+            with operations.restore(job.epoch or operations.snapshot(user_id)):
+                await run(job)
     finally:
         if RUNNERS.get(user_id) is asyncio.current_task():
             del RUNNERS[user_id]
@@ -689,11 +693,11 @@ def resume_queued() -> None:
         except HTTPException:
             _finish(row["id"], "error", NO_CONNECTION)
             continue
-        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, stage_at=clock.NOW())
+        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, stage_at=clock.NOW(),
+                              epoch=operations.snapshot(row["user_id"]))
     users = {JOBS[row["id"]].user_id for row in rows if row["id"] in JOBS}
     for uid in users:
-        with operations.restore(operations.snapshot(uid)):
-            kick(uid)
+        kick(uid)
     if users:
         log.info("распознавания: продолжены ждущие у %d пользователей", len(users))
 
