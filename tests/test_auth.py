@@ -29,7 +29,9 @@ def csrf_in_db(s) -> str:
 
 
 def test_health_is_open_and_api_needs_login(studio):
-    assert studio.c.get("/health").json() == {"status": "ok", "version": release.VERSION}
+    # static — хеш снимка статики: по нему страница прежней выкладки предлагает «Обновить» (stale.js)
+    assert studio.c.get("/health").json() == {"status": "ok", "version": release.VERSION,
+                                              "static": auth.STATIC_VERSION}
     r = studio.c.get("/api/me"); assert r.status_code == 401 and r.json()["detail"]["code"] == "login"
     assert studio.c.get("/", follow_redirects=False).headers["location"] == "/login"
 

@@ -27,6 +27,7 @@ import { popupPanel } from './menu.js';
 import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
+import { lazy } from './stale.js';
 import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
@@ -121,7 +122,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   async function showViewer(agent, kind) {
     try {
       if (!viewers.has(kind)) {
-        const module = await (kind === 'desktop' ? import('./code-desktop.js') : import('./code-computer.js'));
+        const module = await lazy(() => (kind === 'desktop' ? import('./code-desktop.js') : import('./code-computer.js')),
+          'Окно не загрузилось');
         if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
         const create = kind === 'desktop' ? module.desktopView : module.computerView;
         viewers.set(kind, create(root, { locked(aid) { infoKind = kind; infoIntent = aid; pin(aid); } }));
