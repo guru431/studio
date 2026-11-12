@@ -29,6 +29,7 @@ import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
 import { button, el, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
+import { viewerNavigation } from './viewer-navigation.js';
 
 const POLL_MS = 3000;
 const PAGE = 30;
@@ -338,7 +339,7 @@ function build(view, ctx) {
   function openButton(item, ...inside) {
     const open = el('button', { type: 'button', class: 'video-open', 'aria-label': 'Открыть ролик' }, still(item),
       el('span', { class: 'video-play', 'aria-hidden': 'true' }, icon('play')), ...inside);
-    open.addEventListener('click', () => openViewer(item));
+    open.addEventListener('click', (event) => openViewer(item, null, event.currentTarget));
     return open;
   }
 
@@ -421,7 +422,8 @@ function build(view, ctx) {
       node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata',
         poster: posterOf(item), src: media(item.media_id) }));
       body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
-      acts.append(button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
+      acts.append(button('Открыть', { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
+        button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
         repeatButton(item, 'btn btn-sm'), variantsButton(item, 'btn btn-sm'),
         button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
     } else if (RUNNING.has(item.state)) {
@@ -480,7 +482,8 @@ function build(view, ctx) {
   }
 
   /* просмотр ролика (плитка и таблица): плеер, параметры, цепочка, «Скачать», «Удалить» */
-  function openViewer(item) {
+  function openViewer(item, gallery = null, opener = document.activeElement) {
+    for (const player of feedBox.querySelectorAll('video')) player.pause();
     const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': 'Закрыть', title: 'Закрыть' },
       icon('x'));
     const player = el('video', { class: 'viewer-video', controls: true, autoplay: true, playsinline: true, preload: 'metadata',
@@ -511,6 +514,9 @@ function build(view, ctx) {
     }, (err) => { missing.textContent = err.code === 'gone' ? 'Ролик удалён' : words(err); });
     root.append(dialog);
     dialog.showModal();
+    viewerNavigation(dialog, { item, items: feed.items(), section: 'videos', open: openViewer,
+      done: feedBox.dataset.feed === 'end', opener, gallery });
+    return dialog;
   }
 
   api('GET', '/api/sections').then(({ sections }) => {

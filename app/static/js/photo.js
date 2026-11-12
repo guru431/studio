@@ -46,6 +46,7 @@ import { seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
+import { viewerNavigation } from './viewer-navigation.js';
 
 const POLL_MS = 1500;
 const TRANSLATE_FAILS = 40;      // отказов опроса перевода подряд (~минута) — дальше перевод бросается
@@ -414,7 +415,7 @@ function build(view, ctx) {
 
   function openButton(item, ...inside) {
     const open = el('button', { type: 'button', class: 'card-open', 'aria-label': 'Открыть картинку' }, ...inside);
-    open.addEventListener('click', () => openViewer(item));
+    open.addEventListener('click', (event) => openViewer(item, null, event.currentTarget));
     return open;
   }
 
@@ -590,7 +591,7 @@ function build(view, ctx) {
   }
 
   /* просмотр */
-  function openViewer(item) {
+  function openViewer(item, gallery = null, opener = document.activeElement) {
     const img = el('img', { src: media(item.media_id), alt: 'Картинка' });
     const stage = el('div', { class: 'viewer-stage' }, img);
     const close = iconButton('x', 'Закрыть', { class: 'icon-btn viewer-close' });
@@ -627,6 +628,7 @@ function build(view, ctx) {
     const onOpen = async (id) => {
       try {
         const step = await api('GET', `/api/images/${encodeURIComponent(id)}`);
+        if (!dialog.open || !alive) return;
         dialog.close();
         openViewer(step);
       } catch (err) {
@@ -689,6 +691,9 @@ function build(view, ctx) {
     stage.addEventListener('click', (event) => { if (event.target === stage) dialog.close(); });
     root.append(dialog);
     dialog.showModal();
+    viewerNavigation(dialog, { item, items: feed.items(), section: 'images', open: openViewer,
+      done: feedBox.dataset.feed === 'end', opener, gallery });
+    return dialog;
   }
 
   /** Подпись картинки в сравнении: номер шага цепочки и модель · seed · сила (загрузка — «фото с устройства»). */
