@@ -28,6 +28,7 @@ from PIL import Image, ImageChops, ImageDraw
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from clients import local_copy_drift
 from conftest import CLIENT
 
 pytestmark = pytest.mark.manual
@@ -509,6 +510,9 @@ def test_photo_through_the_gateway_and_the_powershell_client(tmp_path):
     local = CLIENT / "studio-batch.local.ps1"
     if not ps or not local.exists():
         pytest.skip("PowerShell and studio-batch.local.ps1 are required")
+    drift = local_copy_drift(CLIENT / "studio-batch.ps1", local)
+    assert not drift, (f"studio-batch.local.ps1 is stale (lines {drift}): rebuild it with "
+                       "studio-batch.ps1 -MakeLocal -GatewayUrl <gateway>")
     source = Image.new("RGB", (512, 512), "skyblue")
     draw = ImageDraw.Draw(source)
     draw.polygon([(0, 512), (0, 300), (160, 190), (320, 330), (512, 210), (512, 512)], fill="forestgreen")
