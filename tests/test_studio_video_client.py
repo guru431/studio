@@ -20,7 +20,7 @@ from email.parser import BytesParser
 
 import pytest
 
-from clients import RUNNERS, flat, ps_encoding, run_client
+from clients import RUNNERS, flat, run_client
 from conftest import CLIENT, ROOT
 
 SCRIPT = CLIENT / "studio-video.ps1"
@@ -218,8 +218,7 @@ def service():
 def run_script(runner, fake, folder, *extra, code=0):
     """code — ожидаемый код выхода: 0 — всё готово или уже было, 3 — хотя бы один ролик не вышел."""
     r = run_client(runner, SCRIPT, ["-Folder", str(folder), "-Token", "test-key", "-Url", fake.url, *extra])
-    enc = ps_encoding() if runner == "ps" else "utf-8"      # Windows PowerShell пишет в трубу кодировкой консоли
-    out = r.stdout.decode(enc, "replace") + r.stderr.decode(enc, "replace")
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
     assert r.returncode == code, out
     assert b"test-key" not in r.stdout + r.stderr, "ключ не печатается"
     return flat(out)
