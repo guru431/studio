@@ -8,6 +8,8 @@
 #   bash deploy/deploy.sh --create-admin    завести или обновить первого администратора:
 #                                           STUDIO_ADMIN_LOGIN, STUDIO_ADMIN_PASSWORD и
 #                                           GATEWAY_KEY_OWNER_IMAGES (подключение «srvllm») из vault
+#   bash deploy/deploy.sh --refresh-base    Docker: собрать образ заново без кэша (свежие база и
+#                                           пакеты Debian сразу, не дожидаясь новой недели)
 # Ключ данных при первой установке (в studio.env нет строки STUDIO_DATA_KEY=) тоже едет из vault.
 # Значения идут потоком grep | ssh: не печатаются, не ложатся на диск workstation и не попадают в
 # argv. Откат — выложить прежний коммит. Vhost (deploy/apache-vhost.conf) подключён в
@@ -43,15 +45,18 @@ die() { echo "deploy: $*" >&2; exit 1; }
 NEW_SECRET=0
 CREATE_ADMIN=0
 PREPARE=0
+REFRESH_BASE=0
 for arg in "$@"; do
     case "$arg" in
         --new-secret) NEW_SECRET=1 ;;
         --create-admin) CREATE_ADMIN=1 ;;
         --prepare-only) PREPARE=1 ;;
-        *) die "неизвестный аргумент: $arg (есть --new-secret и --create-admin)" ;;
+        --refresh-base) REFRESH_BASE=1 ;;
+        *) die "неизвестный аргумент: $arg (есть --new-secret, --create-admin, --prepare-only, --refresh-base)" ;;
     esac
 done
 if [ "$PREPARE" = 1 ] && [ "$RUNTIME" != docker ]; then die '--prepare-only requires Docker'; fi
+if [ "$REFRESH_BASE" = 1 ] && [ "$RUNTIME" != docker ]; then die '--refresh-base requires Docker'; fi
 if [ "$RUNTIME" = docker ]; then
     [ -n "${STUDIO_BACKEND_URL:-}" ] || die 'Docker requires STUDIO_BACKEND_URL'
     [ -n "${STUDIO_PROXY_SSH:-}" ] || die 'Docker requires STUDIO_PROXY_SSH'
@@ -108,6 +113,7 @@ if [ "$RUNTIME" = docker ]; then
     installer=install-docker.sh
     args+=("--revision=$(git -C "$D" rev-parse HEAD)")
     if [ "$PREPARE" = 1 ]; then args+=(--prepare-only); fi
+    if [ "$REFRESH_BASE" = 1 ]; then args+=(--refresh-base); fi
 fi
 if [ "$NEW_SECRET" = 1 ]; then
     args+=(--secret-stdin)
