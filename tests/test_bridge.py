@@ -430,7 +430,7 @@ def test_completions_after_an_outage_mark_unread_and_push_like_a_live_done(studi
     link = connect(studio, aid, machine)
     q = studio.c.portal.call(bridge.watch, aid, other)
     for bad in ([{**items[0], "ago": -1}], [{**items[0], "status": "running"}], [{**items[0], "chat": "x"}],
-                items * 26, "items"):
+                [{**items[0], "status": []}], [{**items[0], "status": {}}], items * 26, "items"):
         studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": bad})
     assert code_attention.revision(aid, pid("studio"), CHAT) is None and pushed == []
     studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": items})
