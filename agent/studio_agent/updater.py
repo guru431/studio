@@ -137,10 +137,15 @@ def prepare(h: Path, release: dict) -> Path:
                            timeout=300, check=True)
         return stage
     except BaseException:
-        # Только собственная новая папка. Работающую/предыдущую копию не трогаем.
-        if stage.resolve().parent == base.resolve() and stage.name.startswith('release-'):
-            shutil.rmtree(stage, ignore_errors=True)
+        discard(stage)
         raise
+
+
+def discard(stage: Path) -> None:
+    """Только собственная новая папка `release-*` в `releases`. Работающую/предыдущую копию не трогаем."""
+    base = Path(os.environ['LOCALAPPDATA']) / 'Programs' / 'studio-agent' / 'releases'
+    if stage.resolve().parent == base.resolve() and stage.name.startswith('release-'):
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def launch(stage: Path, h: Path) -> None:
@@ -153,18 +158,35 @@ def launch(stage: Path, h: Path) -> None:
 
 
 class Updater:
-    def __init__(self, h: Path, active, quit, *, prepare_fn=prepare, launch_fn=launch, sleep=asyncio.sleep):
+    """`holds()` — что держит ожидание: только числа (`tasks`, `asking`, `requests`) и `desktop`, без имён и текстов."""
+
+    def __init__(self, h: Path, active, quit, *, prepare_fn=prepare, launch_fn=launch, sleep=asyncio.sleep,
+                 holds=None, discard_fn=discard):
         self.h, self.active, self.quit = h, active, quit
         self.prepare, self.launch, self.sleep = prepare_fn, launch_fn, sleep
+        self.holds, self.discard = holds, discard_fn
         self.state, self.version = 'idle', None
         self.task = None
+        self._gen = 0  # отмена меняет поколение: подготовка и ожидание прежнего запуска сами уходят
 
     @property
     def busy(self) -> bool:
         return self.state in ('preparing', 'waiting', 'restarting')
 
     def status(self) -> dict:
-        return {'state': self.state, 'version': self.version}
+        status = {'state': self.state, 'version': self.version}
+        if self.state == 'waiting' and self.holds is not None:
+            status['holds'] = self.holds()
+        return status
+
+    def cancel(self) -> dict:
+        """Отмена до перезапуска: сразу `idle` (новые задания снова принимаются), подготовленная копия удаляется,
+        когда её подготовка кончится. В `restarting` поздно — выход уже запрошен."""
+        if self.state in ('preparing', 'waiting'):
+            self._gen += 1
+            self.state, self.version = 'idle', None
+            log.info('обновление: отменено')
+        return self.status()
 
     def start(self, release: dict) -> dict:
         version, digest, size = (release.get(k) for k in ('version', 'sha256', 'size'))
@@ -177,19 +199,29 @@ class Updater:
         if tuple(map(int, version.split('.'))) <= tuple(map(int, VERSION.split('.'))):
             return {'state': 'idle', 'version': VERSION}
         self.state, self.version = 'preparing', version
-        self.task = asyncio.create_task(self._run({'version': version, 'sha256': digest, 'size': size}))
+        self._gen += 1
+        self.task = asyncio.create_task(self._run({'version': version, 'sha256': digest, 'size': size}, self._gen))
         return self.status()
 
-    async def _run(self, release: dict) -> None:
+    async def _run(self, release: dict, gen: int) -> None:
+        stage = None
         try:
             stage = await asyncio.to_thread(self.prepare, self.h, release)
+            if gen != self._gen:
+                return
             self.state = 'waiting'
             while self.active():
                 await self.sleep(1)
+                if gen != self._gen:
+                    return
             self.state = 'restarting'
             # Между последней проверкой ходов и запросом штатного выхода нет await.
             self.launch(stage, self.h)
             self.quit()
         except Exception as error:
-            self.state = 'failed'
+            if gen == self._gen:
+                self.state = 'failed'
             log.warning('обновление: %s', type(error).__name__)
+        finally:
+            if stage is not None and gen != self._gen:  # отменено: подготовленная копия не нужна
+                await asyncio.to_thread(self.discard, stage)

@@ -507,10 +507,29 @@ async def update_agent(aid: int, request: Request):
 async def agent_update_status(aid: int, request: Request):
     own_agent(request, aid)
     require_capability(aid, "agent_update")
-    data = await ask(request, aid, "agent_update_status")
-    return {"state": data.get("state") if data.get("state") in
-            ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
-            "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    return _update_status(await ask(request, aid, "agent_update_status"))
+
+
+@router.delete("/agents/{aid}/update")
+async def cancel_agent_update(aid: int, request: Request):
+    """«Отменить обновление»: права — как у запуска (владелец, открытый PIN компьютера, CSRF)."""
+    own_agent(request, aid)
+    require_capability(aid, "agent_update")
+    require_capability(aid, "agent_update_cancel")
+    return _update_status(await ask(request, aid, "agent_update_cancel"))
+
+
+def _update_status(data: dict) -> dict:
+    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак."""
+    result = {"state": data.get("state") if data.get("state") in
+              ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
+              "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    holds = data.get("holds")
+    if result["state"] == "waiting" and isinstance(holds, dict):
+        counts = {key: holds.get(key) for key in ("tasks", "asking", "requests")}
+        if all(type(v) is int and 0 <= v <= 10_000 for v in counts.values()) and type(holds.get("desktop")) is bool:
+            result["holds"] = {**counts, "desktop": holds["desktop"]}
+    return result
 
 
 @router.post("/agents/{aid}/projects/{pid}/files/suggest")

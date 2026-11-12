@@ -113,13 +113,17 @@ def notice(state: str, fresh: bool) -> str | None:
 
 
 class Tray:
-    """`post(команда)` — в очередь главного потока: `open`, `reset_pin`, `log`, `quit`."""
+    """`post(команда)` — в очередь главного потока: `open`, `reset_pin`, `log`, `cancel_update`, `quit`."""
 
     def __init__(self, state: str, post: Callable[[str], None], pin_locked: Callable[[], bool], login: str = ""):
         import pystray
 
         self.state, self.login = state, login
-        self.activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False}
+        self.activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False, "updating": False}
+
+        def updating(item) -> bool:  # «Отменить обновление» — пока Studio Agent готовит обновление или ждёт заданий
+            return self.activity.get("updating", False)
+
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: status_line(self.state, self.login), None, enabled=False),
             pystray.MenuItem(lambda item: f"Заданий: {self.activity['tasks']} · ждут ответа: {self.activity['waiting']}",
@@ -132,6 +136,7 @@ class Tray:
                              enabled=lambda item: self.activity['desktop_active']),
             pystray.MenuItem("Снять блок PIN", lambda: post("reset_pin"), enabled=lambda item: pin_locked()),
             pystray.MenuItem("Открыть журнал", lambda: post("log")),
+            pystray.MenuItem("Отменить обновление", lambda: post("cancel_update"), enabled=updating, visible=updating),
             pystray.MenuItem(lambda item: "Отменить выход после завершения" if self.activity['quit_when_idle']
                              else f"Выйти после завершения · заданий: {self.activity['tasks']}",
                              lambda: post("quit_idle")),

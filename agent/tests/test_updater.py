@@ -136,6 +136,67 @@ async def test_update_waits_for_jobs_and_repeated_clicks_launch_only_once(home, 
     assert update.state == 'restarting'
 
 
+async def test_cancel_while_waiting_reopens_the_agent_and_removes_the_prepared_copy(home, tmp_path):
+    """«Отменить обновление» в ожидании: сразу `idle` (не `busy`), копия удаляется, выхода нет; `holds` —
+    что держало ожидание, только в `waiting`."""
+    waiting, resume = asyncio.Event(), asyncio.Event()
+
+    async def sleep(seconds):
+        waiting.set()
+        await resume.wait()
+
+    discard, launch, quit = Mock(), Mock(), Mock()
+    holds = {'tasks': 2, 'asking': 1, 'desktop': False, 'requests': 0}
+    update = updater.Updater(home, lambda: True, quit, prepare_fn=Mock(return_value=tmp_path), launch_fn=launch,
+                             sleep=sleep, holds=lambda: dict(holds), discard_fn=discard)
+    assert update.cancel() == {'state': 'idle', 'version': None}            # нечего отменять
+    assert 'holds' not in update.start(FUTURE)
+    await waiting.wait()
+    assert update.status() == {'state': 'waiting', 'version': '99.0.0', 'holds': holds} and update.busy
+    assert update.cancel() == {'state': 'idle', 'version': None} and not update.busy
+    resume.set()
+    await update.task
+    discard.assert_called_once_with(tmp_path)
+    launch.assert_not_called()
+    quit.assert_not_called()
+    assert update.state == 'idle'
+
+
+async def test_cancel_during_preparation_discards_the_copy_when_it_is_ready(home, tmp_path):
+    """Подготовка в потоке не прерывается: отмена — сразу `idle`, готовая позже копия удаляется; новый запуск —
+    своя копия и своё ожидание."""
+    import threading
+    gate = threading.Event()
+
+    def prepare(h, release):
+        gate.wait(5)
+        return tmp_path / release['version']
+
+    discard, launch = Mock(), Mock()
+    update = updater.Updater(home, lambda: False, Mock(), prepare_fn=prepare, launch_fn=launch, discard_fn=discard)
+    update.start(FUTURE)
+    first = update.task
+    assert update.cancel()['state'] == 'idle'
+    update.start({**FUTURE, 'version': '99.0.1'})
+    gate.set()
+    await asyncio.gather(first, update.task)
+    discard.assert_called_once_with(tmp_path / '99.0.0')
+    launch.assert_called_once_with(tmp_path / '99.0.1', home)
+    assert update.state == 'restarting' and update.cancel()['state'] == 'restarting'  # поздно
+
+
+def test_discard_removes_only_own_release_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    base = tmp_path / 'Programs' / 'studio-agent' / 'releases'
+    for name in ('release-a', 'current'):
+        (base / name / '.venv').mkdir(parents=True)
+    outside = tmp_path / 'release-x'
+    outside.mkdir()
+    for path in (base / 'release-a', base / 'current', outside):
+        updater.discard(path)
+    assert sorted(p.name for p in base.iterdir()) == ['current'] and outside.is_dir()
+
+
 async def test_preparation_failure_keeps_current_agent_and_allows_retry(home, caplog):
     quit = Mock()
     prepare = Mock(side_effect=OSError('secret/path/prompt'))

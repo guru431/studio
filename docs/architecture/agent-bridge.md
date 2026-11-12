@@ -46,7 +46,7 @@
 | 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
-| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope` | §18, §17 |
+| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
 
 ## 0.20.0
 
@@ -65,6 +65,14 @@
   общий каталог визуализаций Codex (HTML тредов всех проектов владельца) — `outside`. Тред по пути не сверяется:
   раскладка каталога Codex не контракт. `hello.visualization_scope`; старому мосту сервер передаёт от участника
   только относительный путь. Проверки — `tests/test_visualizations.py`, `../tests/test_project_access.py`.
+- Отмена обновления: `updater.Updater.cancel` в `preparing`/`waiting` сразу возвращает `idle` (новое поколение:
+  ожидание прежнего запуска уходит на следующей паузе, подготовка в потоке доделывается, и её копию удаляет
+  `updater.discard` — только `release-*` в `releases`); в `restarting` — поздно. Студия — op `agent_update_cancel`
+  (`hello.agent_update_cancel` только при GUI-обновлении), трей — «Отменить обновление» (`app.Controller.cancel_update`,
+  виден, пока `activity_status().updating`). `updater.Updater.status` в `waiting` несёт `holds` —
+  `app.Controller._update_holds`: числа заданий, ждущих ответа, запросов канала и признак рабочего стола.
+  Срока авто-откладывания нет. Проверки — `tests/test_updater.py`, `tests/test_agent.py`, `tests/test_tray.py`,
+  серверные `../tests/test_agent_update.py`, `../tests/test_ui_agent_update.py`.
 - Досланные завершения (§18): `agent.Agent.emit` — конец хода, который `link.Link.send` не принял (канала нет), —
   в `agent.Agent.missed`; писатель умершего канала возвращает туда же неотправленные кадры. После `welcome` с
   `completions` кадр `agent.Agent.completions` уходит первым. Только память, без текстов. Сервер —
