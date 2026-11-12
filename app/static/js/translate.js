@@ -42,6 +42,7 @@ import { actionMenu, menuItem, popupMenu } from './menu.js';
 import { timeOnly } from './time.js';
 import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { photoView } from './translate-photo.js';
 import { el, openDialog, words } from './ui.js';
@@ -188,6 +189,7 @@ function build(view, ctx) {
   const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, right, error,
     el('section', { class: 'tl-past', 'aria-label': 'История переводов' }, el('h2', {}, 'История'), list));
   view.append(el('div', { class: 'translate' }, head, body, left));
+  const draft = sectionDraft('translate', input);  // запись по ?id — позже, её исходник встанет вместо черновика
 
   /* модель и языки */
   function chosen() {
@@ -743,6 +745,8 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
+      // черновик — только текст без записи: исходник открытой (отправленной) записи им не становится
+      draft.save(!rec || input.value !== (rec.source || ''));
       alive = false;
       clearTimeout(timer);
       docs.stop();

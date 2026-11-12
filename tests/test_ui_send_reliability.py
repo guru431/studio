@@ -264,3 +264,48 @@ def test_enter_breaks_the_line_on_touch_screens_and_sends_on_desktop(engine, liv
                 pw.expect(text).to_have_value("")
     finally:
         bridge.stop()
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_section_drafts_survive_switching_and_go_on_send_and_lock(chromium, live, width):
+    """Набранное в «Чате» и «Переводе» возвращается после перехода в другой раздел (память вкладки); отправленное —
+    нет; блокировка экрана стирает черновики разделов, которых нет на экране."""
+    login = f"drafts-{width}"
+    live.add_user(login)
+    chat, translate = "#chat-input", "#tl-input"
+
+    def visit(page, section, selector):
+        page.evaluate("s => { location.hash = '#/' + s; }", section)
+        page.locator(selector).wait_for()
+
+    with opened(chromium, live, login, width) as page:
+        add_cloud(page, live)
+        page.locator(chat).fill("Длинное сообщение")
+        visit(page, "translate", translate)
+        page.locator(translate).fill("Текст на потом")
+        visit(page, "chat", chat)
+        pw.expect(page.locator(chat)).to_have_value("Длинное сообщение")
+        visit(page, "translate", translate)
+        pw.expect(page.locator(translate)).to_have_value("Текст на потом")
+
+        visit(page, "chat", chat)
+        page.locator("#send").click()
+        pw.expect(page.locator("#messages .msg.assistant .md")).to_have_text("Облако на связи.")
+        visit(page, "translate", translate)
+        visit(page, "chat", chat)
+        pw.expect(page.locator(chat)).to_have_value("")
+
+        page.locator(chat).fill("Секрет до блокировки")
+        visit(page, "translate", translate)
+        page.evaluate("""async () => { const m = await import('/static/js/api.js');
+          await m.api('POST', '/api/me/screen-lock', { enabled: true, timeout: 600 });
+          await m.api('POST', '/api/lock/now');
+          m.api('GET', '/api/me'); }""")                 # 423 — экран блокировки, запрос ждёт отпирания
+        page.locator("#lock[open]").wait_for()
+        if page.locator("#lock-use-password").is_visible():
+            page.locator("#lock-use-password").click()
+        page.locator("#lock-password").fill("password-123")
+        page.locator("#lock-password-go").click()
+        page.locator("#lock[open]").wait_for(state="detached")
+        visit(page, "chat", chat)
+        pw.expect(page.locator(chat)).to_have_value("")
