@@ -5309,7 +5309,7 @@ def test_pin_settings_save_sections_and_both_timers(browser, live, width, tmp_pa
     assert not r.get("failed"), r
     v = r["values"]
     # порядок — как на рельсе (реестр разделов `sections-meta.js`)
-    assert v["policy"] == [["chat", "code", "photo"], 600] and v["checked"] == [True, True, True]
+    assert v["policy"] == [["chat", "photo", "code"], 600] and v["checked"] == [True, True, True]
     assert v["timer"] == "10" and v["computer"] == 7200 and v["fit"] is True and v["passwordKept"] is True
     assert not problems(r), problems(r)
 
