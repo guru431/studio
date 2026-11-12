@@ -46,6 +46,37 @@
 | 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
+| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
+
+## 0.20.0
+
+- Codex: stdout app-server читается кусками (`codex_rpc.lines`), без предела строки `readline`: ответ
+  `thread/read` со всей историей и картинками бывает больше кадра канала. Строка длиннее `codex_rpc.LINE_MAX`
+  (256 МиБ) в памяти не копится: по её началу или концу находится id ответа, этот запрос получает
+  `RpcError(too_large=True)`, `codex.CodexRunner._metadata` отдаёт `too_large` «Чат Codex слишком большой для
+  чтения мостом», не перезапуская общий процесс; прочие запросы и уведомления идут дальше. `thread/resume` и
+  `thread/fork`, чьи ответы нужны только ради id и cwd, — с `excludeTurns: true`. Проверки — `tests/test_codex_rpc.py`.
+- Codex `step_update` вывода команды — `codex.CodexRunner._step_output`: не чаще `codex.STEP_UPDATE_SEC` (0.25) на
+  шаг, первая дельта сразу, остальные — одной отложенной отправкой последнего состояния (каждый кадр несёт весь
+  хвост до `limits.CLIP`, а очередь канала общая с ответами просьб). `result` шага снимает отложенное и уходит
+  сразу; конец хода досылает отложенное до `done` (`codex.CodexRunner._output_done`). Формат кадра прежний; у
+  Claude и OpenCode `step_update` нет. Проверки — `tests/test_codex_progress.py`.
+- `visualization` участника (`shared_projects`, §17): `visualizations.read` с `codex_home=False` — только проект,
+  общий каталог визуализаций Codex (HTML тредов всех проектов владельца) — `outside`. Тред по пути не сверяется:
+  раскладка каталога Codex не контракт. `hello.visualization_scope`; старому мосту сервер передаёт от участника
+  только относительный путь. Проверки — `tests/test_visualizations.py`, `../tests/test_project_access.py`.
+- Отмена обновления: `updater.Updater.cancel` в `preparing`/`waiting` сразу возвращает `idle` (новое поколение:
+  ожидание прежнего запуска уходит на следующей паузе, подготовка в потоке доделывается, и её копию удаляет
+  `updater.discard` — только `release-*` в `releases`); в `restarting` — поздно. Студия — op `agent_update_cancel`
+  (`hello.agent_update_cancel` только при GUI-обновлении), трей — «Отменить обновление» (`app.Controller.cancel_update`,
+  виден, пока `activity_status().updating`). `updater.Updater.status` в `waiting` несёт `holds` —
+  `app.Controller._update_holds`: числа заданий, ждущих ответа, запросов канала и признак рабочего стола.
+  Срока авто-откладывания нет. Проверки — `tests/test_updater.py`, `tests/test_agent.py`, `tests/test_tray.py`,
+  серверные `../tests/test_agent_update.py`, `../tests/test_ui_agent_update.py`.
+- Досланные завершения (§18): `agent.Agent.emit` — конец хода, который `link.Link.send` не принял (канала нет), —
+  в `agent.Agent.missed`; писатель умершего канала возвращает туда же неотправленные кадры. После `welcome` с
+  `completions` кадр `agent.Agent.completions` уходит первым. Только память, без текстов. Сервер —
+  `bridge._completions`. Проверки — `tests/test_link.py`, серверный `../tests/test_bridge.py`.
 
 ## 0.17.3
 
@@ -136,7 +167,7 @@
 `visualizations.py` читает только UTF-8 `.html` ≤2 МиБ: относительный/абсолютный путь внутри
 проекта или абсолютный путь под `${CODEX_HOME:-~/.codex}/visualizations`. Никаких прочих
 файлов профиля; обход `..`, ADS и выход через junction запрещены, junction самого каталога
-визуализаций тоже. После чтения ядро повторно проверяет открытую PIN-сессию.
+визуализаций тоже. Участнику совместного проекта (мост ≥ 0.20.0) — только путь внутри проекта. После чтения ядро повторно проверяет открытую PIN-сессию.
 Файлы не копируются и не журналируются. Проверки — `tests/test_visualizations.py`.
 
 (мост ≥ 0.15.0) `timeline.py` сохраняет порядок текстовых сегментов и инструментов. Текст единственный,

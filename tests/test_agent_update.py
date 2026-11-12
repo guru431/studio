@@ -84,6 +84,35 @@ def test_update_is_owned_csrf_protected_pin_protected_and_uses_server_release(st
     assert studio.c.get(url).json() == response.json()
     machine.update_state = 'waiting'
     assert studio.c.get(url).json()['state'] == 'waiting'
+    assert studio.c.delete(url).json()['detail']['code'] == 'unsupported'   # мост без отмены
+
+
+def test_cancel_and_holds_of_a_waiting_update(studio, package):
+    """«Отменить обновление» — те же права, что запуск: владелец, CSRF, открытый PIN; `holds` — только числа."""
+    make_user(studio, 'owner')
+    make_user(studio, 'friend')
+    aid, _ = enroll(studio)
+    machine = FakeMachine(pin='2468')
+    machine.agent_version, machine.agent_update, machine.agent_update_cancel = '0.10.0', True, True
+    connect(studio, aid, machine)
+    url = f'/api/code/agents/{aid}/update'
+    signin(studio, 'friend')
+    assert studio.c.delete(url).status_code == 404 and not machine.requests
+    signin(studio, 'owner')
+    assert studio.c.get('/api/agents').json()['items'][0]['agent_update_cancel'] is True
+    saved = studio.c.headers.pop('x-studio-csrf')
+    assert studio.c.delete(url).status_code == 403
+    studio.c.headers['x-studio-csrf'] = saved
+    assert studio.c.delete(url).json()['detail']['code'] == 'closed'
+    assert studio.c.post(f'/api/code/agents/{aid}/open', json={'pin': '2468'}).status_code == 204
+    machine.update_state, machine.update_version = 'waiting', '0.10.1'
+    machine.update_holds = {'tasks': 2, 'asking': 1, 'desktop': True, 'requests': 0, 'extra': 'x'}
+    assert studio.c.get(url).json() == {'state': 'waiting', 'version': '0.10.1',
+                                        'holds': {'tasks': 2, 'asking': 1, 'requests': 0, 'desktop': True}}
+    machine.update_holds = {'tasks': -1, 'asking': 1, 'desktop': True, 'requests': 0}
+    assert 'holds' not in studio.c.get(url).json()
+    assert studio.c.delete(url).json() == {'state': 'idle', 'version': None}
+    assert machine.requests[-1]['op'] == 'agent_update_cancel' and machine.update_state == 'idle'
 
 
 def test_old_offline_and_missing_package_have_explicit_errors(studio, package):

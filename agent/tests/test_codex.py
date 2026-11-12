@@ -259,7 +259,8 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     again.answer(pid, CHAT, rid, "deny", None, None)
     await task
     assert len([m for m, _ in runner.fake.calls if m == "thread/start"]) == 1
-    assert ("thread/resume", {"threadId": THREAD, "cwd": str(runner.project), "model": "model-test"}) in runner.fake.calls
+    assert ("thread/resume", {"threadId": THREAD, "excludeTurns": True, "cwd": str(runner.project),
+                              "model": "model-test"}) in runner.fake.calls
     assert [p for m, p in runner.fake.calls if m == "turn/start"][-1]["effort"] == "high"
 
 
@@ -661,3 +662,14 @@ async def test_expected_not_found_keeps_the_shared_metadata_process(runner):
     with pytest.raises(codex_rpc.RpcError):
         await runner.history(runner.project, CHAT, None, 10)
     assert runner.fake.clients[0].closed and runner._meta is None
+
+
+async def test_oversized_history_is_refused_without_restarting_the_shared_process(runner):
+    """`thread/read` длиннее `codex_rpc.LINE_MAX` — отказ `too_large` этому чтению; общий `_meta` живёт."""
+    runner.fake.read_error = codex_rpc.RpcError(method="thread/read", too_large=True)
+    for read in (runner.history(runner.project, CHAT, None, 10), runner.subagents(runner.project, CHAT),
+                 runner.history_image(runner.project, CHAT, "m", 0), runner.fork_chat(runner.project, CHAT)):
+        with pytest.raises(Refused) as refused:
+            await read
+        assert refused.value.code == "too_large"
+    assert len(runner.fake.clients) == 1 and not runner.fake.clients[0].closed and runner._meta is not None

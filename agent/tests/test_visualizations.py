@@ -70,6 +70,30 @@ def test_codex_visualizations_cannot_follow_junctions(tmp_path, monkeypatch, roo
     assert caught.value.code == 'outside'
 
 
+async def test_participant_reads_only_project_visualizations(home, tmp_path, monkeypatch):
+    """Участник совместного проекта (`shared_projects`, протокол §17): общий каталог визуализаций Codex с HTML
+    тредов всех проектов владельца — `outside`; файлы самого проекта — как у владельца."""
+    root = tmp_path / 'projects'
+    project = root / 'demo'
+    project.mkdir(parents=True)
+    (project / 'view.html').write_text('<p>project</p>', encoding='utf-8')
+    codex = tmp_path / 'codex'
+    monkeypatch.setenv('CODEX_HOME', str(codex))
+    other = codex / 'visualizations' / '2026' / '11' / '08' / 'thread' / 'other.html'
+    other.parent.mkdir(parents=True)
+    other.write_text('<p>other project</p>', encoding='utf-8')
+    agent = make(home, root)
+    scope = [projects.pid('demo')]
+    shared = (await agent.handle(req('visualization', project=scope[0], source=str(other), shared_projects=scope)))[0]
+    assert shared['ok'] is False and shared['code'] == 'outside'
+    for source in ('view.html', str(project / 'view.html')):
+        frame = req('visualization', project=scope[0], source=source, shared_projects=scope)
+        assert (await agent.handle(frame))[0]['data']['text'] == '<p>project</p>'
+    await agent.handle(req('open', pin=None))
+    owner = (await agent.handle(req('visualization', project=scope[0], source=str(other))))[0]
+    assert owner['data']['text'] == '<p>other project</p>'
+
+
 async def test_bridge_requires_pin_and_rechecks_it_after_read(home, tmp_path, monkeypatch):
     root = tmp_path / 'projects'
     project = root / 'demo'
@@ -82,8 +106,8 @@ async def test_bridge_requires_pin_and_rechecks_it_after_read(home, tmp_path, mo
     assert (await agent.handle(frame))[0]['data']['text'] == '<p>private</p>'
     original = visualizations.read
 
-    def revoke(*args):
-        result = original(*args)
+    def revoke(*args, **kwargs):
+        result = original(*args, **kwargs)
         agent.open.close(SESSION)
         return result
 
