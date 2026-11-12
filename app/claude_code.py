@@ -238,6 +238,24 @@ def _first(key: tuple | None, op: str, call):
     return asyncio.shield(task)
 
 
+def _initiator_back(key: tuple | None, aid: int, chat: str, previous: int | None) -> None:
+    """Ход не получил ответа: прежний адресат push (`bridge.initiated`). Просьба под квитанцией, оборванная только
+    обрывом запроса, идёт дальше: адресата возвращает лишь отказ моста — иначе push хода участника ушёл бы владельцу."""
+    held = RECEIPTS.get(key) if key is not None else None
+    if held is None:                               # без квитанции или отказ уже снял её
+        bridge.initiated(aid, chat, previous)
+        return
+
+    def back(t: asyncio.Future) -> None:
+        if t.cancelled() or t.exception() is not None:
+            bridge.initiated(aid, chat, previous)
+
+    if held.task.done():
+        back(held.task)
+    else:
+        held.task.add_done_callback(back)
+
+
 def _repeated(request: Request, aid: int, op: str, data: dict) -> Response:
     """Ответ повтору: ход или уточнение уже у моста — второй раз не просим (`repeat` — что принято первым)."""
     log.info("пользователь %d: компьютер %d — %s повтором", request.state.user.id, aid, op)
@@ -1034,7 +1052,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                          **({"images": images} if images else {})))
     except BaseException:
         bridge.unwatch(aid, chat, q)
-        bridge.initiated(aid, chat, previous)
+        _initiator_back(key, aid, chat, previous)
         raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
