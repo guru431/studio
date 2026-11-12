@@ -1,11 +1,21 @@
-"""Участники проектов: явное разрешение владельца, только id в базе и журнале."""
+"""Участники проектов: явное разрешение владельца, только id в базе и журнале.
+
+Выдача привязана к pid, а pid — к имени папки: удаление или переименование папки выдачу не снимает, новая папка
+с тем же именем открывается прежнему участнику. Поэтому отзыв (`revoke`) моста не спрашивает, а все выдачи
+владельца, и к исчезнувшим папкам, видны и отзываются в «Настройки → Защита» (account.py `/api/me/access`).
+Аварийный выход снимает их всегда (`granted`, `drop`, `wake`)."""
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import auth
 import bridge
 import clock
+import security_log
 import state
 
+log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/code/agents/{aid}/projects/{pid}/members")
 
 
@@ -51,6 +61,89 @@ async def members(aid: int, pid: str, request: Request):
         " WHERE m.agent_id = ? AND m.project = ? ORDER BY u.login", (aid, pid))]}
 
 
+def _journal(request: Request, row, kind: str) -> None:
+    """Выдача и отзыв — в журнал безопасности владельца и в историю подключений компьютера: украденная сессия не
+    выдаст доступ молча. Только виды и id — ни логинов, ни проектов."""
+    ip = auth.client_ip(request)
+    security_log.record(request.state.user.id, "project_member_" + kind, digest=request.state.digest, ip=ip)
+    bridge.record(request.state.user.id, row["id"], row["name"], "member_" + kind, device=bridge.device(request), ip=ip)
+
+
+def drop(grants) -> None:
+    """В транзакции зовущего: выдачи `(agent_id, project, user_id)` — прочь вместе с личными вкладками и местом
+    участника и его ссылками «Поделиться» на этот проект (их создавал прежний код). После COMMIT — `wake(grants)`."""
+    for aid, pid, uid in grants:
+        for table in ("project_members", "code_member_tabs", "chat_shares"):     # имена — из кода
+            state.DB.execute(f"DELETE FROM {table} WHERE agent_id = ? AND project = ? AND user_id = ?", (aid, pid, uid))
+        state.DB.execute("UPDATE code_place SET agent_id = NULL, project = NULL WHERE user_id = ?"
+                         " AND agent_id = ? AND project = ?", (uid, aid, pid))
+
+
+def wake(grants) -> None:
+    """После отзыва: память службы участника о проекте — прочь, потоки компьютера — разбудить."""
+    import claude_code
+    for aid, pid, uid in grants:
+        pdf = claude_code.PDFS.get(uid)
+        if pdf and pdf[0][:2] == (aid, pid):
+            del claude_code.PDFS[uid]
+        view = claude_code.code_visualizations.VIEWS.get(uid)
+        if view and view[2:4] == (aid, pid):
+            del claude_code.code_visualizations.VIEWS[uid]
+    # Генератор SSE проверяет разрешение до выдачи каждого события; будим и тихие потоки.
+    computers = {aid for aid, _, _ in grants}
+    for (agent_id, _), queues in list(bridge.WATCHERS.items()):
+        if agent_id in computers:
+            for q in list(queues):
+                if not q.full():
+                    q.put_nowait(("ping", None))
+
+
+def granted(owner_id: int) -> list[tuple[int, str, int]]:
+    """Все выдачи на компьютерах учётки, и к проектам, которых уже нет (выдача привязана к имени папки)."""
+    return [tuple(r) for r in state.DB.execute(
+        "SELECT m.agent_id, m.project, m.user_id FROM project_members m JOIN agents a ON a.id = m.agent_id"
+        " WHERE a.user_id = ?", (owner_id,))]
+
+
+def revoke(request: Request, aid: int, pid: str, uid: int) -> bool:
+    """Отозвать одну выдачу компьютера владельца без похода к мосту: папку могли удалить или переименовать."""
+    row = owner(request, aid)
+    state.DB.execute("BEGIN IMMEDIATE")
+    try:
+        found = state.DB.execute("SELECT 1 FROM project_members WHERE agent_id = ? AND project = ? AND user_id = ?",
+                                 (aid, pid, uid)).fetchone() is not None
+        drop([(aid, pid, uid)])
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    wake([(aid, pid, uid)])
+    if found:
+        _journal(request, row, "remove")
+        log.info("пользователь %d: отозван доступ участника %d к проекту компьютера %d", request.state.user.id, uid, aid)
+    return found
+
+
+def revoke_all(request: Request) -> int:
+    """«Отозвать всё»: все выдачи компьютеров владельца, и к исчезнувшим папкам; итог — сколько снято."""
+    uid = request.state.user.id
+    state.DB.execute("BEGIN IMMEDIATE")
+    try:
+        grants = granted(uid)
+        drop(grants)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    wake(grants)
+    computers = {r["id"]: r for r in state.DB.execute("SELECT id, name FROM agents WHERE user_id = ?", (uid,))}
+    for aid, _, _ in grants:
+        _journal(request, computers[aid], "remove")
+    if grants:
+        log.info("пользователь %d: отозваны все доступы к проектам — %d", uid, len(grants))
+    return len(grants)
+
+
 @router.post("", status_code=201)
 async def add_member(aid: int, pid: str, body: Member, request: Request):
     await _check(request, aid, pid)
@@ -61,8 +154,11 @@ async def add_member(aid: int, pid: str, body: Member, request: Request):
                             (body.login.strip().lower(),)).fetchone()
     if user is None or user["id"] == request.state.user.id:
         raise HTTPException(422, {"code": "member", "message": "укажите логин другого активного пользователя Студии"})
-    state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)"
-                     " ON CONFLICT DO NOTHING", (aid, pid, user["id"], clock.NOW()))
+    if state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)"
+                        " ON CONFLICT DO NOTHING", (aid, pid, user["id"], clock.NOW())).rowcount:
+        _journal(request, owner(request, aid), "add")
+        log.info("пользователь %d: выдан доступ участнику %d к проекту компьютера %d",
+                 request.state.user.id, user["id"], aid)
     return {"id": user["id"]}
 
 
@@ -71,27 +167,4 @@ async def remove_member(aid: int, pid: str, uid: int, request: Request):
     import claude_code
     owner(request, aid)
     claude_code.check_pid(pid)
-    state.DB.execute("BEGIN IMMEDIATE")
-    try:
-        state.DB.execute("DELETE FROM project_members WHERE agent_id = ? AND project = ? AND user_id = ?",
-                         (aid, pid, uid))
-        state.DB.execute("DELETE FROM code_member_tabs WHERE agent_id = ? AND project = ? AND user_id = ?",
-                         (aid, pid, uid))
-        state.DB.execute("UPDATE code_place SET agent_id = NULL, project = NULL WHERE user_id = ?"
-                         " AND agent_id = ? AND project = ?", (uid, aid, pid))
-        state.DB.execute("COMMIT")
-    except BaseException:
-        state.DB.execute("ROLLBACK")
-        raise
-    pdf = claude_code.PDFS.get(uid)
-    if pdf and pdf[0][:2] == (aid, pid):
-        del claude_code.PDFS[uid]
-    view = claude_code.code_visualizations.VIEWS.get(uid)
-    if view and view[2:4] == (aid, pid):
-        del claude_code.code_visualizations.VIEWS[uid]
-    # Генератор SSE проверяет разрешение до выдачи каждого события; будим и тихие потоки.
-    for (agent_id, _), queues in list(bridge.WATCHERS.items()):
-        if agent_id == aid:
-            for q in list(queues):
-                if not q.full():
-                    q.put_nowait(("ping", None))
+    revoke(request, aid, pid, uid)

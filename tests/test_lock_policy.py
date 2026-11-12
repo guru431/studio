@@ -286,6 +286,8 @@ ROUTES = {
         ("POST", "/api/me/screen-lock"), ("GET", "/api/me/sessions"), ("DELETE", "/api/me/sessions/{sid}"),
         ("PATCH", "/api/me/sessions/{sid}"),
         ("POST", "/api/me/emergency"), ("GET", "/api/me/security-events"), ("DELETE", "/api/me/password-reset"),
+        ("GET", "/api/me/access"), ("DELETE", "/api/me/access"), ("DELETE", "/api/me/access/shares/{share_id}"),
+        ("DELETE", "/api/me/access/members/{aid}/{pid}/{member}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
         ("DELETE", "/api/passkeys/{key_id}")]},

@@ -269,7 +269,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: endpoint('/share'), export: endpoint('/export') });
+  sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: agent?.shared ? null : endpoint('/share'),
+    export: endpoint('/export') });
   actions.append(sharing.button);
   actions.append(reloadButton);
   const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);

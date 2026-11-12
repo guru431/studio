@@ -16,6 +16,7 @@ export function projectMembers(host, trigger, aid, project) {
   const panel = el('div', { class: 'project-members', id: `project-members-${aid}-${project.pid}` },
     el('h3', {}, `Доступ · ${project.name}`),
     el('p', { class: 'muted small' }, 'Участник видит все чаты и файлы этого проекта, может менять файлы и запускать агентов. Агенты работают с правами и подключениями владельца компьютера.'),
+    el('p', { class: 'muted small' }, 'Доступ привязан к имени папки. Все выданные доступы — «Настройки» → «Защита» → «Доступы и ссылки».'),
     form, status, list, close);
   host.append(panel);
   const popup = popupPanel(trigger, panel, { label: `Доступ к проекту ${project.name}`, autoFocus: false,

@@ -892,8 +892,10 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     v = r["values"]
     assert v["made"] is True and v["before"] == [1, 1]
     assert v["confirmHidden"] is True and v["closed"] is True
-    assert v["warning"].endswith(" Чаты Claude Code, Codex и OpenCode хранятся на компьютерах — студия забудет только свои отметки,"
-                                 " сами сессии останутся.")
+    # FINDINGS «Окно „Удалить всю историю“ обещает сохранить настройки, но удаляет голоса и многое другое»
+    assert v["warning"].startswith("Удалятся безвозвратно: вся история разделов «Чат», «Фото», «Видео», «Озвучка»,"
+                                   " «Расшифровка», «Сканы», «Перевод» вместе с файлами, образцы голосов, все ссылки")
+    assert v["warning"].endswith(" Сами чаты Claude Code, Codex и OpenCode хранятся на компьютерах и останутся.")
     assert v["after"] == [0, 0] and v["conns"] == 1
     assert not problems(r), problems(r)
 

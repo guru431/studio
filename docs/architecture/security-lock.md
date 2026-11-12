@@ -32,7 +32,7 @@
   translate при ссылке `translations.scan_id`) и `lock_policy.hidden_scans` (подзапрос для лент) — в `media_sections`
   (исходный PDF, PNG страниц), `lock_policy.blocks` для `/api/ocr/<id>*`, ленте `/api/ocr` (`db.page` с
   `extra`/`extra_args`), `search.find`, `jobs`. Изменяющие `/api/me/ntfy*`, `/api/me/push`, `/api/me/exa-key`, а также
-  `/api/me/sessions*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
+  `/api/me/sessions*`, `/api/me/access*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
   частичная защита (GET ntfy/push открыты). Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
   классификации роняет тест.
 - Закрытые разделы запроса — ContextVar `lock_policy.RESTRICTED` (`auth.guard`), и задача, созданная запросом,
@@ -74,14 +74,24 @@
   название. Можно назвать текущую и другие собственные живые сессии. Защита — обычные guard, CSRF и блокировка;
   чужая или истёкшая сессия — 404. `DELETE /api/me/sessions/<признак>` — завершить (текущая — 409 `current`): строка
   удаляется, push/ntfy уходят каскадом, `bridge.forget(..., close_computers=True)` — доступ теряется сразу.
-- `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться», push/ntfy (и шаблон
-  `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents, `bridge.record('revoke')`, `bridge.drop`).
+- `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться» (и на чаты своих компьютеров),
+  всегда — выдачи проектов своих компьютеров (`project_access.granted`, `project_access.drop`,
+  `project_access.wake`), push/ntfy (и шаблон `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents,
+  `bridge.record('revoke')`, `bridge.drop`).
+- `GET /api/me/access` — «Доступы и ссылки»: выдачи проектов компьютеров учётки (участник, компьютер, проект; имя
+  проекта — фоновой просьбой `projects` к мосту не дольше `account.ACCESS_NAMES_SEC`, иначе null; `missing` — папки
+  нет) и её ссылки «Поделиться» (срок, открытия, неверные PIN, без адреса ссылки). Отзыв одной —
+  `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` (`project_access.revoke`, без моста) и
+  `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all` и все
+  ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).
 - `GET /api/me/security-events?before=` — журнал `security_events` (шаг 34; `kind` без CHECK, каскад от учётки).
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
   (password|pin|passkey), `pin_exhausted`, смена пароля, `session_end`, `emergency`, `pin_set`, `pin_delete`,
   `passkey_add`, `passkey_delete`, `password_reset`, `share_create`, `share_revoke`, `share_pin_fail`,
-  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest). Адрес — открыто, как
+  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
+  `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
+  подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.
 - Шумные неудачи `security_log.NOISY` (`login_fail`, `share_pin_fail`) сворачиваются в пределах
   `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), `created` —
@@ -93,8 +103,8 @@
 - Сброс пароля администратором: `users.password_reset` + событие `password_reset` в журнал владельца (без адреса
   администратора); `GET /api/me.password_reset` — после входа владелец один раз видит окно «Открыть «Безопасность»»;
   закрытие снимает флаг (`DELETE /api/me/password-reset`), аварийный выход — тоже. Администратор флага не видит.
-- Страница — `account-security.js`: `sessionsBlock`, `emergencyBlock`, `securityEventsBlock` в «Настройки → Защита»
-  после блокировки.
+- Страница — `account-security.js`: `sessionsBlock`, `accessBlock`, `emergencyBlock`, `securityEventsBlock` в
+  «Настройки → Защита» после блокировки.
 
 ## Ловушки
 
