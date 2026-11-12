@@ -15,6 +15,7 @@ import { icon } from './icons.js';
 import { NAMES } from './sections-meta.js';
 import { createPicker, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { modelLabel } from './settings.js';
 import { el, openDialog, words } from './ui.js';
@@ -66,6 +67,8 @@ function build(view, ctx) {
   const main = el('section', { class: 'split-main' }, head, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
+  const draft = sectionDraft('speech', text);
+  count.textContent = `${text.value.length} / ${TEXT_MAX}`;
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -246,10 +249,12 @@ function build(view, ctx) {
     }
     error.textContent = '';
     go.disabled = true;
+    const raw = text.value;
     try {
       const { connection_id: connectionId, model } = chosen();
       const created = await api('POST', '/api/speeches', { text: value, voice,
         ...(model ? { connection_id: connectionId, model } : {}) });
+      draft.sent(raw);                 // ушли из раздела до ответа — озвученный текст черновиком не вернётся
       kick();
       text.value = '';
       count.textContent = `0 / ${TEXT_MAX}`;
@@ -278,6 +283,7 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
+      draft.save();                    // озвученный текст поле уже очистило
       records.stop();
       if (live) live.audio.pause();
     },

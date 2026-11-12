@@ -21,7 +21,8 @@ import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
@@ -120,8 +121,10 @@ function build(view, ctx) {
   const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);
   view.append(root);
+  const draft = sectionDraft('video', prompt);
+  if (prompt.value) autosize();
 
-  let focusId = null;            // запись из «В работе», которую ещё ждёт лента
+  let focusId = null;           // запись из «В работе», которую ещё ждёт лента
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
@@ -620,8 +623,10 @@ function build(view, ctx) {
     }
     submitting = true;
     go.disabled = true;
+    const value = prompt.value;
     try {
       const out = await api('POST', '/api/videos', body);
+      draft.sent(value);                            // отправленный промпт черновиком не возвращается
       kick();
       if (alive) feed.prepend(out);
     } catch (err) {
@@ -653,12 +658,7 @@ function build(view, ctx) {
   });
   prompt.addEventListener('input', autosize);
   photoPrompt.addEventListener('input', paintPromptHint);
-  prompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(prompt, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit();
@@ -672,6 +672,7 @@ function build(view, ctx) {
     follow,
     transfer,
     destroy() {
+      draft.save();
       alive = false;
       sourceVersion += 1;
       selection.destroy();

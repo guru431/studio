@@ -61,11 +61,12 @@
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
  * пока человек не тронул ленту. В адресе — только id. */
-import { api, me } from './api.js';
+import { api, me, unknownOutcome } from './api.js';
 import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
@@ -107,8 +108,13 @@ const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субти�
 const THINK_TITLE = 'Рассуждение: модель думает перед ответом, ход мысли виден';
 const THINK_NOTE = 'С рассуждением модель реже ищет в интернете';   // замер 2026-10-22: 5 поисков из 10 против 10
 
+const SAVE_DELAYS = [1000, 2000, 4000, 8000];   // повторы PUT ответа прямого подключения после обрыва связи
+
 const jobs = new Map();          // id диалога → ответ, который читает эта вкладка
 const tokens = new Map();        // id подключения → { token, url } прямого подключения (память вкладки)
+/** Ответы прямого подключения, которые не удалось сохранить: id → { chatId, message, body, error } — только память
+ * вкладки; у ответа «Сохранить ещё раз», пока сервер держит его `streaming`. */
+const unsaved = new Map();
 let screen = null;               // смонтированный раздел
 
 function elapsed(since) {
@@ -126,6 +132,40 @@ function groupOf(updated) {
 function clip(text, max) {
   const cut = text.slice(0, max);
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/** Без одиноких суррогатов: половину эмодзи (пара разорвана в потоке модели) PUT отклонил бы (422) — «�». */
+function wellFormed(text) {
+  return text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (c) => (c.length === 2 ? c : '�'));
+}
+
+/** Итог ответа прямого подключения — PUT. Ответа нет (связь, срок, 502–504) — повтор с паузами SAVE_DELAYS: сервер
+ * принимает PUT, пока ответ `streaming`, а тот же итог повторно — 200. 409 `state` (уже сохранён) и `gone` — как
+ * раньше, не ошибка. Не вышло — «Ответ не сохранился: …», текст остаётся в `unsaved`. true — сохранён. */
+async function saveAnswer(chatId, message, body) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await api('PUT', `/api/chats/${chatId}/messages/${message.id}`, body);
+      break;
+    } catch (err) {
+      if (err.code === 'state' || err.code === 'gone') break;
+      if (attempt < SAVE_DELAYS.length && unknownOutcome(err)) {
+        await new Promise((resolve) => { setTimeout(resolve, SAVE_DELAYS[attempt]); });
+        continue;
+      }
+      if (!unsaved.has(message.id)) unsaved.set(message.id, { chatId, message, body, error: message.error });
+      message.status = 'error';                     // готовый, но не сохранённый — иначе строка под ним пуста
+      message.error = `Ответ не сохранился: ${words(err)}`;
+      return false;
+    }
+  }
+  const kept = unsaved.get(message.id);
+  if (kept) {
+    unsaved.delete(message.id);
+    message.status = body.status;
+    message.error = kept.error;
+  }
+  return true;
 }
 
 function notify(job, final) {
@@ -315,16 +355,11 @@ async function readBrowser(job, turn) {
       job.message.error = words(err);
     }
   }
-  clearInterval(beat);
   job.message.status = status;
-  try {
-    await api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, { content: job.message.content, status });
-  } catch (err) {
-    if (err.code !== 'state' && err.code !== 'gone') {
-      job.message.status = 'error';                 // готовый, но не сохранённый — иначе строка под ним пуста
-      job.message.error = `Ответ не сохранился: ${words(err)}`;
-    }
-  }
+  job.message.content = wellFormed(job.message.content);
+  // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
+  await saveAnswer(job.chatId, job.message, { content: job.message.content, status });
+  clearInterval(beat);
   finish(job);
 }
 
@@ -480,6 +515,8 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
+  const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
+  if (input.value) autosize();
   const sharing = shareMenu(root, { id: 'chat-share', content: scroller,
     failed: (err) => { notice.textContent = words(err); } });
   const share = sharing.button;
@@ -879,7 +916,12 @@ function build(view, ctx) {
   /* лента */
   function liveOf(m) {
     const job = jobs.get(chatId);
-    return job && m.id && job.message.id === m.id ? job.message : m;
+    if (job && m.id && job.message.id === m.id) return job.message;
+    // несохранённый ответ этой вкладки: сервер держит его `streaming` («прервано») — показать текст из памяти
+    const kept = m.id ? unsaved.get(m.id) : null;
+    if (kept && (m === kept.message || m.status === 'streaming')) return kept.message;
+    if (kept) unsaved.delete(m.id);                  // сохранила другая вкладка или ответ заменён
+    return m;
   }
 
   function reading(m) {
@@ -1076,6 +1118,16 @@ function build(view, ctx) {
       });
       p.actions.append(copy);
     }
+    const kept = unsaved.get(m.id);
+    if (kept?.message === m) {
+      const again = button('Сохранить ещё раз', { class: 'btn btn-sm msg-save' }, async () => {
+        again.disabled = true;
+        await saveAnswer(kept.chatId, m, kept.body);
+        paint(m);
+        loadList();
+      });
+      p.actions.append(again);
+    }
     if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? 'Восстановленный ответ' : 'Ответ модели',
       { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
     if (chat?.chat.cleaner && m.content) p.actions.append(button('Очищенная копия',
@@ -1172,6 +1224,7 @@ function build(view, ctx) {
     if (pendingTurn === attempt) pendingTurn = null;
     if (attempt.regenerate || attempt.acknowledged) return;
     attempt.acknowledged = true;
+    inputDraft.sent(attempt.text);                     // ушли из раздела до подтверждения — черновиком не вернётся
     if (input.value === attempt.text) { input.value = ''; autosize(); }
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
@@ -1605,12 +1658,7 @@ function build(view, ctx) {
     autosize();
     dropWaiting();
   });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(input, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit(false);
@@ -1658,6 +1706,7 @@ function build(view, ctx) {
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
+      inputDraft.save();
       sharing.unmount();
       alive = false;
       historyRead?.controller.abort();

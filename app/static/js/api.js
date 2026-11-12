@@ -21,6 +21,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Ответа нет, а запрос, может быть, дошёл: связь (status 0), срок (TimeoutError), прокси или мост не ответили
+ * вовремя (502/503/504). Изменяющий запрос такой отказ не доказывает — сверять или повторять идемпотентно. */
+export function unknownOutcome(err) {
+  return err?.name === 'TimeoutError' || err?.status === 0 || [502, 503, 504].includes(err?.status);
+}
+
 /** Профиль вошедшего (GET /api/me); обновляет loadMe(). */
 export let me = null;
 

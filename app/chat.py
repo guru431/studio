@@ -1788,12 +1788,15 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
 
 @router.put("/chats/{chat_id}/messages/{message_id}")
 async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Request):
-    """Ответ прямого подключения: браузер прочитал модель сам и кладёт итог (один раз)."""
+    """Ответ прямого подключения: браузер прочитал модель сам и кладёт итог (один раз). Тот же итог повторно —
+    200, как в первый раз: ответ на первый PUT мог не дойти, и страница повторяет его после обрыва связи."""
     _chat_row(request.state.user.id, chat_id)
-    row = state.DB.execute("SELECT role, status, via FROM messages WHERE id = ? AND chat_id = ?",
+    row = state.DB.execute("SELECT role, status, via, content FROM messages WHERE id = ? AND chat_id = ?",
                            (message_id, chat_id)).fetchone()
     if row is None:
         raise _gone("такого сообщения нет")
+    if (row["role"], row["via"], row["status"], row["content"]) == ("assistant", "browser", body.status, body.content):
+        return {"id": message_id, "status": body.status}
     if (row["role"], row["status"], row["via"]) != ("assistant", "streaming", "browser") \
             or not _finish(message_id, chat_id, body.content, body.status):
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
