@@ -32,7 +32,7 @@
   translate при ссылке `translations.scan_id`) и `lock_policy.hidden_scans` (подзапрос для лент) — в `media_sections`
   (исходный PDF, PNG страниц), `lock_policy.blocks` для `/api/ocr/<id>*`, ленте `/api/ocr` (`db.page` с
   `extra`/`extra_args`), `search.find`, `jobs`. Изменяющие `/api/me/ntfy*`, `/api/me/push`, `/api/me/exa-key`, а также
-  `/api/me/sessions*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
+  `/api/me/sessions*`, `/api/me/access*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
   частичная защита (GET ntfy/push открыты). Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
   классификации роняет тест.
 - Поиск/задачи фильтруются, code SSE проверяет именно code; закрытие потоков при lock/open — только при защите code
@@ -73,6 +73,12 @@
   всегда — выдачи проектов своих компьютеров (`project_access.granted`, `project_access.drop`,
   `project_access.wake`), push/ntfy (и шаблон `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents,
   `bridge.record('revoke')`, `bridge.drop`).
+- `GET /api/me/access` — «Доступы и ссылки»: выдачи проектов компьютеров учётки (участник, компьютер, проект; имя
+  проекта — фоновой просьбой `projects` к мосту не дольше `account.ACCESS_NAMES_SEC`, иначе null; `missing` — папки
+  нет) и её ссылки «Поделиться» (срок, открытия, неверные PIN, без адреса ссылки). Отзыв одной —
+  `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` (`project_access.revoke`, без моста) и
+  `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all` и все
+  ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).
 - `GET /api/me/security-events?before=` — журнал `security_events` (шаг 34; `kind` без CHECK, каскад от учётки).
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
@@ -92,8 +98,8 @@
 - Сброс пароля администратором: `users.password_reset` + событие `password_reset` в журнал владельца (без адреса
   администратора); `GET /api/me.password_reset` — после входа владелец один раз видит окно «Открыть «Безопасность»»;
   закрытие снимает флаг (`DELETE /api/me/password-reset`), аварийный выход — тоже. Администратор флага не видит.
-- Страница — `account-security.js`: `sessionsBlock`, `emergencyBlock`, `securityEventsBlock` в «Настройки → Защита»
-  после блокировки.
+- Страница — `account-security.js`: `sessionsBlock`, `accessBlock`, `emergencyBlock`, `securityEventsBlock` в
+  «Настройки → Защита» после блокировки.
 
 ## Ловушки
 

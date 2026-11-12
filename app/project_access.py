@@ -124,6 +124,26 @@ def revoke(request: Request, aid: int, pid: str, uid: int) -> bool:
     return found
 
 
+def revoke_all(request: Request) -> int:
+    """«Отозвать всё»: все выдачи компьютеров владельца, и к исчезнувшим папкам; итог — сколько снято."""
+    uid = request.state.user.id
+    state.DB.execute("BEGIN IMMEDIATE")
+    try:
+        grants = granted(uid)
+        drop(grants)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    wake(grants)
+    computers = {r["id"]: r for r in state.DB.execute("SELECT id, name FROM agents WHERE user_id = ?", (uid,))}
+    for aid, _, _ in grants:
+        _journal(request, computers[aid], "remove")
+    if grants:
+        log.info("пользователь %d: отозваны все доступы к проектам — %d", uid, len(grants))
+    return len(grants)
+
+
 @router.post("", status_code=201)
 async def add_member(aid: int, pid: str, body: Member, request: Request):
     await _check(request, aid, pid)

@@ -11,6 +11,10 @@
   ссылки «Поделиться» (и на чаты её компьютеров), доступы участников к проектам её компьютеров (всегда, без
   галочки), push и ntfy всех устройств и прежний шаблон ntfy; `agents: true` — ещё и ключи компьютеров (как отзыв
   из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
+- `GET /api/me/access` — все выдачи проектов компьютеров учётки (участник, компьютер, проект — имя от моста, если
+  он на связи и открыт, иначе id; `missing` — папки уже нет) и все её ссылки «Поделиться» (срок, открытия, неверные
+  PIN). `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` и `DELETE /api/me/access/shares/<id>` —
+  отозвать одну, без моста; `DELETE /api/me/access` — «Отозвать всё».
 - `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху; свёрнутые повторы
   неудач — `count` и время первой `first` (security_log.NOISY).
 - Сброс пароля администратором (admin.py) ставит `users.password_reset`: `GET /api/me` отдаёт его владельцу, и
@@ -19,6 +23,7 @@
 - Все пути — под обычными guard и CSRF; частичная блокировка закрывает их, как управление защитой (lock_policy).
 - Журнал службы — только id и числа.
 """
+import asyncio
 import logging
 import re
 import unicodedata
@@ -37,6 +42,8 @@ import state
 
 EVENTS_PAGE = 50
 HANDLE = re.compile(r"[0-9a-f]{16}")
+#: сколько список доступов ждёт от моста имена проектов; не дождался — показывает id проекта
+ACCESS_NAMES_SEC = 5
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/me")
@@ -148,6 +155,88 @@ async def emergency(body: Emergency, request: Request):
     response = Response(status_code=204, headers={"Clear-Site-Data": auth.CLEAR_CACHE})
     response.delete_cookie(auth.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
+
+
+async def _project_names(request: Request, aids) -> dict:
+    """Имена проектов компьютеров владельца от мостов: `{aid: {pid: имя}}` или `None` — компьютер не на связи, закрыт
+    PIN или молчит дольше `ACCESS_NAMES_SEC`. Фоновая просьба: срок PIN не продлевает."""
+    import claude_code
+
+    async def one(aid):
+        try:
+            data = await asyncio.wait_for(claude_code.ask(request, aid, "projects", passive=True, quiet=True),
+                                          ACCESS_NAMES_SEC)
+        except (HTTPException, TimeoutError):
+            return aid, None
+        return aid, {i["pid"]: i["name"] for i in data.get("items", [])
+                     if isinstance(i, dict) and isinstance(i.get("pid"), str) and isinstance(i.get("name"), str)}
+
+    return dict(await asyncio.gather(*(one(aid) for aid in aids)))
+
+
+def _place(names: dict, aid, pid) -> dict:
+    """Имя проекта, если мост его назвал; `missing` — мост ответил, а такой папки нет (удалили, переименовали)."""
+    known = names.get(aid)
+    return {"name": None if known is None else known.get(pid), "missing": None if known is None else pid not in known}
+
+
+@router.get("/access")
+async def access(request: Request):
+    """Все выданные доступы к проектам компьютеров учётки (и к исчезнувшим папкам) и все её ссылки «Поделиться»."""
+    uid = request.state.user.id
+    members = state.DB.execute(
+        "SELECT m.agent_id, a.name AS computer, m.project, m.user_id, u.login, u.disabled, m.created"
+        " FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = m.user_id"
+        " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
+    shares = state.DB.execute(
+        "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, c.title, s.created, s.expires, s.views,"
+        " s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
+        " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
+        " ORDER BY s.created DESC", (uid, clock.NOW())).fetchall()
+    aids = sorted({r["agent_id"] for r in members} | {r["agent_id"] for r in shares if r["agent_id"] is not None})
+    names = await _project_names(request, aids) if aids else {}
+    return {"members": [{"computer_id": r["agent_id"], "computer": r["computer"], "project": r["project"],
+                         **_place(names, r["agent_id"], r["project"]), "user_id": r["user_id"], "login": r["login"],
+                         "disabled": bool(r["disabled"]), "created": r["created"]} for r in members],
+            "shares": [{"id": r["id"], "kind": "code" if r["agent_id"] else "chat",
+                        "title": r["title"] if r["chat_id"] else None, "computer": r["computer"], "project": r["project"],
+                        **(_place(names, r["agent_id"], r["project"]) if r["agent_id"] else {}),
+                        "created": r["created"], "expires": r["expires"], "views": r["views"], "viewed": r["viewed"],
+                        "fails": r["fails"]} for r in shares]}
+
+
+@router.delete("/access/members/{aid}/{pid}/{member}", status_code=204)
+async def revoke_member(aid: int, pid: str, member: int, request: Request):
+    """Отозвать одну выдачу без похода к мосту — и к папке, которой уже нет (`_check` проекта не нужен)."""
+    import claude_code
+    claude_code.check_pid(pid)
+    project_access.revoke(request, aid, pid, member)
+    return Response(status_code=204)
+
+
+@router.delete("/access/shares/{share_id}", status_code=204)
+async def revoke_share(share_id: str, request: Request):
+    """Отключить свою ссылку «Поделиться» из общего списка: и ту, чей чат или компьютер сейчас не открыть."""
+    uid = request.state.user.id
+    row = state.DB.execute("DELETE FROM chat_shares WHERE id = ? AND user_id = ? RETURNING agent_id",
+                           (share_id, uid)).fetchone()
+    if row is not None:
+        security_log.record(uid, "share_revoke", detail="code" if row["agent_id"] else "chat",
+                            digest=request.state.digest, ip=auth.client_ip(request))
+    return Response(status_code=204)
+
+
+@router.delete("/access")
+async def revoke_access(request: Request):
+    """«Отозвать всё»: выдачи проектов компьютеров учётки и все ссылки «Поделиться» (и на чаты её компьютеров)."""
+    uid = request.state.user.id
+    members = project_access.revoke_all(request)
+    shares = state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? OR agent_id IN"
+                              " (SELECT id FROM agents WHERE user_id = ?)", (uid, uid)).rowcount
+    if shares:
+        security_log.record(uid, "share_revoke", detail="all", digest=request.state.digest, ip=auth.client_ip(request))
+    log.info("пользователь %d: отозваны все ссылки «Поделиться» — %d", uid, shares)
+    return {"members": members, "shares": shares}
 
 
 @router.delete("/password-reset", status_code=204)

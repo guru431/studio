@@ -102,6 +102,74 @@ def test_sessions_journal_and_emergency_exit(browser, live, width, tmp_path):
 
 
 @pytest.mark.parametrize('width', [320, 1280])
+def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, width, tmp_path):
+    """«Доступы и ссылки»: выдачи проектов компьютера (и к папке, имени которой мост не назвал) и ссылки учётки;
+    «Отозвать» по строке, «Отозвать всё» — после подтверждения."""
+    login, friend_login = 'access-' + uuid.uuid4().hex[:16], 'friend-' + uuid.uuid4().hex[:16]
+    uid = live.add_user(login)
+    friend = live.add_user(friend_login)
+    conn = db.connect(live.db_path)
+    now = time.time()
+    aid = conn.execute("INSERT INTO agents(user_id, name, key_hash, created) VALUES (?, 'Рабочий ПК', ?, 0)",
+                       (uid, security.new_token())).lastrowid
+    for project in ('0123456789abcdef', 'fedcba9876543210'):
+        conn.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)",
+                     (aid, project, friend, now - 60))
+    chat = 'access-chat-' + uuid.uuid4().hex
+    conn.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES (?, ?, 'Отчёт за неделю', 0, 0)", (chat, uid))
+    conn.execute("INSERT INTO chat_shares(id, user_id, chat_id, token_hash, token_enc, pin_hash, snapshot, created, views)"
+                 " VALUES (?, ?, ?, ?, x'00', 'x', '{}', ?, 3)", (uuid.uuid4().hex, uid, chat, uuid.uuid4().hex, now - 30))
+    conn.close()
+    engine = focus_browser.browser_type.name
+    mobile = width == 320 and engine != 'firefox'
+    with httpx.Client(base_url=live.url) as client:
+        signed = client.post('/login', data={'login': login, 'password': 'password-123'})
+        assert signed.status_code == 303
+    cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
+    with focus_browser.new_context(viewport={'width': width, 'height': 900}, is_mobile=mobile, has_touch=mobile,
+                                   extra_http_headers={'Cookie': cookie}, service_workers='block') as context:
+        if engine == 'firefox':
+            context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                                 'httpOnly': True, 'sameSite': 'Lax'} for key, value in signed.cookies.items()])
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(live.url + '/#/settings/security')
+        members, shares = page.locator('#access-members .access-member'), page.locator('#access-shares .access-share')
+        pw.expect(members).to_have_count(2)
+        pw.expect(members.first).to_contain_text(friend_login)
+        pw.expect(members.first).to_contain_text('Рабочий ПК · проект 01234567')
+        pw.expect(shares).to_have_count(1)
+        pw.expect(shares.first).to_contain_text('Отчёт за неделю')
+        pw.expect(shares.first).to_contain_text('Чат · бессрочная · открыта 3 раза')
+        block = page.locator('.access-block')
+        block.scroll_into_view_if_needed()
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        block.screenshot(path=str(tmp_path / f'access-{engine}-{width}.png'))
+        revoke = members.first.locator('.access-revoke')
+        (revoke.tap if mobile else revoke.click)()
+        pw.expect(members).to_have_count(1)
+        pw.expect(page.locator('#access-status')).to_have_text('Доступ отозван')
+        page.locator('#access-revoke-all').click()
+        pw.expect(page.locator('#access-revoke-all-dialog')).to_be_visible()
+        page.locator('#access-revoke-all-confirm').click()
+        pw.expect(page.locator('#access-status')).to_have_text('Все доступы и ссылки отозваны')
+        pw.expect(members).to_have_count(0)
+        pw.expect(shares).to_have_count(0)
+        pw.expect(page.locator('#access-revoke-all')).to_be_hidden()
+        journal = page.evaluate("fetch('/api/me/security-events').then(r => r.json()).then(p => p.items.map(i => i.kind))")
+        assert journal[:3] == ['share_revoke', 'project_member_remove', 'project_member_remove']
+        assert not errors, errors
+    conn = db.connect(live.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM project_members WHERE agent_id = ?", (aid,)).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM chat_shares WHERE user_id = ?", (uid,)).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize('width', [320, 1280])
 @pytest.mark.parametrize('theme', ['light', 'dark'])
 def test_detailed_sessions_can_be_named_refreshed_and_ended_with_keyboard_and_touch(focus_browser, live, width, theme, tmp_path):
     engine = focus_browser.browser_type.name
