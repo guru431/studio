@@ -402,7 +402,7 @@ def test_docker_build_refreshes_the_base_and_the_packages_weekly():
     build = re.search(r"^build=\((.*)\)$", code, re.M).group(1)
     assert build.startswith("docker build --pull ") and '--build-arg "REFRESH=$(date -u +%G-W%V)"' in build
     assert 'if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi' in code
-    assert code.count("docker build") == 1 and '"${build[@]}" -t "$image"' in code
+    assert len(re.findall(r"docker build\b", code)) == 1 and '"${build[@]}" -t "$image"' in code
     assert "--refresh-base) REFRESH_BASE=1 ;;" in code
     assert "args+=(--refresh-base)" in DEPLOY_SH and "--refresh-base requires Docker" in DEPLOY_SH
     lines = uncommented(DOCKERFILE).splitlines()
@@ -882,6 +882,35 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     calls = (root / "calls").read_text().splitlines()
     assert ("previous image restored" in r.stderr) is not first
     assert calls[-1].endswith("stop --timeout 20") is first
+
+
+@pytest.mark.parametrize("builder_fails", [False, True], ids=["clean", "docker-error"])
+def test_docker_install_keeps_five_releases_and_their_images(tmp_path, builder_fails):
+    """Каждая выкладка добавляла releases/<rev>-<время> и образ studio:<rev>, ничего не удалялось. Остаются
+    пять новейших и цели current/previous; образ удалённого релиза уходит, если ревизию не держит оставшийся.
+    Ошибка уборки выкладку не валит."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    revs = [f"{n:x}" * 40 for n in range(1, 9)]
+    revs[1] = revs[6]                                   # повтор выкладки той же ревизии — релиз 7 её держит
+    names = [f"{rev}-2026110{n}T120000" for n, rev in enumerate(revs, start=1)]
+    for name in names:
+        (root / "releases" / name).mkdir(parents=True)
+    link = 'ln -s "$1/releases/$2" "$1/$3"'
+    for target, name in ((names[7], "current"), (names[0], "previous")):
+        subprocess.run([bash, "-c", link, "x", root.as_posix(), target, name], env=env, check=True, timeout=20)
+    start = INSTALL_DOCKER.index("prune_releases() {")
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("\nprintf 'studio: Docker release", start) + 1]
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}\n"
+             'docker() { echo "$*" >> "$R/calls"; [ "$1 $2" != "builder prune" ] || [ -z "$FAIL" ]; }\n')
+    r = subprocess.run([bash, "-c", stubs + block + "echo deployed\n"], env={**env, "FAIL": "1" if builder_fails else ""},
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0 and "deployed" in r.stdout and "removed 2 old releases" in r.stdout, r
+    assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], *names[3:]])
+    assert (root / "calls").read_text().splitlines() == [
+        f"image inspect studio:{revs[2]}", f"image rm studio:{revs[2]}",
+        "image prune -f", "builder prune -f --filter until=168h"]
+    assert ("cleanup of old releases or images failed" in r.stderr) is builder_fails
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():
