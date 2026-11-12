@@ -1,6 +1,6 @@
 #!/bin/bash
 # Установка выкладки на debian — её запускает deploy/deploy.sh:
-#   sudo bash /opt/services/studio/.incoming/deploy/install.sh [--secret-stdin] [--admin-stdin]
+#   sudo bash /opt/services/studio/.incoming-<ревизия>-…/deploy/install.sh [--secret-stdin] [--admin-stdin]
 # Код и .venv — root: служба (пользователь studio) их только читает и исполняет. Секрет —
 # /etc/studio/studio.env, 0600 root: его читает systemd при старте, а не служба.
 # --secret-stdin — первая строка stdin `STUDIO_DATA_KEY=…` (ключ Fernet из vault) ложится в
@@ -12,7 +12,7 @@
 # Значения в argv не попадают и не печатаются: только поток stdin.
 set -euo pipefail
 R=/opt/services/studio
-NEW=$R/.incoming
+NEW=$(readlink -f "$(dirname "$(readlink -f "$0")")/..")
 OLD=$R/.previous
 ENV_FILE=/etc/studio/studio.env
 UNIT=studio-web.service
@@ -29,6 +29,11 @@ for arg in "$@"; do
         *) echo "ОШИБКА: неизвестный аргумент $arg (есть --secret-stdin и --admin-stdin)" >&2; exit 1 ;;
     esac
 done
+# Своя папка загрузки каждой выкладки (deploy.sh) и одна установка за раз: параллельные выкладки не
+# подменяют код друг другу посреди переезда.
+case "$NEW" in "$R"/.incoming-*) ;; *) echo "ОШИБКА: install.sh запускают из $R/.incoming-* (deploy.sh)" >&2; exit 1 ;; esac
+exec 9>"$R/.deploy.lock"
+flock -n 9 || { echo "ОШИБКА: уже идёт другая выкладка" >&2; exit 1; }
 
 getent passwd studio >/dev/null \
     || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin studio

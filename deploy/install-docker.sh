@@ -21,7 +21,8 @@ for arg in "$@"; do
 done
 [[ $REVISION =~ ^[a-f0-9]{40}$ ]] || { echo 'studio: invalid revision' >&2; exit 1; }
 [ "$(id -u)" = 0 ] || { echo 'studio: root required' >&2; exit 1; }
-[ "$NEW" = "$R/.incoming" ] || { echo 'studio: install must use .incoming' >&2; exit 1; }
+# deploy.sh uploads every deployment into its own $R/.incoming-<revision>-<id>.
+case "${NEW##*/}" in .incoming-*) ;; *) echo 'studio: install must use an .incoming-* upload' >&2; exit 1 ;; esac
 exec 9>"$R/.deploy.lock"
 flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 
