@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from clients import RUNNERS, local_copy_drift, ps_encoding, run_client
+from clients import RUNNERS, local_copy_drift, run_client
 from conftest import CLIENT
 from test_studio_batch_client import images                                   # noqa: F401 (фикстура)
 from test_studio_batch_client import run_script as run_batch
@@ -102,7 +102,7 @@ def test_make_local_embeds_the_key_and_the_gateway_address(runner, name, tmp_pat
     r = run_client(runner, tmp_path / (name + ".ps1"),
                    ["-MakeLocal", "-VaultPath", str(tmp_path / "vault.env"), "-GatewayUrl", GATEWAY + "/"])
 
-    out = r.stdout.decode(ps_encoding() if runner == "ps" else "utf-8", "replace")
+    out = r.stdout.decode("utf-8", "replace")             # run_client: вывод PowerShell — UTF-8
     assert r.returncode == 0, out + r.stderr.decode("utf-8", "replace")
     assert b"sk-owner-1" not in r.stdout + r.stderr and GATEWAY in out
     suffix = ".ps1" if runner == "ps" else ".py"
