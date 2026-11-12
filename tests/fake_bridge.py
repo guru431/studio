@@ -102,6 +102,7 @@ class FakeMachine:
         self.completions = False                 # кадр досланных завершений (§18)
         self.visualization_scope = False         # участнику — только визуализации проекта (§17)
         self.visualization_images = False
+        self.large_attachments = False
 
     @property
     def hello(self) -> dict:
@@ -114,7 +115,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel")
+                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -776,7 +777,7 @@ class SocketBridge:
     def start(self) -> "SocketBridge":
         from websockets.sync.client import connect as ws_connect
         self._ws = ws_connect(self.ws_url, additional_headers={"Authorization": f"Bearer {self.key}"},
-                              open_timeout=5, legacy=True)
+                              open_timeout=5, legacy=True, max_size=bridge.FRAME_MAX)
         self.machine.open_sessions.clear()
         self._send(self.machine.hello)
         self.welcome = json.loads(self._ws.recv(timeout=5))

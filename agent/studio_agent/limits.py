@@ -4,15 +4,15 @@ import re
 
 MIB = 1024 * 1024
 
-FRAME_MAX = 16 * MIB  # кадр канала
+FRAME_MAX = 48 * MIB  # кадр канала с base64 вложений до 30 МиБ
 WELCOME_SEC = 10  # ждать welcome после hello
 PIN_TRIES = 5  # неверных PIN подряд до блока
 OPEN_IDLE_SEC = 3 * 60 * 60  # открытая сессия без просьб: 3 часа
 TEXT_MAX = 2 * MIB  # текст файла
 RAW_MAX = 10 * MIB  # raw (PDF)
 IMAGE_COUNT = 4
-IMAGE_MAX = 5 * MIB  # картинка хода
-IMAGES_MAX = 8 * MIB  # картинки одного хода вместе
+IMAGE_MAX = 10 * MIB  # картинка или файл хода
+IMAGES_MAX = 30 * MIB  # картинки и файлы одного хода вместе
 ATTACHMENT_COUNT = 8  # файлы и картинки вместе
 PATH_MAX = 1024  # знаков пути
 CLIP = 20_000  # строки событий и шагов, дальше — «…»

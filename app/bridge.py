@@ -50,7 +50,7 @@ EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "
                          "input_accepted", "followup", "followup_sent", "followup_removed", "queue", "ownership",
                          "step_update", "progress"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-FRAME_MAX = 16 * 1024 * 1024
+FRAME_MAX = 48 * 1024 * 1024
 HELLO_SEC = 10
 CALL_SEC = 30
 WATCH_MAX = 1000
@@ -211,7 +211,7 @@ def parse_hello(frame: dict) -> dict:
         if type(frame["images"]) is not bool:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
-    for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "metadata_cache", "file_stats", "file_operations",
+    for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "project_summary", "metadata_cache", "file_stats", "file_operations",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "desktop", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images"):
         if capability in frame:

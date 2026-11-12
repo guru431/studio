@@ -3,8 +3,8 @@
 import { el } from './ui.js';
 
 const TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-const MAX_IMAGE = 5 * 1024 * 1024;
-const BUDGET = 16 * 1024 * 1024;
+const MAX_IMAGE = 10 * 1024 * 1024;
+const BUDGET = 32 * 1024 * 1024;
 const PARALLEL = 4;
 
 export function historyImages(scroller, feed, { api, endpoint, closed }) {

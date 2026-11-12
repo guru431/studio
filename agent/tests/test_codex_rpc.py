@@ -143,8 +143,9 @@ async def _asked(client, process, method):
     return task, process.sent[-1]["id"]
 
 
-async def test_history_line_longer_than_link_frame_is_read():
+async def test_history_line_longer_than_link_frame_is_read(monkeypatch):
     """`thread/read` всей истории — одна строка больше `limits.FRAME_MAX`: читается, канал живёт."""
+    monkeypatch.setattr(limits, "FRAME_MAX", limits.MIB)
     client, process = await _connected()
     task, rid = await _asked(client, process, "thread/read")
     image = "data:image/png;base64," + "A" * (limits.FRAME_MAX + limits.MIB)

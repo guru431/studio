@@ -86,9 +86,9 @@ STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_
           "desktop_disabled": 409, "desktop_unavailable": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
-IMAGE_MAX = 5 * 1024 * 1024
-IMAGES_MAX = 8 * 1024 * 1024
-TURN_BODY_MAX = 13 * 1024 * 1024  # base64 8 МиБ + текст, в пределах кадра 16 МиБ
+IMAGE_MAX = 10 * 1024 * 1024
+IMAGES_MAX = 30 * 1024 * 1024
+TURN_BODY_MAX = 44 * 1024 * 1024  # base64 30 МиБ + текст и JSON, в пределах кадра 48 МиБ
 FILE_MAX = 2 * 1024 * 1024
 FILE_BODY_MAX = 3 * 1024 * 1024
 RAW_MAX = 10 * 1024 * 1024
@@ -276,7 +276,7 @@ def _turn_images(images: list[TurnImage]) -> list[dict]:
         if not raw:
             raise _refuse(422, "invalid", "изображение пустое")
         if len(raw) > IMAGE_MAX or total > IMAGES_MAX:
-            raise _refuse(413, "too_large", "изображения больше предела: 5 МиБ на файл, 8 МиБ всего")
+            raise _refuse(413, "too_large", "изображения больше предела: 10 МиБ на файл, 30 МиБ всего")
     return [image.model_dump() for image in images]
 
 
@@ -296,7 +296,7 @@ def _turn_attachments(items: list[TurnAttachment], images: list[dict]) -> list[d
             raise _refuse(422, "invalid", "вложение не читается") from None
         total += len(raw)
         if len(raw) > IMAGE_MAX or total > IMAGES_MAX:
-            raise _refuse(413, "too_large", "вложения больше предела: 5 МиБ на файл, 8 МиБ всего")
+            raise _refuse(413, "too_large", "вложения больше предела: 10 МиБ на файл, 30 МиБ всего")
         result.append({**item.model_dump(), "name": name})
     return result
 
@@ -1027,6 +1027,10 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
             raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки изображений")
         if attachments and link.hello.get("attachments") is not True:
             raise _refuse(409, "unsupported", "обновите мост на компьютере для отправки вложений")
+        if not link.hello.get("large_attachments"):
+            sizes = [len(item["data"]) // 4 * 3 - item["data"][-2:].count("=") for item in [*images, *attachments]]
+            if any(size > 5 * 1024 * 1024 for size in sizes) or sum(sizes) > 8 * 1024 * 1024:
+                raise _refuse(409, "unsupported", "Обновите мост на компьютере для вложений до 10 МиБ и 30 МиБ на сообщение")
         catalog = link.hello if engine == "claude" else link.hello.get(engine, {})
         if body.model is not None and body.model not in {m["id"] for m in catalog.get("models", ())}:
             raise _refuse(422, "model", NO_MODEL)
@@ -1213,7 +1217,7 @@ async def visualization(aid: int, pid: str, body: VisualizationBody, request: Re
         if not isinstance(image, dict):
             raise _refuse(502, 'bridge', ODD)
         if isinstance(image.get('data'), str) and len(image['data']) > (IMAGE_MAX + 2) // 3 * 4:
-            raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+            raise _refuse(413, 'too_large', 'Изображение больше 10 МиБ')
         raw, mime = await asyncio.to_thread(_image_bytes, image, max_bytes=IMAGE_MAX)
         # _image_bytes проверил и base64 (включая алфавит), и изображение; повторное кодирование не нужно.
         text = '<img alt="Визуализация" style="max-width:100%;height:auto" src="data:' + mime + ';base64,' + image['data'] + '">'
@@ -1392,7 +1396,7 @@ def _pdf_bytes(data: dict) -> bytes:
 def _image_bytes(data: dict, *, max_bytes: int | None = None) -> tuple[bytes, str]:
     raw = _raw_bytes(data)
     if max_bytes is not None and len(raw) > max_bytes:
-        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+        raise _refuse(413, 'too_large', 'Изображение больше 10 МиБ')
     try:
         with Image.open(io.BytesIO(raw)) as image:
             mime = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp', 'GIF': 'image/gif'}.get(image.format)
@@ -1433,10 +1437,10 @@ async def history_image(aid: int, pid: str, chat: str, body: HistoryImage, reque
     data = await ask(request, aid, 'history_image', project=pid, chat=chat,
                      message_id=body.message_id, index=body.index, passive=True)
     if isinstance(data.get('data'), str) and len(data['data']) > (IMAGE_MAX + 2) // 3 * 4:
-        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+        raise _refuse(413, 'too_large', 'Изображение больше 10 МиБ')
     raw, mime = await asyncio.to_thread(_image_bytes, data)
     if len(raw) > IMAGE_MAX:
-        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+        raise _refuse(413, 'too_large', 'Изображение больше 10 МиБ')
     own_agent(request, aid)
     if not _session_open(request.state.digest):
         raise _refuse(409, 'closed', 'Сеанс Студии закрыт')

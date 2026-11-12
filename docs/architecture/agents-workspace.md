@@ -28,7 +28,8 @@ studio-agent 0.8.0: `file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`
 
 Раздел называется «Агенты» (адреса `#/code` и `/api/code/*` прежние). studio-agent 0.7.0:
 `hello.attachments` — произвольные `{name,mime,data}` через `Turn.attachments`, 8 файлов вместе с images,
-5 МиБ/файл и 8 МиБ суммарно; файлы живут в приватном temp машины до disconnect CLI.
+10 МиБ/файл и 30 МиБ суммарно с `hello.large_attachments` (мост 0.22.1+); без него — 5/8 МиБ.
+Файлы живут в приватном temp машины до disconnect CLI.
 `hello.project_activity` — `GET …/agents/<aid>/activity` → op `activity`, только project/chat/engine/running/asking
 всех трёх Runner, без истории. `hello.subscription_usage` — `GET …/agents/<aid>/usage?engine=…&refresh=…`,
 `code_usage.py` фильтрует ответ, `subscription.py` кэширует 60 с и объединяет одновременные проверки.
@@ -97,6 +98,9 @@ Worker завершается при очистке доступа и имеет
 60 с в спокойном проекте; статус активности общий для значка и панели. Настройки объединяют чтение компьютеров.
 
 ## Панель проектов, файлы, сводка, GitHub и remote
+
+Названия проектов выделены полужирным, строки разделяет небольшой отступ. Дата изменения стоит
+сразу после сведений Git и дополнительных remote, без прижатия к правому краю панели.
 
 Во время перечитывания проектов и их сводок ↻ вращается, строка даты показывает «Обновляю сведения…»;
 `aria-busy` и блокировка кнопки снимаются при успехе и ошибке, ответы прежнего компьютера не меняют новый.
@@ -251,8 +255,9 @@ Chrome для Codex — `studio_chrome` (Chrome DevTools MCP, открытый �
 не захватывая writer исходной сессии; временная копия отписывается в finally.
 
 Изображения раздела «Агенты» (studio-agent ≥ 0.3.3): `hello.images: true` → `/api/agents.images`;
-`Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 5 МиБ на файл / 8 МиБ всего.
-Тело хода читается через `auth.small_body` до 13 МиБ; base64 проверяется в потоке, на машине
+`Turn.images` — до 4 `{mime, data}` (base64), PNG/JPEG/WebP/GIF, 10 МиБ на файл / 30 МиБ всего с
+`hello.large_attachments` (без capability — прежние 5/8 МиБ). Тело хода читается через `auth.small_body`
+до 44 МиБ; кадр канала — до 48 МиБ. Base64 проверяется в потоке, на машине
 `image_input.validate` повторяет пределы и сверяет сигнатуру. Старый мост с картинками — 409
 `unsupported`, без картинок контракт прежний. `code-chat.js` — выбор, paste, drop, превью и черновик
 в памяти по чату; пустой текст допустим при картинке. В Agent SDK — поток user-сообщения с image/source

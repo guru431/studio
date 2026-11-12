@@ -13,7 +13,7 @@ from . import VERSION, chrome, jobs, limits
 
 RPC_SEC = 25
 # Строка stdout app-server: ответ `thread/read` с `includeTurns` — вся история одной строкой, картинки —
-# base64 `data:` URL. Предел кадра канала (16 МиБ) к ней не относится; длиннее LINE_MAX — отказ одному запросу.
+# base64 `data:` URL. Предел кадра канала (48 МиБ) к ней не относится; длиннее LINE_MAX — отказ одному запросу.
 LINE_MAX = 256 * limits.MIB
 CHUNK = limits.MIB
 _EDGE = 128  # байт начала и конца переполненной строки: по ним — id ответа

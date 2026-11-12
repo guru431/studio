@@ -23,4 +23,4 @@ LABEL org.opencontainers.image.title="Studio" \
       org.opencontainers.image.revision=$STUDIO_REVISION
 USER 10001:10001
 ENTRYPOINT ["/bin/sh", "/opt/studio/deploy/docker/entrypoint.sh"]
-CMD ["python", "-m", "uvicorn", "main:app", "--app-dir", "/opt/studio/app", "--uds", "/run/studio/web.sock", "--no-access-log", "--no-proxy-headers", "--timeout-graceful-shutdown", "10", "--ws-max-size", "16778240", "--ws-ping-interval", "20", "--ws-ping-timeout", "20"]
+CMD ["python", "-m", "uvicorn", "main:app", "--app-dir", "/opt/studio/app", "--uds", "/run/studio/web.sock", "--no-access-log", "--no-proxy-headers", "--timeout-graceful-shutdown", "10", "--ws-max-size", "50332672", "--ws-ping-interval", "20", "--ws-ping-timeout", "20"]

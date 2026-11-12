@@ -41,7 +41,7 @@ WorkingDirectory=/opt/services/studio
 # а у перенесённой среды скрипты bin/ хранят прежний абсолютный путь интерпретатора.
 # --ws-max-size — bridge.FRAME_MAX + 1 КиБ: кадр моста чуть больше предела доходит до приложения и
 # закрывается 4400 протокола, а не 1009 самого uvicorn; пинги канала — те, что называет протокол §2.
-ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers --timeout-graceful-shutdown 10 --ws-max-size 16778240 --ws-ping-interval 20 --ws-ping-timeout 20
+ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app --uds /run/studio/web.sock --no-access-log --no-proxy-headers --timeout-graceful-shutdown 10 --ws-max-size 50332672 --ws-ping-interval 20 --ws-ping-timeout 20
 TimeoutStopSec=30
 # Ролик отдаётся с шары кусками (Range), загрузки — до 21 МиБ
 MemoryMax=2G

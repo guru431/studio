@@ -20,7 +20,7 @@ def valid_source(source) -> bool:
 def _preview(root, relative):
     if relative.lower().endswith('.html'):
         return files.read_text(root, relative)
-    _, raw = files._read(root, relative, limits.IMAGE_MAX, 'Изображение больше 5 МиБ')
+    _, raw = files._read(root, relative, limits.IMAGE_MAX, 'Изображение больше 10 МиБ')
     mime = image_input.mime_of(raw)
     if mime is None:
         raise Refused('binary', 'Формат изображения не поддерживается')

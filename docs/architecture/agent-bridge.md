@@ -108,7 +108,7 @@
 - `history_image {project, chat, message_id, index}` возвращает сохранённые в CLI байты одного изображения.
   Новый HTTP POST `/api/code/agents/{aid}/projects/{pid}/chats/{chat}/image` принимает только `message_id`/`index`
   в JSON. Обычные проверки учётки, CSRF, PIN и принадлежности чату действуют до чтения и повторно после него.
-  Автоматическая загрузка превью не продлевает таймер PIN. Ответ — оригинал PNG/JPEG/WebP/GIF до 5 МиБ и 16 Мп,
+  Автоматическая загрузка превью не продлевает таймер PIN. Ответ — оригинал PNG/JPEG/WebP/GIF до 10 МиБ и 16 Мп,
   `no-store`/`nosniff`; страница истории сохраняет предел 512 КиБ. URL не загружаются; `localImage` Codex доступен
   только внутри проекта. Сервер ничего не записывает; браузер запрашивает только видимые изображения.
 - Проверки — `agent/tests/test_history_images.py`, `tests/test_code_history_images.py`.
@@ -393,7 +393,8 @@ Node/npm из PATH, без отдельных профилей, статисти
 node_repl, браузерный плагин зависит от доступности browser access host приложения Codex.
 
 (мост ≥ 0.3.3) `hello.images: true` объявляет вложения для обоих помощников. `image_input.validate` проверяет
-до 4 `{mime, data}` (base64): PNG/JPEG/WebP/GIF, сигнатура, 5 МиБ на файл / 8 МиБ всего, в потоке до
+до 4 `{mime, data}` (base64): PNG/JPEG/WebP/GIF, сигнатура, 10 МиБ на файл / 30 МиБ всего
+(мост ≥ 0.22.1, `hello.large_attachments`; старые — 5/8 МиБ), в потоке до
 запуска хода. `Runner.start(images=...)` передаёт их в Agent SDK потоковым user-сообщением с image/source
 base64, Codex — image с data URL в `turn/start.input`; текст может быть пустым. URL и пути из просьбы
 не используются, временных файлов нет. Тексты без images сохраняют прежний формат SDK.

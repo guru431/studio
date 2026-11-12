@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from fake_sdk import HOLD, FakeFactory, delta, result_ok
-from studio_agent import VERSION, files, projects, sessions, store
+from studio_agent import VERSION, files, limits, projects, sessions, store
 from studio_agent.agent import Agent
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
@@ -246,7 +246,7 @@ def test_hello(agent):
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
                              "agent_version": VERSION, "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
-                             "chat_control": True, "attachments": True, "project_activity": True,
+                             "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
@@ -588,7 +588,8 @@ async def test_a_crash_in_an_op_is_error_and_the_next_request_works(agent, monke
 
 
 async def test_oversized_answer_is_refused_too_large(agent, monkeypatch):
-    monkeypatch.setattr(agent._catalog, "list", lambda root, **kw: [{"pid": "0" * 16, "name": "x" * (17 * 2**20)}])
+    monkeypatch.setattr(limits, "FRAME_MAX", 1024)
+    monkeypatch.setattr(agent._catalog, "list", lambda root, **kw: [{"pid": "0" * 16, "name": "x" * 2048}])
     await opened(agent)
     r = req("projects")
     res = (await agent.handle(r))[0]
