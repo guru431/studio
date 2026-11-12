@@ -18,8 +18,11 @@
  *   ["eval", имя, выражение] — значение выражения в ответ под именем;
  *   ["click", селектор]    — нажатие мышью в середину элемента;
  *   ["type", селектор, текст] — нажатие на поле и ввод текста;
- *   ["press", клавиша]     — нажатие клавиши (Escape, Enter, Tab, Backspace, Delete, Home, End, стрелки влево и
- *                            вправо, цифры 0–9);
+ *   ["press", клавиша, модификаторы?] — нажатие клавиши (Escape, Enter, Tab, Backspace, Delete, Home, End, стрелки
+ *                            влево и вправо, цифры 0–9 с code Digit0–Digit9, Slash); модификаторы — «Alt», «Control»,
+ *                            «Meta», «Shift» через «+»;
+ *   ["route", часть адреса, код, тело?] — запросы, чей адрес содержит часть, получают этот ответ (тело — JSON
+ *                            строкой) вместо сети; ["unroute", часть адреса] — снова сеть;
  *   ["screenshot", путь, селектор?] — снимок окна или элемента в PNG (глазами проверить вёрстку).
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
@@ -37,7 +40,9 @@ import process from 'node:process';
 const POLL_MS = 50;
 const IDLE_MS = 300;
 const KEYS = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8, Delete: 46, Home: 36, End: 35, ArrowLeft: 37, ArrowRight: 39,
-  ...Object.fromEntries([...'0123456789'].map((d) => [d, 48 + Number(d)])) };
+  Slash: 191, ...Object.fromEntries([...'0123456789'].map((d) => [d, 48 + Number(d)])) };
+const CODES = { Slash: 'Slash', ...Object.fromEntries([...'0123456789'].map((d) => [d, `Digit${d}`])) };
+const MODIFIERS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -142,11 +147,15 @@ async function click(tab, selector, timeout) {
   }
 }
 
-async function press(tab, key) {
+async function press(tab, key, modifiers = '') {
   if (!(key in KEYS)) throw new Error(`клавиша ${key} драйверу неизвестна`);
+  const mask = modifiers.split('+').filter(Boolean).reduce((sum, name) => {
+    if (!(name in MODIFIERS)) throw new Error(`модификатор ${name} драйверу неизвестен`);
+    return sum | MODIFIERS[name];
+  }, 0);
   for (const type of ['keyDown', 'keyUp']) {
     await tab.send('Input.dispatchKeyEvent',
-      { type, key, code: key, windowsVirtualKeyCode: KEYS[key] });
+      { type, key: key === 'Slash' ? '/' : key, code: CODES[key] || key, windowsVirtualKeyCode: KEYS[key], modifiers: mask });
   }
 }
 
@@ -164,15 +173,28 @@ async function run(job) {
       if (type !== 'EventSource') flying.set(requestId, path);
       if (request.method !== 'GET') out.sent.push(path);
     });
-    if (job.writes) {
+    // Подменённые ответы шагов route: часть адреса → { code, body }.
+    const routes = new Map();
+    let intercepting = false;
+    const intercept = async () => {
+      if (!intercepting) await tab.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
+      intercepting = true;
+    };
+    tab.on('Fetch.requestPaused', ({ requestId, request }) => {
+      const rule = [...routes].find(([part]) => request.url.includes(part));
+      if (rule) {
+        const [, { code, body }] = rule;
+        tab.send('Fetch.fulfillRequest', { requestId, responseCode: code,
+          responseHeaders: [{ name: 'content-type', value: 'application/json' }, { name: 'cache-control', value: 'no-store' }],
+          body: Buffer.from(body || '').toString('base64') }).catch(() => {});
+        return;
+      }
       // Живой прогон: запись мимо разрешённых путей не уходит из браузера вовсе.
-      tab.on('Fetch.requestPaused', ({ requestId, request }) => {
-        const allowed = request.method === 'GET' || job.writes.includes(new URL(request.url).pathname);
-        tab.send(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest',
-          allowed ? { requestId } : { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
-      });
-      await tab.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-    }
+      const allowed = !job.writes || request.method === 'GET' || job.writes.includes(new URL(request.url).pathname);
+      tab.send(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest',
+        allowed ? { requestId } : { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
+    });
+    if (job.writes) await intercept();
     tab.on('Network.loadingFinished', landed);
     tab.on('Network.loadingFailed', landed);
     tab.on('Log.entryAdded', ({ entry }) => {
@@ -213,7 +235,11 @@ async function run(job) {
         else if (kind === 'type') {
           await click(tab, args[0], timeout);
           await tab.send('Input.insertText', { text: args[1] });
-        } else if (kind === 'press') await press(tab, args[0]);
+        } else if (kind === 'press') await press(tab, args[0], args[1]);
+        else if (kind === 'route') {
+          routes.set(args[0], { code: args[1], body: args[2] });
+          await intercept();
+        } else if (kind === 'unroute') routes.delete(args[0]);
         else if (kind === 'screenshot') {
           const clip = args[1] ? await tab.evaluate(`(() => {
             const r = document.querySelector(${JSON.stringify(args[1])}).getBoundingClientRect();

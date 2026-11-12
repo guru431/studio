@@ -24,7 +24,7 @@
  * ссылка «к записи» из чата) выбирает запись после загрузки списка, если её не выбрали сами (нет её —
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
-import { api, hooks, me } from './api.js';
+import { api, hooks, me, toLogin } from './api.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
@@ -429,7 +429,7 @@ function build(view, ctx) {
         await select(answer.id);
         return;
       }
-      if (xhr.status === 401) location.href = '/login';
+      if (xhr.status === 401) toLogin();
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания

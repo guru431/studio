@@ -50,6 +50,7 @@ import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
+import { lazy } from './stale.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
 
 const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
@@ -635,7 +636,7 @@ async function chat(mine, p, id, agent, section, status) {
     if (mine !== gen) return;
     [name, row, { chatView }] = await Promise.all([projectName(p),
       cached || listing.then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null),
-      import('./code-chat.js')]);
+      lazy(() => import('./code-chat.js'), 'Чат не загрузился')]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -681,7 +682,8 @@ async function files(mine, p, path, status) {
   let name, agent;
   let filesView;
   try {
-    [name, agent, { filesView }] = await Promise.all([projectName(p), agentOf(p.aid), import('./code-files.js')]);
+    [name, agent, { filesView }] = await Promise.all([projectName(p), agentOf(p.aid),
+      lazy(() => import('./code-files.js'), 'Файлы не загрузились')]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -792,15 +794,16 @@ async function runGitAction(p, prompt) {
 
 async function git(p) {
   try {
-    const { gitView } = await import('./code-files.js');
+    const { gitView } = await lazy(() => import('./code-files.js'), 'Не удалось загрузить Git');
     if (proj !== p || shownKey !== 'git') return;
     if (p.git) p.git.unmount();
     p.git = gitView(p.gitBox, { git: p.repo,
       failed: (err, box) => {
         if (proj === p) failed(err, p.aid, box);
       } });
-  } catch {
-    if (proj === p) failed({ message: 'Не удалось загрузить Git. Проверьте связь и обновите страницу.' }, p.aid, shownStatus);
+  } catch (err) {
+    if (proj === p) failed({ message: err?.code === 'updated' ? err.message
+      : 'Не удалось загрузить Git. Проверьте связь и обновите страницу.' }, p.aid, shownStatus);
   }
 }
 

@@ -24,10 +24,10 @@
 <body class="shell">
 <nav id="rail" aria-label="Разделы">
   <img class="logo" src="/static/icons/icon.svg" alt="">
-  <!-- вкладки разделов строит app.js из реестра sections-meta.js -->
+  <!-- вкладки разделов и значки кнопок (icons.js) ставит app.js из реестра sections-meta.js; значок «Стереть» PIN — lock.js -->
   <span class="spacer"></span>
-  <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></a>
-  <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M15.5 16.5l2 2 3.5-4"/></svg><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
+  <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск"></a>
+  <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе"><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
   <button id="avatar" type="button" aria-expanded="false" aria-controls="menu" aria-label="Профиль, тема и выход"></button>
 </nav>
 <div id="menu" class="menu" hidden>
@@ -71,7 +71,7 @@
       <button type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
       <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
       <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
-      <button id="lock-pin-back" type="button" aria-label="Стереть" title="Стереть"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7z"/><path d="M12 9l5 6M17 9l-5 6"/></svg></button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
+      <button id="lock-pin-back" type="button" aria-label="Стереть" title="Стереть"></button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
     </div>
   </div>
   <button id="lock-use-password" class="btn-link" type="button">Открыть паролем</button>

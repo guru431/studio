@@ -20,6 +20,8 @@
   На всех устройствах 423 `screen_locked` на защищённые разделы; для всего приложения — всё /api/*,
   кроме SCREEN_LOCK_PATHS. Не путать с паузой входа
   (LOCK_SEC, locked, 429 `locked`).
+- После входа — туда, откуда пришли: страница входа (login.js) шлёт фрагмент адреса полем `next`, сервер берёт
+  его только по `NEXT_RE` (известный экран, безопасные символы) и отвечает 303 на `/#/…`, иначе — на `/`.
 - Журнал — только адрес и итог: логин, пароль, cookie и токены туда не пишутся. Вход, неверный пароль
   известной учётки и выход — ещё и в журнал безопасности учётки (security_log).
 - Сессия помнит время входа и активности, вид устройства, браузер, ОС, доступную модель и последний IP
@@ -68,6 +70,14 @@ SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", 
                                "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
 #: Без cookie/CSRF: привязка проверяет логин/пароль, пакет обновления — действующий ключ устройства (agents.py).
 OPEN_API = frozenset({"/api/agent/enroll", "/api/agent/package"})
+#: Экраны страницы (app.js LOADERS; сверяет tests/test_sections_meta.py) — куда вернуться после входа.
+PAGE_SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code", "search", "settings",
+                 "admin")
+#: Поле `next` входа — фрагмент маршрута страницы `#/<экран>[/<id>…][?<параметры>]`: только ASCII-буквы, цифры и
+#: `_ - = & .`; ни схемы, ни хоста, ни `//`, `\`, `%` и управляющих символов. Иное — на главную.
+NEXT_RE = re.compile(r"#/(?:" + "|".join(PAGE_SECTIONS) + r")"
+                     r"(?:/[A-Za-z0-9_-]{1,64}){0,4}(?:\?[A-Za-z0-9_=&.-]{1,256})?")
+NEXT_MAX = 512
 
 STATIC = Path(__file__).resolve().parent / "static"
 log = logging.getLogger("studio")
@@ -312,6 +322,12 @@ def page(name: str, error: str = "") -> str:
             .replace("{{preloads}}", MODULE_PRELOADS))
 
 
+def login_target(value: str) -> str:
+    """Адрес 303 после входа: `/` и проверенный фрагмент (`NEXT_RE`), с которого пришли, или `/`. Всегда путь этого
+    сайта: открытого перенаправления нет, фрагмент на сервер больше не уходит и в журнал не пишется."""
+    return "/" + value if len(value) <= NEXT_MAX and NEXT_RE.fullmatch(value) else "/"
+
+
 def _login_page(error: str = "", status: int = 200) -> HTMLResponse:
     return HTMLResponse(page("login.html", error), status_code=status, headers={"Cache-Control": "no-store"})
 
@@ -364,7 +380,7 @@ async def login(request: Request):
         session_devices.remember(security.digest(value), request.headers.get("user-agent"), ip)
         security_log.record(uid, "login", digest=security.digest(value), ip=ip)
         log.info("вход с %s: успешно", ip)
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse(login_target((form.get("next") or [""])[0]), status_code=303)
         _set_cookie(response, value)
         return response
     log.warning("вход с %s: неверно", ip)

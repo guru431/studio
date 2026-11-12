@@ -33,6 +33,7 @@
  * GET /api/lock не пришёл при показе экрана — состояние перечитывают возвращение, таймер отметок и «Открыть»
  * (stale), а не подготовка passkey: иначе no_keys учётки с PIN увёл бы к паролю. */
 import { api, hooks, loadMe, me, useCsrf } from './api.js';
+import { icon } from './icons.js';
 import { cancelRecording } from './mic.js';
 import { plural, words } from './ui.js';
 
@@ -706,7 +707,9 @@ export function installLock() {
   });
   passwordForm.addEventListener('submit', openWithPassword);
   for (const key of pinPad.querySelectorAll('[data-digit]')) key.addEventListener('click', () => typeDigit(key.dataset.digit));
-  document.getElementById('lock-pin-back').addEventListener('click', eraseDigit);
+  const back = document.getElementById('lock-pin-back');
+  back.append(icon('backspace'));
+  back.addEventListener('click', eraseDigit);
   pinOk.addEventListener('click', openWithPin);
   document.addEventListener('keydown', onKey);
   for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel']) document.addEventListener(event, activity, { passive: true, capture: true });
