@@ -545,7 +545,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         : el('a', { class: 'btn code-agent-update', href: '/api/agent/download', download: 'studio-agent-setup.exe',
           title: `Скачать установщик Studio Agent${agent.latest_version ? ' ' + agent.latest_version : ''} для Windows`,
           'aria-label': `Скачать установщик агента · ${agent.name}` });
-      button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9"/></svg>';
+      button.append(icon('sync'));
       if (available) button.classList.add('has-update');
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
       const note = update && update.state !== 'complete'
@@ -554,7 +554,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
         title: 'Подключиться к рабочему столу', 'aria-label': `Подключиться к рабочему столу · ${agent.name}`,
         'aria-haspopup': 'dialog' });
-      remote.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2m9 4v3m-4 0h8M2 9h11m-4-4 4 4-4 4"/></svg>';
+      remote.append(icon('remote'));
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
       const seen = !agent.online && Number.isFinite(agent.last_seen)
         ? el('span', { class: 'code-agent-seen muted' }, lastSeenText(agent.last_seen)) : null;

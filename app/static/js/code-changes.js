@@ -1,4 +1,5 @@
 /* Правки последнего ответа помощника. Только предоставленные CLI данные, без чтения диска. */
+import { icon } from './icons.js';
 import { el, openDialog } from './ui.js';
 import { changeView } from './code-diff.js';
 
@@ -6,7 +7,7 @@ export function changesView(host, { openFile }) {
   const count = el('span', { class: 'code-changed-count', 'aria-hidden': 'true' }, '0');
   const button = el('button', { type: 'button', id: 'code-changed-files', class: 'icon-btn code-changed-files',
     'aria-haspopup': 'dialog', 'aria-expanded': 'false' });
-  button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8m-8 4h5"/></svg>';
+  button.append(icon('changes'));
   button.append(count);
   let state = { files: [], changes: [] }, serial = '', dialog = null, selected = null;
   const body = el('div', { class: 'code-changed-body' });

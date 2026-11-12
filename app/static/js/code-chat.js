@@ -196,9 +196,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-label': 'Следующее моё сообщение', title: 'Следующее моё сообщение', disabled: true });
   const allSteps = el('button', { type: 'button', id: 'code-toggle-steps', class: 'icon-btn',
     'aria-label': 'Развернуть все команды', title: 'Развернуть все команды', 'aria-pressed': 'false', disabled: true });
-  previous.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>';
-  next.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-6-6 6 6 6-6"/></svg>';
-  allSteps.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4m-8 6 4 4 4-4"/></svg>';
+  previous.append(icon('upward'));
+  next.append(icon('downward'));
+  allSteps.append(icon('expand'));
   const navigation = el('nav', { class: 'code-message-nav', 'aria-label': 'Навигация по чату', hidden: true }, previous, allSteps, next);
   let messageTarget = null;
   let messageScrollTop = 0;
@@ -253,8 +253,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     'aria-label': 'Отправить', title: 'Отправить' }, el('span', { class: 'code-go-label' }, 'Отправить'));
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go composer-stop', hidden: true,
     'aria-label': 'Остановить', title: 'Остановить' }, el('span', { class: 'code-go-label' }, 'Остановить'));
-  send.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>');
-  stop.insertAdjacentHTML('afterbegin', '<svg class="ico code-go-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>');
+  send.prepend(icon('send', 'ico code-go-icon'));
+  stop.prepend(icon('stop', 'ico code-go-icon'));
   const activityText = el('span', {}, 'Нет активной задачи');
   const activity = el('div', { id: 'code-activity', class: 'code-activity', role: 'status',
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
@@ -262,7 +262,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const activeTools = new Map();
   const reloadButton = el('button', { type: 'button', id: 'code-reload', class: 'btn btn-sm code-reload', hidden: true,
     title: 'Загрузить чат заново', 'aria-label': 'Повторить' }, el('span', { class: 'code-reload-label' }, 'Повторить'));
-  reloadButton.insertAdjacentHTML('afterbegin', '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>');
+  reloadButton.prepend(icon('refresh'));
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
   const sharing = shareMenu(actions, { id: 'code-share-chat', content: scroller, request: api, failed: (err) => {
@@ -293,7 +293,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': 'Добавить вложение',
     title: agent?.attachments ? 'Прикрепить файлы любого типа · до 8 файлов, 5 МиБ на файл, 8 МиБ всего'
       : 'Изображения · обновите мост для файлов любого типа', disabled: !agent?.images && !agent?.attachments });
-  attach.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 6.5-6.5a3 3 0 0 1 4.2 4.2L10 19.4a5 5 0 0 1-7.1-7.1L12 3.2m-6.2 11 8.7-8.7"/></svg>';
+  attach.append(icon('clip'));
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
   const sessionText = el('p');
   const waitSession = el('button', { type: 'button', id: 'code-wait-session', class: 'btn btn-sm' }, 'Дождаться завершения');
@@ -359,7 +359,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   if (agent?.chat_fork && engine !== 'opencode') {
     const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
       'aria-label': 'Создать ветку чата', title: 'Создать ветку чата · копия переписки, файлы в текущем состоянии' });
-    copy.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10m12-10c0 6-12 3-12 10"/></svg>';
+    copy.append(icon('fork'));
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }

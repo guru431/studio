@@ -73,8 +73,10 @@
   Озвучка, Расшифровка · Сканы, Перевод · Агенты (`.tab.group-start::before` — разделитель). Сервер: `sections.NAMES`
   (`speech` — «Озвучка»; адрес `#/speech` и id прежние), `push.TITLE` = «Агенты»; сверка — `tests/test_sections_meta.py`.
   Названия — [глоссарий](../glossary.md).
-- `icons.js` (`icon`, `svg`, `iconButton`) — **единственный набор SVG**: локальные таблицы `ICONS` запрещены тестом;
-  текстовые символы-кнопки (•••, ⋯, ↻, ⓘ, ×, ⏻, ★, ⌫ PIN) заменены SVG. Значок «Агентов» — терминал везде.
+- `icons.js` (`icon`, `svg`, `iconButton`) — **единственный набор SVG**: локальные таблицы `ICONS` и разметка
+  `<svg`/`viewBox`/фигур в других модулях и HTML-страницах запрещены тестом (`test_sections_meta.py`); значки кнопок
+  `index.html` (поиск, «В работе», «Стереть» PIN) ставят `app.js::buildRail` и `lock.js::installLock`. Текстовые
+  символы-кнопки (•••, ⋯, ↻, ⓘ, ×, ⏻, ★, ⌫ PIN) заменены SVG. Значок «Агентов» — терминал везде.
 - `menu.js` — общий компонент меню: `popupMenu` (popover у кнопки, размещение в `visualViewport` с учётом zoom;
   роли `menu`/`menuitem`/`menuitemradio` с `aria-checked` и ✓; у кнопки `aria-haspopup`/`aria-expanded`/`aria-controls`;
   ↑↓, Home/End, Tab, Enter/пробел; Escape закрывает только верхнее меню, не доходит до обработчиков раздела и

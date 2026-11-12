@@ -1,5 +1,6 @@
 /* История штатных дочерних агентов. Все ответы остаются в памяти открытой страницы. */
 import { api } from './api.js';
+import { icon } from './icons.js';
 import { el, words } from './ui.js';
 import { renderMarkdown } from './markdown.js';
 
@@ -9,7 +10,7 @@ const HISTORY_POLL_MS = 2000;
 export function subagentView(host, { endpoint, supported = true }) {
   const button = el('button', { type: 'button', id: 'code-subagents', class: 'icon-btn',
     'aria-label': 'Подзадачи', title: 'Подзадачи' });
-  button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/></svg>';
+  button.append(icon('subagents'));
   const count = el('span', { class: 'code-subagents-count', 'aria-hidden': 'true' }, '—');
   button.append(count);
   if (!supported) {
