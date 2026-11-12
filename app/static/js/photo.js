@@ -158,6 +158,7 @@ function build(view, ctx) {
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
+    quiet: ['elapsed', 'chain'],          // время идущей — таймер tick; цепочка — не в карточке
     load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши картинки.' : 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
     head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),

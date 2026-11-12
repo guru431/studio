@@ -22,7 +22,7 @@ import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
-import { createPicker, dayTitle } from './feed.js';
+import { createPicker, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown } from './markdown.js';
 import { el, openDialog, plural, words } from './ui.js';
@@ -98,38 +98,17 @@ function build(view, ctx) {
   }
 
   /* список */
+  const paintRows = pickerList(list, { cls: 'ocr-item', moreId: 'ocr-more', empty: 'Здесь появятся ваши документы',
+    name: (item) => item.name,
+    state: (item) => [`${item.pages} стр.`, item.detail].filter(Boolean).join(' · '),
+    pick(id) {
+      panel(false);
+      picked = true;
+      select(id);
+    } });
+
   function paintList() {
-    const { items, current } = docs;
-    if (!items.length) {
-      list.replaceChildren(el('p', { class: 'muted small' }, 'Здесь появятся ваши документы'));
-      return;
-    }
-    const nodes = [];
-    let last = '';
-    for (const item of items) {
-      const label = dayTitle(item.created);
-      if (label !== last) {
-        nodes.push(el('p', { class: 'tr-group' }, label));
-        last = label;
-      }
-      const link = el('button', { type: 'button', class: 'tr-item ocr-item', 'data-id': item.id, 'data-state': item.state,
-        'aria-current': current && current.id === item.id ? 'true' : null },
-      el('span', { class: 'tr-name' }, item.name),
-      el('span', { class: 'tr-state' }, [`${item.pages} стр.`, item.detail].filter(Boolean).join(' · ')));
-      link.addEventListener('click', () => {
-        panel(false);
-        picked = true;
-        select(item.id);
-      });
-      nodes.push(link);
-    }
-    if (!docs.done) {
-      const next = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'ocr-more', disabled: docs.paging },
-        docs.paging ? 'Загружаю…' : 'Показать ещё');
-      next.addEventListener('click', docs.more);
-      nodes.push(next);
-    }
-    list.replaceChildren(...nodes);
+    paintRows(docs);
   }
 
   /* выбранный */

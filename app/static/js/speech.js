@@ -13,7 +13,7 @@
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { NAMES } from './sections-meta.js';
-import { createPicker, dayTitle } from './feed.js';
+import { createPicker, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { modelLabel } from './settings.js';
@@ -117,38 +117,17 @@ function build(view, ctx) {
   }
 
   /* список и выбранная */
+  const paintRows = pickerList(list, { cls: 'sp-item', moreId: 'sp-more', empty: 'Здесь появятся ваши озвучки',
+    name: (item) => item.text.slice(0, 80),
+    state: (item) => (item.state === 'done' ? clock(item.duration)
+      : RUNNING.has(item.state) ? item.detail : item.state === 'cancelled' ? 'отменено' : 'ошибка'),
+    pick(id) {
+      panel(false);
+      select(id);
+    } });
+
   function paintList() {
-    const { items, current } = records;
-    if (!items.length) {
-      list.replaceChildren(el('p', { class: 'muted small' }, 'Здесь появятся ваши озвучки'));
-      return;
-    }
-    const nodes = [];
-    let last = '';
-    for (const item of items) {
-      const label = dayTitle(item.created);
-      if (label !== last) {
-        nodes.push(el('p', { class: 'tr-group' }, label));
-        last = label;
-      }
-      const state = item.state === 'done' ? clock(item.duration)
-        : RUNNING.has(item.state) ? item.detail : item.state === 'cancelled' ? 'отменено' : 'ошибка';
-      const link = el('button', { type: 'button', class: 'tr-item sp-item', 'data-id': item.id, 'data-state': item.state,
-        'aria-current': current && current.id === item.id ? 'true' : null },
-      el('span', { class: 'tr-name' }, item.text.slice(0, 80)), el('span', { class: 'tr-state' }, state));
-      link.addEventListener('click', () => {
-        panel(false);
-        select(item.id);
-      });
-      nodes.push(link);
-    }
-    if (!records.done) {
-      const next = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'sp-more', disabled: records.paging },
-        records.paging ? 'Загружаю…' : 'Показать ещё');
-      next.addEventListener('click', records.more);
-      nodes.push(next);
-    }
-    list.replaceChildren(...nodes);
+    paintRows(records);
   }
 
   function confirmDelete(item) {
