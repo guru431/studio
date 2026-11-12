@@ -51,3 +51,20 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   box.addEventListener('click', (event) => { if (event.target === box) field.focus(); });   // пустое место рамки
   return { box, error };
 }
+
+/** Сенсорный экран без мыши: на экранной клавиатуре нет Shift+Enter. */
+const TOUCH = '(pointer: coarse) and (hover: none)';
+
+/** Enter основного многострочного поля (Чат, Агенты, Фото, Видео): на сенсорном экране — перенос строки, отправка —
+ * кнопкой; иначе Enter — `send()`, Shift+Enter — перенос. `enterkeyhint` («Ввод» или «Отправить» на клавише)
+ * сверяется при фокусе: планшет мог получить мышь. Однострочные поля (поиск) свой Enter оставляют. */
+export function enterSends(field, send) {
+  const paint = () => field.setAttribute('enterkeyhint', matchMedia(TOUCH).matches ? 'enter' : 'send');
+  paint();
+  field.addEventListener('focus', paint);
+  field.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || matchMedia(TOUCH).matches) return;
+    event.preventDefault();
+    send();
+  });
+}

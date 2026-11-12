@@ -34,7 +34,7 @@ import { api as request, me, unknownOutcome } from './api.js';
 import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { codePicker } from './code-picker.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
 import { el, focusDesktop, words } from './ui.js';
@@ -1802,12 +1802,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (text.value) drafts.set(draftKey, text.value);
     else drafts.delete(draftKey);
   });
-  text.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(text, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit();

@@ -21,7 +21,7 @@ import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { chainList } from './chain.js';
 import { createFeed, pageQuery } from './feed.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
@@ -638,12 +638,7 @@ function build(view, ctx) {
   });
   prompt.addEventListener('input', autosize);
   photoPrompt.addEventListener('input', paintPromptHint);
-  prompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(prompt, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit();

@@ -36,7 +36,7 @@ import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
 import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
 import { createFeed, pageQuery } from './feed.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
 import { kick } from './jobs.js';
 import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
@@ -922,12 +922,7 @@ function build(view, ctx) {
     if (f) describe({ file: f });
   });
   prompt.addEventListener('input', autosize);
-  prompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(prompt, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!go.disabled) submit(true);
