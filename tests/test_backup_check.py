@@ -348,3 +348,61 @@ def test_admin_backup_check_is_only_for_admins(studio, check):
     make_user(studio, "bob"); signin(studio, "bob")
     assert studio.c.post("/api/admin/backup-check").status_code == 403
     assert studio.c.get("/api/admin/backup-check").status_code == 403
+
+
+# ---- ночная проверка: итог в базе, панель, уведомление ---------------------------------------
+
+def test_verify_command_stores_a_short_result_only_for_the_newest_copy(base, env, monkeypatch):
+    """Итог жил только в памяти службы: о копии, которая не поднимается, владелец узнавал при восстановлении."""
+    add_rows(base)
+    monkeypatch.setattr(clock, "NOW", lambda: 1_792_454_400.0)
+    assert manage.main(["verify-backup"]) == 2                   # копий нет — тоже провал, и он записан
+    assert manage.last_check(base) == {"ok": False, "problems": 1, "at": 1_792_454_400.0, "backup_at": None,
+                                       "notified": False}
+    copy = backup_of(base, env, monkeypatch)
+    assert manage.main(["verify-backup"]) == 0
+    stored = manage.last_check(base)
+    assert stored == {"ok": True, "problems": 0, "at": 1_792_454_400.0, "backup_at": copy.stat().st_mtime,
+                      "notified": True}
+    assert manage.main(["verify-backup", str(copy)]) == 0          # явный путь — не «последняя проверка»
+    assert manage.last_check(base) == stored
+    raw = base.execute("SELECT value FROM settings WHERE key = ?", (manage.CHECK_KEY,)).fetchone()[0]
+    assert "secret-login" not in raw and "studio-2026" not in raw and "backup" not in raw.replace("backup_at", "")
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    calls = []
+    monkeypatch.setattr(admin.push, "notify_later",
+                        lambda uid, body, href, tag, *, title: calls.append((uid, body, href, title)))
+    return calls
+
+
+def test_failed_nightly_check_is_pushed_to_active_admins_once(studio, sent):
+    owner = make_user(studio, "owner", is_admin=True)
+    gone = make_user(studio, "gone", is_admin=True)
+    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (gone,))
+    make_user(studio, "bob")
+    manage.record_check(state.DB, {"ok": False, "problems": ["a", "b"], "at": None})
+    assert admin.notify_failed_check() == 1
+    assert sent == [(owner, admin.CHECK_NOTICE.format(2), "admin", "Студия")]
+    assert admin.notify_failed_check() == 0 and len(sent) == 1        # один раз
+    manage.record_check(state.DB, {"ok": True, "problems": [], "at": None})
+    assert admin.notify_failed_check() == 0
+    manage.record_check(state.DB, {"ok": False, "problems": ["a"], "at": None}, notified=True)   # из панели
+    assert admin.notify_failed_check() == 0 and len(sent) == 1
+
+
+def test_admin_storage_shows_the_last_check(studio, check, monkeypatch):
+    make_user(studio, "owner", is_admin=True); signin(studio, "owner")
+    assert studio.c.get("/api/admin/storage").json()["check"] is None
+    monkeypatch.setattr(manage, "verify_backup", lambda path=None: {"ok": False, "problems": ["x"], "at": 5.0})
+    studio.c.post("/api/admin/backup-check")
+    wait_done(studio)
+    for _ in range(200):                                  # запись — колбэком на цикле событий службы
+        found = studio.c.get("/api/admin/storage").json()["check"]
+        if found:
+            break
+        time.sleep(0.01)
+    assert found == {"ok": False, "problems": 1, "at": clock.NOW(), "backup_at": 5.0, "age": 0}
+    assert manage.last_check(state.DB)["notified"] is True             # из панели — не уведомлять

@@ -36,7 +36,8 @@
   `STUDIO_DATA_KEY`) и необязательная `STUDIO_CLEANER_CA=/путь` — сертификат Cleaner, docs/cleaner-integration.md): его читает systemd, а не служба. Смена ключа делает прежние токены
   подключений нерасшифровываемыми — их вводят заново.
 - Копия базы — `studio-backup.timer` (04:30, `Persistent=true`) → `studio-backup.service` →
-  `manage.py backup`: `sqlite3` backup во временный файл рядом с базой, затем на шару
+  `manage.py backup`, после удачной копии — `manage.py verify-backup` (итог в `settings`, провал — push
+  администраторам; [deploy-docker](deploy-docker.md#данные-и-запуск-после-перезагрузки)): `sqlite3` backup во временный файл рядом с базой, затем на шару
   `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних успешных: старые убирает
   только успешная новая копия (`BACKUP_KEEP` — число копий, а не дней); юнит ограничен
   `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт, пока
