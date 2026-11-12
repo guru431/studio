@@ -173,7 +173,8 @@ def test_avatar_menu_works_from_the_keyboard(browser, live, width):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["expanded"] == "true" and v["collapsed"] == v["tabbedOut"] == "false"
-    assert v["roles"] == ["status"], v["roles"]
+    # group — шрифт и масштаб устройства (appearance.deviceSizeControls), но не menu/menuitem
+    assert v["roles"] == ["status", "group"], v["roles"]
     assert v["first"] == "menu-theme-light" and v["moved"] == "menu-theme-dark" and v["back"] == "avatar"
     assert not problems(r), problems(r)
 
@@ -976,7 +977,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
                                               "translate", "code", "agents", "security")]
     assert v["labels"] == ["Агенты: чаты", "Агенты: подключения", "Журнал безопасности"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
@@ -5058,7 +5059,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
     assert v["chatOld"] == [False, ["привет", "Здравствуйте!"]]
     assert v["video"] == [False, "#/settings/video"] and v["photo"] == [False, "#/settings/photo"] and not v["overflow"]
     assert "Изменить" not in v["acts"] and "Повторить с тем же seed" not in v["acts"]
-    assert {"Скачать", "Удалить", "Оживить"} <= set(v["acts"])
+    assert {"Скачать", "Удалить", "Создать видео"} <= set(v["acts"])
     assert v["transcribe"] == [False, "#/settings/transcribe", "Выберите запись в списке."]
     assert v["export"] == [200, True] and v["speech"] == [False, "#/settings/speech"]
     assert [re.sub(r"[0-9a-f]{32}", "<id>", c) for c in v["clicked"]] == [
@@ -5313,7 +5314,7 @@ def test_pin_settings_save_sections_and_both_timers(browser, live, width, tmp_pa
     assert not r.get("failed"), r
     v = r["values"]
     # порядок — как на рельсе (реестр разделов `sections-meta.js`)
-    assert v["policy"] == [["chat", "code", "photo"], 600] and v["checked"] == [True, True, True]
+    assert v["policy"] == [["chat", "photo", "code"], 600] and v["checked"] == [True, True, True]
     assert v["timer"] == "10" and v["computer"] == 7200 and v["fit"] is True and v["passwordKept"] is True
     assert not problems(r), problems(r)
 
@@ -7453,7 +7454,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["tabs"] == ["chat", "code", "photo", "video", "transcribe", "speech", "ocr", "translate"]
+    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
     assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
