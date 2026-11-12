@@ -1,20 +1,23 @@
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
- * createFeed(el, { load, render, key, empty, head, onChange, dayTools }): el — прокручиваемый
+ * createFeed(el, { load, render, key, quiet, empty, head, onChange, dayTools }): el — прокручиваемый
  * контейнер ленты; load(last) — Promise страницы записей новее-сверху, следующая — после last,
  * последней записи ленты (запрос — pageQuery(last)), первая — last undefined, пустая страница — конец;
- * render(item) — узел карточки; key(item) — id записи; empty — текст пустой ленты, head — узел над
+ * render(item) — узел карточки; key(item) — id записи; quiet — поля, смена которых карточку не меняет
+ * (их ведёт свой таймер раздела): update с теми же прочими полями узел не заменяет (опрос не сбивает
+ * фокус и нажатие), без quiet — заменяет всегда; empty — текст пустой ленты, head — узел над
  * днями; onChange() — после каждой смены показанных записей (страница, prepend, update, remove,
  * redraw; reload — когда легла его первая страница); dayTools(день) — узел в начало заголовка дня
- * (выделение, select.js). Необязательны все пять. Записи несут `created` (секунды unix) и `id`.
+ * (выделение, select.js). Необязательны все шесть. Записи несут `created` (секунды unix) и `id`.
  * Ответ — { prepend(item), update(item), remove(id), reload(), redraw(), items() }; reload() — Promise
  * первой страницы, redraw() — карточки заново тем же render (сменился вид ленты), записи и прокрутка —
  * на месте; items() — копия записей в порядке ленты.
  * Состояние — el.dataset.feed: loading | ready | end | error (по нему ждут тесты).
  *
  * pageQuery и withFirstPage — те же страницы для списков «Расшифровки» и «Озвучки», createPicker —
- * их список с выбором; dayTitle — и подпись дня этих списков и «Сканов» (год — если не текущий). */
+ * их список с выбором, pickerList — его отрисовка на месте; dayTitle — и подпись дня этих списков и «Сканов»
+ * (год — если не текущий). */
 import { api } from './api.js';
 import { calendarDay, dateOnly } from './time.js';
 import { button, el as make, words } from './ui.js';
@@ -150,7 +153,72 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail, po
   return s;
 }
 
-export function createFeed(el, { load, render, key, empty = '', head = null, onChange = () => {}, dayTools = null }) {
+/** Список createPicker на месте («Расшифровка», «Озвучка», «Сканы»): строка записи — кнопка .tr-item cls,
+ * один и тот же узел, пока запись в списке, — меняются только её имя, слова состояния, data-state и
+ * aria-current у выбранной; подписи дней и «Показать ещё» (id moreId) — тоже те же узлы; новые — на своё
+ * место, пропавшие — прочь (опрос не сбивает фокус и нажатие). name(item), state(item) — тексты строки,
+ * pick(id) — нажатие, empty — текст пустого списка. Ответ — paint(picker). */
+export function pickerList(list, { cls, name, state, pick, empty, moreId }) {
+  const rows = new Map();              // id → { node, title, words }
+  const days = new Map();              // подпись дня → узел
+  const none = make('p', { class: 'muted small' }, empty);
+  const more = make('button', { type: 'button', class: 'btn btn-sm tr-more', id: moreId });
+  let picker = null;
+  more.addEventListener('click', () => picker.more());
+
+  function text(node, value) {
+    const shown = value ?? '';
+    if (node.textContent !== shown) node.textContent = shown;
+  }
+
+  return function paint(p) {
+    picker = p;
+    const { items, current } = p;
+    const nodes = [];
+    const seen = new Set();
+    let last = '';
+    for (const item of items) {
+      const label = dayTitle(item.created);
+      if (label !== last) {
+        if (!days.has(label)) days.set(label, make('p', { class: 'tr-group' }, label));
+        nodes.push(days.get(label));
+        last = label;
+      }
+      const { id } = item;
+      let r = rows.get(id);
+      if (!r) {
+        r = { title: make('span', { class: 'tr-name' }), words: make('span', { class: 'tr-state' }) };
+        r.node = make('button', { type: 'button', class: `tr-item ${cls}`.trim(), 'data-id': id }, r.title, r.words);
+        r.node.addEventListener('click', () => pick(id));
+        rows.set(id, r);
+      }
+      seen.add(id);
+      text(r.title, name(item));
+      text(r.words, state(item));
+      r.node.dataset.state = item.state;
+      if (current && current.id === id) r.node.setAttribute('aria-current', 'true');
+      else r.node.removeAttribute('aria-current');
+      nodes.push(r.node);
+    }
+    for (const id of [...rows.keys()]) if (!seen.has(id)) rows.delete(id);
+    if (!items.length) nodes.push(none);
+    else if (!p.done) {
+      more.disabled = p.paging;
+      text(more, p.paging ? 'Загружаю…' : 'Показать ещё');
+      nodes.push(more);
+    }
+    const keep = new Set(nodes);
+    for (const child of [...list.children]) if (!keep.has(child)) child.remove();
+    let at = list.firstChild;
+    for (const node of nodes) {
+      if (node === at) at = at.nextSibling;
+      else list.insertBefore(node, at);
+    }
+  };
+}
+
+export function createFeed(el, { load, render, key, quiet = null, empty = '', head = null, onChange = () => {},
+  dayTools = null }) {
   const items = [];              // записи по порядку ленты
   const nodes = new Map();       // id → узел карточки
   const groups = new Map();      // день → { box, grid }
@@ -236,15 +304,24 @@ export function createFeed(el, { load, render, key, empty = '', head = null, onC
     onChange();
   }
 
+  /** Запись без полей quiet и created: по ней update решает, нужна ли новая карточка. */
+  function look(item) {
+    const shown = { ...item, created: undefined };
+    for (const k of quiet) shown[k] = undefined;
+    return JSON.stringify(shown);
+  }
+
   function update(item) {
     const id = key(item);
     const old = nodes.get(id);
     if (!old) return;
+    const i = items.findIndex((x) => key(x) === id);
+    const same = quiet && i >= 0 && look(items[i]) === look(item);
+    if (i >= 0) items[i] = { ...item, created: items[i].created };
+    if (same) return;                 // карточка та же: фокус и нажатие на ней не теряются
     const node = render(item);
     old.replaceWith(node);
     nodes.set(id, node);
-    const i = items.findIndex((x) => key(x) === id);
-    if (i >= 0) items[i] = { ...item, created: items[i].created };
     onChange();
   }
 

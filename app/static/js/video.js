@@ -125,6 +125,7 @@ function build(view, ctx) {
   const feed = createFeed(feedBox, {
     key: (item) => item.id,
     render: card,
+    quiet: ['elapsed', 'progress', 'detail', 'chain'],      // ход, слова и время — таймер tick; цепочка — не в карточке
     load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
     empty: ctx.hint ? 'Здесь появятся ваши ролики.' : 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
     head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
@@ -518,10 +519,24 @@ function build(view, ctx) {
     modelPick.hidden = options.length < 2;
   }, () => {});
 
+  // ход, слова и время идущего — на месте: опрос карточку с ними не пересоздаёт (quiet ленты)
   const tick = setInterval(() => {
     for (const [id, entry] of running) {
-      const time = feedBox.querySelector(`.video-card[data-id="${id}"] .card-time`);
-      if (time) time.textContent = busyText(entry);
+      const card = feedBox.querySelector(`.video-card[data-id="${id}"]`);
+      if (!card) continue;
+      const { item } = entry;
+      const time = card.querySelector('.card-time');
+      if (time) {
+        time.textContent = busyText(entry);
+        if (time.closest('.cell-when')) time.title = cap(item.detail);           // вид «Таблица»
+      }
+      const state = card.querySelector('.video-state');
+      if (state) state.textContent = cap(item.detail) || 'В очереди';
+      const bar = card.querySelector('.video-bar');
+      if (bar) {
+        bar.setAttribute('aria-valuenow', String(item.progress));
+        bar.firstElementChild.style.width = `${item.progress}%`;
+      }
     }
   }, 1000);
 
