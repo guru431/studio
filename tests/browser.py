@@ -100,6 +100,9 @@ def launch(profile: Path):
              "--no-proxy-server", "--no-first-run", "--disable-extensions",
              "--disable-background-networking", "--disable-component-update", "--disable-sync",
              "--enable-logging=stderr",
+             # Под администратором Edge перезапускает себя без прав через чужой процесс и выходит с кодом 0:
+             # порт не дождаться, а terminate() не закрыл бы настоящий браузер.
+             "--do-not-de-elevate",
              # Порт выбирает браузер и записывает в профиль: занятым он не окажется.
              "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=err)
