@@ -261,7 +261,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const reloadButton = el('button', { type: 'button', id: 'code-reload', class: 'btn btn-sm code-reload', hidden: true,
-    title: 'Загрузить чат заново', 'aria-label': 'Повторить' }, el('span', { class: 'code-reload-label' }, 'Повторить'));
+    'data-keep': '', title: 'Загрузить чат заново', 'aria-label': 'Повторить' }, el('span', { class: 'code-reload-label' }, 'Повторить'));
   reloadButton.insertAdjacentHTML('afterbegin', '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>');
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
