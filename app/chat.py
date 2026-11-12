@@ -368,6 +368,21 @@ def _attachment_out(a, scans: dict | None = None, sources: set | None = None, re
     return out
 
 
+def _sane(text: str) -> str:
+    """Текст модели без одиночных суррогатов UTF-16 (`\\ud800` в JSON потока): SQLite такой не кодирует, и ответ
+    навсегда остался бы `streaming`. Пара суррогатов — свой символ, одиночный — U+FFFD."""
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def _sane_strings(obj: dict) -> dict:
+    """`object_hook` разбора куска потока: строки объекта — `_sane`."""
+    return {k: _sane(v) if isinstance(v, str) else v for k, v in obj.items()}
+
+
 def _finish(message_id: str, chat_id: str, content: str, status: str, reasoning: "str | None" = None,
             reasoning_sec: "float | None" = None, error: "str | None" = None) -> bool:
     """Итог идущего ответа (`error` — причина отказа словами); False — он уже сохранён (или удалён)."""
@@ -809,7 +824,7 @@ class StreamTask:
                         ending = ending or "stop"
                         break
                     try:
-                        chunk = json.loads(data)
+                        chunk = json.loads(data, object_hook=_sane_strings)
                     except ValueError:
                         continue
                     if not isinstance(chunk, dict):
@@ -918,6 +933,7 @@ class StreamTask:
             try:
                 async with asyncio.timeout(STREAM_TOTAL_SEC):
                     async for kind, data in cleaner.events(self.cleaner_preview):
+                        data = _sane_strings(data)
                         if isinstance(data.get("text"), str):
                             self.content = data["text"]
                             if len(self.content) > ANSWER_MAX:
@@ -1049,10 +1065,16 @@ class StreamTask:
             pings.cancel()
         self.card_wait = None
         thought = self.thought_out()
-        _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status, *thought,
-                error=error if status == "error" else None)
-        if STREAMS.get(self.message_id) is self:
-            del STREAMS[self.message_id]
+        try:
+            _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
+                    *thought, error=error if status == "error" else None)
+        except Exception as e:                       # noqa: BLE001 — ответ не должен остаться в STREAMS
+            status, error = "error", f"сбой службы: {type(e).__name__}"
+            log.warning("чат %s: ответ %s — итог не записан (%s)", self.chat_id[:8], self.message_id[:8],
+                        type(e).__name__)
+        finally:
+            if STREAMS.get(self.message_id) is self:
+                del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
         self.put(*(("error", error) if error is not None else ("done", _ended_with(status, thought[1]))))
 
@@ -1072,10 +1094,14 @@ async def _cancel(streams: list[StreamTask]) -> None:
     for st in streams:
         status = "error" if st.shutdown else "stopped"
         thought = st.thought_out()
-        if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status, *thought):
-            st.put("done", _ended_with(status, thought[1]))
-        if STREAMS.get(st.message_id) is st:
-            del STREAMS[st.message_id]
+        try:                                         # сбой одного итога не оставляет прочие (и lifespan) без своих
+            if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status, *thought):
+                st.put("done", _ended_with(status, thought[1]))
+        except Exception as e:                       # noqa: BLE001
+            log.warning("чат %s: ответ %s — итог не записан (%s)", st.chat_id[:8], st.message_id[:8], type(e).__name__)
+        finally:
+            if STREAMS.get(st.message_id) is st:
+                del STREAMS[st.message_id]
 
 
 def _stop_unstarted(chat_ids: set[str]) -> None:
