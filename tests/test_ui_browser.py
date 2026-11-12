@@ -5054,7 +5054,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
     assert v["chatOld"] == [False, ["привет", "Здравствуйте!"]]
     assert v["video"] == [False, "#/settings/video"] and v["photo"] == [False, "#/settings/photo"] and not v["overflow"]
     assert "Изменить" not in v["acts"] and "Повторить с тем же seed" not in v["acts"]
-    assert {"Скачать", "Удалить", "Оживить"} <= set(v["acts"])
+    assert {"Скачать", "Удалить", "Создать видео"} <= set(v["acts"])
     assert v["transcribe"] == [False, "#/settings/transcribe", "Выберите запись в списке."]
     assert v["export"] == [200, True] and v["speech"] == [False, "#/settings/speech"]
     assert [re.sub(r"[0-9a-f]{32}", "<id>", c) for c in v["clicked"]] == [
