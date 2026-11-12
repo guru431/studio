@@ -35,6 +35,7 @@ INSTALL = (DEPLOY / "install.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
 INSTALL_DOCKER = (DEPLOY / "install-docker.sh").read_text(encoding="utf-8")
 DOCKERFILE = (DEPLOY / "docker" / "Dockerfile").read_text(encoding="utf-8")
+NGINX = (DEPLOY / "docker" / "nginx.conf").read_text(encoding="utf-8")
 SOCK = "/run/studio/web.sock"
 EXEC_START = ("ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app "
               f"--uds {SOCK} --no-access-log --no-proxy-headers")
@@ -249,6 +250,41 @@ def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
     exec_start = directives(UNIT, "ExecStart")[0]
     assert int(re.search(r"--ws-max-size (\d+)", exec_start).group(1)) == bridge.FRAME_MAX + 1024
     assert "--ws-ping-interval 20 --ws-ping-timeout 20" in exec_start
+
+
+def _uvicorn_flags(argv: list) -> list:
+    """Флаги uvicorn без интерпретатора и путей (каталог приложения у юнита и образа разный)."""
+    argv = argv[argv.index("uvicorn") + 1:]
+    assert argv[0] == "main:app" and argv[1:3][0] == "--app-dir"
+    return argv[3:]
+
+
+def test_docker_command_runs_uvicorn_with_the_unit_flags():
+    """Пределы `--ws-max-size`, `--timeout-graceful-shutdown` и пинги сверялись только у юнита systemd: образ
+    мог разойтись с ним молча."""
+    import json
+    cmd = json.loads(re.search(r"^CMD (\[.*\])$", DOCKERFILE, re.M).group(1))
+    unit = shlex.split(directives(UNIT, "ExecStart")[0])
+    assert cmd[:3] == ["python", "-m", "uvicorn"] and unit[1:3] == ["-m", "uvicorn"]
+    assert _uvicorn_flags(cmd) == _uvicorn_flags(unit)          # и сокет: nginx ходит в /run/studio/web.sock
+    assert "upstream studio { server unix:/run/studio/web.sock; }" in NGINX
+
+
+def _nginx(name: str) -> str:
+    values = re.findall(rf"^\s*{name} (\S+);", uncommented(NGINX), re.M)
+    assert len(values) == 1, (name, values)
+    return values[0]
+
+
+def test_nginx_passes_every_body_and_wait_that_apache_passes():
+    """nginx контейнера стоит за Apache: меньший предел тела или ожидания отбивал бы запрос раньше Apache."""
+    body = _nginx("client_max_body_size")
+    size = int(body[:-1]) * {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[body[-1].lower()]
+    assert size >= max(int(n) for n in re.findall(r"LimitRequestBody (\d+)", uncommented(VHOST)))
+    longest = max(int(t) for t in re.findall(r"^\s*ProxyPass \S+ \S+ (?:\S+=\S+ )*timeout=(\d+)", uncommented(VHOST), re.M))
+    for name in ("proxy_read_timeout", "proxy_send_timeout"):
+        value = _nginx(name)
+        assert value.endswith("s") and int(value[:-1]) >= longest, (name, value, longest)
 
 
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
