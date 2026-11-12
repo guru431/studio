@@ -180,6 +180,71 @@ class Turn(ChatSettings):
     images: list[TurnImage] = Field(default_factory=list, max_length=4)
     attachments: list[TurnAttachment] = Field(default_factory=list, max_length=8)
     mode: Literal["steer", "queue"] = "steer"
+    request_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{16,64}$")   # квитанция отправки (RECEIPTS)
+
+
+class _Receipt:
+    """Просьба `turn`/`steer` с `request_id`: задача `ask` (её не обрывает обрыв запроса) и время."""
+
+    def __init__(self, op: str, task: asyncio.Future):
+        self.op, self.task, self.at = op, task, clock.NOW()
+
+
+#: (учётка, компьютер, чат, request_id) → _Receipt — память процесса: повтор отправки после обрыва связи
+#: не просит мост второй раз. Принятая живёт RECEIPT_SEC; отказ квитанцию снимает — повтор разрешён.
+RECEIPTS: dict[tuple[int, int, str, str], _Receipt] = {}
+RECEIPT_SEC = 600
+RECEIPTS_MAX = 1000
+
+
+def _expire_receipts() -> None:
+    now = clock.NOW()
+    for key in [key for key, held in RECEIPTS.items() if held.task.done() and now - held.at > RECEIPT_SEC]:
+        del RECEIPTS[key]
+    extra = len(RECEIPTS) - RECEIPTS_MAX       # сверх предела — старейшие завершённые (идущие ждут их повторы)
+    if extra > 0:
+        for key in [key for key, held in RECEIPTS.items() if held.task.done()][:extra]:
+            del RECEIPTS[key]
+
+
+async def _prior(key: tuple | None) -> tuple[str, dict] | None:
+    """Принятая раньше просьба с той же квитанцией — (op, ответ моста); идёт — ждёт её исхода; не было или
+    отказ — None."""
+    while key is not None:
+        _expire_receipts()
+        held = RECEIPTS.get(key)
+        if held is None:
+            return None
+        try:
+            return held.op, await asyncio.shield(held.task)
+        except Exception:                           # отказ первой: квитанция снята, повтор просит мост сам
+            if RECEIPTS.get(key) is held:
+                del RECEIPTS[key]
+    return None
+
+
+def _first(key: tuple | None, op: str, call):
+    """Просьба мосту под квитанцией: отдельной задачей — обрыв первого запроса её не отменяет, повтор ждёт её же."""
+    if key is None:
+        return call
+    task = asyncio.ensure_future(call)
+    held = RECEIPTS[key] = _Receipt(op, task)
+
+    def failed(t: asyncio.Future) -> None:
+        if (t.cancelled() or t.exception() is not None) and RECEIPTS.get(key) is held:
+            del RECEIPTS[key]
+
+    task.add_done_callback(failed)
+    return asyncio.shield(task)
+
+
+def _repeated(request: Request, aid: int, op: str, data: dict) -> Response:
+    """Ответ повтору: ход или уточнение уже у моста — второй раз не просим (`repeat` — что принято первым)."""
+    log.info("пользователь %d: компьютер %d — %s повтором", request.state.user.id, aid, op)
+    if op == "turn":
+        turn_id = data.get("turn")
+        return _relay({"repeat": "turn", "turn": turn_id if isinstance(turn_id, str) else None})
+    return _relay({**data, "repeat": "steer"})
 
 
 def _turn_images(images: list[TurnImage]) -> list[dict]:
@@ -909,7 +974,10 @@ async def steer(aid: int, pid: str, chat: str, request: Request):
 
 async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
-    сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
+    сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`.
+    С `request_id` (страница повторяет отправку после обрыва связи) ход и уточнение принимаются один раз:
+    повтор ждёт исхода первой просьбы и, если её приняли, отвечает JSON `{"repeat": "turn"|"steer", …}`
+    вместо второй просьбы мосту (`RECEIPTS`); отказ первой повтор не держит."""
     agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
@@ -946,20 +1014,26 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
             raise _refuse(422, "model", NO_MODEL)
         if body.effort is not None and body.effort not in catalog.get("efforts", ()):
             raise _refuse(422, "effort", NO_EFFORT)
+    key = (request.state.user.id, aid, chat, body.request_id) if body.request_id is not None else None
+    if (prior := await _prior(key)) is not None:
+        return _repeated(request, aid, *prior)
     if op == "steer":
-        return _relay(await ask(request, aid, "steer", project=pid, chat=chat, text=body.text,
-                                **({"mode": "queue"} if body.mode == "queue" else {}),
-                                **({"attachments": attachments} if attachments else {}),
-                                **({"images": images} if images else {})))
+        return _relay(await _first(key, op, ask(request, aid, "steer", project=pid, chat=chat, text=body.text,
+                                                **({"mode": "queue"} if body.mode == "queue" else {}),
+                                                **({"attachments": attachments} if attachments else {}),
+                                                **({"images": images} if images else {}))))
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
     previous = bridge.initiated(aid, chat, member)
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))   # до просьбы, как `_watched`
     try:
-        q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
-                                 effort=body.effort, **({"access": body.access} if body.access is not None else {}),
-                                 **({"attachments": attachments} if attachments else {}),
-                                 **({"images": images} if images else {}))
+        data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
+                                         model=body.model, effort=body.effort,
+                                         **({"access": body.access} if body.access is not None else {}),
+                                         **({"attachments": attachments} if attachments else {}),
+                                         **({"images": images} if images else {})))
     except BaseException:
+        bridge.unwatch(aid, chat, q)
         bridge.initiated(aid, chat, previous)
         raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)

@@ -30,11 +30,11 @@
  * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
-import { api as request, me } from './api.js';
+import { api as request, me, unknownOutcome } from './api.js';
 import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { codePicker } from './code-picker.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
 import { el, focusDesktop, words } from './ui.js';
@@ -104,6 +104,9 @@ const imageDrafts = new Drafts();  // картинки черновика — т
 const historyCache = new Map(); // последние 12 историй, только память этой страницы
 document.addEventListener('studio-code-clear', () => historyCache.clear());
 const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
+/** Квитанции отправки (`${aid}/${chat}` → { id, value, images }): исход не известен (обрыв связи) — тот же текст и
+ * те же картинки уходят с тем же `request_id`, и сервер второй раз ход не начнёт; правка — новый id. */
+const sendIds = new Map();
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
 const WINDOW = crypto.randomUUID().replaceAll('-', '');
 
@@ -891,6 +894,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!pending) return;
     historyEmpty = false;
     if (pending.quick) { pendingInputs.delete(draftKey); return; }
+    if (sendIds.get(draftKey)?.value === pending.value) sendIds.delete(draftKey);
     if (drafts.get(draftKey) === pending.value) drafts.delete(draftKey);
     if (imageDrafts.get(draftKey) === pending.images) imageDrafts.delete(draftKey);
     pendingInputs.delete(draftKey);
@@ -910,6 +914,30 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     images = [...pending.images, ...images.filter((i) => !pending.images.includes(i))];
     keepImages();
     autosize();
+  }
+
+  /** request_id отправки: тот же текст и те же картинки, что ушли без ответа, — прежний, иначе новый. */
+  function sendId(value, sent) {
+    const known = sendIds.get(draftKey);
+    if (known && known.value === value && known.images.length === sent.length
+        && known.images.every((image, n) => image === sent[n])) return known.id;
+    const id = crypto.randomUUID().replaceAll('-', '');
+    sendIds.set(draftKey, { id, value, images: sent });
+    return id;
+  }
+
+  /** Обрыв связи на «Отправить», когда ход, может быть, уже принят: история скажет, принят ли. Нет — ввод
+   * возвращается в поле с той же квитанцией (повтор без правки второй ход не запустит); live покажет ход,
+   * если он всё же идёт. */
+  async function checkSent() {
+    showStatus('Связь прервалась — проверяю, принято ли задание…', false);
+    await loadHistory(false, true);
+    if (!alive) return;
+    if (pendingInputs.has(draftKey)) {
+      restoreInput();
+      showStatus('Связь прервалась. Задание возвращено в поле — повторная отправка не запустит его второй раз');
+    } else if (status.textContent.startsWith('Связь прервалась')) showStatus('');
+    openLive();
   }
 
   function followupNode(data) {
@@ -1586,12 +1614,21 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         return;
       }
       const sentImages = images;
+      const requestId = sendId(value, sentImages);
       sending = true;
       updateControls();
       try {
-        const result = await api('POST', endpoint('/steer'), { text: value,
+        const result = await api('POST', endpoint('/steer'), { text: value, request_id: requestId,
           ...(agent?.queue_edit && delivery.value === 'queue' ? { mode: 'queue' } : {}),
           ...attachmentBody(sentImages) });
+        sendIds.delete(draftKey);
+        if (result.repeat === 'turn') {      // это задание уже ушло ходом (обрыв связи раньше): второй раз — нет
+          if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
+          images = images.filter((i) => !sentImages.includes(i));
+          keepImages();
+          if (alive) showStatus('Это задание уже принято', false);
+          return;
+        }
         if (unsentFollowups.has(result.id)) return;
         if (result.mode === 'queue' && !sentFollowups.has(result.id)) {
           if (!queuedInputs.has(draftKey)) queuedInputs.set(draftKey, new Map());
@@ -1603,6 +1640,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         if (alive) showStatus(result.mode === 'queue' ? 'Уточнение принято — будет выполнено после текущего ответа'
           : 'Уточнение отправлено в текущее задание', false);
       } catch (err) {
+        if (!unknownOutcome(err)) sendIds.delete(draftKey);
         if (alive) {
           if (err.code === 'closed') closed();
           else {
@@ -1618,6 +1656,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     const sentImages = quick ? [] : images;
+    const requestId = quick ? null : sendId(value, sentImages);
     acted = Date.now();
     sending = true;
     updateControls();
@@ -1632,18 +1671,27 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
+    let posted = false;
     try {
       // Старое сообщение с таким же текстом не подтверждает принятие нового задания.
       const before = await api('GET', endpoint(), undefined, { signal: own.signal });
       const pending = pendingInputs.get(draftKey);
       if (pending) pending.beforeTotal = before.total;
+      posted = true;
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null,
         ...(access.value ? { access: access.value } : {}),
+        ...(requestId ? { request_id: requestId } : {}),
         ...attachmentBody(sentImages) }, { signal: own.signal });
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       if (controller === own) controller = null;
+      // ответа нет, а ход мост, может быть, уже принял: не возвращать ввод вслепую — сверить с историей
+      if (posted && requestId && unknownOutcome(err)) {
+        await checkSent();
+        return;
+      }
+      if (requestId) sendIds.delete(draftKey);
       restoreInput();
       if (err.code === 'closed') closed();
       else if (err.status === 404 && err.code === 'not_found') gone();
@@ -1659,6 +1707,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       updateControls();
       attach.disabled = adding || (!agent?.images && !agent?.attachments);
       paintImages();
+    }
+    if (requestId) sendIds.delete(draftKey);
+    if (!(response instanceof Response)) {   // повтор отправки, которую мост уже принял (`repeat`): хода второй раз нет
+      acknowledgeInput();
+      if (controller === own) controller = null;
+      if (!alive) return;
+      showStatus('Это задание уже принято', false);
+      if (!(await loadHistory(false, true))) openLive();
+      return;
     }
     // ход принят (ответ — поток, первое его событие — turn); набранное после — остаётся
     if (!agent?.chat_control) acknowledgeInput();
@@ -1746,12 +1803,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (text.value) drafts.set(draftKey, text.value);
     else drafts.delete(draftKey);
   });
-  text.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(text, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit();

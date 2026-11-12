@@ -36,7 +36,8 @@ import { chainList, isExternal, NAMES, paramParts, seedOf } from './chain.js';
 import { openCompare } from './compare.js';
 import { openEditor } from './editor.js';
 import { createFeed, pageQuery } from './feed.js';
-import { fieldBox } from './field.js';
+import { enterSends, fieldBox } from './field.js';
+import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
@@ -153,6 +154,8 @@ function build(view, ctx) {
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
     selection.bar);
   view.append(root);
+  const draft = sectionDraft('photo', prompt);
+  if (prompt.value) autosize();
 
   let focusId = null;            // запись из «В работе», которую ещё ждёт лента
   const feed = createFeed(feedBox, {
@@ -557,7 +560,11 @@ function build(view, ctx) {
       return;
     }
     const many = withSource && series.value();
-    create(body).then((ok) => { if (ok && many) series.reset(); });   // серия — на один запуск
+    const value = prompt.value;
+    create(body).then((ok) => {
+      if (ok) draft.sent(value);                    // отправленный промпт черновиком не возвращается
+      if (ok && many) series.reset();               // серия — на один запуск
+    });
   }
 
   function repeatBody(item) {
@@ -923,12 +930,7 @@ function build(view, ctx) {
     if (f) describe({ file: f });
   });
   prompt.addEventListener('input', autosize);
-  prompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
+  enterSends(prompt, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!go.disabled) submit(true);
@@ -942,6 +944,7 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
+      draft.save();
       alive = false;
       if (shutDescribe) shutDescribe();
       selection.destroy();
