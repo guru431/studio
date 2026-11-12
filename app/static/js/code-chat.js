@@ -30,7 +30,7 @@
  * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
-import { api as request, me } from './api.js';
+import { api as request, me, unknownOutcome } from './api.js';
 import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
 import { codePicker } from './code-picker.js';
@@ -108,11 +108,6 @@ const pendingInputs = new Map(); // до подтверждения, что CLI 
  * те же картинки уходят с тем же `request_id`, и сервер второй раз ход не начнёт; правка — новый id. */
 const sendIds = new Map();
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
-
-/** Ответа нет, а запрос, может быть, дошёл: связь, срок, прокси или мост не ответил вовремя. */
-function unknownOutcome(err) {
-  return err?.name === 'TimeoutError' || err?.status === 0 || [502, 503, 504].includes(err?.status);
-}
 const WINDOW = crypto.randomUUID().replaceAll('-', '');
 
 function attachmentBody(items) {
