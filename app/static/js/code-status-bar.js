@@ -14,7 +14,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
     button.append(label);
     const controlled = button.getAttribute('aria-controls');
     const menu = controlled ? actions.querySelector('#' + CSS.escape(controlled)) || document.getElementById(controlled) : null;
-    return { button, label, menu: menu?.hasAttribute('popover') ? menu : null };
+    return { button, label, menu: menu?.hasAttribute('popover') ? menu : null, keep: button.hasAttribute('data-keep') };
   });
   bar.replaceChildren(activity, controls);
   host.append(panel);
@@ -46,7 +46,10 @@ export function statusActions(host, bar, activity, actions, fixed) {
   const fit = () => {
     frame = null;
     if (!bar.isConnected || !bar.clientWidth) return;
-    const available = items.filter(({ button }) => !button.hidden);
+    // data-keep («Повторить» при сбое загрузки) в «⋯» не уходит: такие кнопки — последними, показаны всегда
+    const available = [...items.filter(item => !item.button.hidden && !item.keep),
+      ...items.filter(item => !item.button.hidden && item.keep)];
+    const least = available.filter(item => item.keep).length;
     const pinned = [...fixed.children].filter(node => node.tagName === 'BUTTON' && !node.hidden);
     const sizes = measure([...available.map(item => item.button), ...pinned, more]);
     const preferred = sizes.slice(available.length, -1);
@@ -61,15 +64,16 @@ export function statusActions(host, bar, activity, actions, fixed) {
       .reduce((sum, size) => sum + size.width, 0) + Math.max(0, count - 1) * actionGap;
     let shown = available.length;
     let moreWidth = sizes.at(-1).width;
-    if (shown > 0 && naturalFixed + inlineWidth(shown) + gap > budget) {
+    if (shown > least && naturalFixed + inlineWidth(shown) + gap > budget) {
       shown -= 1;
-      while (shown > 0 && naturalFixed + inlineWidth(shown) + moreWidth + 2 * gap > budget) shown -= 1;
+      while (shown > least && naturalFixed + inlineWidth(shown) + moreWidth + 2 * gap > budget) shown -= 1;
     }
     const hidden = available.length - shown;
+    const inline = shown ? inlineWidth(shown) + gap : 0;
     const minimum = pinned.map((button, index) => Math.min(preferred[index].width,
       button.classList.contains('code-cache') || button.classList.contains('code-usage') ? 32
         : button.classList.contains('code-context') ? 28 : 24));
-    if (minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1)
+    if (minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1) + inline
         + (hidden ? 24 + gap : 0) > budget) {
       gap = fixedGap = 1;
       controls.style.columnGap = fixed.style.columnGap = '1px';
@@ -78,7 +82,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
           ? 28 : button.classList.contains('code-context') ? 24 : 20);
       }
     }
-    const compact = minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1)
+    const compact = minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1) + inline
       + (hidden ? 20 + gap : 0) > budget;
     controls.dataset.compact = String(compact);
     if (compact) {
@@ -89,7 +93,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
           : button.classList.contains('code-context') ? 22 : 18);
     }
     if (hidden) moreWidth = Math.min(moreWidth, Math.max(20,
-      budget - minimum.reduce((sum, width) => sum + width, 0) - fixedGap * (pinned.length - 1) - gap));
+      budget - minimum.reduce((sum, width) => sum + width, 0) - fixedGap * (pinned.length - 1) - gap - inline));
     const fixedRoom = budget - inlineWidth(shown) - (hidden ? moreWidth : 0) - gap * (Number(shown > 0) + Number(hidden > 0));
     const minimumSum = minimum.reduce((sum, width) => sum + width, 0);
     const growth = preferred.reduce((sum, size, index) => sum + size.width - minimum[index], 0);
