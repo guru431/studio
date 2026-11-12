@@ -133,6 +133,9 @@ class Watch(asyncio.Queue):
 LINKS: dict[int, Link] = {}
 #: (agent_id, chat) → очереди наблюдателей чата
 WATCHERS: dict[tuple[int, str], set[Watch]] = {}
+#: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
+INITIATORS: dict[tuple[int, str], int] = {}
+INITIATORS_MAX = 10_000
 #: фоновые отправки (`forget`) и закрытия каналов (`_close_later`): ссылка держит задачу до конца, `stop` ждёт
 #: их не дольше `STOP_SEC` и отменяет остаток
 TASKS: set[asyncio.Task] = set()
@@ -383,12 +386,39 @@ ASK_WORDS = {"permission": "ждёт подтверждения", "question": "�
 DONE_WORDS = {"done": "ход окончен", "stopped": "ход прерван", "error": "ошибка"}
 
 
+def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
+    """Ход чата начинает участник `user_id`: ему — push карточек и конца этого хода; `None` — ход владельца
+    (push по умолчанию — ему). Ставится до просьбы `turn`: быстрый `done` приходит раньше, чем зовущий получит
+    ответ. Возвращает прежнюю запись — её возвращают, если мост хода не принял. Только память: перезапуск
+    службы возвращает push владельцу."""
+    key = (agent_id, chat)
+    previous = INITIATORS.pop(key, None)
+    if user_id is not None:
+        INITIATORS[key] = user_id
+        while len(INITIATORS) > INITIATORS_MAX:
+            del INITIATORS[next(iter(INITIATORS))]
+    return previous
+
+
+def _addressee(link: Link, frame: dict) -> int | None:
+    """Кому push хода: начавшему его участнику, пока проект ему выдан (отозван — никому: владельцу о чужих ходах
+    не шлём); нет записи — владельцу компьютера."""
+    member = INITIATORS.get((link.agent_id, frame["chat"]))
+    if member is None:
+        return link.user_id
+    import project_access                # он импортирует этот модуль: на загрузке — кольцо
+    return member if frame["project"] in project_access.projects(member, link.agent_id) else None
+
+
 def _push(link: Link, frame: dict) -> None:
-    """Карточка или конец хода, которых никто не смотрит, — push владельцу (спека 6.8)."""
+    """Карточка или конец хода, которых никто не смотрит, — push начавшему ход (спека 6.8)."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
-    if text is None or watching(link.agent_id, frame["chat"]):
+    user_id = _addressee(link, frame) if text is not None else None
+    if e["k"] == "done":
+        INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
+    if text is None or user_id is None or watching(link.agent_id, frame["chat"]):
         return
     project_name = frame.get("project_name")
     # Имя — только один компонент пути; неизвестный/старый мост сохраняет прежний текст push.
@@ -396,7 +426,7 @@ def _push(link: Link, frame: dict) -> None:
                   and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
                   or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
     place = f"{link.name} · {project_name}" if valid_name else link.name
-    push.notify_later(link.user_id, f"{place}: {text}",
+    push.notify_later(user_id, f"{place}: {text}",
                       f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
 
 

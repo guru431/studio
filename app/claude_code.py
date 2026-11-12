@@ -891,7 +891,7 @@ async def steer(aid: int, pid: str, chat: str, request: Request):
 async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
     сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
     raw = await auth.small_body(request, TURN_BODY_MAX)
@@ -932,10 +932,17 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                 **({"mode": "queue"} if body.mode == "queue" else {}),
                                 **({"attachments": attachments} if attachments else {}),
                                 **({"images": images} if images else {})))
-    q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
-                             effort=body.effort, **({"access": body.access} if body.access is not None else {}),
-                             **({"attachments": attachments} if attachments else {}),
-                             **({"images": images} if images else {}))
+    # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
+    member = request.state.user.id if agent["user_id"] != request.state.user.id else None
+    previous = bridge.initiated(aid, chat, member)
+    try:
+        q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
+                                 effort=body.effort, **({"access": body.access} if body.access is not None else {}),
+                                 **({"attachments": attachments} if attachments else {}),
+                                 **({"images": images} if images else {}))
+    except BaseException:
+        bridge.initiated(aid, chat, previous)
+        raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,
