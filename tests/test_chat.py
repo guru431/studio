@@ -802,6 +802,53 @@ def test_graceful_shutdown_saves_the_partial_answer_as_interrupted(studio):
     assert (answer["status"], answer["content"]) == ("error", "Здрав\n\n[прервано перезапуском студии]")
 
 
+def test_a_lone_surrogate_in_the_model_stream_does_not_hang_the_answer(studio):
+    """Одиночный суррогат UTF-16 (`\\ud800` в JSON потока) SQLite не кодирует: текст модели очищается на входе
+    (одиночный — U+FFFD, пара — свой символ), ответ сохраняется и уходит из STREAMS, следующий ход не 409 busy."""
+    import httpx
+    add_gateway(studio); cid = new_chat(studio)
+
+    def line(delta, finish=None):              # ensure_ascii — как у шлюзов: суррогаты экранированы
+        return "data: " + json.dumps({"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}) + "\n\n"
+    body = (line({"reasoning_content": "мысль\udc00"}) + line({"content": "При\ud800вет "}) +
+            line({"content": "😀"}) + line({}, "stop") + "data: [DONE]\n\n")
+
+    async def reply(request):
+        return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
+    studio.gw.on["/v1/chat/completions"] = reply
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["content"]) == ("done", "При�вет \U0001f600")
+    assert not chat.STREAMS
+    studio.gw.on.clear()
+    assert sse(turn(studio, cid, "Ещё"))[-1] == ("done", {"status": "done"})
+
+
+def test_one_failing_answer_does_not_stop_the_others_on_shutdown(studio, monkeypatch):
+    """Остановка службы: итог одного ответа не записался — остальные всё равно сохраняются, STREAMS пуст."""
+    add_gateway(studio)
+    first, second = new_chat(studio), new_chat(studio)
+    studio.gw.chat_hold = True
+    real = chat._finish
+
+    def broken(message_id, chat_id, *args, **kwargs):
+        if chat_id == first:
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+        return real(message_id, chat_id, *args, **kwargs)
+    try:
+        for cid in (first, second):
+            with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
+                events = events_of(r.iter_lines())
+                assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
+        monkeypatch.setattr(chat, "_finish", broken)
+        studio.c.portal.call(chat.stop_all)
+    finally:
+        studio.gw.chat_hold = False
+    assert not chat.STREAMS
+    assert messages(studio, second)[1]["status"] == "error"
+    assert messages(studio, second)[1]["content"].endswith("[прервано перезапуском студии]")
+
+
 def test_restart_marks_server_streams_interrupted(studio):
     add_gateway(studio); cid = new_chat(studio)
     for mid, via in (("a" * 32, "server"), ("b" * 32, "browser")):

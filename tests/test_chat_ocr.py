@@ -367,6 +367,39 @@ def test_restart_while_a_turn_waits_leaves_a_marker(studio):
     assert sent == doc("скан.pdf", marker, f"{QUESTION}\n\nещё раз") and "None" not in sent
 
 
+def test_restart_keeps_only_the_queued_scans_of_unsent_attachments(studio):
+    """Перезапуск: ждущий скан отправленного хода — ошибка с пометкой (ход прерван, как при «Остановить»), ждущий
+    скан ещё не отправленного вложения распознаётся после старта (`ocr.resume_queued`)."""
+    add_gateway(studio); cid = new_chat(studio)
+    studio.gw.ocr_hold = True
+    running = upload(studio, scan_pdf("ink"))
+    queued = upload(studio, scan_pdf("ink"), "второй.pdf")
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/turns",
+                             json={"text": QUESTION, "attachment_ids": [running["id"], queued["id"]]}) as r:
+            events = events_of(r.iter_lines())
+            assert next(e for e, _ in events if e == "ocr")
+            wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+        unsent = upload(studio, scan_pdf("ink"), "третий.pdf")
+
+        async def restart():
+            await ocr.stop()
+            await chat.stop_all()
+            ocr.JOBS.clear()
+            chat.recover()
+            ocr.recover()
+            ocr.resume_queued()
+        on_loop(studio, restart)
+    finally:
+        studio.gw.ocr_hold = False
+    marker = ocr.attachment_marker(ocr.INTERRUPTED)
+    for att in (running, queued):
+        assert scan_of(studio, att["ocr"]["id"])["state"] == "error" and att_text(studio, att["id"])[0] == marker
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?",
+                                                (unsent["ocr"]["id"],)).fetchone()[0] == "done")
+    assert att_text(studio, unsent["id"])[0] == f"Страница 1\n\n{TEXT}"
+
+
 def test_wait_does_not_eat_the_answer_deadline(studio, monkeypatch):
     monkeypatch.setattr(chat, "STREAM_TOTAL_SEC", 3000)
     add_gateway(studio); cid = new_chat(studio)
@@ -394,6 +427,20 @@ def test_too_big_after_recognition_is_an_error_in_words(studio, monkeypatch):
     events = sse(ask(studio, cid, ids=[att["id"]]))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith("Не помещается в контекст модели")
     assert studio.gw.chat_requests == []
+
+
+def test_scan_from_the_chat_is_recognized_while_the_scans_section_is_locked(studio):
+    """Раннер «Сканов», запущенный запросом чата при закрытом частичной защитой разделе «Сканы», не наследует
+    закрытые разделы запроса: свой файл документа он читает, а не падает «файл документа удалён» без шлюза."""
+    add_gateway(studio); new_chat(studio)
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "sections": ["ocr"], "timeout": 300}).status_code == 200
+    assert studio.c.post("/api/lock/now").status_code == 204
+    att = upload(studio, scan_pdf("ink"))
+    sid = att["ocr"]["id"]
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0]
+               in ocr.TERMINAL)
+    assert (scan_of(studio, sid)["state"], scan_of(studio, sid)["detail"]) == ("done", ocr.DONE)
+    assert len(studio.gw.ocr_requests) == 1
 
 
 def test_unsent_scan_attachment_cancels_its_scan(studio):
