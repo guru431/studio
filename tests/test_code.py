@@ -704,6 +704,39 @@ def test_receipt_repeat_waits_for_the_first_request_even_if_it_was_cut(monkeypat
     assert asyncio.run(crowd()) == [f"{2:016}", f"{3:016}"]
 
 
+@pytest.mark.parametrize("accepted", [True, False])
+def test_cut_member_turn_keeps_the_member_as_push_addressee_until_the_bridge_answers(monkeypatch, accepted):
+    """Ход участника под квитанцией, запрос оборвался, а просьба мосту идёт: push хода — по-прежнему участнику,
+    если мост ход принял; отказ моста возвращает прежнего адресата (владельца)."""
+    monkeypatch.setattr(claude_code, "RECEIPTS", {})
+    monkeypatch.setattr(bridge, "INITIATORS", {})
+    member, key = 7, (7, 2, A, RID)
+
+    async def scenario():
+        gate = asyncio.get_running_loop().create_future()
+
+        async def call():
+            return await gate
+
+        previous = bridge.initiated(2, A, member)
+        first = asyncio.ensure_future(claude_code._first(key, "turn", call()))
+        await asyncio.sleep(0)
+        first.cancel()                                 # обрыв запроса участника
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        claude_code._initiator_back(key, 2, A, previous)
+        assert bridge.INITIATORS == {(2, A): member}
+        if accepted:
+            gate.set_result({"turn": "t-1"})
+        else:
+            gate.set_exception(RuntimeError("отказ"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return dict(bridge.INITIATORS)
+
+    assert asyncio.run(scenario()) == ({(2, A): member} if accepted else {})
+
+
 def test_permission_card_round_trip(studio):
     aid, m, _ = setup(studio)
     m.script = [text("Удаляю"), ASK, text("Готово"), DONE]
