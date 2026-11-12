@@ -86,14 +86,14 @@ DROP_V20 = DROP_V24 + "ALTER TABLE users DROP COLUMN code_defaults; DROP TABLE c
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 38
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 39
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_step_38_keeps_owner_workspace_and_cascades_membership(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38) + '\nPRAGMA user_version=37;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38) + '\nPRAGMA user_version=37;')
     conn.executemany("INSERT INTO users(id,login,name,pw_hash,created) VALUES(?,?,?,'hash',0)",
                      [(1, 'owner', 'Owner'), (2, 'friend', 'Friend')])
     conn.execute("INSERT INTO agents(id,user_id,name,key_hash,created) VALUES(1,1,'PC','key',0)")
@@ -111,7 +111,7 @@ def test_step_38_keeps_owner_workspace_and_cascades_membership(env):
 
 def test_step_31_keeps_history_and_cascades_acknowledgements_with_chat(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31) + '\nPRAGMA user_version=30;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31) + '\nPRAGMA user_version=30;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('chat',1,'Keep history',0,0)")
     db.migrate(conn)
@@ -127,7 +127,7 @@ def test_step_34_keeps_sessions_and_cascades_security_events_with_the_account(en
     """Шаг 34: прежние сессии живы (новые столбцы — NULL), прежний код заводит сессии без них; журнал уходит с
     учёткой, а сессия — с push и ntfy устройства, как прежде."""
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34) + '\nPRAGMA user_version = 33;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34) + '\nPRAGMA user_version = 33;')
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, mobile, seen) VALUES ('d', 1, 'c', 9, 1, 1, 5)")
     db.migrate(conn); db.migrate(conn)
@@ -145,7 +145,7 @@ def test_step_35_adds_the_answer_error_and_keeps_messages(env):
     """Шаг 35: причина отказа ответа — `messages.error`, у прежних строк NULL. Прежний код (вставка по именам
     столбцов, выборка `*` по именам) с новой базой работает."""
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35) + '\nPRAGMA user_version=34;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35) + '\nPRAGMA user_version=34;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'Keep',0,0)")
     conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
@@ -163,7 +163,7 @@ def test_step_35_adds_the_answer_error_and_keeps_messages(env):
 
 def test_step_25_keeps_profile_and_gives_existing_users_initial_quick_actions(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25) + "\nPRAGMA user_version = 24;")
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25) + "\nPRAGMA user_version = 24;")
     conn.execute("INSERT INTO users(login, name, pw_hash, created, theme, code_defaults)"
                  " VALUES ('owner', 'Owner', 'hash', 0, 'dark', ?)", ('{"codex":{"effort":"high"}}',))
     db.migrate(conn); db.migrate(conn)
@@ -175,7 +175,7 @@ def test_step_25_keeps_profile_and_gives_existing_users_initial_quick_actions(en
 
 def test_step_27_defaults_existing_users_to_moscow_without_changing_their_data(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27) + '\nPRAGMA user_version = 26;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27) + '\nPRAGMA user_version = 26;')
     conn.execute("INSERT INTO users(login, name, pw_hash, created, theme) VALUES ('owner', 'Owner', 'hash', 0, 'dark')")
     db.migrate(conn)
     assert conn.execute('SELECT timezone, theme FROM users').fetchone()[:] == ('Europe/Moscow', 'dark')
@@ -188,7 +188,7 @@ def test_step_27_defaults_existing_users_to_moscow_without_changing_their_data(e
 
 def test_step_28_keeps_profile_and_cascades_attention_with_computer(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28) + '\nPRAGMA user_version = 27;')
+    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28) + '\nPRAGMA user_version = 27;')
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created, timezone) VALUES (1, 'u', 'U', 'h', 0, 'UTC')")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'k', 0)")
     db.migrate(conn)
@@ -549,7 +549,7 @@ def test_step_18_adds_translations_with_search_and_keeps_rows(env):
     conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18}PRAGMA user_version = 17;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 38
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 39
     conn.execute("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source,"
                  " state, detail, created) VALUES ('t1', 1, 'text', 'm', 'auto', 'ru', 'Hello', 'Hello world',"
                  " 'queued', 'в очереди', 1)")
@@ -585,7 +585,7 @@ def test_step_19_adds_code_tables_and_cascades(env):
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d1', 1, 'c', 9, 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 38
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 39
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     assert conn.execute("SELECT has_pin, projects_root, cc_version, last_seen FROM agents").fetchone()[:] == (
         0, None, None, None)
@@ -628,7 +628,7 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 38
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 39
     conn.execute("INSERT INTO code_tabs(user_id, agent_id, project, touched) VALUES (1, 5, 'p', 1)")
     assert conn.execute("SELECT tabs, active FROM code_tabs").fetchone()[:] == ("[]", None)
     conn.execute("INSERT INTO code_place(user_id, panel_id, agent_id, project) VALUES (1, 5, 5, 'p')")
@@ -645,6 +645,34 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
     assert conn.execute("SELECT panel_id, agent_id, project FROM code_place").fetchone()[:] == (None, None, "p")
     conn.execute("DELETE FROM users WHERE id = 1")
     assert count("code_place") == 0
+
+
+def test_step_39_widens_agent_event_kinds_and_keeps_rows(env):
+    """Шаг 39: выдача и отзыв доступа к проекту — в истории подключений; прежние строки, id и каскад — на месте."""
+    import sqlite3
+    conn = db.connect(env.db_path); db.migrate(conn)
+    conn.executescript("""DROP TABLE agent_events;
+CREATE TABLE agent_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL, agent_name TEXT NOT NULL, created REAL NOT NULL,
+       kind TEXT NOT NULL CHECK (kind IN ('enroll','revoke','online','offline','open','pin_ok','pin_fail','session_start')),
+       device TEXT, ip TEXT);
+CREATE INDEX agent_events_user ON agent_events(user_id, id);
+PRAGMA user_version = 38;""")
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
+    conn.execute("INSERT INTO agent_events(id, user_id, agent_id, agent_name, created, kind, ip)"
+                 " VALUES (7, 1, 5, 'ПК', 1, 'enroll', '10.77.1.9')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 2, 'member_add')")
+    db.migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 39
+    assert tuple(conn.execute("SELECT id, kind, ip FROM agent_events").fetchone()) == (7, "enroll", "10.77.1.9")
+    conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 2, 'member_add')")
+    conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 3, 'pin_ok')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 4, 'x')")
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'agent_events_user'").fetchone() is not None
+    conn.execute("DELETE FROM users WHERE id = 1")
+    assert conn.execute("SELECT COUNT(*) FROM agent_events").fetchone()[0] == 0
 
 
 def test_code_without_the_translate_section_ignores_its_rows(studio, monkeypatch):

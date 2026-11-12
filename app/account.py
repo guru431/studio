@@ -8,8 +8,9 @@
   `close` её признака (`bridge.forget`): следующий её запрос — 401, уведомления ей больше не идут.
 - `PATCH /api/me/sessions/<признак> {label}` — назвать свою живую сессию (до 80 символов); пустое имя — сброс.
 - `POST /api/me/emergency {password, agents}` — аварийный выход с паролем учётки: все сессии (и текущая), все
-  ссылки «Поделиться», push и ntfy всех устройств и прежний шаблон ntfy; `agents: true` — ещё и ключи
-  компьютеров (как отзыв из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
+  ссылки «Поделиться» (и на чаты её компьютеров), доступы участников к проектам её компьютеров (всегда, без
+  галочки), push и ntfy всех устройств и прежний шаблон ntfy; `agents: true` — ещё и ключи компьютеров (как отзыв
+  из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
 - `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху; свёрнутые повторы
   неудач — `count` и время первой `first` (security_log.NOISY).
 - Сброс пароля администратором (admin.py) ставит `users.password_reset`: `GET /api/me` отдаёт его владельцу, и
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 import auth
 import bridge
 import clock
+import project_access
 import screenlock
 import security_log
 import state
@@ -121,8 +123,12 @@ async def emergency(body: Emergency, request: Request):
     digests = [r["digest"] for r in state.DB.execute("SELECT digest FROM sessions WHERE user_id = ?", (uid,))]
     state.DB.execute("BEGIN")
     try:
+        # выдачи проектов её компьютеров — всегда: украденная сессия могла выдать доступ своей учётке
+        grants = project_access.granted(uid)
+        project_access.drop(grants)
         for table in ("chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "sessions"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))   # имена — из кода
+        state.DB.execute("DELETE FROM chat_shares WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)", (uid,))
         state.DB.execute("UPDATE users SET password_reset = NULL WHERE id = ?", (uid,))  # совет сброса исполнен
         revoked = state.DB.execute("DELETE FROM agents WHERE user_id = ? RETURNING id, name",
                                    (uid,)).fetchall() if body.agents else []
@@ -133,10 +139,12 @@ async def emergency(body: Emergency, request: Request):
     ip = auth.client_ip(request)
     for agent in revoked:
         bridge.record(uid, agent["id"], agent["name"], "revoke", device="аварийный выход", ip=ip)
+    project_access.wake(grants)
     _forget(uid, digests)
     for agent in revoked:
         await bridge.drop(agent["id"])
-    log.info("пользователь %d: аварийный выход, сессий %d, компьютеров %d", uid, len(digests), len(revoked))
+    log.info("пользователь %d: аварийный выход, сессий %d, компьютеров %d, выдач проектов %d",
+             uid, len(digests), len(revoked), len(grants))
     response = Response(status_code=204, headers={"Clear-Site-Data": auth.CLEAR_CACHE})
     response.delete_cookie(auth.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response

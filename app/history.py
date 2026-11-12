@@ -72,9 +72,11 @@ async def _delete_all(user_id: int) -> int:
         for table in ("chat_shares", "images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
                       "code_tabs", "code_member_tabs", "code_place", "media"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
-        # отметки «завершено, не прочитано» — тоже номера сессий (своего user_id нет — по компьютерам учётки)
-        state.DB.execute("DELETE FROM code_attention WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)",
-                         (user_id,))
+        # отметки «завершено, не прочитано» — тоже номера сессий (своего user_id нет — по компьютерам учётки);
+        # и ссылки «Поделиться» на чаты её компьютеров, кем бы ни созданы (участник проекта — прежним кодом)
+        for table in ("code_attention", "chat_shares"):
+            state.DB.execute(f"DELETE FROM {table} WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)",
+                             (user_id,))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
