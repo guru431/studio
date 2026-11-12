@@ -71,3 +71,43 @@ def test_section_of_an_older_deployment_offers_a_reload(browser, live, width):
     assert v["bar"] == {"text": "Студия обновилась" + "Обновить", "role": "alert", "inside": True}
     assert v["after"] == ["#/photo", False]
     assert not problems(r, "photo.js"), problems(r, "photo.js")
+
+
+HASH = "location.hash"
+
+
+def alt(key, modifiers="Alt"):
+    return ("press", key, modifiers)
+
+
+def test_alt_digits_open_sections_in_rail_order(browser, live):
+    """Alt+1…8 — разделы в порядке рельса, Alt+/ — «Поиск»; из поля ввода тоже. Ctrl+Alt (AltGr) и Shift+Alt, открытое
+    окно — мимо. У кнопок рельса — aria-keyshortcuts и подсказка."""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        ("eval", "keys", "[...document.querySelectorAll('#rail a.tab')].map(a => [a.dataset.section,"
+                         " a.getAttribute('aria-keyshortcuts'), a.title])"),
+        ("eval", "searchKeys", "[document.querySelector('#search-open').getAttribute('aria-keyshortcuts'),"
+                               " document.querySelector('#search-open').title]"),
+        alt("3"), ("wait", "document.title === 'Видео — Студия'"), ("eval", "video", HASH),
+        alt("8"), ("wait", "document.title === 'Агенты — Студия'"), ("eval", "code", HASH),
+        alt("Slash"), ("wait", "document.querySelector('#search-q')"),
+        ("eval", "search", HASH),
+        ("eval", "focus", "document.querySelector('#search-q').focus(), document.activeElement.id"),
+        alt("1"), ("wait", "document.title === 'Чат — Студия'"), ("eval", "fromField", HASH),
+        alt("2", "Control+Alt"), ("eval", "altGr", HASH),
+        alt("2", "Shift+Alt"), ("eval", "shifted", HASH),
+        ("click", "#jobs"), ("wait", "document.querySelector('#jobs-panel').open"),
+        alt("2"), ("eval", "inDialog", HASH),
+        ("click", "#jobs-close"), ("wait", "!document.querySelector('#jobs-panel').open"),
+        alt("2"), ("wait", "document.title === 'Фото — Студия'"), ("eval", "photo", HASH)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    order = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
+    assert [row[0] for row in v["keys"]] == order
+    assert [row[1] for row in v["keys"]] == [f"Alt+{n}" for n in range(1, 9)]
+    assert v["keys"][0][2] == "Чат · Alt+1" and v["searchKeys"] == ["Alt+/", "Поиск · Alt+/"]
+    assert [v["video"], v["code"], v["search"]] == ["#/video", "#/code", "#/search"]
+    assert v["focus"] == "search-q" and v["fromField"] == "#/chat"
+    assert v["altGr"] == v["shifted"] == v["inDialog"] == "#/chat"
+    assert v["photo"] == "#/photo"
+    assert not problems(r), problems(r)
