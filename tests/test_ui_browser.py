@@ -173,7 +173,8 @@ def test_avatar_menu_works_from_the_keyboard(browser, live, width):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["expanded"] == "true" and v["collapsed"] == v["tabbedOut"] == "false"
-    assert v["roles"] == ["status"], v["roles"]
+    # group — шрифт и масштаб устройства (appearance.deviceSizeControls), но не menu/menuitem
+    assert v["roles"] == ["status", "group"], v["roles"]
     assert v["first"] == "menu-theme-light" and v["moved"] == "menu-theme-dark" and v["back"] == "avatar"
     assert not problems(r), problems(r)
 
