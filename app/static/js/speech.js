@@ -13,7 +13,7 @@
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { NAMES } from './sections-meta.js';
-import { createPicker, pickerList } from './feed.js';
+import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
@@ -156,7 +156,8 @@ function build(view, ctx) {
   /* Слушать по мере готовности: готовые части идущей озвучки (GET …/parts/<n>) — по очереди в одном плеере,
    * он переживает перерисовку при опросе; следующая часть — по `ended`, а пока её нет — после опроса.
    * Итоговый mp3 от этого не меняется; кончилась — обычный плеер готовой озвучки. */
-  let live = null;            // { id, audio, next, ready, waiting }
+  let live = null;            // { id, audio, note, box, next, ready, waiting }
+  let busy = null;            // блок «идёт» выбранной озвучки (feed.busyBlock): опрос меняет в нём только текст
 
   function playPart() {
     if (!live || live.next >= live.ready) {
@@ -173,7 +174,9 @@ function build(view, ctx) {
     if (!live || live.id !== item.id) {
       if (live) live.audio.pause();
       const audio = el('audio', { class: 'sp-audio sp-live', id: 'sp-live', controls: true, preload: 'auto' });
-      live = { id: item.id, audio, next: 0, ready: 0, waiting: false };
+      const note = el('p', { class: 'muted small' });
+      live = { id: item.id, audio, note, box: el('div', { class: 'sp-live-box' }, note, audio), next: 0, ready: 0,
+        waiting: false };
       audio.addEventListener('ended', playPart);
       live.ready = item.parts;
       audio.src = `/api/speeches/${encodeURIComponent(item.id)}/parts/0`;
@@ -181,8 +184,8 @@ function build(view, ctx) {
     }
     live.ready = item.parts;
     if (live.waiting) playPart();
-    return el('div', { class: 'sp-live-box' }, el('p', { class: 'muted small' },
-      `Готово частей: ${item.parts} — можно слушать, пока озвучка идёт`), live.audio);
+    live.note.textContent = `Готово частей: ${item.parts} — можно слушать, пока озвучка идёт`;
+    return live.box;
   }
 
   function paintView() {
@@ -192,24 +195,17 @@ function build(view, ctx) {
       live = null;
     }
     if (!item) {
+      busy = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите озвучку в списке.'
         : 'Напишите или продиктуйте текст внизу и нажмите «Озвучить».'));
       return;
     }
     const nodes = [el('p', { class: 'sp-text' }, item.text)];
     const acts = el('div', { class: 'tr-acts' });
-    if (RUNNING.has(item.state)) {
-      const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-cancel' }, 'Отменить');
-      cancel.addEventListener('click', async () => {
-        cancel.disabled = true;
-        try {
-          await api('POST', `/api/speeches/${item.id}/cancel`);
-        } catch (err) {
-          error.textContent = words(err);
-        }
-        refresh();
-      });
-      nodes.push(el('div', { class: 'tr-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }), el('p', {}, item.detail), cancel));
+    busy = RUNNING.has(item.state) ? busyBlock(busy, item, { id: 'sp-cancel', url: '/api/speeches',
+      fail: (err) => { error.textContent = words(err); }, after: refresh }) : null;
+    if (busy) {
+      nodes.push(busy.box);
       if (item.parts > 0) nodes.push(liveAudio(item));
     } else if (item.state === 'done') {
       nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
@@ -228,7 +224,7 @@ function build(view, ctx) {
       acts.append(del);
     }
     nodes.push(acts);
-    body.replaceChildren(...nodes);
+    keep(body, nodes);
   }
 
   /* озвучить */

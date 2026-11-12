@@ -67,6 +67,7 @@ import { menuItem, popupMenu } from './menu.js';
 import { calendarDay } from './time.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
+import { keep } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { CORS } from './settings.js';
@@ -469,6 +470,8 @@ function build(view, ctx) {
   let historyRead = null;
   let pendingTurn = null;      // request id and unsent draft: this view's memory only
   const parts = new WeakMap(); // сообщение → его узлы в ленте
+  const received = new WeakMap(); // сообщение с сервера → его JSON при получении (settle)
+  const shown = new WeakMap();    // сообщение → { node, last, cleaner }: узел в ленте и с чем он нарисован
   const unfolded = new Set();  // id ответов, чьё рассуждение человек раскрыл: лента перестраивается целиком
 
   /* разметка */
@@ -986,6 +989,21 @@ function build(view, ctx) {
     return node;
   }
 
+  /* диалог с сервера: сообщение, пришедшее тем же, что в показанном диалоге, остаётся прежним объектом — renderFeed
+     не пересоздаёт его узел (опрос идущего ответа не сбивает фокус, выделение и нажатие в прежних сообщениях) */
+  function settle(data) {
+    const before = chat && chat.chat.id === data.chat.id ? chat.messages : [];
+    const prior = new Map(before.filter((m) => received.has(m)).map((m) => [m.id, m]));
+    data.messages = data.messages.map((m) => {
+      const text = JSON.stringify(m);
+      const old = prior.get(m.id);
+      if (old && received.get(old) === text) return old;
+      received.set(m, text);
+      return m;
+    });
+    return data;
+  }
+
   /* плашка: идёт инструмент — он с крутилкой; есть шаги с сервера — итог зелёным или красным; вызовы этого хода
      до перечитывания — итог без цвета (ошибок ещё не знаем); нет ничего — плашки нет (ответ по памяти) */
   function paintBadge(p, m, job) {
@@ -1157,7 +1175,15 @@ function build(view, ctx) {
       feed.replaceChildren(emptyNote());
       return;
     }
-    feed.replaceChildren(...msgs.map((m, i) => messageNode(m, i === msgs.length - 1)));
+    const cleaner = !!chat.chat.cleaner;               // от него — «Очищенная копия» ответов
+    keep(feed, msgs.map((m, i) => {
+      const last = i === msgs.length - 1;
+      const was = shown.get(m);
+      if (was && was.last === last && was.cleaner === cleaner && received.has(m)) return was.node;
+      const node = messageNode(m, last);
+      shown.set(m, { node, last, cleaner });
+      return node;
+    }));
   }
 
   function emptyNote() {
@@ -1246,7 +1272,7 @@ function build(view, ctx) {
         attempt ? api('GET', `/api/chats/${id}/turns/${attempt.requestId}`, undefined, options) : null,
       ]);
       if (!alive || mine !== opened || chatId !== id) return;
-      chat = data;
+      chat = settle(data);
       shareContext();
       if (receipt?.accepted && data.messages.some((message) => message.id === receipt.assistant_message_id)) {
         acknowledgeTurn(attempt);
@@ -1314,7 +1340,7 @@ function build(view, ctx) {
     try {
       const data = await api('GET', `/api/chats/${encodeURIComponent(id)}`);
       if (mine !== opened) return;
-      chat = data;
+      chat = settle(data);
       shareContext();
     } catch (err) {
       if (mine !== opened) return;

@@ -46,10 +46,18 @@ export function check() {
 
 /** Модуль из load() или отказ русскими словами: what — «Раздел не загрузился», «Чат не загрузился»… */
 export async function lazy(load, what = 'Раздел не загрузился') {
+  // Перезагрузка и переход обрывают идущий import() раньше pagehide: сверять версию тогда незачем, а запрос
+  // /health уходящего документа WebKit сам называет ошибкой страницы. beforeunload приходит до обрыва; слушатель —
+  // только пока идёт импорт, чтобы не лишать страницу bfcache.
+  let leaving = false;
+  const leave = () => { leaving = true; };
+  addEventListener('beforeunload', leave);
   try {
     return await load();
   } catch {
-    if (await check()) throw Object.assign(new Error(UPDATED), { code: 'updated' });
+    if (!leaving && await check()) throw Object.assign(new Error(UPDATED), { code: 'updated' });
     throw Object.assign(new Error(`${what}. Проверьте связь и обновите страницу.`), { code: 'module' });
+  } finally {
+    removeEventListener('beforeunload', leave);
   }
 }
