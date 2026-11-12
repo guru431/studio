@@ -613,6 +613,96 @@ def test_second_turn_in_a_running_chat_is_409_running(studio):
     assert len(sent(m, "turn")) == 2
 
 
+RID = "r" * 16
+
+
+def test_repeated_turn_with_the_same_request_id_reaches_the_bridge_once(studio, monkeypatch):
+    """Обрыв связи после того, как мост принял ход: страница шлёт ту же отправку снова — второго хода нет,
+    ответ — `repeat` с ходом первого; новая отправка (другой id) — новый ход."""
+    monkeypatch.setattr(claude_code, "RECEIPTS", {})
+    aid, m, _ = setup(studio)
+    m.script = [text("Готово"), DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Сделай", "request_id": RID}) as r:
+        assert [e for e, _ in events_of(r.iter_lines())] == ["turn", "text", "done"]
+    again = studio.c.post(chat_url(aid, "turn"), json={"text": "Сделай", "request_id": RID})
+    assert (again.status_code, again.json()) == (200, {"repeat": "turn", "turn": "t-1"})
+    assert m.turns == 1 and not bridge.WATCHERS
+    m.script = [DONE]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Сделай", "request_id": "s" * 16}) as r:
+        assert [e for e, _ in events_of(r.iter_lines())] == ["turn", "done"]
+    assert m.turns == 2
+    bad = studio.c.post(chat_url(aid, "turn"), json={"text": "Сделай", "request_id": "short"})
+    assert bad.status_code == 422 and m.turns == 2
+
+
+def test_refused_turn_frees_its_request_id_and_steer_repeats_once(studio, monkeypatch):
+    monkeypatch.setattr(claude_code, "RECEIPTS", {})
+    aid, m, _ = setup(studio)
+    m.running[A] = {"turn": "t-0", "project": ALPHA, "followups": []}
+    r = studio.c.post(chat_url(aid, "turn"), json={"text": "Сделай", "request_id": RID})
+    assert (r.status_code, detail(r)["code"]) == (409, "running")
+    del m.running[A]
+    m.script = [text("При"), ASK]
+    with studio.c.stream("POST", chat_url(aid, "turn"), json={"text": "Сделай", "request_id": RID}) as r:
+        until(events_of(r.iter_lines()), "ask")
+        body = {"text": "Уточнение", "request_id": "u" * 16}
+        first, second = (studio.c.post(chat_url(aid, "steer"), json=body) for _ in range(2))
+        assert first.status_code == second.status_code == 200
+        assert second.json() == {**first.json(), "repeat": "steer"}
+        assert len(m.running[A]["followups"]) == 1
+        # уточнение с квитанцией принятого хода — тоже повтор: текст, вернувшийся в поле, не уходит второй раз
+        assert studio.c.post(chat_url(aid, "steer"), json={"text": "Сделай", "request_id": RID}).json() == {
+            "repeat": "turn", "turn": "t-1"}
+        assert len(m.running[A]["followups"]) == 1
+    assert len(sent(m, "turn")) == 2 and len(sent(m, "steer")) == 1
+
+
+def test_receipt_repeat_waits_for_the_first_request_even_if_it_was_cut(monkeypatch):
+    """Повтор, пока первая просьба ждёт мост, ждёт её исхода; обрыв первого запроса просьбу не отменяет;
+    отказ снимает квитанцию; принятые живут RECEIPT_SEC и не сверх RECEIPTS_MAX."""
+    monkeypatch.setattr(claude_code, "RECEIPTS", {})
+    now = [1000.0]
+    monkeypatch.setattr(claude_code.clock, "NOW", lambda: now[0])
+    key = (1, 2, A, RID)
+
+    async def scenario():
+        gate = asyncio.get_running_loop().create_future()
+
+        async def call():
+            return await gate
+
+        first = asyncio.ensure_future(claude_code._first(key, "turn", call()))
+        repeat = asyncio.ensure_future(claude_code._prior(key))
+        await asyncio.sleep(0)
+        first.cancel()                                 # обрыв связи первого запроса
+        await asyncio.sleep(0)
+        assert not repeat.done()
+        gate.set_result({"turn": "t-9"})
+        assert await repeat == ("turn", {"turn": "t-9"})
+
+        async def refused():
+            raise RuntimeError("отказ")
+
+        other = (1, 2, A, "o" * 16)
+        with pytest.raises(RuntimeError):
+            await claude_code._first(other, "turn", refused())
+        await asyncio.sleep(0)
+        assert other not in claude_code.RECEIPTS and await claude_code._prior(other) is None
+        now[0] += claude_code.RECEIPT_SEC + 1
+        assert await claude_code._prior(key) is None
+
+    asyncio.run(scenario())
+    monkeypatch.setattr(claude_code, "RECEIPTS_MAX", 2)
+
+    async def crowd():
+        for n in range(4):
+            await claude_code._first((1, 2, A, f"{n:016}"), "turn", asyncio.sleep(0, {"turn": str(n)}))
+        claude_code._expire_receipts()
+        return [k[3] for k in claude_code.RECEIPTS]
+
+    assert asyncio.run(crowd()) == [f"{2:016}", f"{3:016}"]
+
+
 def test_permission_card_round_trip(studio):
     aid, m, _ = setup(studio)
     m.script = [text("Удаляю"), ASK, text("Готово"), DONE]
