@@ -416,6 +416,20 @@ def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
     assert turn(studio, cid, "Как дела?").json()["messages"][2] == {"role": "assistant", "content": "Здравствуйте!"}
 
 
+def test_repeated_direct_answer_put_is_idempotent(studio):
+    """Ответ на первый PUT потерялся, страница повторяет тот же итог — 200, а не «уже сохранён»; иной итог — 409."""
+    add_connection(studio); cid = new_chat(studio)
+    aid = turn(studio, cid, "Привет").json()["assistant_message_id"]
+    url = f"/api/chats/{cid}/messages/{aid}"
+    body = {"content": "Здравствуйте!", "status": "done"}
+    first, again = studio.c.put(url, json=body), studio.c.put(url, json=body)
+    assert first.status_code == again.status_code == 200 and again.json() == first.json()
+    assert studio.c.put(url, json={**body, "status": "error"}).status_code == 409
+    assert studio.c.put(url, json={**body, "content": "другое"}).status_code == 409
+    answer = messages(studio, cid)[1]
+    assert (answer["content"], answer["status"]) == ("Здравствуйте!", "done")
+
+
 def test_today_line_names_the_moscow_date():
     assert chat.today_line(1_800_000_000) == "Сегодня пятница, 15 января 2027 года (Москва)."
     # 2026-10-21T21:00:00Z — в Москве уже полночь следующего дня

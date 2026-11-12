@@ -145,3 +145,77 @@ def test_agent_turn_lost_after_delivery_is_not_started_twice(chromium, live, wid
             pw.expect(page.locator("#code-feed .code-msg.user")).to_have_count(2)
     finally:
         bridge.stop()
+
+
+def add_cloud(page, live):
+    """Облако в «Чате» с отмеченной cloud-chat — прямое подключение: модель зовёт сам браузер."""
+    page.goto(live.url + "/#/settings")
+    page.locator(".settings-nav").wait_for()
+    page.evaluate("""async ([url, token]) => { const m = await import('/static/js/api.js');
+      const c = await m.api('POST', '/api/connections', { name: 'Облако', kind: 'openai', base_url: url, token,
+        sections: ['chat'] });
+      await m.api('PUT', '/api/sections/chat/links/' + c.id, { models: ['cloud-chat'] }); }""",
+                  [live.cloud.base_url, live.cloud.TOKEN])
+    page.goto(live.url + "/#/chat")
+    page.reload()
+    page.locator("#model-chip").click()
+    page.locator('.model-option[data-model="cloud-chat"]').click()
+    pw.expect(page.locator("#model-chip")).to_contain_text("cloud-chat")
+
+
+LAST = "#messages .msg.assistant:last-child"
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live, width):
+    """Прямое подключение: ответ на итоговый PUT потерялся — страница повторяет его (сервер отвечает тому же
+    итогу 200), ответ сохранён. PUT отказал — «Ответ не сохранился» и «Сохранить ещё раз»: текст держит память
+    вкладки и после ухода из диалога, кнопка сохраняет его."""
+    login = f"put-lost-{width}"
+    live.add_user(login)
+    puts = []
+    mode = {"put": "lose"}
+
+    def put(route):
+        if route.request.method != "PUT":
+            route.continue_()
+            return
+        puts.append(mode["put"])
+        if mode["put"] == "lose":
+            mode["put"] = None
+            route.fetch()
+            route.abort()
+        elif mode["put"] == "fail":
+            route.fulfill(status=500, json={"detail": {"code": "http", "message": "сбой"}})
+        else:
+            route.continue_()
+
+    last_saved = """async () => { const m = await import('/static/js/api.js');
+      const last = (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).messages.at(-1);
+      return [last.status, last.content]; }"""
+    with opened(chromium, live, login, width) as page:
+        add_cloud(page, live)
+        page.route("**/api/chats/*/messages/*", put)
+        answer = page.locator(LAST)
+        page.locator("#chat-input").fill("Ты здесь?")
+        page.locator("#send").click()
+        until(page, lambda: len(puts) == 2)
+        pw.expect(answer.locator(".md")).to_have_text("Облако на связи.")
+        pw.expect(answer.locator(".msg-meta")).to_have_text("")
+        assert page.evaluate(last_saved) == ["done", "Облако на связи."]
+
+        mode["put"] = "fail"
+        page.locator("#chat-input").fill("Ещё раз")
+        page.locator("#send").click()
+        pw.expect(answer.locator(".msg-meta")).to_contain_text("Ответ не сохранился")
+        assert page.evaluate(last_saved) == ["streaming", ""]
+        dialog = page.evaluate("location.hash")
+        page.evaluate("() => { location.hash = '#/chat'; }")
+        page.locator("#messages .msg").first.wait_for(state="detached")
+        page.evaluate("hash => { location.hash = hash; }", dialog)
+        pw.expect(answer.locator(".md")).to_have_text("Облако на связи.")
+        mode["put"] = None
+        answer.locator(".msg-save").click()
+        pw.expect(answer.locator(".msg-save")).to_have_count(0)
+        pw.expect(answer.locator(".msg-meta")).to_have_text("")
+        assert page.evaluate(last_saved) == ["done", "Облако на связи."]
