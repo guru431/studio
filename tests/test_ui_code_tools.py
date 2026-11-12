@@ -75,11 +75,15 @@ def test_fork_subagents_and_worktree_browser_flows(browser, live, width, tmp_pat
         {"id": "answer", "role": "assistant", "text": "Исходный ответ", "steps": [], "time": 2}])})
     machine.chat_fork = machine.subagents = machine.worktrees = True
     machine.projects["alpha"]["chats"][CODE_CHAT_A]["children"] = {
-        "reviewer": {"title": "Проверка кода", "messages": [{"role": "assistant", "text": "Результат подзадачи", "steps": []}]}}
+        "reviewer": {"title": "Проверка кода", "status": "running", "started_at": 1767268800,
+                     "duration_ms": 3000, "total_tokens": 1500,
+                     "messages": [{"role": "assistant", "text": "Результат подзадачи", "steps": []}]}}
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             ("click", "#code-subagents"), ("wait", "!!document.querySelector('.code-subagent-row')"),
+            ("eval", "metrics", "document.querySelector('.code-subagent-metrics').textContent"),
+            ("eval", "active", "document.querySelector('.code-subagent-row').dataset.status === 'running' && getComputedStyle(document.querySelector('.code-subagent-row')).boxShadow !== 'none'"),
             ("click", ".code-subagent-row"), ("wait", "document.querySelector('.code-subagent-history').textContent.includes('Результат подзадачи')"),
             ("eval", "child", "document.querySelector('.code-subagent-history').textContent"),
             ("click", "#code-subagents-dialog .dialog-actions button"),
@@ -98,6 +102,8 @@ def test_fork_subagents_and_worktree_browser_flows(browser, live, width, tmp_pat
         server.stop()
     assert not result.get("failed"), result
     assert result["values"]["draft"] == "Измени постановку"
+    assert result["values"]["active"]
+    assert all(word in result["values"]["metrics"] for word in ("Запуск:", "Длительность:", "Токены:", "1\u00a0500"))
     assert result["values"]["fits"] and "Результат подзадачи" in result["values"]["child"]
     assert len(machine.projects["alpha"]["chats"][CODE_CHAT_A]["messages"]) == 2
     assert not problems(result), problems(result)

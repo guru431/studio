@@ -3,9 +3,20 @@ import { api } from './api.js';
 import { icon } from './icons.js';
 import { el, words } from './ui.js';
 import { renderMarkdown } from './markdown.js';
+import { dateTime } from './time.js';
 
 const POLL_MS = 10000; // События хода обновляют счётчик сразу; опрос сверяет историю и фоновые завершения.
 const HISTORY_POLL_MS = 2000;
+const ACTIVE = ['running', 'inProgress', 'pending', 'waiting'];
+
+function duration(row) {
+  const elapsed = ACTIVE.includes(row.status) && Number.isFinite(row.started_at)
+    ? Math.max(row.duration_ms || 0, Date.now() - row.started_at * 1000) : row.duration_ms;
+  if (!Number.isFinite(elapsed)) return 'нет данных';
+  const seconds = Math.floor(Math.max(0, elapsed) / 1000);
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds / 60) % 60;
+  return `${hours ? `${hours} ч ` : ''}${hours || minutes ? `${minutes} мин ` : ''}${seconds % 60} с`;
+}
 
 export function subagentView(host, { endpoint, supported = true }) {
   const button = el('button', { type: 'button', id: 'code-subagents', class: 'icon-btn',
@@ -34,7 +45,7 @@ export function subagentView(host, { endpoint, supported = true }) {
   let historyVersion = null;
   const known = new Map();
   const statuses = { running: 'работает', inProgress: 'работает', pending: 'ожидает', waiting: 'ждёт ответа', completed: 'завершён',
-    failed: 'ошибка', errored: 'ошибка', stopped: 'остановлен', shutdown: 'остановлен', unknown: 'статус не сообщается' };
+    failed: 'ошибка', errored: 'ошибка', stopped: 'остановлен', shutdown: 'остановлен', interrupted: 'остановлен', unknown: 'статус не сообщается' };
 
   async function read(path, body, render, passive = false) {
     if (passive && request) return;
@@ -100,7 +111,7 @@ export function subagentView(host, { endpoint, supported = true }) {
 
   function paint() {
     const rows = [...known.values()];
-    const active = rows.filter(row => ['running', 'inProgress', 'pending', 'waiting'].includes(row.status)).length;
+    const active = rows.filter(row => ACTIVE.includes(row.status)).length;
     const unknown = rows.filter(row => !row.status || row.status === 'unknown').length;
     count.textContent = String(active);
     const label = `Подзадачи · работают: ${active} · всего: ${rows.length}`
@@ -110,8 +121,13 @@ export function subagentView(host, { endpoint, supported = true }) {
     if (!dialog.open) return;
     const focused = document.activeElement?.dataset.subagent;
     list.replaceChildren(...rows.map((row) => {
-        const entry = el('button', { type: 'button', class: 'btn code-subagent-row' },
-          `${row.title} · ${statuses[row.status] || 'статус не сообщается'}`);
+        const entry = el('button', { type: 'button', class: 'btn code-subagent-row',
+          'data-status': row.status || 'unknown' },
+          el('span', { class: 'code-subagent-title' }, `${row.title} · ${statuses[row.status] || 'статус не сообщается'}`),
+          el('span', { class: 'code-subagent-metrics' },
+            `Запуск: ${Number.isFinite(row.started_at) ? dateTime(row.started_at) : 'нет данных'}`,
+            el('span', { 'data-duration': row.id }, `Длительность: ${duration(row)}`),
+            `Токены: ${Number.isFinite(row.total_tokens) ? row.total_tokens.toLocaleString('ru-RU') : 'нет данных'}`));
         entry.dataset.subagent = row.id;
         entry.setAttribute('aria-pressed', String(selected === row.id));
         entry.addEventListener('click', () => openChild(row));
@@ -153,7 +169,7 @@ export function subagentView(host, { endpoint, supported = true }) {
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!row || typeof row.id !== 'string') continue;
       const before = known.get(row.id);
-      const terminal = ['completed', 'failed', 'errored', 'stopped', 'shutdown'];
+      const terminal = ['completed', 'failed', 'errored', 'stopped', 'shutdown', 'interrupted'];
       const status = before && !live && terminal.includes(before.status) && !terminal.includes(row.status)
         ? before.status : row.status;
       known.set(row.id, { ...before, ...row,
@@ -173,10 +189,17 @@ export function subagentView(host, { endpoint, supported = true }) {
     else load();
   };
   document.addEventListener('visibilitychange', visibility);
+  const ticker = setInterval(() => {
+    if (!alive || !dialog.open || document.hidden) return;
+    for (const node of list.querySelectorAll('[data-duration]')) {
+      const row = known.get(node.dataset.duration);
+      if (row && ACTIVE.includes(row.status)) node.textContent = `Длительность: ${duration(row)}`;
+    }
+  }, 1000);
   load();
   return { button, refresh: schedule, update, open(row) { dialog.showModal(); paint(); openChild(row); load(); },
     unmount() {
-      alive = false; request?.abort(); listing?.abort(); clearTimeout(timer);
+      alive = false; request?.abort(); listing?.abort(); clearTimeout(timer); clearInterval(ticker);
       document.removeEventListener('visibilitychange', visibility);
       known.clear(); dialog.remove();
     } };

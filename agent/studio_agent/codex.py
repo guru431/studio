@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import codex_progress, codex_rpc, diffs, events, history_images, limits, metadata, permissions, sessions, store, timeline
+from . import codex_progress, codex_rpc, diffs, events, history_images, limits, metadata, permissions, sessions, store, task_metrics, timeline
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -602,6 +602,35 @@ class CodexRunner(Runner):
                 if not same_project(source.get("cwd"), project):
                     raise Refused("not_found")
                 children = codex_progress.children([item for turn in source.get("turns", []) for item in turn.get("items", [])], limit=None)
+                # Только уже подтверждённые дети; thread/read не захватывает writer сессии.
+                gate = asyncio.Semaphore(4)
+
+                async def metrics(row):
+                    async with gate:
+                        try:
+                            child = (await self._metadata(project, "thread/read", {"threadId": row["id"]})).get("thread", {})
+                            if not same_project(child.get("cwd"), project):
+                                return
+                            state = child.get("status") or {}
+                            state = state.get("type") if isinstance(state, dict) else state
+                            if state == "active":
+                                row["status"] = "running"
+                            elif state == "idle" and row.get("status") in (*task_metrics.ACTIVE, "unknown"):
+                                row["status"] = "completed"
+                            started = task_metrics.timestamp(child.get("createdAt"))
+                            ended = task_metrics.timestamp(child.get("updatedAt"))
+                            if started is not None:
+                                row["started_at"] = started
+                            if row.get("status") in task_metrics.TERMINAL and ended is not None:
+                                task_metrics.update(row, now=self.now(), ended=True, patch={"end_time": ended})
+                            usage = await asyncio.to_thread(last_context, child.get("path"))
+                            total = ((usage or {}).get("usage") or {}).get("total")
+                            if task_metrics.number(total) is not None:
+                                row["total_tokens"] = total
+                        except (codex_rpc.RpcError, Refused, OSError):
+                            pass  # Отказ одного ребёнка не скрывает весь список.
+
+                await asyncio.gather(*(metrics(row) for row in children if row["id"] != target))
                 self._children_cache.pop(key, None)
                 self._children_cache[key] = (self.now(), children)
                 while len(self._children_cache) > CHILDREN_CACHE_MAX:
@@ -611,7 +640,8 @@ class CodexRunner(Runner):
         rows = {row["id"]: dict(row) for row in children}
         current = self._turns.get(chat)
         if current is not None and current.project == project:
-            rows.update({row["id"]: dict(row) for row in current.progress.get("agents", [])})
+            for row in current.progress.get("agents", []):
+                rows[row["id"]] = {**rows.get(row["id"], {}), **row}
         return {"items": [row for row in rows.values() if row["id"] != target]}
 
     async def subagent_history(self, project, chat, child):
@@ -954,7 +984,13 @@ class CodexRunner(Runner):
             status = "running" if method == "turn/started" else {
                 "completed": "completed", "interrupted": "interrupted", "failed": "errored"}.get(
                 (p.get("turn") or {}).get("status"), "unknown")
-            rows = [{**row, "status": status} if row["id"] == sender else row for row in rows]
+            rows = [task_metrics.update({**row, "status": status}, now=self.now(), started=method == "turn/started",
+                                       ended=method == "turn/completed") if row["id"] == sender else row for row in rows]
+        elif method == "thread/tokenUsage/updated":
+            usage = p.get("tokenUsage") or {}
+            total = permissions.token_usage(usage.get("total")) or {}
+            if "total" in total:
+                rows = [{**row, "total_tokens": total["total"]} if row["id"] == sender else row for row in rows]
         elif method == "serverRequest/resolved":
             self._notification(t, method, p)
         if rows != t.progress.get("agents", []):
@@ -967,15 +1003,15 @@ class CodexRunner(Runner):
                 or child not in t.subtasks and len(t.subtasks) >= codex_progress.AGENTS_MAX):
             return
         t.subtasks[child] = name or t.subtasks.get(child)
-        if name:
-            rows = t.progress.get("agents", [])
-            if not any(row["id"] == child for row in rows):
-                rows = [*rows, {"id": child, "title": name, "status": "running"}][:codex_progress.AGENTS_MAX]
-            else:
-                rows = [{**row, "title": name} if row["id"] == child else row for row in rows]
-            if rows != t.progress.get("agents", []):
-                t.progress["agents"] = rows
-                self._send(t, {"k": "progress", "agents": rows})
+        rows = t.progress.get("agents", [])
+        if not any(row["id"] == child for row in rows):
+            rows = [*rows, {"id": child, "title": name or f"Агент {child[:8]}", "status": "running",
+                           "started_at": self.now()}][:codex_progress.AGENTS_MAX]
+        elif name:
+            rows = [{**row, "title": name} if row["id"] == child else row for row in rows]
+        if rows != t.progress.get("agents", []):
+            t.progress["agents"] = rows
+            self._send(t, {"k": "progress", "agents": rows})
 
     @staticmethod
     def _subtask_name(t, child):

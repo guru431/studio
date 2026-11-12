@@ -14,6 +14,11 @@ from studio_agent.turns import Runner, _Turn
 from test_turns import CHAT, PID, project, marked, settle
 
 
+@pytest.fixture(autouse=True)
+def isolated_transcripts(monkeypatch):
+    monkeypatch.setattr(subagents, "_resolve_subagents_dir", lambda *a: None)
+
+
 def lifecycle(subtype, child="child", **fields):
     return parse_message({"type": "system", "subtype": subtype, "task_id": child,
                           "uuid": "message", "session_id": CHAT, **fields})
@@ -30,7 +35,7 @@ async def test_claude_subagent_lifecycle_streams_terminal_status_and_persists_on
     factory = FakeFactory([
         lifecycle("task_started", description="Проверка приватного запроса", task_type="local_agent"),
         lifecycle("task_started", "shell", description="Команда", task_type="local_bash"),
-        lifecycle(ending, **fields), result_ok()])
+        lifecycle(ending, **fields), lifecycle("task_updated", "shell", patch={"status": "completed"}), result_ok()])
     runner = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=factory)
     runner.start(project, PID, CHAT, "Задание", None, None)
     await settle(runner)
@@ -98,7 +103,7 @@ async def background(home, project):
         await asyncio.gather(turn.task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("kind", ["local_agent", "local_workflow"])
+@pytest.mark.parametrize("kind", ["local_agent", "local_workflow", "local_bash"])
 async def test_background_work_survives_parent_result_until_its_final_response(background, kind):
     runner, client, turn, sent = background
     client.items.put_nowait(lifecycle("task_started", task_type=kind, description="Фоновая проверка"))
@@ -141,15 +146,16 @@ async def test_workflow_children_stream_through_hooks_and_queue_waits_for_the_wo
     assert any(f["e"] == {"k": "followup_sent", "id": queued["id"]} for f in sent)
 
 
-async def test_stopping_an_idle_parent_stops_its_background_work_without_waiting_for_another_result(background):
+@pytest.mark.parametrize("kind", ["local_agent", "local_bash"])
+async def test_stopping_an_idle_parent_stops_its_background_work_without_waiting_for_another_result(background, kind):
     runner, client, turn, sent = background
-    client.items.put_nowait(lifecycle("task_started", task_type="local_agent", description="Проверка"))
+    client.items.put_nowait(lifecycle("task_started", task_type=kind, description="Проверка"))
     client.items.put_nowait(result_ok())
     await client.results.get()
     await runner.stop(PID, CHAT)
     await asyncio.gather(turn.task, return_exceptions=True)
     assert client.stopped_tasks == ["child"] and client.disconnected
-    assert runner.choices.details(CHAT)["subagent_statuses"] == {"child": "stopped"}
+    assert runner.choices.details(CHAT).get("subagent_statuses", {}) == ({"child": "stopped"} if kind == "local_agent" else {})
     assert sent[-1]["e"]["status"] == "stopped"
 
 
@@ -198,6 +204,50 @@ async def test_background_error_finishes_the_turn_and_releases_the_client(backgr
     client.items.put_nowait(result("error_during_execution", is_error=True, result="Ошибка проверки"))
     await turn.task
     assert client.disconnected and sent[-1]["e"]["status"] == "error"
+
+
+async def test_subagent_metrics_survive_completion_without_saving_titles(home, project, monkeypatch):
+    from studio_agent import task_metrics
+
+    sent, moment = [], [100.0]
+    choices = store.Choices(home)
+    runner = Runner(sent.append, choices=choices, cli_path=None, now=lambda: moment[0])
+    turn = _Turn(project, PID, CHAT, "turn")
+    runner._turns[CHAT] = turn
+    runner._subtask(turn, lifecycle("task_started", task_type="local_agent", description="Приватная задача"))
+    moment[0] = 108.0
+    runner._subtask(turn, lifecycle("task_progress", description="Приватный прогресс",
+        usage={"total_tokens": 1250, "duration_ms": 7500, "tool_uses": 2}))
+    runner._subtask(turn, lifecycle("task_notification", status="completed", output_file="private", summary="private",
+        usage={"total_tokens": 1500, "duration_ms": 8000, "tool_uses": 3}))
+    await runner._finish(turn, False, None)
+    expected = {"started_at": 100.0, "ended_at": 108.0, "duration_ms": 8000, "total_tokens": 1500}
+    assert choices.details(CHAT)["subagent_metrics"] == {"child": expected}
+    assert "Приватн" not in choices.path.read_text(encoding="utf-8")
+    monkeypatch.setattr(sessions, "exists", lambda *a: True)
+    monkeypatch.setattr(subagents.claude_agent_sdk, "list_subagents", lambda *a, **kw: ["child"])
+    row = subagents.list_children(project, CHAT, choices=choices)["items"][0]
+    assert task_metrics.numeric(row) == expected and row["status"] == "completed"
+
+
+def test_historical_subagent_metrics_deduplicate_messages_and_read_timestamps(tmp_path, monkeypatch):
+    root = tmp_path / "subagents"
+    root.mkdir()
+    path = root / "agent-child.jsonl"
+    records = [
+        {"type": "user", "timestamp": "2026-01-01T12:00:00Z"},
+        {"type": "assistant", "timestamp": "2026-01-01T12:00:02Z", "message": {
+            "id": "one", "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 80}}},
+        {"type": "assistant", "timestamp": "2026-01-01T12:00:03Z", "message": {
+            "id": "one", "usage": {"input_tokens": 100, "output_tokens": 30, "cache_read_input_tokens": 80},
+            "stop_reason": "end_turn"}}]
+    path.write_text("\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8")
+    monkeypatch.setattr(sessions, "exists", lambda *a: True)
+    monkeypatch.setattr(subagents.claude_agent_sdk, "list_subagents", lambda *a, **kw: ["child"])
+    monkeypatch.setattr(subagents, "_resolve_subagents_dir", lambda *a: root)
+    row = subagents.list_children(tmp_path, CHAT)["items"][0]
+    assert row["total_tokens"] == 210 and row["duration_ms"] == 3000
+    assert row["ended_at"] - row["started_at"] == 3 and row["status"] == "completed"
 
 
 async def test_followup_image_is_in_the_live_snapshot_without_inline_bytes_and_survives_done(background):

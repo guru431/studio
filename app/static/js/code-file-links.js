@@ -15,6 +15,17 @@ export function localFileHref(value) {
   return '/' + value.replace(/^\//, '').replaceAll('\\', '/');
 }
 
+export function visualizationFilePath(href) {
+  const local = localFileHref(href);
+  if (!local) return null;
+  let path;
+  try { path = decodeURIComponent(local).slice(1); } catch { return null; }
+  if (!path.toLowerCase().endsWith('.html') || path.length > 1024 || /[\x00-\x1f\x7f?"<>|]/.test(path)
+      || path.split('/').some(part => part === '..' || part === '.')) return null;
+  // Разрешённый корень повторно проверяет мост; путь никогда не попадает в URL запроса.
+  return path;
+}
+
 export function projectFilePath(href, agent, project) {
   if (typeof href !== 'string' || !agent || !project) return null;
   const local = localFileHref(href);

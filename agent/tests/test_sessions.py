@@ -238,7 +238,49 @@ def test_clip_cuts_nested_strings():
     assert got["a"][1] == {"b": "коротко"} and got["n"] == 5 and len(value["a"][0]) == 30_000
 
 
+def test_legacy_studio_session_becomes_visible_with_a_reversible_metadata_change(tmp_path, monkeypatch):
+    path = tmp_path / (CHAT + ".jsonl")
+    original = b'{"type":"file-history-snapshot"}\n' + json.dumps({"type": "user", "entrypoint": "sdk-py",
+        "message": {"content": "Приватный текст"}}, ensure_ascii=False).encode() + b'\n' + b'{"type":"tag","tag":"studio"}\n'
+    path.write_bytes(original)
+    stamp = path.stat().st_mtime_ns
+    monkeypatch.setattr(sessions, "_resolve_session_file_path", lambda *a: path)
+    monkeypatch.setattr(sessions, "get_session_info", lambda *a, **k: SDKSessionInfo(session_id=CHAT,
+        summary="Private", last_modified=1, tag="studio"))
+    assert sessions.make_visible(tmp_path, CHAT)
+    expected = [json.loads(line) for line in original.splitlines()]
+    expected[1]["entrypoint"] = "local-agent"
+    assert [json.loads(line) for line in path.read_bytes().splitlines()] == expected
+    assert path.with_suffix(".studio-backup").read_bytes() == original
+    assert path.stat().st_mtime_ns == stamp
+    assert not sessions.make_visible(tmp_path, CHAT)
+    assert not list(tmp_path.glob('.studio-session-*'))
+    monkeypatch.setattr(sessions, "get_session_info", lambda *a, **k: SDKSessionInfo(session_id=CHAT,
+        summary="Private", last_modified=1))
+    assert not sessions.make_visible(tmp_path, CHAT)
+
+
 def test_text_of():
     assert events.text_of("как есть") == "как есть"
     assert events.text_of([text("a"), {"type": "image"}, {"type": "tool_use"}, text("b")]) == "a\n[изображение]\nb"
     assert events.text_of(None) == ""
+
+
+def test_session_visibility_does_not_replace_a_concurrently_changed_transcript(tmp_path, monkeypatch):
+    path = tmp_path / (CHAT + ".jsonl")
+    original = b'{"type":"user","entrypoint":"sdk-py"}\n'
+    path.write_bytes(original)
+    monkeypatch.setattr(sessions, "_resolve_session_file_path", lambda *a: path)
+    monkeypatch.setattr(sessions, "get_session_info", lambda *a, **k: SDKSessionInfo(session_id=CHAT,
+        summary="Private", last_modified=1, tag="studio"))
+    temporary = sessions.tempfile.NamedTemporaryFile
+    appended = b'{"type":"assistant","message":{"content":"new"}}\n'
+    def concurrent(**kwargs):
+        with path.open("ab") as target:
+            target.write(appended)
+        return temporary(**kwargs)
+    monkeypatch.setattr(sessions.tempfile, "NamedTemporaryFile", concurrent)
+    assert not sessions.make_visible(tmp_path, CHAT)
+    assert path.read_bytes() == original + appended
+    assert not path.with_suffix(".studio-backup").exists()
+    assert not list(tmp_path.glob('.studio-session-*'))

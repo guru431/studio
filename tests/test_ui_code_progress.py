@@ -122,10 +122,12 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
         'progress': {'changes': {'diff': PATCH, 'files': [{'path': 'src/a.py', 'added': 2, 'removed': 1},
                                                        {'path': 'src/without-diff.py'}]},
             'plan': [{'step': 'Проверить', 'status': 'completed'}],
-            'agents': [{'id': CHILD, 'title': 'GPU backend', 'status': 'completed', 'task': 'Проверка GPU'}]}}
+            'agents': [{'id': CHILD, 'title': 'GPU backend', 'status': 'running', 'task': 'Проверка GPU',
+                        'started_at': T0, 'duration_ms': 3000, 'total_tokens': 1500}]}}
     session = code_session('Прогресс', messages=[message])
     session['engine'] = 'codex'
-    session['children'] = {CHILD: {'title': 'GPU backend', 'messages': [
+    session['children'] = {CHILD: {'title': 'GPU backend', 'status': 'running', 'started_at': T0,
+                                 'duration_ms': 3000, 'total_tokens': 1500, 'messages': [
         {'role': 'assistant', 'text': 'Результат GPU', 'steps': []}]}}
     machine = FakeMachine({'alpha': {'files': {'src/a.py': b'new = 2\nextra = 3'}, 'chats': {CODE_CHAT_A: session}}})
     machine.codex, machine.subagents = CATALOG, True
@@ -162,6 +164,21 @@ def test_timeline_changes_agents_and_running_output_survive_reload(desktop_brows
             page.screenshot(path=str(tmp_path / f'reference-progress-{desktop_browser.browser_type.name}-{width}.png'))
             page.locator('.code-progress-agent').click()
             page.get_by_text('Результат GPU', exact=True).wait_for()
+            page.evaluate(f'Date.now = () => {(T0 + 10) * 1000}')
+            row = page.locator('.code-subagent-row')
+            assert row.get_attribute('data-status') == 'running'
+            assert row.evaluate("node => getComputedStyle(node).boxShadow !== 'none'")
+            assert 'Токены: 1\u00a0500' in row.inner_text()
+            assert 'Запуск:' in row.inner_text() and 'нет данных' not in row.inner_text()
+            page.wait_for_function("() => document.querySelector('[data-duration]').textContent === 'Длительность: 10 с'")
+            page.evaluate(f'Date.now = () => {(T0 + 11) * 1000}')
+            page.wait_for_function("() => document.querySelector('[data-duration]').textContent === 'Длительность: 11 с'")
+            for theme in ['light', 'dark']:
+                page.evaluate("theme => { document.documentElement.dataset.theme = theme; document.documentElement.style.setProperty('--font-scale', '1.5'); }", theme)
+                assert page.locator('#code-subagents-dialog').evaluate('node => node.scrollWidth <= node.clientWidth')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                page.screenshot(path=str(tmp_path / f'subagents-{desktop_browser.browser_type.name}-{width}-{theme}.png'))
+            page.evaluate("document.documentElement.style.setProperty('--font-scale', '1')")
             page.locator('#code-subagents-dialog .dialog-actions button').click()
             changed = page.locator('#code-changed-files')
             assert changed.locator('.code-changed-count').inner_text() == '2'

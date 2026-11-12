@@ -5,6 +5,7 @@ import json
 import itertools
 import threading
 import tempfile
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -64,7 +65,8 @@ def provider(project):
             words = '\n'.join(content if isinstance(content, str) else '\n'.join(
                 block.get('text', '') for block in content if block.get('type') == 'text') for content in prompts)
             child = 'workflow-probe-child' in words
-            main = not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
+            shell = 'shell-probe-main' in words
+            main = shell or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
             if child:
                 if not release.wait(30):
                     self.send_error(504)
@@ -73,10 +75,11 @@ def provider(project):
                 main_calls.append(1)
             tool = main and len(main_calls) == 1 or child and 'toolu_child_probe_' not in last
             identifier = 'toolu_child_probe_' + ('one' if 'one' in words else 'two') if child else 'toolu_workflow_probe'
-            block = ({'type': 'tool_use', 'id': identifier, 'name': 'Read' if child else 'Workflow', 'input': {}}
+            block = ({'type': 'tool_use', 'id': identifier, 'name': 'Read' if child else 'Bash' if shell else 'Workflow', 'input': {}}
                      if tool else {'type': 'text', 'text': ''})
             delta = ({'type': 'input_json_delta', 'partial_json': json.dumps(
-                {'file_path': str(source)} if child else {'script': SCRIPT})}
+                {'file_path': str(source)} if child else {'command': f'"{Path(sys.executable).as_posix()}" "{(project / "shell_probe.py").as_posix()}"',
+                    'description': 'Studio shell probe', 'run_in_background': True} if shell else {'script': SCRIPT})}
                      if tool else {'type': 'text_delta', 'text': 'child finished' if child else 'parent finished'})
             usage = {'input_tokens': 1, 'output_tokens': 1}
             frames = [
@@ -109,12 +112,14 @@ def provider(project):
         worker.join(timeout=3)
 
 
-async def test_native_workflow_keeps_its_children_alive_after_parent_result(home, project, provider, monkeypatch):
+@pytest.mark.parametrize('mode', ['workflow', 'shell'])
+async def test_native_background_work_keeps_its_children_alive_after_parent_result(home, project, provider, monkeypatch, mode):
     address, release, main_calls = provider
     config = home / 'claude'
     config.mkdir()
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.delenv('CLAUDECODE', raising=False)
+    (project / 'shell_probe.py').write_text('import pathlib, time\ndeadline = time.monotonic() + 30\nwhile not pathlib.Path(__file__).with_name("release").exists() and time.monotonic() < deadline:\n time.sleep(0.05)\nprint("shell finished")\n', encoding='utf-8')
     parent_result = asyncio.Event()
     children_started = asyncio.Event()
     sent = []
@@ -122,7 +127,7 @@ async def test_native_workflow_keeps_its_children_alive_after_parent_result(home
     class Client(ClaudeSDKClient):
         def __init__(self, *, options):
             options.setting_sources = []
-            options.allowed_tools = ['Workflow', 'Read']
+            options.allowed_tools = ['Workflow', 'Read', 'Bash']
             options.can_use_tool = None
             options.env.update(ANTHROPIC_BASE_URL=address, ANTHROPIC_API_KEY='local-test-key',
                                ANTHROPIC_AUTH_TOKEN='', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
@@ -142,25 +147,33 @@ async def test_native_workflow_keeps_its_children_alive_after_parent_result(home
             children_started.set()
 
     runner = Runner(emit, choices=store.Choices(home), cli_path=None, factory=Client)
-    runner.start(project, PID, CHAT, 'workflow-probe-main', 'claude-sonnet-5-5', None)
+    runner.start(project, PID, CHAT, f'{mode}-probe-main', 'claude-sonnet-5-5', None)
     turn = runner._turns[CHAT]
     try:
         await asyncio.wait_for(parent_result.wait(), 20)
-        await asyncio.wait_for(children_started.wait(), 10)
+        if mode == 'workflow':
+            await asyncio.wait_for(children_started.wait(), 10)
         assert CHAT in runner.live() and turn.background_tasks
         assert not any(f['e']['k'] == 'done' for f in sent)
         release.set()
+        (project / 'release').touch()
         await asyncio.wait_for(asyncio.shield(turn.task), 20)
         assert sent[-1]['e']['status'] == 'done' and len(main_calls) >= 3
+        files = list((config / 'projects').glob('*/' + CHAT + '.jsonl'))
+        assert len(files) == 1
+        records = [json.loads(line) for line in files[0].read_text(encoding='utf-8').splitlines()]
+        assert next(row for row in records if row.get('type') == 'user')['entrypoint'] == 'local-agent'
         monkeypatch.setattr(sessions, 'exists', lambda *_: True)
         rows = subagents.list_children(project, CHAT, choices=runner.choices)['items']
-        assert len(rows) == 2 and {row['status'] for row in rows} == {'completed'}
+        assert len(rows) == (2 if mode == 'workflow' else 0)
+        assert {row['status'] for row in rows} == ({'completed'} if mode == 'workflow' else set())
         for row in rows:
             messages = subagents.history(project, CHAT, row['id'])['items']
             steps = [step for message in messages for step in message['steps']]
             assert any(step['tool'] == 'Read' and not step['error'] for step in steps), messages
     finally:
         release.set()
+        (project / 'release').touch()
         if not turn.task.done():
             turn.task.cancel()
         await asyncio.gather(turn.task, return_exceptions=True)

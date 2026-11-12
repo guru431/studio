@@ -28,7 +28,9 @@ LABEL_MAX = 100
 SETTINGS = ["user", "project", "local"]
 DEFAULTS: dict[str, dict] = {}
 DEFAULTS_MAX = 8
-ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"}  # решение плана 4: только это
+# Сессия начата пользователем через Studio. VS Code исключает sdk-py/sdk-ts/sdk-cli из своего списка;
+# Штатное значение local-agent обозначает локальный мост; SDK по-прежнему управляет транспортом.
+ENV = {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}", "CLAUDE_CODE_ENTRYPOINT": "local-agent"}
 SUBAGENT_LIMITS = ("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH")
 # Привязка к сессии того, кто запустил мост (Claude Code, терминал VS Code): ходам она чужая.
 SESSION_ENV = frozenset({"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",

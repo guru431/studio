@@ -5,9 +5,14 @@
 import contextlib
 import json
 import logging
+import os
+import shutil
+import stat
+import tempfile
 from pathlib import Path
 
 from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
+from claude_agent_sdk._internal.sessions import _resolve_session_file_path
 
 from . import diffs, history_images, limits, permissions, timeline
 from .errors import Refused
@@ -246,5 +251,74 @@ def mark_studio(project: Path, chat: str) -> None:
     """Метка `studio` сессии, начатой студией; сбой — только в журнал."""
     try:
         tag_session(chat, TAG, directory=str(project))
+        make_visible(project, chat)
     except Exception as e:
         log.warning("метка сессии: %s", type(e).__name__)
+
+
+def make_visible(project: Path, chat: str) -> bool:
+    """Совместимость прежней Studio-сессии с VS Code. Звать только после остановки её writer.
+
+    Меняем первый entrypoint sdk-py, без текстов в журнале; исходный JSONL остаётся в соседней копии.
+    Новые сессии сразу создаются с entrypoint local-agent и сюда не попадают.
+    """
+    if not limits.CHAT_ID.fullmatch(chat):
+        raise Refused("invalid")
+    info = get_session_info(chat, directory=str(project))
+    if info is None or info.tag != TAG:
+        return False
+    if info.cwd is not None and os.path.normcase(os.path.realpath(info.cwd)) != os.path.normcase(os.path.realpath(project)):
+        return False
+    path = _resolve_session_file_path(chat, str(project))
+    if path is None or path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        return False
+    before = path.stat()
+    with path.open("rb") as source:
+        head = source.read(64 * 1024)
+    offset = 0
+    for line in head.splitlines(keepends=True):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            offset += len(line)
+            continue
+        if isinstance(record, dict) and "entrypoint" in record:
+            if record["entrypoint"] != "sdk-py":
+                return False
+            record["entrypoint"] = "local-agent"
+            changed = json.dumps(record, ensure_ascii=True).encode("utf-8") + (b"\r\n" if line.endswith(b"\r\n") else b"\n")
+            break
+        offset += len(line)
+    else:
+        return False
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".studio-session-", delete=False) as target:
+            temporary = target.name
+            with path.open("rb") as source:
+                target.write(source.read(offset))
+                source.seek(len(line), 1)
+                target.write(changed)
+                shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        current = path.stat()
+        if (current.st_ino, current.st_size, current.st_mtime_ns) != (before.st_ino, before.st_size, before.st_mtime_ns):
+            return False
+        backup = path.with_suffix(".studio-backup")
+        # Не перезаписываем прежнюю копию, ссылку или файл владельца с таким именем.
+        try:
+            with backup.open("xb") as target, path.open("rb") as source:
+                shutil.copyfileobj(source, target)
+        except FileExistsError:
+            return False
+        current = path.stat()
+        if (current.st_ino, current.st_size, current.st_mtime_ns) != (before.st_ino, before.st_size, before.st_mtime_ns):
+            return False
+        os.replace(temporary, path)
+        temporary = None
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return True
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
