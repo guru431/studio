@@ -7449,7 +7449,7 @@ def test_code_section_lists_computers_and_says_when_there_are_none(browser, live
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["tabs"] == ["chat", "code", "photo", "video", "transcribe", "speech", "ocr", "translate"]
+    assert v["tabs"] == ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
     assert v["tab"] == "Агенты" and v["current"] == "code" and v["head"] is False and v["panel"] is False
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
