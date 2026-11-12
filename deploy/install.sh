@@ -1,6 +1,6 @@
 #!/bin/bash
 # Установка выкладки на debian — её запускает deploy/deploy.sh:
-#   sudo bash /opt/services/studio/.incoming/deploy/install.sh [--secret-stdin] [--admin-stdin]
+#   sudo bash /opt/services/studio/.incoming-<ревизия>-…/deploy/install.sh [--secret-stdin] [--admin-stdin]
 # Код и .venv — root: служба (пользователь studio) их только читает и исполняет. Секрет —
 # /etc/studio/studio.env, 0600 root: его читает systemd при старте, а не служба.
 # --secret-stdin — первая строка stdin `STUDIO_DATA_KEY=…` (ключ Fernet из vault) ложится в
@@ -12,13 +12,13 @@
 # Значения в argv не попадают и не печатаются: только поток stdin.
 set -euo pipefail
 R=/opt/services/studio
-NEW=$R/.incoming
+NEW=$(readlink -f "$(dirname "$(readlink -f "$0")")/..")
 OLD=$R/.previous
 ENV_FILE=/etc/studio/studio.env
 UNIT=studio-web.service
 SOCK=/run/studio/web.sock
 MEDIA=/mnt/storage/SharedData/studio
-PARTS=(app deploy requirements.txt)
+PARTS=(app deploy requirements.txt constraints.txt)
 
 SECRET=0
 ADMIN=0
@@ -29,6 +29,11 @@ for arg in "$@"; do
         *) echo "ОШИБКА: неизвестный аргумент $arg (есть --secret-stdin и --admin-stdin)" >&2; exit 1 ;;
     esac
 done
+# Своя папка загрузки каждой выкладки (deploy.sh) и одна установка за раз: параллельные выкладки не
+# подменяют код друг другу посреди переезда.
+case "$NEW" in "$R"/.incoming-*) ;; *) echo "ОШИБКА: install.sh запускают из $R/.incoming-* (deploy.sh)" >&2; exit 1 ;; esac
+exec 9>"$R/.deploy.lock"
+flock -n 9 || { echo "ОШИБКА: уже идёт другая выкладка" >&2; exit 1; }
 
 getent passwd studio >/dev/null \
     || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin studio
@@ -99,20 +104,20 @@ command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — ч
 }
 
 # Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
-# Собирается в $NEW/.venv, только если сменились requirements.txt или python3 (штамп в самой
+# Собирается в $NEW/.venv, только если сменились requirements.txt, constraints.txt или python3 (штамп в самой
 # среде; не сменились — действующая остаётся, её никто не трогал), и переезжает на место вместе с
 # кодом; прежняя уходит в $OLD, откат возвращает и её. Упал pip — недособранная среда убрана,
 # прежние код и среда не тронуты. Переезд ломает абсолютный shebang скриптов bin/ — поэтому служба,
 # копия базы и manage.py запускаются интерпретатором среды (`.venv/bin/python -m …`), pip — тоже.
 STAMP=.studio-requirements
-want="$(sha256sum < "$NEW/requirements.txt" | cut -d' ' -f1) $(python3 -V 2>&1)"
+want="$(cat "$NEW/requirements.txt" "$NEW/constraints.txt" | sha256sum | cut -d' ' -f1) $(python3 -V 2>&1)"
 SWAP=("${PARTS[@]}" agent)      # архив моста (agent/) переезжает и откатывается вместе с кодом
 PY=$R/.venv/bin/python
 if ! [ -x "$PY" ] || [ "$(cat "$R/.venv/$STAMP" 2>/dev/null)" != "$want" ]; then
     rm -rf "$NEW/.venv"
     python3 -m venv "$NEW/.venv"
     if ! "$NEW/.venv/bin/python" -m pip install --quiet --disable-pip-version-check --root-user-action=ignore \
-            -r "$NEW/requirements.txt"; then
+            -r "$NEW/requirements.txt" -c "$NEW/constraints.txt"; then
         rm -rf "$NEW/.venv"
         echo "ОШИБКА: pip не поставил зависимости — прежние код и среда не тронуты" >&2
         exit 1

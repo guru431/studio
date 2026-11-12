@@ -1235,12 +1235,14 @@ ntfy получает только текст уведомления (для а�
 Ходят прямо в шлюз (`-Url`, по умолчанию `http://10.77.1.15:4000/slot`), студия им не нужна.
 В репозитории ключа в скриптах нет: один раз собрать локальную копию с вписанным ключом —
 
-    powershell -ExecutionPolicy Bypass -File client\studio-batch.ps1 -MakeLocal
-    powershell -ExecutionPolicy Bypass -File client\studio-video.ps1 -MakeLocal
+    powershell -ExecutionPolicy Bypass -File client\studio-batch.ps1 -MakeLocal -GatewayUrl http://<шлюз>:4000/slot
+    powershell -ExecutionPolicy Bypass -File client\studio-video.ps1 -MakeLocal -GatewayUrl http://<шлюз>:4000/slot
 
 Ключ берётся строкой `GATEWAY_KEY_OWNER_IMAGES=` из `C:\work\projects\local-config\secrets\vault.env`
-(другой путь — `-VaultPath`); рядом появится `*.local.ps1` (в `.gitignore`), её можно переносить
-на другие компьютеры как есть. После ротации ключа — `-MakeLocal` заново.
+(другой путь — `-VaultPath`), адрес шлюза `-GatewayUrl` становится умолчанием `-Url` копии (без него остаётся
+адрес-пример из репозитория); рядом появится `*.local.ps1` (в `.gitignore`), её можно переносить
+на другие компьютеры как есть. После ротации ключа и после обновления скриптов — `-MakeLocal` заново: живая
+приёмка отказывает, если копия расходится со скриптом не только ключом и адресом.
 
 **Картинки** — `studio-batch.local.ps1 -PromptsFile prompts.txt [-Model lustify|flux]
 [-Size portrait|square|landscape] [-Count 3] [-Seed N] [-ImagePath D:\photo.jpg] [-Strength 0.65]
@@ -1276,8 +1278,8 @@ BOM; отпечаток роликов у двух версий один, пап
 
 Локальную копию с ключом проще собрать на workstation, где лежит vault, и перенести на Linux:
 
-    py client\studio-batch.py --make-local
-    py client\studio-video.py --make-local
+    py client\studio-batch.py --make-local --gateway-url http://<шлюз>:4000/slot
+    py client\studio-video.py --make-local --gateway-url http://<шлюз>:4000/slot
 
 Рядом появятся `*.local.py` (в `.gitignore`). На Linux без vault — `--vault-path /путь/vault.env`;
 там копия получает права 0700. Запуск —

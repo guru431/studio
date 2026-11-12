@@ -19,6 +19,9 @@ backup — согласованная копия SQLite (`Connection.backup`, с
 verify-backup [ПУТЬ] — поднимется ли студия из копии (без пути — из новейшей): verify_backup на
 временной копии в tmp_dir, рабочая база не открывается. Итог — JSON в stdout; код 0 — поднимается,
 1 — нет, 2 — копии нет или неверный вызов. Та же функция — у панели (admin.py, «Проверить копию»).
+Без пути краткий итог (check_summary: флаг, число проблем, время) ложится в рабочую базу — `settings`
+CHECK_KEY: его показывает панель, а провал служба сообщает администраторам (admin.notify_failed_check).
+Ночной юнит копии зовёт verify-backup сразу после backup.
 """
 import json
 import os
@@ -51,6 +54,7 @@ BACKUP_GLOB = "studio-????????.db"          # копии в $STUDIO_MEDIA_DIR/ba
 VERIFY_FILES_SEC = 600                      # verify_backup: дольше файлы не проверяются — «проверено N из M»
 #: verify_backup: свободного места в tmp_dir (диск рабочей базы) — копия плюс столько (или 10 % копии)
 VERIFY_RESERVE = 256 << 20
+CHECK_KEY = "backup_check"                  # settings: итог последней проверки новейшей копии (check_summary)
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -314,8 +318,26 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     return out
 
 
+def check_summary(out: dict, *, notified: bool) -> dict:
+    """Краткий итог verify_backup для `settings`: без путей, имён и слов — флаг, число проблем, время
+    проверки и время копии (None — копии нет). notified — о провале уже знают (проверка из панели)."""
+    return {"ok": bool(out["ok"]), "problems": len(out["problems"]), "at": clock.NOW(),
+            "backup_at": out.get("at"), "notified": bool(out["ok"] or notified)}
+
+
+def record_check(conn: sqlite3.Connection, out: dict, *, notified: bool = False) -> None:
+    conn.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (CHECK_KEY, json.dumps(check_summary(out, notified=notified))))
+
+
+def last_check(conn: sqlite3.Connection) -> "dict | None":
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (CHECK_KEY,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
 def verify_command(argv: list[str]) -> int:
-    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается, 1 — нет, 2 — копии нет."""
+    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается, 1 — нет, 2 — копии нет. Без пути
+    (новейшая копия, ночной юнит) краткий итог — в рабочую базу; не записался — только предупреждение."""
     try:
         state.CFG = config.load()
     except RuntimeError as e:
@@ -323,6 +345,15 @@ def verify_command(argv: list[str]) -> int:
         return 2
     out = verify_backup(argv[0] if argv else None)
     print(json.dumps(out, ensure_ascii=False, indent=1))
+    if not argv and state.CFG.db_path.is_file():     # sqlite3.connect завёл бы пустую базу
+        try:
+            conn = db.connect(state.CFG.db_path)
+            try:
+                record_check(conn, out)
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            print(f"итог проверки не записан в базу ({type(e).__name__})", file=sys.stderr)
     return 0 if out["ok"] else 2 if out["backup"] is None else 1
 
 

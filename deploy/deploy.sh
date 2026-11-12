@@ -1,6 +1,6 @@
 #!/bin/bash
 # Выкладка студии на debian с workstation (Git Bash): закоммиченный HEAD (git archive, не рабочее
-# дерево) → /opt/services/studio/.incoming → deploy/install.sh от root (среда, код, юниты, перезапуск,
+# дерево) → /opt/services/studio/.incoming-<ревизия>-… → deploy/install.sh от root (среда, код, юниты, перезапуск,
 # проверка сокета, таймер копии базы) → проверка снаружи через Apache.
 #   bash deploy/deploy.sh                   обычная выкладка
 #   bash deploy/deploy.sh --new-secret      заново положить STUDIO_DATA_KEY из vault (после смены
@@ -8,6 +8,8 @@
 #   bash deploy/deploy.sh --create-admin    завести или обновить первого администратора:
 #                                           STUDIO_ADMIN_LOGIN, STUDIO_ADMIN_PASSWORD и
 #                                           GATEWAY_KEY_OWNER_IMAGES (подключение «srvllm») из vault
+#   bash deploy/deploy.sh --refresh-base    Docker: собрать образ заново без кэша (свежие база и
+#                                           пакеты Debian сразу, не дожидаясь новой недели)
 # Ключ данных при первой установке (в studio.env нет строки STUDIO_DATA_KEY=) тоже едет из vault.
 # Значения идут потоком grep | ssh: не печатаются, не ложатся на диск workstation и не попадают в
 # argv. Откат — выложить прежний коммит. Vhost (deploy/apache-vhost.conf) подключён в
@@ -33,7 +35,7 @@ KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
 VAULT=${STUDIO_VAULT:-/c/work/projects/local-config/secrets/vault.env}
 URL=${STUDIO_URL:-https://studio.example.com}
 R=${STUDIO_REMOTE_ROOT:-/opt/services/studio}
-PARTS=(app deploy requirements.txt)
+PARTS=(app deploy requirements.txt constraints.txt)
 RUNTIME=${STUDIO_RUNTIME:-systemd}
 case "$RUNTIME" in systemd|docker) ;; *) echo 'deploy: invalid STUDIO_RUNTIME' >&2; exit 1 ;; esac
 if [ "$RUNTIME" = docker ]; then PARTS+=(.dockerignore); fi
@@ -43,22 +45,28 @@ die() { echo "deploy: $*" >&2; exit 1; }
 NEW_SECRET=0
 CREATE_ADMIN=0
 PREPARE=0
+REFRESH_BASE=0
 for arg in "$@"; do
     case "$arg" in
         --new-secret) NEW_SECRET=1 ;;
         --create-admin) CREATE_ADMIN=1 ;;
         --prepare-only) PREPARE=1 ;;
-        *) die "неизвестный аргумент: $arg (есть --new-secret и --create-admin)" ;;
+        --refresh-base) REFRESH_BASE=1 ;;
+        *) die "неизвестный аргумент: $arg (есть --new-secret, --create-admin, --prepare-only, --refresh-base)" ;;
     esac
 done
 if [ "$PREPARE" = 1 ] && [ "$RUNTIME" != docker ]; then die '--prepare-only requires Docker'; fi
+if [ "$REFRESH_BASE" = 1 ] && [ "$RUNTIME" != docker ]; then die '--refresh-base requires Docker'; fi
 if [ "$RUNTIME" = docker ]; then
     [ -n "${STUDIO_BACKEND_URL:-}" ] || die 'Docker requires STUDIO_BACKEND_URL'
     [ -n "${STUDIO_PROXY_SSH:-}" ] || die 'Docker requires STUDIO_PROXY_SSH'
     [ -n "${STUDIO_PROXY_VHOST:-}" ] || die 'Docker requires STUDIO_PROXY_VHOST'
 fi
 
-git -C "$D" cat-file -e HEAD:agent/install.cmd 2>/dev/null \
+# Ревизия разрешается один раз: коммит параллельной сессии во время выкладки не смешает в ней мост,
+# код и тег образа из разных ревизий.
+REV=$(git -C "$D" rev-parse --verify 'HEAD^{commit}')
+git -C "$D" cat-file -e "$REV:agent/install.cmd" 2>/dev/null \
     || die "нет agent/install.cmd в HEAD студии — архив моста едет вместе со студией"
 [ -z "$(git -C "$D" status --porcelain -- "${PARTS[@]}" agent)" ] \
     || die "незакоммиченные изменения в ${PARTS[*]} agent — выкладывается только закоммиченный HEAD"
@@ -70,33 +78,43 @@ if [ ! -x "$PYTHON" ]; then PYTHON=$D/.venv/Scripts/python.exe; fi
 "$PYTHON" "$D/deploy/render-profile.py" --check
 MD2PDF_SOURCE=${STUDIO_MD2PDF_SOURCE:-$HOME/.claude/bin/md2pdf.py}
 [ -s "$MD2PDF_SOURCE" ] || die "нет общего md2pdf.py; задайте STUDIO_MD2PDF_SOURCE"
-md2pdf_expected=$(git -C "$D" show HEAD:deploy/md2pdf.sha256 | tr -d '\r\n')
+md2pdf_expected=$(git -C "$D" show "$REV:deploy/md2pdf.sha256" | tr -d '\r\n')
 md2pdf_actual=$(sha256sum "$MD2PDF_SOURCE" | cut -d' ' -f1)
 [ "$md2pdf_actual" = "$md2pdf_expected" ] || die "версия md2pdf.py не совпала с deploy/md2pdf.sha256"
 
 package=$(mktemp -d)
-trap 'rm -rf -- "$package"' EXIT
-git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent > "$package/studio-agent.zip"
+# Своя папка загрузки на хосте: параллельная выкладка не очистит и не перемешает её содержимое.
+# Установщик её переносит или удаляет; что осталось (отказ, --prepare-only) — убирает выход.
+IN=$R/.incoming-${REV:0:12}-$$-$RANDOM
+uploaded=0
+cleanup() {
+    rm -rf -- "$package"
+    if [ "$uploaded" = 1 ]; then "${SSH[@]}" "sudo rm -rf $IN" || true; fi
+}
+trap cleanup EXIT
+git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent" > "$package/studio-agent.zip"
 "$PYTHON" "$D/deploy/render-profile.py" --agent "$package/studio-agent.zip"
-git -C "$D" show HEAD:deploy/build-agent-installer.ps1 > "$package/build-agent-installer.ps1"
-git -C "$D" show HEAD:deploy/agent-installer.cs > "$package/agent-installer.cs"
+git -C "$D" show "$REV:deploy/build-agent-installer.ps1" > "$package/build-agent-installer.ps1"
+git -C "$D" show "$REV:deploy/agent-installer.cs" > "$package/agent-installer.cs"
 echo "==> сборка установщика Windows"
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$(cygpath -w "$package/build-agent-installer.ps1")" \
     -Archive "$(cygpath -w "$package/studio-agent.zip")" \
     -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
 
-echo "==> код $(git -C "$D" rev-parse --short HEAD) → $HOST:$R"
-"${SSH[@]}" "sudo install -d -m 0755 $R && sudo rm -rf $R/.incoming && sudo install -d -o root -g root -m 0700 $R/.incoming"
-git -C "$D" -c core.autocrlf=false archive --format=tar HEAD "${PARTS[@]}" \
+echo "==> код ${REV:0:7} → $HOST:$R"
+uploaded=1
+# Папки загрузки старше суток (оборванные выкладки, прежняя общая .incoming) — не чьи-то текущие.
+"${SSH[@]}" "sudo install -d -m 0755 $R && sudo find $R -mindepth 1 -maxdepth 1 -name '.incoming*' -mmin +1440 -exec rm -rf {} + && sudo mkdir -m 0700 $IN"
+git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
     | "$PYTHON" "$D/deploy/render-profile.py" \
-    | "${SSH[@]}" "sudo tar -xf - -C $R/.incoming"
+    | "${SSH[@]}" "sudo tar -xf - -C $IN"
 # Shared converter is delivered byte-for-byte, like the generated bridge artifacts.
-"${SSH[@]}" "sudo sh -c 'cat > $R/.incoming/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
-echo "==> мост $(git -C "$D" rev-parse --short HEAD) → ZIP и установщик EXE"
-"${SSH[@]}" "sudo install -d -m 0755 $R/.incoming/agent"
+"${SSH[@]}" "sudo sh -c 'cat > $IN/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
+echo "==> мост ${REV:0:7} → ZIP и установщик EXE"
+"${SSH[@]}" "sudo install -d -m 0755 $IN/agent"
 for file in studio-agent.zip studio-agent-setup.exe; do
-    "${SSH[@]}" "sudo sh -c 'cat > $R/.incoming/agent/$file'" < "$package/$file"
+    "${SSH[@]}" "sudo sh -c 'cat > $IN/agent/$file'" < "$package/$file"
 done
 
 if [ "$NEW_SECRET" = 0 ] && ! "${SSH[@]}" "sudo grep -qs '^STUDIO_DATA_KEY=' /etc/studio/studio.env"; then
@@ -106,8 +124,9 @@ args=()
 installer=install.sh
 if [ "$RUNTIME" = docker ]; then
     installer=install-docker.sh
-    args+=("--revision=$(git -C "$D" rev-parse HEAD)")
+    args+=("--revision=$REV")
     if [ "$PREPARE" = 1 ]; then args+=(--prepare-only); fi
+    if [ "$REFRESH_BASE" = 1 ]; then args+=(--refresh-base); fi
 fi
 if [ "$NEW_SECRET" = 1 ]; then
     args+=(--secret-stdin)
@@ -126,7 +145,7 @@ fi
         grep -E '^(STUDIO_ADMIN_LOGIN|STUDIO_ADMIN_PASSWORD|GATEWAY_KEY_OWNER_IMAGES)=' "$VAULT" \
             || die "нет STUDIO_ADMIN_LOGIN / STUDIO_ADMIN_PASSWORD в $VAULT"
     fi
-} | tr -d '\r' | "${SSH[@]}" "sudo bash $R/.incoming/deploy/$installer ${args[*]:-}" \
+} | tr -d '\r' | "${SSH[@]}" "sudo bash $IN/deploy/$installer ${args[*]:-}" \
     || die "установка не прошла (вывод install.sh — выше)"
 
 if [ "$PREPARE" = 1 ]; then exit 0; fi
@@ -134,9 +153,9 @@ if [ "$RUNTIME" = docker ]; then
     PROXY_SSH=(ssh -T -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20
                -p "${STUDIO_PROXY_SSH_PORT:-$PORT}" "$STUDIO_PROXY_SSH")
     "${PROXY_SSH[@]}" 'sudo install -d -m 0700 /etc/studio'
-    git -C "$D" show HEAD:deploy/install-proxy.sh \
+    git -C "$D" show "$REV:deploy/install-proxy.sh" \
         | "${PROXY_SSH[@]}" "sudo sh -c 'umask 077; cat > /etc/studio/install-proxy.sh'"
-    git -C "$D" -c core.autocrlf=false archive --format=tar HEAD deploy/apache-vhost.conf \
+    git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" deploy/apache-vhost.conf \
         | "$PYTHON" "$D/deploy/render-profile.py" \
         | tar -xOf - deploy/apache-vhost.conf \
         | "${PROXY_SSH[@]}" "sudo bash /etc/studio/install-proxy.sh $STUDIO_PROXY_VHOST"

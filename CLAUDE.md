@@ -111,7 +111,8 @@ minor для возможностей, major для несовместимых �
 ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 10001 с корнем только для чтения и пределом 2 ГБ;
 база и медиа — внешние bind mounts, секрет — `/etc/studio/studio.env` (0600 root). `studio-docker.service`
 поднимает Compose после монтирования шары, `studio-backup.timer` в 04:30 запускает согласованную копию базы
-из контейнера; сохраняются 7 последних копий на шаре. Apache на прежнем хосте завершает HTTPS и проксирует
+из контейнера и её проверку `verify-backup` (итог — в `settings`, провал — push администраторам); сохраняются
+7 последних копий на шаре. Apache на прежнем хосте завершает HTTPS и проксирует
 на ограниченный nginx контейнера. Профиль установки — `deploy/local-profile.sh`, `STUDIO_RUNTIME=docker`.
 Подробно — [deploy-docker](docs/architecture/deploy-docker.md); прежняя нативная установка и подробности
 совместимости схемы — [deploy-host](docs/architecture/deploy-host.md).
@@ -119,19 +120,23 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
     bash deploy/deploy.sh                    # HEAD → Docker, install-docker.sh, проверка через Apache
     bash deploy/deploy.sh --new-secret       # заново положить STUDIO_DATA_KEY из vault
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
+    bash deploy/deploy.sh --refresh-base     # Docker: образ без кэша — свежие база и пакеты Debian сразу
 
-Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
+Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
 `deploy/build-agent-installer.ps1`); грязное дерево выкладываемых частей и `agent/` — отказ. `install-docker.sh`
 собирает образ до смены `current`, проверяет CIFS и здоровье обоих контейнеров; неудачный образ возвращает
 предыдущий, сохраняя актуальную базу. `install-proxy.sh` проверяет конфигурацию Apache и перезагружает только
-прокси. `--prepare-only` собирает образ без запуска контейнеров и переключения прокси. Смоук —
+прокси. `--prepare-only` собирает образ без запуска контейнеров и переключения прокси. Сборка — `--pull`, слой apt
+пересобирается первой выкладкой каждой ISO-недели (`ARG REFRESH`), таймера пересборки нет. Смоук —
 `https://studio.example.com/health`. Windows-мост после
 выкладки сервера не перезапускать; активный мост не завершать (Stop-Process/kill) из выполняемого им задания.
 
 ## Откат по шагам схемы
 
-Прежний код (`.previous`) на новой базе. SQL — служба остановлена, `sudo -u studio sqlite3 /var/lib/studio/studio.db`,
-с `PRAGMA foreign_keys=ON;` для каскадов; «стёршим» — тем, кто стирал историю прежним кодом, после возврата вперёд
+Прежний код (`.previous`, в Docker — `previous`) на новой базе. SQL — при остановленной службе, команды общие для обеих
+установок: Docker — функция `sql` из [deploy-docker](docs/architecture/deploy-docker.md#восстановление-и-sql-обходы)
+(Python образа от 10001:10001, остановить и таймер копии), нативная — `sudo -u studio sqlite3 /var/lib/studio/studio.db`;
+с `PRAGMA foreign_keys=ON;` для каскадов (`sql` включает сама); «стёршим» — тем, кто стирал историю прежним кодом, после возврата вперёд
 (или стереть историю снова). Развёрнуто — [deploy-host](docs/architecture/deploy-host.md#откат-по-шагам-схемы--подробности).
 
 | Шаг | Что добавил | Что делает прежний код | SQL-обход |

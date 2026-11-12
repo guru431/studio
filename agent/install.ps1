@@ -88,7 +88,7 @@ if (-not $NoVenv) {
         }
         Invoke-Checked $exe ($base + @('-m', 'venv', $venv))
     }
-    Invoke-Checked $py @('-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', (Join-Path $repo 'requirements.txt'))
+    Invoke-Checked $py @('-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', (Join-Path $repo 'requirements.txt'), '-c', (Join-Path $repo 'constraints.txt'))
 }
 
 if (-not $NoStart) {
