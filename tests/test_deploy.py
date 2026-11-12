@@ -894,6 +894,7 @@ def _symlink_bash(tmp_path):
     return bash, env
 
 
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
 @pytest.mark.parametrize("first", [True, False], ids=["first-install", "update"])
 def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     """Без `current` `readlink -f` возвращал сам путь с кодом 0: неудачный первый запуск делал `current`
@@ -924,6 +925,7 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     assert calls[-1].endswith("stop --timeout 20") is first
 
 
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
 @pytest.mark.parametrize("builder_fails", [False, True], ids=["clean", "docker-error"])
 def test_docker_install_keeps_five_releases_and_their_images(tmp_path, builder_fails):
     """Каждая выкладка добавляла releases/<rev>-<время> и образ studio:<rev>, ничего не удалялось. Остаются
