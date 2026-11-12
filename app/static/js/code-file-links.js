@@ -20,7 +20,8 @@ export function visualizationFilePath(href) {
   if (!local) return null;
   let path;
   try { path = decodeURIComponent(local).slice(1); } catch { return null; }
-  if (!path.toLowerCase().endsWith('.html') || path.length > 1024 || /[\x00-\x1f\x7f?"<>|]/.test(path)
+  const image = /\.(?:png|jpe?g|webp|gif)$/i.test(path) && path.split('/').some(part => part.toLowerCase() === 'generated_images');
+  if ((!path.toLowerCase().endsWith('.html') && !image) || path.length > 1024 || /[\x00-\x1f\x7f?"<>|]/.test(path)
       || path.split('/').some(part => part === '..' || part === '.')) return null;
   // Разрешённый корень повторно проверяет мост; путь никогда не попадает в URL запроса.
   return path;

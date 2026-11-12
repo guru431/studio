@@ -138,6 +138,7 @@ async def list_agents(request: Request):
                       "project_summary": hello.get("project_summary", False),
                       "metadata_cache": hello.get("metadata_cache", False),
                       "visualizations": hello.get("visualizations", False),
+                      "visualization_images": hello.get("visualization_images", False),
                       "history_images": hello.get("history_images", False),
                       "computer_info": hello.get("computer_info", False),
                       "desktop": hello.get("desktop", False),

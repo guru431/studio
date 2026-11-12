@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { button, el, openDialog } from './ui.js';
 
-export function visualizationsView(host, { aid, pid, supported }) {
+export function visualizationsView(host, { aid, pid, supported, images = false }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/visualization`;
   let dialog = null;
   let pending = null;
@@ -33,7 +33,7 @@ export function visualizationsView(host, { aid, pid, supported }) {
       frame.removeAttribute('src');
       if (dialog === current) dialog = null;
     }, { once: true });
-    if (!supported) {
+    if (!supported || /\.(?:png|jpe?g|webp|gif)$/i.test(reference.path) && !images) {
       status.textContent = 'Обновите агент на компьютере, чтобы открывать визуализации';
       return;
     }

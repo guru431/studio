@@ -1200,18 +1200,35 @@ async def visualization(aid: int, pid: str, body: VisualizationBody, request: Re
     agent = own_agent(request, aid)
     check_pid(pid)
     require_capability(aid, "visualizations")
+    raster = body.source.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif'))
+    if raster:
+        require_capability(aid, 'visualization_images')
     # Мост до `hello.visualization_scope` открывает участнику и общий каталог визуализаций Codex с HTML всех
     # проектов владельца: ему — только относительный путь, файл внутри проекта (протокол §17).
     if agent["user_id"] != request.state.user.id and re.match(r"[A-Za-z]:|[\\/]", body.source):
         require_capability(aid, "visualization_scope")
     data = await ask(request, aid, "visualization", project=pid, source=body.source)
-    text = _strings(data, "text")["text"]
-    try:
-        size = len(text.encode('utf-8'))
-    except UnicodeEncodeError:
-        raise _refuse(502, "bridge", ODD) from None
-    if size > code_visualizations.MAX_BYTES:
-        raise _refuse(413, "too_large", TOO_LARGE)
+    if raster:
+        image = data.get('image')
+        if not isinstance(image, dict):
+            raise _refuse(502, 'bridge', ODD)
+        if isinstance(image.get('data'), str) and len(image['data']) > (IMAGE_MAX + 2) // 3 * 4:
+            raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
+        raw, mime = await asyncio.to_thread(_image_bytes, image, max_bytes=IMAGE_MAX)
+        # _image_bytes проверил и base64 (включая алфавит), и изображение; повторное кодирование не нужно.
+        text = '<img alt="Визуализация" style="max-width:100%;height:auto" src="data:' + mime + ';base64,' + image['data'] + '">'
+        own_agent(request, aid)
+        if not _session_open(request.state.digest):
+            raise _refuse(409, 'closed', 'Сеанс Студии закрыт')
+    else:
+        text = _strings(data, "text")["text"]
+    if not raster:
+        try:
+            size = len(text.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise _refuse(502, "bridge", ODD) from None
+        if size > code_visualizations.MAX_BYTES:
+            raise _refuse(413, "too_large", TOO_LARGE)
     token = code_visualizations.keep(request.state.user.id, bridge.tag(request.state.digest), aid, pid, text)
     return {"token": token}
 
@@ -1372,8 +1389,10 @@ def _pdf_bytes(data: dict) -> bytes:
     return raw
 
 
-def _image_bytes(data: dict) -> tuple[bytes, str]:
+def _image_bytes(data: dict, *, max_bytes: int | None = None) -> tuple[bytes, str]:
     raw = _raw_bytes(data)
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise _refuse(413, 'too_large', 'Изображение больше 5 МиБ')
     try:
         with Image.open(io.BytesIO(raw)) as image:
             mime = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp', 'GIF': 'image/gif'}.get(image.format)

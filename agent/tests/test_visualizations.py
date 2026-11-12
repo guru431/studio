@@ -1,6 +1,7 @@
 """Visualization roots, size/encoding limits and PIN checks use real temporary files."""
 import pytest
 import _winapi
+import base64
 
 from studio_agent import limits, projects, visualizations
 from studio_agent.errors import Refused
@@ -20,6 +21,26 @@ def test_read_project_and_codex_visualizations(tmp_path, monkeypatch):
     assert visualizations.read(project, str(output))['text'] == '<button>Готово</button>'
     assert visualizations.read(project, 'view.html')['text'] == '<p>Project</p>'
     assert visualizations.read(project, str(local))['text'] == '<p>Project</p>'
+
+
+def test_generated_images_are_bounded_and_owner_only(tmp_path, monkeypatch):
+    from test_image_input import PNG
+    project = tmp_path / 'project'
+    project.mkdir()
+    home = tmp_path / 'codex'
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    path = home / 'generated_images' / 'thread' / 'view.png'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(base64.b64decode(PNG['data']))
+    result = visualizations.read(project, str(path))
+    assert result['image'] == PNG
+    with pytest.raises(Refused) as caught:
+        visualizations.read(project, str(path), codex_home=False)
+    assert caught.value.code == 'outside'
+    monkeypatch.setattr(limits, 'IMAGE_MAX', 4)
+    with pytest.raises(Refused) as caught:
+        visualizations.read(project, str(path))
+    assert caught.value.code == 'too_large'
 
 
 def test_reject_outside_traversal_and_non_html(tmp_path, monkeypatch):

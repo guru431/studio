@@ -47,6 +47,7 @@ import { withFollowups } from './code-followups.js';
 import { fileHints } from './code-autocomplete.js';
 import { queueView } from './code-queue.js';
 import { subagentView } from './code-subagents.js';
+import { taskNotice } from './code-task-notice.js';
 import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
@@ -145,7 +146,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const workspace = document.getElementById('view');
   const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
     role: 'region', 'aria-label': 'Лента чата' });
-  const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations });
+  const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations, images: agent.visualization_images });
   const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile,
     visualization: visualizations.open };
   let alive = true;
@@ -793,6 +794,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function messageNode(m) {
     if (m.role === 'user') {
+      if (engine === 'claude' && !m.images?.length) {
+        const notice = taskNotice(m.text);
+        if (notice) return notice;
+      }
       const branch = agent?.chat_fork && engine !== 'opencode' && m.forkable !== false && typeof m.id === 'string'
         ? el('button', { type: 'button', class: 'btn btn-sm code-fork', disabled: running,
           title: 'Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.' }, 'Продолжить иначе') : null;
