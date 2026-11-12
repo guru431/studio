@@ -5,6 +5,7 @@ durable; deleting local history also schedules removal of its encrypted replacem
 """
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from cryptography.fernet import InvalidToken
@@ -18,7 +19,13 @@ import security
 import state
 import upstream
 
+log = logging.getLogger("studio")
+
 TICKET_SECONDS = 540
+#: живых билетов предпросмотра на учётку: сверх — вытесняется самый старый свой, другие учётки не страдают
+USER_TICKETS = 8
+#: всего билетов в процессе — защита памяти
+TICKETS_MAX = 64
 TICKETS: dict[str, "Preview"] = {}
 LOCKS: dict[tuple, asyncio.Lock] = {}
 
@@ -120,7 +127,10 @@ def remember(preview):
     for key, old in list(TICKETS.items()):
         if old.expires <= clock.NOW() or (old.user_id, old.item_id) == (preview.user_id, preview.item_id):
             TICKETS.pop(key, None)
-    if len(TICKETS) >= 64:
+    own = [key for key, old in TICKETS.items() if old.user_id == preview.user_id]     # старые — первыми
+    for key in own[:max(0, len(own) - USER_TICKETS + 1)]:
+        TICKETS.pop(key)
+    if len(TICKETS) >= TICKETS_MAX:
         raise refused("Слишком много открытых предпросмотров: повторите позже", 429)
     ticket = uuid.uuid4().hex
     TICKETS[ticket] = preview
@@ -294,8 +304,11 @@ def stalled(user_id: int) -> list[dict]:
 
 async def sweep():
     while True:
-        for ticket, preview in list(TICKETS.items()):
-            if preview.expires <= clock.NOW():
-                TICKETS.pop(ticket, None)
-        await purge()
+        try:
+            for ticket, preview in list(TICKETS.items()):
+                if preview.expires <= clock.NOW():
+                    TICKETS.pop(ticket, None)
+            await purge()
+        except Exception as e:                    # noqa: BLE001 — уборка не должна вставать до перезапуска
+            log.warning("Cleaner: сбой уборки (%s)", type(e).__name__)
         await clock.SLEEP(60)
