@@ -149,11 +149,9 @@ async def say(conn, model: str, text: str, voice) -> tuple[bytes, str]:
 
 async def free_card(conn) -> None:
     """Release моделей картинок и gemma-abl перед речью srvllm; итог не важен (занятую дождётся шлюз)."""
-    if conn.kind != "srvllm":
+    if conn.kind != "srvllm" or not await images.free_models(conn):
         return
     try:
-        for model in images.MODELS.values():
-            await images.release(conn, model)
         await images.release_description(conn)
     except (httpx.HTTPError, upstream.UpstreamRefused):
         return

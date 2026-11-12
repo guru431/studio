@@ -701,11 +701,7 @@ class StreamTask:
         ходом: тёплый Lustify без нужды не выгружается. Итог не важен: идущую генерацию release не оборвёт (409),
         её дождётся `_wait_card`."""
         log.info("чат %s: ответ %s — освобождаю модели картинок", self.chat_id[:8], self.message_id[:8])
-        try:
-            for model in images.MODELS.values():
-                await images.release(self.conn, model)
-        except (httpx.HTTPError, upstream.UpstreamRefused):
-            return
+        await images.free_models(self.conn)
 
     def put(self, kind: str, data) -> None:
         if self.listening:

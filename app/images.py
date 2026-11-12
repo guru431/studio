@@ -698,6 +698,17 @@ async def release(conn: Connection, model: str) -> httpx.Response:
     return await _slot(conn, "/images/release", SHORT_TIMEOUT_SEC, json={"model": model})
 
 
+async def free_models(conn: Connection) -> bool:
+    """Release всех моделей картинок (Lustify, FLUX держат карту арендой) перед локальной моделью. Итог не важен:
+    идущую генерацию release не оборвёт (409), занятую карту дождётся шлюз. False — шлюз отказал или не ответил."""
+    try:
+        for model in MODELS.values():
+            await release(conn, model)
+    except (httpx.HTTPError, upstream.UpstreamRefused):
+        return False
+    return True
+
+
 async def release_description(conn: Connection) -> httpx.Response:
     return await _slot(conn, "/images/descriptions/release", SHORT_TIMEOUT_SEC, json={"model": DESCRIPTION_MODEL})
 
