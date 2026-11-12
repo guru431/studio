@@ -396,6 +396,20 @@ def test_too_big_after_recognition_is_an_error_in_words(studio, monkeypatch):
     assert studio.gw.chat_requests == []
 
 
+def test_scan_from_the_chat_is_recognized_while_the_scans_section_is_locked(studio):
+    """Раннер «Сканов», запущенный запросом чата при закрытом частичной защитой разделе «Сканы», не наследует
+    закрытые разделы запроса: свой файл документа он читает, а не падает «файл документа удалён» без шлюза."""
+    add_gateway(studio); new_chat(studio)
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "sections": ["ocr"], "timeout": 300}).status_code == 200
+    assert studio.c.post("/api/lock/now").status_code == 204
+    att = upload(studio, scan_pdf("ink"))
+    sid = att["ocr"]["id"]
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0]
+               in ocr.TERMINAL)
+    assert (scan_of(studio, sid)["state"], scan_of(studio, sid)["detail"]) == ("done", ocr.DONE)
+    assert len(studio.gw.ocr_requests) == 1
+
+
 def test_unsent_scan_attachment_cancels_its_scan(studio):
     add_gateway(studio)
     studio.gw.ocr_hold = True
