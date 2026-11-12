@@ -217,6 +217,49 @@ def test_grants_are_journaled_and_emergency_exit_revokes_them_without_the_agents
     assert studio.c.get(url(aid, "projects", ALPHA, "chats")).status_code == 404
 
 
+def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(studio):
+    """IDEAS «Единый список выданных доступов и публичных ссылок» и FINDINGS «Совместный доступ переживает удаление
+    папки»: выдача к исчезнувшей папке видна и отзывается без моста; чужие строки не видны и не отзываются."""
+    aid, machine, _, member, base = share(studio)
+    assert studio.c.post(url(aid, "projects", BETA, "members"), json={"login": "friend"}).status_code == 201
+    owner_id = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
+    state.DB.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c1',?,'Мой чат',0,0)", (owner_id,))
+    assert studio.c.post("/api/chats/c1/share", json={"pin": "0123", "days": None}).status_code == 201
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats", A, "share"), json={"pin": "0123"}).status_code == 201
+    del machine.projects["beta"]                                     # папку удалили или переименовали
+    data = studio.c.get("/api/me/access").json()
+    assert [(m["project"], m["name"], m["missing"], m["login"]) for m in data["members"]] == sorted(
+        [(ALPHA, "alpha", False, "friend"), (BETA, None, True, "friend")])
+    shares = {s["kind"]: s for s in data["shares"]}
+    assert (shares["chat"]["title"], shares["chat"]["expires"], "name" in shares["chat"]) == ("Мой чат", None, False)
+    assert (shares["code"]["title"], shares["code"]["name"], shares["code"]["project"]) == (None, "alpha", ALPHA)
+    machine.open_sessions.clear()                                    # PIN закрыт — имён нет, id остаются
+    closed = studio.c.get("/api/me/access").json()["members"]
+    assert {(m["project"], m["name"], m["missing"]) for m in closed} == {(ALPHA, None, None), (BETA, None, None)}
+    make_user(studio, "stranger")
+    signin(studio, "stranger")
+    assert studio.c.get("/api/me/access").json() == {"members": [], "shares": []}
+    assert studio.c.delete(f"/api/me/access/members/{aid}/{BETA}/{member}").status_code == 404
+    assert studio.c.delete("/api/me/access/shares/" + data["shares"][0]["id"]).status_code == 204
+    assert studio.c.delete("/api/me/access").json() == {"members": 0, "shares": 0}
+    assert len(links()) == 2 and state.DB.execute("SELECT count(*) FROM project_members").fetchone()[0] == 2
+    signin(studio, "owner")
+    before = len(machine.requests)
+    assert studio.c.delete(f"/api/me/access/members/{aid}/{BETA}/{member}").status_code == 204
+    assert studio.c.delete(f"/api/me/access/members/{aid}/xyz/{member}").status_code == 422
+    assert len(machine.requests) == before                           # отзыв — без моста
+    assert [r[0] for r in state.DB.execute("SELECT project FROM project_members")] == [ALPHA]
+    chat_link = next(s["id"] for s in data["shares"] if s["kind"] == "chat")
+    assert studio.c.delete("/api/me/access/shares/" + chat_link).status_code == 204
+    assert studio.c.get("/api/chats/c1/share").json() == {"enabled": False}
+    assert studio.c.delete("/api/me/access").json() == {"members": 1, "shares": 1}
+    assert links() == [] and state.DB.execute("SELECT count(*) FROM project_members").fetchone()[0] == 0
+    kinds = [r[0] for r in state.DB.execute("SELECT kind FROM security_events WHERE user_id = ? ORDER BY id", (owner_id,))]
+    assert kinds[-4:] == ["project_member_remove", "share_revoke", "project_member_remove", "share_revoke"]
+    signin(studio, "friend")
+    assert studio.c.get("/api/agents").json() == {"items": []}
+
+
 def test_image_decode_rechecks_membership_before_sending_bytes(studio, monkeypatch):
     aid, machine, _, member, _ = share(studio)
     machine.projects["alpha"]["files"]["a.png"] = PNG_REAL

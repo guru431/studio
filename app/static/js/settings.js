@@ -3,7 +3,7 @@
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
  * «Агенты» — умолчания чатов и компьютеры) и «Очистка данных · Cleaner». «Учётка»: «Оформление» (тема и акцент
  * учётки, шрифт, масштаб, плотность и нижняя панель этого устройства, часовой пояс — appearance.js),
- * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, аварийный выход и журнал безопасности —
+ * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, доступы и ссылки, аварийный выход и журнал безопасности —
  * account-security.js), «Уведомления» (push, ntfy), «Данные» (хранилище, выгрузка, удаление истории),
  * «Ввод и интернет» (голосовой ввод, ключ Exa). Прежние адреса (`other` — «Прочее», `dictation`) ведут
  * на новые (OLD_IDS). Справа — выбранный раздел: его
@@ -28,7 +28,7 @@
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
-import { emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
+import { accessBlock, emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { accountLookBlock, deviceLookBlock } from './appearance.js';
 import { openMobileNavigationEditor } from './mobile-navigation.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
@@ -1446,7 +1446,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'security') {
-      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), emergencyBlock(host), securityEventsBlock());
+      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
+        securityEventsBlock());
       return;
     }
     if (shown === 'notifications') {
