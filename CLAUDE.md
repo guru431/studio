@@ -132,8 +132,10 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 
 ## Откат по шагам схемы
 
-Прежний код (`.previous`) на новой базе. SQL — служба остановлена, `sudo -u studio sqlite3 /var/lib/studio/studio.db`,
-с `PRAGMA foreign_keys=ON;` для каскадов; «стёршим» — тем, кто стирал историю прежним кодом, после возврата вперёд
+Прежний код (`.previous`, в Docker — `previous`) на новой базе. SQL — при остановленной службе, команды общие для обеих
+установок: Docker — функция `sql` из [deploy-docker](docs/architecture/deploy-docker.md#восстановление-и-sql-обходы)
+(Python образа от 10001:10001, остановить и таймер копии), нативная — `sudo -u studio sqlite3 /var/lib/studio/studio.db`;
+с `PRAGMA foreign_keys=ON;` для каскадов (`sql` включает сама); «стёршим» — тем, кто стирал историю прежним кодом, после возврата вперёд
 (или стереть историю снова). Развёрнуто — [deploy-host](docs/architecture/deploy-host.md#откат-по-шагам-схемы--подробности).
 
 | Шаг | Что добавил | Что делает прежний код | SQL-обход |

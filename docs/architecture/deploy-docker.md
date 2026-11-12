@@ -152,7 +152,59 @@ sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy
 
 При неудачном старте новой версии installer автоматически возвращает прежний контейнерный релиз;
 база не откатывается. Для ручного возврата сначала переключают `current` на `previous`, затем запускают
-Compose с `up -d --no-build --wait`; совместимость схемы описана в [deploy-host](deploy-host.md).
+Compose с `up -d --no-build --wait`; совместимость схемы описана в [deploy-host](deploy-host.md), SQL-обходы
+таблицы отката ([CLAUDE.md](../../CLAUDE.md#откат-по-шагам-схемы)) выполняют, как описано ниже.
+
+## Восстановление и SQL-обходы
+
+На Docker-хосте нет пользователя `studio`, CLI `sqlite3` нет и в образе: база принадлежит 10001:10001, а SQL
+выполняет Python образа текущего релиза отдельным контейнером без сети, от того же uid. Служба при этом
+остановлена — и таймер копии тоже: `studio-backup.service` требует `studio-docker.service` и поднял бы
+приложение посреди работы. Из каталога установки:
+
+```bash
+cd /opt/services/studio
+IMAGE=$(sed -n 's/^STUDIO_IMAGE=//p' current/deploy/docker/host.conf)
+# SQL со stdin по одной инструкции; PRAGMA foreign_keys=ON уже включена (каскады); строки SELECT — через «|».
+sql() {
+  sudo docker run --rm -i --network none -u 10001:10001 -v /var/lib/studio:/var/lib/studio \
+    --entrypoint python "$IMAGE" -c '
+import sqlite3, sys
+c = sqlite3.connect("/var/lib/studio/studio.db", isolation_level=None)
+c.execute("PRAGMA foreign_keys=ON")
+s = ""
+for line in sys.stdin:
+    s += line
+    if sqlite3.complete_statement(s):
+        for row in c.execute(s):
+            print(*row, sep="|")
+        s = ""
+'
+}
+sudo systemctl stop studio-backup.timer studio-docker.service
+sql <<'SQL'
+DELETE FROM section_links WHERE section = 'ocr';
+SELECT count(*) FROM section_links;
+SQL
+sudo systemctl start studio-docker.service studio-backup.timer
+```
+
+Автокоммит — каждая инструкция отдельно; несколько связанных — между `BEGIN;` и `COMMIT;`.
+
+Восстановление базы из ночной копии (`backup/studio-YYYYMMDD.db` на шаре):
+
+1. Проверить копию, пока служба работает: `… exec -T web python /opt/studio/app/manage.py verify-backup
+   /media/backup/studio-YYYYMMDD.db` (путь внутри контейнера; без пути — новейшая). Код 0 — поднимается.
+2. `sudo systemctl stop studio-backup.timer studio-docker.service`.
+3. Сохранить рабочую базу вместе с журналом: `sudo mkdir -m 0700 /var/lib/studio/before-restore-$(date +%Y%m%d)`
+   и перенести туда `studio.db`, `studio.db-wal`, `studio.db-shm` (какие есть). На месте `-wal`/`-shm`
+   не должно остаться: чужой журнал SQLite применил бы к копии.
+4. `sudo install -o 10001 -g 10001 -m 0600 /mnt/storage/SharedData/studio/backup/studio-YYYYMMDD.db
+   /var/lib/studio/studio.db` — копия с владельцем контейнера (каталог остаётся `0700 10001:10001`).
+5. `sudo systemctl start studio-docker.service studio-backup.timer`, проверить `/health` и вход. Файлов,
+   удалённых после даты копии, на шаре уже нет — их строки `media` отвечают 404. Токены подключений
+   расшифровываются только тем `STUDIO_DATA_KEY`, что был при копии (запасной — vault).
+6. Сохранённую папку `before-restore-…` удалить, когда восстановление подтверждено.
 
 Для возвращения **на прежний хост** нельзя просто запустить оставленную старую базу:
 после переключения в Docker могли появиться новые записи. Отключить автозапуск
