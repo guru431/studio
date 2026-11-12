@@ -4,7 +4,7 @@
  * signal — обрыв запроса (AbortSignal, например срок).
  * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message, detail)
- * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа.
+ * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа (toLogin — с адресом раздела).
  * 423 `screen_locked` (студия заперта, lock.js) при заданном hooks.locked ждёт отпирания и повторяет
  * тот же запрос: опрос хода задания не показывает ошибку из-за блокировки.
  *
@@ -32,6 +32,11 @@ let csrf = null;
 /** CSRF сессии, пока профиля нет (запертая студия получает его из GET /api/lock). */
 export function useCsrf(token) {
   csrf = token;
+}
+
+/** Страница входа с текущим адресом студии: после входа сервер вернёт сюда же (auth.login_target). */
+export function toLogin() {
+  location.href = '/login' + location.hash;
 }
 
 export async function loadMe() {
@@ -71,7 +76,7 @@ export async function api(method, path, body, { signal, headers: extraHeaders } 
     } catch {
       // тело не JSON — остаётся общий текст
     }
-    if (code === 'login') location.href = '/login';
+    if (code === 'login') toLogin();
     if (code === 'screen_locked' && hooks.locked) {
       await hooks.locked();
       return api(method, path, body, { signal, headers: extraHeaders });

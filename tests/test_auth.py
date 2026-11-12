@@ -181,6 +181,40 @@ def test_foreign_origin_cannot_post_login(studio):
     assert r.status_code == 303
 
 
+@pytest.mark.parametrize("next_, location", [
+    ("#/code/3/0123456789abcdef/0f8fad5b-d9cb-469f-a165-70867728950e",
+     "/#/code/3/0123456789abcdef/0f8fad5b-d9cb-469f-a165-70867728950e"),
+    ("#/video?id=video_0123456789abcdef01234567", "/#/video?id=video_0123456789abcdef01234567"),
+    ("#/chat/12?m=345", "/#/chat/12?m=345"),
+    ("#/settings/security", "/#/settings/security"),
+    ("", "/"),
+    ("#//evil.example/x", "/"),                          # другой хост
+    ("https://evil.example/#/chat", "/"),                # схема
+    ("//evil.example", "/"),
+    ("#/\\evil.example", "/"),                            # обратный слэш
+    ("#/chat/1\r\nSet-Cookie: x=1", "/"),                # управляющие символы
+    ("#/chat\n", "/"),
+    ("#/chat/%2F%2Fevil", "/"),                          # %-коды
+    ("#/unknown", "/"),                                  # неизвестный экран
+    ("#/chatroom", "/"),
+    ("#/profile", "/"),                                  # прежний адрес — не маршрут
+    ("#/chat/" + "a" * 65, "/"),                         # слишком длинный id
+    ("#/chat/1/2/3/4/5", "/"),                           # слишком глубоко
+    ("#/chat/ыы", "/"),                                  # не ASCII
+])
+def test_login_returns_only_to_a_known_screen_of_this_site(studio, next_, location):
+    """После входа — на фрагмент, с которого пришли, только если это маршрут страницы; иначе — на главную."""
+    make_user(studio, "owner")
+    r = studio.c.post("/login", data={"login": "owner", "password": "password-123", "next": next_},
+                      follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == location
+
+
+def test_login_page_carries_the_address_to_the_form(studio):
+    page = studio.c.get("/login").text
+    assert 'name="next"' in page and "/login.js" in page
+
+
 def test_oversized_login_body_is_refused(studio):
     r = studio.c.post("/login", data={"login": "owner", "password": "x" * 5000}, follow_redirects=False)
     assert r.status_code == 413 and "Слишком длинный запрос" in r.text

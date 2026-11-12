@@ -3,7 +3,7 @@
 Студия — живая (`live_app.py`), браузер — свой на каждый тест (cookie localhost общие для портов).
 """
 import json
-import re
+from pathlib import Path
 
 import pytest
 
@@ -111,3 +111,58 @@ def test_alt_digits_open_sections_in_rail_order(browser, live):
     assert v["altGr"] == v["shifted"] == v["inDialog"] == "#/chat"
     assert v["photo"] == "#/photo"
     assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_login_returns_to_the_address_it_came_from(browser, live, width):
+    """Ссылка без сессии (нажатие на push) — `/` уводит на вход с тем же фрагментом; неверный пароль его не теряет,
+    после верного студия открывает этот адрес, а не «Чат»."""
+    login = f"back{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/#/settings/security", [("idle",),
+        ("eval", "page", "[location.pathname, location.hash, document.querySelector('#next').value]"),
+        ("type", "#login", login), ("type", "#password", "wrong-password"), ("click", "#submit"),
+        ("wait", "document.querySelector('.error').textContent.trim() !== ''"), ("idle",),
+        ("eval", "again", "[location.pathname, location.hash, document.querySelector('#next').value]"),
+        ("type", "#login", login), ("type", "#password", "password-123"), ("click", "#submit"),
+        ("wait", READY), ("eval", "after", "[location.pathname, location.hash, document.title]")],
+        width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["page"] == ["/login", "#/settings/security", "#/settings/security"]
+    assert v["again"] == ["/login", "#/settings/security", "#/settings/security"]
+    assert v["after"] == ["/", "#/settings/security", "Настройки — Студия"]
+    assert not problems(r, "status of 401"), problems(r, "status of 401")
+
+
+@pytest.mark.parametrize("engine", ["webkit", "firefox"])
+def test_login_keeps_the_address_in_webkit_and_firefox(live, engine):
+    """Перенос фрагмента через 303 `/` → `/login` и через POST формы зависит от движка: WebKit и Firefox ведут себя
+    как Chromium. Secure-cookie по http://localhost WebKit не хранит, поэтому после входа проверяется ответ POST."""
+    pw = pytest.importorskip("playwright.sync_api")
+    login = f"back-{engine}"
+    live.add_user(login)
+    with pw.sync_playwright() as driver:
+        kind = getattr(driver, engine)
+        if not Path(kind.executable_path).is_file():
+            pytest.skip(f"нет {engine}: .venv/Scripts/python -m playwright install {engine}")
+        browser = kind.launch()
+        try:
+            page = browser.new_page()
+            page.set_default_timeout(15000)
+            page.goto(live.url + "/#/settings/security")
+            page.wait_for_url("**/login#/settings/security")
+            assert page.locator("#next").input_value() == "#/settings/security"
+            page.fill("#login", login)
+            page.fill("#password", "wrong-password")
+            page.click("#submit")
+            page.wait_for_selector(".error:not(:empty)")
+            assert page.evaluate("[location.pathname, location.hash]") == ["/login", "#/settings/security"]
+            page.fill("#login", login)
+            page.fill("#password", "password-123")
+            posted = lambda r: r.request.method == "POST" and r.url.startswith(live.url + "/login")  # noqa: E731
+            with page.expect_response(posted) as got:
+                page.click("#submit")
+            assert got.value.status == 303 and got.value.headers["location"] == "/#/settings/security"
+        finally:
+            browser.close()

@@ -17,7 +17,7 @@
  * документ, как выгрузка .md. «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
-import { api, hooks, me } from './api.js';
+import { api, hooks, me, toLogin } from './api.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
@@ -365,7 +365,7 @@ function build(view, ctx) {
         await select(answer.id);
         return;
       }
-      if (xhr.status === 401) location.href = '/login';
+      if (xhr.status === 401) toLogin();
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): те же файлы — после отпирания

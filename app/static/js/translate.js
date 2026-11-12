@@ -36,7 +36,7 @@
  * Запись-снимок (translate-photo.js) — над правым окном переключатель «Поверх снимка» (по умолчанию: снимок с
  * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
-import { api, hooks, me } from './api.js';
+import { api, hooks, me, toLogin } from './api.js';
 import { icon } from './icons.js';
 import { actionMenu, menuItem, popupMenu } from './menu.js';
 import { timeOnly } from './time.js';
@@ -475,7 +475,7 @@ function build(view, ctx) {
       paintRight();
       paintGo();
       if (xhr.status === 401) {
-        location.href = '/login';
+        toLogin();
         return;
       }
       const detail = answer && answer.detail;
