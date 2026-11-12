@@ -95,6 +95,8 @@ class FakeMachine:
         self.agent_update = False
         self.update_state = 'idle'
         self.update_version = None
+        self.update_holds = None                 # что держит ожидание обновления (мост 0.20.0)
+        self.agent_update_cancel = False         # «Отменить обновление» (мост 0.20.0)
         self.context = None
         self.project_sharing = True
         self.completions = False                 # кадр досланных завершений (§18)
@@ -111,7 +113,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope")
+                                           "completions", "visualization_scope", "agent_update_cancel")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -215,7 +217,15 @@ class FakeMachine:
         return {}
 
     def _op_agent_update_status(self, req, events):
-        return {'state': self.update_state, 'version': self.update_version}
+        status = {'state': self.update_state, 'version': self.update_version}
+        if self.update_state == 'waiting' and self.update_holds is not None:
+            status['holds'] = self.update_holds
+        return status
+
+    def _op_agent_update_cancel(self, req, events):
+        if self.update_state in ('preparing', 'waiting'):
+            self.update_state, self.update_version = 'idle', None
+        return self._op_agent_update_status(req, events)
 
     def _project(self, req) -> tuple[str, dict]:
         for name, project in self.projects.items():

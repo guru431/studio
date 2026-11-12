@@ -87,6 +87,7 @@ BODIES = {
     ("GET", "/api/code/agents/1/projects/1/git"): None,
     ("POST", "/api/code/agents/1/update"): None,
     ("GET", "/api/code/agents/1/update"): None,
+    ("DELETE", "/api/code/agents/1/update"): None,
 }
 
 

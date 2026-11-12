@@ -82,6 +82,39 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
     assert not problems(result), problems(result)
 
 
+def test_waiting_update_names_what_holds_it_and_can_be_cancelled(browser, live, update_zip):
+    login = 'agent-update-cancel'
+    live.add_user(login)
+    machine = machine_for_update()
+    machine.agent_update_cancel = True
+    original = machine._op_agent_update
+
+    def waiting(req, events):
+        original(req, events)
+        machine.update_state = 'waiting'
+        machine.update_holds = {'tasks': 2, 'asking': 1, 'desktop': False, 'requests': 0}
+        return machine._op_agent_update_status(req, events)
+
+    machine._op_agent_update = waiting
+    aid, server = code_online(live, login, machine)
+    row = f'#code-agents li[data-id="{aid}"]'
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', "!!document.querySelector('#code-projects li')"), ('click', row + ' .code-agent-update'),
+            ('wait', f"document.querySelector('{row} .code-agent-update-status')?.textContent.includes('идёт заданий: 2')"),
+            ('eval', 'words', f"document.querySelector('{row} .code-agent-update-status [role=status]').textContent"),
+            ('click', row + ' .code-agent-update-cancel'),
+            ('wait', f"document.querySelector('{row} .code-agent-update-status') === null"),
+            ('eval', 'enabled', f"!document.querySelector('{row} .code-agent-update').disabled")])
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    assert result['values']['words'] == 'Ждём завершения — идёт заданий: 2, ждут вашего ответа: 1'
+    assert result['values']['enabled'] and machine.update_state == 'idle'
+    assert [req['op'] for req in machine.requests].count('agent_update_cancel') == 1
+    assert not problems(result), problems(result)
+
+
 def test_update_continues_after_pin_and_failure_can_be_retried(browser, live, update_zip):
     login = 'agent-update-pin'
     live.add_user(login)

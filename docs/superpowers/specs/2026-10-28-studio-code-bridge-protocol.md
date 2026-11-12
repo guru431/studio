@@ -36,6 +36,11 @@
 После открытия PIN обычная просьба `agent_update {version, sha256, size}` сразу отвечает
 `{state: preparing|waiting|restarting|idle|failed, version}`. Повтор во время обновления возвращает
 текущую стадию; `agent_update_status {}` читает её. Более старая/равная версия не устанавливается.
+С моста 0.20.0 (`hello.agent_update_cancel: true`) `agent_update_cancel {}` в `preparing`/`waiting` возвращает
+`idle` (новые задания снова принимаются; подготовленная копия удаляется), в `restarting` — поздно, ответ — текущая
+стадия; права — как у `agent_update` (открытый PIN владельца, участнику — `closed`). В `waiting` статус несёт
+`holds {tasks, asking, requests, desktop}` — что держит ожидание, только числа и признак рабочего стола.
+Сервер: `DELETE /api/code/agents/<aid>/update`; мосту без capability — 409 `unsupported`.
 Агент скачивает `GET /api/agent/package` с настроенного HTTPS-сервера, без перенаправлений,
 `Authorization: Bearer <device_key>`; сервер проверяет существование устройства и активность учётки.
 ZIP ограничен 16 МиБ, распакованный размер — 64 МиБ, 3000 записей; запрещены обход корня, ссылки,
