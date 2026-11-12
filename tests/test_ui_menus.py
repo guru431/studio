@@ -56,6 +56,13 @@ def test_chat_menu_keys_and_escape_closes_only_the_top_menu(engine, live, cookie
         if width < 760:
             # выдвижная панель осталась: Escape закрыл только меню, второй — панель
             pw.expect(page.locator('.chat')).to_have_class(re.compile('panel-open'))
+            # фокус ни на чём (Safari нажатием фокус не переводит): Escape — по-прежнему только меню
+            more.click()
+            pw.expect(menu).to_be_visible()
+            page.evaluate("() => document.activeElement?.blur()")
+            page.keyboard.press('Escape')
+            pw.expect(menu).to_be_hidden()
+            pw.expect(page.locator('.chat')).to_have_class(re.compile('panel-open'))
             page.keyboard.press('Escape')
             pw.expect(page.locator('.chat')).not_to_have_class(re.compile('panel-open'))
     assert inside, width
