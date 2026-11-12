@@ -17,31 +17,36 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 DONE = {"k": "done", "status": "done"}
 
 
-@pytest.fixture(scope="module", params=["chromium", "webkit"])
-def engine(request):
-    with pw.sync_playwright() as driver:
-        if request.param == "chromium":
-            executable = find_browser()
-            if not executable:
-                pytest.skip("нет Chromium/Edge/Chrome")
-            browser = driver.chromium.launch(executable_path=executable)
-        else:
-            if not Path(driver.webkit.executable_path).is_file():
-                pytest.skip("нет WebKit")
-            browser = driver.webkit.launch()
-        yield browser
-        browser.close()
-
-
 @pytest.fixture(scope="module")
-def chromium():
-    with pw.sync_playwright() as driver:
+def driver():
+    """Один Playwright на модуль: второй sync_playwright при живом первом — отказ «Sync API inside the asyncio loop»."""
+    with pw.sync_playwright() as playwright:
+        yield playwright
+
+
+def launch(driver, name):
+    if name == "chromium":
         executable = find_browser()
         if not executable:
             pytest.skip("нет Chromium/Edge/Chrome")
-        browser = driver.chromium.launch(executable_path=executable)
-        yield browser
-        browser.close()
+        return driver.chromium.launch(executable_path=executable)
+    if not Path(driver.webkit.executable_path).is_file():
+        pytest.skip("нет WebKit")
+    return driver.webkit.launch()
+
+
+@pytest.fixture(scope="module", params=["chromium", "webkit"])
+def engine(driver, request):
+    browser = launch(driver, request.param)
+    yield browser
+    browser.close()
+
+
+@pytest.fixture(scope="module")
+def chromium(driver):
+    browser = launch(driver, "chromium")
+    yield browser
+    browser.close()
 
 
 @contextmanager
