@@ -389,10 +389,46 @@ def test_stop_keeps_done_parts_and_restart_interrupts(studio, monkeypatch):
     queued = file_job(studio, uid, conn, kick=False)
     assert studio.c.post(f"/api/translate/{queued}/cancel").json() == {"state": "cancelled"}
     other = file_job(studio, uid, conn, kick=False)
+    on_loop(studio, lambda: state.DB.execute("UPDATE translations SET state = 'working' WHERE id = ?", (other,)))
+    waiting = file_job(studio, uid, conn, kick=False)
     on_loop(studio, translate.recover)
     row = row_of(studio, other)
     assert (row["state"], row["detail"]) == ("error", translate.INTERRUPTED) and row["finished"] is not None
     assert row_of(studio, tid)["state"] == "cancelled"
+    assert row_of(studio, waiting)["state"] == "queued"                # его продолжит resume_queued
+
+
+def test_queued_translations_survive_a_restart(studio):
+    """Перезапуск обрывает идущую запись, а ждущие обеих полос переводятся после старта (`resume_queued`) той же
+    моделью; подключения нет — ошибка словами, без модели."""
+    uid, conn = gateway_conn(studio)
+    held = hold_chat(studio)
+    running = start(studio, "Hello.")
+    wait_row(studio, running, ("working",))
+    waiting = start(studio, "Hello again.")
+    filed = file_job(studio, uid, conn, kick=False)
+
+    async def restart():
+        await translate.stop()
+        translate.JOBS.clear()
+        translate.recover()
+        translate.resume_queued()
+    on_loop(studio, restart)
+    held[0] = False
+    row = row_of(studio, running)
+    assert (row["state"], row["detail"]) == ("error", translate.INTERRUPTED)
+    for tid in (waiting, filed):
+        row = wait_row(studio, tid)
+        assert (row["state"], row["model"]) == ("done", MODEL), row
+
+    orphan = file_job(studio, uid, conn, kick=False)
+    on_loop(studio, lambda: state.DB.execute("UPDATE translations SET connection_id = 999 WHERE id = ?", (orphan,)))
+    translate.JOBS.pop(orphan)                                          # после перезапуска снимков нет
+    sent = len(studio.gw.chat_requests)
+    on_loop(studio, translate.resume_queued)
+    row = row_of(studio, orphan)
+    assert (row["state"], row["detail"]) == ("error", translate.NO_CONNECTION)
+    assert len(studio.gw.chat_requests) == sent and translate.JOBS == {}
 
 
 def test_stop_user_cancels_both_lanes(studio):

@@ -615,11 +615,45 @@ def test_recover_marks_running_as_interrupted_and_fills_the_attachment(studio):
     on_loop(studio, ocr.recover)
     marker = ocr.attachment_marker(ocr.INTERRUPTED)
     assert marker == "[скан не распознан: прервано перезапуском студии]"
-    for sid, aid in zip(sids[:3], atts[:3]):
+    for sid, aid in zip(sids[1:3], atts[1:3]):
         row = scan_row(studio, sid)
         assert (row["state"], row["detail"], row["finished"]) == ("error", ocr.INTERRUPTED, clock.NOW())
         assert attachment(studio, aid) == (marker, len(marker))
+    # ждущий скан неотправленного вложения — в очереди: его продолжит resume_queued
+    assert scan_row(studio, sids[0])["state"] == "queued" and attachment(studio, atts[0]) == (None, 0)
     assert scan_row(studio, sids[3])["state"] == "done" and attachment(studio, atts[3]) == ("готово", 6)
+
+
+def test_queued_scans_survive_a_restart(studio):
+    """Перезапуск обрывает идущий документ, а ждущие распознаются после старта (`resume_queued`) с подключением
+    документа; подключения нет — ошибка словами, без шлюза."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    running = pdf_scan(studio, uid, conn, "ink")
+    queued = pdf_scan(studio, uid, conn, "ink", "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+    async def restart():
+        await ocr.stop()
+        ocr.JOBS.clear()
+        ocr.recover()
+        ocr.resume_queued()
+    try:
+        on_loop(studio, restart)
+        assert (scan_row(studio, running)["state"], scan_row(studio, running)["detail"]) == ("error", ocr.INTERRUPTED)
+        assert scan_row(studio, queued)["state"] in ("queued", "working")
+    finally:
+        studio.gw.ocr_hold = False
+    row = wait_scan(studio, queued)
+    assert (row["state"], row["text"]) == ("done", f"{TEXT}\n\n{TEXT}")
+
+    orphan = pdf_scan(studio, uid, conn, "ink", kick=False)
+    on_loop(studio, lambda: state.DB.execute("UPDATE scans SET connection_id = 999 WHERE id = ?", (orphan,)))
+    ocr.JOBS.pop(orphan)                                                # после перезапуска снимков нет
+    sent = len(studio.gw.ocr_requests)
+    on_loop(studio, ocr.resume_queued)
+    row = scan_row(studio, orphan)
+    assert (row["state"], row["detail"]) == ("error", ocr.NO_CONNECTION) and len(studio.gw.ocr_requests) == sent
 
 
 def test_stop_user_stops_the_runner(studio):

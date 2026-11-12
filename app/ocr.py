@@ -88,6 +88,7 @@ CANCELLING = "отменяю"
 CANCELLED = "отменено"
 DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
+NO_CONNECTION = "подключения документа больше нет — загрузите документ заново"
 UNREADABLE = "страница не читается — файл повреждён"
 EMPTY = "на странице не найден текст"
 
@@ -663,13 +664,38 @@ async def request_cancel(user_id: int, scan_id: str) -> str:
 
 
 def recover() -> None:
-    """После перезапуска раннеров нет: ждущие и идущие — ошибка «прервано перезапуском», у
-    документов из чата — пометка во вложении."""
-    rows = state.DB.execute(f"SELECT id FROM scans WHERE state IN {RUNNING}").fetchall()
+    """После перезапуска раннеров нет: идущие — ошибка «прервано перезапуском», у документов из чата — пометка во
+    вложении. Ждущие остаются в очереди — их продолжит `resume_queued`; кроме сканов вложений уже отправленного
+    хода чата: его ответ `chat.recover` пометил прерванным, а ждущие сканы прерванного хода отменяются, как при
+    «Остановить»."""
+    rows = state.DB.execute(
+        "SELECT id FROM scans s WHERE state IN ('working', 'cancelling') OR (state = 'queued' AND origin = 'chat'"
+        " AND EXISTS (SELECT 1 FROM attachments a WHERE a.id = s.attachment_id AND a.message_id IS NOT NULL))").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
     if rows:
         log.warning("распознавания: %d прервано перезапуском", len(rows))
+
+
+def resume_queued() -> None:
+    """Старт службы (после recover и state.HTTP): ждущие документы — снова в очередь своего пользователя с
+    подключением документа (его нет — ошибка словами), раннер — с поколением истории старта
+    (`operations.snapshot`): очистка истории после него их сохранение запрещает."""
+    rows = state.DB.execute("SELECT id, user_id, connection_id FROM scans WHERE state = 'queued'"
+                            " ORDER BY created, rowid").fetchall()
+    for row in rows:
+        try:
+            conn = connections.get(row["user_id"], row["connection_id"])
+        except HTTPException:
+            _finish(row["id"], "error", NO_CONNECTION)
+            continue
+        JOBS[row["id"]] = Job(id=row["id"], user_id=row["user_id"], conn=conn, stage_at=clock.NOW())
+    users = {JOBS[row["id"]].user_id for row in rows if row["id"] in JOBS}
+    for uid in users:
+        with operations.restore(operations.snapshot(uid)):
+            kick(uid)
+    if users:
+        log.info("распознавания: продолжены ждущие у %d пользователей", len(users))
 
 
 async def stop_user(user_id: int) -> None:

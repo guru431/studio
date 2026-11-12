@@ -657,12 +657,41 @@ async def resume(user_id: int, tid: str) -> None:
 
 
 def recover() -> None:
-    """После перезапуска раннеров нет: ждущие и идущие — ошибка «прервано» (готовые куски — в тексте)."""
-    rows = state.DB.execute(f"SELECT id FROM translations WHERE state IN {RUNNING}").fetchall()
+    """После перезапуска раннеров нет: идущие — ошибка «прервано» (готовые куски — в тексте); ждущие остаются в
+    очереди — их продолжит `resume_queued`."""
+    rows = state.DB.execute("SELECT id FROM translations WHERE state IN ('working', 'cancelling')").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
     if rows:
         log.warning("переводы: %d прервано перезапуском", len(rows))
+
+
+def resume_queued() -> None:
+    """Старт службы (после recover и state.HTTP): ждущие записи — снова в очередь своей полосы с подключением и
+    моделью записи (`sections.resolve`, как у «Продолжить»), снимок без исходника — ещё с подключением «Сканов»;
+    отказ — ошибка записи его словами. Раннер — с поколением истории старта (`operations.snapshot`)."""
+    rows = state.DB.execute("SELECT id, user_id, kind, connection_id, model, source IS NOT NULL AS has_source"
+                            " FROM translations WHERE state = 'queued' ORDER BY created, rowid").fetchall()
+    lanes = set()
+    for row in rows:
+        uid = row["user_id"]
+        try:
+            try:
+                connections.get(uid, row["connection_id"])
+            except HTTPException:
+                raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
+            conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"])
+            reader = _photo_reader(uid)[0] if row["kind"] == "photo" and not row["has_source"] else None
+        except HTTPException as e:
+            _finish(row["id"], "error", e.detail["message"])
+            continue
+        JOBS[row["id"]] = Job(id=row["id"], user_id=uid, conn=conn, model=model, ocr_conn=reader, stage_at=clock.NOW())
+        lanes.add((uid, lane_of(row["kind"])))
+    for uid, lane in lanes:
+        with operations.restore(operations.snapshot(uid)):
+            kick(uid, lane)
+    if lanes:
+        log.info("переводы: продолжены ждущие в %d очередях", len(lanes))
 
 
 async def stop_user(user_id: int) -> None:
