@@ -211,6 +211,7 @@ def clear_bridge() -> None:
     bridge.TASKS.clear()
     bridge.LINKS.clear()
     bridge.WATCHERS.clear()
+    bridge.INITIATORS.clear()
 
 
 def clear_push() -> None:

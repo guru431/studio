@@ -43,6 +43,41 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     assert chat in [i["chat"] for i in studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]]
 
 
+def test_push_of_a_member_turn_goes_to_the_member_while_access_lasts(studio, monkeypatch):
+    """Карточка и конец хода участника — push ему, не владельцу; ход владельца — владельцу; отозван — никому.
+    Досланное завершение (§18) — тому же адресату."""
+    from fake_bridge import emit
+    from test_code import ASK
+    aid, machine, link, member, base = share(studio)
+    owner = link.user_id
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    monkeypatch.setattr(bridge, "watching", lambda *a: False)       # страница ушла: поток хода — не взгляд
+    signin(studio, "friend")
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    machine.script = [DONE]
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats", chat, "turn"), json={"text": "x"}).status_code == 200
+    assert pushed == [member] and not bridge.INITIATORS
+    bridge.initiated(aid, chat, member)                                 # карточка хода участника
+    emit(studio, link, ALPHA, chat, ASK)
+    assert pushed == [member, member] and bridge.INITIATORS
+    bridge.initiated(aid, chat, None)
+    signin(studio, "owner")
+    studio.c.post(url(aid, "open"), json={"pin": "2468"})
+    machine.script = [DONE]
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats", chat, "turn"), json={"text": "x"}).status_code == 200
+    assert pushed[2:] == [owner]
+    bridge.initiated(aid, chat, member)                                 # ход участника идёт, канал оборвался
+    link.hello["completions"] = True
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [
+        {"project": ALPHA, "chat": chat, "status": "done", "ago": 0}]})
+    assert pushed[3:] == [member] and not bridge.INITIATORS
+    bridge.initiated(aid, chat, member)
+    assert studio.c.delete(base + f"/{member}").status_code == 204
+    emit(studio, link, ALPHA, chat, ASK, DONE)
+    assert pushed[4:] == [] and not bridge.INITIATORS
+
+
 def test_member_visualization_by_absolute_path_needs_a_bridge_that_scopes_it(studio):
     """Мост до 0.20.0 открывает участнику и общий каталог визуализаций Codex (HTML всех проектов владельца):
     без `hello.visualization_scope` участнику — только относительный путь; владельцу — как раньше."""
