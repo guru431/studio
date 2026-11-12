@@ -8,10 +8,9 @@
  * значок «очистить» оставался бы у пустого поля. Нажатие «очистить» — пустое поле, событие `input` (раздел
  * пересчитает высоту, счётчик, поиск), фокус в поле; у поля только для чтения (перевод «EN») — ничего.
  * error — место ошибки микрофона под рамкой: его ставит раздел. */
+import { icon } from './icons.js';
 import { attachMic } from './mic.js';
 import { el } from './ui.js';
-
-const CLEAR = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
 export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false } = {}) {
   const error = el('div', { class: 'field-error' });
@@ -20,7 +19,7 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   if (clear) {
     const button = el('button', { type: 'button', class: 'icon-btn field-clear', 'aria-label': 'Очистить поле',
       title: 'Очистить поле' });
-    button.innerHTML = CLEAR;                                       // константа выше
+    button.append(icon('x'));
     button.addEventListener('click', () => {
       // поле только для чтения (идёт перевод «EN») — не трогать: пустое поле спрятало бы «EN» с отменой
       if (field.readOnly || field.disabled) return;

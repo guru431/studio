@@ -77,7 +77,7 @@ minor для возможностей, major для несовместимых �
   попытки не тормозит — на неё не полагаться.
 - **Единственные источники на странице**: имена, группы, подсказки и порядок разделов — только `sections-meta.js`
   (сервер `sections.NAMES`, `push.TITLE` сверяет `tests/test_sections_meta.py`); SVG-значки — только `icons.js`
-  (локальные `ICONS` запрещены тестом); меню — `menu.js`; тема и акцент — `appearance.js`; цвета тем — один
+  (локальные `ICONS` и `<svg` вне него запрещены тестом); меню — `menu.js`; тема и акцент — `appearance.js`; цвета тем — один
   `light-dark()` при `color-scheme` (`[data-theme]` меняет только `color-scheme`); `:hover` — только внутри
   `@media (hover: hover)`. Сторожат `tests/test_css_tokens.py`, `tests/test_sections_meta.py`.
 

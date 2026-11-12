@@ -1012,7 +1012,7 @@ label.chip { cursor: pointer; }
 /* значки icons.js вместо текстовых символов (×, ⋯, ↻, ⓘ, ⏻) — по размеру прежнего символа */
 :is(.code-tab-close, .code-image-remove) svg.ico { width: 14px; height: 14px; }
 :is(#code-project-refresh, .code-agent-info, .code-file-menu, #code-open-file-actions, #code-desktop-disconnect,
-  #code-desktop-close) svg.ico { width: 16px; height: 16px; }
+  #code-desktop-close, .link-menu) svg.ico { width: 16px; height: 16px; }
 #code-project-refresh > span, .code-agent-info > span { display: inline-grid; place-items: center; }
 
 /* просмотр во весь экран */

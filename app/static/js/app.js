@@ -226,6 +226,8 @@ function announce(section) {
  * (code-activity.js). Подпись остаётся видимой на узком экране и продублирована в aria-label. */
 function buildRail() {
   const rail = document.getElementById('rail');
+  document.getElementById('search-open').append(svgIcon('search'));
+  document.getElementById('jobs').prepend(svgIcon('jobs'));
   const spacer = rail.querySelector('.spacer');
   let group = null;
   for (const s of SECTION_LIST) {
