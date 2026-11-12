@@ -51,7 +51,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -73,7 +72,6 @@ import sections
 import state
 import translate_spot
 import translate_text
-import upstream
 
 QUEUE_MAX = 5
 RUNNING = ("queued", "working", "cancelling")
@@ -232,15 +230,6 @@ def _check(job: Job) -> None:
 
 
 # ---- задание ---------------------------------------------------------------------
-
-async def _free(conn) -> None:
-    """Release моделей картинок перед локальной моделью; итог не важен (занятую дождётся шлюз)."""
-    try:
-        for model in images.MODELS.values():
-            await images.release(conn, model)
-    except (httpx.HTTPError, upstream.UpstreamRefused):
-        return
-
 
 async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, float]:
     """503 шлюза: пауза RETRY_SEC с этапом «жду карту · м:сс» от первого отказа; дольше WAIT_MAX_SEC — ошибка,
@@ -548,7 +537,7 @@ async def _translate(job: Job, row) -> "str | None":
             return NO_TEXT
     if sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
-        await _free(job.conn)                    # и до определения языка: оно — запрос к той же модели
+        await images.free_models(job.conn)       # и до определения языка: оно — запрос к той же модели
     _check(job)                                  # «Остановить» до определения языка — без запроса к модели
     origin, lang = await _languages(job, row)
     waiting = state.DB.execute("SELECT n, source FROM translation_parts WHERE translation_id = ? AND state = 'waiting'"
