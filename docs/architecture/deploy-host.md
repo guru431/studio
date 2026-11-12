@@ -54,7 +54,8 @@
   -p "Environment=$(systemctl show -p Environment --value studio-web)"
   /opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py verify-backup`. Затем —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
-  `studio:www-data`, удалить `-wal`/`-shm`), запустить. Файлов, удалённых после даты копии, на шаре
+  `studio:www-data`, удалить `-wal`/`-shm`), запустить. На Docker-хосте — свой порядок (владелец 10001:10001,
+`studio-docker.service`): [deploy-docker](deploy-docker.md#восстановление-и-sql-обходы). Файлов, удалённых после даты копии, на шаре
   уже нет: их строки `media` отвечают 404. Запасной `STUDIO_DATA_KEY` — vault
   `local-config/secrets/vault.env` `STUDIO_DATA_KEY` (тот же, что в `/etc/studio/studio.env`): без него
   токены подключений из копии не расшифровать — их вводят заново.
@@ -120,7 +121,8 @@ Windows-мост после выкладки сервера перезапуск
 
 Сводная таблица всех шагов с 16 — в [CLAUDE.md](../../CLAUDE.md#откат-по-шагам-схемы). Ниже — развёрнутые описания и
 SQL для шагов, где их больше строки. SQL — служба остановлена, от `studio`:
-`sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`; каскады — только с `PRAGMA foreign_keys=ON;`.
+`sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`; каскады — только с `PRAGMA foreign_keys=ON;`. На Docker-хосте
+те же инструкции — функцией `sql` ([deploy-docker](deploy-docker.md#восстановление-и-sql-обходы)).
 
 **Откат на код до шага схемы 20** (`.previous`): прежний код таблиц `code_tabs` и `code_place` не читает — раздел
 «Claude Code» прежний (лестница уровней), рабочее место не видно и не мешает. Его «Удалить всю историю» их не стирает:
@@ -163,7 +165,7 @@ SQL — как у шага 16 ниже.
 `pin_fails` (запертая студия открывается паролем и passkey; заданный PIN снова действует после возврата).
 
 **Откат на код до шага схемы 16** (`.previous`): прежний код не знает раздела `ocr`. SQL ниже — служба
-остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`.
+остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "…"` (Docker — функция `sql`, выше).
 
 - `PATCH /api/connections/<id>` без `sections` (имя, токен — так шлют форма подключения и панель) у
   подключения srvllm отвечает 422, пока есть строки `ocr`. Обход: `DELETE FROM section_links WHERE
