@@ -20,7 +20,8 @@ def test_status_budget_following_and_subagent_history(desktop_browser, live, wid
     session['children'] = {
         'first': {'title': 'Первая проверка', 'status': 'running', 'messages': []},
         'old': {'title': 'Вчерашняя проверка', 'status': 'completed', 'messages': [
-            {'role': 'assistant', 'text': 'Сохранённый результат', 'steps': []}]},
+            {'role': 'assistant', 'text': 'Сохранённый результат',
+             'steps': [{'tool': 'Read', 'text': 'Прочитанная строка\n' * 120}]}]},
     }
     machine = code_free_machine({CODE_CHAT_A: session})
     machine.subagents = machine.chat_fork = True
@@ -112,6 +113,21 @@ def test_status_budget_following_and_subagent_history(desktop_browser, live, wid
             page.locator('.code-subagent-row').filter(has_text='Вчерашняя проверка').click()
             page.get_by_text('Сохранённый результат', exact=True).wait_for()
             assert page.locator('.code-subagent-row').count() == 3
+            detail = page.locator('.code-subagent-history details')
+            detail.locator('summary').click()
+            history = page.locator('.code-subagent-history')
+            history.evaluate('node => {node.scrollTop=25;}')
+            detail.locator('summary').focus()
+            session['children']['old']['messages'].append(
+                {'role': 'assistant', 'text': 'Новое сообщение без повторного нажатия', 'steps': []})
+            page.get_by_text('Новое сообщение без повторного нажатия', exact=True).wait_for(state='attached')
+            assert detail.get_attribute('open') is not None
+            assert abs(history.evaluate('node => node.scrollTop') - 25) < 2
+            assert detail.locator('summary').evaluate('node => document.activeElement === node')
+            session['children']['old']['messages'].append(
+                {'role': 'assistant', 'text': 'Сообщение после ручного обновления', 'steps': []})
+            page.locator('#code-subagents-dialog').get_by_role('button', name='Обновить', exact=True).click()
+            page.get_by_text('Сообщение после ручного обновления', exact=True).wait_for(state='attached')
             assert all(page.evaluate(geometry).values()), page.evaluate(geometry)
             page.screenshot(path=str(tmp_path / f'restored-chat-{engine}-{width}.png'))
             assert not errors, errors

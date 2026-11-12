@@ -66,6 +66,7 @@ def test_image_is_restored_after_switching_chat_and_revoked_on_leave(desktop_bro
             assert all(row['chat'] == CODE_CHAT_A and row['message_id'] == 'picture-message' and row['index'] == 0 for row in calls)
             page.evaluate("""() => {
               const fetchOriginal=window.fetch;
+              window.restoreImageFetch=() => {window.fetch=fetchOriginal;};
               window.fetch=async (url, options) => {
                 if (new URL(String(url),location.href).pathname.endsWith('/image'))
                   await new Promise(resolve => {window.releaseImage=resolve;});
@@ -79,7 +80,27 @@ def test_image_is_restored_after_switching_chat_and_revoked_on_leave(desktop_bro
             page.evaluate('hash => location.hash=hash', path + CODE_CHAT_B)
             page.locator(f'#code-chat[data-chat="{CODE_CHAT_B}"][data-loaded="1"]').wait_for()
             page.evaluate('window.releaseImage()')
+            page.evaluate('window.restoreImageFetch()')
             assert page.locator('.code-sent-image').count() == 0
+            # Уточнение идёт по живому каналу, затем возвращается в снимке того же хода.
+            machine.script = [{'k': 'text', 'text': 'Работа продолжается'}]
+            page.evaluate('hash => location.hash=hash', path + CODE_CHAT_A)
+            page.locator(f'#code-chat[data-chat="{CODE_CHAT_A}"][data-loaded="1"]').wait_for()
+            page.locator('#code-text').fill('Начать проверку')
+            page.locator('#code-send').click()
+            page.get_by_text('Работа продолжается', exact=True).wait_for()
+            page.locator('#code-image-input').set_input_files(
+                {'name': 'screen.png', 'mimeType': 'image/png', 'buffer': PNG_REAL})
+            page.locator('#code-images img').wait_for()
+            page.locator('#code-text').fill('Уточнение со скриншотом')
+            page.locator('#code-send').click()
+            live_image = "() => document.querySelector('[data-followup] .code-sent-image')?.naturalWidth === 64"
+            page.wait_for_function(live_image)
+            page.evaluate('hash => location.hash=hash', path + CODE_CHAT_B)
+            page.locator(f'#code-chat[data-chat="{CODE_CHAT_B}"][data-loaded="1"]').wait_for()
+            page.evaluate('hash => location.hash=hash', path + CODE_CHAT_A)
+            page.wait_for_function(live_image)
+            assert page.locator('[data-followup] .code-sent-image').get_attribute('src').startswith('blob:')
             assert not errors, errors
     finally:
         channel.stop()

@@ -4,6 +4,7 @@ import { el, words } from './ui.js';
 import { renderMarkdown } from './markdown.js';
 
 const POLL_MS = 10000; // События хода обновляют счётчик сразу; опрос сверяет историю и фоновые завершения.
+const HISTORY_POLL_MS = 2000;
 
 export function subagentView(host, { endpoint, supported = true }) {
   const button = el('button', { type: 'button', id: 'code-subagents', class: 'icon-btn',
@@ -29,40 +30,71 @@ export function subagentView(host, { endpoint, supported = true }) {
   let alive = true, request = null, listing = null, timer = null;
   let pending = false;
   let selected = null;
+  let historyVersion = null;
   const known = new Map();
   const statuses = { running: 'работает', inProgress: 'работает', pending: 'ожидает', waiting: 'ждёт ответа', completed: 'завершён',
     failed: 'ошибка', errored: 'ошибка', stopped: 'остановлен', shutdown: 'остановлен', unknown: 'статус не сообщается' };
 
-  async function read(path, body, render) {
+  async function read(path, body, render, passive = false) {
+    if (passive && request) return;
     request?.abort();
     const own = request = new AbortController();
-    status.textContent = 'Читаю на компьютере…';
+    if (!passive) status.textContent = 'Читаю на компьютере…';
     try {
-      const data = await api(body ? 'POST' : 'GET', endpoint(path), body ?? undefined, { signal: own.signal });
+      const data = await api(body ? 'POST' : 'GET', endpoint(path), body ?? undefined,
+        { signal: own.signal, ...(passive ? { headers: { 'x-studio-passive': '1' } } : {}) });
       if (!alive || own.signal.aborted) return;
       status.textContent = '';
       render(data);
     } catch (err) {
       if (alive && !own.signal.aborted) status.textContent = words(err);
+    } finally {
+      if (request === own) request = null;
     }
   }
 
   function openChild(row) {
     selected = row.id;
+    historyVersion = null;
     history.replaceChildren();
-    read('/subagent', { request_id: row.id }, (data) => {
-      history.append(el('h3', {}, row.title));
-      for (const message of data.items || []) {
+    paint();
+    loadChild(row);
+    schedule();
+  }
+
+  function loadChild(row, passive = false) {
+    return read('/subagent', { request_id: row.id }, (data) => {
+      if (!dialog.open || selected !== row.id) return;
+      const version = JSON.stringify([row.title, data.items, data.complete]);
+      if (version === historyVersion) return;
+      const selection = window.getSelection();
+      if (passive && !selection?.isCollapsed && history.contains(selection?.anchorNode)) return;
+      const top = history.scrollTop, outerTop = dialog.scrollTop;
+      const atEnd = history.scrollHeight - history.clientHeight - top < 8;
+      const expanded = new Set([...history.querySelectorAll('details[open]')].map(node => node.dataset.step));
+      const focus = document.activeElement?.closest('details')?.dataset.step;
+      const content = [el('h3', {}, row.title)];
+      for (const [index, message] of (data.items || []).entries()) {
         const text = el('div', { class: message.role === 'assistant' ? 'md' : 'code-subagent-user' });
         if (message.role === 'assistant') text.append(renderMarkdown(message.text || ''));
         else text.textContent = message.text || '';
-        history.append(text);
-        for (const step of message.steps || []) history.append(el('details', {},
-          el('summary', {}, String(step.tool || 'Инструмент')), el('pre', {}, String(step.text || ''))));
+        content.push(text);
+        for (const [number, step] of (message.steps || []).entries()) {
+          const key = `${index}:${number}`;
+          const detail = el('details', { 'data-step': key },
+            el('summary', {}, String(step.tool || 'Инструмент')), el('pre', {}, String(step.text || '')));
+          detail.open = expanded.has(key);
+          content.push(detail);
+        }
       }
-      if (!(data.items || []).length) history.append(el('p', { class: 'muted' }, 'История пока пуста'));
-      if (data.complete === false) history.append(el('p', { class: 'muted small' }, 'Показана часть истории'));
-    });
+      if (!(data.items || []).length) content.push(el('p', { class: 'muted' }, 'История пока пуста'));
+      if (data.complete === false) content.push(el('p', { class: 'muted small' }, 'Показана часть истории'));
+      history.replaceChildren(...content);
+      historyVersion = version;
+      if (focus) history.querySelector(`details[data-step="${focus}"] > summary`)?.focus({ preventScroll: true });
+      history.scrollTop = passive && atEnd ? history.scrollHeight : top;
+      dialog.scrollTop = outerTop;
+    }, passive);
   }
 
   function paint() {
@@ -99,12 +131,13 @@ export function subagentView(host, { endpoint, supported = true }) {
       if (!alive || own.signal.aborted) return;
       update(data.items);
       if (dialog.open) status.textContent = '';
+      if (dialog.open && selected && known.has(selected)) await loadChild(known.get(selected), true);
     } catch (err) {
       if (alive && !own.signal.aborted && dialog.open) status.textContent = words(err);
     } finally {
       if (listing === own) listing = null;
       if (alive) {
-        timer = setTimeout(load, pending ? 150 : POLL_MS);
+        timer = setTimeout(load, pending ? 150 : dialog.open && selected ? HISTORY_POLL_MS : POLL_MS);
         pending = false;
       }
     }
@@ -131,9 +164,11 @@ export function subagentView(host, { endpoint, supported = true }) {
   button.addEventListener('click', () => { dialog.showModal(); paint(); load(); });
   refresh.addEventListener('click', load);
   close.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => { request?.abort(); selected = null; history.replaceChildren(); });
+  dialog.addEventListener('close', () => {
+    request?.abort(); selected = null; historyVersion = null; history.replaceChildren();
+  });
   const visibility = () => {
-    if (document.hidden) { clearTimeout(timer); listing?.abort(); }
+    if (document.hidden) { clearTimeout(timer); listing?.abort(); request?.abort(); }
     else load();
   };
   document.addEventListener('visibilitychange', visibility);
