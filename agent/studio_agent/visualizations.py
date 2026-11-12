@@ -13,14 +13,16 @@ def valid_source(source) -> bool:
             and not any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in source))
 
 
-def read(project: Path, source: str) -> dict:
+def read(project: Path, source: str, *, codex_home: bool = True) -> dict:
+    """`codex_home=False` — только проект: общий каталог визуализаций Codex хранит HTML тредов всех проектов
+    владельца, участнику совместного проекта (протокол §17) он не открывается."""
     if not valid_source(source):
         raise Refused('invalid')
     target = Path(source.replace('\\', '/'))
     if not target.is_absolute():
         return files.read_text(project, source.replace('\\', '/'))
     # Check lexical containment first: realpath alone would admit traversal and junctions.
-    roots = (project, Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'visualizations')
+    roots = (project, Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'visualizations')[:2 if codex_home else 1]
     for root in roots:
         try:
             relative = target.relative_to(root.absolute())
