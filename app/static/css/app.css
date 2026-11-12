@@ -1355,7 +1355,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-panel-footer p { grid-column: 1 / -1; margin: 0; font-size: var(--fs-2xs); overflow-wrap: anywhere; }
 .code-agents, .code-projects, .code-chats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .code-agents { gap: var(--space-1); }
-.code-projects { gap: 0; }
+.code-projects { gap: var(--space-2); }
 .code-agent { display: flex; align-items: center; gap: var(--space-4); width: 100%; min-width: 0; padding: 7px var(--space-4); border: 0;
   border-radius: var(--r-control); background: none; color: var(--text-1); text-align: left; font-size:var(--fs-md); cursor: pointer; }
 @media (hover: hover) { .code-agent:hover { background: var(--surface-2); } }
@@ -1397,7 +1397,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .project-members-list li span { overflow-wrap: anywhere; min-width: 0; }
 .project-members .btn { min-height: 44px; }
 .code-project-title { display: flex; align-items: baseline; gap: var(--space-2); flex: 1; min-width: 0; }
-.code-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .code-project-count { flex: none; color: var(--text-2); font-size:var(--fs-xs); font-variant-numeric: tabular-nums; }
 .code-project-metrics, .code-project-summary { min-width: 0; font-weight: 400;
   font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--text-2); }
@@ -1405,7 +1405,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-project-summary { display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--space-1); overflow-x: auto; }
 .code-project-metrics a { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .code-project-git, .code-project-github, .code-project-remote, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
-.code-project-modified { flex: none; margin-left: auto; white-space: nowrap; }
+.code-project-modified { flex: none; white-space: nowrap; }
 .code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-project-remote[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--success); }
 .code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-project-remote[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--warn); }
 .code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-project-remote[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }

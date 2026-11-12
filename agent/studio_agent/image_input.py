@@ -27,14 +27,14 @@ def validate(images):
             raise Refused("invalid", "нужен PNG, JPEG, WebP или GIF")
         data = image["data"]
         if len(data) > (FILE_MAX + 2) // 3 * 4:
-            raise Refused("too_large", "изображение больше 5 МиБ")
+            raise Refused("too_large", "изображение больше 10 МиБ")
         try:
             raw = base64.b64decode(data, validate=True)
         except ValueError:
             raise Refused("invalid", "изображение не читается") from None
         total += len(raw)
         if len(raw) > FILE_MAX or total > TOTAL_MAX:
-            raise Refused("too_large", "изображения больше предела: 5 МиБ на файл, 8 МиБ всего")
+            raise Refused("too_large", "изображения больше предела: 10 МиБ на файл, 30 МиБ всего")
         if mime_of(raw) != image["mime"]:
             raise Refused("invalid", "формат изображения не совпадает с содержимым")
 

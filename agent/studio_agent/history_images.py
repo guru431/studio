@@ -79,7 +79,7 @@ def payload(content, index, engine, project):
         if not source.is_relative_to(root):
             raise Refused("outside", "Изображение находится вне проекта")
         _, raw = files._read(project, source.relative_to(root).as_posix(), image_input.FILE_MAX,
-                            "Изображение больше 5 МиБ")
+                            "Изображение больше 10 МиБ")
         result = {"mime": image_input.mime_of(raw), "data": base64.b64encode(raw).decode("ascii")}
     else:
         url = block.get("url") or block.get("image_url")

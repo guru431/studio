@@ -70,6 +70,23 @@ def test_combined_size_and_count_limits_include_images(monkeypatch):
         attachments.validate([FILE])
 
 
+@pytest.mark.integration
+def test_ten_mib_per_file_and_thirty_mib_total_include_images():
+    from studio_agent import image_input
+
+    raw = b"\x89PNG\r\n\x1a\n" + b"x" * (10 * limits.MIB - 8)
+    image = {"mime": "image/png", "data": base64.b64encode(raw).decode()}
+    item = {**FILE, "data": image["data"]}
+    image_input.validate([image] * 3)
+    attachments.validate([item] * 2, [image])
+    with pytest.raises(Refused, match="too_large"):
+        attachments.validate([item] * 2 + [{**FILE, "data": "eA=="}], [image])
+    with pytest.raises(Refused, match="too_large"):
+        attachments.validate([{**item, "data": base64.b64encode(raw + b"x").decode()}])
+    with pytest.raises(Refused, match="too_large"):
+        image_input.validate([{**image, "data": base64.b64encode(raw + b"x").decode()}])
+
+
 @pytest.mark.parametrize("operation", ["turn", "steer"])
 async def test_combined_size_is_checked_before_start_or_followup(agent, monkeypatch, operation):
     from test_image_input import PNG

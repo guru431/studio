@@ -156,6 +156,15 @@ def test_apache_lets_through_the_largest_body_the_studio_accepts():
     assert limit >= claude_code.FILE_BODY_MAX                                         # правка файла Claude Code
 
 
+def test_apache_accepts_agent_turn_bodies_including_followups():
+    locations = re.findall(r'<LocationMatch "([^"]+)">(.*?)</LocationMatch>', VHOST, re.S)
+    for op in ("turn", "steer"):
+        path = f"/api/code/agents/1/projects/{'a' * 16}/chats/11111111-1111-4111-8111-111111111111/{op}"
+        [body] = [body for pattern, body in locations if re.search(pattern, path)]
+        assert int(re.search(r"LimitRequestBody (\d+)", body).group(1)) >= claude_code.TURN_BODY_MAX
+    assert claude_code.TURN_BODY_MAX < bridge.FRAME_MAX
+
+
 def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     """B2-M8: при равных пределах 502 Apache закрывал бы 504 службы словами «шлюз не ответил»."""
     timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))

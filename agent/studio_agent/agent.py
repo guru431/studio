@@ -134,7 +134,7 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "agent_version": agent_version, "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
-                 "chat_state": True, "chat_control": True, "attachments": True, "project_activity": True,
+                 "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,

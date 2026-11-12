@@ -52,3 +52,30 @@ def test_shared_limits_count_files_and_images_together(studio, monkeypatch):
     monkeypatch.setattr(claude_code, "IMAGES_MAX", 25)
     result = studio.c.post(chat_url(aid, "turn"), json={"text": "x", "attachments": [FILE], "images": [PNG]})
     assert result.status_code == 413 and not sent(machine, "turn")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("op", ["turn", "steer"])
+def test_thirty_mib_of_attachments_reaches_bridge_and_one_extra_byte_is_refused(studio, op):
+    aid, machine, link = setup(studio)
+    link.hello.update(attachments=True, large_attachments=True)
+    machine.script = [DONE]
+    if op == "steer":
+        machine.running[A] = {"turn": "t1", "project": ALPHA, "text": "", "steps": [], "asks": {}, "followups": []}
+    ten_mib = {**FILE, "data": base64.b64encode(b"x" * (10 * 1024 * 1024)).decode()}
+    result = studio.c.post(chat_url(aid, op), json={"text": "", "attachments": [ten_mib] * 3})
+    assert result.status_code == 200
+    [request] = sent(machine, op)
+    assert request["attachments"] == [ten_mib] * 3
+    result = studio.c.post(chat_url(aid, op), json={"text": "", "attachments": [ten_mib] * 3 + [{**FILE, "data": "eA=="}]})
+    assert result.status_code == 413 and len(sent(machine, op)) == 1
+
+
+@pytest.mark.integration
+def test_legacy_bridge_refuses_large_files_without_sending_them(studio):
+    aid, machine, link = setup(studio)
+    link.hello["attachments"] = True
+    item = {**FILE, "data": base64.b64encode(b"x" * (5 * 1024 * 1024 + 1)).decode()}
+    result = studio.c.post(chat_url(aid, "turn"), json={"text": "", "attachments": [item]})
+    assert result.status_code == 409 and result.json()["detail"]["code"] == "unsupported"
+    assert not sent(machine, "turn")

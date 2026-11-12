@@ -35,14 +35,14 @@ def validate(items, images=()):
         if not isinstance(mime, str) or not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime):
             raise Refused("invalid", "нужен тип вложения")
         if len(mime) > 200 or len(item["data"]) > (limits.IMAGE_MAX + 2) // 3 * 4:
-            raise Refused("too_large", "вложение больше 5 МиБ")
+            raise Refused("too_large", "вложение больше 10 МиБ")
         try:
             raw = base64.b64decode(item["data"], validate=True)
         except ValueError:
             raise Refused("invalid", "вложение не читается") from None
         total += len(raw)
         if len(raw) > limits.IMAGE_MAX or total > limits.IMAGES_MAX:
-            raise Refused("too_large", "вложения больше предела: 5 МиБ на файл, 8 МиБ всего")
+            raise Refused("too_large", "вложения больше предела: 10 МиБ на файл, 30 МиБ всего")
 
 
 class Files:
