@@ -41,6 +41,15 @@ document.addEventListener('studio-code-clear', () => {
 const UPDATE_WORDS = { preparing: 'Скачивание и установка…', waiting: 'Ждём завершения заданий…',
   restarting: 'Перезапуск агента…', pin: 'Введите PIN для обновления агента',
   failed: 'Не удалось обновить агент. Повторите попытку.' };
+// Мост ≥ 0.20.0 называет, что держит ожидание обновления: только числа и признак рабочего стола.
+function waitingWords(holds) {
+  const parts = [];
+  if (holds?.tasks) parts.push(`идёт заданий: ${holds.tasks}`);
+  if (holds?.asking) parts.push(`ждут вашего ответа: ${holds.asking}`);
+  if (holds?.desktop) parts.push('подключён удалённый рабочий стол');
+  if (holds?.requests) parts.push(`выполняется запросов: ${holds.requests}`);
+  return parts.length ? `Ждём завершения — ${parts.join(', ')}` : UPDATE_WORDS.waiting;
+}
 const versionParts = (value) => /^\d+\.\d+\.\d+$/.test(value || '') ? value.split('.').map(Number) : null;
 function newer(latest, current) {
   const a = versionParts(latest), b = versionParts(current);
@@ -180,7 +189,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         try {
           const data = await api('GET', `/api/code/agents/${aid}/update`);
           if (data.state === 'idle') update.state = 'failed';
-          else Object.assign(update, data);
+          else { Object.assign(update, data); if (!data.holds) delete update.holds; }
         } catch (err) {
           if (['closed', 'offline'].includes(err.code)) update.state = 'restarting';
           else { update.state = 'failed'; update.message = words(err); }
@@ -208,6 +217,18 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         update.message = '';
         pin(agent.id);
       }
+    }
+    if (alive) { paintAgents(); scheduleUpdates(); }
+  }
+  async function cancelUpdate(agent) {
+    const update = updates.get(agent.id);
+    if (!update) return;
+    try {
+      const data = await api('DELETE', `/api/code/agents/${agent.id}/update`);
+      if (data.state === 'idle') updates.delete(agent.id);
+      else { Object.assign(update, data); update.message = data.state === 'restarting' ? 'Перезапуск уже начат — отменить нельзя' : ''; }
+    } catch (err) {
+      update.message = words(err);
     }
     if (alive) { paintAgents(); scheduleUpdates(); }
   }
@@ -546,9 +567,15 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       button.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9"/></svg>';
       if (available) button.classList.add('has-update');
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
+      const cancellable = agent.agent_update_cancel && ['preparing', 'waiting'].includes(update?.state);
+      const cancel = cancellable ? el('button', { type: 'button', class: 'btn btn-link code-agent-update-cancel',
+        'aria-label': `Отменить обновление · ${agent.name}` }, 'Отменить обновление') : null;
+      cancel?.addEventListener('click', () => { cancel.disabled = true; cancelUpdate(agent); });
       const note = update && update.state !== 'complete'
-        ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}`,
-        role: 'status' }, update.message || UPDATE_WORDS[update.state] || '') : null;
+        ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}` },
+          el('span', { role: 'status' }, update.message
+            || (update.state === 'waiting' ? waitingWords(update.holds) : UPDATE_WORDS[update.state]) || ''),
+          cancel ? ' ' : null, cancel) : null;
       const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
         title: 'Подключиться к рабочему столу', 'aria-label': `Подключиться к рабочему столу · ${agent.name}`,
         'aria-haspopup': 'dialog' });

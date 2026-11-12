@@ -516,7 +516,7 @@ class Controller:
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
                                    models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode)
         if self.on_update_quit is not None:
-            agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit)
+            agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit, holds=self._update_holds)
         agent.on_pin_locked = self._pin_changed
         await asyncio.to_thread(update_helper.acquire_runtime_lease, updater.REPO)
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
@@ -547,12 +547,32 @@ class Controller:
                 or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
                 or any(not task.done() for task in getattr(self._link, '_requests', ())))
 
+    def _update_holds(self) -> dict:
+        """Что держит ожидание обновления (`_update_active`) — только числа и признак, для Студии."""
+        live = [waiting for backend in (self.runner, self.codex, self.opencode) if backend is not None
+                for waiting in backend.live().values()]
+        return {"tasks": len(live), "asking": sum(bool(waiting) for waiting in live),
+                "desktop": bool(self.agent is not None and self.agent.desktop.status()["active"]),
+                "requests": sum(not task.done() for task in getattr(self._link, '_requests', ()))}
+
+    def cancel_update(self) -> None:
+        """Пункт трея «Отменить обновление»: то же, что кнопка Студии; из любого потока."""
+        def cancel():
+            if self.agent is not None and self.agent.updater is not None:
+                self.agent.updater.cancel()
+            self._refresh_activity()
+
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(cancel)
+
     def _refresh_activity(self):
         live = [waiting for backend in (self.runner, self.codex, self.opencode) if backend is not None
                 for waiting in backend.live().values()]
         active = self.agent is not None and self.agent.desktop.status()["active"]
+        update = getattr(self.agent, "updater", None)
         value = {"tasks": len(live), "waiting": sum(bool(waiting) for waiting in live),
-                 "desktop_active": bool(active), "quit_when_idle": self._quit_when_idle}
+                 "desktop_active": bool(active), "quit_when_idle": self._quit_when_idle,
+                 "updating": update is not None and update.state in ("preparing", "waiting")}
         if value != self._activity:
             self._activity = value
             for callback in list(self._activity_subscribers):
@@ -781,6 +801,8 @@ def main(argv: list[str]) -> int:
                 ctrl.stop_desktop_session()
             elif cmd == "quit_idle":
                 ctrl.set_quit_when_idle(not ctrl.activity_status()["quit_when_idle"])
+            elif cmd == "cancel_update":
+                ctrl.cancel_update()
             elif cmd == "quit":
                 icon.stop()
                 ctrl.quit()

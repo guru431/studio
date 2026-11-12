@@ -80,10 +80,12 @@ class Link:
         self._finished = asyncio.Event()
         self._running = False
 
-    def send(self, frame: dict) -> None:
-        """Кадр в текущий канал; канала нет — пропадает."""
-        if self._queue is not None:
-            self._queue.put_nowait(frame)
+    def send(self, frame: dict) -> bool:
+        """Кадр в текущий канал; канала нет — `False` (конец хода `Agent.missed` дошлёт после `welcome`)."""
+        if self._queue is None:
+            return False
+        self._queue.put_nowait(frame)
+        return True
 
     async def stop(self) -> None:
         """Закрыть канал и выйти из `run()` со `stopped`."""
@@ -164,6 +166,9 @@ class Link:
                 except Exception as e:
                     log.warning("канал: welcome: %s", type(e).__name__)
             self.agent.new_link(reconnect=True)
+            # Ходы, кончившиеся без канала, — первым кадром, если студия их принимает (протокол §18).
+            if frame.get("completions") is True and (missed := self.agent.completions()) is not None:
+                queue.put_nowait(missed)
             self._queue = queue
             self.agent.send = self.send
             writer = asyncio.create_task(self._write(ws, queue))
@@ -191,6 +196,10 @@ class Link:
                 writer.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await writer
+            if not self._stop.is_set():  # не ушедшие концы ходов — следующему каналу
+                while not queue.empty():
+                    if isinstance(left := queue.get_nowait(), dict):
+                        self.agent.missed(left)
             with contextlib.suppress(Exception):
                 await ws.close()
 

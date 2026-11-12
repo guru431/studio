@@ -54,6 +54,8 @@ FRAME_MAX = 16 * 1024 * 1024
 HELLO_SEC = 10
 CALL_SEC = 30
 WATCH_MAX = 1000
+COMPLETIONS_MAX = 50  # досланных завершений в кадре (протокол §18)
+COMPLETION_AGE_MAX = 7 * 24 * 3600  # давность конца хода, с: старше — время отметки по этому пределу
 STOP_SEC = 2
 MESSAGE_MAX = 300
 CODE_MAX = 40
@@ -131,6 +133,9 @@ class Watch(asyncio.Queue):
 LINKS: dict[int, Link] = {}
 #: (agent_id, chat) → очереди наблюдателей чата
 WATCHERS: dict[tuple[int, str], set[Watch]] = {}
+#: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
+INITIATORS: dict[tuple[int, str], int] = {}
+INITIATORS_MAX = 10_000
 #: фоновые отправки (`forget`) и закрытия каналов (`_close_later`): ссылка держит задачу до конца, `stop` ждёт
 #: их не дольше `STOP_SEC` и отменяет остаток
 TASKS: set[asyncio.Task] = set()
@@ -207,8 +212,8 @@ def parse_hello(frame: dict) -> dict:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "project_activity", "subscription_usage", "project_summary", "metadata_cache", "file_stats", "file_operations",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "computer_info", "desktop", "visualizations",
-                       "passive_requests", "history_images", "project_sharing"):
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "desktop", "visualizations",
+                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -278,8 +283,9 @@ async def attach(link: Link) -> None:
         _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
     try:
+        # `completions` — студия принимает кадр досланных завершений (протокол §18); старый мост поле не читает.
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
-                         "studio_version": release.VERSION})
+                         "studio_version": release.VERSION, "completions": True})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:
@@ -350,8 +356,29 @@ def deliver(link: Link, frame: dict) -> None:
         for q in list(WATCHERS.get((link.agent_id, frame["chat"]), ())):
             _put_event(link.agent_id, frame["chat"], q, frame["e"])
         _push(link, frame)
+    elif t == "completions" and link.hello.get("completions"):
+        _completions(link, frame)
     else:
         raise ProtocolError("t")
+
+
+def _completions(link: Link, frame: dict) -> None:
+    """Ходы, кончившиеся без канала (протокол §18): отметка «непрочитано» и push — как у живого `done`. Строки
+    `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет."""
+    if LINKS.get(link.agent_id) is not link:
+        return
+    items = frame.get("items")
+    if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
+            isinstance(i, dict) and i.get("status") in DONE_WORDS and type(i.get("ago")) is int and i["ago"] >= 0
+            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
+        log.warning("агент %d: неверные досланные завершения", link.agent_id)
+        return
+    for item in items:
+        finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
+        code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
+        _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                     "e": {"k": "done", "status": item["status"]}})
+    log.info("агент %d: досланных завершений %d", link.agent_id, len(items))
 
 
 #: повод push → слова тела (тексты сервера плана)
@@ -359,12 +386,39 @@ ASK_WORDS = {"permission": "ждёт подтверждения", "question": "�
 DONE_WORDS = {"done": "ход окончен", "stopped": "ход прерван", "error": "ошибка"}
 
 
+def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
+    """Ход чата начинает участник `user_id`: ему — push карточек и конца этого хода; `None` — ход владельца
+    (push по умолчанию — ему). Ставится до просьбы `turn`: быстрый `done` приходит раньше, чем зовущий получит
+    ответ. Возвращает прежнюю запись — её возвращают, если мост хода не принял. Только память: перезапуск
+    службы возвращает push владельцу."""
+    key = (agent_id, chat)
+    previous = INITIATORS.pop(key, None)
+    if user_id is not None:
+        INITIATORS[key] = user_id
+        while len(INITIATORS) > INITIATORS_MAX:
+            del INITIATORS[next(iter(INITIATORS))]
+    return previous
+
+
+def _addressee(link: Link, frame: dict) -> int | None:
+    """Кому push хода: начавшему его участнику, пока проект ему выдан (отозван — никому: владельцу о чужих ходах
+    не шлём); нет записи — владельцу компьютера."""
+    member = INITIATORS.get((link.agent_id, frame["chat"]))
+    if member is None:
+        return link.user_id
+    import project_access                # он импортирует этот модуль: на загрузке — кольцо
+    return member if frame["project"] in project_access.projects(member, link.agent_id) else None
+
+
 def _push(link: Link, frame: dict) -> None:
-    """Карточка или конец хода, которых никто не смотрит, — push владельцу (спека 6.8)."""
+    """Карточка или конец хода, которых никто не смотрит, — push начавшему ход (спека 6.8)."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
-    if text is None or watching(link.agent_id, frame["chat"]):
+    user_id = _addressee(link, frame) if text is not None else None
+    if e["k"] == "done":
+        INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
+    if text is None or user_id is None or watching(link.agent_id, frame["chat"]):
         return
     project_name = frame.get("project_name")
     # Имя — только один компонент пути; неизвестный/старый мост сохраняет прежний текст push.
@@ -372,7 +426,7 @@ def _push(link: Link, frame: dict) -> None:
                   and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
                   or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
     place = f"{link.name} · {project_name}" if valid_name else link.name
-    push.notify_later(link.user_id, f"{place}: {text}",
+    push.notify_later(user_id, f"{place}: {text}",
                       f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
 
 

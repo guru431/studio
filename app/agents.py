@@ -126,6 +126,7 @@ async def list_agents(request: Request):
         hello = link.hello if link is not None else {}
         items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
                       "agent_version": hello.get("agent_version"), "agent_update": hello.get("agent_update", False),
+                      "agent_update_cancel": hello.get("agent_update_cancel", False),
                       "latest_version": release["version"] if release else None,
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
@@ -152,7 +153,7 @@ async def list_agents(request: Request):
                       **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
-            items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False,
+            items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
                              computer_info=False, desktop=False, subscription_usage=False, worktrees=False)
     return {"items": items}
 

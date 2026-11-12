@@ -118,7 +118,9 @@
   Push (спека 6.8): ключ VAPID (P-256) в `settings` `vapid` шифром `STUDIO_DATA_KEY` (`vapid_key`), тело — RFC
   8291 aes128gcm одной записью, подпись — JWT ES256, всё на `cryptography`; `GET/POST/DELETE /api/me/push`, флаг
   устройства `studio-push` (`settings.js`); адреса — только `push.HOSTS` («Правила»). Повод — `bridge._push`:
-  `ask` и `done`, только если чат никто не смотрит (`bridge.watching`); страница снимает поток на
+  `ask` и `done`, только если чат никто не смотрит (`bridge.watching`); адресат — начавший ход: ход участника
+  совместного проекта (`bridge.initiated` до просьбы `turn`, в памяти) — ему, пока проект ему выдан (отозван —
+  никому), иначе владельцу компьютера; страница снимает поток на
   `visibilitychange: hidden` и открывает `live` на `visible`; текст — «<имя компьютера> · <имя проекта>: <повод>»
   (со старым мостом — без проекта), `href`
   `code/<aid>/<pid>/<chat>`, `tag` `code-<chat>`; 404 и 410 службы — подписка снята; `sw.js` — `push` с

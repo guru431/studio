@@ -507,10 +507,29 @@ async def update_agent(aid: int, request: Request):
 async def agent_update_status(aid: int, request: Request):
     own_agent(request, aid)
     require_capability(aid, "agent_update")
-    data = await ask(request, aid, "agent_update_status")
-    return {"state": data.get("state") if data.get("state") in
-            ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
-            "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    return _update_status(await ask(request, aid, "agent_update_status"))
+
+
+@router.delete("/agents/{aid}/update")
+async def cancel_agent_update(aid: int, request: Request):
+    """«Отменить обновление»: права — как у запуска (владелец, открытый PIN компьютера, CSRF)."""
+    own_agent(request, aid)
+    require_capability(aid, "agent_update")
+    require_capability(aid, "agent_update_cancel")
+    return _update_status(await ask(request, aid, "agent_update_cancel"))
+
+
+def _update_status(data: dict) -> dict:
+    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак."""
+    result = {"state": data.get("state") if data.get("state") in
+              ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
+              "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    holds = data.get("holds")
+    if result["state"] == "waiting" and isinstance(holds, dict):
+        counts = {key: holds.get(key) for key in ("tasks", "asking", "requests")}
+        if all(type(v) is int and 0 <= v <= 10_000 for v in counts.values()) and type(holds.get("desktop")) is bool:
+            result["holds"] = {**counts, "desktop": holds["desktop"]}
+    return result
 
 
 @router.post("/agents/{aid}/projects/{pid}/files/suggest")
@@ -891,7 +910,7 @@ async def steer(aid: int, pid: str, chat: str, request: Request):
 async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     """Ход: просьба `turn` мосту, затем его события потоком SSE до `done` или `offline`. Модель и усилие
     сверяются со знакомством моста; канала нет — их не сверить, и `ask` скажет `offline`."""
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
     raw = await auth.small_body(request, TURN_BODY_MAX)
@@ -932,10 +951,17 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                 **({"mode": "queue"} if body.mode == "queue" else {}),
                                 **({"attachments": attachments} if attachments else {}),
                                 **({"images": images} if images else {})))
-    q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
-                             effort=body.effort, **({"access": body.access} if body.access is not None else {}),
-                             **({"attachments": attachments} if attachments else {}),
-                             **({"images": images} if images else {}))
+    # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
+    member = request.state.user.id if agent["user_id"] != request.state.user.id else None
+    previous = bridge.initiated(aid, chat, member)
+    try:
+        q, data = await _watched(request, aid, chat, "turn", project=pid, text=body.text, model=body.model,
+                                 effort=body.effort, **({"access": body.access} if body.access is not None else {}),
+                                 **({"attachments": attachments} if attachments else {}),
+                                 **({"images": images} if images else {}))
+    except BaseException:
+        bridge.initiated(aid, chat, previous)
+        raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
     return _Watch(aid, chat, q, request.state.digest,
@@ -1079,9 +1105,13 @@ class VisualizationBody(BaseModel):
 
 @router.post("/agents/{aid}/projects/{pid}/visualization")
 async def visualization(aid: int, pid: str, body: VisualizationBody, request: Request):
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
     require_capability(aid, "visualizations")
+    # Мост до `hello.visualization_scope` открывает участнику и общий каталог визуализаций Codex с HTML всех
+    # проектов владельца: ему — только относительный путь, файл внутри проекта (протокол §17).
+    if agent["user_id"] != request.state.user.id and re.match(r"[A-Za-z]:|[\\/]", body.source):
+        require_capability(aid, "visualization_scope")
     data = await ask(request, aid, "visualization", project=pid, source=body.source)
     text = _strings(data, "text")["text"]
     try:

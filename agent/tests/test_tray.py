@@ -62,7 +62,8 @@ def test_local_activity_menu_routes_desktop_and_exit_actions_without_private_det
             return super().__new__(cls, items)
 
     def item(text, action, **kwargs):
-        return SimpleNamespace(text=text, action=action, enabled=kwargs.get('enabled', True))
+        return SimpleNamespace(text=text, action=action, enabled=kwargs.get('enabled', True),
+                               visible=kwargs.get('visible', True))
 
     monkeypatch.setitem(sys.modules, 'pystray', SimpleNamespace(Menu=Menu, MenuItem=item,
         Icon=lambda name, image, title, menu: SimpleNamespace(title=title, menu=menu)))
@@ -82,7 +83,12 @@ def test_local_activity_menu_routes_desktop_and_exit_actions_without_private_det
     next(entry for entry in items if text(entry).startswith('Выйти после')).action()
     next(entry for entry in items if text(entry).startswith('Выход сейчас')).action()
     assert commands == ['stop_desktop', 'quit_idle', 'quit']
-    icon.show_activity({'tasks': 0, 'waiting': 0, 'desktop_active': False, 'quit_when_idle': True})
+    cancel = next(entry for entry in items if text(entry) == 'Отменить обновление')
+    assert not cancel.visible(cancel) and not cancel.enabled(cancel)
+    icon.show_activity({'tasks': 0, 'waiting': 0, 'desktop_active': False, 'quit_when_idle': True, 'updating': True})
+    assert cancel.visible(cancel) and cancel.enabled(cancel)
+    cancel.action()
+    assert commands[-1] == 'cancel_update'
     assert not stop.enabled(stop)
     assert any(text(entry) == 'Отменить выход после завершения' for entry in items)
     icon.show('replaced', 'x' * 200)

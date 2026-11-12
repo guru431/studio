@@ -95,7 +95,8 @@ async def test_shared_requests_are_scoped_without_opening_the_computer(agent_wit
 
 @pytest.mark.parametrize("op,fields", [
     ("read", {"project": "f" * 16, "path": "a.txt"}),
-    ("computer_info", {}), ("desktop_status", {}), ("agent_update", {}), ("usage", {}), ("open", {"pin": "2468"}),
+    ("computer_info", {}), ("desktop_status", {}), ("agent_update", {}), ("agent_update_cancel", {}), ("usage", {}),
+    ("open", {"pin": "2468"}),
     ("worktrees", {"project": projects.pid("demo")}),
     ("worktree_create", {"project": projects.pid("demo"), "query": "branch"}),
 ])
@@ -250,7 +251,8 @@ def test_hello(agent):
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
                              "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
-                             "passive_requests": True, "history_images": True, "project_sharing": True}
+                             "passive_requests": True, "history_images": True, "project_sharing": True,
+                             "completions": True, "visualization_scope": True, "agent_update_cancel": False}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -282,10 +284,12 @@ async def test_everything_but_open_is_closed_until_opened(agent):
 async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existing(agent_with_pin):
     agent = agent_with_pin
     agent.updater = SimpleNamespace(busy=False, start=Mock(return_value={'state': 'preparing'}),
-                                    status=lambda: {'state': 'waiting'})
-    assert agent.hello()['agent_update'] is True
+                                    status=lambda: {'state': 'waiting'}, cancel=Mock(return_value={'state': 'idle'}))
+    assert agent.hello()['agent_update'] is True and agent.hello()['agent_update_cancel'] is True
     assert (await agent.handle(req('agent_update')))[0]['code'] == 'closed'
+    assert (await agent.handle(req('agent_update_cancel')))[0]['code'] == 'closed'
     agent.updater.start.assert_not_called()
+    agent.updater.cancel.assert_not_called()
     await opened(agent, pin='2468')
     assert (await agent.handle(req('agent_update', version='99.0.0')))[0]['data']['state'] == 'preparing'
     agent.updater.busy = True
@@ -293,6 +297,7 @@ async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existin
     assert (await agent.handle(req('save')))[0]['code'] == 'busy'
     assert (await agent.handle(req('agent_update_status')))[0]['data']['state'] == 'waiting'
     assert (await agent.handle(req('projects')))[0]['ok']
+    assert (await agent.handle(req('agent_update_cancel')))[0]['data'] == {'state': 'idle'}  # и пока busy
 
 
 async def test_posted_local_idle_exit_refuses_new_work_but_keeps_status_available(agent):

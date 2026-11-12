@@ -212,7 +212,13 @@ def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(
     for i, backend in enumerate(backends):
         backend._turns[str(i)] = SimpleNamespace(asks={"private-prompt": True} if i == 1 else {})
     ctrl._refresh_activity()
-    assert ctrl.activity_status() == {"tasks": 3, "waiting": 1, "desktop_active": True, "quit_when_idle": False}
+    assert ctrl.activity_status() == {"tasks": 3, "waiting": 1, "desktop_active": True, "quit_when_idle": False,
+                                      "updating": False}
+    assert ctrl._update_holds() == {"tasks": 3, "asking": 1, "desktop": True, "requests": 0}  # для Студии — числа
+    ctrl.agent.updater = SimpleNamespace(state="waiting")
+    ctrl._refresh_activity()
+    assert ctrl.activity_status()["updating"] is True
+    del ctrl.agent.updater
     assert "private-prompt" not in str(snapshots)
     ctrl.set_quit_when_idle(True)
     assert not exits

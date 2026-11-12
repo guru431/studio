@@ -117,6 +117,60 @@ async def test_welcome_goes_to_on_welcome_before_online(fake_studio, agent):
     await task
 
 
+def _done(chat, status="done", project="0123456789abcdef"):
+    return {"t": "ev", "project": project, "chat": chat, "turn": "t1", "project_name": "demo",
+            "e": {"k": "done", "status": status}}
+
+
+async def test_turns_finished_without_link_are_sent_after_welcome_once(fake_studio, agent):
+    """Конец хода без канала (обрыв, выкладка) — кадр `completions` первым после `welcome`, если студия его
+    принимает; прежней студии — не шлётся и ждёт. Повтор того же чата — последний итог, прочие события — нет."""
+    clock = [100.0]
+    agent._now = lambda: clock[0]
+    other = "1b1e2c3d-4f50-4617-8899-aabbccddeeff"
+    agent.emit(_done(CHAT, "error"))
+    agent.emit({"t": "ev", "project": "0123456789abcdef", "chat": other, "turn": "t1", "e": {"k": "text", "text": "x"}})
+    clock[0] += 30
+    agent.emit(_done(other, "stopped"))
+    agent.emit(_done(CHAT))
+    clock[0] += 5
+    lk, states, task = start(fake_studio, agent)                       # прежняя студия: флага нет
+    await fake_studio.connected()
+    assert (await fake_studio.request("open", pin=None))["ok"] is True
+    assert [f["t"] for _, f in fake_studio.frames] == ["res"] and len(agent._missed) == 2
+    await lk.stop()
+    await task
+    fake_studio.completions = True
+    lk, states, task = start(fake_studio, agent)
+    await fake_studio.connected(2)
+    await until(lambda: any(n == 1 for n, _ in fake_studio.frames))
+    n, frame = next((n, f) for n, f in fake_studio.frames if n == 1)
+    assert frame == {"t": "completions", "items": [
+        {"project": "0123456789abcdef", "chat": other, "status": "stopped", "project_name": "demo", "ago": 5},
+        {"project": "0123456789abcdef", "chat": CHAT, "status": "done", "project_name": "demo", "ago": 5}]}
+    assert not agent._missed
+    agent.emit(_done(CHAT))                                             # канал есть — обычное событие
+    await until(lambda: fake_studio.events)
+    assert not agent._missed
+    await lk.stop()
+    await task
+
+
+def test_unsent_completions_frame_waits_for_the_next_link(agent):
+    clock = [1000.0]
+    agent._now = lambda: clock[0]
+    for i in range(limits.COMPLETIONS_MAX + 3):
+        agent.emit(_done(f"00000000-0000-4000-8000-{i:012d}"))
+    frame = agent.completions()
+    assert len(frame["items"]) == limits.COMPLETIONS_MAX and frame["items"][0]["chat"].endswith("000000000003")
+    clock[0] += 10
+    agent.emit(_done(CHAT))
+    agent.missed(frame)                                                 # канал умер, кадр не ушёл
+    again = agent.completions()["items"]
+    assert len(again) == limits.COMPLETIONS_MAX and again[-1] == {**again[-1], "chat": CHAT, "ago": 0}
+    assert again[0]["ago"] == 10 and again[0]["chat"].endswith("000000000004")
+
+
 async def test_a_failing_on_welcome_does_not_break_the_link(fake_studio, agent):
     def broken(frame):
         raise KeyError("x")

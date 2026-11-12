@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,13 @@ from pathlib import Path
 from . import VERSION, chrome, jobs, limits
 
 RPC_SEC = 25
+# Строка stdout app-server: ответ `thread/read` с `includeTurns` — вся история одной строкой, картинки —
+# base64 `data:` URL. Предел кадра канала (16 МиБ) к ней не относится; длиннее LINE_MAX — отказ одному запросу.
+LINE_MAX = 256 * limits.MIB
+CHUNK = limits.MIB
+_EDGE = 128  # байт начала и конца переполненной строки: по ним — id ответа
+_HEAD_ID = re.compile(rb'\s*\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"id"\s*:\s*(-?\d+)\s*,\s*"(?:result|error)"')
+_TAIL_ID = re.compile(rb',\s*"id"\s*:\s*(-?\d+)\s*\}\s*$')
 
 
 def find_cli() -> Path | None:
@@ -38,15 +46,55 @@ def version(path: Path) -> str:
 class RpcError(Exception):
     """Тело ошибки может содержать пути и тексты: его нельзя писать в журнал.
 
-    `transport` — канал с app-server оборвался (EOF, не JSON); без него — ответ живого сервера."""
+    `transport` — канал с app-server оборвался (EOF, не JSON); без него — ответ живого сервера.
+    `too_large` — ответ длиннее `LINE_MAX`: пропущен, канал и прочие запросы живут."""
 
-    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None, transport=False):
+    def __init__(self, *, not_found=False, writer_active=False, method=None, code=None, transport=False,
+                 too_large=False):
         super().__init__()
         self.not_found = not_found
         self.writer_active = writer_active
         self.method = method
         self.code = code if type(code) is int else None
         self.transport = transport
+        self.too_large = too_large
+
+
+class _Oversize:
+    """Строка длиннее `LINE_MAX`: от неё остаются только начало и конец."""
+
+    def __init__(self, head, tail):
+        self.head, self.tail = head, tail
+
+    def rid(self):
+        match = _HEAD_ID.match(self.head) or _TAIL_ID.search(self.tail)
+        return int(match.group(1)) if match else None
+
+
+async def lines(stream):
+    """Строки потока без предела `readline`: чтение кусками, строка длиннее `LINE_MAX` — `_Oversize`
+    (её середина не копится в памяти). Последняя строка без перевода — как у `readline` при EOF."""
+    line, head, tail = bytearray(), None, b""
+    while chunk := await stream.read(CHUNK):
+        start = 0
+        while True:
+            end = chunk.find(b"\n", start)
+            piece = chunk[start:] if end < 0 else chunk[start:end]
+            if head is None:
+                line += piece
+                if len(line) > LINE_MAX:
+                    head, tail, line = bytes(line[:_EDGE]), bytes(line[-_EDGE:]), bytearray()
+            else:
+                tail = (tail + piece)[-_EDGE:]
+            if end < 0:
+                break
+            yield line if head is None else _Oversize(head, tail)
+            line, head, tail = bytearray(), None, b""
+            start = end + 1
+    if head is not None:
+        yield _Oversize(head, tail)
+    elif line:
+        yield line
 
 
 class Client:
@@ -98,7 +146,13 @@ class Client:
 
     async def _read(self):
         try:
-            while line := await self.process.stdout.readline():
+            async for line in lines(self.process.stdout):
+                if isinstance(line, _Oversize):
+                    # Отказ — только ожидающему этого ответа; id не найден — запрос дождётся своего срока.
+                    rid = line.rid()
+                    if (future := self.pending.get(rid)) is not None and not future.done():
+                        future.set_exception(RpcError(method=self.methods.get(rid), too_large=True))
+                    continue
                 frame = json.loads(line)
                 if not isinstance(frame, dict):
                     raise RpcError()
