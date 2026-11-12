@@ -47,16 +47,36 @@ def busy_gateway(s, times):
 
 
 def test_busy_card_waits_and_retries_the_model(studio):
+    """Первый 503 локальной модели — release моделей картинок и повтор сразу (без паузы), дальше — ожидание."""
     add_gateway(studio); cid = new_chat(studio)
-    busy_gateway(studio, 2)
+    busy_gateway(studio, 3)
     events = sse(turn(studio, cid, "Привет"))
     waits = [d for e, d in events if e == "wait"]
     # часы двигают и пинги потока: секунды второго ожидания — не меньше паузы
     assert waits[0] == {"seconds": 0} and waits[1]["seconds"] >= chat.RETRY_SEC and waits[2:] == [{}]
     assert events[-1] == ("done", {"status": "done"})
-    assert studio.gw.chat_busy == 2 and len(studio.gw.chat_requests) == 1
+    assert studio.gw.chat_busy == 3 and len(studio.gw.chat_requests) == 1
     answer = messages(studio, cid)[1]
     assert (answer["status"], answer["content"], answer["error"], answer["wait"]) == ("done", "Здравствуйте!", None, None)
+
+
+def test_local_model_frees_image_models_once_on_a_busy_card(studio):
+    """Ход на локальной модели после Lustify или FLUX: на первом 503 — release моделей картинок токеном
+    подключения учётки, затем повтор; раз на ход (не перед каждым ходом — тёплый Lustify без нужды не выгружается).
+    Идущая генерация отвечает release 409 — ход просто ждёт карту дальше."""
+    from fakes import FakeGateway
+    add_gateway(studio); cid = new_chat(studio)
+    assert sse(turn(studio, cid, "Привет"))[-1] == ("done", {"status": "done"})
+    assert studio.gw.releases == []                                   # карта свободна — release не нужен
+    studio.gw.requests.clear()
+    studio.gw.release_replies = [(409, {"error": {"message": "generation running"}})]
+    busy_gateway(studio, 3)
+    assert sse(turn(studio, cid, "Ещё"))[-1] == ("done", {"status": "done"})
+    sent = [r.url.path for r in studio.gw.requests if r.url.path != "/v1/models"]
+    assert sent == ["/v1/chat/completions", "/slot/images/release", "/slot/images/release",
+                    "/v1/chat/completions", "/v1/chat/completions", "/v1/chat/completions"]
+    import images
+    assert studio.gw.releases == [(m, f"Bearer {FakeGateway.TOKEN}") for m in images.MODELS.values()]
 
 
 def test_busy_card_too_long_is_an_error_kept_after_reload(studio, monkeypatch):

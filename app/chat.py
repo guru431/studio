@@ -59,6 +59,7 @@ import clock
 import connections
 import cleaner_client as cleaner
 import documents
+import images
 import lock_policy
 import manage
 import media
@@ -656,6 +657,7 @@ class StreamTask:
     #: ждём карту (503 шлюза): (начало ожидания — для слов, начало отсчёта срока WAIT_MAX_SEC); не ждём — None
     card_wait: "tuple[float, float] | None" = None
     gave_up: bool = False        # «Не ждать»: отмена ожидания — ошибка GAVE_UP, а не «остановлено»
+    freed: bool = False          # модели картинок отпущены (первый 503 локальной модели, раз на ход)
 
     def waited(self) -> "float | None":
         """Секунды ожидания карты для страницы; не ждём — None."""
@@ -692,6 +694,18 @@ class StreamTask:
         await clock.SLEEP(RETRY_SEC)
         self.deadline += clock.NOW() - now
         return None
+
+    async def _free_images(self) -> None:
+        """Первый 503 локальной модели: release моделей картинок (Lustify, FLUX держат карту арендой до 10 минут
+        после генерации), как перед переводом и озвучкой, — но только когда карта занята, а не перед каждым
+        ходом: тёплый Lustify без нужды не выгружается. Итог не важен: идущую генерацию release не оборвёт (409),
+        её дождётся `_wait_card`."""
+        log.info("чат %s: ответ %s — освобождаю модели картинок", self.chat_id[:8], self.message_id[:8])
+        try:
+            for model in images.MODELS.values():
+                await images.release(self.conn, model)
+        except (httpx.HTTPError, upstream.UpstreamRefused):
+            return
 
     def put(self, kind: str, data) -> None:
         if self.listening:
@@ -974,6 +988,10 @@ class StreamTask:
             if error is not None:
                 return error
             if ending == BUSY:                           # 503: тот же круг заново после паузы
+                if not self.freed and sections.is_local(self.conn, self.model):
+                    self.freed = True                    # первый раз — отпустить модели картинок и сразу повторить
+                    await self._free_images()
+                    continue
                 error = await self._wait_card()
                 if error is not None:
                     return error
