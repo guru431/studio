@@ -36,6 +36,7 @@ import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
+import { lazy } from './stale.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -189,10 +190,10 @@ async function render() {
   }
   let module;
   try {
-    module = await SECTIONS[route.section].load();
-  } catch {
+    module = await lazy(SECTIONS[route.section].load);
+  } catch (err) {               // прежняя версия статики после выкладки — плашка «Студия обновилась» (stale.js)
     module = { mount(node) { node.replaceChildren(head(SECTIONS[route.section].title),
-      notice('wait', 'Раздел не загрузился. Проверьте связь и обновите страницу.', 'empty')); }, unmount() {} };
+      notice('wait', err.message, 'empty')); }, unmount() {} };
   }
   if (mine !== renders) return;
   cancelRecording();                            // запись голоса прежнего раздела не переживает его

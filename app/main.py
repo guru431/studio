@@ -196,7 +196,8 @@ async def invalid_request(_request: Request, _exc: RequestValidationError):
 
 @app.api_route("/health", methods=PAGE)
 async def health():
-    return {"status": "ok", "version": release.VERSION}
+    # static — хеш снимка статики: страница прежней выкладки по нему предлагает «Обновить» (stale.js)
+    return {"status": "ok", "version": release.VERSION, "static": STATIC_VERSION}
 
 
 @app.api_route("/robots.txt", methods=PAGE)
