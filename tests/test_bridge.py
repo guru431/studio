@@ -81,7 +81,7 @@ def test_hello_brings_the_agent_online(studio):
     with link_ws(studio, key) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                                     "studio_version": release.VERSION}
+                                     "studio_version": release.VERSION, "completions": True}
         [item] = agents(studio)
         assert {k: item[k] for k in ("online", "has_pin", "cc_version", "projects_root", "models", "efforts",
                                      "last_seen")} == {
@@ -342,7 +342,7 @@ def test_lock_and_unlock_preserve_computer_pin_but_block_access_while_locked(stu
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                          "studio_version": release.VERSION}]
+                          "studio_version": release.VERSION, "completions": True}]
 
     def closes():
         settle(studio)
@@ -411,6 +411,37 @@ def test_in_process_bridge_answers_and_streams(studio):
     assert not bridge.LINKS and kinds()[:2] == ["offline", "online"]
 
 
+def test_completions_after_an_outage_mark_unread_and_push_like_a_live_done(studio, monkeypatch):
+    """Ходы, кончившиеся без канала, мост досылает кадром `completions` (§18): отметка «непрочитано» со временем
+    конца хода и push — если чат никто не смотрит; без capability кадр — нарушение протокола."""
+    import code_attention
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    other = "1f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
+    items = [{"project": pid("studio"), "chat": CHAT, "status": "done", "project_name": "studio", "ago": 30},
+             {"project": pid("studio"), "chat": other, "status": "error", "ago": 9_999_999}]
+    old = connect(studio, aid, FakeMachine())
+    with pytest.raises(bridge.ProtocolError):
+        studio.c.portal.call(bridge.deliver, old, {"t": "completions", "items": items})
+    machine = FakeMachine()
+    machine.completions = True
+    link = connect(studio, aid, machine)
+    q = studio.c.portal.call(bridge.watch, aid, other)
+    for bad in ([{**items[0], "ago": -1}], [{**items[0], "status": "running"}], [{**items[0], "chat": "x"}],
+                items * 26, "items"):
+        studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": bad})
+    assert code_attention.revision(aid, pid("studio"), CHAT) is None and pushed == []
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": items})
+    rows = {r["chat"]: (r["finished"], r["seen"]) for r in state.DB.execute("SELECT * FROM code_attention")}
+    assert rows == {CHAT: (T0 - 30, 0), other: (T0 - bridge.COMPLETION_AGE_MAX, 0)}
+    assert pushed == [(studio.c.portal.call(lambda: bridge.LINKS[aid].user_id), "Рабочий ПК · studio: ход окончен",
+                       f"code/{aid}/{pid('studio')}/{CHAT}", f"code-{CHAT}")]   # `other` смотрят — без push
+    assert studio.c.portal.call(q.empty)
+    studio.c.portal.call(bridge.unwatch, aid, other, q)
+
+
 def test_stop_and_drop_user_close_links(studio):
     owner = make_user(studio, "owner")
     make_user(studio, "friend")
@@ -430,7 +461,7 @@ def test_welcome_carries_login(studio):
     aid, _ = enroll(studio, login="friend", name="Ноутбук")
     link = connect(studio, aid, FakeMachine())
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend",
-                          "studio_version": release.VERSION}]
+                          "studio_version": release.VERSION, "completions": True}]
 
 
 def test_hanging_close_holds_neither_the_new_link_nor_the_revoke(studio, monkeypatch):

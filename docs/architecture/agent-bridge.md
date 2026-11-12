@@ -46,6 +46,7 @@
 | 0.17.2 | `hello.history_images`; `history.items[].images`, `history_image` | §4 |
 | 0.19.0 | `hello.project_sharing`; доверенное `req.shared_projects` | §17 |
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
+| 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions` | §18 |
 
 ## 0.20.0
 
@@ -55,6 +56,10 @@
   `RpcError(too_large=True)`, `codex.CodexRunner._metadata` отдаёт `too_large` «Чат Codex слишком большой для
   чтения мостом», не перезапуская общий процесс; прочие запросы и уведомления идут дальше. `thread/resume` и
   `thread/fork`, чьи ответы нужны только ради id и cwd, — с `excludeTurns: true`. Проверки — `tests/test_codex_rpc.py`.
+- Досланные завершения (§18): `agent.Agent.emit` — конец хода, который `link.Link.send` не принял (канала нет), —
+  в `agent.Agent.missed`; писатель умершего канала возвращает туда же неотправленные кадры. После `welcome` с
+  `completions` кадр `agent.Agent.completions` уходит первым. Только память, без текстов. Сервер —
+  `bridge._completions`. Проверки — `tests/test_link.py`, серверный `../tests/test_bridge.py`.
 
 ## 0.17.3
 

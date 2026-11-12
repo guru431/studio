@@ -97,6 +97,7 @@ class FakeMachine:
         self.update_version = None
         self.context = None
         self.project_sharing = True
+        self.completions = False                 # кадр досланных завершений (§18)
 
     @property
     def hello(self) -> dict:
@@ -108,7 +109,8 @@ class FakeMachine:
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
-                                           "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing")
+                                           "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
+                                           "completions")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
