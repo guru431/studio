@@ -33,6 +33,8 @@ BACKUP = (DEPLOY / "studio-backup.service").read_text(encoding="utf-8")
 TIMER = (DEPLOY / "studio-backup.timer").read_text(encoding="utf-8")
 INSTALL = (DEPLOY / "install.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+INSTALL_DOCKER = (DEPLOY / "install-docker.sh").read_text(encoding="utf-8")
+DOCKERFILE = (DEPLOY / "docker" / "Dockerfile").read_text(encoding="utf-8")
 SOCK = "/run/studio/web.sock"
 EXEC_START = ("ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app "
               f"--uds {SOCK} --no-access-log --no-proxy-headers")
@@ -287,6 +289,21 @@ def test_deploy_files_have_lf_endings():
         if not path.is_file():
             continue
         assert b"\r\n" not in path.read_bytes(), path.name
+
+
+def test_docker_build_refreshes_the_base_and_the_packages_weekly():
+    """Без --pull и ARG REFRESH база и слой apt (Chromium, ffmpeg) брались из кэша первой сборки:
+    исправления Debian и Python в прод не попадали, пока кэш не очистят вручную."""
+    code = uncommented(INSTALL_DOCKER)
+    build = re.search(r"^build=\((.*)\)$", code, re.M).group(1)
+    assert build.startswith("docker build --pull ") and '--build-arg "REFRESH=$(date -u +%G-W%V)"' in build
+    assert 'if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi' in code
+    assert code.count("docker build") == 1 and '"${build[@]}" -t "$image"' in code
+    assert "--refresh-base) REFRESH_BASE=1 ;;" in code
+    assert "args+=(--refresh-base)" in DEPLOY_SH and "--refresh-base requires Docker" in DEPLOY_SH
+    lines = uncommented(DOCKERFILE).splitlines()
+    apt = next(i for i, s in enumerate(lines) if "apt-get install" in s or "apt-get update" in s)
+    assert 0 < lines.index("ARG REFRESH=none") < apt         # кэш промахивается на слое apt и дальше
 
 
 def test_backup_is_a_consistent_copy_and_keeps_the_last_seven(env, monkeypatch, capsys):

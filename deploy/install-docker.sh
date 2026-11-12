@@ -8,12 +8,14 @@ REVISION=
 CREATE_ADMIN=0
 SECRET=0
 PREPARE=0
+REFRESH_BASE=0
 for arg in "$@"; do
     case "$arg" in
         --revision=*) REVISION=${arg#*=} ;;
         --secret-stdin) SECRET=1 ;;
         --admin-stdin) CREATE_ADMIN=1 ;;
         --prepare-only) PREPARE=1 ;;
+        --refresh-base) REFRESH_BASE=1 ;;
         *) echo 'studio: unsupported Docker install argument' >&2; exit 1 ;;
     esac
 done
@@ -56,7 +58,11 @@ setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
 [ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
 image="studio:$REVISION"
-docker build --build-arg "STUDIO_REVISION=$REVISION" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
+# --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
+# first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
+build=(docker build --pull --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
+if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
+"${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
 docker compose --env-file "$NEW/deploy/docker/host.conf" -f "$NEW/deploy/docker/compose.yaml" config --quiet
 if [ "$PREPARE" = 1 ]; then
