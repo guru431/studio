@@ -95,6 +95,12 @@ studio). Команды ниже — из `agent/`, с отдельной сре
 проверяют ACP без CLI и квоты.
 
 `timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом.
+Временный корень — `%TEMP%/studio-agent-pytest`, успешные временные каталоги удаляются; явные `--basetemp`
+и `PYTEST_DEBUG_TEMPROOT` сохраняются. Изоляция и два одновременных прогона — `tests/test_tmp_isolation.py`.
+Хук `pytest_asyncio_loop_factories` (pytest-asyncio ≥ 1.4) выбирает общий тестовый Proactor из
+`../tools/pytest_support.py`: при WinError 995 действующего внутреннего чтения IOCP чтение возобновляется.
+Отмена, остальные ошибки и общий таймаут сохраняются; регрессия и условие удаления обхода —
+[testing](../docs/architecture/testing.md).
 `verbosity_test_cases = 1` сохраняет имя теста перед сбоем, `faulthandler_timeout = 20` выводит стеки напрямую в stderr
 до завершения процесса по таймауту, в том числе при закрытии asyncio Runner. Регрессия — `tests/test_suite_timeout.py`
 (`integration`, отдельный процесс с намеренно незавершаемой задачей).

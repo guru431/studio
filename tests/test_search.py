@@ -539,6 +539,7 @@ def test_the_log_gets_the_count_not_the_words(studio, caplog):
     assert "кошк" not in caplog.text.lower() and "lustify" not in caplog.text and "2027-01-01" not in caplog.text
 
 
+@pytest.mark.integration  # замер скорости — отдельно от конкурирующих быстрых проверок
 def test_search_of_twenty_thousand_rows_is_quick(studio):
     """Анти-цель «поиск тормозит службу»: 20 000 строк учётки — ответ быстрее 0,2 с, и общим словом
     (совпали все), и одними фильтрами."""
@@ -558,6 +559,7 @@ def test_search_of_twenty_thousand_rows_is_quick(studio):
     assert hits(search(studio, q="номер 19999")) == [("photo", "i19999")]
 
 
+@pytest.mark.integration
 def test_next_pages_of_chats_are_as_quick_as_the_first(studio):
     """Со словами запросы идут от FTS5 и с курсором, и с фильтром: от индекса search_docs MATCH шёл заново на
     каждую строку истории — вторая страница диалогов на 20 000 сообщений длилась секунды, а первая — десятую."""
@@ -587,6 +589,7 @@ def test_next_pages_of_chats_are_as_quick_as_the_first(studio):
     assert max(best[1:]) < 2 * best[0] + 0.05, best
 
 
+@pytest.mark.integration
 def test_one_letter_over_a_large_vocabulary_is_quick(studio):
     """Короткое начало слова: snippet() по «к»* без индекса префиксов сливал списки позиций всех слов
     на «к» на каждую строку выдачи (150 000 разных слов — 1,4 с в цикле событий); с prefix='1 2 3' —

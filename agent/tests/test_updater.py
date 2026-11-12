@@ -330,7 +330,7 @@ def test_real_windows_process_handle_waits_for_natural_exit():
 
 @pytest.mark.integration
 @pytest.mark.timeout(90)
-def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tmp_path, monkeypatch):
+def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tmp_path, tmp_path_factory, monkeypatch):
     """Настоящие venv/pip и смена процессов, без запущенного рабочего моста, сети и квоты CLI."""
     trace = tmp_path / 'trace.txt'
     archive = tmp_path / 'package.zip'
@@ -348,7 +348,8 @@ def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tm
     data = archive.read_bytes()
     store.save_config(home, store.Config(url='https://studio.example'))
     monkeypatch.setattr(store, 'load_key', lambda h: 'test-device-key')
-    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'local'))
+    # Имя теста + releases/.venv + licenses pip превышали Windows MAX_PATH.
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path_factory.mktemp('install')))
     opener = Mock()
     opener.open.side_effect = lambda *a, **kw: io.BytesIO(data)
     monkeypatch.setattr(updater.urllib.request, 'build_opener', lambda *a: opener)
