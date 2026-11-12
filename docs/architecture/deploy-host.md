@@ -84,7 +84,7 @@
 
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt`); грязное
 дерево выкладываемых частей и `agent/` — отказ. С ним едут установщик EXE и ZIP обновления моста:
-`git archive --format=zip --prefix=studio-agent/ HEAD:agent` → `.incoming/agent/studio-agent.zip`, строка
+`git archive --format=zip --prefix=studio-agent/ <ревизия>:agent` → `.incoming-…/agent/studio-agent.zip`, строка
 `==> мост <хеш>` того же коммита студии. До первого SSH `deploy/build-agent-installer.ps1` собирает
 `studio-agent-setup.exe` из этого ZIP и `deploy/agent-installer.cs` того же HEAD (штатный csc .NET Framework Windows).
 `GET /api/agent/download` отдаёт EXE браузеру, `/api/agent/package` — ZIP действующему мосту.
@@ -94,7 +94,12 @@
 `--create-admin` берёт из vault `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`,
 `GATEWAY_KEY_OWNER_IMAGES` и через `install.sh --admin-stdin` отдаёт в `manage.py create-admin`
 (`systemd-run --pipe` от `studio` с окружением юнита); повтор безопасен, новый пароль гасит сессии.
-`install.sh` до подмены кода собирает новую среду Python рядом (`.incoming/.venv`; только если
+Ревизию `deploy.sh` разрешает один раз (`REV`): код, мост, EXE, vhost и тег образа — из одного коммита, даже если
+во время выкладки появился новый. Каждая выкладка грузится в свою папку `.incoming-<ревизия>-<id>`; установщик
+(`install.sh`, `install-docker.sh`) берёт `flock -n` на `.deploy.lock` — вторая одновременная выкладка получает отказ,
+а не перемешанный каталог. Оставшуюся папку (отказ, `--prepare-only`) убирает выход `deploy.sh`, брошенные старше
+суток — следующая выкладка.
+`install.sh` до подмены кода собирает новую среду Python рядом (`.incoming-…/.venv`; только если
 сменились `requirements.txt`, `constraints.txt` (транзитивные пакеты, `pip -c`) или `python3` — штамп
 `.venv/.studio-requirements`), переносит её на
 место вместе с кодом, держит прежние код и среду в `.previous` до ответа `/health` от www-data

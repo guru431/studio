@@ -254,17 +254,38 @@ def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
-    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent' in code
+    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent"' in code
     assert "for file in studio-agent.zip studio-agent-setup.exe" in code
-    assert "$R/.incoming/agent/$file" in code
-    first_ssh = code.index('"${SSH[@]}"')
+    assert "$IN/agent/$file" in code
+    first_ssh = code.index('"${SSH[@]}" "sudo install -d')
     assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
-    assert code.index('cat-file -e HEAD:agent/install.cmd') < first_ssh
+    assert code.index('cat-file -e "$REV:agent/install.cmd"') < first_ssh
     archive = code.index("archive --format=zip")
     build = code.index('powershell.exe -NoProfile -NonInteractive')
     assert archive < build < first_ssh
-    assert 'show HEAD:deploy/build-agent-installer.ps1' in code
-    assert 'show HEAD:deploy/agent-installer.cs' in code
+    assert 'show "$REV:deploy/build-agent-installer.ps1"' in code
+    assert 'show "$REV:deploy/agent-installer.cs"' in code
+
+
+def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
+    """HEAD разрешался заново около десяти раз: коммит параллельной сессии смешивал мост, код и тег образа
+    из разных ревизий. Общую .incoming одна выкладка очищала посреди загрузки другой."""
+    code = uncommented(DEPLOY_SH)
+    gits = re.findall(r'git -C "\$D" .*', code)
+    assert [g for g in gits if "HEAD" in g] == ["git -C \"$D\" rev-parse --verify 'HEAD^{commit}')"]
+    assert all('"$REV' in g for g in gits if re.search(r" (show|archive|cat-file) ", g)), gits
+    assert len([g for g in gits if " archive " in g]) == 3 and 'args+=("--revision=$REV")' in code
+    assert "IN=$R/.incoming-${REV:0:12}-$$-$RANDOM" in code and "sudo mkdir -m 0700 $IN" in code
+    assert "$R/.incoming" not in code.replace("$R/.incoming-${REV", "") and "rm -rf $R/.incoming" not in code
+    assert '"${SSH[@]}" "sudo bash $IN/deploy/$installer ${args[*]:-}"' in code
+    assert 'if [ "$uploaded" = 1 ]; then "${SSH[@]}" "sudo rm -rf $IN" || true; fi' in code     # отказ, --prepare-only
+    docker = uncommented(INSTALL_DOCKER)
+    check = docker.index('case "${NEW##*/}" in .incoming-*) ;;')
+    assert check < docker.index("flock -n 9") < docker.index("docker build")
+    native = uncommented(INSTALL)
+    assert 'NEW=$(readlink -f "$(dirname "$(readlink -f "$0")")/..")' in native
+    check = native.index('case "$NEW" in "$R"/.incoming-*) ;;')
+    assert check < native.index('exec 9>"$R/.deploy.lock"') < native.index("flock -n 9") < native.index("getent passwd")
 
 
 def test_install_swaps_the_bridge_archive_with_the_code():
