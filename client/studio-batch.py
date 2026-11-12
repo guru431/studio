@@ -15,7 +15,7 @@ manifest.tsv (номер, файл, seed, размер, модель, промп
 тем же seed.
 
 Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
-    python3 studio-batch.py --make-local [--vault-path /путь/vault.env]
+    python3 studio-batch.py --make-local [--vault-path /путь/vault.env] [--gateway-url http://<шлюз>:4000/slot]
 Рядом появится studio-batch.local.py (в .gitignore, права 0700) — дальше запускайте её; её
 можно переносить на другие компьютеры как есть. Ключ на один запуск — --token (он виден в
 списке процессов).
@@ -122,13 +122,18 @@ def parse_args(argv):
     p.add_argument("--make-local", action="store_true",
                    help=f"собрать рядом {LOCAL_NAME} с ключом {VAULT_KEY} из vault и выйти")
     p.add_argument("--vault-path", default=VAULT_PATH, help="файл vault для --make-local")
+    p.add_argument("--gateway-url", default="",
+                   help="адрес шлюза (база API, как --url): --make-local впишет его в копию умолчанием --url; "
+                        "без него — нынешнее умолчание")
     args = p.parse_args(argv)
     if not args.make_local and not args.prompts_file:
         p.error("нужен --prompts-file (или --make-local)")
+    if args.gateway_url and not args.make_local:
+        p.error("--gateway-url — только с --make-local (на один запуск — --url)")
     return args
 
 
-def make_local(vault_path):
+def make_local(vault_path, gateway_url=""):
     vault = Path(vault_path)
     if not vault.is_file():
         raise Fail(f"Нет файла vault: {vault} (путь — параметром --vault-path)")
@@ -146,13 +151,23 @@ def make_local(vault_path):
     if len(slots) != 1:
         raise Fail(f'В {script} не найдена строка-заглушка ключа (EMBEDDED_KEY = "")')
     text = source[:slots[0].start()] + "EMBEDDED_KEY = " + repr(key) + source[slots[0].end():]
+    what = "ключ вписан"
+    if gateway_url:
+        if not re.fullmatch(r"https?://[^\s'\"`]+", gateway_url):
+            raise Fail(f"Адрес шлюза — http(s)://хост[:порт]/путь без пробелов и кавычек: {gateway_url}")
+        gateway_url = gateway_url.rstrip("/")
+        urls = list(re.finditer(r"^URL = .*$", text, re.M))
+        if len(urls) != 1:
+            raise Fail(f"В {script} не найдена строка умолчания URL")
+        text = text[:urls[0].start()] + "URL = " + repr(gateway_url) + text[urls[0].end():]
+        what = f"ключ и адрес шлюза {gateway_url} вписаны"
     target = script.with_name(LOCAL_NAME)
     # Ключ — только владельцу файла; LF — иначе shebang на Linux не найдёт python3
     with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700), "w",
                    encoding="utf-8", newline="\n") as f:
         f.write(text)
     os.chmod(target, 0o700)
-    say(f"Готово: {target} — ключ вписан (файл в .gitignore). Дальше запускайте его.")
+    say(f"Готово: {target} — {what} (файл в .gitignore). Дальше запускайте его.")
 
 
 def multipart(fields, file_field, image):
@@ -332,7 +347,7 @@ def main(argv=None):
     args = parse_args(argv)
     try:
         if args.make_local:
-            make_local(args.vault_path)
+            make_local(args.vault_path, args.gateway_url)
         elif run(args):
             return 3                    # хотя бы одна картинка не вышла: внешний запуск должен это видеть
     except (Fail, OSError) as e:

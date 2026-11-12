@@ -33,6 +33,9 @@ BACKUP = (DEPLOY / "studio-backup.service").read_text(encoding="utf-8")
 TIMER = (DEPLOY / "studio-backup.timer").read_text(encoding="utf-8")
 INSTALL = (DEPLOY / "install.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+INSTALL_DOCKER = (DEPLOY / "install-docker.sh").read_text(encoding="utf-8")
+DOCKERFILE = (DEPLOY / "docker" / "Dockerfile").read_text(encoding="utf-8")
+NGINX = (DEPLOY / "docker" / "nginx.conf").read_text(encoding="utf-8")
 SOCK = "/run/studio/web.sock"
 EXEC_START = ("ExecStart=/opt/services/studio/.venv/bin/python -m uvicorn main:app --app-dir /opt/services/studio/app "
               f"--uds {SOCK} --no-access-log --no-proxy-headers")
@@ -207,7 +210,11 @@ def test_backup_timer_runs_as_the_service_user():
     for name in ("User", "Group", "EnvironmentFile", "Environment"):
         assert directives(BACKUP, name) == directives(UNIT, name), name
     assert directives(BACKUP, "Type") == ["oneshot"]
-    assert directives(BACKUP, "ExecStart") == ["/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py backup"]
+    manage_py = "/opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py"
+    assert directives(BACKUP, "ExecStart") == [f"{manage_py} backup", f"{manage_py} verify-backup"]
+    docker = [s.rsplit("/manage.py ", 1)[1]
+              for s in directives((DEPLOY / "docker" / "studio-backup.service").read_text(encoding="utf-8"), "ExecStart")]
+    assert docker == ["backup", "verify-backup"]           # ночная проверка — сразу после удачной копии
     assert directives(TIMER, "OnCalendar") == ["*-*-* 04:30"] and directives(TIMER, "Persistent") == ["true"]
     assert "WantedBy=timers.target" in TIMER
     assert "systemctl enable --now --quiet studio-backup.timer" in INSTALL
@@ -237,7 +244,7 @@ def test_admin_secrets_travel_by_stdin_only():
 
 def test_install_and_deploy_ship_the_same_parts():
     parts = {re.search(r"^PARTS=\((.*)\)$", text, re.M).group(1) for text in (INSTALL, DEPLOY_SH)}
-    assert parts == {"app deploy requirements.txt"}
+    assert parts == {"app deploy requirements.txt constraints.txt"}
     assert "URL=${STUDIO_URL:-https://studio.example.com}" in DEPLOY_SH and '"$URL/health"' in DEPLOY_SH
 
 
@@ -249,20 +256,76 @@ def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
     assert "--ws-ping-interval 20 --ws-ping-timeout 20" in exec_start
 
 
+def _uvicorn_flags(argv: list) -> list:
+    """Флаги uvicorn без интерпретатора и путей (каталог приложения у юнита и образа разный)."""
+    argv = argv[argv.index("uvicorn") + 1:]
+    assert argv[0] == "main:app" and argv[1:3][0] == "--app-dir"
+    return argv[3:]
+
+
+def test_docker_command_runs_uvicorn_with_the_unit_flags():
+    """Пределы `--ws-max-size`, `--timeout-graceful-shutdown` и пинги сверялись только у юнита systemd: образ
+    мог разойтись с ним молча."""
+    import json
+    cmd = json.loads(re.search(r"^CMD (\[.*\])$", DOCKERFILE, re.M).group(1))
+    unit = shlex.split(directives(UNIT, "ExecStart")[0])
+    assert cmd[:3] == ["python", "-m", "uvicorn"] and unit[1:3] == ["-m", "uvicorn"]
+    assert _uvicorn_flags(cmd) == _uvicorn_flags(unit)          # и сокет: nginx ходит в /run/studio/web.sock
+    assert "upstream studio { server unix:/run/studio/web.sock; }" in NGINX
+
+
+def _nginx(name: str) -> str:
+    values = re.findall(rf"^\s*{name} (\S+);", uncommented(NGINX), re.M)
+    assert len(values) == 1, (name, values)
+    return values[0]
+
+
+def test_nginx_passes_every_body_and_wait_that_apache_passes():
+    """nginx контейнера стоит за Apache: меньший предел тела или ожидания отбивал бы запрос раньше Apache."""
+    body = _nginx("client_max_body_size")
+    size = int(body[:-1]) * {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[body[-1].lower()]
+    assert size >= max(int(n) for n in re.findall(r"LimitRequestBody (\d+)", uncommented(VHOST)))
+    longest = max(int(t) for t in re.findall(r"^\s*ProxyPass \S+ \S+ (?:\S+=\S+ )*timeout=(\d+)", uncommented(VHOST), re.M))
+    for name in ("proxy_read_timeout", "proxy_send_timeout"):
+        value = _nginx(name)
+        assert value.endswith("s") and int(value[:-1]) >= longest, (name, value, longest)
+
+
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
-    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ HEAD:agent' in code
+    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent"' in code
     assert "for file in studio-agent.zip studio-agent-setup.exe" in code
-    assert "$R/.incoming/agent/$file" in code
-    first_ssh = code.index('"${SSH[@]}"')
+    assert "$IN/agent/$file" in code
+    first_ssh = code.index('"${SSH[@]}" "sudo install -d')
     assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
-    assert code.index('cat-file -e HEAD:agent/install.cmd') < first_ssh
+    assert code.index('cat-file -e "$REV:agent/install.cmd"') < first_ssh
     archive = code.index("archive --format=zip")
     build = code.index('powershell.exe -NoProfile -NonInteractive')
     assert archive < build < first_ssh
-    assert 'show HEAD:deploy/build-agent-installer.ps1' in code
-    assert 'show HEAD:deploy/agent-installer.cs' in code
+    assert 'show "$REV:deploy/build-agent-installer.ps1"' in code
+    assert 'show "$REV:deploy/agent-installer.cs"' in code
+
+
+def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
+    """HEAD разрешался заново около десяти раз: коммит параллельной сессии смешивал мост, код и тег образа
+    из разных ревизий. Общую .incoming одна выкладка очищала посреди загрузки другой."""
+    code = uncommented(DEPLOY_SH)
+    gits = re.findall(r'git -C "\$D" .*', code)
+    assert [g for g in gits if "HEAD" in g] == ["git -C \"$D\" rev-parse --verify 'HEAD^{commit}')"]
+    assert all('"$REV' in g for g in gits if re.search(r" (show|archive|cat-file) ", g)), gits
+    assert len([g for g in gits if " archive " in g]) == 3 and 'args+=("--revision=$REV")' in code
+    assert "IN=$R/.incoming-${REV:0:12}-$$-$RANDOM" in code and "sudo mkdir -m 0700 $IN" in code
+    assert "$R/.incoming" not in code.replace("$R/.incoming-${REV", "") and "rm -rf $R/.incoming" not in code
+    assert '"${SSH[@]}" "sudo bash $IN/deploy/$installer ${args[*]:-}"' in code
+    assert 'if [ "$uploaded" = 1 ]; then "${SSH[@]}" "sudo rm -rf $IN" || true; fi' in code     # отказ, --prepare-only
+    docker = uncommented(INSTALL_DOCKER)
+    check = docker.index('case "${NEW##*/}" in .incoming-*) ;;')
+    assert check < docker.index("flock -n 9") < docker.index("docker build")
+    native = uncommented(INSTALL)
+    assert 'NEW=$(readlink -f "$(dirname "$(readlink -f "$0")")/..")' in native
+    check = native.index('case "$NEW" in "$R"/.incoming-*) ;;')
+    assert check < native.index('exec 9>"$R/.deploy.lock"') < native.index("flock -n 9") < native.index("getent passwd")
 
 
 def test_install_swaps_the_bridge_archive_with_the_code():
@@ -281,12 +344,110 @@ def test_requirements_are_exact_pins():
     assert lines and all(re.fullmatch(r"[A-Za-z0-9._-]+(\[[a-z,]+\])?==\S+", line) for line in lines), lines
 
 
+def _requirements(path: Path) -> list:
+    from packaging.requirements import Requirement
+    return [Requirement(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith(("#", "-"))]
+
+
+def _constraints(path: Path) -> dict:
+    """Каждая строка — `имя==версия`, имя — один раз."""
+    from packaging.utils import canonicalize_name
+    pins = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#"):
+            assert re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9.+!]+", line), line
+            name, version = line.split("==")
+            assert canonicalize_name(name) not in pins, line
+            pins[canonicalize_name(name)] = version
+    return pins
+
+
+def unpinned_dependencies(roots, pins: dict, environments: list) -> set:
+    """Имена замыкания `roots`, которых нет в `pins`. Зависимости — из метаданных пакетов, установленных
+    в среде тестов, маркеры — целевых сред (любой из них достаточно); пакет, которого здесь нет (uvloop
+    под Windows), проверяется только сам."""
+    import importlib.metadata
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+    todo, seen, missing = list(roots), set(), set()
+    while todo:
+        req = todo.pop()
+        name = canonicalize_name(req.name)
+        if name not in pins:
+            missing.add(name)
+            continue
+        if (name, frozenset(req.extras)) in seen:
+            continue
+        seen.add((name, frozenset(req.extras)))
+        try:
+            requires = importlib.metadata.requires(req.name) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for spec in map(Requirement, requires):
+            if spec.marker is None or any(spec.marker.evaluate({**env, "extra": extra})
+                                          for env in environments for extra in {"", *req.extras}):
+                todo.append(spec)
+    return missing
+
+
+LINUX_313 = {"sys_platform": "linux", "platform_system": "Linux", "os_name": "posix", "platform_machine": "x86_64",
+             "python_version": "3.13", "python_full_version": "3.13.0", "implementation_name": "cpython",
+             "platform_python_implementation": "CPython"}
+
+
+def test_constraints_pin_the_whole_dependency_closure():
+    """Закреплены были только прямые пакеты: starlette, pydantic, anyio, websockets сервера и mcp, anyio,
+    jsonschema моста брались свежими в момент сборки слоя pip или обновления моста на каждой машине."""
+    from packaging.utils import canonicalize_name
+    for folder in (ROOT, ROOT / "agent"):
+        pins = _constraints(folder / "constraints.txt")
+        roots = _requirements(folder / "requirements.txt")
+        for req in roots:                                   # прямые — те же версии, что в requirements.txt
+            assert pins.get(canonicalize_name(req.name)) == str(req.specifier)[2:], req
+    # Замыкание сервера — по метаданным этой среды (requirements-dev ставит requirements.txt); моста —
+    # в наборе agent/ (agent/tests/test_constraints.py), его пакетов в среде сервера нет.
+    assert unpinned_dependencies(_requirements(ROOT / "requirements.txt"), _constraints(ROOT / "constraints.txt"),
+                                 [LINUX_313]) == set()
+
+
+def test_every_pip_install_uses_the_constraints():
+    assert "pip install --no-cache-dir -r requirements.txt -c constraints.txt " in DOCKERFILE
+    assert "COPY requirements.txt constraints.txt ./" in DOCKERFILE
+    assert "!constraints.txt" in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert '-r "$NEW/requirements.txt" -c "$NEW/constraints.txt"' in INSTALL
+    assert 'cat "$NEW/requirements.txt" "$NEW/constraints.txt" | sha256sum' in INSTALL      # штамп среды
+    updater = (ROOT / "agent" / "studio_agent" / "updater.py").read_text(encoding="utf-8")
+    assert "'-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')" in updater
+    install = (ROOT / "agent" / "install.ps1").read_text(encoding="utf-8-sig")
+    assert "'-r', (Join-Path $repo 'requirements.txt'), '-c', (Join-Path $repo 'constraints.txt')" in install
+    assert "'constraints.txt'" in (DEPLOY / "build-agent-installer.ps1").read_text(encoding="utf-8-sig")
+    attributes = subprocess.run(["git", "-C", str(ROOT), "check-attr", "export-ignore", "agent/constraints.txt"],
+                                capture_output=True, text=True, timeout=20).stdout
+    assert attributes.endswith(": unspecified\n"), attributes          # едет в ZIP моста
+
+
 def test_deploy_files_have_lf_endings():
     """\r в юните systemd принял бы за часть пути, bash — за часть команды."""
     for path in DEPLOY.iterdir():
         if not path.is_file():
             continue
         assert b"\r\n" not in path.read_bytes(), path.name
+
+
+def test_docker_build_refreshes_the_base_and_the_packages_weekly():
+    """Без --pull и ARG REFRESH база и слой apt (Chromium, ffmpeg) брались из кэша первой сборки:
+    исправления Debian и Python в прод не попадали, пока кэш не очистят вручную."""
+    code = uncommented(INSTALL_DOCKER)
+    build = re.search(r"^build=\((.*)\)$", code, re.M).group(1)
+    assert build.startswith("docker build --pull ") and '--build-arg "REFRESH=$(date -u +%G-W%V)"' in build
+    assert 'if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi' in code
+    assert len(re.findall(r"docker build\b", code)) == 1 and '"${build[@]}" -t "$image"' in code
+    assert "--refresh-base) REFRESH_BASE=1 ;;" in code
+    assert "args+=(--refresh-base)" in DEPLOY_SH and "--refresh-base requires Docker" in DEPLOY_SH
+    lines = uncommented(DOCKERFILE).splitlines()
+    apt = next(i for i, s in enumerate(lines) if "apt-get install" in s or "apt-get update" in s)
+    assert 0 < lines.index("ARG REFRESH=none") < apt         # кэш промахивается на слое apt и дальше
 
 
 def test_backup_is_a_consistent_copy_and_keeps_the_last_seven(env, monkeypatch, capsys):
@@ -577,6 +738,7 @@ def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
         (base / "agent").mkdir()
         (base / "agent" / "studio-agent.zip").write_text(text)
         (base / "requirements.txt").write_text("a==1\n", newline="\n")
+        (base / "constraints.txt").write_text("b==2\n", newline="\n")
     fake, log = tmp_path / "python", tmp_path / "log"
     fake.write_text(FAKE_PY, newline="\n")
     if old_venv is not None:
@@ -586,7 +748,7 @@ def _run_env(tmp_path, *, old_venv: "str | None", fail_pip=False, then=""):
     start = INSTALL.index("# Среда Python")
     block = INSTALL[start:INSTALL.index('rm -rf "$NEW"\n', start) + len('rm -rf "$NEW"\n')]
     script = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming; OLD=$R/.previous\n"
-              "PARTS=(app deploy requirements.txt)\n"
+              "PARTS=(app deploy requirements.txt constraints.txt)\n"
               "python3() { case \"$1\" in -V) echo 'Python 3.13.5' ;; -m) mkdir -p \"$3/bin\"; cp \"$FAKE\" \"$3/bin/python\" ;; esac; }\n"
               "chown() { :; }; chmod() { :; }; install() { mkdir -p \"${@: -1}\"; }\n"
               + _function("restore") + block + then)
@@ -600,7 +762,7 @@ def _stamp(venv) -> str:
     return (venv / ".studio-requirements").read_text().strip()
 
 
-SAME = hashlib.sha256(b"a==1\n").hexdigest() + " Python 3.13.5"
+SAME = hashlib.sha256(b"a==1\nb==2\n").hexdigest() + " Python 3.13.5"
 
 
 @pytest.mark.integration                   # bash с заглушками: 1–3 с на Windows (каждый mv — процесс)
@@ -610,7 +772,7 @@ def test_install_swaps_a_fresh_environment_and_restore_brings_the_old_one_back(t
     assert r.returncode == 0 and "swapped" in r.stdout, r.stderr
     new_py = root.as_posix() + "/.incoming/.venv/bin/python"
     assert calls == [f"{new_py} -m pip install --quiet --disable-pip-version-check --root-user-action=ignore "
-                     f"-r {root.as_posix()}/.incoming/requirements.txt",
+                     f"-r {root.as_posix()}/.incoming/requirements.txt -c {root.as_posix()}/.incoming/constraints.txt",
                      f"{new_py} -m compileall -q {root.as_posix()}/.incoming/app"]
     assert (root / "app" / "f").read_text() == "old"           # откат: прежний код
     assert (root / "agent" / "studio-agent.zip").read_text() == "old"     # и прежний архив моста
@@ -660,6 +822,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
+    (repo / "constraints.txt").write_text("# constraints\n")
     converter_bytes = b'# Shared converter fixture\n'
     (repo / 'deploy' / 'md2pdf.sha256').write_text(hashlib.sha256(converter_bytes).hexdigest() + '\n', encoding='utf-8')
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -715,6 +878,81 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     r = deploy()
     assert r.returncode == 1 and 'версия md2pdf.py не совпала' in r.stderr
     assert (tmp_path / 'ssh-calls').read_bytes() == calls
+
+
+def _symlink_bash(tmp_path):
+    """Git Bash создаёт настоящие ссылки только с MSYS=winsymlinks:nativestrict (иначе — копию)."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    env = {**os.environ, "MSYS": "winsymlinks:nativestrict"}
+    (tmp_path / "probe-target").mkdir()
+    probe = subprocess.run([bash, "-c", 'ln -s "$1/probe-target" "$1/probe" && [ -L "$1/probe" ]', "x",
+                            tmp_path.as_posix()], env=env, capture_output=True, timeout=20)
+    if probe.returncode:
+        pytest.skip("нет прав на символические ссылки")
+    return bash, env
+
+
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
+@pytest.mark.parametrize("first", [True, False], ids=["first-install", "update"])
+def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
+    """Без `current` `readlink -f` возвращал сам путь с кодом 0: неудачный первый запуск делал `current`
+    ссылкой на себя. Неудачное обновление возвращает прежний релиз."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    (root / "releases").mkdir(parents=True)
+    (root / ".incoming-x").mkdir()
+    if not first:
+        (root / "releases" / "old").mkdir()
+        subprocess.run([bash, "-c", 'ln -s "$1/releases/old" "$1/current"', "x", root.as_posix()], env=env, check=True,
+                       timeout=20)
+    start = INSTALL_DOCKER.index('release="$R/releases/')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("    exit 1\nfi\n", start) + len("    exit 1\nfi\n")]
+    # Первый `up` (новый релиз) не проходит проверку здоровья, повторный (прежний релиз) — проходит.
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x; REVISION={'a' * 40}\n"
+             'docker() { echo "docker $*" >> "$R/calls"; if [ "$6" = up ]; then'
+             ' [ -e "$R/failed" ] && return 0; touch "$R/failed"; return 1; fi; }\n')
+    r = subprocess.run([bash, "-c", stubs + block], env=env, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 1 and "new release failed health checks" in r.stderr, r
+    release = next(p for p in (root / "releases").iterdir() if p.name != "old")
+    target = release if first else root / "releases" / "old"
+    same = subprocess.run([bash, "-c", '[ -d "$1/current" ] && [ "$1/current" -ef "$2" ]',
+                           "x", root.as_posix(), target.as_posix()], env=env, timeout=20)
+    assert same.returncode == 0, "current → не тот релиз"
+    calls = (root / "calls").read_text().splitlines()
+    assert ("previous image restored" in r.stderr) is not first
+    assert calls[-1].endswith("stop --timeout 20") is first
+
+
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
+@pytest.mark.parametrize("builder_fails", [False, True], ids=["clean", "docker-error"])
+def test_docker_install_keeps_five_releases_and_their_images(tmp_path, builder_fails):
+    """Каждая выкладка добавляла releases/<rev>-<время> и образ studio:<rev>, ничего не удалялось. Остаются
+    пять новейших и цели current/previous; образ удалённого релиза уходит, если ревизию не держит оставшийся.
+    Ошибка уборки выкладку не валит."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    revs = [f"{n:x}" * 40 for n in range(1, 9)]
+    revs[1] = revs[6]                                   # повтор выкладки той же ревизии — релиз 7 её держит
+    names = [f"{rev}-2026110{n}T120000" for n, rev in enumerate(revs, start=1)]
+    for name in names:
+        (root / "releases" / name).mkdir(parents=True)
+    link = 'ln -s "$1/releases/$2" "$1/$3"'
+    for target, name in ((names[7], "current"), (names[0], "previous")):
+        subprocess.run([bash, "-c", link, "x", root.as_posix(), target, name], env=env, check=True, timeout=20)
+    start = INSTALL_DOCKER.index("prune_releases() {")
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("\nprintf 'studio: Docker release", start) + 1]
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}\n"
+             'docker() { echo "$*" >> "$R/calls"; [ "$1 $2" != "builder prune" ] || [ -z "$FAIL" ]; }\n')
+    r = subprocess.run([bash, "-c", stubs + block + "echo deployed\n"], env={**env, "FAIL": "1" if builder_fails else ""},
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0 and "deployed" in r.stdout and "removed 2 old releases" in r.stdout, r
+    assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], *names[3:]])
+    assert (root / "calls").read_text().splitlines() == [
+        f"image inspect studio:{revs[2]}", f"image rm studio:{revs[2]}",
+        "image prune -f", "builder prune -f --filter until=168h"]
+    assert ("cleanup of old releases or images failed" in r.stderr) is builder_fails
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():

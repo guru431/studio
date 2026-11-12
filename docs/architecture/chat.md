@@ -50,7 +50,9 @@
 
 ## «Интернет» (спека 2026-10-21-studio-chat-internet, шаг схемы 14) — `web`
 
-Поиск и страницы Exa — `EXA_URL` через `state.HTTP`, не `upstream`; субтитры YouTube — общий `yt-dlp` списком
+Поиск и страницы Exa — `EXA_URL` через `state.HTTP`, не `upstream`; субтитры YouTube — `yt-dlp` образа Docker (версия
+закреплена в Dockerfile, ночного обновления нет: новая версия — сменой закрепления и выкладкой,
+[deploy-docker](deploy-docker.md#обновления-базы-и-пакетов-образа); JS-рантайма deno в образе нет) списком
 аргументов только по `https://www.youtube.com/watch?v=<id>` из `web.youtube_id`, одна дорожка `pick_track`, файлы
 `<uuid>.*` в `tmp_dir`; запуск — `web.RUN`, тесты подменяют; кнопка — `chats.web` (`PATCH` диалога), инструменты хода —
 `web.tools_for` (только `proxied` и только с ключом Exa — без ключа ни одного, YouTube тоже; `PATCH {web: true}` без

@@ -6,7 +6,7 @@ pytest>=8.0
 httpx2>=2.16
 # `timeout = 30` в pytest.ini: зависший тест падает с дампом стеков, а не держит прогон
 pytest-timeout>=2.3
-# `-n 4` в pytest.ini: набор — четырьмя процессами
+# `-n 8 --dist loadgroup` в pytest.ini: восемь процессов, группы `serial` — одним
 pytest-xdist>=3.6
 # Safari/WebKit: браузер ставится отдельно командой python -m playwright install webkit.
 playwright>=1.64

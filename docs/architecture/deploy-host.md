@@ -36,7 +36,8 @@
   `STUDIO_DATA_KEY`) и необязательная `STUDIO_CLEANER_CA=/путь` — сертификат Cleaner, docs/cleaner-integration.md): его читает systemd, а не служба. Смена ключа делает прежние токены
   подключений нерасшифровываемыми — их вводят заново.
 - Копия базы — `studio-backup.timer` (04:30, `Persistent=true`) → `studio-backup.service` →
-  `manage.py backup`: `sqlite3` backup во временный файл рядом с базой, затем на шару
+  `manage.py backup`, после удачной копии — `manage.py verify-backup` (итог в `settings`, провал — push
+  администраторам; [deploy-docker](deploy-docker.md#данные-и-запуск-после-перезагрузки)): `sqlite3` backup во временный файл рядом с базой, затем на шару
   `backup/studio-YYYYMMDD.db` (временное имя + `os.replace`), 7 последних успешных: старые убирает
   только успешная новая копия (`BACKUP_KEEP` — число копий, а не дней); юнит ограничен
   `TimeoutStartSec=30min`. В копиях удалённое («Удалить всю историю», удалённые учётки) живёт, пока
@@ -54,7 +55,8 @@
   -p "Environment=$(systemctl show -p Environment --value studio-web)"
   /opt/services/studio/.venv/bin/python /opt/services/studio/app/manage.py verify-backup`. Затем —
   остановить `studio-web`, положить копию на место `/var/lib/studio/studio.db` (владелец
-  `studio:www-data`, удалить `-wal`/`-shm`), запустить. Файлов, удалённых после даты копии, на шаре
+  `studio:www-data`, удалить `-wal`/`-shm`), запустить. На Docker-хосте — свой порядок (владелец 10001:10001,
+`studio-docker.service`): [deploy-docker](deploy-docker.md#восстановление-и-sql-обходы). Файлов, удалённых после даты копии, на шаре
   уже нет: их строки `media` отвечают 404. Запасной `STUDIO_DATA_KEY` — vault
   `local-config/secrets/vault.env` `STUDIO_DATA_KEY` (тот же, что в `/etc/studio/studio.env`): без него
   токены подключений из копии не расшифровать — их вводят заново.
@@ -82,9 +84,9 @@
     bash deploy/deploy.sh --new-secret       # заново положить STUDIO_DATA_KEY из vault
     bash deploy/deploy.sh --create-admin     # первый администратор и его подключение «srvllm» из vault
 
-Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt`); грязное
+Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt`); грязное
 дерево выкладываемых частей и `agent/` — отказ. С ним едут установщик EXE и ZIP обновления моста:
-`git archive --format=zip --prefix=studio-agent/ HEAD:agent` → `.incoming/agent/studio-agent.zip`, строка
+`git archive --format=zip --prefix=studio-agent/ <ревизия>:agent` → `.incoming-…/agent/studio-agent.zip`, строка
 `==> мост <хеш>` того же коммита студии. До первого SSH `deploy/build-agent-installer.ps1` собирает
 `studio-agent-setup.exe` из этого ZIP и `deploy/agent-installer.cs` того же HEAD (штатный csc .NET Framework Windows).
 `GET /api/agent/download` отдаёт EXE браузеру, `/api/agent/package` — ZIP действующему мосту.
@@ -94,8 +96,14 @@
 `--create-admin` берёт из vault `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`,
 `GATEWAY_KEY_OWNER_IMAGES` и через `install.sh --admin-stdin` отдаёт в `manage.py create-admin`
 (`systemd-run --pipe` от `studio` с окружением юнита); повтор безопасен, новый пароль гасит сессии.
-`install.sh` до подмены кода собирает новую среду Python рядом (`.incoming/.venv`; только если
-сменились `requirements.txt` или `python3` — штамп `.venv/.studio-requirements`), переносит её на
+Ревизию `deploy.sh` разрешает один раз (`REV`): код, мост, EXE, vhost и тег образа — из одного коммита, даже если
+во время выкладки появился новый. Каждая выкладка грузится в свою папку `.incoming-<ревизия>-<id>`; установщик
+(`install.sh`, `install-docker.sh`) берёт `flock -n` на `.deploy.lock` — вторая одновременная выкладка получает отказ,
+а не перемешанный каталог. Оставшуюся папку (отказ, `--prepare-only`) убирает выход `deploy.sh`, брошенные старше
+суток — следующая выкладка.
+`install.sh` до подмены кода собирает новую среду Python рядом (`.incoming-…/.venv`; только если
+сменились `requirements.txt`, `constraints.txt` (транзитивные пакеты, `pip -c`) или `python3` — штамп
+`.venv/.studio-requirements`), переносит её на
 место вместе с кодом, держит прежние код и среду в `.previous` до ответа `/health` от www-data
 через сокет, ставит юниты копии базы и включает таймер. Отказ `systemctl restart` и молчание `/health`
 идут одним путём `service_failed` — status, журнал и строки отката, без автоматического отката; таймер
@@ -114,7 +122,8 @@ Windows-мост после выкладки сервера перезапуск
 
 Сводная таблица всех шагов с 16 — в [CLAUDE.md](../../CLAUDE.md#откат-по-шагам-схемы). Ниже — развёрнутые описания и
 SQL для шагов, где их больше строки. SQL — служба остановлена, от `studio`:
-`sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`; каскады — только с `PRAGMA foreign_keys=ON;`.
+`sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`; каскады — только с `PRAGMA foreign_keys=ON;`. На Docker-хосте
+те же инструкции — функцией `sql` ([deploy-docker](deploy-docker.md#восстановление-и-sql-обходы)).
 
 **Откат на код до шага схемы 20** (`.previous`): прежний код таблиц `code_tabs` и `code_place` не читает — раздел
 «Claude Code» прежний (лестница уровней), рабочее место не видно и не мешает. Его «Удалить всю историю» их не стирает:
@@ -157,7 +166,7 @@ SQL — как у шага 16 ниже.
 `pin_fails` (запертая студия открывается паролем и passkey; заданный PIN снова действует после возврата).
 
 **Откат на код до шага схемы 16** (`.previous`): прежний код не знает раздела `ocr`. SQL ниже — служба
-остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "…"`.
+остановлена, от `studio`: `sudo -u studio sqlite3 /var/lib/studio/studio.db "…"` (Docker — функция `sql`, выше).
 
 - `PATCH /api/connections/<id>` без `sections` (имя, токен — так шлют форма подключения и панель) у
   подключения srvllm отвечает 422, пока есть строки `ocr`. Обход: `DELETE FROM section_links WHERE

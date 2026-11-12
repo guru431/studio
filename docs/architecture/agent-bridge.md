@@ -577,7 +577,8 @@ UUID нового чата задаёт студия, настоящий thread 
   копирования файлов и изменения среды, без остановки процесса. Владелец дожидается заданий и выходит в трее.
   После выхода файлы архива — поверх, кроме `.venv`, `Unblock-File` («Mark of the Web»); из git-копии — на
   месте. Затем `.venv` (`-Python`, иначе `py -3`, нет `py` — `python`; проверка ≥ 3.11 до `venv` с понятной ошибкой),
-  `pip install -r requirements.txt`, запуск `pythonw.exe studio_agent.pyw` без ожидания; `-NoVenv`, `-NoStart`,
+  `pip install -r requirements.txt -c constraints.txt` (транзитивные пакеты закреплены; так же ставит самообновление
+  `updater.prepare`), запуск `pythonw.exe studio_agent.pyw` без ожидания; `-NoVenv`, `-NoStart`,
   `-RunKey` (ключ автозапуска, тесты — `HKCU:\Software\studio-agent-test\Run`) — для тестов; повтор безопасен;
   автозапуск ставит окно (`autostart.REPO` — та копия, что запущена), а установка в `Programs` значение `StudioAgent`,
   если оно есть, переписывает на эту копию (как `autostart.command()`), нет — не заводит.

@@ -1,7 +1,8 @@
 # Docker Compose: установка, перенос и восстановление
 
 Основной запуск с 2026-11-11 — два контейнера из одного образа: `web` (FastAPI, Unix-сокет) и
-`ingress` (nginx). Образ включает Python 3.13, зависимости из `requirements.txt`, ffmpeg, Chromium,
+`ingress` (nginx). Образ включает Python 3.13, зависимости из `requirements.txt` с закреплёнными
+транзитивными пакетами `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`), ffmpeg, Chromium,
 закреплённый yt-dlp, общий `md2pdf.py` с проверкой SHA-256 и EXE/ZIP Windows-моста из того же HEAD.
 Работающие Windows-мосты при выкладке не перезапускаются: их каналы переподключаются сами.
 
@@ -47,7 +48,12 @@ core dumps, ограничениями памяти и процессов. `web`
   Контейнеры перезапускаются Docker; без CIFS web отказывает до записи.
 - Копия базы: `studio-backup.timer` в 04:30 → `studio-backup.service` → `manage.py backup` внутри web.
   Формат и хранение прежние: согласованная SQLite backup, 7 последних на шаре. Проверка восстановления
-  — `manage.py verify-backup`: целостность, схема, расшифровка и наличие медиа.
+  — `manage.py verify-backup`: целостность, схема, расшифровка и наличие медиа. Юнит копии зовёт её
+  сразу после удачной копии; краткий итог (`ok`, число проблем, время проверки и копии — без путей и имён)
+  ложится в `settings` (`manage.CHECK_KEY`) и виден в «Администрирование» → «Хранилище» строкой «Проверка
+  копии». Провал служба замечает (`admin.notify_failed_check`, раз в `admin.CHECK_WATCH_SEC` (900) с и сразу
+  после старта) и один раз шлёт push и ntfy активным администраторам. Итог «Проверить копию» из панели
+  тоже записывается, но без уведомления.
 
 ## Выкладка
 
@@ -77,8 +83,34 @@ STUDIO_APACHE_PORT=8443
 переключает `current`, ожидает здоровье обоих контейнеров и обновляет vhost. Неудачный запуск возвращает
 предыдущий образ; база остаётся актуальной. Прежний успешный релиз — `previous`, исходники — `releases/`.
 `--new-secret` и `--create-admin` — явные операции, как в прежней установке. Переносу они не нужны.
-Выкладка с грязным деревом приложения/моста запрещена. Повторная выкладка использует кэш слоёв Docker.
-yt-dlp обновляется пересборкой образа с обновлением его закреплённой версии в Dockerfile.
+Выкладка с грязным деревом приложения/моста запрещена. HEAD разрешается один раз: код, мост и тег образа — из
+одной ревизии; загрузка — в свою папку `.incoming-<ревизия>-<id>`, вторая одновременная выкладка получает отказ
+`flock` ([deploy-host](deploy-host.md#выкладка)). Повторная выкладка использует кэш слоёв Docker
+(кроме случаев ниже).
+
+После успешной выкладки `install-docker.sh` убирает старое (`prune_releases`): в `releases/` остаются пять
+новейших релизов (по времени в имени) и цели `current` и `previous`; образ `studio:<ревизия>` удалённого релиза
+уходит, если ту же ревизию не держит оставшийся релиз; затем `docker image prune -f` (образы без тега: прежние
+сборки той же ревизии и заменённые `--pull` базы) и `docker builder prune -f --filter until=168h` (кэш сборки
+старше недели). Ошибка уборки — только предупреждение: выкладка уже здорова. Вернуться дальше пяти релизов —
+выложить нужный коммит заново.
+
+### Обновления базы и пакетов образа
+
+- База `python:3.13-slim-trixie` (Debian trixie и патч-выпуск Python 3.13): `install-docker.sh` собирает
+  с `docker build --pull`, новая база из реестра заменяет кэшированную, и все слои пересобираются.
+  Digest не закреплён: обновление базы приходит с ближайшей выкладкой.
+- Пакеты Debian (Chromium, ffmpeg, nginx-light, сертификаты): сборка получает `REFRESH` — ISO-неделю
+  (`date -u +%G-W%V`) на Docker-хосте. Первая выкладка каждой недели промахивается мимо кэша на слое apt
+  и ставит текущие пакеты с исправлениями безопасности; повторные выкладки той же недели берут кэш.
+- Таймера пересборки нет: без выкладки образ не обновляется.
+- Срочно (CVE в Chromium, ffmpeg, OpenSSL или Python): `bash deploy/deploy.sh --refresh-base` —
+  `--pull --no-cache`, все слои заново, затем обычная проверка здоровья и откат при отказе. Версии в
+  работающем контейнере: `… exec -T web sh -c 'python -V; dpkg-query -W chromium ffmpeg openssl'`
+  (команда compose — ниже).
+- Python-пакеты обновляются только сменой закреплений в репозитории: прямые — `requirements.txt`,
+  транзитивные — `constraints.txt`. yt-dlp — сменой его закрепления в Dockerfile и выкладкой: YouTube
+  ломает старые версии, поэтому при отказах субтитров первым делом поднимают версию yt-dlp.
 
 Из каталога установки на Docker-хосте:
 
@@ -88,6 +120,21 @@ sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy
 sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py verify-backup
 sudo systemctl start studio-backup.service
 sudo systemctl status studio-docker-start.service studio-docker.service studio-backup.timer
+```
+
+Приёмка YouTube после выкладки или смены версии yt-dlp — выгрузка субтитров одного публичного ролика внутри `web`
+с окружением службы (`web._env`) и аргументами `web.youtube`, без загрузки видео; `/tmp` контейнера — tmpfs.
+Ожидается строка `ok` и файл `.vtt`; предупреждение yt-dlp об отсутствии JS-рантайма (deno в образе нет) —
+сведение для решения владельца, не отказ. `VIDEO` — id любого публичного ролика с субтитрами:
+
+```bash
+VIDEO=jNQXAC9IVRw
+sudo docker compose --env-file current/deploy/docker/host.conf -f current/deploy/docker/compose.yaml exec -T web \
+  env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME=/nonexistent sh -c '
+    yt-dlp --version
+    yt-dlp --ignore-config --no-playlist --no-cache-dir --skip-download --write-subs --write-auto-subs \
+      --sub-langs "en.*,ru.*" --sub-format vtt -o "/tmp/yt-check.%(ext)s" "https://www.youtube.com/watch?v=$1"
+    ls -l /tmp/yt-check.*.vtt && echo ok; rm -f /tmp/yt-check.*' yt-check "$VIDEO"
 ```
 
 ## Перенос с нативной установки
@@ -110,7 +157,59 @@ sudo systemctl status studio-docker-start.service studio-docker.service studio-b
 
 При неудачном старте новой версии installer автоматически возвращает прежний контейнерный релиз;
 база не откатывается. Для ручного возврата сначала переключают `current` на `previous`, затем запускают
-Compose с `up -d --no-build --wait`; совместимость схемы описана в [deploy-host](deploy-host.md).
+Compose с `up -d --no-build --wait`; совместимость схемы описана в [deploy-host](deploy-host.md), SQL-обходы
+таблицы отката ([CLAUDE.md](../../CLAUDE.md#откат-по-шагам-схемы)) выполняют, как описано ниже.
+
+## Восстановление и SQL-обходы
+
+На Docker-хосте нет пользователя `studio`, CLI `sqlite3` нет и в образе: база принадлежит 10001:10001, а SQL
+выполняет Python образа текущего релиза отдельным контейнером без сети, от того же uid. Служба при этом
+остановлена — и таймер копии тоже: `studio-backup.service` требует `studio-docker.service` и поднял бы
+приложение посреди работы. Из каталога установки:
+
+```bash
+cd /opt/services/studio
+IMAGE=$(sed -n 's/^STUDIO_IMAGE=//p' current/deploy/docker/host.conf)
+# SQL со stdin по одной инструкции; PRAGMA foreign_keys=ON уже включена (каскады); строки SELECT — через «|».
+sql() {
+  sudo docker run --rm -i --network none -u 10001:10001 -v /var/lib/studio:/var/lib/studio \
+    --entrypoint python "$IMAGE" -c '
+import sqlite3, sys
+c = sqlite3.connect("/var/lib/studio/studio.db", isolation_level=None)
+c.execute("PRAGMA foreign_keys=ON")
+s = ""
+for line in sys.stdin:
+    s += line
+    if sqlite3.complete_statement(s):
+        for row in c.execute(s):
+            print(*row, sep="|")
+        s = ""
+'
+}
+sudo systemctl stop studio-backup.timer studio-docker.service
+sql <<'SQL'
+DELETE FROM section_links WHERE section = 'ocr';
+SELECT count(*) FROM section_links;
+SQL
+sudo systemctl start studio-docker.service studio-backup.timer
+```
+
+Автокоммит — каждая инструкция отдельно; несколько связанных — между `BEGIN;` и `COMMIT;`.
+
+Восстановление базы из ночной копии (`backup/studio-YYYYMMDD.db` на шаре):
+
+1. Проверить копию, пока служба работает: `… exec -T web python /opt/studio/app/manage.py verify-backup
+   /media/backup/studio-YYYYMMDD.db` (путь внутри контейнера; без пути — новейшая). Код 0 — поднимается.
+2. `sudo systemctl stop studio-backup.timer studio-docker.service`.
+3. Сохранить рабочую базу вместе с журналом: `sudo mkdir -m 0700 /var/lib/studio/before-restore-$(date +%Y%m%d)`
+   и перенести туда `studio.db`, `studio.db-wal`, `studio.db-shm` (какие есть). На месте `-wal`/`-shm`
+   не должно остаться: чужой журнал SQLite применил бы к копии.
+4. `sudo install -o 10001 -g 10001 -m 0600 /mnt/storage/SharedData/studio/backup/studio-YYYYMMDD.db
+   /var/lib/studio/studio.db` — копия с владельцем контейнера (каталог остаётся `0700 10001:10001`).
+5. `sudo systemctl start studio-docker.service studio-backup.timer`, проверить `/health` и вход. Файлов,
+   удалённых после даты копии, на шаре уже нет — их строки `media` отвечают 404. Токены подключений
+   расшифровываются только тем `STUDIO_DATA_KEY`, что был при копии (запасной — vault).
+6. Сохранённую папку `before-restore-…` удалить, когда восстановление подтверждено.
 
 Для возвращения **на прежний хост** нельзя просто запустить оставленную старую базу:
 после переключения в Docker могли появиться новые записи. Отключить автозапуск

@@ -8,18 +8,21 @@ REVISION=
 CREATE_ADMIN=0
 SECRET=0
 PREPARE=0
+REFRESH_BASE=0
 for arg in "$@"; do
     case "$arg" in
         --revision=*) REVISION=${arg#*=} ;;
         --secret-stdin) SECRET=1 ;;
         --admin-stdin) CREATE_ADMIN=1 ;;
         --prepare-only) PREPARE=1 ;;
+        --refresh-base) REFRESH_BASE=1 ;;
         *) echo 'studio: unsupported Docker install argument' >&2; exit 1 ;;
     esac
 done
 [[ $REVISION =~ ^[a-f0-9]{40}$ ]] || { echo 'studio: invalid revision' >&2; exit 1; }
 [ "$(id -u)" = 0 ] || { echo 'studio: root required' >&2; exit 1; }
-[ "$NEW" = "$R/.incoming" ] || { echo 'studio: install must use .incoming' >&2; exit 1; }
+# deploy.sh uploads every deployment into its own $R/.incoming-<revision>-<id>.
+case "${NEW##*/}" in .incoming-*) ;; *) echo 'studio: install must use an .incoming-* upload' >&2; exit 1 ;; esac
 exec 9>"$R/.deploy.lock"
 flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 
@@ -56,7 +59,11 @@ setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
 [ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
 image="studio:$REVISION"
-docker build --build-arg "STUDIO_REVISION=$REVISION" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
+# --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
+# first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
+build=(docker build --pull --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
+if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
+"${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
 docker compose --env-file "$NEW/deploy/docker/host.conf" -f "$NEW/deploy/docker/compose.yaml" config --quiet
 if [ "$PREPARE" = 1 ]; then
@@ -65,7 +72,11 @@ if [ "$PREPARE" = 1 ]; then
 fi
 
 release="$R/releases/$REVISION-$(date -u +%Y%m%dT%H%M%S)"
-previous=$(readlink -f "$R/current" || true)
+previous=
+if [ -L "$R/current" ]; then previous=$(readlink -f "$R/current" || true); fi
+# Without this check a missing current resolved to its own path and a failed first start linked
+# current to itself.
+[ -d "$previous" ] || previous=
 mv "$NEW" "$release"
 ln -s "$release" "$R/.current-next"
 mv -Tf "$R/.current-next" "$R/current"
@@ -99,4 +110,35 @@ systemctl start studio-docker-start.service studio-docker.service studio-backup.
 if [ "$CREATE_ADMIN" = 1 ]; then
     "${compose[@]}" exec -T web python /opt/studio/app/manage.py create-admin
 fi
+
+prune_releases() {
+    # Keep the five newest releases and the targets of current and previous. An image goes with its
+    # release unless a kept release has the same revision. Failures only warn: the release is healthy.
+    local dir name rev count=0 status=0 kept=() removed=()
+    while read -r _ dir; do
+        count=$((count + 1))
+        if [ "$count" -le 5 ] || [ "$dir" -ef "$R/current" ] || [ "$dir" -ef "$R/previous" ]; then
+            kept+=("${dir##*/}")
+        elif rm -rf -- "$dir"; then
+            removed+=("${dir##*/}")
+        else
+            status=1
+        fi
+    done < <(for dir in "$R"/releases/*-*T*; do
+                 if [ -d "$dir" ]; then printf '%s %s\n' "${dir##*-}" "$dir"; fi
+             done | sort -r)
+    for name in "${removed[@]}"; do
+        rev=${name%-*}
+        if printf '%s\n' "${kept[@]}" | grep -q "^$rev-"; then continue; fi
+        if docker image inspect "studio:$rev" >/dev/null 2>&1; then
+            docker image rm "studio:$rev" >/dev/null || status=1
+        fi
+    done
+    # Untagged images: earlier builds of a redeployed revision and replaced base images (--pull).
+    docker image prune -f >/dev/null || status=1
+    docker builder prune -f --filter until=168h >/dev/null || status=1
+    printf 'studio: removed %d old releases\n' "${#removed[@]}"
+    return "$status"
+}
+prune_releases || echo 'studio: cleanup of old releases or images failed; the new release is healthy' >&2
 printf 'studio: Docker release %s is healthy\n' "$REVISION"

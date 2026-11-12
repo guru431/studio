@@ -112,7 +112,7 @@ async def lifespan(_app):
     ocr.resume_queued()
     translate.resume_queued()
     loops =([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
-              asyncio.create_task(cleaner.sweep())]
+              asyncio.create_task(cleaner.sweep()), admin.start_check_watch()]
              if state.WATCHER else [])
     try:
         yield

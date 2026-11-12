@@ -10,8 +10,8 @@ Exa — постоянный адрес `EXA_URL` через общий клие
 `{"kind": "search", "query", "results": [{"title", "url", "published"}], "text"}`, страница
 `{"kind": "page", "url", "title", "text"}`; `text` — ровно то, что получит модель.
 
-YouTube — общий yt-dlp debian (`/usr/local/bin/yt-dlp`, root обновляет ночью), списком аргументов без
-оболочки. Адрес разбирает студия (`youtube_id`), yt-dlp получает только канонический
+YouTube — yt-dlp образа Docker (`/usr/local/bin/yt-dlp`, версия закреплена в deploy/docker/Dockerfile;
+обновляется сменой закрепления и выкладкой — ночного обновления нет), списком аргументов без оболочки. Адрес разбирает студия (`youtube_id`), yt-dlp получает только канонический
 `https://www.youtube.com/watch?v=<id>`: у него есть общий извлекатель, и чужой адрес сервер прочитал бы. Ролик —
 только тот, чей id есть у адреса из переписки или найденного поиском (`known` у call, как у страниц): id,
 составленный моделью, был бы каналом вывода переписки.
@@ -202,8 +202,8 @@ async def page(key: str, url: str) -> dict:
 
 def _env() -> dict:
     """Окружение yt-dlp: без окружения службы (там STUDIO_DATA_KEY); Windows (тесты) без SYSTEMROOT
-    процессы не запускает. HOME — не tmp_dir: каталог, что там заведёт помощник yt-dlp (`.cache/` deno),
-    уронил бы старт службы — audio.clean_tmp удаляет файлы `unlink`-ом."""
+    процессы не запускает. HOME — не tmp_dir: каталог, что там завёл бы yt-dlp или его JS-рантайм
+    (`.cache/` deno; в образе deno нет), уронил бы старт службы — audio.clean_tmp удаляет файлы `unlink`-ом."""
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent"}
     if os.name == "nt":
         env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
