@@ -974,7 +974,7 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "transcribe", "speech", "voices", "ocr",
+    assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
                                               "translate", "code", "agents", "security")]
     assert v["labels"] == ["Агенты: чаты", "Агенты: подключения", "Журнал безопасности"]
     assert v["empty"] == "Отметьте хотя бы один раздел"
