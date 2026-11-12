@@ -278,7 +278,8 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
                 && summary.top >= heading.bottom && date.right <= summary.right
                 && (!gh || gh.left >= summary.left && gh.right <= summary.right)
                 && remotes.every(r => r.left >= summary.left && r.right <= summary.right)
-                && summary.height >= lineHeight - 1 && row.children.length === 2;
+                && summary.height >= lineHeight - 1 && summary.height <= lineHeight + 1
+                && Math.abs(date.top - summary.top) < 2 && row.children.length === 2;
             })"""),
             ("eval", "github", """[...document.querySelectorAll('.code-project-github')].map(e =>
               [e.textContent, e.dataset.gitLevel, e.title])"""),

@@ -287,7 +287,8 @@ class FakeMachine:
 
     def _op_subagents(self, req, events):
         row = self._chat(req)
-        return {"items": [{"id": key, "title": value.get("title", key), "status": "completed"}
+        return {"items": [{"id": key, "title": value.get("title", key), "status": value.get("status", "completed"),
+                           **{field: value[field] for field in ("started_at", "ended_at", "duration_ms", "total_tokens") if field in value}}
                           for key, value in row.get("children", {}).items()]}
 
     def _op_subagent_history(self, req, events):

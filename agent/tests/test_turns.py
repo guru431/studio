@@ -26,6 +26,7 @@ def marked(monkeypatch):
     monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
     monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
     monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: marked.append((project, chat)))
+    monkeypatch.setattr(sessions, "make_visible", lambda *a: False)
     return marked
 
 
@@ -78,7 +79,7 @@ async def test_turn_streams_text_steps_and_ends_done(home, project, monkeypatch)
     assert opts.session_id == CHAT and opts.resume is None
     assert opts.setting_sources == ["user", "project", "local"]
     assert opts.cwd == project and opts.include_partial_messages is True and opts.model is None
-    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}"} and opts.stderr is not None
+    assert opts.env == {"CLAUDE_AGENT_SDK_CLIENT_APP": f"studio-agent/{VERSION}", "CLAUDE_CODE_ENTRYPOINT": "local-agent"} and opts.stderr is not None
     assert opts.system_prompt == {"type": "preset", "preset": "claude_code"}
     assert opts.permission_mode is None and opts.can_use_tool is not None
     assert opts.extra_args == {"chrome": None} and opts.tools is None and opts.disallowed_tools == []
@@ -265,6 +266,22 @@ async def test_new_session_is_marked_studio_after_disconnect(home, project, monk
     await settle(r)
     assert seen == [(project, CHAT, True)]
     assert f.options[0].model == "sonnet" and store.Choices(home).get(CHAT) == ("sonnet", None)
+
+
+async def test_failed_disconnect_does_not_rewrite_session_metadata(home, project, monkeypatch, marked):
+    attempts = []
+    monkeypatch.setattr(sessions, "make_visible", lambda *a: attempts.append(a))
+    f = FakeFactory([result_ok()])
+    async def broken():
+        raise OSError("still running")
+    def factory(options):
+        client = f(options)
+        client.disconnect = broken
+        return client
+    r = Runner(lambda _: None, choices=store.Choices(home), cli_path=None, factory=factory)
+    r.start(project, PID, CHAT, "Привет", None, None)
+    await settle(r)
+    assert not marked and not attempts
 
 
 async def test_watch_gives_a_snapshot_with_the_open_card_and_answer_still_works(home, project):

@@ -61,6 +61,41 @@ async def test_subagent_archive_cache_coalesces_reads_but_live_state_and_expiry_
     assert runner._metadata.await_count == 2
 
 
+async def test_subagent_history_restores_times_tokens_and_actual_idle_status(runner, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    source = {"cwd": str(runner.project), "turns": [{"items": [
+        {"type": "subAgentActivity", "agentThreadId": CHILD, "kind": "started"}]}]}
+    child = {"cwd": str(runner.project), "createdAt": 100, "updatedAt": 108,
+             "status": {"type": "idle"}, "path": "verified-rollout"}
+    async def metadata(project, method, params):
+        return {"thread": child if params["threadId"] == CHILD else source}
+    runner._metadata = AsyncMock(side_effect=metadata)
+    monkeypatch.setattr(codex, "last_context", lambda path: {"usage": {"total": 1500}})
+    row = (await runner.subagents(runner.project, CHAT))["items"][0]
+    assert row["status"] == "completed"
+    assert {key: row[key] for key in ("started_at", "ended_at", "duration_ms", "total_tokens")} == {
+        "started_at": 100, "ended_at": 108, "duration_ms": 8000, "total_tokens": 1500}
+
+
+def test_subagent_live_metrics_route_only_to_the_child(runner):
+    from types import SimpleNamespace
+
+    now = [100.0]
+    runner.now = lambda: now[0]
+    turn = _Turn(runner.project, "a" * 16, CHAT, "turn")
+    turn.client = SimpleNamespace(thread="parent")
+    runner._adopt(turn, CHILD, None)
+    assert runner._family(turn, "thread/tokenUsage/updated", {
+        "threadId": CHILD, "tokenUsage": {"total": {"totalTokens": 1234}}})
+    assert turn.context is None
+    now[0] = 105.0
+    assert runner._family(turn, "turn/completed", {"threadId": CHILD, "turn": {"status": "completed"}})
+    row = turn.progress["agents"][0]
+    assert row["started_at"] == 100 and row["ended_at"] == 105 and row["duration_ms"] == 5000
+    assert row["total_tokens"] == 1234 and row["status"] == "completed"
+
+
 def test_agent_history_keeps_all_children_and_live_summary_prioritizes_active_ones():
     items = [{"type": "subAgentActivity", "agentThreadId": f"01999999-2222-7333-8444-{index:012d}",
               "kind": "completed"} for index in range(codex_progress.AGENTS_MAX + 5)]

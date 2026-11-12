@@ -149,6 +149,9 @@
 Визуализации Codex (`visualize` с JSON `path/mode/title`) распознаёт общее inline-расширение
 `visualization-markup.js` в `markdown.js` и Worker; блоки кода остаются текстом.
 `code-visualizations.js` открывает модальное окно с iframe `sandbox="allow-scripts"`.
+Обычные Markdown-ссылки на локальные HTML-файлы открывают то же окно, включая абсолютные пути в служебном
+каталоге визуализаций Codex. Путь передаётся только в теле POST, проверка корня остаётся на мосту;
+ссылки на другие внешние файлы не получают дополнительных прав.
 `POST …/projects/{pid}/visualization` требует `hello.visualizations`, owner/PIN/CSRF, читает
 HTML через op `visualization` и создаёт случайный токен. `GET …/visualization/{token}` сверяет
 сессию/компьютер/проект и живой PIN через `projects`, отдаёт документ с отдельной CSP;

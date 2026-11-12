@@ -24,7 +24,7 @@ try { document.cookie; document.querySelector('#isolation').textContent = 'cooki
 def test_visualizations_in_history_and_stream_are_interactive_and_isolated(desktop_browser, live, width, tmp_path):
     login = f'visualization-{desktop_browser.browser_type.name}-{width}'
     live.add_user(login)
-    text = MARKER + '\n\n```text\n' + MARKER + '\n```\n\n' + 'Paragraph.\n\n' * 800
+    text = MARKER + '\n\n[Открыть фотовизуализацию](' + SOURCE + ')\n\n```text\n' + MARKER + '\n```\n\n' + 'Paragraph.\n\n' * 800
     message = {'id': 'answer', 'role': 'assistant', 'text': text, 'steps': [], 'time': T0}
     session = code_session('Панель', messages=[message])
     machine = FakeMachine({'alpha': {'files': {SOURCE: FRAGMENT.encode()}, 'chats': {CODE_CHAT_A: session}}})
@@ -69,6 +69,10 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
             close = page.locator('#code-visualization').get_by_role('button', name='Закрыть')
             close.tap() if width == 320 else close.click()
             assert page.locator('#code-visualization').count() == 0
+            page.locator('.code-visualization-link').click()
+            frame.locator('#increment').wait_for()
+            assert frame.locator('#increment').inner_text() == '0'
+            close.click()
             machine.script = [{'k': 'text', 'text': MARKER[:30]}, {'k': 'text', 'text': MARKER[30:]}]
             page.locator('#code-text').fill('Покажи панель')
             page.locator('#code-send').click()

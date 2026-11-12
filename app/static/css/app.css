@@ -1323,7 +1323,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 /* панель слева, правая часть рядом; у открытого чата и файлов собственная прокрутка */
 .code-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
 .code-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
-.code-panel { width: 220px; flex: none; position: sticky; top: 0; height: calc(100 * var(--dvh)); align-self: flex-start;
+.code-panel { width: calc(300px * var(--font-scale, 1)); flex: none; position: sticky; top: 0; height: calc(100 * var(--dvh)); align-self: flex-start;
   display: flex; flex-direction: column; background: var(--surface-side); border-right: 1px solid var(--line); }
 /* компьютеры — без прокрутки, прокручиваются только проекты под ними */
 .code-panel-agents { flex: none; padding: var(--space-5) var(--space-4) var(--space-4); border-bottom: 1px solid var(--line); }
@@ -1400,10 +1400,10 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-project-metrics, .code-project-summary { min-width: 0; font-weight: 400;
   font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--text-2); }
 .code-project-metrics { flex: none; white-space: nowrap; }
-.code-project-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.code-project-summary { display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--space-2); overflow-x: auto; }
 .code-project-metrics a { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .code-project-git, .code-project-github, .code-project-remote, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
-.code-project-modified { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.code-project-modified { flex: none; margin-left: auto; white-space: nowrap; }
 .code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-project-remote[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--success); }
 .code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-project-remote[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--warn); }
 .code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-project-remote[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }
@@ -1539,7 +1539,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 
 /* телефон: панель выезжает слева по ☰ (как список диалогов чата), переключатели — второй строкой */
 @media (max-width: 760px) {
-  .code-panel { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, calc(85 * var(--vw))); height: auto; align-self: stretch;
+  .code-panel { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(340px, calc(100 * var(--vw) - 12px)); height: auto; align-self: stretch;
     padding-top: env(safe-area-inset-top, 0px); transform: translateX(-100%); visibility: hidden;
     transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
   .code-ws.panel-open .code-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
@@ -1690,6 +1690,13 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-msg.user .code-fork { display: block; margin-top: var(--space-3); font-size: var(--fs-2xs); }
 .code-subagents-dialog { width: min(900px, calc(100 * var(--vw) - 24px)); }
 .code-subagent-row, .code-worktree-row { display: block; width: 100%; margin: 5px 0; text-align: left; overflow-wrap: anywhere; }
+.code-subagent-row { white-space: normal; }
+.code-subagent-title { display: block; }
+.code-subagent-metrics { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-2);
+  color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
+.code-subagent-row:is([data-status="running"], [data-status="inProgress"], [data-status="pending"], [data-status="waiting"]) {
+  border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--surface-1));
+  box-shadow: inset 3px 0 var(--success); }
 .code-subagent-history { max-height: calc(55 * var(--dvh)); overflow: auto; overflow-wrap: anywhere; }
 .code-subagent-history pre { white-space: pre-wrap; }
 .code-subagent-user { white-space: pre-wrap; padding: var(--space-4); margin-top: var(--space-5); border: 1px solid var(--line); border-radius: var(--r-control); }

@@ -20,7 +20,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundE
                               SystemMessage)
 
 from . import attachments as attachment_input
-from . import cli, events, history_images, image_input, limits, permissions, sessions, store, timeline
+from . import cli, events, history_images, image_input, limits, permissions, sessions, store, task_metrics, timeline
 from .claude_sdk import ClaudeSDKClient
 from .errors import Refused
 
@@ -110,7 +110,7 @@ class _Turn:
     files: attachment_input.Files = field(default_factory=attachment_input.Files)
     subtasks: dict = field(default_factory=dict)  # id потока/сессии субагента этого хода → имя (или None)
     child_states: dict = field(default_factory=dict)  # lifecycle Claude; subtasks других движков хранит имена
-    background_tasks: dict = field(default_factory=dict)  # только конечные local_agent/local_workflow текущего клиента
+    background_tasks: dict = field(default_factory=dict)  # фоновые агенты, Workflow и команды текущего клиента
 
 
 class Runner:
@@ -487,6 +487,10 @@ class Runner:
                               for key, status in (remembered.items() if isinstance(remembered, dict) else ())
                               if isinstance(key, str) and REQUEST_ID.fullmatch(key)
                               and status in ("running", "completed", "failed", "stopped", "unknown")}
+            metrics = saved.get("subagent_metrics") or {}
+            for key, row in t.child_states.items():
+                if isinstance(metrics, dict) and isinstance(metrics.get(key), dict):
+                    row.update(task_metrics.numeric(metrics[key]))
             t.access = t.access or saved.get("access")
             t.context = saved.get("context")
             if t.access is not None:
@@ -543,7 +547,7 @@ class Runner:
         except Exception as e:
             log.warning("ход %s: %s", t.turn, type(e).__name__)
             failure = NO_START
-        await self._finish(t, new and sent, failure)
+        await self._finish(t, new and sent, failure, claude=sent)
         if cancelled:
             raise asyncio.CancelledError
 
@@ -565,6 +569,8 @@ class Runner:
             row["status"] = "stopped"
         if previous and previous["status"] in ("completed", "failed", "stopped") and row["status"] == "unknown":
             return {}
+        task_metrics.update(row, now=self.now(), started=data.get("hook_event_name") == "SubagentStart",
+                            ended=row["status"] == "stopped")
         if row != previous:
             t.child_states[child] = row
             self._children_progress(t)
@@ -584,7 +590,7 @@ class Runner:
         patch = getattr(message, "patch", None) or data.get("patch") or {}
         status = getattr(message, "status", None) or data.get("status") or (patch.get("status") if isinstance(patch, dict) else None)
         task_kind = t.background_tasks.get(child) or kind
-        if message.subtype == "task_started" and kind in ("local_agent", "local_workflow"):
+        if message.subtype == "task_started" and kind in ("local_agent", "local_workflow", "local_bash"):
             t.background_tasks[child] = kind
         if status in ("completed", "failed", "stopped", "killed"):
             t.background_tasks.pop(child, None)
@@ -600,6 +606,9 @@ class Runner:
             row["status"] = "stopped" if status == "killed" else status
         elif message.subtype == "task_started":
             row["status"] = "running"
+        task_metrics.update(row, now=self.now(), started=message.subtype == "task_started",
+                            ended=row["status"] in ("completed", "failed", "stopped"), patch=patch,
+                            usage=getattr(message, "usage", None) or data.get("usage"))
         if row == previous:
             return
         t.child_states[child] = row
@@ -667,17 +676,22 @@ class Runner:
             model = sessions.last_model(t.project, t.chat)  # продолжение не меняет модель сессии
         return new, model, effort
 
-    async def _finish(self, t: _Turn, mark: bool, failure: str | None) -> None:
+    async def _finish(self, t: _Turn, mark: bool, failure: str | None, *, claude=False) -> None:
         """Конец хода: карточки — отказ, клиент гаснет, новой сессии — метка, чат свободен, затем `done`."""
         t.finishing = True
         try:
             self._deny_all(t)
+            disconnected = t.client is None
             if t.client is not None:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(t.client.disconnect(), DISCONNECT_SEC)
-            if mark:  # клиент погашен: файл сессии не пишут двое
+                    disconnected = True
+            if mark and disconnected:  # клиент погашен: файл сессии не пишут двое
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(sessions.mark_studio, t.project, t.chat)
+            elif claude and disconnected:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(sessions.make_visible, t.project, t.chat)
             if t.context:
                 with contextlib.suppress(OSError):
                     await asyncio.to_thread(self.choices.update, t.chat, context=t.context)
@@ -686,13 +700,15 @@ class Runner:
                 for row in t.child_states.values():
                     if row["status"] == "running":
                         row["status"] = "stopped" if t.stopped or t.closing else "unknown"
+                        task_metrics.update(row, now=self.now(), ended=True)
                         changed = True
                 if changed:
                     self._children_progress(t)
                 with contextlib.suppress(OSError):
                     await asyncio.to_thread(self.choices.update, t.chat,
                                            subagent_statuses={key: row["status"] if row["status"] != "running" else "unknown"
-                                                              for key, row in t.child_states.items()})
+                                                              for key, row in t.child_states.items()},
+                                           subagent_metrics={key: task_metrics.numeric(row) for key, row in t.child_states.items()})
         finally:  # и при отмене посреди конца: чат не остаётся занятым
             try:
                 await asyncio.to_thread(t.files.cleanup)

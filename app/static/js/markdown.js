@@ -15,7 +15,7 @@
  * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
  * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
 
-import { localFileHref } from './code-file-links.js';
+import { localFileHref, visualizationFilePath } from './code-file-links.js';
 import { visualizationExtension, visualizationReference } from './visualization-markup.js';
 
 await Promise.all([['marked', 'marked.min.js'], ['DOMPurify', 'purify.min.js'], ['hljs', 'highlight.min.js']]
@@ -134,6 +134,16 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
       }
     }
     const path = fileLinks?.resolve(href);
+    const visual = path?.toLowerCase().endsWith('.html') ? path : visualizationFilePath(href);
+    if (visual && fileLinks?.visualization) {
+      link.setAttribute('href', '#');
+      link.classList.add('code-visualization-link');
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        fileLinks.visualization({ path: visual, title: link.textContent || 'Визуализация' });
+      });
+      continue;
+    }
     if (path) {
       link.setAttribute('href', '#');
       link.classList.add('code-message-file');
