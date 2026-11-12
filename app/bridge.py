@@ -369,7 +369,8 @@ def _completions(link: Link, frame: dict) -> None:
         return
     items = frame.get("items")
     if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
-            isinstance(i, dict) and i.get("status") in DONE_WORDS and type(i.get("ago")) is int and i["ago"] >= 0
+            isinstance(i, dict) and isinstance(i.get("status"), str) and i["status"] in DONE_WORDS
+            and type(i.get("ago")) is int and i["ago"] >= 0
             and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
         log.warning("агент %d: неверные досланные завершения", link.agent_id)
         return
