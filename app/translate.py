@@ -638,6 +638,7 @@ async def resume(user_id: int, tid: str) -> None:
     except HTTPException:                        # 404 gone — «такого перевода нет» для страницы, а запись есть
         raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
     conn, model = sections.resolve(user_id, "translate", row["connection_id"], row["model"])
+    operations.check(user_id)                    # стирание истории идёт: запись не возвращается в очередь
     _check_queue(user_id, lane_of(row["kind"]))
     state.DB.execute("BEGIN")
     try:
