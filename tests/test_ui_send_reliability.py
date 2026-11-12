@@ -192,6 +192,8 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
             route.abort()
         elif mode["put"] == "fail":
             route.fulfill(status=500, json={"detail": {"code": "http", "message": "сбой"}})
+        elif mode["put"] == "closed":
+            route.fulfill(status=409, json={"detail": {"code": "state", "message": "этот ответ уже сохранён"}})
         else:
             route.continue_()
 
@@ -224,6 +226,15 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
         pw.expect(answer.locator(".msg-save")).to_have_count(0)
         pw.expect(answer.locator(".msg-meta")).to_have_text("")
         assert page.evaluate(last_saved) == ["done", "Облако на связи."]
+
+        # 409 state: ответ уже закрыт сервером иначе — не «сохранён»: слова, без «Сохранить ещё раз», текст на экране
+        mode["put"] = "closed"
+        page.locator("#chat-input").fill("И ещё")
+        page.locator("#send").click()
+        pw.expect(answer.locator(".msg-meta")).to_contain_text("сервер уже закрыл его")
+        pw.expect(answer.locator(".msg-save")).to_have_count(0)
+        pw.expect(answer.locator(".md")).to_have_text("Облако на связи.")
+        assert page.evaluate(last_saved) == ["streaming", ""]
 
 
 @pytest.mark.parametrize("touch,width", [(True, 320), (False, 1280)])

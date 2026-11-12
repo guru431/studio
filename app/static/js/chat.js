@@ -141,22 +141,27 @@ function wellFormed(text) {
 }
 
 /** Итог ответа прямого подключения — PUT. Ответа нет (связь, срок, 502–504) — повтор с паузами SAVE_DELAYS: сервер
- * принимает PUT, пока ответ `streaming`, а тот же итог повторно — 200. 409 `state` (уже сохранён) и `gone` — как
- * раньше, не ошибка. Не вышло — «Ответ не сохранился: …», текст остаётся в `unsaved`. true — сохранён. */
+ * принимает PUT, пока ответ `streaming`, а тот же итог повторно — 200. `gone` — ответа в диалоге больше нет, сохранять
+ * нечего. 409 `state` — ответ уже закрыт иначе (брошен по сроку или сохранён другой вкладкой): этот текст не сохранён
+ * и не сохранится — «Сохранить ещё раз» нет (`closed`), текст остаётся на экране, чтобы его скопировать. Не вышло —
+ * «Ответ не сохранился: …», текст остаётся в `unsaved`. true — сохранён. */
 async function saveAnswer(chatId, message, body) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       await api('PUT', `/api/chats/${chatId}/messages/${message.id}`, body);
       break;
     } catch (err) {
-      if (err.code === 'state' || err.code === 'gone') break;
-      if (attempt < SAVE_DELAYS.length && unknownOutcome(err)) {
+      if (err.code === 'gone') break;
+      const closed = err.code === 'state';
+      if (!closed && attempt < SAVE_DELAYS.length && unknownOutcome(err)) {
         await new Promise((resolve) => { setTimeout(resolve, SAVE_DELAYS[attempt]); });
         continue;
       }
       if (!unsaved.has(message.id)) unsaved.set(message.id, { chatId, message, body, error: message.error });
+      unsaved.get(message.id).closed = closed;
       message.status = 'error';                     // готовый, но не сохранённый — иначе строка под ним пуста
-      message.error = `Ответ не сохранился: ${words(err)}`;
+      message.error = closed ? 'Ответ не сохранился: сервер уже закрыл его — скопируйте текст'
+        : `Ответ не сохранился: ${words(err)}`;
       return false;
     }
   }
@@ -922,7 +927,8 @@ function build(view, ctx) {
     if (job && m.id && job.message.id === m.id) return job.message;
     // несохранённый ответ этой вкладки: сервер держит его `streaming` («прервано») — показать текст из памяти
     const kept = m.id ? unsaved.get(m.id) : null;
-    if (kept && (m === kept.message || m.status === 'streaming')) return kept.message;
+    // закрытый сервером без текста (брошен по сроку) — текст из памяти, чтобы его скопировать
+    if (kept && (m === kept.message || m.status === 'streaming' || (kept.closed && !m.content))) return kept.message;
     if (kept) unsaved.delete(m.id);                  // сохранила другая вкладка или ответ заменён
     return m;
   }
@@ -1137,7 +1143,7 @@ function build(view, ctx) {
       p.actions.append(copy);
     }
     const kept = unsaved.get(m.id);
-    if (kept?.message === m) {
+    if (kept?.message === m && !kept.closed) {
       const again = button('Сохранить ещё раз', { class: 'btn btn-sm msg-save' }, async () => {
         again.disabled = true;
         await saveAnswer(kept.chatId, m, kept.body);
@@ -1179,7 +1185,10 @@ function build(view, ctx) {
     keep(feed, msgs.map((m, i) => {
       const last = i === msgs.length - 1;
       const was = shown.get(m);
-      if (was && was.last === last && was.cleaner === cleaner && received.has(m)) return was.node;
+      // идущий ответ рисуется заново: «жду карту · м:сс» считается от неизменного `wait` по Date.now()
+      if (was && was.last === last && was.cleaner === cleaner && received.has(m) && m.status !== 'streaming') {
+        return was.node;
+      }
       const node = messageNode(m, last);
       shown.set(m, { node, last, cleaner });
       return node;
