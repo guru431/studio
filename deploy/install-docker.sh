@@ -110,4 +110,35 @@ systemctl start studio-docker-start.service studio-docker.service studio-backup.
 if [ "$CREATE_ADMIN" = 1 ]; then
     "${compose[@]}" exec -T web python /opt/studio/app/manage.py create-admin
 fi
+
+prune_releases() {
+    # Keep the five newest releases and the targets of current and previous. An image goes with its
+    # release unless a kept release has the same revision. Failures only warn: the release is healthy.
+    local dir name rev count=0 status=0 kept=() removed=()
+    while read -r _ dir; do
+        count=$((count + 1))
+        if [ "$count" -le 5 ] || [ "$dir" -ef "$R/current" ] || [ "$dir" -ef "$R/previous" ]; then
+            kept+=("${dir##*/}")
+        elif rm -rf -- "$dir"; then
+            removed+=("${dir##*/}")
+        else
+            status=1
+        fi
+    done < <(for dir in "$R"/releases/*-*T*; do
+                 if [ -d "$dir" ]; then printf '%s %s\n' "${dir##*-}" "$dir"; fi
+             done | sort -r)
+    for name in "${removed[@]}"; do
+        rev=${name%-*}
+        if printf '%s\n' "${kept[@]}" | grep -q "^$rev-"; then continue; fi
+        if docker image inspect "studio:$rev" >/dev/null 2>&1; then
+            docker image rm "studio:$rev" >/dev/null || status=1
+        fi
+    done
+    # Untagged images: earlier builds of a redeployed revision and replaced base images (--pull).
+    docker image prune -f >/dev/null || status=1
+    docker builder prune -f --filter until=168h >/dev/null || status=1
+    printf 'studio: removed %d old releases\n' "${#removed[@]}"
+    return "$status"
+}
+prune_releases || echo 'studio: cleanup of old releases or images failed; the new release is healthy' >&2
 printf 'studio: Docker release %s is healthy\n' "$REVISION"
