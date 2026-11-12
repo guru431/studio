@@ -346,7 +346,7 @@ PIN-сессия, повторная проверка после чтения. �
 | `activity` | `state: thinking|tool|responding|waiting`, `tool?` | текущая стадия; в snapshot — `activity` без k |
 | `step` | `id`, `tool`, `input` (объект) | вызов инструмента начат |
 | `result` | `id`, `text`, `error` (bool) | итог инструмента |
-| `step_update` | `id`, `text?`, `output_truncated?`, `process_id?`, `progress_message?` | обновление уже известного шага, без его завершения; `text` заменяет текущий вывод |
+| `step_update` | `id`, `text?`, `output_truncated?`, `process_id?`, `progress_message?` | обновление уже известного шага, без его завершения; `text` заменяет текущий вывод (с моста 0.20.0 — не чаще раза в 250 мс на шаг, последнее состояние; `result` — сразу) |
 | `progress` | `changes?`, `plan?`, `agents?` | обновление переданных полей сводки активного хода |
 | `ask` | `request_id`, `kind: "permission"`, `tool`, `input`, `always` (bool: есть ли что запомнить) | запрос разрешения |
 | `ask` | `request_id`, `kind: "question"`, `questions`: `[{"id"?, "question", "header", "multi", "options": [{"id"?, "label", "description"}]}]` | вопрос агента; ID варианта OpenCode стабилен до закрытия карточки, включая snapshot |

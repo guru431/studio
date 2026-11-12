@@ -122,6 +122,49 @@ def test_history_preserves_text_tool_order_and_agent_phase_without_reasoning():
     assert "private reasoning" not in str(answer)
 
 
+async def test_output_deltas_of_a_step_are_coalesced_and_result_is_immediate(runner):
+    """`step_update` вывода шага — не чаще `codex.STEP_UPDATE_SEC`: первая дельта сразу, остальные — одним
+    последним состоянием; итог шага снимает отложенное, конец хода досылает его до `done`."""
+    import asyncio
+    t = _Turn(runner.project, "a" * 16, CHAT, "turn")
+    runner._turns[CHAT] = t
+    clock, gate, slept = [0.0], asyncio.Event(), []
+
+    async def sleep(sec):
+        slept.append(sec)
+        await gate.wait()
+
+    runner.monotonic, runner.sleep = (lambda: clock[0]), sleep
+
+    def updates():
+        return [f["e"] for f in runner.sent if f["e"]["k"] == "step_update"]
+
+    for sid in ("cmd", "cmd2"):
+        runner._notification(t, "item/started", {"item": {"id": sid, "type": "commandExecution", "status": "inProgress"}})
+    for _ in range(100):
+        runner._notification(t, "item/commandExecution/outputDelta", {"itemId": "cmd", "delta": "x"})
+    assert [u["text"] for u in updates()] == ["x"]
+    await asyncio.sleep(0)
+    assert slept == [codex.STEP_UPDATE_SEC]
+    clock[0] = codex.STEP_UPDATE_SEC
+    gate.set()
+    await asyncio.sleep(0)
+    assert [u["text"] for u in updates()] == ["x", "x" * 100] and not t.output_flush
+    gate.clear()
+    clock[0] += 0.1
+    runner._notification(t, "item/commandExecution/outputDelta", {"itemId": "cmd", "delta": "y"})
+    runner._notification(t, "item/completed", {"item": {"id": "cmd", "type": "commandExecution", "status": "completed",
+                                                        "aggregatedOutput": "x" * 100 + "y", "exitCode": 0}})
+    assert len(updates()) == 2 and runner.sent[-1]["e"]["k"] in ("result", "activity")
+    assert next(f["e"] for f in runner.sent if f["e"]["k"] == "result")["text"] == "x" * 100 + "y"
+    runner._notification(t, "item/commandExecution/outputDelta", {"itemId": "cmd2", "delta": "a"})
+    runner._notification(t, "item/commandExecution/outputDelta", {"itemId": "cmd2", "delta": "b"})
+    runner._output_done(t)                                              # конец хода: отложенное — сразу
+    assert updates()[-1] == {"k": "step_update", "id": "cmd2", "text": "ab", "output_truncated": False}
+    await asyncio.sleep(0)
+    assert not t.output_flush and len(updates()) == 4
+
+
 def test_output_and_partial_snapshot_are_bounded_and_do_not_keep_invalid_offsets(runner):
     t = _Turn(runner.project, "a" * 16, CHAT, "turn")
     runner._notification(t, "item/started", {"item": {"id": "cmd", "type": "commandExecution", "status": "inProgress"}})

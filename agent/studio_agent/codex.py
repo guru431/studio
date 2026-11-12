@@ -21,6 +21,9 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 SCAN_EVERY_SEC = 600  # полный обход сессий проекта для сверки готового индекса — не чаще
 CHILDREN_CACHE_SEC = 10
 CHILDREN_CACHE_MAX = 32
+# `step_update` вывода одного шага — не чаще: каждый несёт весь хвост до `limits.CLIP`, а очередь канала общая
+# с ответами просьб. Первая дельта уходит сразу, следующие — одним последним состоянием в конце паузы.
+STEP_UPDATE_SEC = 0.25
 
 
 def same_project(left, right) -> bool:
@@ -251,6 +254,7 @@ class CodexRunner(Runner):
         self.aliases = Aliases(home)
         self.rpc_factory = factory
         self.now = now
+        self.monotonic, self.sleep = time.monotonic, asyncio.sleep  # схлопывание вывода шага; тесты подменяют
         self.catalog = None
         self.models, self.efforts, self.version = [], [], ""
         self.default_efforts = {}
@@ -790,6 +794,7 @@ class CodexRunner(Runner):
             for task in list(requests):
                 task.cancel()
             await asyncio.gather(*requests, return_exceptions=True)
+            self._output_done(t)
             await self._finish(t, False, failure)
         if cancelled:
             raise asyncio.CancelledError
@@ -831,8 +836,7 @@ class CodexRunner(Runner):
                 output = step["text"] + p["delta"]
                 step["text"] = output[-limits.CLIP:]
                 step["output_truncated"] = len(output) > limits.CLIP or step.get("output_truncated", False)
-                self._send(t, {"k": "step_update", "id": step["id"], "text": step["text"],
-                               "output_truncated": step["output_truncated"]})
+                self._step_output(t, step)
             elif method.endswith("terminalInteraction"):
                 step["process_id"] = str(p.get("processId", ""))[:200]
                 self._send(t, {"k": "step_update", "id": step["id"], "process_id": step["process_id"]})
@@ -874,6 +878,7 @@ class CodexRunner(Runner):
             if method == "item/completed":
                 if old is not None:
                     old.pop("progress_message", None)
+                self._output_done(t, step["id"])  # итог несёт весь вывод: отложенный `step_update` не нужен
                 self._send(t, {"k": "result", **step})
                 self._activity(t, "thinking")
             else:
@@ -882,6 +887,44 @@ class CodexRunner(Runner):
             for rid, ask in list(t.asks.items()):
                 if ask.data["frame"]["id"] == p.get("requestId"):
                     self._settle(t, rid, None)
+
+    def _step_output(self, t, step):
+        """`step_update` вывода шага: сразу, если прошлый ушёл не позже `STEP_UPDATE_SEC` назад; иначе одна
+        отложенная отправка последнего состояния. Снимок `watch` читает `t.feed` и паузы не ждёт."""
+        flushes, sent = vars(t).setdefault("output_flush", {}), vars(t).setdefault("output_sent", {})
+        sid = step["id"]
+        if sid in flushes:
+            return
+        wait = STEP_UPDATE_SEC - (self.monotonic() - sent.get(sid, float("-inf")))
+
+        def update():
+            sent[sid] = self.monotonic()
+            self._send(t, {"k": "step_update", "id": sid, "text": step["text"],
+                           "output_truncated": step["output_truncated"]})
+
+        if wait <= 0:
+            update()
+            return
+
+        async def later():
+            await self.sleep(wait)
+            if flushes.get(sid) is task:
+                del flushes[sid]
+                update()
+
+        task = flushes[sid] = asyncio.create_task(later())
+
+    def _output_done(self, t, sid=None):
+        """Итог шага (`sid`) — снять его отложенный `step_update`: `result` несёт весь вывод. Конец хода — отложенные
+        уходят сразу, до `done`: шаг без итога (остановка посреди команды) сохраняет последний вывод."""
+        flushes = vars(t).get("output_flush", {})
+        for key in [sid] if sid is not None else list(flushes):
+            if (task := flushes.pop(key, None)) is not None:
+                task.cancel()
+                step = next((s for s in t.feed.steps if s["id"] == key), None)
+                if sid is None and step is not None:
+                    self._send(t, {"k": "step_update", "id": key, "text": step["text"],
+                                   "output_truncated": step["output_truncated"]})
 
     def _family(self, t, method, p):
         """Субагенты этого хода: потоки, порождённые им (`collabAgentToolCall.receiverThreadIds` от потока
