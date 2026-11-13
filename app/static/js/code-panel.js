@@ -101,6 +101,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
     title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
+  const newProject = el('button', { id: 'code-project-create', class: 'btn', type: 'button', hidden: true,
+    'aria-haspopup': 'dialog' }, 'Новый проект');
   // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.
   const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
     placeholder: 'Поиск проектов', 'aria-label': 'Поиск проектов', autocomplete: 'off', maxlength: '200',
@@ -120,10 +122,47 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const sortPanel = el('div', { id: 'code-project-sort-menu', class: 'code-project-sort-menu' }, search, sortOptions);
   const sortPopup = popupPanel(sortBox, sortPanel, { label: 'Поиск и сортировка проектов', side: 'above',
     followViewport: true, autoFocus: false });
-  const footer = el('div', { class: 'code-panel-footer', hidden: true }, sortBox, sort, sortPanel, refresh, updated);
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, newProject, sortBox, sort, sortPanel, refresh, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
+
+  let createDialog = null;
+  let createLoading = false;
+  newProject.addEventListener('click', async () => {
+    const agent = items.find((a) => a.id === selected), mine = gen;
+    if (createLoading || !agent?.project_create || agent.shared || mode !== 'projects') return;
+    createLoading = true;
+    newProject.setAttribute('aria-busy', 'true');
+    try {
+      const { projectCreate } = await lazy(() => import('./code-project-create.js'), 'Окно не загрузилось');
+      if (!alive || mine !== gen) return;
+      createDialog?.close();
+      createDialog = projectCreate(root, agent, {
+        trigger: newProject,
+        closed: () => pin(agent.id),
+        created: async (row) => {
+          if (!alive || mine !== gen) return;
+          // Сначала сбрасываем кэш списка code.js: новое имя нужно и правой части.
+          let found;
+          try { found = await list(agent.id, true, true); }
+          catch (err) {
+            if (alive && mine === gen) {
+              if (err.code === 'closed') pin(agent.id);
+              else status.textContent = `Проект создан. ${words(err)}`;
+            }
+            return;
+          }
+          if (!alive || mine !== gen) return;
+          search.value = '';
+          projects(mine, agent, found);
+          window.location.hash = `#/code/${agent.id}/${row.pid}`;
+          chose();
+        },
+      });
+    } catch (err) { if (alive && mine === gen) status.textContent = words(err); }
+    finally { createLoading = false; newProject.setAttribute('aria-busy', 'false'); }
+  });
 
   let infoIntent = null; // Окна открываются только отдельными кнопками сведений и рабочего стола.
   let infoKind = 'info';
@@ -664,6 +703,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   /** Компьютер в панели: kind — open (вход, нажатие) или pin (отказ closed справа). */
   function show(aid, kind) {
+    createDialog?.close();
     const mine = ++gen;
     if (infoIntent !== aid) infoIntent = null;
     selected = aid;
@@ -786,6 +826,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     paintCounts();
     paintHere();
     footer.hidden = false;
+    newProject.hidden = !agent.project_create || !!agent.shared;
     filterProjects();
     showComputer();
     sortProjects();
@@ -794,6 +835,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function showPin(mine, agent) {
+    createDialog?.close();
     summaries.delete(agent.id);
     checked.delete(agent.id);
     mode = 'pin';
@@ -942,6 +984,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     agents: () => loaded,
     unmount() {
       alive = false;
+      createDialog?.close();
       sortPopup.close();
       observer.disconnect();
       cancelAnimationFrame(summaryFrame);

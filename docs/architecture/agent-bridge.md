@@ -48,6 +48,7 @@
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
 | 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
 | 0.22.0 | `hello.visualization_images` — PNG/JPEG/WebP/GIF проекта и `CODEX_HOME/generated_images` владельца через `visualization` | §4 |
+| 0.24.0 | `hello.project_create` — `project_roots`, `project_create`, создание пустой папки в выбранном корне | §19 |
 
 ## 0.20.0
 
