@@ -117,6 +117,11 @@ class Open(BaseModel):
     pin: str | None = Field(None, max_length=PIN_MAX)
 
 
+class NewProject(BaseModel):
+    root: str = Field(pattern=r"^[0-9a-f]{16}$")
+    name: str = Field(min_length=1, max_length=120)
+
+
 class ChatState(BaseModel):
     state: Literal["open", "closed"]
 
@@ -483,6 +488,20 @@ async def projects(aid: int, request: Request):
     return {"items": [{"pid": i["pid"], "name": i["name"]} for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
                       and isinstance(i.get("name"), str)]}
+
+
+@router.get("/agents/{aid}/project-roots")
+async def project_roots(aid: int, request: Request):
+    project_access.owner(request, aid)
+    require_capability(aid, "project_create")
+    return _relay(await ask(request, aid, "project_roots"))
+
+
+@router.post("/agents/{aid}/projects", status_code=201)
+async def project_create(aid: int, body: NewProject, request: Request):
+    project_access.owner(request, aid)
+    require_capability(aid, "project_create")
+    return _BridgeJSON(await ask(request, aid, "project_create", root=body.root, name=body.name), status_code=201)
 
 
 @router.get("/agents/{aid}/access", status_code=204)

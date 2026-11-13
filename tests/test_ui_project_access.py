@@ -33,6 +33,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
     live.add_user(owner)
     live.add_user(friend)
     machine = FakeMachine({'alpha': {}, 'private': {}})
+    machine.project_create = True
     aid, channel = code_online(live, owner, machine)
     owner_cookie, friend_cookie = signed(live, owner), signed(live, friend)
     try:
@@ -86,6 +87,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 assert member_page.locator('#code-projects > li').count() == 1
                 assert member_page.locator('#code-project-access').count() == 0
                 assert member_page.locator('.code-agent-info, .code-agent-desktop, .code-agent-update').count() == 0
+                assert not member_page.locator('#code-project-create').is_visible()
                 member_page.reload()
                 member_page.locator(f'li[data-pid="{pid("alpha")}"]').wait_for()
                 member_page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').click()

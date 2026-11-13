@@ -89,6 +89,7 @@ class FakeMachine:
         self.chat_fork = False
         self.subagents = False
         self.worktrees = False
+        self.project_create = False
         self.subscription_usage = False
         self.usage_data = None
         self.agent_version = None
@@ -115,7 +116,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments")
+                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))

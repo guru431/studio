@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .errors import Refused
-from .files import inside
+from .files import _parts, inside
 
 HIDDEN = stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM
 
@@ -40,6 +40,44 @@ def project_id(config, root, name: str) -> str:
     paths = roots(config)
     legacy = getattr(config, "projects_legacy_root", "") or (paths[0] if paths else "")
     return pid(name) if legacy and _key(root) == _key(legacy) else pid(_key(root) + "\0" + name)
+
+
+def valid_name(name) -> bool:
+    """Одна видимая папка Windows; путь и имена устройств не принимаются."""
+    if not isinstance(name, str) or not 1 <= len(name) <= 120 or name.startswith("."):
+        return False
+    try:
+        return len(_parts(name)) == 1
+    except Refused:
+        return False
+
+
+def list_roots(config) -> list[dict]:
+    """Папки для выбора владельцем; id остаётся прежним при перестановке настроек."""
+    return [{"id": pid(_key(root)), "path": os.path.realpath(root)} for root in roots(config)]
+
+
+def create_project(config, root_id: str, name: str) -> dict:
+    """Новая пустая папка только в выбранном разрешённом корне, без перезаписи."""
+    if not valid_name(name):
+        raise Refused("invalid", "укажите имя новой папки, до 120 знаков, без разделителей пути")
+    root = next((Path(item["path"]) for item in list_roots(config) if item["id"] == root_id), None)
+    if root is None:
+        raise Refused("not_found", "папка проектов больше не разрешена — обновите список")
+    target = root / name
+    if not inside(str(root), os.path.realpath(target)):
+        raise Refused("outside")
+    try:
+        target.mkdir()  # Без parents/exist_ok: корень не создаём, существующее не трогаем.
+    except FileExistsError:
+        raise Refused("exists", "проект или файл с таким именем уже существует") from None
+    except (FileNotFoundError, NotADirectoryError):
+        raise Refused("not_found", "папка проектов недоступна на компьютере") from None
+    except PermissionError:
+        raise Refused("read_only", "нет прав на создание проекта в этой папке") from None
+    except OSError:
+        raise Refused("busy", "не удалось создать проект — проверьте папку на компьютере") from None
+    return {"pid": project_id(config, root, name), "name": name}
 
 
 def catalog(config) -> list[tuple[dict, Path]]:
@@ -130,6 +168,12 @@ class Catalog:
     def list(self, config, *, refresh=False):
         with self.lock:
             return [dict(row) for row, _ in self._read(config, refresh)]
+
+    def create(self, config, root_id, name):
+        with self.lock:
+            row = create_project(config, root_id, name)
+            self.signature = None
+            return row
 
     def find(self, config, project):
         with self.lock:

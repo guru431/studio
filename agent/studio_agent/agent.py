@@ -32,6 +32,8 @@ OPS = {
     "agent_update_cancel": (),
     "usage": ("refresh",),
     "projects": ("refresh",),
+    "project_roots": (),
+    "project_create": ("root", "name"),
     "project_summary": ("project", "refresh", "remote"),
     "activity": (),
     "chats": ("project", "refresh"),
@@ -137,7 +139,7 @@ class Agent:
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
                  "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                 "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
+                 "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
@@ -268,10 +270,10 @@ class Agent:
         if op not in OPS:
             raise Refused("invalid")
         if self.updater is not None and self.updater.busy and op in (
-                "turn", "save", "file_operation", "worktree_create", "chat_fork", "desktop_start"):
+                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if self.local_exit_pending and op in (
-                "turn", "save", "file_operation", "worktree_create", "chat_fork", "desktop_start"):
+                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start"):
             raise Refused("busy", "Агент завершает работу по выбору на компьютере")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
@@ -377,7 +379,9 @@ class Agent:
                     and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value))
         if name == "index":
             return type(value) is int and 0 <= value < history_images.COUNT
-        if name == "project":
+        if name == "name":
+            return projects.valid_name(value)
+        if name in ("project", "root"):
             return isinstance(value, str) and ID.fullmatch(value) is not None
         if name == "chat":
             return isinstance(value, str) and limits.CHAT_ID.fullmatch(value) is not None
@@ -451,6 +455,12 @@ class Agent:
 
     async def _op_projects(self, frame, after):
         return {"items": await asyncio.to_thread(self._catalog.list, self.cfg, refresh=bool(frame.get("refresh")))}
+
+    async def _op_project_roots(self, frame, after):
+        return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
+
+    async def _op_project_create(self, frame, after):
+        return await asyncio.to_thread(self._catalog.create, self.cfg, frame["root"], frame["name"])
 
     async def _op_project_summary(self, frame, after):
         project = await self._project(frame)

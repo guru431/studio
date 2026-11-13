@@ -249,7 +249,7 @@ def test_hello(agent):
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
                              "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                             "chat_fork": True, "subagents": True, "worktrees": True, "pin_timeout": True,
+                             "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                              "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True, "agent_update_cancel": False}

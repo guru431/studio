@@ -1359,6 +1359,10 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 @media (pointer: coarse) { .code-project-sort-menu :is(.code-project-search, .code-project-sort-option) { font-size:max(16px, var(--fs-sm)); } }
 .code-panel-footer .btn { padding: 0; font-size: var(--fs-2xl); line-height: 1; }
 .code-panel-footer .btn > span { display: inline-block; }
+.code-panel-footer #code-project-create { grid-column: 1 / -1; padding: var(--space-3); font-size: var(--fs-sm); line-height: 1.3; }
+.code-project-create .field { display: grid; gap: var(--space-3); margin-block: var(--space-5); min-width: 0; }
+.code-project-create .input { width: 100%; min-width: 0; }
+.code-project-create p { overflow-wrap: anywhere; }
 #code-project-refresh[aria-busy="true"] > span { animation: spin 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { #code-project-refresh[aria-busy="true"] > span { animation: none; } }
 .code-panel-footer p { grid-column: 1 / -1; margin: 0; font-size: var(--fs-2xs); overflow-wrap: anywhere; }
