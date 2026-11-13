@@ -6,6 +6,7 @@ import io
 import json
 import logging
 
+import pytest
 from PIL import Image
 
 import chat
@@ -377,6 +378,7 @@ def test_images_go_as_image_url_parts_up_to_four(studio):
     assert est == 4 + 4000                                                       # ceil(12 / 3) + 1000 × 4
 
 
+@pytest.mark.integration  # восемь файлов и два полных хода: > 1 с под нагрузкой набора
 def test_images_are_capped_across_the_whole_request(studio):
     """Два хода по четыре фото с ответом между ними: предел MAX_IMAGES — на весь запрос, а не на
     сообщение (аудит). Картинки — последнего хода, фото прежнего — пометкой, в истории — все."""

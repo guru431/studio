@@ -1,11 +1,11 @@
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 from tools.pytest_support import new_event_loop
 
 
@@ -14,7 +14,7 @@ def pytest_configure(config):
     """Очистка pytest моста не затрагивает временные каталоги других проектов."""
     if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
         return
-    root = Path(tempfile.gettempdir()) / "studio-agent-pytest"
+    root = ROOT / ".tmp" / ".pytest_cache" / "agent"
     root.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(root)
 

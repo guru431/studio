@@ -8,6 +8,7 @@
 """
 import ast
 import re
+import unicodedata
 from functools import cache
 from pathlib import Path
 
@@ -52,12 +53,19 @@ def _modules(package: Path) -> frozenset:
 
 
 @cache
+def _source(package: Path, name: str) -> tuple[str, str]:
+    """Исходник и форма имён Python: NFKC сохраняет поиск Unicode-идентификаторов до разбора AST."""
+    text = (package / f"{name}.py").read_text(encoding="utf-8")
+    return text, unicodedata.normalize("NFKC", text)
+
+
+@cache
 def _module(package: Path, name: str) -> "tuple[dict, dict, dict] | None":
     """Имена модуля: верхний уровень (с объявленными global), поля и методы классов, узлы значений.
     Ключ кэша — имя строкой: пути Windows равны без учёта регистра."""
     if name not in _modules(package):
         return None
-    tree = ast.parse((package / f"{name}.py").read_text(encoding="utf-8"))
+    tree = ast.parse(_source(package, name)[0])
     top, classes, values = {}, {}, {}
 
     def names(target):
@@ -161,6 +169,8 @@ def _values_anywhere(package: Path, name: str) -> frozenset:
     """Числовые значения константы `name` во всех модулях пакета."""
     found = set()
     for module in _modules(package):
+        if name not in _source(package, module)[1]:
+            continue                    # нет имени — не нужен полный разбор классов/методов модуля
         info = _module(package, module)
         if info is not None and name in info[2]:
             try:
@@ -264,6 +274,7 @@ def test_relative_links_in_docs_resolve(doc):
     assert _link_problems(doc) == []
 
 
+@pytest.mark.xdist_group("docs")  # тот же AST-кэш, что у проверок ссылок на символы
 def test_the_checker_catches_a_wrong_constant_and_a_missing_symbol(tmp_path, monkeypatch):
     doc = tmp_path / "doc.md"
     doc.write_text("`chat.RETRY_SEC` (16) с, `chat.NO_SUCH_THING`, `users.no_such_column`, `chat.WAIT_MAX_SEC` (30 мин),"
@@ -277,3 +288,8 @@ def test_the_checker_catches_a_wrong_constant_and_a_missing_symbol(tmp_path, mon
     assert any("no_such_column" in p for p in problems)
     assert not any("WAIT_MAX_SEC" in p for p in problems)        # 30 мин = 1800 с
     assert [p.split(":")[0] for p in _link_problems(doc)] == ["missing.md", "doc.md#нет"]
+
+
+def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
+    (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
+    assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}

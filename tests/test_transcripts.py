@@ -8,6 +8,8 @@ import threading
 from types import SimpleNamespace
 from urllib.parse import quote
 
+import pytest
+
 import clock
 import media
 import state
@@ -204,6 +206,7 @@ def test_restart_marks_running_as_interrupted(studio):
     assert tuple(row) == ("error", transcripts.INTERRUPTED)
 
 
+@pytest.mark.integration  # заполнение всей файловой очереди: > 1 с под нагрузкой набора
 def test_uploads_queue_up_and_history_wipe_takes_all(studio, env, fake_audio, monkeypatch):
     """Очередь вместо 409: идёт одна запись, ждущих — до QUEUE_MAX («в очереди · N»), следующая — 409 busy;
     стирание истории снимает и идущую, и ждущие."""

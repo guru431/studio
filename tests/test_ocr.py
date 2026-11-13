@@ -229,6 +229,7 @@ def test_card_busy_too_long_is_an_error_in_words(studio, monkeypatch):
     assert row["state"] == "error" and "карта занята" in row["detail"] and row["text"] is None
 
 
+@pytest.mark.integration  # многостраничный PDF, запись и отмена: > 1 с под нагрузкой набора
 def test_cancel_waits_for_the_page_and_releases(studio, caplog):
     """Отмена запрос страницы не обрывает: ответ дожидается и выбрасывается, вторая страница не
     запрашивается, слот ocr освобождается после ответа — 200, а не 409 занятого слота."""

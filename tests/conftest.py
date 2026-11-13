@@ -3,7 +3,6 @@ import asyncio
 import math
 import os
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +23,7 @@ def pytest_configure(config):
     """Каталоги/очистка pytest Studio не пересекаются с остальными проектами."""
     if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
         return
-    root = Path(tempfile.gettempdir()) / "studio-pytest"
+    root = ROOT / ".tmp" / ".pytest_cache" / "main"
     root.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(root)
 

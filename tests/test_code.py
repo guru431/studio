@@ -18,6 +18,7 @@ import security
 import state
 from conftest import make_user, signin
 from fake_bridge import FakeMachine, Refused, connect, enroll, pid, settle
+from http_checks import on_http
 from scans import scan_pdf
 from test_auth import guarded_routes
 from test_chat import events_of
@@ -179,17 +180,20 @@ def test_someone_elses_agent_is_404_before_the_bridge(studio):
     # у рабочего места компьютер не в адресе — чужой проверяет test_workspace.py
     routes = [(method, path) for method, path in guarded_routes() if path.startswith("/api/code/agents/")]
     assert routes
-    for method, path in routes:
-        assert (method, path) in BODIES, f"нет тела для {method} {path} — допишите в BODIES"
-        parts = path.split("/")
-        for i in range(1, len(parts)):
-            if parts[i] == "1":
-                parts[i] = {"agents": str(aid), "projects": ALPHA, "chats": A,
-                            "visualization": "0" * 32, "members": "1"}[parts[i - 1]]
-        body = BODIES[(method, path)]
-        r = studio.c.request(method, "/".join(parts), **({} if body is None else {"json": body}))
-        assert (r.status_code, detail(r)["code"]) == (404, "not_found"), (method, path, r.text)
-        assert detail(r).get("computer") is True, (method, path)   # страница отличает его от «нет файла/сессии»
+    async def check(client):
+        for method, path in routes:
+            assert (method, path) in BODIES, f"нет тела для {method} {path} — допишите в BODIES"
+            parts = path.split("/")
+            for i in range(1, len(parts)):
+                if parts[i] == "1":
+                    parts[i] = {"agents": str(aid), "projects": ALPHA, "chats": A,
+                                "visualization": "0" * 32, "members": "1"}[parts[i - 1]]
+            body = BODIES[(method, path)]
+            r = await client.request(method, "/".join(parts), **({} if body is None else {"json": body}))
+            assert (r.status_code, detail(r)["code"]) == (404, "not_found"), (method, path, r.text)
+            assert detail(r).get("computer") is True, (method, path)   # страница отличает его от «нет файла/сессии»
+
+    on_http(studio, check)
     assert set(routes) == set(BODIES)           # и в таблице нет строк маршрутов, которых уже нет
     assert m.requests == []
     assert state.DB.execute("SELECT count(*) FROM code_chats").fetchone()[0] == 0
@@ -1101,12 +1105,15 @@ def test_bad_paths_never_reach_the_bridge(studio):
     aid, m, _ = with_files(studio)
     before = len(m.requests)
     bad = ("../x", "/etc", "a\\b", "a//b", "./a", "a/..", "a\x00b", "a\nb", "a/", "x" * 1025, 5, None, ["a"])
-    for path in bad:
-        for r in (studio.c.post(project_url(aid, "files"), json={"path": path}),
-                  studio.c.post(project_url(aid, "read"), json={"path": path}),
-                  studio.c.put(project_url(aid, "file"), json={"path": path, "text": "", "version": "v"}),
-                  studio.c.post(project_url(aid, "pdf"), json={"path": path, "page": 1})):
-            assert (r.status_code, detail(r)) == (422, {"code": "path", "message": "неверный путь"}), (path, r.url)
+    async def check(client):
+        for path in bad:
+            for r in (await client.post(project_url(aid, "files"), json={"path": path}),
+                      await client.post(project_url(aid, "read"), json={"path": path}),
+                      await client.put(project_url(aid, "file"), json={"path": path, "text": "", "version": "v"}),
+                      await client.post(project_url(aid, "pdf"), json={"path": path, "page": 1})):
+                assert (r.status_code, detail(r)) == (422, {"code": "path", "message": "неверный путь"}), (path, r.url)
+
+    on_http(studio, check)
     assert len(m.requests) == before
     r = studio.c.post(project_url(aid, "read"), json={"path": "x" * claude_code.PATH_MAX})     # длина на пределе
     assert (r.status_code, detail(r)["code"]) == (404, "not_found")

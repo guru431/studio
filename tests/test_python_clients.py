@@ -69,6 +69,7 @@ def test_without_key_refuses_and_points_to_make_local(script, args, capsys):
     assert "--make-local" in capsys.readouterr().err
 
 
+@pytest.mark.integration  # настоящий CLI-процесс с файловой копией: > 1 с под нагрузкой Windows
 @SCRIPTS
 def test_make_local_writes_a_copy_with_the_vault_key(script, tmp_path):
     copy = tmp_path / script.name

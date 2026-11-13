@@ -15,6 +15,7 @@ import release
 import security
 import state
 from conftest import T0, login, make_user
+from http_checks import on_http
 
 DAY = 86400
 
@@ -341,21 +342,29 @@ def guarded_routes() -> list[tuple[str, str]]:
     return routes
 
 
+def assert_routes_refused(studio, method, paths, status, code):
+    """Все HTTP-запросы на цикле службы: без перехода TestClient между потоками на каждый маршрут."""
+    assert paths, method
+
+    async def check(client):
+        for path in paths:
+            r = await client.request(method, path)
+            assert r.status_code == status and r.json()["detail"]["code"] == code, (method, path)
+
+    on_http(studio, check)
+
+
 @pytest.mark.parametrize("method", sorted({method for method, _ in guarded_routes()}))
 def test_every_route_but_the_anonymous_ones_needs_a_session(studio, method):
     paths = [path for route_method, path in guarded_routes() if route_method == method]
-    assert paths, method
-    for path in paths:
-        r = studio.c.request(method, path)
-        assert r.status_code == 401 and r.json()["detail"]["code"] == "login", (method, path)
+    assert_routes_refused(studio, method, paths, 401, "login")
 
 
-def test_every_changing_route_needs_the_csrf_header(studio):
+@pytest.mark.parametrize("method", sorted({method for method, _ in guarded_routes()} - {"GET"}))
+def test_every_changing_route_needs_the_csrf_header(studio, method):
+    paths = [path for route_method, path in guarded_routes() if route_method == method]
     make_user(studio, "owner", is_admin=True); login(studio, "owner", "password-123")
-    for method, path in guarded_routes():
-        if method != "GET":
-            r = studio.c.request(method, path)
-            assert r.status_code == 403 and r.json()["detail"]["code"] == "csrf", (method, path)
+    assert_routes_refused(studio, method, paths, 403, "csrf")
 
 
 def test_logout_ends_the_session_server_side(studio):
