@@ -9,6 +9,7 @@ WELCOME_SEC = 10  # ждать welcome после hello
 PIN_TRIES = 5  # неверных PIN подряд до блока
 OPEN_IDLE_SEC = 3 * 60 * 60  # открытая сессия без просьб: 3 часа
 TEXT_MAX = 2 * MIB  # текст файла
+VISUALIZATION_MAX = 10 * MIB  # HTML с вложенными данными, отдельно от редактора
 RAW_MAX = 10 * MIB  # raw (PDF)
 IMAGE_COUNT = 4
 IMAGE_MAX = 10 * MIB  # картинка или файл хода

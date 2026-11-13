@@ -8,7 +8,7 @@ import secrets
 import clock
 
 TTL = 300
-MAX_BYTES = 2 * 1024 * 1024
+MAX_BYTES = 10 * 1024 * 1024
 # One preview per user, as with the project PDF cache; token is only a lookup key.
 VIEWS: dict[int, tuple] = {}
 CDNS = ('https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh '
