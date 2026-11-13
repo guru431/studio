@@ -429,6 +429,7 @@ def test_run_without_yt_dlp_on_the_host_is_words(studio, monkeypatch):
     assert e.value.args[0] == "чтение YouTube на сервере недоступно"
 
 
+@pytest.mark.integration  # настоящий процесс и настоящий срок: > 1 с под нагрузкой Windows
 def test_run_kills_the_process_after_the_deadline(studio):
     import web
     started = time.monotonic()
@@ -437,6 +438,7 @@ def test_run_kills_the_process_after_the_deadline(studio):
     assert time.monotonic() - started < 5
 
 
+@pytest.mark.integration  # настоящий дочерний Python: > 1 с под нагрузкой Windows
 def test_run_returns_code_and_both_streams(studio):
     import web
     code, out, err = run(studio, web.RUN, [sys.executable, "-c",
@@ -444,6 +446,7 @@ def test_run_returns_code_and_both_streams(studio):
     assert (code, out.strip(), err.strip()) == (3, b"o", b"e")
 
 
+@pytest.mark.integration  # настоящий дочерний Python: > 1 с под нагрузкой Windows
 def test_run_gives_yt_dlp_no_environment_of_the_service(studio, monkeypatch):
     """yt-dlp — сторонний и обновляется ночью: окружения службы (STUDIO_DATA_KEY) он не видит."""
     import state

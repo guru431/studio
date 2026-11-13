@@ -1,5 +1,6 @@
 """Проверка подключения и паспорт (app/checks.py, app/capabilities.py): пробы только чтением, возможности с
 источником, паспорт браузера, пробный ответ."""
+import asyncio
 import json
 import logging
 
@@ -448,9 +449,12 @@ def test_a_long_service_list_does_not_push_the_srvllm_catalog_out():
 def test_shared_client_keeps_no_cookies_of_the_services():
     """Клиент один на всех пользователей: cookie ответа одного не уходит с запросами других."""
     client = state.make_http()
-    request = httpx.Request("GET", GW + "/v1/models")
-    client.cookies.extract_cookies(httpx.Response(200, headers={"set-cookie": "__cf_bm=abc; Path=/"}, request=request))
-    assert not client.cookies
+    try:
+        request = httpx.Request("GET", GW + "/v1/models")
+        client.cookies.extract_cookies(httpx.Response(200, headers={"set-cookie": "__cf_bm=abc; Path=/"}, request=request))
+        assert not client.cookies
+    finally:
+        asyncio.run(client.aclose())
 
 
 def test_check_logs_only_the_id_and_the_outcome(studio, caplog):

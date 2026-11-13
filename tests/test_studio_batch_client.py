@@ -148,6 +148,7 @@ def run_script(runner, images, *args, code=0):
     return flat(out)
 
 
+@pytest.mark.integration  # настоящий CLI и HTTP: > 1 с под нагрузкой Windows
 def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):
     """В трубу и файл Python пишет кодировкой локали (Windows — cp1251): «×» и «→» сообщений
     роняли пакет посреди работы."""

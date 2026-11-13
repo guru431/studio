@@ -457,16 +457,22 @@ def test_input_is_checked_before_a_job(studio):
     assert code(post(studio, "Hello."), 409)["code"] == "no_model"
     add_gateway(studio)
     assert code(post(studio, "  \r\n "), 422) == {"code": "empty", "message": "введите текст"}
-    assert code(post(studio, "a" * 300_001), 422) == {
-        "code": "too_long", "message": "текст длиннее 300 000 знаков — разделите его"}
-    hold_chat(studio)                                                   # длинный текст — не переводить на деле
-    assert post(studio, "a\r\n" * 150_000).status_code == 202          # переносы Windows не считаются дважды
     assert code(post(studio, "Hello.", target="xx"), 422)["code"] == "lang"
     assert code(post(studio, "Hello.", target="auto"), 422)["code"] == "lang"
     assert code(post(studio, "Hello.", source="xx"), 422)["code"] == "lang"
     assert code(post(studio, "Hello.", model="gpt-5"), 422)["code"] == "model"
     assert studio.c.get("/api/translate/languages").json() == {
         "items": translate_text.languages(), "auto": "auto", "default_target": "ru"}
+
+
+@pytest.mark.integration  # граничные тела на сотни тысяч знаков: > 1 с под нагрузкой набора
+def test_text_limit_counts_normalized_line_endings(studio):
+    add_gateway(studio)
+    too_long = post(studio, "a" * 300_001)
+    assert too_long.status_code == 422 and too_long.json()["detail"] == {
+        "code": "too_long", "message": "текст длиннее 300 000 знаков — разделите его"}
+    hold_chat(studio)                                                   # длинный текст — не переводить на деле
+    assert post(studio, "a\r\n" * 150_000).status_code == 202          # переносы Windows не считаются дважды
 
 
 def test_foreign_translation_is_gone(studio):

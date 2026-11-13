@@ -93,6 +93,7 @@ def test_powershell_parses_script_and_defaults_match_contract():
     assert d["VaultPath"] == r"C:\work\projects\local-config\secrets\vault.env"
 
 
+@pytest.mark.integration  # настоящий Python и кодировка трубы: > 1 с под нагрузкой Windows
 def test_python_help_survives_a_pipe_in_a_non_utf8_encoding():
     """В трубу и файл Python пишет кодировкой локали (Windows — cp1251): «→» справки ронял скрипт."""
     r = subprocess.run([sys.executable, str(SCRIPT.with_suffix(".py")), "--help"], capture_output=True,

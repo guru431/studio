@@ -7,6 +7,7 @@ from test_deploy import _bash
 import pytest
 
 
+@pytest.mark.integration  # три запуска Bash под нагрузкой набора: > 1 с на Windows
 def test_container_entrypoint_checks_storage_before_executing_the_application():
     bash = _bash()
     if not bash:

@@ -14,12 +14,13 @@ import conftest
 def test_agent_tmp_root_preserves_explicit_selection(tmp_path, monkeypatch, override):
     monkeypatch.delenv("PYTEST_DEBUG_TEMPROOT", raising=False)
     selected = str(tmp_path / "selected")
+    project = tmp_path / "project"
+    monkeypatch.setattr(conftest, "ROOT", project)
     config = SimpleNamespace(option=SimpleNamespace(basetemp=selected if override == "basetemp" else None))
     if override == "environment":
         monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", selected)
-    monkeypatch.setattr(conftest.tempfile, "gettempdir", lambda: str(tmp_path))
     conftest.pytest_configure(config)
-    root = tmp_path / "studio-agent-pytest"
+    root = project / ".tmp" / ".pytest_cache" / "agent"
     assert root.exists() == (override is None)
     assert os.environ.get("PYTEST_DEBUG_TEMPROOT") == (
         selected if override == "environment" else str(root) if override is None else None)
@@ -65,4 +66,4 @@ def test_concurrent(tmp_path, tmp_path_factory):
                 process.communicate(timeout=5)
     bases = [Path(path.read_text(encoding="utf-8")) for path in tmp_path.glob("*.base")]
     assert len(bases) == 2 and bases[0] != bases[1]
-    assert all(base.is_relative_to(system_temp / "studio-agent-pytest") for base in bases)
+    assert all(base.is_relative_to(conftest.ROOT / ".tmp" / ".pytest_cache" / "agent") for base in bases)

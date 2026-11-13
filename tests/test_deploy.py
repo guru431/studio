@@ -566,6 +566,7 @@ def _install_environment(tmp_path, contents, replacement=None):
     return result, path
 
 
+@pytest.mark.integration  # Bash с файловыми процессами под xdist: > 1 с на Windows
 @pytest.mark.parametrize("extra,valid", [
     ("", True), ("STUDIO_CLEANER_CA=/usr/local/share/studio/cleaner-cert.pem\n", True),
     ("STUDIO_CLEANER_CA=/one.pem\nSTUDIO_CLEANER_CA=/two.pem\n", False),
@@ -590,6 +591,7 @@ def test_data_key_rotation_preserves_the_public_cleaner_ca(tmp_path):
     assert old not in result.stdout + result.stderr and new not in result.stdout + result.stderr
 
 
+@pytest.mark.integration  # настоящий Bash: > 1 с на Windows под нагрузкой набора
 def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():
     """B2-M1: `systemctl status` упавшей службы отвечает 3 — под pipefail скрипт умирал на нём, и
     журнал (traceback) с подсказкой отката не печатались; подсказка забывала прежний юнит."""
@@ -611,6 +613,7 @@ def test_install_failure_branch_prints_the_journal_and_the_rollback_hint():
     assert "systemctl daemon-reload" in r.stderr and "чинить вперёд" not in r.stderr
 
 
+@pytest.mark.integration  # запуск Bash под нагрузкой набора: > 1 с на Windows
 def test_install_restart_refusal_takes_the_failure_branch():
     """Отказ `systemctl restart` (сломанный юнит) под set -e обрывал скрипт без журнала и подсказки
     отката, хотя прежняя служба уже остановлена, а новый код на месте. Теперь — путь отказа /health,
@@ -642,6 +645,7 @@ def test_install_systemctl_enable_does_not_hide_errors():
     assert not any("2>" in s or "/dev/null" in s for s in lines), lines
 
 
+@pytest.mark.integration  # поведенческий сценарий настоящего Bash, как остальные ветки отказа
 def test_install_timer_refusal_is_a_loud_failure():
     """Таймер копии базы не включился: служба уже обновлена и отвечает, но это ошибка с кодом не 0."""
     bash = _bash()
@@ -657,6 +661,7 @@ def test_install_timer_refusal_is_a_loud_failure():
     assert "Failed to enable unit" in r.stderr and "studio-backup.timer не включён" in r.stderr
 
 
+@pytest.mark.integration  # настоящий Bash, rm и mv под нагрузкой набора: > 1 с на Windows
 def test_install_restore_puts_the_previous_tree_back(tmp_path):
     """Откат после отказа configtest: новое дерево уходит, прежнее — на место; без прежнего (первая
     установка) — просто нет нового."""
@@ -696,6 +701,7 @@ def test_install_checks_apache_before_the_restart_and_always_reloads_after_healt
     assert line == "systemctl reload apache2"           # без условия вокруг
 
 
+@pytest.mark.integration  # настоящий Bash: > 1 с на Windows под нагрузкой набора
 def test_install_configtest_refusal_shows_the_output_and_blames_no_file():
     """N3: configtest падает и из-за чужого vhost хоста — сообщение не называет файл студии,
     а вывод apache2ctl показан целиком."""

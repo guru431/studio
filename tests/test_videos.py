@@ -145,12 +145,13 @@ def test_video_needs_a_readable_image(studio):
     assert studio.gw.video_calls == [] and media_rows() == 0
 
 
+@pytest.mark.integration  # настоящий multipart ~20 МиБ: под нагрузкой набора > 1 с
 def test_video_upload_limit_is_twenty_megabytes_and_json_jobs_keep_theirs(studio):
     from image_upload import MAX_BODY, MAX_UPLOAD, VIDEO_UPLOAD
     add_gateway(studio)
     padded = photo()["image"][1]
     # PNG с хвостом: ~20 МБ, декодируется быстро; хвост — строками по 1 КиБ: разбор multipart вдвое быстрее
-    # одной сплошной строки (тест укладывается в 1 с)
+    # одной сплошной строки.
     line = b"\0" * 1023 + b"\n"
     padded += line * ((VIDEO_UPLOAD - 1024 - len(padded)) // len(line))
     assert len(padded) > VIDEO_UPLOAD - 2048
