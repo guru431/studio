@@ -5,7 +5,24 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 39
+VERSION = 40
+
+# NULL — только у прежних учёток до обязательного подтверждения почты.
+EMAIL_40 = """ALTER TABLE users ADD COLUMN email TEXT COLLATE NOCASE;
+ALTER TABLE users ADD COLUMN email_codes INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX users_email ON users(email) WHERE email IS NOT NULL;
+CREATE TABLE invitations(id TEXT PRIMARY KEY, email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+       comment TEXT NOT NULL DEFAULT '', is_admin INTEGER NOT NULL DEFAULT 0,
+       invited_by INTEGER REFERENCES users ON DELETE SET NULL, created REAL NOT NULL,
+       expires REAL NOT NULL, token_hash TEXT UNIQUE, accepted REAL, revoked REAL,
+       user_id INTEGER REFERENCES users ON DELETE SET NULL, sent INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE email_tokens(digest TEXT PRIMARY KEY, kind TEXT NOT NULL,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, email TEXT NOT NULL,
+       password_stamp TEXT NOT NULL, secret_hash TEXT, next TEXT NOT NULL DEFAULT '',
+       created REAL NOT NULL, expires REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX email_tokens_user ON email_tokens(user_id, kind);
+CREATE TABLE email_limits(key TEXT PRIMARY KEY, started REAL NOT NULL, count INTEGER NOT NULL);
+"""
 
 #: выдача и отзыв доступа к проекту — в истории подключений компьютера (project_access): CHECK видов шире, как
 #: CODE_23 у code_chats. Входящих FK у agent_events нет; id, строки и индекс сохраняются. Прежний код пишет свои
@@ -522,7 +539,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37 + PROJECTS_38 + AGENT_EVENTS_39
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37 + PROJECTS_38 + AGENT_EVENTS_39 + EMAIL_40
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -616,6 +633,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     38: PROJECTS_38,
     # история подключений: выдача и отзыв доступа к проекту
     39: AGENT_EVENTS_39,
+    40: EMAIL_40,
 }
 
 

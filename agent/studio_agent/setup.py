@@ -74,7 +74,8 @@ def apply(h: Path, form: dict, *, enroll_fn=enroll.enroll) -> store.Config:
     login = _text(form, "login").strip()
     if login:
         name = _text(form, "name").strip()
-        agent_id, key, cfg.login = enroll_fn(url, login, _text(form, "password"), name)
+        options = {"code": _text(form, "email_code")} if _text(form, "email_code") else {}
+        agent_id, key, cfg.login = enroll_fn(url, login, _text(form, "password"), name, **options)
         store.save_key(h, key)
         cfg.agent_id, cfg.name = agent_id, name
     cfg.url = url

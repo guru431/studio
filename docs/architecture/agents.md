@@ -5,6 +5,8 @@
 Раздел называется «Агенты» (адреса `#/code` и `/api/code/*` — прежние, модуль — `claude_code.py`). Канал — протокол
 [2026-10-28-studio-code-bridge-protocol](../superpowers/specs/2026-10-28-studio-code-bridge-protocol.md); мост —
 [agent-bridge.md](agent-bridge.md); страница — [agents-workspace.md](agents-workspace.md).
+Привязка принимает логин или email; при включённых почтовых кодах требуется одноразовый код из письма
+([почта учётной записи](email-accounts.md)). Действующие ключи компьютеров от этой опции не меняются.
 
 ## Каналы, отказы, фоновые просьбы
 

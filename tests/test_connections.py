@@ -600,7 +600,7 @@ def test_create_admin_sets_up_the_owner_gateway(env, monkeypatch, capsys):
     monkeypatch.setattr(state, "CFG", None)                     # manage ставит CFG — тест вернёт прежний
     fernet = Fernet(os.environ["STUDIO_DATA_KEY"])
     for key in ["gateway-key-one", "gateway-key-two"]:
-        stdin = f"STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nGATEWAY_KEY_OWNER_IMAGES={key}\n"
+        stdin = f"STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\nGATEWAY_KEY_OWNER_IMAGES={key}\n"
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
         assert manage.main(["create-admin"]) == 0
         conn = db.connect(env.db_path)
@@ -619,7 +619,7 @@ def test_create_admin_sets_up_the_owner_gateway(env, monkeypatch, capsys):
 
 def test_create_admin_without_gateway_key_adds_no_connection(env, monkeypatch):
     monkeypatch.setattr(state, "CFG", None)
-    monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\n"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"))
     assert manage.main(["create-admin"]) == 0
     conn = db.connect(env.db_path)
     assert conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0] == 0

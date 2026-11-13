@@ -45,7 +45,7 @@ import security
 import state
 
 USAGE = ("использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
-         " | manage.py verify-backup [ПУТЬ]")
+         " | manage.py verify-backup [ПУТЬ] | manage.py set-email < KEY=VALUE")
 GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
@@ -68,6 +68,14 @@ def read_pairs(text: str) -> dict[str, str]:
 
 
 def create_admin(values: dict[str, str]) -> int:
+    import email_accounts
+    email = None
+    if values.get("STUDIO_ADMIN_EMAIL"):
+        try:
+            email = email_accounts.email_address(values["STUDIO_ADMIN_EMAIL"])
+        except ValueError:
+            print("нужен корректный STUDIO_ADMIN_EMAIL", file=sys.stderr)
+            return 2
     login = values.get("STUDIO_ADMIN_LOGIN", "").strip().lower()
     password = values.get("STUDIO_ADMIN_PASSWORD", "")
     if not login or not password:
@@ -92,10 +100,47 @@ def create_admin(values: dict[str, str]) -> int:
     conn = db.connect(cfg.db_path)
     try:
         db.migrate(conn)
-        code = _ensure_admin(conn, login, password)
+        code = _ensure_admin(conn, login, password, email)
+        if code:
+            return code
         if gateway_key:
             _ensure_gateway(conn, login, gateway_key)
         return code
+    finally:
+        conn.close()
+
+
+def set_email(values: dict[str, str]) -> int:
+    """Оператор привязывает недостающую почту без смены пароля и отключения устройств."""
+    import email_accounts
+    login = values.get("STUDIO_ACCOUNT_LOGIN", "").strip().lower()
+    try:
+        email = email_accounts.email_address(values.get("STUDIO_ACCOUNT_EMAIL", ""))
+        cfg = config.load()
+    except (ValueError, RuntimeError):
+        print("нужны корректные STUDIO_ACCOUNT_LOGIN, STUDIO_ACCOUNT_EMAIL и конфигурация", file=sys.stderr)
+        return 2
+    if not re.fullmatch(auth.LOGIN_RE, login) or not cfg.db_path.is_file():
+        print("учётка или база не найдена", file=sys.stderr)
+        return 2
+    conn = db.connect(cfg.db_path)
+    try:
+        db.migrate(conn)
+        row = conn.execute("SELECT id,email FROM users WHERE login=?", (login,)).fetchone()
+        if row is None or (row["email"] is not None and row["email"] != email):
+            print("учётка не найдена или почта уже задана; используйте настройки", file=sys.stderr)
+            return 2
+        try:
+            changed = conn.execute("UPDATE users SET email=? WHERE id=? AND (email IS NULL OR email=?)",
+                                    (email, row["id"], email)).rowcount
+            if not changed:
+                print("почта уже изменена; используйте настройки", file=sys.stderr)
+                return 2
+        except sqlite3.IntegrityError:
+            print("почта уже используется", file=sys.stderr)
+            return 2
+        print(f"пользователь {row['id']}: почта сохранена")
+        return 0
     finally:
         conn.close()
 
@@ -123,11 +168,18 @@ def _ensure_gateway(conn, login: str, key: str) -> None:
     print(f"подключение {GATEWAY_NAME}: " + ("создано" if row is None else "ключ обновлён"))
 
 
-def _ensure_admin(conn, login: str, password: str) -> int:
+def _ensure_admin(conn, login: str, password: str, email: str | None = None) -> int:
     row = conn.execute("SELECT id, pw_hash FROM users WHERE login = ?", (login,)).fetchone()
     if row is None:
-        conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, created) VALUES (?, ?, ?, 1, ?)",
-                     (login, login, security.hash_password(password), clock.NOW()))
+        if not email:
+            print("для первого администратора нужен STUDIO_ADMIN_EMAIL", file=sys.stderr)
+            return 2
+        try:
+            conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, created, email) VALUES (?, ?, ?, 1, ?, ?)",
+                         (login, login, security.hash_password(password), clock.NOW(), email))
+        except sqlite3.IntegrityError:
+            print("логин или почта уже используются", file=sys.stderr)
+            return 2
         print(f"администратор {login}: создан")
         return 0
     changed = not security.verify_password(password, row["pw_hash"])
@@ -358,6 +410,8 @@ def verify_command(argv: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
+    if argv == ["set-email"]:
+        return set_email(read_pairs(sys.stdin.read()))
     if argv == ["create-admin"]:
         return create_admin(read_pairs(sys.stdin.read()))
     if argv == ["backup"]:

@@ -12,7 +12,8 @@ import { dateTime } from './time.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const DEVICES = { phone: 'Телефон', computer: 'Компьютер' };
-const EVENTS = { login: 'вход', login_fail: 'неверный пароль', logout: 'выход', unlock: 'открыто',
+const EVENTS = { email_change: 'почта изменена', email_codes_on: 'коды входа включены', email_codes_off: 'коды входа выключены',
+  password_recovery: 'пароль восстановлен через почту', login: 'вход', login_fail: 'неверный пароль', logout: 'выход', unlock: 'открыто',
   unlock_fail: 'не открыто', pin_exhausted: 'PIN исчерпан', password: 'пароль сменён', session_end: 'сессия завершена',
   emergency: 'аварийный выход', share_create: 'ссылка создана', share_revoke: 'ссылка отозвана',
   share_pin_fail: 'неверный PIN ссылки', share_locked: 'ссылка остановлена', pin_set: 'PIN задан',

@@ -41,10 +41,10 @@ class LiveApp:
         import security
         conn = db.connect(self.db_path)
         try:
-            return conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, theme, created)"
-                                " VALUES (?, ?, ?, ?, ?, ?)",
+            return conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, theme, created, email)"
+                                " VALUES (?, ?, ?, ?, ?, ?, ?)",
                                 (login, login, security.hash_password(password), int(is_admin), theme,
-                                 time.time())).lastrowid
+                                 time.time(), login + '@example.com')).lastrowid
         finally:
             conn.close()
 
@@ -67,7 +67,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def start_live_app(tmp_path: Path) -> LiveApp:
+def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> LiveApp:
     from cryptography.fernet import Fernet
 
     import auth
@@ -77,7 +77,7 @@ def start_live_app(tmp_path: Path) -> LiveApp:
     import videos
 
     port = _free_port()
-    url = f"http://localhost:{port}"
+    url = f"{'https' if tls else 'http'}://localhost:{port}"
     db_path, media_dir = tmp_path / "studio.db", tmp_path / "media"
     media_dir.mkdir(exist_ok=True)
     env = {"STUDIO_DATA_KEY": Fernet.generate_key().decode(), "STUDIO_DB": str(db_path),
@@ -104,10 +104,12 @@ def start_live_app(tmp_path: Path) -> LiveApp:
     videos.POLL_SEC = POLL_SEC
     auth.FAILS.clear()
     assert manage.create_admin({"STUDIO_ADMIN_LOGIN": "owner", "STUDIO_ADMIN_PASSWORD": PASSWORD,
+                                "STUDIO_ADMIN_EMAIL": "owner@example.com",
                                 "GATEWAY_KEY_OWNER_IMAGES": FakeGateway.TOKEN}) == 0
 
+    ssl_options = {"ssl_certfile": str(tls[0]), "ssl_keyfile": str(tls[1])} if tls else {}
     server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning",
-                                           access_log=False, lifespan="on"))
+                                           access_log=False, lifespan="on", **ssl_options))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 

@@ -254,8 +254,8 @@ def make_user(s, login, password="password-123", is_admin=False) -> int:
     import clock
     import security
     import state
-    cur = state.DB.execute("INSERT INTO users(login, name, pw_hash, is_admin, created) VALUES (?, ?, ?, ?, ?)",
-                           (login, login, security.hash_password(password), int(is_admin), clock.NOW()))
+    cur = state.DB.execute("INSERT INTO users(login, name, pw_hash, is_admin, created, email) VALUES (?, ?, ?, ?, ?, ?)",
+                           (login, login, security.hash_password(password), int(is_admin), clock.NOW(), login + '@example.com'))
     return cur.lastrowid
 
 

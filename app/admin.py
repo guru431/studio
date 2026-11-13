@@ -46,13 +46,6 @@ log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
 
 
-class UserCreate(BaseModel):
-    login: str = Field(max_length=64)
-    name: str = Field(max_length=NAME_MAX)
-    password: str = Field(max_length=profile.PASSWORD_MAX)
-    is_admin: bool = False
-
-
 class UserPatch(BaseModel):
     login: str | None = Field(None, max_length=64)
     name: str | None = Field(None, max_length=NAME_MAX)
@@ -67,12 +60,13 @@ class Allowlist(BaseModel):
 
 def _user_out(uid: int) -> dict:
     row = state.DB.execute(
-        "SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created,"
+        "SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
         " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections"
         " FROM users u WHERE u.id = ?", (uid,)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого пользователя нет"})
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
+            "email": row["email"],
             "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"]}
 
 
@@ -106,18 +100,8 @@ async def list_users():
 
 
 @router.post("/users", status_code=201)
-async def create_user(body: UserCreate, admin: auth.User = Depends(auth.require_admin)):
-    login = _login(body.login)
-    name = _name(body.name)
-    profile.check_password(body.password)
-    pw_hash = await asyncio.to_thread(security.hash_password, body.password)
-    try:
-        uid = state.DB.execute("INSERT INTO users(login, name, pw_hash, is_admin, created) VALUES (?, ?, ?, ?, ?)",
-                               (login, name, pw_hash, int(body.is_admin), clock.NOW())).lastrowid
-    except sqlite3.IntegrityError:
-        raise _taken() from None
-    log.info("администратор %d: создан пользователь %d", admin.id, uid)
-    return _user_out(uid)
+async def create_user():
+    raise HTTPException(410, {"code": "invite", "message": "Создавайте пользователей приглашением на email"})
 
 
 @router.patch("/users/{uid}")

@@ -99,7 +99,7 @@ MODULE_IMPORTS = json.dumps({"imports": {"/static/js/": f"/static/v/{STATIC_VERS
 MODULE_IMPORTS_HASH = base64.b64encode(hashlib.sha256(MODULE_IMPORTS.encode()).digest()).decode("ascii")
 MODULE_PRELOADS = html.escape(json.dumps(static_assets.module_preloads(STATIC), separators=(",", ":")))
 _PAGES = {name: (STATIC / name).read_text(encoding='utf-8')
-          for name in ('index.html', 'login.html', 'offline.html', 'share.html')}
+          for name in ('index.html', 'login.html', 'offline.html', 'share.html', 'account.html')}
 
 #: ("pair", логин, адрес) и ("ip", адрес) → моменты неудач за последние LOCK_SEC.
 FAILS: dict[tuple, list[float]] = {}
@@ -223,6 +223,10 @@ async def guard(request: Request, call_next):
         if not hmac.compare_digest(sent.encode("utf-8"), csrf.encode("utf-8")):
             return JSONResponse({"detail": {"code": "csrf", "message": "обновите страницу"}}, status_code=403)
     digest = security.digest(request.cookies[COOKIE])
+    import email_accounts
+    if not email_accounts.has_email(user.id) and path not in email_accounts.EMAIL_PATHS and path not in SCREEN_LOCK_PATHS:
+        return JSONResponse({"detail": {"code": "email_required", "message": "Подтвердите почту учётной записи"}},
+                            status_code=428, headers={"Cache-Control": "no-store"})
     if screen and path not in SCREEN_LOCK_PATHS and lock_policy.blocks(request, user.id, digest):
         response = JSONResponse({"detail": {"code": "screen_locked", "message": "студия заперта"}}, status_code=423,
                                 headers={"Cache-Control": "no-store"})
@@ -366,25 +370,51 @@ async def login(request: Request):
         log.warning("вход с %s: тело длиннее %d байт", ip, LOGIN_BODY_MAX)
         return _login_page("Слишком длинный запрос", 413)
     form = parse_qs(body.decode("utf-8", "replace"))
-    name = (form.get("login") or [""])[0].strip().lower()
+    name = identity_name((form.get("login") or [""])[0].strip().lower())
     password = (form.get("password") or [""])[0]
     if locked(name, ip):
         log.warning("вход с %s: пауза", ip)
         return _login_page("Слишком много попыток — подождите 15 минут", 429)
     uid = await check_password(name, password, ip)
     if uid is not None:               # сессия — без await после сверки
-        replaced = request.cookies.get(COOKIE)
-        if replaced:                  # прежняя сессия этого браузера иначе лежала бы до срока
-            state.DB.execute("DELETE FROM sessions WHERE digest = ?", (security.digest(replaced),))
-        value, _ = create_session(uid, device_class(request.headers.get("user-agent")))
-        session_devices.remember(security.digest(value), request.headers.get("user-agent"), ip)
-        security_log.record(uid, "login", digest=security.digest(value), ip=ip)
-        log.info("вход с %s: успешно", ip)
-        response = RedirectResponse(login_target((form.get("next") or [""])[0]), status_code=303)
-        _set_cookie(response, value)
-        return response
+        import email_accounts
+        row = state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()
+        next_ = (form.get("next") or [""])[0]
+        if row["email_codes"]:
+            try:
+                token = await email_accounts.login_code(uid, request, next_)
+            except HTTPException as err:
+                return _login_page(err.detail["message"], err.status_code)
+            response = RedirectResponse("/account/code", status_code=303)
+            response.set_cookie(email_accounts.CHALLENGE_COOKIE, token, max_age=email_accounts.CODE_SEC,
+                                path="/", secure=True, httponly=True, samesite="lax")
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return finish_login(uid, request, next_)
     log.warning("вход с %s: неверно", ip)
     return _login_page("Неверный логин или пароль", 401)
+
+
+def identity_name(value: str) -> str:
+    """Логин и почта делят один счёт неверных паролей."""
+    row = state.DB.execute("SELECT login FROM users WHERE login=? OR email=?", (value, value)).fetchone()
+    return row[0] if row else value
+
+
+def finish_login(uid: int, request: Request, next_: str = "") -> Response:
+    import email_accounts
+    ip = client_ip(request)
+    replaced = request.cookies.get(COOKIE)
+    if replaced:
+        state.DB.execute("DELETE FROM sessions WHERE digest=?", (security.digest(replaced),))
+    value, _ = create_session(uid, device_class(request.headers.get("user-agent")))
+    session_devices.remember(security.digest(value), request.headers.get("user-agent"), ip)
+    security_log.record(uid, "login", digest=security.digest(value), ip=ip)
+    log.info("вход с %s: успешно", ip)
+    target = login_target(next_) if email_accounts.has_email(uid) else "/account/email"
+    response = RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"})
+    _set_cookie(response, value)
+    return response
 
 
 async def check_password(name: str, password: str, ip: str, source: str = "login") -> int | None:

@@ -11,7 +11,7 @@ import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
-const COLUMNS = [['login', 'Логин'], ['name', 'Имя'], ['admin', 'Админ'], ['disabled', 'Отключён'],
+const COLUMNS = [['login', 'Логин'], ['email', 'Email'], ['name', 'Имя'], ['admin', 'Админ'], ['disabled', 'Отключён'],
   ['connections', 'Подключений']];
 const USER_ERRORS = { login: 'login', taken: 'login', name: 'name', short: 'password' };
 
@@ -43,34 +43,6 @@ function usersBlock(host) {
       note.textContent = words(err);
     }
     await reload();
-  }
-
-  function create() {
-    const login = el('input', { class: 'input', name: 'login', maxlength: '32', autocomplete: 'off',
-      autocapitalize: 'none', spellcheck: 'false', placeholder: 'латиница, цифры, . _ -' });
-    const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off' });
-    const password = el('input', { class: 'input', name: 'password', type: 'password', maxlength: '1024',
-      autocomplete: 'new-password', placeholder: 'не короче 10 знаков' });
-    const admin = el('input', { type: 'checkbox', name: 'is_admin' });
-    const save = button('Создать', { class: 'btn btn-accent', id: 'user-save' });
-    const form = el('div', {}, field('Логин', login, 'login'), field('Имя', name, 'name'),
-      field('Пароль', password, 'password'), el('label', { class: 'check' }, admin, 'Администратор'),
-      el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' }));
-    const dialog = openDialog(host, { id: 'user-dialog', title: 'Новый пользователь', body: [form], actions: [save] });
-    login.focus();
-    save.addEventListener('click', async () => {
-      save.disabled = true;
-      try {
-        await api('POST', '/api/admin/users', { login: login.value.trim(), name: name.value.trim() || login.value.trim(),
-          password: password.value, is_admin: admin.checked });
-        dialog.close();
-        await reload();
-      } catch (err) {
-        showError(form, err, USER_ERRORS, 'form');
-      } finally {
-        save.disabled = false;
-      }
-    });
   }
 
   function edit(user) {
@@ -156,7 +128,7 @@ function usersBlock(host) {
 
   function row(user) {
     const self = user.id === me.id;
-    const values = { login: user.login, name: user.name, admin: yesNo(user.is_admin), disabled: yesNo(user.disabled),
+    const values = { login: user.login, email: user.email || 'Требует подтверждения', name: user.name, admin: yesNo(user.is_admin), disabled: yesNo(user.disabled),
       connections: String(user.connections) };
     return el('tr', { 'data-login': user.login, class: user.disabled ? 'off' : null },
       ...COLUMNS.map(([key, title]) => el('td', { 'data-col': key, 'data-label': title }, values[key])),
@@ -172,12 +144,75 @@ function usersBlock(host) {
           title: self ? 'себя удалить нельзя' : null }, () => remove(user)))));
   }
 
-  const add = button('Создать пользователя', { class: 'btn btn-accent', id: 'user-add' }, create);
   return {
-    el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Пользователи'), add),
+    el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Пользователи')),
       el('div', { class: 'table-wrap' }, table), note),
     reload,
   };
+}
+
+function invitationsBlock(host) {
+  const list = el('tbody', { id: 'invitations' });
+  const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
+  const statuses = { pending: 'Ожидает регистрации', accepted: 'Зарегистрирован', expired: 'Срок истёк',
+    revoked: 'Отозвано', failed: 'Письмо не отправлено' };
+  async function act(action) {
+    note.textContent = '';
+    try { await action(); }
+    catch (err) { note.textContent = words(err); }
+    await reload();
+  }
+  function edit(invite = null) {
+    const email = el('input', { class: 'input', id: 'invite-email', name: 'email', type: 'email',
+      autocomplete: 'email', maxlength: '254', required: true, value: invite?.email || '', readonly: !!invite });
+    const comment = el('textarea', { class: 'input', id: 'invite-comment', name: 'comment', maxlength: '1000' }, invite?.comment || '');
+    const admin = el('input', { type: 'checkbox', id: 'invite-admin' });
+    const fail = el('p', { class: 'error', role: 'alert' });
+    const save = button(invite ? 'Сохранить' : 'Отправить приглашение', { class: 'btn btn-accent', id: 'invite-save',
+      type: 'submit', form: 'invite-form' });
+    const form = el('form', { id: 'invite-form' }, field('Email', email, email.id),
+      field('Комментарий (виден только администраторам)', comment, comment.id),
+      ...(!invite ? [el('label', { class: 'check' }, admin, 'Администратор')] : []), fail);
+    const dialog = openDialog(host, { id: 'invite-dialog', title: invite ? 'Комментарий к приглашению' : 'Пригласить пользователя',
+      body: [form], actions: [save] });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true;
+      try {
+        if (invite) await api('PATCH', `/api/admin/invitations/${invite.id}`, { comment: comment.value });
+        else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
+        dialog.close();
+        await reload();
+      } catch (err) { fail.textContent = words(err); await reload(); }
+      finally { save.disabled = false; }
+    });
+  }
+  async function reload() {
+    try {
+      const { items } = await api('GET', '/api/admin/invitations');
+      list.replaceChildren(...items.map(invite => el('tr', { 'data-email': invite.email },
+        el('td', { 'data-label': 'Email' }, invite.email), el('td', { 'data-label': 'Комментарий' }, invite.comment),
+        el('td', { 'data-label': 'Статус' }, statuses[invite.status]),
+        el('td', { class: 'actions' }, el('div', { class: 'acts' },
+          button('Комментарий', { class: 'btn btn-sm invite-edit' }, () => edit(invite)),
+          ...(invite.status !== 'accepted' ? [
+            button('Отправить снова', { class: 'btn btn-sm invite-resend' }, event => {
+              const button = event.currentTarget;
+              button.disabled = true;
+              act(() => api('POST', '/api/admin/invitations', {
+                email: invite.email, comment: invite.comment, is_admin: invite.is_admin }));
+            }),
+            button('Отозвать', { class: 'btn btn-sm invite-revoke' }, () =>
+              act(() => api('DELETE', `/api/admin/invitations/${invite.id}`))),
+          ] : []))))));
+    } catch (err) { note.textContent = words(err); }
+  }
+  return { reload, el: el('section', { class: 'block' }, el('div', { class: 'block-head' },
+    el('h2', {}, 'Приглашения'), button('Пригласить пользователя', { class: 'btn btn-accent', id: 'user-add' }, () => edit())),
+    el('p', { class: 'muted small' }, 'Ссылка одноразовая, действует 48 часов. Получатель сам выбирает логин и пароль.'),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'users' }, el('thead', {}, el('tr', {},
+      ...['Email', 'Комментарий', 'Статус', 'Действия'].map(text => el('th', { scope: 'col' }, text)))), list)), note) };
 }
 
 function allowlistBlock() {
@@ -383,11 +418,13 @@ export function mount(view, ctx) {
   }
   const root = el('div', { class: 'page wide' });
   const users = usersBlock(root);
+  const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const storage = storageBlock();
-  root.append(users.el, allow.el, storage.el);
+  root.append(invitations.el, users.el, allow.el, storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
+  invitations.reload();
   allow.load();
   storage.load();
 }

@@ -4,6 +4,7 @@
 `/logout`, `/robots.txt` (роботам — ничего), PIN-вход `/share` и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
 `/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
 `/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
+Почтовые `/account/*` имеют собственные проверки Origin, тела, токенов и пауз (`email_accounts`).
 Публичные `/share/unlock`, `/share/check`, `/share/file` проверяют отдельные PIN/read-токены;
 доступа к API учётки они не дают, секреты несут только телом запроса, ответы не кэшируются.
 Страницы отвечают и на HEAD: им проверяют адрес и строят превью ссылок.
@@ -44,6 +45,7 @@ import connections
 import db
 import desktop
 import dictation
+import email_accounts
 import images
 import jobs
 import media
@@ -142,6 +144,8 @@ async def headers(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "same-origin")
     if request.url.path == "/share" or request.url.path.startswith("/share/"):
         response.headers.update(chat_shares.PUBLIC_HEADERS)
+    if request.url.path.startswith("/account/"):
+        response.headers.update(email_accounts.PUBLIC_HEADERS)
     if response.headers.get("content-type", "").startswith("text/html"):
         response.headers.setdefault("Content-Security-Policy", CSP)
     if request.url.path.startswith("/static/"):
@@ -156,6 +160,7 @@ app.middleware("http")(headers)
 app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), name="static-versioned")
 app.mount("/static", StaticFiles(directory=auth.STATIC), name="static")
 app.include_router(auth.router)
+app.include_router(email_accounts.router)
 app.include_router(profile.router)
 app.include_router(account.router)
 app.include_router(screenlock.router)
@@ -215,6 +220,8 @@ async def index(request: Request):
     if session is None:
         return RedirectResponse("/login", status_code=303)
     user, csrf = session
+    if not email_accounts.has_email(user.id):
+        return RedirectResponse("/account/email", status_code=303)
     # Hash-маршрут виден только браузеру: security даёт истечение общей сессии,
     # а lock.js применяет область защиты к открытому разделу до показа панели.
     lock = screenlock.snapshot(user.id, security.digest(request.cookies[auth.COOKIE]), csrf, "security")
