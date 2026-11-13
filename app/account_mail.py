@@ -1,5 +1,6 @@
 """Почта учётной записи: получатели, письма и тексты SMTP-ошибок в журнал не попадают."""
 import asyncio
+import ipaddress
 import logging
 import os
 import smtplib
@@ -23,6 +24,15 @@ def _send(recipient: str, subject: str, body: str) -> None:
     context = ssl.create_default_context()
     port = int(os.environ.get("STUDIO_SMTP_PORT", "465" if mode == "ssl" else "587"))
     transport = smtplib.SMTP_SSL if mode == "ssl" else smtplib.SMTP
+    connect_ip = os.environ.get("STUDIO_SMTP_CONNECT_IP", "").strip()
+    if connect_ip:
+        connect_ip = str(ipaddress.ip_address(connect_ip))
+        # Меняется только адрес TCP: SMTP._host остаётся исходным именем для проверки TLS и SNI.
+        class RoutedSMTP(transport):
+            def _get_socket(self, host, port, timeout):
+                return super()._get_socket(connect_ip, port, timeout)
+
+        transport = RoutedSMTP
     options = {"context": context} if mode == "ssl" else {}
     with transport(host, port, timeout=10, **options) as smtp:
         if mode == "starttls":
