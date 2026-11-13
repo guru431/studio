@@ -1232,7 +1232,7 @@ async def visualization(aid: int, pid: str, body: VisualizationBody, request: Re
         except UnicodeEncodeError:
             raise _refuse(502, "bridge", ODD) from None
         if size > code_visualizations.MAX_BYTES:
-            raise _refuse(413, "too_large", TOO_LARGE)
+            raise _refuse(413, "too_large", "Визуализация больше 10 МиБ")
     token = code_visualizations.keep(request.state.user.id, bridge.tag(request.state.digest), aid, pid, text)
     return {"token": token}
 

@@ -3,7 +3,7 @@ import pytest
 import _winapi
 import base64
 
-from studio_agent import limits, projects, visualizations
+from studio_agent import files, limits, projects, visualizations
 from studio_agent.errors import Refused
 from test_agent import make, req, SESSION
 
@@ -21,6 +21,23 @@ def test_read_project_and_codex_visualizations(tmp_path, monkeypatch):
     assert visualizations.read(project, str(output))['text'] == '<button>Готово</button>'
     assert visualizations.read(project, 'view.html')['text'] == '<p>Project</p>'
     assert visualizations.read(project, str(local))['text'] == '<p>Project</p>'
+
+
+def test_large_html_preview_has_its_own_byte_limit(tmp_path):
+    path = tmp_path / 'view.html'
+    header = '<button>Схема</button>'.encode('utf-8')
+    raw = header + b' ' * (10 * 1024 * 1024 - len(header))
+    path.write_bytes(raw)
+    with pytest.raises(Refused) as caught:
+        files.read_text(tmp_path, 'view.html')
+    assert caught.value.code == 'too_large'
+    result = visualizations.read(tmp_path, 'view.html')
+    assert result == {'text': raw.decode('utf-8'), 'version': files.version(raw)}
+    path.write_bytes(raw + b'x')
+    with pytest.raises(Refused) as caught:
+        visualizations.read(tmp_path, 'view.html')
+    assert caught.value.code == 'too_large'
+    assert '10 МиБ' in caught.value.message
 
 
 def test_generated_images_are_bounded_and_owner_only(tmp_path, monkeypatch):
@@ -61,7 +78,7 @@ def test_read_is_bounded_and_utf8(tmp_path, monkeypatch):
     with pytest.raises(Refused) as caught:
         visualizations.read(tmp_path, 'view.html')
     assert caught.value.code == 'binary'
-    monkeypatch.setattr(limits, 'TEXT_MAX', 4)
+    monkeypatch.setattr(limits, 'VISUALIZATION_MAX', 4)
     path.write_bytes(b'12345')
     with pytest.raises(Refused) as caught:
         visualizations.read(tmp_path, str(path))

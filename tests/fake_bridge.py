@@ -587,9 +587,9 @@ class FakeMachine:
         return data
 
     @staticmethod
-    def _text(data: bytes) -> str:
-        if len(data) > OPEN_MAX:
-            raise Refused("too_large", "файл больше 2 МиБ")
+    def _text(data: bytes, limit=OPEN_MAX) -> str:
+        if len(data) > limit:
+            raise Refused("too_large", f"файл больше {limit // (1024 * 1024)} МиБ")
         try:
             if b"\0" in data:
                 raise UnicodeDecodeError("utf-8", data, 0, 1, "NUL")
@@ -604,7 +604,8 @@ class FakeMachine:
     def _op_visualization(self, req, events):
         if req['source'].lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
             return {'image': self._op_raw({**req, 'path': req['source']}, events)}
-        return self._op_read({**req, 'path': req['source']}, events)
+        data = self._file({**req, 'path': req['source']})
+        return {'text': self._text(data, 10 * 1024 * 1024), 'version': _version(data)}
 
     def _op_raw(self, req, events):
         data = self._file(req)

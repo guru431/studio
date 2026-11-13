@@ -33,6 +33,22 @@ def test_html_preview_is_private_bounded_and_sandboxed(studio, caplog):
     assert '<script src=' not in frame.text and 'unpkg' not in frame.text
 
 
+def test_large_html_preview_and_server_byte_limit(studio, monkeypatch):
+    aid, machine, endpoint = ready(studio)
+    header = '<button>Схема</button>'.encode('utf-8')
+    raw = header + b' ' * (10 * 1024 * 1024 - len(header))
+    machine.projects['alpha']['files']['view.html'] = raw
+    response = studio.c.post(endpoint, json={'source': 'view.html'})
+    assert response.status_code == 200
+    frame = studio.c.get(endpoint + '/' + response.json()['token'])
+    assert frame.status_code == 200 and raw in frame.content
+    # Сервер проверяет размер в байтах даже при неверном ответе моста.
+    monkeypatch.setattr(machine, '_op_visualization', lambda req, events: {'text': raw.decode('utf-8') + 'я'})
+    response = studio.c.post(endpoint, json={'source': 'view.html'})
+    assert response.status_code == 413 and detail(response)['code'] == 'too_large'
+    assert '10 МиБ' in detail(response)['message']
+
+
 def test_lucide_comes_from_the_studio_and_only_when_the_fragment_uses_it(studio):
     aid, machine, endpoint = ready(studio)
     machine.projects['alpha']['files']['icons.html'] = b'<i data-lucide="check"></i>'
@@ -70,9 +86,9 @@ def test_old_bridge_and_oversized_or_revoked_results_are_rejected(studio, monkey
     bridge.LINKS[aid].hello['visualizations'] = False
     assert detail(studio.c.post(endpoint, json={'source': 'view.html'}))['code'] == 'unsupported'
     bridge.LINKS[aid].hello['visualizations'] = True
-    monkeypatch.setattr(code_visualizations, 'MAX_BYTES', 2)
-    assert studio.c.post(endpoint, json={'source': 'view.html'}).status_code == 413
-    monkeypatch.setattr(code_visualizations, 'MAX_BYTES', 2 * 1024 * 1024)
+    with monkeypatch.context() as bounds:
+        bounds.setattr(code_visualizations, 'MAX_BYTES', 2)
+        assert studio.c.post(endpoint, json={'source': 'view.html'}).status_code == 413
     original = machine._op_visualization
 
     def revoke(req, events):
@@ -87,7 +103,7 @@ def test_old_bridge_and_oversized_or_revoked_results_are_rejected(studio, monkey
 def test_generated_raster_preview_uses_image_limits_and_validates_bytes(studio):
     aid, machine, endpoint = ready(studio)
     source = 'C:/Users/owner/.codex/generated_images/thread/view.png'
-    machine.projects['alpha']['files'][source] = png(160, 100) + b'\0' * (code_visualizations.MAX_BYTES + 1)
+    machine.projects['alpha']['files'][source] = png(160, 100) + b'\0' * (2 * 1024 * 1024 + 1)
     assert detail(studio.c.post(endpoint, json={'source': source}))['code'] == 'unsupported'
     machine.visualization_images = True
     bridge.LINKS[aid].hello['visualization_images'] = True

@@ -29,7 +29,9 @@ def test_visualizations_in_history_and_stream_are_interactive_and_isolated(deskt
     text = MARKER + '\n\n[Открыть HTML](' + SOURCE + ')\n\n[Открыть фотовизуализацию](' + IMAGE_SOURCE + ')\n\n```text\n' + MARKER + '\n```\n\n' + 'Paragraph.\n\n' * 800
     message = {'id': 'answer', 'role': 'assistant', 'text': text, 'steps': [], 'time': T0}
     session = code_session('Панель', messages=[message])
-    machine = FakeMachine({'alpha': {'files': {SOURCE: FRAGMENT.encode(), IMAGE_SOURCE: png(160, 100)}, 'chats': {CODE_CHAT_A: session}}})
+    # HTML с вложенными данными превышает прежний предел редактора 2 МиБ.
+    fragment = FRAGMENT.encode() + b'<!--' + b'x' * (2 * 1024 * 1024) + b'-->'
+    machine = FakeMachine({'alpha': {'files': {SOURCE: fragment, IMAGE_SOURCE: png(160, 100)}, 'chats': {CODE_CHAT_A: session}}})
     machine.visualizations = machine.visualization_images = True
     aid, channel = code_online(live, login, machine)
     signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
