@@ -83,6 +83,7 @@ export async function api(method, path, body, { signal, headers: extraHeaders } 
       // тело не JSON — остаётся общий текст
     }
     if (code === 'login') toLogin();
+    if (code === 'email_required') location.href = '/account/email';
     if (code === 'screen_locked' && hooks.locked) {
       await hooks.locked();
       return api(method, path, body, { signal, headers: extraHeaders });

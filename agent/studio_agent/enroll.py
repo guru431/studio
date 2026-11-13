@@ -18,6 +18,8 @@ NAME = "Имя компьютера — от 1 до 64 знаков"
 URL = "Адрес студии — https://…"
 UNAVAILABLE = "Студия недоступна ({})"
 KEPT = "Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → «Компьютеры»"
+EMAIL_CODE_REQUIRED = "Введите код из письма и повторите пароль"
+EMAIL_CODE_INVALID = "Код неверен или истёк. Для нового письма оставьте поле кода пустым"
 
 
 class EnrollError(Exception):
@@ -61,9 +63,12 @@ def _send(request: urllib.request.Request, timeout: float) -> tuple[int, bytes]:
         raise EnrollError("unavailable", UNAVAILABLE.format(type(e).__name__)) from None
 
 
-def enroll(url: str, login: str, password: str, name: str, *, timeout: float = 30) -> tuple[int, str, str]:
+def enroll(url: str, login: str, password: str, name: str, *, timeout: float = 30, code: str = "") -> tuple[int, str, str]:
     """→ (id компьютера, ключ устройства, логин учётки); прежняя студия логина не отдаёт — введённый `strip().lower()`."""
-    body = json.dumps({"login": login, "password": password, "name": name}).encode("utf-8")
+    data = {"login": login, "password": password, "name": name}
+    if code:
+        data["code"] = code
+    body = json.dumps(data).encode("utf-8")
     request = urllib.request.Request(base_url(url) + PATH, data=body, method="POST", headers={
         "Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"studio-agent/{VERSION}"})
     try:
@@ -107,6 +112,12 @@ def _code(e: urllib.error.HTTPError) -> str | None:
 def _refusal(e: urllib.error.HTTPError) -> EnrollError:
     """Отказ студии `{"detail": {"code", "message"}}` → слова окна."""
     code = _code(e)
+    if e.code == 428 and code == "email_code":
+        return EnrollError("email_code", EMAIL_CODE_REQUIRED)
+    if e.code == 428 and code == "email_required":
+        return EnrollError("email_required", "Сначала подтвердите почту в браузере Студии")
+    if e.code == 400 and code == "expired":
+        return EnrollError("email_code", EMAIL_CODE_INVALID)
     if e.code == 401:
         return EnrollError("login", LOGIN)
     if e.code == 429:

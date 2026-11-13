@@ -13,7 +13,7 @@ import os
 import threading
 from urllib.parse import urlsplit
 
-from . import VERSION, computer_info, setup, theme
+from . import VERSION, computer_info, enroll, setup, theme
 
 log = logging.getLogger(__name__)
 
@@ -487,6 +487,7 @@ class MainWindow:
         box.columnconfigure(1, weight=1)
         url = tk.StringVar(value=cfg.url)
         login, password = tk.StringVar(), tk.StringVar()
+        email_code = tk.StringVar()
         name = tk.StringVar(value=cfg.name or os.environ.get("COMPUTERNAME", ""))
         folders = list(cfg.projects_roots)
         pin, pin2 = tk.StringVar(), tk.StringVar()
@@ -503,12 +504,17 @@ class MainWindow:
 
         field("Адрес студии", url)
         r += 1
-        first = field("Логин", login)
+        first = field("Логин или email", login)
         r += 1
         secret = field("Пароль", password, secret=True)
         ttk.Label(box, text=NOTE_PASSWORD, style="Card.Muted.TLabel").grid(row=r + 1, column=0, columnspan=2,
                                                                           sticky="w", pady=(0, gap))
         r += 2
+        code_entry = field("Код из письма", email_code)
+        code_widgets = box.grid_slaves(row=r)
+        for widget in code_widgets:
+            widget.grid_remove()
+        r += 1
         field("Имя компьютера", name)
         r += 1
         self.folders_control(box, row=r, folders=folders, problem=errors)
@@ -536,6 +542,7 @@ class MainWindow:
             if not go.instate(["!disabled"]):
                 return
             form = {"url": url.get(), "login": login.get(), "password": password.get(), "name": name.get(),
+                    "email_code": email_code.get(),
                     "projects_roots": list(folders), "pin": pin.get(), "pin2": pin2.get(), "no_pin": False,
                     "autostart": auto.get()}
             password.set("")
@@ -549,6 +556,11 @@ class MainWindow:
                     if go.winfo_exists():
                         go.state(["!disabled"])
                         errors.set("\n".join(found) if found else FAILED)
+                        if found and any(word in (enroll.EMAIL_CODE_REQUIRED, enroll.EMAIL_CODE_INVALID) for word in found):
+                            for widget in code_widgets:
+                                widget.grid()
+                            code_entry.focus_set()
+                            self.schedule_fit()
                     return
                 self.notice = ""
                 self.enrolled = True

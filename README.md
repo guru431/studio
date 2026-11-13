@@ -126,7 +126,8 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 
 ### Accounts, privacy and sharing
 
-- Administrator-created accounts, isolated user histories and encrypted connection credentials.
+- Email invitations from an administrator; users choose their own login and password. Required email, login by username or email, email password recovery and optional email login codes (off by default).
+- Isolated user histories and encrypted connection credentials.
 - Per-section connections, selected models/defaults and an administrator-controlled allowlist for server-side destinations.
 - Password login, brute-force limits, session management and a security event history.
 - Lock the whole app or selected sections using an application PIN, account password or passkey, including device biometrics where supported.

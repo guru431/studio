@@ -27,6 +27,7 @@ import auth
 import agent_release
 import bridge
 import clock
+import email_accounts
 import security
 import project_access
 import state
@@ -62,7 +63,10 @@ async def enroll(request: Request):
     fields = [data.get(k, "") for k in ("login", "password", "name")] if isinstance(data, dict) else None
     if fields is None or not all(isinstance(v, str) for v in fields):
         raise _refuse(ip, 422, "invalid", "неверные данные запроса")
-    name, password, agent_name = fields[0].strip().lower(), fields[1], fields[2].strip()
+    name, password, agent_name = auth.identity_name(fields[0].strip().lower()), fields[1], fields[2].strip()
+    code = data.get("code", "")
+    if not isinstance(code, str) or len(code) > 6:
+        raise _refuse(ip, 422, "invalid", "неверный код входа")
     if not 1 <= len(agent_name) <= NAME_MAX or any(unicodedata.category(c).startswith("C") for c in agent_name):
         raise _refuse(ip, 422, "name", "имя компьютера — от 1 до 64 знаков без управляющих")
     if auth.locked(name, ip):
@@ -70,6 +74,13 @@ async def enroll(request: Request):
     uid = await auth.check_password(name, password, ip, source="bridge")
     if uid is None:
         raise _refuse(ip, 401, "login", "неверный логин или пароль")
+    if not email_accounts.has_email(uid):
+        raise _refuse(ip, 428, "email_required", "Сначала подтвердите почту в браузере Студии")
+    if state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()[0]:
+        if not code:
+            await email_accounts.login_code(uid, request, "", "bridge")
+            raise HTTPException(428, {"code": "email_code", "message": "Введите код из письма и повторите пароль"})
+        email_accounts.bridge_code(uid, code)
     # без await после сверки учётки: ключ получает проверенная живая учётка
     key = security.new_token()
     agent_id = state.DB.execute("INSERT INTO agents(user_id, name, key_hash, created) VALUES (?, ?, ?, ?)",

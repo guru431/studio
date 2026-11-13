@@ -70,6 +70,18 @@ def test_apply_enrolls_and_keeps_no_password(home, form):
             assert PASSWORD.encode("utf-8") not in data and PASSWORD.encode("utf-16-le") not in data, f.name
 
 
+def test_email_code_is_passed_to_enrollment_and_never_saved(home, form):
+    supplied = []
+
+    def fake_enroll(url, login, password, name, *, code):
+        supplied.append(code)
+        return 7, "device-key", "owner"
+
+    setup.apply(home, {**form, "email_code": "123456"}, enroll_fn=fake_enroll)
+    assert supplied == ["123456"]
+    assert all(b"123456" not in path.read_bytes() for path in home.rglob("*") if path.is_file())
+
+
 def test_apply_without_login_keeps_key_and_pin(home, form, tmp_path):
     setup.apply(home, {**form, "pin": "2468", "pin2": "2468"}, enroll_fn=lambda *a: (7, "k", "owner"))
     other = tmp_path / "other"

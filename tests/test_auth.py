@@ -288,6 +288,7 @@ def test_api_answers_are_not_cached(studio):
 ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html", "/robots.txt",
              "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico", "/api/agent/enroll",
              "/share", "/share/unlock", "/share/check", "/share/file"}
+ANONYMOUS |= {"/account/{screen}", "/account/invite/check", "/account/invite/accept", "/account/forgot", "/account/reset", "/account/code"}
 
 
 def test_pages_answer_head_and_robots_are_turned_away(studio):
@@ -390,7 +391,7 @@ def test_require_admin_refuses_plain_users():
 
 
 def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
-    stdin = "STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\n"
+    stdin = "STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"
     for _ in range(2):
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
         assert manage.main(["create-admin"]) == 0
@@ -402,8 +403,18 @@ def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
     assert "very-long-pass" not in out.out + out.err
 
 
-def test_create_admin_new_password_ends_sessions(env, monkeypatch, capsys):
+def test_first_admin_requires_email(env, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\n"))
+    assert manage.main(["create-admin"]) == 2
+    conn = db.connect(env.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM users").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_create_admin_new_password_ends_sessions(env, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"))
     assert manage.main(["create-admin"]) == 0
     conn = db.connect(env.db_path)
     conn.execute("UPDATE users SET is_admin = 0, disabled = 1")

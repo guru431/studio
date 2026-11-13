@@ -67,8 +67,16 @@ def _enroll(h) -> int:
     try:
         cfg = setup.apply(h, form)
     except enroll.EnrollError as e:
-        print(e.words)
-        return 1
+        if e.code == "email_code":
+            form["email_code"] = input("Код из письма: ").strip()
+            try:
+                cfg = setup.apply(h, form)
+            except enroll.EnrollError as retry:
+                print(retry.words)
+                return 1
+        else:
+            print(e.words)
+            return 1
     print(f"Привязан: компьютер {cfg.agent_id}. Работающий мост подхватит ключ после перезапуска.")
     return 0
 

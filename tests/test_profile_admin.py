@@ -72,7 +72,7 @@ def test_me_carries_csrf_and_profile(studio):
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
-                       "studio_version"}
+                       "studio_version", "email", "email_codes"}
     assert me["password_reset"] is None
 
 
@@ -361,32 +361,22 @@ def test_non_admin_cannot_reach_the_panel(studio):
     assert state.DB.execute("SELECT COUNT(*) FROM users WHERE login = 'eve'").fetchone()[0] == 0
 
 
-def test_admin_creates_user_who_can_log_in(studio):
+def test_direct_creation_is_replaced_by_email_invitations(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     r = studio.c.post("/api/admin/users", json={"login": "Ivan", "name": "Иван", "password": "ivan-password",
                                                 "is_admin": False})
-    assert r.status_code == 201
-    user = r.json()
-    assert user["login"] == "ivan" and user["name"] == "Иван" and not user["is_admin"] and not user["disabled"]
-    assert user["connections"] == 0 and "password" not in r.text and "pw_hash" not in r.text
-    assert "ivan-password" not in r.text
-    logins = [u["login"] for u in studio.c.get("/api/admin/users").json()["items"]]
-    assert logins == ["owner", "ivan"]
-    assert login(studio, "ivan", "ivan-password").status_code == 303
+    assert r.status_code == 410 and code(r) == "invite"
+    assert [u["login"] for u in studio.c.get("/api/admin/users").json()["items"]] == ["owner"]
 
 
-def test_login_must_be_simple_and_unique(studio):
+def test_user_rename_requires_a_simple_unique_login(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
+    uid = make_user(studio, "ivan")
     for bad in ["Иван", "a", "x" * 33, "a b"]:
-        r = studio.c.post("/api/admin/users", json={"login": bad, "name": "n", "password": "password-123",
-                                                    "is_admin": False})
+        r = studio.c.patch(f"/api/admin/users/{uid}", json={"login": bad})
         assert r.status_code == 422 and code(r) == "login", bad
-    r = studio.c.post("/api/admin/users", json={"login": "owner", "name": "n", "password": "password-123",
-                                                "is_admin": False})
+    r = studio.c.patch(f"/api/admin/users/{uid}", json={"login": "owner"})
     assert r.status_code == 409 and code(r) == "taken"
-    r = studio.c.post("/api/admin/users", json={"login": "ivan", "name": "n", "password": "short",
-                                                "is_admin": False})
-    assert r.status_code == 422 and code(r) == "short"
 
 
 def test_admin_renames_a_login_and_sessions_survive(studio):
@@ -540,7 +530,7 @@ def test_panel_lists_no_history(studio, env):
     for word in ["prompt", "title", "content", "секрет", "pw_hash"]:
         assert word not in text, word
     for item in studio.c.get("/api/admin/users").json()["items"]:
-        assert set(item) == {"id", "login", "name", "is_admin", "disabled", "created", "connections"}
+        assert set(item) == {"id", "login", "name", "is_admin", "disabled", "created", "connections", "email"}
 
 
 def test_allowlist_round_trip(studio):

@@ -106,6 +106,8 @@ class PasswordChange(BaseModel):
 
 
 def check_password(password: str) -> None:
+    if len(password) > PASSWORD_MAX:
+        raise HTTPException(422, {"code": "long", "message": f"пароль длиннее {PASSWORD_MAX} символов"})
     if len(password) < security.PASSWORD_MIN:
         raise HTTPException(422, {"code": "short", "message": f"пароль короче {security.PASSWORD_MIN} символов"})
 
@@ -116,12 +118,13 @@ def _me(request: Request) -> dict:
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
                            " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions,"
-                           " password_reset FROM users WHERE id = ?",
+                           " password_reset, email, email_codes FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     views = json.loads(row["views"])
     accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
+            "email": row["email"], "email_codes": bool(row["email_codes"]),
             "theme": row["theme"], "accent": accent if accent in ACCENTS else ACCENTS[0],
             "timezone": row["timezone"], "views": views, "studio_version": release.VERSION,
             "default_connection_id": chat[0].id if chat else None,

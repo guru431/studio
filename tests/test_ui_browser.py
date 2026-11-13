@@ -731,16 +731,13 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert not problems(r), problems(r)
 
 
-def test_admin_creates_a_friend_who_sees_no_owner_history(browser, live):
+def test_friend_sees_no_owner_history(browser, live):
+    live.add_user("friend", password="friend-pass-1")
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), make_history(), history_of("owner"),
         *go("admin"), ("wait", "document.querySelector('#user-add') && document.querySelector('#users tbody tr')"),
         ("eval", "head", "[...document.querySelectorAll('#users thead th')].map(t => t.textContent)"),
-        ("click", "#user-add"), ("wait", is_open("#user-dialog")),
-        ("type", "#user-dialog [name=login]", "friend"), ("type", "#user-dialog [name=name]", "Друг"),
-        ("type", "#user-dialog [name=password]", "friend-pass-1"),
-        ("click", "#user-save"),
         ("wait", "document.querySelector('#users tr[data-login=friend]')"),
-        ("eval", "row", "[...document.querySelectorAll('#users tr[data-login=friend] td')].slice(0, 5).map(t => t.textContent)"),
+        ("eval", "row", "[...document.querySelectorAll('#users tr[data-login=friend] td')].slice(0, 6).map(t => t.textContent)"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         ("click", "#avatar"), ("click", "#menu-logout"),
         ("wait", "location.pathname === '/login' && document.querySelector('#login')"),
@@ -750,8 +747,8 @@ def test_admin_creates_a_friend_who_sees_no_owner_history(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["made"] is True and v["owner"][0] >= 1 and v["owner"][1] >= 1
-    assert v["head"][:5] == ["Логин", "Имя", "Админ", "Отключён", "Подключений"]
-    assert v["row"] == ["friend", "Друг", "нет", "нет", "0"]
+    assert v["head"][:6] == ["Логин", "Email", "Имя", "Админ", "Отключён", "Подключений"]
+    assert v["row"] == ["friend", "friend@example.com", "friend", "нет", "нет", "0"]
     assert v["friend"] == [0, 0] and v["menuAdmin"] is True
     assert not problems(r), problems(r)
 
@@ -771,16 +768,11 @@ def test_admin_renames_a_user_in_the_panel(browser, live):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_admin_manages_users_connections_and_the_allowlist(browser, live, width):
     login = f"mate{width}"
+    live.add_user(login)
     entry = f"10.77.1.{width % 250}:4000"
     rid = f"#users tr[data-login={login}]"
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("admin"),
         ("wait", "document.querySelector('#user-add') && document.querySelector('#allow-list li')"),
-        ("click", "#user-add"), ("wait", is_open("#user-dialog")),
-        ("type", "#user-dialog [name=login]", login), ("type", "#user-dialog [name=name]", "Приятель"),
-        ("type", "#user-dialog [name=password]", "short"), ("click", "#user-save"),
-        ("wait", "document.querySelector('#user-dialog .error[data-for=password]').textContent.length > 0"),
-        ("eval", "short", "document.querySelector('#user-dialog .error[data-for=password]').textContent"),
-        ("type", "#user-dialog [name=password]", "-and-long"), ("click", "#user-save"),
         ("wait", f"document.querySelector('{rid}')"),
         # подключения пользователя — те же разделы, что в его настройках
         ("click", f"{rid} .user-conns"), ("wait", is_open("#user-conns-dialog")),
@@ -834,7 +826,6 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["short"].startswith("Пароль короче")
     assert v["tokenType"] == "password"
     assert v["pathError"] == "Адрес через сервер — без пути"
     assert v["conn"] == ["через сервер", ["local-gemma-abl"]] and v["noCheck"]

@@ -75,6 +75,21 @@ def test_created_gives_id_key_and_login(studio):
     assert headers["Content-Type"] == "application/json"
 
 
+def test_email_code_is_sent_only_in_request_body(studio):
+    s = studio(201, {"agent_id": 7, "device_key": "k", "login": "owner"})
+    assert enroll.enroll(s.url, "owner@example.com", "password", "Computer", code="123456") == (7, "k", "owner")
+    path, headers, body = s.requests[0]
+    assert json.loads(body)["code"] == "123456"
+    assert "123456" not in path + str(headers)
+
+
+def test_email_code_request_is_reported_to_the_setup_form(studio):
+    s = studio(428, {"detail": {"code": "email_code"}})
+    with pytest.raises(enroll.EnrollError) as caught:
+        enroll.enroll(s.url, "owner", "password", "Computer")
+    assert caught.value.code == "email_code" and "код из письма" in caught.value.words
+
+
 @pytest.mark.parametrize("status, code, words", [
     (401, "login", "Неверный логин или пароль"),
     (429, "locked", "Вход на паузе после неудач — попробуйте позже"),

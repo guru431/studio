@@ -28,6 +28,7 @@
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me } from './api.js';
+import { emailBlock } from './email-settings.js';
 import { accessBlock, emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { accountLookBlock, deviceLookBlock } from './appearance.js';
 import { openMobileNavigationEditor } from './mobile-navigation.js';
@@ -1459,7 +1460,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'security') {
-      group('security', passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
+      group('security', emailBlock(), passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
         securityEventsBlock());
       return;
     }

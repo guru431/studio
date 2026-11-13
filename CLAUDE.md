@@ -43,12 +43,14 @@ minor для возможностей, major для несовместимых �
   только в снимке ссылки «Поделиться» и только шифром `STUDIO_DATA_KEY` ([sharing-export](docs/architecture/sharing-export.md)).
 - **Анонимны только**: `/health`, `/login` (страница и вход), `/logout`, `/robots.txt`, оболочка PWA (`/static/*`,
   `/manifest.webmanifest`, `/sw.js`, `/offline.html`, значки из корня `/apple-touch-icon.png`,
-  `/apple-touch-icon-precomposed.png`, `/favicon.ico`) и два класса входов **со своей защитой**:
+  `/apple-touch-icon-precomposed.png`, `/favicon.ico`) и три класса входов **со своей защитой**:
   - ссылка «Поделиться»: `/share` (оболочка) и `/share/unlock|check|file` (`chat_shares.py`): секреты — только телом
     JSON до 4096 байт (`chat_shares.public_guard`), чужой `Origin` — 403, PIN ссылки с паузами (5 на ссылку, 30 на IP
     за 15 мин) и общим пределом `chat_shares.FAILS_MAX`, read-токен в памяти страницы без прав API учётки, всё —
     `no-store`, `no-referrer`, `noindex`;
-  - `auth.OPEN_API`: `/api/agent/enroll` (`POST` — вход логином и паролем со счётом и паузами `/login`; `DELETE` —
+  - почта учётки `/account/*` (`email_accounts.py`): страницы и JSON-действия приглашения, восстановления и
+    кодов; свой Origin, предел тела, одноразовые хешированные токены, сроки и паузы — [email-accounts](docs/architecture/email-accounts.md);
+  - `auth.OPEN_API`: `/api/agent/enroll` (`POST` — вход логином/email и паролем, при включении ещё кодом, со счётом и паузами `/login`; `DELETE` —
     отвязка ключом устройства в `Authorization`; чужой `Origin` — 403) и `/api/agent/package` (ZIP обновления — только
     `Authorization: Bearer` действующего устройства активной учётки).
   `/` без сессии уводит на вход; остальное `/api/*` — через `auth.guard` (сессия + CSRF у изменяющих). `auth.guard` —
@@ -87,6 +89,7 @@ minor для возможностей, major для несовместимых �
 |---|---|---|
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Вход и защита | `auth`, `profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
+| Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports` | [sharing-export](docs/architecture/sharing-export.md) |
@@ -141,6 +144,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 
 | Шаг | Что добавил | Что делает прежний код | SQL-обход |
 |---|---|---|---|
+| 40 | Email, коды, приглашения, почтовые токены и паузы | Не требует email/кодов, возвращает прежнее создание учёток; почтовая защита при откате не действует | Не нужен; данные сохраняются |
 | 16 | `scans`, раздел `ocr` | `PATCH` подключения srvllm без `sections` — 422; поиск с документом ocr — 500; стирание не уносит сканы; вложение со сканом — «None» | `DELETE FROM section_links WHERE section='ocr'; DELETE FROM section_defaults WHERE section='ocr'; DELETE FROM search_docs WHERE section='ocr';` вперёд — вернуть индекс (deploy-host); стёршим — `DELETE FROM scans WHERE user_id IN (…)` |
 | 17 | PIN учётки | не читает: открывают пароль и passkey | — |
 | 18 | `translations` | раздела нет; стирание не уносит переводы; удаление скана уносит файл перевода | стёршим — `DELETE FROM translations WHERE user_id IN (…)` |

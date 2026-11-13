@@ -1268,6 +1268,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .solo-card h1 { margin: 0; font-size:var(--fs-3xl); }
 .solo-card .brand p { margin: 0; color: var(--text-2); font-size:var(--fs-md); }
 .solo-card label { margin-top: var(--space-2); }
+.solo-card form { display: flex; flex-direction: column; gap: var(--space-5); }
 .solo-card .btn { width: 100%; min-height: var(--h-touch); margin-top: var(--space-4); }
 .solo-card .error { margin: 0; font-size:var(--fs-md); text-align: center; }
 .solo-card .error:empty { display: none; }

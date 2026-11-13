@@ -396,7 +396,7 @@ def test_wrong_pins_are_journaled_and_the_total_limit_revokes_the_link(studio, m
 
 def test_share_schema_migration_keeps_original_chats_and_is_idempotent(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
+    conn.executescript(db.SCHEMA.removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33) + '\nPRAGMA user_version=32;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'Keep',0,0)")
     db.migrate(conn)

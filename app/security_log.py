@@ -18,6 +18,7 @@ import state
 
 #: виды событий; новый вид — сюда (столбец kind без CHECK: шаг схемы не нужен)
 KINDS = frozenset({
+    "email_change", "email_codes_on", "email_codes_off", "password_recovery",
     "login", "login_fail", "logout",                  # вход паролем, неверный пароль известного логина, выход
     "unlock", "unlock_fail", "pin_exhausted",         # отпирание (detail — password | pin | passkey)
     "password",                                       # смена пароля из профиля

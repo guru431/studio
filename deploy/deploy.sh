@@ -144,6 +144,11 @@ fi
     if [ "$CREATE_ADMIN" = 1 ]; then
         grep -E '^(STUDIO_ADMIN_LOGIN|STUDIO_ADMIN_PASSWORD|GATEWAY_KEY_OWNER_IMAGES)=' "$VAULT" \
             || die "нет STUDIO_ADMIN_LOGIN / STUDIO_ADMIN_PASSWORD в $VAULT"
+        if [ -n "${STUDIO_ADMIN_EMAIL:-}" ]; then
+            printf 'STUDIO_ADMIN_EMAIL=%s\n' "$STUDIO_ADMIN_EMAIL"
+        else
+            grep -m1 '^STUDIO_ADMIN_EMAIL=' "$VAULT" || true
+        fi
     fi
 } | tr -d '\r' | "${SSH[@]}" "sudo bash $IN/deploy/$installer ${args[*]:-}" \
     || die "установка не прошла (вывод install.sh — выше)"
