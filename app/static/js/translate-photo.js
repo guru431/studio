@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Снимок в «Переводе» — спека 2026-10-28-studio-translator-design, 6.2 «Снимок», 6.5.
  *
  * photoView(record, parts) — узел записи-снимка: переключатель #tl-mode-overlay «Поверх снимка» (по умолчанию) /
@@ -32,7 +33,7 @@ function shown(parts) {
 
 /** «Вывеска.jpg» → «Вывеска.ru.png». */
 function fileName(record) {
-  const name = String(record.name || 'снимок');
+  const name = String(record.name || tr("снимок"));
   const dot = name.lastIndexOf('.');
   return `${dot > 0 ? name.slice(0, dot) : name}.${record.result_lang || record.target_lang}.png`;
 }
@@ -64,17 +65,17 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
   let blocks = parts;
   let key = '';
 
-  const toOverlay = el('button', { type: 'button', id: 'tl-mode-overlay', class: 'chip' }, 'Поверх снимка');
-  const toText = el('button', { type: 'button', id: 'tl-mode-text', class: 'chip' }, 'Текстом');
-  const original = el('button', { type: 'button', id: 'tl-original', class: 'chip', 'aria-pressed': 'false' }, 'Исходник');
-  const save = el('button', { type: 'button', id: 'tl-save', class: 'btn btn-sm' }, 'Сохранить снимок');
+  const toOverlay = el('button', { type: 'button', id: 'tl-mode-overlay', class: 'chip' }, tr("Поверх снимка"));
+  const toText = el('button', { type: 'button', id: 'tl-mode-text', class: 'chip' }, tr("Текстом"));
+  const original = el('button', { type: 'button', id: 'tl-original', class: 'chip', 'aria-pressed': 'false' }, tr("Исходник"));
+  const save = el('button', { type: 'button', id: 'tl-save', class: 'btn btn-sm' }, tr("Сохранить снимок"));
   const fail = el('p', { class: 'error tl-photo-error', 'aria-live': 'polite' });
-  const img = el('img', { class: 'tl-photo-img', alt: 'Снимок', src: `/api/media/${encodeURIComponent(record.media_id)}` });
+  const img = el('img', { class: 'tl-photo-img', alt: tr("Снимок"), src: `/api/media/${encodeURIComponent(record.media_id)}` });
   const layer = el('div', { class: 'tl-layer' });
   const frame = el('div', { id: 'tl-photo', class: 'tl-photo' }, img, layer);
   const tools = el('div', { class: 'tl-photo-tools' }, original, save);
   const node = el('div', { class: 'tl-photo-view' },
-    el('div', { class: 'tl-photo-bar' }, el('div', { class: 'tl-modes', role: 'group', 'aria-label': 'Вид перевода' },
+    el('div', { class: 'tl-photo-bar' }, el('div', { class: 'tl-modes', role: 'group', 'aria-label': tr("Вид перевода") },
       toOverlay, toText), tools), fail, frame);
 
   function fitAll() {
@@ -203,7 +204,7 @@ function fitCanvas(ctx, text, w, h, family) {
 
 export async function savePng(record, parts) {
   const response = await fetch(`/api/media/${encodeURIComponent(record.media_id)}`, { credentials: 'same-origin' });
-  if (!response.ok) throw new Error(response.status === 404 ? 'снимок удалён' : `ошибка сервера (${response.status})`);
+  if (!response.ok) throw new Error(response.status === 404 ? tr("снимок удалён") : tr("ошибка сервера ({0})", response.status));
   const picture = await createImageBitmap(await response.blob());
   const canvas = document.createElement('canvas');
   canvas.width = picture.width;
@@ -234,6 +235,6 @@ export async function savePng(record, parts) {
     ctx.restore();
   }
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('снимок не собрался'))), 'image/png');
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error(tr("снимок не собрался")))), 'image/png');
   });
 }

@@ -1,3 +1,4 @@
+import { locale, tr } from './i18n.js';
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
@@ -45,7 +46,7 @@ import { agentDownload, button, el, field, openDialog, plural, showError, words 
 import { icon } from './icons.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
 
-export const CORS = 'Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер';
+export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
   gigaam: 'GigaAM' };
 const SEARCH_FROM = 8;
@@ -63,7 +64,7 @@ async function directModels(conn) {
   try {
     ({ token, models_url: url } = await api('GET', `/api/connections/${conn.id}/token`));
   } catch (err) {
-    if (err.status === 403 || err.status === 404) throw new Error('Токен этого подключения браузеру не выдаётся');
+    if (err.status === 403 || err.status === 404) throw new Error(tr("Токен этого подключения браузеру не выдаётся"));
     throw err;
   }
   let response;
@@ -74,13 +75,13 @@ async function directModels(conn) {
     if (err instanceof TypeError) throw new Error(CORS);
     throw err;
   }
-  if (response.status === 401 || response.status === 403) throw new Error(`Сервис не принял токен (${response.status})`);
-  if (!response.ok) throw new Error(`Сервис не отдал список моделей (${response.status})`);
+  if (response.status === 401 || response.status === 403) throw new Error(tr("Сервис не принял токен ({0})", response.status));
+  if (!response.ok) throw new Error(tr("Сервис не отдал список моделей ({0})", response.status));
   let data;
   try {
     data = (await response.json()).data;
   } catch {
-    throw new Error('Сервис ответил не списком моделей');
+    throw new Error(tr("Сервис ответил не списком моделей"));
   }
   return (Array.isArray(data) ? data : []).map((m) => m && m.id).filter((id) => typeof id === 'string');
 }
@@ -115,21 +116,21 @@ function enginePriorityBlock(defaults) {
         paint();
       };
       const up = button('↑', { class: 'btn btn-sm code-engine-up', disabled: index === 0,
-        'aria-label': `Поднять ${ENGINE_NAMES[engine]}` }, () => move(-1));
+        'aria-label': tr("Поднять {0}", ENGINE_NAMES[engine]) }, () => move(-1));
       const down = button('↓', { class: 'btn btn-sm code-engine-down', disabled: index === order.length - 1,
-        'aria-label': `Опустить ${ENGINE_NAMES[engine]}` }, () => move(1));
+        'aria-label': tr("Опустить {0}", ENGINE_NAMES[engine]) }, () => move(1));
       return el('li', { 'data-engine': engine }, el('span', { class: 'code-engine-name' }, `${index + 1}. ${ENGINE_NAMES[engine]}`),
         el('div', { class: 'code-engine-order-controls' }, up, down));
     }));
   }
-  const save = button('Сохранить приоритет', { id: 'code-engine-order-save', class: 'btn' }, async () => {
+  const save = button(tr("Сохранить приоритет"), { id: 'code-engine-order-save', class: 'btn' }, async () => {
     save.disabled = true;
     for (const control of rows.querySelectorAll('button')) control.disabled = true;
     try {
       const code_defaults = Object.fromEntries(order.map((engine, index) => [engine, { priority: index + 1 }]));
       const answer = await api('PATCH', '/api/me', { code_defaults });
       me.code_defaults = answer.code_defaults;
-      say(note, 'Приоритет агентов сохранён', 'ok');
+      say(note, tr("Приоритет агентов сохранён"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
@@ -138,17 +139,15 @@ function enginePriorityBlock(defaults) {
     }
   });
   paint();
-  return el('section', { class: 'block code-engine-priority' }, el('h3', {}, 'Приоритет агентов'),
-    el('p', { class: 'muted small' }, 'Порядок кнопок нового чата. Для автоматического создания чата выбирается первый доступный агент. '
-      + 'Сохраняется для всех ваших устройств.'), rows, save, note);
+  return el('section', { class: 'block code-engine-priority' }, el('h3', {}, tr("Приоритет агентов")),
+    el('p', { class: 'muted small' }, tr("Порядок кнопок нового чата. Для автоматического создания чата выбирается первый доступный агент. Сохраняется для всех ваших устройств.")), rows, save, note);
 }
 
 function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
-  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, 'Claude Code, Codex и OpenCode'),
-    el('p', { class: 'muted small' }, 'Модель, усилие и права для новых чатов на всех ваших устройствах. '
-      + 'Начатые чаты сохраняют свой выбор. Показаны текущие настройки подключённого компьютера; в проекте они уточняются при открытии чата.'),
+  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, tr("Claude Code, Codex и OpenCode")),
+    el('p', { class: 'muted small' }, tr("Модель, усилие и права для новых чатов на всех ваших устройствах. Начатые чаты сохраняют свой выбор. Показаны текущие настройки подключённого компьютера; в проекте они уточняются при открытии чата.")),
     rows, note);
 
   async function load() {
@@ -164,11 +163,11 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
           for (const effort of catalog.efforts || []) efforts.add(effort);
         }
         const saved = profile.code_defaults?.[engine] || {};
-        if (saved.model && !models.has(saved.model)) models.set(saved.model, `${saved.model} (сейчас недоступна)`);
+        if (saved.model && !models.has(saved.model)) models.set(saved.model, tr("{0} (сейчас недоступна)", saved.model));
         if (saved.effort) efforts.add(saved.effort);
         const prefix = `code-defaults-${engine}`;
         const model = el('select', { class: 'input', id: `${prefix}-model` },
-          el('option', { value: '' }, native.model || (catalogs.length ? 'Не получено' : 'Компьютер не на связи')),
+          el('option', { value: '' }, native.model || (catalogs.length ? tr("Не получено") : tr("Компьютер не на связи"))),
           ...[...models].map(([id, label]) => el('option', { value: id }, label)));
         const effort = el('select', { class: 'input', id: `${prefix}-effort` },
           el('option', { value: '' }, effortLabel(native.effort)),
@@ -181,17 +180,17 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
         access.value = saved.access || '';
         return { engine, model, effort, access, node: el('div', { class: 'block' },
           el('h3', {}, ENGINE_NAMES[engine]), el('div', { class: 'grid3' },
-            field('Модель', model, `${prefix}-model`), field('Усилие', effort, `${prefix}-effort`),
-            field('Права доступа', access, `${prefix}-access`))) };
+            field(tr("Модель"), model, `${prefix}-model`), field(tr("Усилие"), effort, `${prefix}-effort`),
+            field(tr("Права доступа"), access, `${prefix}-access`))) };
       });
-      const save = button('Сохранить', { class: 'btn', id: 'code-defaults-save' }, async () => {
+      const save = button(tr("Сохранить"), { class: 'btn', id: 'code-defaults-save' }, async () => {
         save.disabled = true;
         try {
           const code_defaults = Object.fromEntries(forms.map(({ engine, model, effort, access }) => [engine,
             { model: model.value || null, effort: effort.value || null, access: access.value || null }]));
           const answer = await api('PATCH', '/api/me', { code_defaults });
           me.code_defaults = answer.code_defaults;
-          say(note, 'Умолчания сохранены — применятся к новым чатам', 'ok');
+          say(note, tr("Умолчания сохранены — применятся к новым чатам"), 'ok');
         } catch (err) {
           say(note, words(err), 'error');
         } finally {
@@ -199,7 +198,7 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
         }
       });
       rows.replaceChildren(enginePriorityBlock(profile.code_defaults), ...forms.map((f) => f.node),
-        ...(!items.some((a) => a.online) ? [el('p', { class: 'muted small' }, 'Подключите компьютер, чтобы выбрать его модели и усилия.')] : []),
+        ...(!items.some((a) => a.online) ? [el('p', { class: 'muted small' }, tr("Подключите компьютер, чтобы выбрать его модели и усилия."))] : []),
         el('div', { class: 'row' }, save));
     } catch (err) {
       say(note, words(err), 'error');
@@ -211,40 +210,38 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
 
 /** «Нижняя панель» телефона — тот же редактор, что в листе «Ещё» (mobile-navigation.js); на широком экране скрыт. */
 function mobileNavBlock() {
-  const open = button('Настроить нижнюю панель', { class: 'btn', id: 'appearance-mobile-nav-open',
+  const open = button(tr("Настроить нижнюю панель"), { class: 'btn', id: 'appearance-mobile-nav-open',
     'aria-haspopup': 'dialog' }, () => openMobileNavigationEditor(open));
-  return el('section', { class: 'block appearance-mobile-nav' }, el('h2', {}, 'Нижняя панель'),
-    el('p', { class: 'muted small scope-note' }, 'Это устройство — этот браузер и учётка.'),
-    el('p', { class: 'muted small' }, 'На телефоне: все разделы в один ряд или 3–4 основных и «Ещё». '
-      + 'Та же настройка — в листе «Ещё».'), open);
+  return el('section', { class: 'block appearance-mobile-nav' }, el('h2', {}, tr("Нижняя панель")),
+    el('p', { class: 'muted small scope-note' }, tr("Это устройство — этот браузер и учётка.")),
+    el('p', { class: 'muted small' }, tr("На телефоне: все разделы в один ряд или 3–4 основных и «Ещё». Та же настройка — в листе «Ещё».")), open);
 }
 
 function timezoneBlock(refreshTimes) {
   const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone,
     ...(Intl.supportedValuesOf?.('timeZone') || [])].filter(Boolean))].sort();
   const select = el('select', { class: 'input', id: 'timezone' }, ...zones.map((zone) =>
-    el('option', { value: zone }, zone === DEFAULT_TIMEZONE ? 'Москва (Europe/Moscow)' : zone)));
+    el('option', { value: zone }, zone === DEFAULT_TIMEZONE ? tr("Москва (Europe/Moscow)") : zone)));
   select.value = me.timezone || DEFAULT_TIMEZONE;
   const note = status('timezone-status');
-  const save = button('Сохранить', { class: 'btn', id: 'timezone-save' }, async () => {
+  const save = button(tr("Сохранить"), { class: 'btn', id: 'timezone-save' }, async () => {
     save.disabled = select.disabled = true;
     try {
       const profile = await api('PATCH', '/api/me', { timezone: select.value });
       me.timezone = profile.timezone;
       refreshTimes();
       document.dispatchEvent(new Event('studio-me'));
-      say(note, 'Часовой пояс сохранён', 'ok');
+      say(note, tr("Часовой пояс сохранён"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
       save.disabled = select.disabled = false;
     }
   });
-  return el('section', { class: 'block' }, el('h2', {}, 'Часовой пояс'),
-    el('p', { class: 'muted small scope-note' }, 'Вся учётка — на всех ваших устройствах.'),
-    el('p', { class: 'muted small' }, 'Для дат, времени и поиска на всех ваших устройствах, а также календарной даты'
-      + ' в контексте чата — через сервер, напрямую и через Cleaner. По умолчанию — Москва.'),
-    field('Часовой пояс', select, select.id), el('div', { class: 'row' }, save, note));
+  return el('section', { class: 'block' }, el('h2', {}, tr("Часовой пояс")),
+    el('p', { class: 'muted small scope-note' }, tr("Вся учётка — на всех ваших устройствах.")),
+    el('p', { class: 'muted small' }, tr("Для дат, времени и поиска на всех ваших устройствах, а также календарной даты в контексте чата — через сервер, напрямую и через Cleaner. По умолчанию — Москва.")),
+    field(tr("Часовой пояс"), select, select.id), el('div', { class: 'row' }, save, note));
 }
 
 function passwordBlock() {
@@ -253,25 +250,25 @@ function passwordBlock() {
   const fresh = input('pw-new', 'new-password');
   const repeat = input('pw-repeat', 'new-password');
   const note = status('password-status');
-  const save = button('Сменить пароль', { class: 'btn', id: 'password-save' });
+  const save = button(tr("Сменить пароль"), { class: 'btn', id: 'password-save' });
   save.addEventListener('click', async () => {
     if (fresh.value !== repeat.value) {
-      say(note, 'Пароли не совпадают', 'error');
+      say(note, tr("Пароли не совпадают"), 'error');
       return;
     }
     save.disabled = true;
     try {
       await api('POST', '/api/me/password', { current: current.value, new: fresh.value });
       current.value = fresh.value = repeat.value = '';
-      say(note, 'Пароль сменён, другие сессии закрыты', 'ok');
+      say(note, tr("Пароль сменён, другие сессии закрыты"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
       save.disabled = false;
     }
   });
-  return el('section', { class: 'block' }, el('h2', {}, 'Пароль'), el('div', { class: 'grid3' },
-    field('Текущий', current, 'current'), field('Новый', fresh, 'new'), field('Повтор нового', repeat, 'repeat')),
+  return el('section', { class: 'block' }, el('h2', {}, tr("Пароль")), el('div', { class: 'grid3' },
+    field(tr("Текущий"), current, 'current'), field(tr("Новый"), fresh, 'new'), field(tr("Повтор нового"), repeat, 'repeat')),
   el('div', { class: 'row' }, save, note));
 }
 
@@ -285,8 +282,8 @@ const LOCK_SECTIONS = Object.fromEntries(sectionPairs());
 function timeoutField(id, seconds, max) {
   const unit = seconds > 0 && seconds % 3600 === 0 ? 3600 : seconds > 0 && seconds % 60 === 0 ? 60 : 1;
   const amount = el('input', { class: 'input', id, type: 'number', min: '0', step: '1', value: seconds / unit });
-  const units = el('select', { class: 'input', id: `${id}-unit`, 'aria-label': 'Единицы времени' },
-    ...[[1, 'секунд'], [60, 'минут'], [3600, 'часов']].map(([value, text]) => el('option', { value }, text)));
+  const units = el('select', { class: 'input', id: `${id}-unit`, 'aria-label': tr("Единицы времени") },
+    ...[[1, tr("секунд")], [60, tr("минут")], [3600, tr("часов")]].map(([value, text]) => el('option', { value }, text)));
   units.value = String(unit);
   const read = () => Number(amount.value) * Number(units.value);
   return { node: el('div', { class: 'lock-timeout' }, amount, units), read,
@@ -296,26 +293,25 @@ function timeoutField(id, seconds, max) {
 function computerPinBlock() {
   const timer = timeoutField('computer-pin-timeout', me.computer_pin_timeout ?? 10800, 604800);
   const note = status('computer-pin-status');
-  const save = button('Сохранить таймер компьютера', { class: 'btn', id: 'computer-pin-save' }, async () => {
+  const save = button(tr("Сохранить таймер компьютера"), { class: 'btn', id: 'computer-pin-save' }, async () => {
     if (!timer.valid(60)) {
-      say(note, 'Укажите время от 1 минуты до 7 дней', 'error');
+      say(note, tr("Укажите время от 1 минуты до 7 дней"), 'error');
       return;
     }
     save.disabled = true;
     try {
       const answer = await api('PATCH', '/api/me', { computer_pin_timeout: timer.read() });
       me.computer_pin_timeout = answer.computer_pin_timeout;
-      say(note, 'Таймер PIN компьютера сохранён', 'ok');
+      say(note, tr("Таймер PIN компьютера сохранён"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
       save.disabled = false;
     }
   });
-  return el('section', { class: 'block' }, el('h2', {}, 'PIN компьютера'),
-    el('p', { class: 'muted small' }, 'Через это время без обращений компьютер снова запросит свой PIN. '
-      + 'Настройка действует для всех ваших компьютеров и отдельно от PIN приложения.'),
-    field('Запрашивать повторно через', timer.node, 'computer-pin-period'), el('div', { class: 'row' }, save, note));
+  return el('section', { class: 'block' }, el('h2', {}, tr("PIN компьютера")),
+    el('p', { class: 'muted small' }, tr("Через это время без обращений компьютер снова запросит свой PIN. Настройка действует для всех ваших компьютеров и отдельно от PIN приложения.")),
+    field(tr("Запрашивать повторно через"), timer.node, 'computer-pin-period'), el('div', { class: 'row' }, save, note));
 }
 
 /* «Блокировка»: всё приложение или выбранные разделы и таймер; изменения включённой защиты и выключение —
@@ -328,8 +324,8 @@ function lockBlock() {
   const enabled = el('input', { type: 'checkbox', id: 'lock-enabled', checked: !!me.screen_lock });
   const offPassword = el('input', { class: 'input', id: 'lock-off-password', type: 'password',
     autocomplete: 'current-password', maxlength: '1024' });
-  const off = button('Выключить', { class: 'btn', id: 'lock-off' });
-  const offBox = el('div', { hidden: true }, field('Пароль учётки — чтобы выключить блокировку', offPassword, 'lock-off'),
+  const off = button(tr("Выключить"), { class: 'btn', id: 'lock-off' });
+  const offBox = el('div', { hidden: true }, field(tr("Пароль учётки — чтобы выключить блокировку"), offPassword, 'lock-off'),
     el('div', { class: 'row' }, off));
   const list = el('ul', { class: 'passkeys', id: 'passkeys' });
   const chosen = me.screen_lock_sections || ['*'];
@@ -343,16 +339,16 @@ function lockBlock() {
   const timer = timeoutField('lock-timeout', me.screen_lock_timeout ?? 60, 86400);
   const password = el('input', { class: 'input', id: 'lock-policy-password', type: 'password',
     autocomplete: 'current-password', maxlength: '1024' });
-  const passwordBox = el('div', { hidden: !me.screen_lock }, field('Пароль учётки — чтобы изменить защиту', password, 'lock-policy'));
-  const save = button('Сохранить защиту приложения', { class: 'btn', id: 'lock-save' });
+  const passwordBox = el('div', { hidden: !me.screen_lock }, field(tr("Пароль учётки — чтобы изменить защиту"), password, 'lock-policy'));
+  const save = button(tr("Сохранить защиту приложения"), { class: 'btn', id: 'lock-save' });
   const selected = () => all.checked ? ['*'] : checks.filter((c) => c.input.checked).map((c) => c.id);
   const valid = () => {
     if (!selected().length) {
-      say(note, 'Выберите хотя бы один раздел или всё приложение', 'error');
+      say(note, tr("Выберите хотя бы один раздел или всё приложение"), 'error');
       return false;
     }
     if (!timer.valid()) {
-      say(note, 'Укажите время от 0 секунд до 24 часов', 'error');
+      say(note, tr("Укажите время от 0 секунд до 24 часов"), 'error');
       return false;
     }
     return true;
@@ -383,7 +379,7 @@ function lockBlock() {
     }
     try {
       await setLock({ enabled: true, sections: selected(), timeout: timer.read() });
-      say(note, 'Защита приложения включена', 'ok');
+      say(note, tr("Защита приложения включена"), 'ok');
     } catch (err) {
       enabled.checked = false;
       say(note, words(err), 'error');
@@ -395,7 +391,7 @@ function lockBlock() {
     try {
       await setLock({ enabled: enabled.checked, sections: selected(), timeout: timer.read(), password: password.value });
       password.value = '';
-      say(note, 'Настройки защиты приложения сохранены', 'ok');
+      say(note, tr("Настройки защиты приложения сохранены"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
@@ -408,7 +404,7 @@ function lockBlock() {
       await setLock({ enabled: false, password: offPassword.value });
       offPassword.value = '';
       offBox.hidden = true;
-      say(note, 'Блокировка выключена', 'ok');
+      say(note, tr("Блокировка выключена"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
@@ -422,22 +418,22 @@ function lockBlock() {
   // (-webkit-text-security, app.css), one-time-code — без автозаполнения.
   const pinState = el('span', { id: 'pin-state' });
   const pinSet = button('', { class: 'btn', id: 'pin-set' });
-  const pinRemove = button('Убрать PIN', { class: 'btn', id: 'pin-remove' });
+  const pinRemove = button(tr("Убрать PIN"), { class: 'btn', id: 'pin-remove' });
   const pinPassword = el('input', { class: 'input', id: 'pin-password', type: 'password',
     autocomplete: 'current-password', maxlength: '1024' });
   const pinInput = (id) => el('input', { class: 'input', id, type: 'text', inputmode: 'numeric',
     autocomplete: 'one-time-code', maxlength: '8' });
   const pinNew = pinInput('pin-new');
   const pinRepeat = pinInput('pin-repeat');
-  const pinSave = button('Сохранить', { class: 'btn', id: 'pin-save' });
+  const pinSave = button(tr("Сохранить"), { class: 'btn', id: 'pin-save' });
   const pinForm = el('div', { id: 'pin-form', class: 'pin-form', hidden: true }, el('div', { class: 'grid3' },
-    field('Пароль учётки', pinPassword, 'pin-password'), field('PIN', pinNew, 'pin-new'),
-    field('Повтор PIN', pinRepeat, 'pin-repeat')),
-  el('p', { class: 'muted small' }, 'От 4 до 8 цифр. Не совпадающий с кодом телефона'), el('div', { class: 'row' }, pinSave));
+    field(tr("Пароль учётки"), pinPassword, 'pin-password'), field('PIN', pinNew, 'pin-new'),
+    field(tr("Повтор PIN"), pinRepeat, 'pin-repeat')),
+  el('p', { class: 'muted small' }, tr("От 4 до 8 цифр. Не совпадающий с кодом телефона")), el('div', { class: 'row' }, pinSave));
 
   function paintPin() {
-    pinState.textContent = me.pin ? 'PIN задан' : 'PIN: не задан';
-    pinSet.textContent = me.pin ? 'Сменить PIN' : 'Задать PIN';
+    pinState.textContent = me.pin ? tr("PIN задан") : tr("PIN: не задан");
+    pinSet.textContent = me.pin ? tr("Сменить PIN") : tr("Задать PIN");
     pinRemove.hidden = !me.pin;
   }
 
@@ -448,7 +444,7 @@ function lockBlock() {
   });
   pinSave.addEventListener('click', async () => {
     if (pinNew.value !== pinRepeat.value) {
-      say(note, 'PIN и повтор не совпадают', 'error');
+      say(note, tr("PIN и повтор не совпадают"), 'error');
       return;
     }
     pinSave.disabled = true;
@@ -458,7 +454,7 @@ function lockBlock() {
       pinPassword.value = pinNew.value = pinRepeat.value = '';
       pinForm.hidden = true;
       paintPin();
-      say(note, 'PIN задан', 'ok');
+      say(note, tr("PIN задан"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
@@ -473,7 +469,7 @@ function lockBlock() {
       pinPassword.value = pinNew.value = pinRepeat.value = '';
       pinForm.hidden = true;
       paintPin();
-      say(note, 'PIN убран', 'ok');
+      say(note, tr("PIN убран"), 'ok');
     } catch (err) {
       say(note, words(err), 'error');
     } finally {
@@ -486,7 +482,7 @@ function lockBlock() {
     try {
       const { items } = await api('GET', '/api/passkeys');
       list.replaceChildren(...(items.length ? items.map((k) => {
-        const del = button('Удалить', { class: 'btn btn-sm btn-danger passkey-delete' }, async () => {
+        const del = button(tr("Удалить"), { class: 'btn btn-sm btn-danger passkey-delete' }, async () => {
           del.disabled = true;
           try {
             await api('DELETE', `/api/passkeys/${k.id}`);
@@ -496,8 +492,8 @@ function lockBlock() {
           reload();
         });
         return el('li', { class: 'passkey', 'data-id': k.id }, el('b', {}, k.name), el('span', { class: 'muted small' },
-          ` добавлен ${day(k.created)} · ${k.used ? `открывал ${day(k.used)}` : 'ещё не открывал'}`), del);
-      }) : [el('li', { class: 'muted small' }, 'Ключей нет: запертую студию откроет пароль учётки')]));
+          tr(" добавлен {0} · {1}", day(k.created), k.used ? tr("открывал {0}", day(k.used)) : tr("ещё не открывал"))), del);
+      }) : [el('li', { class: 'muted small' }, tr("Ключей нет: запертую студию откроет пароль учётки"))]));
     } catch (err) {
       say(note, words(err), 'error');
     }
@@ -507,10 +503,10 @@ function lockBlock() {
   if (isTouch()) {
     const password = el('input', { class: 'input', id: 'passkey-password', type: 'password',
       autocomplete: 'current-password', maxlength: '1024' });
-    const next = button('Далее', { class: 'btn', id: 'passkey-next' });
-    const ask = el('div', {}, field('Пароль учётки — чтобы добавить ключ этого устройства', password, 'passkey'),
+    const next = button(tr("Далее"), { class: 'btn', id: 'passkey-next' });
+    const ask = el('div', {}, field(tr("Пароль учётки — чтобы добавить ключ этого устройства"), password, 'passkey'),
       el('div', { class: 'row' }, next));
-    const create = button('Добавить Face ID / отпечаток этого устройства', { class: 'btn btn-accent', id: 'passkey-add',
+    const create = button(tr("Добавить Face ID / отпечаток этого устройства"), { class: 'btn btn-accent', id: 'passkey-add',
       hidden: true });
     let options = null;
     let optionsAt = 0;
@@ -524,7 +520,7 @@ function lockBlock() {
     // вызов на сервере живёт 120 с: позже устройство создало бы ключ, который сервер не примет (сирота в «Паролях»)
     const expire = () => {
       restart();
-      say(note, 'Прошло больше полутора минут — введите пароль ещё раз');
+      say(note, tr("Прошло больше полутора минут — введите пароль ещё раз"));
     };
     next.addEventListener('click', async () => {
       next.disabled = true;
@@ -553,13 +549,13 @@ function lockBlock() {
       try {
         await pending;
         restart();
-        say(note, 'Ключ добавлен', 'ok');
+        say(note, tr("Ключ добавлен"), 'ok');
       } catch (err) {
         if (err && err.name === 'NotAllowedError') {
-          say(note, 'Устройство не подтвердило — нажмите ещё раз', 'error');      // вызов на сервере ещё жив
+          say(note, tr("Устройство не подтвердило — нажмите ещё раз"), 'error');      // вызов на сервере ещё жив
         } else {
           restart();
-          say(note, err && err.name === 'InvalidStateError' ? 'Ключ этого устройства уже добавлен' : words(err), 'error');
+          say(note, err && err.name === 'InvalidStateError' ? tr("Ключ этого устройства уже добавлен") : words(err), 'error');
         }
       } finally {
         create.disabled = false;
@@ -570,21 +566,21 @@ function lockBlock() {
   }
 
   reload();
-  return el('section', { class: 'block lock-block' }, el('h2', {}, 'PIN приложения'),
-    el('label', { class: 'check' }, enabled, 'Запрашивать PIN, пароль или ключ устройства'),
-    el('div', { class: 'checks' }, el('label', { class: 'check' }, all, 'Всё приложение'),
-      el('label', { class: 'check' }, some, 'Выбранные разделы')), selection,
-    el('p', { class: 'muted small' }, 'Защита действует на телефоне и компьютере. Одно отпирание открывает все выбранные разделы.'),
-    field('Запрашивать после бездействия', timer.node, 'lock-period'),
-    el('p', { class: 'muted small' }, '0 — при каждом возвращении в приложение. Максимум — 24 часа.'),
+  return el('section', { class: 'block lock-block' }, el('h2', {}, tr("PIN приложения")),
+    el('label', { class: 'check' }, enabled, tr("Запрашивать PIN, пароль или ключ устройства")),
+    el('div', { class: 'checks' }, el('label', { class: 'check' }, all, tr("Всё приложение")),
+      el('label', { class: 'check' }, some, tr("Выбранные разделы"))), selection,
+    el('p', { class: 'muted small' }, tr("Защита действует на телефоне и компьютере. Одно отпирание открывает все выбранные разделы.")),
+    field(tr("Запрашивать после бездействия"), timer.node, 'lock-period'),
+    el('p', { class: 'muted small' }, tr("0 — при каждом возвращении в приложение. Максимум — 24 часа.")),
     passwordBox, el('div', { class: 'row' }, save), offBox,
     el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, ...adding, note);
 }
 
 /* «Хранилище»: свои файлы по видам (из базы: размер оригиналов, без миниатюр), итог и очередь удаления —
  * «ждут удаления: N (с …)» или «очередь пуста». Квот и автоудаления нет. Панель берёт отсюда же подписи. */
-const KIND_NAMES = { image: 'Картинки', video: 'Ролики', audio: 'Звук', document: 'Документы и расшифровки', other: 'Прочее' };
-const UNITS = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ'];
+const KIND_NAMES = { image: tr("Картинки"), video: tr("Ролики"), audio: tr("Звук"), document: tr("Документы и расшифровки"), other: tr("Прочее") };
+const UNITS = [tr("Б"), tr("КиБ"), tr("МиБ"), tr("ГиБ"), tr("ТиБ")];
 
 export function sizeText(bytes) {
   let n = bytes;
@@ -593,13 +589,13 @@ export function sizeText(bytes) {
     n /= 1024;
     i += 1;
   }
-  return `${i ? n.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : n} ${UNITS[i]}`;
+  return `${i ? n.toLocaleString(locale(), { maximumFractionDigits: 1 }) : n} ${UNITS[i]}`;
 }
 
 export function filesText(n) {
   const tens = n % 100;
   const ones = n % 10;
-  const word = tens >= 11 && tens <= 14 ? 'файлов' : ones === 1 ? 'файл' : ones >= 2 && ones <= 4 ? 'файла' : 'файлов';
+  const word = tens >= 11 && tens <= 14 ? tr("файлов") : ones === 1 ? tr("файл") : ones >= 2 && ones <= 4 ? tr("файла") : tr("файлов");
   return `${n} ${word}`;
 }
 
@@ -609,40 +605,39 @@ export function momentText(ts) {
 
 /** Очередь удаления словами: пуста — kind 'ok'. */
 export function queueText(pending) {
-  return pending.files ? [`Ждут удаления на хранилище: ${filesText(pending.files)} (с ${momentText(pending.since)}) — `
-    + 'удалятся, когда оно станет доступно', ''] : ['Очередь удаления пуста: удалённое стёрто и с хранилища', 'ok'];
+  return pending.files ? [tr("Ждут удаления на хранилище: {0} (с {1}) — ", filesText(pending.files), momentText(pending.since))
+    + tr("удалятся, когда оно станет доступно"), ''] : [tr("Очередь удаления пуста: удалённое стёрто и с хранилища"), 'ok'];
 }
 
 /* «Выгрузить мою историю»: окно с галочками разделов (все отмечены) → «Подготовить» (POST /api/me/export,
  * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
  * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
-const EXPORT_SECTIONS = [...sectionPairs(['chat', 'photo', 'video', 'transcribe', 'speech']), ['voices', 'Голоса озвучки'],
-  ...sectionPairs(['ocr', 'translate']), ['code', `${NAMES.code}: чаты`], ['agents', `${NAMES.code}: подключения`],
-  ['security', 'Журнал безопасности']];
+const EXPORT_SECTIONS = [...sectionPairs(['chat', 'photo', 'video', 'transcribe', 'speech']), ['voices', tr("Голоса озвучки")],
+  ...sectionPairs(['ocr', 'translate']), ['code', tr("{0}: чаты", NAMES.code)], ['agents', tr("{0}: подключения", NAMES.code)],
+  ['security', tr("Журнал безопасности")]];
 
 function exportDialog(host) {
   const boxes = EXPORT_SECTIONS.map(([key, name]) => el('label', { class: 'check' },
     el('input', { type: 'checkbox', name: 'export-section', value: key, checked: true }), name));
   const fail = el('p', { class: 'error', id: 'export-error', 'aria-live': 'polite' });
   const ready = el('p', { id: 'export-ready', hidden: true });
-  const prepare = button('Подготовить', { class: 'btn btn-accent', id: 'export-prepare' });
-  openDialog(host, { id: 'export-dialog', title: 'Выгрузить мою историю', cancelText: 'Закрыть', actions: [prepare],
-    body: [el('p', { class: 'muted small' }, 'Один ZIP: чаты, промпты, цепочки, расшифровки и файлы, с описанием '
-      + 'и списком сумм sha256. Ключей подключений и пароля в нём нет. Ссылка живёт час.'), ...boxes, fail, ready] });
+  const prepare = button(tr("Подготовить"), { class: 'btn btn-accent', id: 'export-prepare' });
+  openDialog(host, { id: 'export-dialog', title: tr("Выгрузить мою историю"), cancelText: tr("Закрыть"), actions: [prepare],
+    body: [el('p', { class: 'muted small' }, tr("Один ZIP: чаты, промпты, цепочки, расшифровки и файлы, с описанием и списком сумм sha256. Ключей подключений и пароля в нём нет. Ссылка живёт час.")), ...boxes, fail, ready] });
   prepare.addEventListener('click', async () => {
     const sections = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
     fail.textContent = '';
     ready.hidden = true;
     if (!sections.length) {
-      fail.textContent = 'Отметьте хотя бы один раздел';
+      fail.textContent = tr("Отметьте хотя бы один раздел");
       return;
     }
     prepare.disabled = true;
     try {
       const { id, files, bytes } = await api('POST', '/api/me/export', { sections });
-      const count = `${files.toLocaleString('ru-RU')} ${plural(files, ['файл', 'файла', 'файлов'])}`;
+      const count = `${files.toLocaleString(locale())} ${plural(files, [tr("файл"), tr("файла"), tr("файлов")])}`;
       ready.replaceChildren(el('a', { class: 'btn btn-accent', id: 'export-download', download: '',
-        href: `/api/me/export/${encodeURIComponent(id)}` }, `Скачать: ${count}, ${sizeText(bytes)}`));
+        href: `/api/me/export/${encodeURIComponent(id)}` }, tr("Скачать: {0}, {1}", count, sizeText(bytes))));
       ready.hidden = false;
     } catch (err) {
       fail.textContent = words(err);
@@ -662,20 +657,19 @@ function storageBlock(host) {
       const line = (key, name, n) => [el('dt', {}, name),
         el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
       list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
-        ...line('total', 'Всего', total));
+        ...line('total', tr("Всего"), total));
       say(queue, ...queueText(pending));
-      if (cleaner_pending) queue.textContent += ` Контекстов Cleaner в очереди удаления: ${cleaner_pending}.`;
-      for (const s of cleaner_stalled || []) queue.textContent += ` Отложено после неудачи (${s.base_url}): ${s.count}.`;
+      if (cleaner_pending) queue.textContent += tr(" Контекстов Cleaner в очереди удаления: {0}.", cleaner_pending);
+      for (const s of cleaner_stalled || []) queue.textContent += tr(" Отложено после неудачи ({0}): {1}.", s.base_url, s.count);
     } catch (err) {
       say(queue, words(err), 'error');
     }
   }
 
   reload();
-  return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, 'Хранилище'), list, queue,
-    el('p', { class: 'muted small' }, 'Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: '
-      + 'удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).'),
-    el('div', { class: 'row' }, button('Выгрузить мою историю', { class: 'btn', id: 'export-open' },
+  return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, tr("Хранилище")), list, queue,
+    el('p', { class: 'muted small' }, tr("Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).")),
+    el('div', { class: 'row' }, button(tr("Выгрузить мою историю"), { class: 'btn', id: 'export-open' },
       () => exportDialog(host)))) };
 }
 
@@ -687,10 +681,10 @@ function exaBlock() {
   const key = el('input', { class: 'input', id: 'exa-key', type: 'password', autocomplete: 'off', maxlength: '200',
     spellcheck: 'false' });
   const note = status('exa-status');
-  const save = button('Сохранить', { class: 'btn', id: 'exa-save' });
-  const remove = button('Убрать', { class: 'btn', id: 'exa-remove' });
+  const save = button(tr("Сохранить"), { class: 'btn', id: 'exa-save' });
+  const remove = button(tr("Убрать"), { class: 'btn', id: 'exa-remove' });
   const show = () => {
-    say(note, me.exa_key ? 'Ключ задан' : 'Ключа нет', me.exa_key ? 'ok' : '');
+    say(note, me.exa_key ? tr("Ключ задан") : tr("Ключа нет"), me.exa_key ? 'ok' : '');
     remove.disabled = !me.exa_key;
   };
   async function change(method, body) {
@@ -710,12 +704,11 @@ function exaBlock() {
   save.addEventListener('click', () => change('PUT', { key: key.value }));
   remove.addEventListener('click', () => change('DELETE'));
   show();
-  return el('section', { class: 'block exa-block' }, el('h2', {}, 'Интернет'),
-    el('p', { class: 'muted small' }, 'Кнопка «Интернет» в чате — поиск и чтение страниц через Exa по вашему ключу и '
-      + 'субтитры YouTube — включается только с ключом; убранный ключ выключает её во всех диалогах. Ключ — на ',
+  return el('section', { class: 'block exa-block' }, el('h2', {}, tr("Интернет")),
+    el('p', { class: 'muted small' }, tr("Кнопка «Интернет» в чате — поиск и чтение страниц через Exa по вашему ключу и субтитры YouTube — включается только с ключом; убранный ключ выключает её во всех диалогах. Ключ — на "),
     el('a', { href: EXA_KEYS, target: '_blank', rel: 'noopener noreferrer' }, 'dashboard.exa.ai'),
-    ': бесплатно $10 в месяц, без привязанной карты перерасхода нет. Поисковые запросы и адреса страниц видит Exa.'),
-    field('Ключ Exa', key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
+    tr(": бесплатно $10 в месяц, без привязанной карты перерасхода нет. Поисковые запросы и адреса страниц видит Exa.")),
+    field(tr("Ключ Exa"), key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
 }
 
 /* Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): подписка этого устройства —
@@ -723,8 +716,8 @@ function exaBlock() {
  * '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет. Разрешение спрашивается первым
  * в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
 const PUSH_KEY = 'studio-push';
-const DENIED = 'Браузер запретил уведомления — разрешите их в настройках сайта';
-const NO_WORKER = 'Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен';
+const DENIED = tr("Браузер запретил уведомления — разрешите их в настройках сайта");
+const NO_WORKER = tr("Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен");
 const PUSH_READY_SEC = 10;       // служебный работник не зарегистрирован — ready не разрешится никогда
 
 /** Регистрация служебного работника — не дольше PUSH_READY_SEC, иначе отказ словами NO_WORKER. */
@@ -808,11 +801,11 @@ function pushBox() {
         }
         await subscribePush();
         pushFlag(true);
-        say(note, 'Push включён на этом устройстве', 'ok');
+        say(note, tr("Push включён на этом устройстве"), 'ok');
       } else {
         await unsubscribePush();
         pushFlag(false);
-        say(note, 'Push выключен на этом устройстве');
+        say(note, tr("Push выключен на этом устройстве"));
       }
     } catch (err) {
       box.checked = !on;
@@ -824,7 +817,7 @@ function pushBox() {
   if (pushSupported()) {
     api('GET', '/api/me/push').then(async (answer) => {
       if (!answer || typeof answer.subscribed !== 'boolean') {
-        throw new Error('Сервер вернул некорректные данные подписки push — обновите страницу');
+        throw new Error(tr("Сервер вернул некорректные данные подписки push — обновите страницу"));
       }
       let on = pushFlag() && answer.subscribed;
       if (on) {
@@ -840,11 +833,8 @@ function pushBox() {
       box.disabled = false;
     }).catch((err) => say(note, words(err), 'error'));
   }
-  return [el('label', { class: 'check push-check' }, box, 'Push на этом устройстве'),
-    el('p', { class: 'muted small', id: 'push-hint' }, 'Приходят и при закрытой студии и погасшем экране: запрос '
-      + 'разрешения, вопрос и конец хода Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий. '
-      + 'Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано, но факт и время '
-      + 'им видны. На iPhone — только у студии, добавленной на экран «Домой».'), note];
+  return [el('label', { class: 'check push-check' }, box, tr("Push на этом устройстве")),
+    el('p', { class: 'muted small', id: 'push-hint' }, tr("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий. Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано, но факт и время им видны. На iPhone — только у студии, добавленной на экран «Домой».")), note];
 }
 
 /* Локальные уведомления (jobs.js) — запасной вариант без подписки; Web Push — для всех фоновых заданий и «Агентов». */
@@ -856,22 +846,20 @@ function notifyBlock() {
     say(note, '');
     if (!box.checked) {
       await setNotify(false);
-      say(note, 'Уведомления выключены на этом устройстве');
+      say(note, tr("Уведомления выключены на этом устройстве"));
       return;
     }
     const on = await setNotify(true);
     box.checked = on;
-    if (on) say(note, 'Уведомления включены на этом устройстве', 'ok');
-    else say(note, 'Браузер запретил уведомления — разрешите их в настройках сайта', 'error');
+    if (on) say(note, tr("Уведомления включены на этом устройстве"), 'ok');
+    else say(note, tr("Браузер запретил уведомления — разрешите их в настройках сайта"), 'error');
   });
   if (!supported) {
-    say(note, 'Этот браузер не показывает уведомления сайта: на iPhone — только у студии, добавленной на экран «Домой»');
+    say(note, tr("Этот браузер не показывает уведомления сайта: на iPhone — только у студии, добавленной на экран «Домой»"));
   }
-  return el('section', { class: 'block notify-block' }, el('h2', {}, 'Уведомления'),
-    el('label', { class: 'check' }, box, 'Сообщать о готовности, когда студия открыта в фоне'), note,
-    el('p', { class: 'muted small' }, 'Только на этом устройстве и пока студия открыта — свёрнутая вкладка или окно. '
-      + 'При включённом push готовность сообщает сервер, без повторного локального уведомления. '
-      + 'Промптов, текстов и имён файлов в уведомлении нет.'),
+  return el('section', { class: 'block notify-block' }, el('h2', {}, tr("Уведомления")),
+    el('label', { class: 'check' }, box, tr("Сообщать о готовности, когда студия открыта в фоне")), note,
+    el('p', { class: 'muted small' }, tr("Только на этом устройстве и пока студия открыта — свёрнутая вкладка или окно. При включённом push готовность сообщает сервер, без повторного локального уведомления. Промптов, текстов и имён файлов в уведомлении нет.")),
     ...pushBox());
 }
 
@@ -879,23 +867,23 @@ function notifyBlock() {
  * Мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
  * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
-const AGENT_EVENTS = { enroll: 'привязан', revoke: 'отозван', online: 'на связи', offline: 'связь потеряна',
-  open: 'открыт', pin_ok: 'открыт PIN', pin_fail: 'неверный PIN', session_start: 'новый чат',
-  member_add: 'доступ к проекту выдан', member_remove: 'доступ к проекту отозван' };
+const AGENT_EVENTS = { enroll: tr("привязан"), revoke: tr("отозван"), online: tr("на связи"), offline: tr("связь потеряна"),
+  open: tr("открыт"), pin_ok: tr("открыт PIN"), pin_fail: tr("неверный PIN"), session_start: tr("новый чат"),
+  member_add: tr("доступ к проекту выдан"), member_remove: tr("доступ к проекту отозван") };
 
 function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   const list = el('ul', { class: 'agents', id: 'agents' });
   const events = el('ul', { class: 'agent-events', id: 'agent-events' });
   const note = status('agents-status');
   let next = null;
-  const more = button('Показать ещё', { class: 'btn btn-sm', id: 'agent-events-more', hidden: true },
+  const more = button(tr("Показать ещё"), { class: 'btn btn-sm', id: 'agent-events-more', hidden: true },
     () => loadEvents(next));
 
   function revoke(agent) {
-    const yes = button('Отозвать', { class: 'btn btn-danger', id: 'agent-revoke-confirm' });
+    const yes = button(tr("Отозвать"), { class: 'btn btn-danger', id: 'agent-revoke-confirm' });
     const fail = el('p', { class: 'error' });
-    const dialog = openDialog(host, { id: 'agent-revoke-dialog', title: 'Отозвать компьютер?', actions: [yes], body: [
-      el('p', {}, 'Мост на нём отключится и не войдёт снова без нового входа. История подключений останется.'),
+    const dialog = openDialog(host, { id: 'agent-revoke-dialog', title: tr("Отозвать компьютер?"), actions: [yes], body: [
+      el('p', {}, tr("Мост на нём отключится и не войдёт снова без нового входа. История подключений останется.")),
       el('p', { class: 'muted' }, `«${agent.name}»`), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
@@ -915,10 +903,10 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
       const { items } = await agents();
       list.replaceChildren(...(items.length ? items.map((a) => el('li', { class: 'agent', 'data-id': String(a.id) },
         el('b', { class: 'agent-name' }, a.name),
-        el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? 'на связи' : 'не на связи'),
+        el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? tr("на связи") : tr("не на связи")),
         a.has_pin ? el('span', { class: 'tag agent-pin' }, 'PIN') : null,
-        button('Отозвать', { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
-        : [el('li', { class: 'muted small' }, 'Компьютеров пока нет.')]));
+        button(tr("Отозвать"), { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
+        : [el('li', { class: 'muted small' }, tr("Компьютеров пока нет."))]));
     } catch (err) {
       say(note, words(err), 'error');
     }
@@ -948,34 +936,33 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, 'Компьютеры (Claude Code, Codex и OpenCode)'),
+  return el('section', { class: 'block agents-block' }, el('h2', {}, tr("Компьютеры (Claude Code, Codex и OpenCode)")),
     list, note,
-    el('h3', {}, 'История подключений'), events, el('div', { class: 'row' }, more));
+    el('h3', {}, tr("История подключений")), events, el('div', { class: 'row' }, more));
 }
 
 /** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —
  * с их файлами, образцы голосов, ссылки «Поделиться» и рабочее место «Агентов». */
 function wipeWhat() {
   const sections = RAIL_SECTIONS.filter((s) => s.id !== 'code').map((s) => `«${s.name}»`).join(', ');
-  return `Удалятся безвозвратно: вся история разделов ${sections} вместе с файлами, образцы голосов, все ссылки `
-    + `«Поделиться», а в разделе «${NAMES.code}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, `
-    + 'Codex и OpenCode хранятся на компьютерах и останутся.';
+  return tr("Удалятся безвозвратно: вся история разделов {0} вместе с файлами, образцы голосов, все ссылки ", sections)
+    + tr("«Поделиться», а в разделе «{0}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, ", NAMES.code)
+    + tr("Codex и OpenCode хранятся на компьютерах и останутся.");
 }
 
 function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
-  const start = button('Удалить всю историю', { class: 'btn btn-danger', id: 'history-wipe' }, () => {
+  const start = button(tr("Удалить всю историю"), { class: 'btn btn-danger', id: 'history-wipe' }, () => {
     say(note, '');
     const text = el('p', {}, wipeWhat());
-    const kept = el('p', { class: 'muted small' }, 'Подключения, пресеты и ключи останутся, как и настройки, компьютеры, '
-      + 'выданные доступы к проектам и журнал безопасности.');
+    const kept = el('p', { class: 'muted small' }, tr("Подключения, пресеты и ключи останутся, как и настройки, компьютеры, выданные доступы к проектам и журнал безопасности."));
     const fail = el('p', { class: 'error' });
-    const next = button('Удалить', { class: 'btn btn-danger', id: 'wipe-next' });
-    const confirm = button('Да, удалить навсегда', { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
-    const dialog = openDialog(host, { id: 'wipe-dialog', title: 'Удалить всю историю?', body: [text, kept, fail],
+    const next = button(tr("Удалить"), { class: 'btn btn-danger', id: 'wipe-next' });
+    const confirm = button(tr("Да, удалить навсегда"), { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
+    const dialog = openDialog(host, { id: 'wipe-dialog', title: tr("Удалить всю историю?"), body: [text, kept, fail],
       actions: [next, confirm] });
     next.addEventListener('click', () => {
-      text.textContent = 'Точно? Отменить удаление нельзя.';
+      text.textContent = tr("Точно? Отменить удаление нельзя.");
       next.hidden = true;
       confirm.hidden = false;
       confirm.focus();
@@ -986,9 +973,9 @@ function wipeBlock(host, onWiped) {
         const { pending_files: left, cleaner_pending } = await api('DELETE', '/api/history');
         dialog.close();
         // хранилище было недоступно: файлы ждут в очереди удаления — сказать как есть
-        say(note, left ? `История удалена, но файлов на хранилище ещё ${left}: удалятся, когда оно станет доступно`
-          : 'История удалена', 'ok');
-        if (cleaner_pending) note.textContent += ` Контекстов Cleaner в очереди удаления: ${cleaner_pending}.`;
+        say(note, left ? tr("История удалена, но файлов на хранилище ещё {0}: удалятся, когда оно станет доступно", left)
+          : tr("История удалена"), 'ok');
+        if (cleaner_pending) note.textContent += tr(" Контекстов Cleaner в очереди удаления: {0}.", cleaner_pending);
         onWiped();
       } catch (err) {
         fail.textContent = words(err);
@@ -996,9 +983,8 @@ function wipeBlock(host, onWiped) {
       }
     });
   });
-  return el('section', { class: 'block' }, el('h2', {}, 'История'),
-    el('p', { class: 'muted small' }, 'История всех разделов с файлами, образцы голосов и ссылки «Поделиться» этого '
-      + 'профиля. Подключения, пресеты и ключи не удаляются.'),
+  return el('section', { class: 'block' }, el('h2', {}, tr("История")),
+    el('p', { class: 'muted small' }, tr("История всех разделов с файлами, образцы голосов и ссылки «Поделиться» этого профиля. Подключения, пресеты и ключи не удаляются.")),
     el('div', { class: 'row' }, start, note));
 }
 
@@ -1016,9 +1002,9 @@ function probeVoice(host, voice) {
     autocomplete: 'off' });
   const fail = el('p', { class: 'error', 'aria-live': 'polite' });
   const player = el('audio', { id: 'voice-probe-audio', controls: true, hidden: true });
-  const go = button('Послушать', { class: 'btn btn-accent', id: 'voice-probe-go' });
-  const dialog = openDialog(host, { id: 'voice-probe-dialog', title: `Проба: ${voice.name}`, cancelText: 'Закрыть',
-    body: [field('Фраза (до 200 знаков)', phrase, 'text'), player, fail], actions: [go] });
+  const go = button(tr("Послушать"), { class: 'btn btn-accent', id: 'voice-probe-go' });
+  const dialog = openDialog(host, { id: 'voice-probe-dialog', title: tr("Проба: {0}", voice.name), cancelText: tr("Закрыть"),
+    body: [field(tr("Фраза (до 200 знаков)"), phrase, 'text'), player, fail], actions: [go] });
   let url = null;
   dialog.addEventListener('close', () => {
     player.pause();
@@ -1052,7 +1038,7 @@ function voicesBlock(host) {
     try {
       const { items } = await api('GET', '/api/voices');
       list.replaceChildren(...(items.length ? items.map((v) => {
-        const del = button('Удалить', { class: 'btn btn-sm btn-danger voice-delete' }, async () => {
+        const del = button(tr("Удалить"), { class: 'btn btn-sm btn-danger voice-delete' }, async () => {
           del.disabled = true;
           try {
             await api('DELETE', `/api/voices/${v.id}`);
@@ -1061,10 +1047,10 @@ function voicesBlock(host) {
           }
           reload();
         });
-        const tryIt = button('Проба', { class: 'btn btn-sm voice-probe' }, () => probeVoice(host, v));
+        const tryIt = button(tr("Проба"), { class: 'btn btn-sm voice-probe' }, () => probeVoice(host, v));
         return el('li', { class: 'voice', 'data-id': v.id }, el('b', {}, v.name),
-          el('span', { class: 'muted small' }, ` образец ${clock(v.duration)}`), tryIt, del);
-      }) : [el('li', { class: 'muted small' }, 'Голосов пока нет: озвучка шлюза srvllm говорит голосом по образцу')]));
+          el('span', { class: 'muted small' }, tr(" образец {0}", clock(v.duration))), tryIt, del);
+      }) : [el('li', { class: 'muted small' }, tr("Голосов пока нет: озвучка шлюза srvllm говорит голосом по образцу"))]));
     } catch (err) {
       say(note, words(err), 'error');
     }
@@ -1073,20 +1059,20 @@ function voicesBlock(host) {
   function add() {
     const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off' });
     const text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: '500',
-      placeholder: 'Определится автоматически после загрузки или записи' });
+      placeholder: tr("Определится автоматически после загрузки или записи") });
     const file = el('input', { type: 'file', name: 'audio', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm' });
-    const rec = button('Записать с микрофона', { class: 'btn btn-sm', id: 'voice-record' });
+    const rec = button(tr("Записать с микрофона"), { class: 'btn btn-sm', id: 'voice-record' });
     const recNote = el('p', { class: 'muted small', 'aria-live': 'polite' });
     const recognizeNote = el('p', { class: 'muted small', 'aria-live': 'polite', id: 'voice-asr-status' });
-    const retry = button('Распознать ещё раз', { class: 'btn btn-sm', id: 'voice-transcribe', hidden: true });
+    const retry = button(tr("Распознать ещё раз"), { class: 'btn btn-sm', id: 'voice-transcribe', hidden: true });
     const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
-    const save = button('Сохранить', { class: 'btn btn-accent', id: 'voice-save' });
+    const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'voice-save' });
     let recorded = null;
     let recording = null;
     let recognizing = null;
-    const dialog = openDialog(host, { id: 'voice-dialog', title: 'Новый голос', actions: [save], body: [
-      field('Имя голоса', name, 'name'), field('Текст образца (можно поправить)', text, 'text'),
-      el('p', { class: 'muted small' }, 'Запись 5–15 секунд чистой речи: файлом или с микрофона.'),
+    const dialog = openDialog(host, { id: 'voice-dialog', title: tr("Новый голос"), actions: [save], body: [
+      field(tr("Имя голоса"), name, 'name'), field(tr("Текст образца (можно поправить)"), text, 'text'),
+      el('p', { class: 'muted small' }, tr("Запись 5–15 секунд чистой речи: файлом или с микрофона.")),
       el('div', { class: 'row' }, file, rec), recNote, recognizeNote, retry, fail] });
     dialog.addEventListener('close', () => { recognizing?.abort(); });
 
@@ -1096,7 +1082,7 @@ function voicesBlock(host) {
       recognizing = controller;
       text.value = '';
       fail.textContent = '';
-      recognizeNote.textContent = 'Распознаю текст образца…';
+      recognizeNote.textContent = tr("Распознаю текст образца…");
       text.disabled = save.disabled = rec.disabled = true;
       text.setAttribute('aria-busy', 'true');
       retry.hidden = true;
@@ -1106,10 +1092,10 @@ function voicesBlock(host) {
         const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
         if (recognizing !== controller || !dialog.open || !dialog.isConnected) return;
         text.value = result.text;
-        recognizeNote.textContent = 'Текст распознан. Проверьте его перед сохранением.';
+        recognizeNote.textContent = tr("Текст распознан. Проверьте его перед сохранением.");
       } catch (err) {
         if (controller.signal.aborted || recognizing !== controller || !dialog.open || !dialog.isConnected) return;
-        recognizeNote.textContent = 'Распознавание не удалось. Повторите или введите текст образца вручную.';
+        recognizeNote.textContent = tr("Распознавание не удалось. Повторите или введите текст образца вручную.");
         fail.textContent = words(err);
       } finally {
         if (recognizing === controller) {
@@ -1139,7 +1125,7 @@ function voicesBlock(host) {
       file.disabled = save.disabled = rec.disabled = true;
       retry.hidden = true;
       try {
-        recording = await startRecording(15, (sec) => { recNote.textContent = `Запись · ${clock(sec)} — нажмите ещё раз, чтобы остановить`; }, rec);
+        recording = await startRecording(15, (sec) => { recNote.textContent = tr("Запись · {0} — нажмите ещё раз, чтобы остановить", clock(sec)); }, rec);
       } catch (err) {
         recNote.textContent = words(err);
         file.disabled = save.disabled = rec.disabled = false;
@@ -1150,25 +1136,25 @@ function voicesBlock(host) {
         file.disabled = save.disabled = false;
         return;
       }
-      rec.textContent = 'Остановить';
+      rec.textContent = tr("Остановить");
       const sample = await recording.done;
       recording = null;
       file.disabled = save.disabled = false;
       if (!sample) {                                 // отменена (окно закрыли, ушли из раздела)
-        rec.textContent = recorded ? 'Записать заново' : 'Записать с микрофона';
+        rec.textContent = recorded ? tr("Записать заново") : tr("Записать с микрофона");
         recNote.textContent = '';
         return;
       }
       recorded = sample;
-      rec.textContent = 'Записать заново';
-      recNote.textContent = 'Запись готова';
+      rec.textContent = tr("Записать заново");
+      recNote.textContent = tr("Запись готова");
       file.value = '';
       transcribe(sample);
     });
     save.addEventListener('click', async () => {
       const sample = file.files[0] || recorded;
       if (!sample) {
-        fail.textContent = 'Нужна запись образца: файл или с микрофона';
+        fail.textContent = tr("Нужна запись образца: файл или с микрофона");
         return;
       }
       save.disabled = file.disabled = rec.disabled = retry.disabled = text.disabled = true;
@@ -1190,8 +1176,8 @@ function voicesBlock(host) {
   }
 
   reload();
-  return el('section', { class: 'block voices-block' }, el('div', { class: 'block-head' }, el('h2', {}, 'Голоса'),
-    button('+ Голос', { class: 'btn', id: 'voice-add' }, add)), list, note);
+  return el('section', { class: 'block voices-block' }, el('div', { class: 'block-head' }, el('h2', {}, tr("Голоса")),
+    button(tr("+ Голос"), { class: 'btn', id: 'voice-add' }, add)), list, note);
 }
 
 /* ---- разделы ---------------------------------------------------------------------- */
@@ -1204,13 +1190,13 @@ const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'da
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
-  const names = { ...SECTION_NAMES, cleaner: 'Очистка данных · Cleaner', code: NAMES.code, appearance: 'Оформление',
-    security: 'Защита', notifications: 'Уведомления', data: 'Данные', input: other ? 'Ввод и интернет' : 'Голосовой ввод' };
+  const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
+    security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
   const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];
   const accountIds = other ? ACCOUNT_IDS : ['input'];
   const ids = [...sectionIds, ...accountIds];
-  const nav = el('nav', { class: 'settings-nav', 'aria-label': 'Разделы настроек' });
+  const nav = el('nav', { class: 'settings-nav', 'aria-label': tr("Разделы настроек") });
   const panel = el('div', { class: 'settings-panel' });
   const download = other ? agentDownload() : null;
   const root = el('div', { class: 'settings' }, ...(download ? [download] : []), nav, panel);
@@ -1231,7 +1217,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     return OLD_IDS[id];
   }
 
-  for (const [title, list] of [['Разделы', sectionIds], ['Учётка', accountIds]]) {
+  for (const [title, list] of [[tr("Разделы"), sectionIds], [tr("Учётка"), accountIds]]) {
     nav.append(el('h2', { class: 'settings-group' }, title));
     for (const id of list) {
       const link = el('a', { href: `#/settings/${id}`, 'data-section': id }, names[id]);
@@ -1278,13 +1264,13 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   }
 
   async function refresh(s, conn) {
-    say(note, 'Загружаю список моделей…');
+    say(note, tr("Загружаю список моделей…"));
     try {
       // прямое подключение: список берёт браузер; через сервер, убранное из списка (и в панели) — GET …/found
       const items = direct && !conn.proxied && !conn.dropped ? await modelsOf(conn)
         : (await api('GET', `${base}/${s.id}/links/${conn.id}/found`)).items;
       found.set(`${s.id}:${conn.id}`, items);
-      say(note, items.length ? `Найдено моделей: ${items.length}` : 'Сервис не назвал ни одной модели');
+      say(note, items.length ? tr("Найдено моделей: {0}", items.length) : tr("Сервис не назвал ни одной модели"));
     } catch (err) {
       say(note, words(err), 'error');
     }
@@ -1307,10 +1293,10 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   }
 
   function tryModel(s, conn, model) {
-    const send = button('Отправить', { class: 'btn btn-accent', id: 'probe-send' });
+    const send = button(tr("Отправить"), { class: 'btn btn-accent', id: 'probe-send' });
     const fail = el('p', { class: 'error' });
-    const dialog = openDialog(host, { id: 'probe-dialog', title: 'Пробный ответ', actions: [send], body: [
-      el('p', {}, `Модель «${modelLabel(model)}» подключения «${conn.name}».`), el('p', {}, PROBE_WARNING), fail] });
+    const dialog = openDialog(host, { id: 'probe-dialog', title: tr("Пробный ответ"), actions: [send], body: [
+      el('p', {}, tr("Модель «{0}» подключения «{1}».", modelLabel(model), conn.name)), el('p', {}, PROBE_WARNING), fail] });
     send.addEventListener('click', async () => {
       send.disabled = true;
       try {
@@ -1326,12 +1312,12 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   }
 
   function remove(conn) {
-    const yes = button('Удалить', { class: 'btn btn-danger', id: 'conn-delete-confirm' });
+    const yes = button(tr("Удалить"), { class: 'btn btn-danger', id: 'conn-delete-confirm' });
     const fail = el('p', { class: 'error' });
     const used = sectionsText(conn.sections);
-    const dialog = openDialog(host, { id: 'conn-delete-dialog', title: 'Удалить подключение?', actions: [yes], body: [
+    const dialog = openDialog(host, { id: 'conn-delete-dialog', title: tr("Удалить подключение?"), actions: [yes], body: [
       el('p', {}, `«${conn.name}» — ${conn.base_url}`),
-      el('p', { class: 'muted' }, used ? `Подключение участвует в разделах: ${used}. Оно уйдёт из всех.` : 'Подключение не участвует ни в одном разделе.'),
+      el('p', { class: 'muted' }, used ? tr("Подключение участвует в разделах: {0}. Оно уйдёт из всех.", used) : tr("Подключение не участвует ни в одном разделе.")),
       fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
@@ -1356,7 +1342,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       const checked = link.models.includes(m);
       const check = el('input', { type: 'checkbox', class: 'model-check', value: m, checked });
       const radio = el('input', { type: 'radio', class: 'model-default', name: `default-${s.id}`, value: m,
-        'data-conn': String(conn.id), 'aria-label': `По умолчанию: ${modelLabel(m)}`, disabled: !checked,
+        'data-conn': String(conn.id), 'aria-label': tr("По умолчанию: {0}", modelLabel(m)), disabled: !checked,
         checked: !!s.default && s.default.connection_id === conn.id && s.default.model === m });
       check.addEventListener('change', () => saveModels(s, conn, names, box));
       radio.addEventListener('change', () => saveDefault(s, conn, m));
@@ -1364,21 +1350,21 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       const tryable = direct && checked && s.id === 'chat' && conn.kind !== 'srvllm' && !conn.cleaner;
       box.append(el('li', { class: 'model', 'data-model': m },
         el('label', { class: 'check model-name' }, check, modelLabel(m)),
-        known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, 'не найдена') : null,
-        tryable ? button('Пробный ответ', { class: 'btn btn-sm model-probe' }, () => tryModel(s, conn, m)) : null,
-        el('label', { class: 'model-default-label', title: 'По умолчанию' }, radio, el('span', { class: 'small muted' }, 'по умолчанию'))));
+        known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, tr("не найдена")) : null,
+        tryable ? button(tr("Пробный ответ"), { class: 'btn btn-sm model-probe' }, () => tryModel(s, conn, m)) : null,
+        el('label', { class: 'model-default-label', title: tr("По умолчанию") }, radio, el('span', { class: 'small muted' }, tr("по умолчанию")))));
     }
     let search = null;
     if (names.length > SEARCH_FROM) {
-      search = el('input', { class: 'input model-search', type: 'search', placeholder: 'Поиск модели', 'aria-label': 'Поиск модели' });
+      search = el('input', { class: 'input model-search', type: 'search', placeholder: tr("Поиск модели"), 'aria-label': tr("Поиск модели") });
       search.addEventListener('input', () => {
         const q = search.value.trim().toLowerCase();
         for (const li of box.children) li.hidden = !!q && !li.dataset.model.toLowerCase().includes(q);
       });
     }
     const actions = el('div', { class: 'link-actions', hidden: true },
-      button('Изменить', { class: 'btn btn-sm link-edit' }, () => editConnection(host, connBase, conn, changed)),
-      button('Убрать из раздела', { class: 'btn btn-sm link-remove' }, async () => {
+      button(tr("Изменить"), { class: 'btn btn-sm link-edit' }, () => editConnection(host, connBase, conn, changed)),
+      button(tr("Убрать из раздела"), { class: 'btn btn-sm link-remove' }, async () => {
         try {
           await api('DELETE', `${base}/${s.id}/links/${conn.id}`);
           say(note, '');
@@ -1387,8 +1373,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         }
         await changed();
       }),
-      button('Удалить подключение', { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)));
-    const menu = button(icon('more'), { class: 'btn btn-sm link-menu', 'aria-label': 'Ещё', title: 'Ещё',
+      button(tr("Удалить подключение"), { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)));
+    const menu = button(icon('more'), { class: 'btn btn-sm link-menu', 'aria-label': tr("Ещё"), title: tr("Ещё"),
       'aria-expanded': 'false' }, () => {
       actions.hidden = !actions.hidden;
       menu.setAttribute('aria-expanded', String(!actions.hidden));
@@ -1399,7 +1385,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ? passportBlock({ conn, section: s.id, models: link.catalog || link.models, label: modelLabel,
         error: checkErrors.get(conn.id), busy, open: opened.has(key),
         onToggle: (open) => (open ? opened.add(key) : opened.delete(key)) }) : null;
-    const checkButton = direct ? button('Проверить', { class: 'btn btn-sm link-check', disabled: busy },
+    const checkButton = direct ? button(tr("Проверить"), { class: 'btn btn-sm link-check', disabled: busy },
       () => runCheck(s, conn)) : null;
     return el('li', { class: 'link', 'data-conn': String(conn.id) },
       el('div', { class: 'link-head' },
@@ -1407,13 +1393,13 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('b', { class: 'link-name' }, conn.name),
           el('span', { class: 'link-url' }, conn.base_url),
           el('span', { class: 'link-hint' },
-            conn.cleaner ? el('span', { class: 'tag' }, 'Cleaner · очистка данных') : null,
-            el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? 'через сервер' : 'из браузера'),
-            ` ключ ${conn.token_hint}`)),
+            conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
+            el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
+            tr(" ключ {0}", conn.token_hint))),
         el('div', { class: 'link-buttons' }, checkButton,
-          button('Обновить модели', { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
+          button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
       passport, actions, search,
-      names.length ? box : el('p', { class: 'muted small' }, 'Нажмите «Обновить модели» и отметьте нужные'));
+      names.length ? box : el('p', { class: 'muted small' }, tr("Нажмите «Обновить модели» и отметьте нужные")));
   }
 
   async function addLink(s, cleaner = false) {
@@ -1426,14 +1412,14 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     const select = el('select', { class: 'input', name: 'existing' },
       ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
-      el('option', { value: 'new' }, 'Новый адрес…'));
+      el('option', { value: 'new' }, tr("Новый адрес…")));
     select.value = conns.length ? String(conns[0].id) : 'new';
     const form = connectionForm(null, { cleaner });
     form.el.hidden = select.value !== 'new';
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
-    const box = el('div', {}, field('Подключение', select, 'existing'), form.el);
-    const save = button('Добавить', { class: 'btn btn-accent', id: 'link-save' });
-    const dialog = openDialog(host, { id: 'link-dialog', title: `Адрес для раздела «${names[s.id]}»`, body: [box], actions: [save] });
+    const box = el('div', {}, field(tr("Подключение"), select, 'existing'), form.el);
+    const save = button(tr("Добавить"), { class: 'btn btn-accent', id: 'link-save' });
+    const dialog = openDialog(host, { id: 'link-dialog', title: tr("Адрес для раздела «{0}»", names[s.id]), body: [box], actions: [save] });
     save.addEventListener('click', async () => {
       if (save.disabled) return;
       save.disabled = true;
@@ -1454,12 +1440,12 @@ export function settingsView(host, { sections: base, connections: connBase, sect
   function sectionBlock(s, cleaner = false) {
     if (cleaner) s = { ...s, links: s.links.filter((l) => l.connection.cleaner) };
     const list = el('ul', { class: 'links' }, ...(s.links.length ? s.links.map((l) => linkCard(s, l))
-      : [el('li', { class: 'muted' }, 'В разделе пока нет подключений')]));
+      : [el('li', { class: 'muted' }, tr("В разделе пока нет подключений"))]));
     return el('section', { class: 'block section-panel', 'data-section': s.id },
       el('h2', {}, names[s.id]), list,
-      el('div', { class: 'row' }, button(cleaner ? '+ Подключить Cleaner' : '+ Адрес для раздела',
+      el('div', { class: 'row' }, button(cleaner ? tr("+ Подключить Cleaner") : tr("+ Адрес для раздела"),
         { class: 'btn', id: cleaner ? `cleaner-add-${s.id}` : 'link-add' }, () => addLink(s, cleaner))),
-      cleaner ? el('a', { class: 'small', href: `#/settings/${s.id}` }, 'Все модели раздела') : note);
+      cleaner ? el('a', { class: 'small', href: `#/settings/${s.id}` }, tr("Все модели раздела")) : note);
   }
 
   function renderDictation() {
@@ -1480,20 +1466,17 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     dictationHost = null;
-    const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, '‹ Настройки')
-      : button('‹ Разделы', { class: 'btn-link settings-back' }, () => show(null));
+    const back = hash ? el('a', { class: 'settings-back', href: '#/settings' }, tr("‹ Настройки"))
+      : button(tr("‹ Разделы"), { class: 'btn-link settings-back' }, () => show(null));
     const group = (id, ...blocks) => panel.replaceChildren(back,
       el('div', { class: 'section-panel', 'data-section': id }, ...blocks));
     if (shown === 'cleaner') {
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'cleaner' },
-        el('section', { class: 'block' }, el('h2', {}, 'Очистка данных · Cleaner'),
-          el('p', {}, 'Личные подключения и модели по умолчанию для чата и перевода.'),
-          el('details', { class: 'small' }, el('summary', {}, 'Как подключить и использовать'),
-          el('p', { class: 'muted' }, 'В Cleaner откройте «Ключи» и создайте ключ с доступом к облачному подключению и его моделям. '
-            + 'У каждого пользователя должна быть своя учётная запись Cleaner. Адрес сервиса разрешает администратор Studio.'),
-          el('p', { class: 'muted' }, '«Проверить» проверяет связь и доступ к моделям. Перед отправкой из чата вы увидите очищенный текст; '
-            + 'в переводе очистка выполняется автоматически. Настройки по умолчанию действуют для новых диалогов и переводов. '
-            + 'Адрес и ключ можно изменить через меню «⋯» подключения.'))),
+        el('section', { class: 'block' }, el('h2', {}, tr("Очистка данных · Cleaner")),
+          el('p', {}, tr("Личные подключения и модели по умолчанию для чата и перевода.")),
+          el('details', { class: 'small' }, el('summary', {}, tr("Как подключить и использовать")),
+          el('p', { class: 'muted' }, tr("В Cleaner откройте «Ключи» и создайте ключ с доступом к облачному подключению и его моделям. У каждого пользователя должна быть своя учётная запись Cleaner. Адрес сервиса разрешает администратор Studio.")),
+          el('p', { class: 'muted' }, tr("«Проверить» проверяет связь и доступ к моделям. Перед отправкой из чата вы увидите очищенный текст; в переводе очистка выполняется автоматически. Настройки по умолчанию действуют для новых диалогов и переводов. Адрес и ключ можно изменить через меню «⋯» подключения.")))),
         ...['chat', 'translate'].map((id) => sectionOf(id)).filter(Boolean).map((s) => sectionBlock(s, true)), note));
       return;
     }
@@ -1566,7 +1549,7 @@ let screen = null;
 export function mount(view, ctx) {
   screen = settingsView(view, { sections: '/api/sections', connections: '/api/connections', section: ctx.id,
     hash: true, other: true, direct: true, voices: true, onChange: () => loadMe().catch(() => null) });
-  view.append(el('header', { class: 'head' }, el('h1', {}, 'Настройки')), el('div', { class: 'page wide' }, screen.el));
+  view.append(el('header', { class: 'head' }, el('h1', {}, tr("Настройки"))), el('div', { class: 'page wide' }, screen.el));
   screen.reload();
 }
 

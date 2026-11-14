@@ -7,28 +7,30 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
-<title>Студия — просмотр чата</title>
+<title data-i18n>Студия — просмотр чата</title>
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
 <link rel="stylesheet" href="/static/css/share.css?v={{v}}">
+<script src="/static/en.js?v={{v}}"></script>
+<script src="/static/i18n.js?v={{v}}"></script>
 <script src="/static/theme.js?v={{v}}"></script>
 <script type="module" src="/static/js/share-view.js?v={{v}}"></script>
 </head>
 <body class="share-page">
 <main id="shared-main">
   <form id="share-unlock" class="solo-card">
-    <div class="brand"><img src="/static/icons/icon.svg" alt=""><h1>Просмотр чата</h1></div>
-    <p>Введите PIN, который сообщил владелец чата. Доступ — только для чтения.</p>
-    <label for="share-pin">PIN доступа · 4 цифры</label>
+    <div class="brand"><img src="/static/icons/icon.svg" alt=""><h1 data-i18n>Просмотр чата</h1></div>
+    <p data-i18n>Введите PIN, который сообщил владелец чата. Доступ — только для чтения.</p>
+    <label for="share-pin" data-i18n>PIN доступа · 4 цифры</label>
     <input class="input" id="share-pin" type="password" inputmode="numeric" pattern="[0-9]{4}"
            minlength="4" maxlength="4" autocomplete="off" required>
     <p id="share-error" class="error" role="alert"></p>
-    <button id="share-open" class="btn btn-accent" type="submit">Открыть чат</button>
+    <button id="share-open" class="btn btn-accent" type="submit" data-i18n>Открыть чат</button>
   </form>
   <section id="shared-chat" hidden aria-labelledby="shared-title">
-    <header class="shared-head"><h1 id="shared-title"></h1><p class="muted">Только чтение · снимок переписки</p>
-      <button id="share-close" class="btn" type="button">Закрыть просмотр</button></header>
-    <div id="shared-messages" class="feed" aria-label="Сообщения чата"></div>
+    <header class="shared-head"><h1 id="shared-title"></h1><p class="muted" data-i18n>Только чтение · снимок переписки</p>
+      <button id="share-close" class="btn" type="button" data-i18n>Закрыть просмотр</button></header>
+    <div id="shared-messages" class="feed" aria-label="Сообщения чата" data-i18n-attrs="aria-label"></div>
     <p id="shared-status" class="error" role="status"></p>
   </section>
 </main>

@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Озвучка» (#/speech) — раскладка как у «Разговоров» (спека 2026-10-20, раздел 6.4).
  *
  * Слева — озвучки по дням, справа — выбранная: текст, плеер, «Скачать» (mp3), «Удалить»; идущая —
@@ -45,21 +46,21 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
   const { select, refresh } = records;
 
-  const list = el('nav', { class: 'tr-list sp-list', 'aria-label': 'Озвучки' });
+  const list = el('nav', { class: 'tr-list sp-list', 'aria-label': tr("Озвучки") });
   const aside = el('aside', { class: 'split-aside', id: 'sp-aside' }, list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': 'Озвучки',
+  const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': tr("Озвучки"),
     'aria-controls': 'sp-aside', 'aria-expanded': 'false' }, icon('list'));
   const head = el('header', { class: 'head' }, toggle, el('h1', {}, NAMES.speech));
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
-  const text = el('textarea', { id: 'speech-text', rows: '1', maxlength: String(TEXT_MAX), 'aria-label': 'Текст для озвучки',
-    placeholder: 'Текст, который нужно озвучить' });
+  const text = el('textarea', { id: 'speech-text', rows: '1', maxlength: String(TEXT_MAX), 'aria-label': tr("Текст для озвучки"),
+    placeholder: tr("Текст, который нужно озвучить") });
   const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
-  const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': 'Модель' });
+  const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': tr("Модель") });
   const voiceBox = el('span', { class: 'sp-voice' });
-  const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, 'Озвучить');
+  const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, tr("Озвучить"));
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer' }, textBox.box, textBox.error, hint,
@@ -87,18 +88,18 @@ function build(view, ctx) {
     const { kind } = chosen();
     hint.hidden = true;
     if (kind === 'srvllm') {
-      const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': 'Голос' },
+      const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       voiceBox.replaceChildren(pick);
       if (!voices.length) {
-        hint.replaceChildren('Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: ',
-          el('a', { href: '#/settings/speech' }, 'открыть настройки'));
+        hint.replaceChildren(tr("Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: "),
+          el('a', { href: '#/settings/speech' }, tr("открыть настройки")));
         hint.hidden = false;
       }
     } else {
       const options = el('datalist', { id: 'service-voices' }, ...SERVICE_VOICES.map((v) => el('option', { value: v })));
       voiceBox.replaceChildren(el('input', { class: 'chip', id: 'chip-voice', list: 'service-voices', value: 'alloy',
-        maxlength: '64', 'aria-label': 'Голос сервиса', autocomplete: 'off' }), options);
+        maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' }), options);
     }
   }
 
@@ -120,10 +121,10 @@ function build(view, ctx) {
   }
 
   /* список и выбранная */
-  const paintRows = pickerList(list, { cls: 'sp-item', moreId: 'sp-more', empty: 'Здесь появятся ваши озвучки',
+  const paintRows = pickerList(list, { cls: 'sp-item', moreId: 'sp-more', empty: tr("Здесь появятся ваши озвучки"),
     name: (item) => item.text.slice(0, 80),
     state: (item) => (item.state === 'done' ? clock(item.duration)
-      : RUNNING.has(item.state) ? item.detail : item.state === 'cancelled' ? 'отменено' : 'ошибка'),
+      : RUNNING.has(item.state) ? serverMessage(item.detail) : item.state === 'cancelled' ? tr("отменено") : tr("ошибка")),
     pick(id) {
       panel(false);
       select(id);
@@ -135,9 +136,9 @@ function build(view, ctx) {
 
   function confirmDelete(item) {
     const fail = el('p', { class: 'error' });
-    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'sp-delete-confirm' }, 'Удалить');
-    const dialog = openDialog(root, { id: 'sp-delete-dialog', title: 'Удалить озвучку?', actions: [yes],
-      body: [el('p', {}, 'Удалятся текст и звук.'), fail] });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'sp-delete-confirm' }, tr("Удалить"));
+    const dialog = openDialog(root, { id: 'sp-delete-dialog', title: tr("Удалить озвучку?"), actions: [yes],
+      body: [el('p', {}, tr("Удалятся текст и звук.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -184,7 +185,7 @@ function build(view, ctx) {
     }
     live.ready = item.parts;
     if (live.waiting) playPart();
-    live.note.textContent = `Готово частей: ${item.parts} — можно слушать, пока озвучка идёт`;
+    live.note.textContent = tr("Готово частей: {0} — можно слушать, пока озвучка идёт", item.parts);
     return live.box;
   }
 
@@ -196,8 +197,8 @@ function build(view, ctx) {
     }
     if (!item) {
       busy = null;
-      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите озвучку в списке.'
-        : 'Напишите или продиктуйте текст внизу и нажмите «Озвучить».'));
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? tr("Выберите озвучку в списке.")
+        : tr("Напишите или продиктуйте текст внизу и нажмите «Озвучить».")));
       return;
     }
     const nodes = [el('p', { class: 'sp-text' }, item.text)];
@@ -210,16 +211,16 @@ function build(view, ctx) {
     } else if (item.state === 'done') {
       nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
         src: `/api/media/${encodeURIComponent(item.media_id)}` }));
-      const save = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-download' }, 'Скачать mp3');
+      const save = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-download' }, tr("Скачать mp3"));
       save.addEventListener('click', () => {
         el('a', { href: `/api/media/${encodeURIComponent(item.media_id)}?download=1`, download: '' }).click();
       });
       acts.append(save);
     } else {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
+      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
     }
     if (!RUNNING.has(item.state)) {
-      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'sp-delete' }, 'Удалить');
+      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'sp-delete' }, tr("Удалить"));
       del.addEventListener('click', () => confirmDelete(item));
       acts.append(del);
     }
@@ -236,11 +237,11 @@ function build(view, ctx) {
     const voiceField = voiceBox.querySelector('#chip-voice');
     const voice = voiceField ? voiceField.value.trim() : '';
     if (!value) {
-      error.textContent = 'Напишите текст';
+      error.textContent = tr("Напишите текст");
       return;
     }
     if (!voice) {
-      error.textContent = 'Выберите голос';
+      error.textContent = tr("Выберите голос");
       return;
     }
     error.textContent = '';

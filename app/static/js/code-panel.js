@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
  *
@@ -32,24 +33,24 @@ import { el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 
-const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
-const PIN_LOCKED = 'PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере';
+const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
+const PIN_LOCKED = tr("PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере");
 const snapshots = new Map(); // Только метаданные, отдельно по учётке; переживают переход между разделами.
 const SUMMARY_MS = 20000;
 document.addEventListener('studio-code-clear', () => {
   for (const scope of snapshots.values()) { scope.summaries.clear(); scope.checked.clear(); }
 });
-const UPDATE_WORDS = { preparing: 'Скачивание и установка…', waiting: 'Ждём завершения заданий…',
-  restarting: 'Перезапуск агента…', pin: 'Введите PIN для обновления агента',
-  failed: 'Не удалось обновить агент. Повторите попытку.' };
+const UPDATE_WORDS = { preparing: tr("Скачивание и установка…"), waiting: tr("Ждём завершения заданий…"),
+  restarting: tr("Перезапуск агента…"), pin: tr("Введите PIN для обновления агента"),
+  failed: tr("Не удалось обновить агент. Повторите попытку.") };
 // Мост ≥ 0.20.0 называет, что держит ожидание обновления: только числа и признак рабочего стола.
 function waitingWords(holds) {
   const parts = [];
-  if (holds?.tasks) parts.push(`идёт заданий: ${holds.tasks}`);
-  if (holds?.asking) parts.push(`ждут вашего ответа: ${holds.asking}`);
-  if (holds?.desktop) parts.push('подключён удалённый рабочий стол');
-  if (holds?.requests) parts.push(`выполняется запросов: ${holds.requests}`);
-  return parts.length ? `Ждём завершения — ${parts.join(', ')}` : UPDATE_WORDS.waiting;
+  if (holds?.tasks) parts.push(tr("идёт заданий: {0}", holds.tasks));
+  if (holds?.asking) parts.push(tr("ждут вашего ответа: {0}", holds.asking));
+  if (holds?.desktop) parts.push(tr("подключён удалённый рабочий стол"));
+  if (holds?.requests) parts.push(tr("выполняется запросов: {0}", holds.requests));
+  return parts.length ? tr("Ждём завершения — {0}", parts.join(', ')) : UPDATE_WORDS.waiting;
 }
 const versionParts = (value) => /^\d+\.\d+\.\d+$/.test(value || '') ? value.split('.').map(Number) : null;
 function newer(latest, current) {
@@ -62,10 +63,10 @@ function newer(latest, current) {
 /** «был на связи …» отключённого компьютера (D2): сегодня/вчера — время, раньше — дата; пояс учётки (time.js). */
 export function lastSeenText(stamp, now = Date.now() / 1000) {
   const days = calendarDay(now).number - calendarDay(stamp).number;
-  if (days === 0) return `был на связи сегодня в ${timeOnly(stamp)}`;
-  if (days === 1) return `был на связи вчера в ${timeOnly(stamp)}`;
-  return `был на связи ${dateTime(stamp, { day: 'numeric', month: 'short', year: days > 300 ? 'numeric' : undefined,
-    hour: '2-digit', minute: '2-digit' })}`;
+  if (days === 0) return tr("был на связи сегодня в {0}", timeOnly(stamp));
+  if (days === 1) return tr("был на связи вчера в {0}", timeOnly(stamp));
+  return tr("был на связи {0}", dateTime(stamp, { day: 'numeric', month: 'short', year: days > 300 ? 'numeric' : undefined,
+    hour: '2-digit', minute: '2-digit' }));
 }
 
 /** Слова поиска проектов: регистр и е/ё не различаются. */
@@ -73,22 +74,22 @@ const searchable = (text) => text.toLocaleLowerCase('ru').replaceAll('ё', 'е')
 
 function remoteBadge(remote, name) {
   return {
-    current: ['✓', 'green', `${name} синхронизирован с текущей веткой`],
-    behind: [`↓${remote.behind}`, 'red', `${name} отстаёт на ${remote.behind} комм. от текущей ветки`],
-    ahead: [`↑${remote.ahead}`, 'yellow', `${name} опережает текущую ветку на ${remote.ahead} комм.`],
-    diverged: ['↕', 'red', `Истории разошлись: ${name} отстаёт на ${remote.behind} и опережает на ${remote.ahead} комм.`],
-    missing: ['∅', 'red', `Текущая ветка ещё не опубликована на ${name}`],
-  }[remote.state] || ['?', 'unknown', `Не удалось проверить ${name} или сравнить историю коммитов`];
+    current: ['✓', 'green', tr("{0} синхронизирован с текущей веткой", name)],
+    behind: [`↓${remote.behind}`, 'red', tr("{0} отстаёт на {1} комм. от текущей ветки", name, remote.behind)],
+    ahead: [`↑${remote.ahead}`, 'yellow', tr("{0} опережает текущую ветку на {1} комм.", name, remote.ahead)],
+    diverged: ['↕', 'red', tr("Истории разошлись: {0} отстаёт на {1} и опережает на {2} комм.", name, remote.behind, remote.ahead)],
+    missing: ['∅', 'red', tr("Текущая ветка ещё не опубликована на {0}", name)],
+  }[remote.state] || ['?', 'unknown', tr("Не удалось проверить {0} или сравнить историю коммитов", name)];
 }
 
 export function panelView(host, { selected: first = null, opened, chose, list, openJournal, initialAgents = null }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
-  const sort = el('select', { id: 'code-project-sort', hidden: true, 'aria-label': 'Сортировка проектов' },
-    ...[['name', 'По имени'], ['modified', 'По дате изменения'], ['findings', 'По количеству проблем'],
-      ['ideas', 'По количеству идей'], ['unpushed', 'Сначала незапушенные'],
-      ['public', 'Сначала публичные'], ['private', 'Сначала приватные']]
+  const sort = el('select', { id: 'code-project-sort', hidden: true, 'aria-label': tr("Сортировка проектов") },
+    ...[['name', tr("По имени")], ['modified', tr("По дате изменения")], ['findings', tr("По количеству проблем")],
+      ['ideas', tr("По количеству идей")], ['unpushed', tr("Сначала незапушенные")],
+      ['public', tr("Сначала публичные")], ['private', tr("Сначала приватные")]]
       .map(([value, label]) => el('option', { value }, label)));
   const sortKey = `studio-code-project-sort:${me.id}`;
   try {
@@ -97,18 +98,18 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   } catch { /* Закрытое хранилище не мешает пользоваться панелью. */ }
   const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
   const sortBox = el('button', { type: 'button', id: 'code-project-sort-open', class: 'input code-project-sort',
-    'aria-label': 'Поиск и сортировка проектов' }, sortText);
+    'aria-label': tr("Поиск и сортировка проектов") }, sortText);
   const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
-    title: 'Обновить сведения', 'aria-label': 'Обновить сведения' }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
-  const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, 'Ещё не обновлено');
+    title: tr("Обновить сведения"), 'aria-label': tr("Обновить сведения") }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
+  const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, tr("Ещё не обновлено"));
   const newProject = el('button', { id: 'code-project-create', class: 'btn', type: 'button', hidden: true,
-    'aria-haspopup': 'dialog' }, 'Новый проект');
+    'aria-haspopup': 'dialog' }, tr("Новый проект"));
   // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.
   const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
-    placeholder: 'Поиск проектов', 'aria-label': 'Поиск проектов', autocomplete: 'off', maxlength: '200',
+    placeholder: tr("Поиск проектов"), 'aria-label': tr("Поиск проектов"), autocomplete: 'off', maxlength: '200',
     'aria-keyshortcuts': 'Control+K' });
   const sortOptions = el('fieldset', { id: 'code-project-sort-options', class: 'code-project-sort-options' },
-    el('legend', {}, 'Сортировка'), ...[...sort.options].map((option) => {
+    el('legend', {}, tr("Сортировка")), ...[...sort.options].map((option) => {
       const radio = el('input', { type: 'radio', name: 'code-project-order', value: option.value,
         checked: option.selected });
       radio.addEventListener('change', () => {
@@ -120,10 +121,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       return el('label', { class: 'code-project-sort-option' }, radio, el('span', {}, option.textContent));
     }));
   const sortPanel = el('div', { id: 'code-project-sort-menu', class: 'code-project-sort-menu' }, search, sortOptions);
-  const sortPopup = popupPanel(sortBox, sortPanel, { label: 'Поиск и сортировка проектов', side: 'above',
+  const sortPopup = popupPanel(sortBox, sortPanel, { label: tr("Поиск и сортировка проектов"), side: 'above',
     followViewport: true, autoFocus: false });
   const footer = el('div', { class: 'code-panel-footer', hidden: true }, newProject, sortBox, sort, sortPanel, refresh, updated);
-  const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': 'Компьютеры и проекты' },
+  const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': tr("Компьютеры и проекты") },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
 
@@ -135,7 +136,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     createLoading = true;
     newProject.setAttribute('aria-busy', 'true');
     try {
-      const { projectCreate } = await lazy(() => import('./code-project-create.js'), 'Окно не загрузилось');
+      const { projectCreate } = await lazy(() => import('./code-project-create.js'), tr("Окно не загрузилось"));
       if (!alive || mine !== gen) return;
       createDialog?.close();
       createDialog = projectCreate(root, agent, {
@@ -149,7 +150,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           catch (err) {
             if (alive && mine === gen) {
               if (err.code === 'closed') pin(agent.id);
-              else status.textContent = `Проект создан. ${words(err)}`;
+              else status.textContent = tr("Проект создан. {0}", words(err));
             }
             return;
           }
@@ -171,7 +172,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     try {
       if (!viewers.has(kind)) {
         const module = await lazy(() => (kind === 'desktop' ? import('./code-desktop.js') : import('./code-computer.js')),
-          'Окно не загрузилось');
+          tr("Окно не загрузилось"));
         if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
         const create = kind === 'desktop' ? module.desktopView : module.computerView;
         viewers.set(kind, create(root, { locked(aid) { infoKind = kind; infoIntent = aid; pin(aid); } }));
@@ -223,7 +224,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         if (!agent?.online) {
           update.offlineSince ||= Date.now();
           update.state = Date.now() - update.offlineSince > 120000 ? 'failed' : 'restarting';
-          if (update.state === 'failed') update.message = 'Агент не подключился после обновления — проверьте компьютер';
+          if (update.state === 'failed') update.message = tr("Агент не подключился после обновления — проверьте компьютер");
           continue;
         }
         delete update.offlineSince;
@@ -267,7 +268,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     try {
       const data = await api('DELETE', `/api/code/agents/${agent.id}/update`);
       if (data.state === 'idle') updates.delete(agent.id);
-      else { Object.assign(update, data); update.message = data.state === 'restarting' ? 'Перезапуск уже начат — отменить нельзя' : ''; }
+      else { Object.assign(update, data); update.message = data.state === 'restarting' ? tr("Перезапуск уже начат — отменить нельзя") : ''; }
     } catch (err) {
       update.message = words(err);
     }
@@ -321,7 +322,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   function filterProjects() {
     const words = searchable(search.value).split(/\s+/).filter(Boolean);
-    sortText.textContent = sort.selectedOptions[0].textContent + (words.length ? ' · Поиск' : '');
+    sortText.textContent = sort.selectedOptions[0].textContent + (words.length ? tr(" · Поиск") : '');
     const listBox = body.querySelector('#code-projects');
     if (!listBox) return;
     let found = 0;
@@ -332,7 +333,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     }
     let none = body.querySelector('#code-project-none');
     if (!found && words.length) {
-      if (!none) body.append(none = el('p', { id: 'code-project-none', class: 'muted' }, 'Проекты не найдены'));
+      if (!none) body.append(none = el('p', { id: 'code-project-none', class: 'muted' }, tr("Проекты не найдены")));
     } else none?.remove();
     visible();
   }
@@ -367,22 +368,22 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function dateText(stamp, compact = false) {
-    if (!Number.isFinite(stamp)) return compact ? '—' : 'нет данных';
+    if (!Number.isFinite(stamp)) return compact ? '—' : tr("нет данных");
     return dateTime(stamp, compact
       ? { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' } : undefined);
   }
 
   function paintUpdated() {
     const supported = items.find((a) => a.id === selected)?.project_summary;
-    updated.textContent = !supported ? 'Для сведений обновите мост на компьютере'
-      : checked.has(selected) ? `Обновлено: ${dateText(checked.get(selected))}` : 'Ещё не обновлено';
+    updated.textContent = !supported ? tr("Для сведений обновите мост на компьютере")
+      : checked.has(selected) ? tr("Обновлено: {0}", dateText(checked.get(selected))) : tr("Ещё не обновлено");
   }
 
   function refreshBusy(busy) {
     refresh.disabled = busy;
     refresh.setAttribute('aria-busy', String(busy));
     footer.setAttribute('aria-busy', String(busy));
-    const label = busy ? 'Обновляю сведения…' : 'Обновить сведения';
+    const label = busy ? tr("Обновляю сведения…") : tr("Обновить сведения");
     refresh.title = label;
     refresh.setAttribute('aria-label', label);
     if (busy) updated.textContent = label;
@@ -395,35 +396,35 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const href = li.querySelector('.code-project-name').getAttribute('href');
     const value = (key) => Number.isInteger(data?.[key]) ? String(data[key]) : '—';
     metrics.replaceChildren('(',
-      el('a', { class: 'code-project-findings', href: `${href}?tab=files&journal=findings`, title: `Открыть FINDINGS.md · Проблемы: ${value('findings')}`,
-        'aria-label': `Проблемы: ${value('findings')}` }, `П: ${value('findings')}`), ' · ',
-      el('a', { class: 'code-project-ideas', href: `${href}?tab=files&journal=ideas`, title: `Открыть IDEAS.md · Идеи: ${value('ideas')}`,
-        'aria-label': `Идеи: ${value('ideas')}` }, `И: ${value('ideas')}`), ')');
-    const git = data?.git === 'not_git' ? 'Без Git'
+      el('a', { class: 'code-project-findings', href: `${href}?tab=files&journal=findings`, title: tr("Открыть FINDINGS.md · Проблемы: {0}", value('findings')),
+        'aria-label': tr("Проблемы: {0}", value('findings')) }, tr("П: {0}", value('findings'))), ' · ',
+      el('a', { class: 'code-project-ideas', href: `${href}?tab=files&journal=ideas`, title: tr("Открыть IDEAS.md · Идеи: {0}", value('ideas')),
+        'aria-label': tr("Идеи: {0}", value('ideas')) }, tr("И: {0}", value('ideas'))), ')');
+    const git = data?.git === 'not_git' ? tr("Без Git")
       : `Git: ${value('changed')} ↑${value('unpushed')}`;
     const gh = data?.github;
     const github = gh ? remoteBadge(gh, 'GitHub') : null;
     const githubAt = data && 'github_checked_at' in data ? data.github_checked_at : data?.checked_at;
-    const githubTitle = github ? data.github_pending ? 'Проверяю GitHub…'
-      : `${github[2]}. Проверено: ${dateText(githubAt)}${data.stale ? '. Не удалось обновить' : ''}` : '';
+    const githubTitle = github ? data.github_pending ? tr("Проверяю GitHub…")
+      : tr("{0}. Проверено: {1}{2}", github[2], dateText(githubAt), data.stale ? tr(". Не удалось обновить") : '') : '';
     const remotes = (data?.remotes || []).filter((remote) => remote.name !== 'origin' && remote.name !== 'upstream'
       && !(remote.name === 'github' && gh))
       .map((remote) => {
         const [mark, level, description] = remoteBadge(remote, remote.name);
-        const title = `${description}. По локальным данным Git, без fetch; состояние сервера может отличаться.`
-          + `${data.stale ? ' Не удалось обновить.' : ''}`;
+        const title = tr("{0}. По локальным данным Git, без fetch; состояние сервера может отличаться.", description)
+          + `${data.stale ? tr(" Не удалось обновить.") : ''}`;
         return el('a', { class: 'code-project-remote', href: `${href}?tab=git`,
           'data-git-level': data.stale ? 'unknown' : level, title, 'aria-label': title }, `${remote.name} ${mark}`);
       });
     summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
-      title: `Изменено файлов: ${value('changed')}. Не запушено коммитов: ${value('unpushed')}. По локальным данным Git, без fetch.` }, git),
+      title: tr("Изменено файлов: {0}. Не запушено коммитов: {1}. По локальным данным Git, без fetch.", value('changed'), value('unpushed')) }, git),
     ...(github ? [el('a', { class: 'code-project-github', href: `${href}?tab=git`,
       'data-git-level': data.stale ? 'unknown' : github[1], title: githubTitle, 'aria-label': githubTitle }, `GitHub ${data.github_pending ? '…' : github[0]}`)] : []),
     ...remotes,
     el('span', { 'aria-hidden': 'true' }, ' · '),
-    el('span', { class: 'code-project-modified', title: `Изменён: ${dateText(data?.modified)}` }, dateText(data?.modified, true)),
-    ...(data?.stale ? [el('span', { class: 'error', title: 'Не удалось обновить', 'aria-label': 'Не удалось обновить' }, ' ⚠')] : []));
+    el('span', { class: 'code-project-modified', title: tr("Изменён: {0}", dateText(data?.modified)) }, dateText(data?.modified, true)),
+    ...(data?.stale ? [el('span', { class: 'error', title: tr("Не удалось обновить"), 'aria-label': tr("Не удалось обновить") }, ' ⚠')] : []));
     for (const link of metrics.querySelectorAll('a')) link.addEventListener('click', (event) => {
       if (link.hash === location.hash && openJournal && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
         event.preventDefault();
@@ -433,7 +434,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     });
     for (const link of summary.querySelectorAll('a')) link.addEventListener('click', chose);
     li.classList.toggle('has-unpushed', data?.unpushed > 0);
-    if (data?.checked_at) summary.title = `Проверено: ${dateText(data.checked_at)}`;
+    if (data?.checked_at) summary.title = tr("Проверено: {0}", dateText(data.checked_at));
   }
 
   function sortProjects() {
@@ -523,7 +524,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
       if (!alive || mine !== gen) return;
       if (!failures) checked.set(agent.id, Date.now() / 1000);
-      else status.textContent = `Не удалось обновить сведения: ${failures}. Повторите обновление.`;
+      else status.textContent = tr("Не удалось обновить сведения: {0}. Повторите обновление.", failures);
       for (const li of body.querySelectorAll('#code-projects li[data-pid]')) paintSummary(li, results.get(li.dataset.pid));
       sortProjects();
       paintUpdated();
@@ -540,7 +541,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   sort.addEventListener('change', () => {
     for (const radio of sortOptions.querySelectorAll('input')) radio.checked = radio.value === sort.value;
-    sortText.textContent = sort.selectedOptions[0].textContent + (search.value.trim() ? ' · Поиск' : '');
+    sortText.textContent = sort.selectedOptions[0].textContent + (search.value.trim() ? tr(" · Поиск") : '');
     sortProjects();
     visible();
     try { localStorage.setItem(sortKey, sort.value); } catch { /* Выбор действует в открытой панели. */ }
@@ -585,14 +586,14 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const row = el('button', { type: 'button', class: 'code-agent', 'aria-current': agent.id === selected ? 'true' : null,
         title: agent.online && agent.cc_version ? `Claude Code ${agent.cc_version}` : null },
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
-        el('span', { class: 'sr' }, agent.online ? 'на связи' : 'не на связи')),
+        el('span', { class: 'sr' }, agent.online ? tr("на связи") : tr("не на связи"))),
       el('span', { class: 'code-agent-name' }, agent.name),
-      agent.has_pin ? el('span', { class: 'sr' }, 'защищён PIN') : null,
+      agent.has_pin ? el('span', { class: 'sr' }, tr("защищён PIN")) : null,
       el('span', { class: 'code-agent-version', title: agent.agent_version
-        ? `Studio Agent ${agent.agent_version}` : 'Этот агент ещё не сообщает свою версию' }, agent.agent_version || '—'));
+        ? `Studio Agent ${agent.agent_version}` : tr("Этот агент ещё не сообщает свою версию") }, agent.agent_version || '—'));
       row.addEventListener('click', () => { infoIntent = null; select(agent.id); });
       const info = el('button', { type: 'button', class: 'btn code-agent-info',
-        title: 'Сведения о компьютере', 'aria-label': `Сведения о компьютере · ${agent.name}`, 'aria-haspopup': 'dialog' },
+        title: tr("Сведения о компьютере"), 'aria-label': tr("Сведения о компьютере · {0}", agent.name), 'aria-haspopup': 'dialog' },
         el('span', { 'aria-hidden': 'true' }, icon('info')));
       info.addEventListener('click', () => computerClicked(agent.id));
       const update = updates.get(agent.id);
@@ -600,17 +601,17 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const busy = updating(update) || update?.state === 'pin';
       const automatic = agent.online && agent.agent_update && available;
       const button = automatic || busy
-        ? el('button', { type: 'button', class: 'btn code-agent-update', title: `Обновить агент до ${agent.latest_version}`,
-          'aria-label': `Обновить агент · ${agent.name}`, disabled: busy })
+        ? el('button', { type: 'button', class: 'btn code-agent-update', title: tr("Обновить агент до {0}", agent.latest_version),
+          'aria-label': tr("Обновить агент · {0}", agent.name), disabled: busy })
         : el('a', { class: 'btn code-agent-update', href: '/api/agent/download', download: 'studio-agent-setup.exe',
-          title: `Скачать установщик Studio Agent${agent.latest_version ? ' ' + agent.latest_version : ''} для Windows`,
-          'aria-label': `Скачать установщик агента · ${agent.name}` });
+          title: tr("Скачать установщик Studio Agent{0} для Windows", agent.latest_version ? ' ' + agent.latest_version : ''),
+          'aria-label': tr("Скачать установщик агента · {0}", agent.name) });
       button.append(icon('sync'));
       if (available) button.classList.add('has-update');
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
       const cancellable = agent.agent_update_cancel && ['preparing', 'waiting'].includes(update?.state);
       const cancel = cancellable ? el('button', { type: 'button', class: 'btn btn-link code-agent-update-cancel',
-        'aria-label': `Отменить обновление · ${agent.name}` }, 'Отменить обновление') : null;
+        'aria-label': tr("Отменить обновление · {0}", agent.name) }, tr("Отменить обновление")) : null;
       cancel?.addEventListener('click', () => { cancel.disabled = true; cancelUpdate(agent); });
       const note = update && update.state !== 'complete'
         ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}` },
@@ -618,16 +619,16 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
             || (update.state === 'waiting' ? waitingWords(update.holds) : UPDATE_WORDS[update.state]) || ''),
           cancel ? ' ' : null, cancel) : null;
       const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
-        title: 'Подключиться к рабочему столу', 'aria-label': `Подключиться к рабочему столу · ${agent.name}`,
+        title: tr("Подключиться к рабочему столу"), 'aria-label': tr("Подключиться к рабочему столу · {0}", agent.name),
         'aria-haspopup': 'dialog' });
       remote.append(icon('remote'));
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
       const seen = !agent.online && Number.isFinite(agent.last_seen)
         ? el('span', { class: 'code-agent-seen muted' }, lastSeenText(agent.last_seen)) : null;
       if (seen) row.title = seen.textContent;
-      if (agent.shared) row.title = 'Совместные проекты';
+      if (agent.shared) row.title = tr("Совместные проекты");
       return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row,
-        ...(agent.shared ? [el('span', { class: 'muted small' }, 'Совместные')] : [button, info, remote]), seen, note);
+        ...(agent.shared ? [el('span', { class: 'muted small' }, tr("Совместные"))] : [button, info, remote]), seen, note);
     }));
   }
 
@@ -653,15 +654,15 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     for (const li of body.querySelectorAll('#code-projects li[data-pid]')) {
       const n = count(selected, li.dataset.pid);
       li.querySelector('.code-project-count').textContent = n ? String(n) : '';
-      li.querySelector('.code-project-count').title = `Открыто вкладок: ${n}`;
+      li.querySelector('.code-project-count').title = tr("Открыто вкладок: {0}", n);
       const tasks = [...(activity.get(selected)?.values() || [])].filter((item) => item.project === li.dataset.pid);
       for (const kind of ['running', 'asking', 'unread']) {
         const badge = li.querySelector(`.code-project-state.${kind}`);
         const total = tasks.filter((item) => codeActivityState(item) === kind).length;
         badge.hidden = !total;
         badge.textContent = String(total);
-        const label = kind === 'asking' ? `Требуют вашего ответа: ${total}`
-          : kind === 'unread' ? `Завершены, не прочитаны: ${total}` : `В работе: ${total}`;
+        const label = kind === 'asking' ? tr("Требуют вашего ответа: {0}", total)
+          : kind === 'unread' ? tr("Завершены, не прочитаны: {0}", total) : tr("В работе: {0}", total);
         badge.title = label;
         badge.setAttribute('aria-label', label);
       }
@@ -677,7 +678,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         old.delete(item.chat);
         const kind = codeActivityState(item);
         link.dataset.state = kind;
-        const title = item.title || 'Сессия';
+        const title = item.title || tr("Сессия");
         link.title = `${title} · ${CODE_ACTIVITY_LABELS[kind]}`;
         link.setAttribute('aria-label', link.title);
         link.replaceChildren(el('span', { class: 'code-session-name' }, title),
@@ -693,7 +694,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           const pid = li.dataset.pid;
           mark.addEventListener('click', () => markRead(selected, pid, mark));
         }
-        mark.textContent = `Отметить прочитанными · ${unread}`;
+        mark.textContent = tr("Отметить прочитанными · {0}", unread);
         mark.disabled = false;
         list.append(mark);
       } else mark?.remove();
@@ -844,11 +845,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     // компьютера в синхронизируемое хранилище браузера; точки вместо цифр — -webkit-text-security (app.css)
     const input = el('input', { id: 'code-pin-input', class: 'input', type: 'text', inputmode: 'numeric',
       autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64',
-      'aria-label': 'PIN компьютера' });
-    const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'button' }, 'Открыть');
+      'aria-label': tr("PIN компьютера") });
+    const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'button' }, tr("Открыть"));
     const error = el('p', { id: 'code-pin-error', class: 'error', 'aria-live': 'polite' });
-    const box = el('div', { id: 'code-pin', class: 'code-pin', role: 'group', 'aria-label': 'PIN компьютера', 'data-id': agent.id },
-      el('h2', {}, 'PIN компьютера'), el('p', { class: 'muted code-pin-name' }, agent.name),
+    const box = el('div', { id: 'code-pin', class: 'code-pin', role: 'group', 'aria-label': tr("PIN компьютера"), 'data-id': agent.id },
+      el('h2', {}, tr("PIN компьютера")), el('p', { class: 'muted code-pin-name' }, agent.name),
       el('div', { class: 'code-pin-row' }, input, go), error);
     go.addEventListener('click', send);
     input.addEventListener('keydown', (event) => {
@@ -873,7 +874,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       } catch (err) {
         if (!alive || mine !== gen) return;
         const left = err.detail && err.detail.left;
-        if (err.code === 'pin') error.textContent = Number.isInteger(left) ? `Неверный PIN — ${attemptsLeft(left)}` : 'Неверный PIN';
+        if (err.code === 'pin') error.textContent = Number.isInteger(left) ? tr("Неверный PIN — {0}", attemptsLeft(left)) : tr("Неверный PIN");
         else if (err.code === 'pin_locked') error.textContent = PIN_LOCKED;
         else if (err.code === 'offline') error.textContent = OFFLINE;
         else error.textContent = words(err);

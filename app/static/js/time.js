@@ -1,19 +1,20 @@
 /* Все даты интерфейса — в часовом поясе учётки; серверные отметки остаются секундами Unix. */
 import { me } from './api.js';
+import { locale } from './i18n.js';
 
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
 export const timeZone = () => me?.timezone || DEFAULT_TIMEZONE;
 
 export function dateTime(stamp, options = {}) {
-  return new Date(stamp * 1000).toLocaleString('ru-RU', { ...options, timeZone: timeZone() });
+  return new Date(stamp * 1000).toLocaleString(locale(), { ...options, timeZone: timeZone() });
 }
 
 export function dateOnly(stamp, options = {}) {
-  return new Date(stamp * 1000).toLocaleDateString('ru-RU', { ...options, timeZone: timeZone() });
+  return new Date(stamp * 1000).toLocaleDateString(locale(), { ...options, timeZone: timeZone() });
 }
 
 export function timeOnly(stamp) {
-  return new Date(stamp * 1000).toLocaleTimeString('ru-RU',
+  return new Date(stamp * 1000).toLocaleTimeString(locale(),
     { hour: '2-digit', minute: '2-digit', timeZone: timeZone() });
 }
 

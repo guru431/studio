@@ -1,10 +1,11 @@
+import { tr } from './i18n.js';
 /* Подсказки относительных путей: только память страницы, запрос всегда в POST body. */
 import { api } from './api.js';
 import { el } from './ui.js';
 
 export function fileHints(text, host, { aid, pid, failed }) {
   const box = el('div', { id: 'code-file-hints', class: 'code-file-hints', hidden: true });
-  const list = el('div', { role: 'listbox', id: 'code-file-options', 'aria-label': 'Файлы проекта' });
+  const list = el('div', { role: 'listbox', id: 'code-file-options', 'aria-label': tr("Файлы проекта") });
   const status = el('div', { class: 'small muted', role: 'status' });
   box.append(list, status);
   host.append(box);
@@ -63,8 +64,8 @@ export function fileHints(text, host, { aid, pid, failed }) {
         box.hidden = false;
         host.hidden = false;
         text.setAttribute('aria-expanded', 'true');
-        status.textContent = !rows.length ? 'Файлы не найдены' : data.complete === false
-          ? 'Обход ограничен — показана часть файлов' : data.more ? 'Уточните имя для остальных файлов' : 'Enter — выбрать · Esc — закрыть';
+        status.textContent = !rows.length ? tr("Файлы не найдены") : data.complete === false
+          ? tr("Обход ограничен — показана часть файлов") : data.more ? tr("Уточните имя для остальных файлов") : tr("Enter — выбрать · Esc — закрыть");
         paint();
       } catch (err) {
         if (alive && !own.signal.aborted && mine === generation) {

@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Текст модели → безопасный DOM: marked (разметка) → DOMPurify (очистка) → highlight.js (код).
  *
  * Библиотеки — обычные скрипты из /static/vendor (глобальные marked, DOMPurify, hljs), их
@@ -77,7 +78,7 @@ function markdownParser(html) {
       image(token) {
         const href = localFileHref(token.href);
         if (!href) return false;
-        return `<a href="${escapeHtml(href)}">${escapeHtml(token.text || 'Открыть изображение')}</a>`;
+        return `<a href="${escapeHtml(href)}">${escapeHtml(token.text || tr("Открыть изображение"))}</a>`;
       },
     },
   });
@@ -89,11 +90,11 @@ async function copy(pre, button) {
   const code = pre.querySelector('code') || pre;
   try {
     await navigator.clipboard.writeText(code.textContent);
-    button.textContent = 'Скопировано';
+    button.textContent = tr("Скопировано");
   } catch {
-    button.textContent = 'Не вышло';
+    button.textContent = tr("Не вышло");
   }
-  setTimeout(() => { button.textContent = 'Копировать'; }, COPIED_MS);
+  setTimeout(() => { button.textContent = tr("Копировать"); }, COPIED_MS);
 }
 
 function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = {}) {
@@ -112,7 +113,7 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'copy';
-    button.textContent = 'Копировать';
+    button.textContent = tr("Копировать");
     button.addEventListener('click', () => copy(pre, button));
     pre.append(button);
   }
@@ -125,8 +126,8 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'btn code-visualization-open';
-        button.textContent = 'Открыть визуализацию';
-        button.title = reference.title;
+        button.textContent = tr("Открыть визуализацию");
+        button.title = reference.title || tr("Визуализация");
         button.disabled = !fileLinks?.visualization;
         button.addEventListener('click', () => fileLinks.visualization(reference));
         link.replaceWith(button);
@@ -140,7 +141,7 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
       link.classList.add('code-visualization-link');
       link.addEventListener('click', event => {
         event.preventDefault();
-        fileLinks.visualization({ path: visual, title: link.textContent || 'Визуализация' });
+        fileLinks.visualization({ path: visual, title: link.textContent || tr("Визуализация") });
       });
       continue;
     }
@@ -152,7 +153,7 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
     }
     if (localFileHref(href)) {
       link.removeAttribute('href');
-      link.title = 'Файл вне текущего проекта или недоступен в этом разделе';
+      link.title = tr("Файл вне текущего проекта или недоступен в этом разделе");
       continue;
     }
     link.target = '_blank';

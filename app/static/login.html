@@ -6,12 +6,14 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
-<title>Студия — вход</title>
+<title data-i18n>Студия — вход</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
+<script src="/static/en.js?v={{v}}"></script>
+<script src="/static/i18n.js?v={{v}}"></script>
 <script src="/static/theme.js?v={{v}}"></script>
 <script src="/static/login.js?v={{v}}" defer></script>
 </head>
@@ -19,17 +21,18 @@
 <form class="solo-card" method="post" action="/login">
   <div class="brand">
     <img src="/static/icons/icon.svg" alt="">
-    <h1>Студия</h1>
-    <p>Чат, фото, видео, озвучка, расшифровка, сканы, перевод и агенты</p>
+    <h1 data-i18n>Студия</h1>
+    <p data-i18n>Чат, фото, видео, озвучка, расшифровка, сканы, перевод и агенты</p>
   </div>
-  <label for="login">Логин или email</label>
+  <label for="login" data-i18n>Логин или email</label>
   <input class="input" id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required>
-  <label for="password">Пароль</label>
+  <label for="password" data-i18n>Пароль</label>
   <input class="input" id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
   <input type="hidden" id="next" name="next">
-  <p class="error" role="alert">{{error}}</p>
-  <button class="btn btn-accent" id="submit" type="submit">Войти</button>
-  <a class="btn" href="/account/forgot">Забыли пароль?</a>
+  <p class="error" role="alert" data-i18n-error>{{error}}</p>
+  <button class="btn btn-accent" id="submit" type="submit" data-i18n>Войти</button>
+  <a class="btn" href="/account/forgot" data-i18n>Забыли пароль?</a>
+  <div data-language-picker="login-language"></div>
 </form>
 </body>
 </html>

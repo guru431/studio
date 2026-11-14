@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
@@ -33,8 +34,8 @@ export function dayTitle(created) {
   const d = calendarDay(created);
   const today = calendarDay(Date.now() / 1000);
   const days = today.number - d.number;
-  if (days <= 0) return 'Сегодня';
-  if (days === 1) return 'Вчера';
+  if (days <= 0) return tr("Сегодня");
+  if (days === 1) return tr("Вчера");
   const opts = { day: 'numeric', month: 'long' };
   if (d.year !== today.year) opts.year = 'numeric';
   return dateOnly(created, opts);
@@ -207,7 +208,7 @@ export function pickerList(list, { cls, name, state, pick, empty, moreId }) {
     if (!items.length) nodes.push(none);
     else if (!p.done) {
       more.disabled = p.paging;
-      text(more, p.paging ? 'Загружаю…' : 'Показать ещё');
+      text(more, p.paging ? tr("Загружаю…") : tr("Показать ещё"));
       nodes.push(more);
     }
     keep(list, nodes);
@@ -231,7 +232,7 @@ export function keep(parent, nodes) {
  * меняется только текст, узлы те же (опрос не сбивает фокус на «Отменить»). Ответ — { id, box }. */
 export function busyBlock(prev, item, { id, url, fail, after }) {
   if (!prev || prev.id !== item.id) {
-    const cancel = make('button', { type: 'button', class: 'btn btn-sm', id }, 'Отменить');
+    const cancel = make('button', { type: 'button', class: 'btn btn-sm', id }, tr("Отменить"));
     cancel.addEventListener('click', async () => {
       cancel.disabled = true;
       try {
@@ -267,7 +268,7 @@ export function createFeed(el, { load, render, key, quiet = null, empty = '', he
   function setState(name) {
     el.dataset.feed = name;
     const none = !items.length;
-    if (name === 'loading') more.replaceChildren(make('p', { class: 'muted small' }, 'Загружаю…'));
+    if (name === 'loading') more.replaceChildren(make('p', { class: 'muted small' }, tr("Загружаю…")));
     else if (name === 'error') return;
     else more.replaceChildren(...(none && empty ? [make('p', { class: 'muted feed-empty' }, empty)] : []));
   }
@@ -314,7 +315,7 @@ export function createFeed(el, { load, render, key, quiet = null, empty = '', he
       loading = false;
       el.dataset.feed = 'error';
       more.replaceChildren(make('p', { class: 'error small' }, words(err)),
-        button('Повторить', { class: 'btn btn-sm' }, () => page()));
+        button(tr("Повторить"), { class: 'btn btn-sm' }, () => page()));
       return;
     }
     if (mine !== generation) return;

@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* «Поиск» (спека 2026-10-21-studio-history-search-design): своя история по словам и фильтрам.
  *
  * Поле (пауза SEARCH_PAUSE_MS после ввода, Enter — сразу; «очистить» и голосовой ввод — field.js), чипы раздела,
@@ -26,7 +27,7 @@ import { el, words } from './ui.js';
 export const SEARCH_PAUSE_MS = 300;
 const LIMIT = 30;
 /** Фильтр разделов: разделы с историей в порядке рельса («Агенты» — история на компьютере, поиск её не видит). */
-const SECTIONS = [['', 'Все'], ...sectionPairs().filter(([id]) => id !== 'code')];
+const SECTIONS = [['', tr("Все")], ...sectionPairs().filter(([id]) => id !== 'code')];
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const HAS_WORD = /[\p{L}\p{N}]/u;
@@ -80,27 +81,27 @@ function mountScreen(view, ctx) {
   let models = null;           // модели своей истории по разделам; пока не пришли — выбор не сбрасывается
 
   const q = el('input', { id: 'search-q', class: 'input', type: 'search', maxlength: '200', autocomplete: 'off',
-    enterkeyhint: 'search', placeholder: 'Слова промпта, сообщения или записи', 'aria-label': 'Что искать' });
+    enterkeyhint: 'search', placeholder: tr("Слова промпта, сообщения или записи"), 'aria-label': tr("Что искать") });
   q.value = memory.q;
   const field = fieldBox(q);
-  const chips = el('div', { class: 'search-chips', role: 'group', 'aria-label': 'Раздел' },
+  const chips = el('div', { class: 'search-chips', role: 'group', 'aria-label': tr("Раздел") },
     ...SECTIONS.map(([value, label]) => el('button', { type: 'button', class: 'chip', 'data-section': value,
       'aria-pressed': String(memory.section === value) }, label)));
-  const model = el('select', { id: 'search-model', class: 'chip', 'aria-label': 'Модель' });
-  const since = el('input', { id: 'search-since', class: 'input search-date', type: 'date', 'aria-label': 'С какого дня' });
-  const until = el('input', { id: 'search-until', class: 'input search-date', type: 'date', 'aria-label': 'По какой день' });
+  const model = el('select', { id: 'search-model', class: 'chip', 'aria-label': tr("Модель") });
+  const since = el('input', { id: 'search-since', class: 'input search-date', type: 'date', 'aria-label': tr("С какого дня") });
+  const until = el('input', { id: 'search-until', class: 'input search-date', type: 'date', 'aria-label': tr("По какой день") });
   since.value = memory.since;
   until.value = memory.until;
-  const reset = el('button', { type: 'button', id: 'search-reset', class: 'btn-link' }, 'сбросить');
+  const reset = el('button', { type: 'button', id: 'search-reset', class: 'btn-link' }, tr("сбросить"));
   const status = el('p', { id: 'search-status', class: 'muted small', 'aria-live': 'polite' });
   const results = el('div', { id: 'search-results', 'data-state': 'idle' });
-  const moreBtn = el('button', { type: 'button', id: 'search-more', class: 'btn', hidden: true }, 'Показать ещё');
+  const moreBtn = el('button', { type: 'button', id: 'search-more', class: 'btn', hidden: true }, tr("Показать ещё"));
 
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.search)),
     el('div', { class: 'page search-page' },
       field.box, field.error, chips,
-      el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, 'с'), since,
-        el('label', { for: until.id }, 'по'), until, reset),
+      el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, tr("с")), since,
+        el('label', { for: until.id }, tr("по")), until, reset),
       status, results, moreBtn));
 
   function paintModels() {
@@ -110,7 +111,7 @@ function mountScreen(view, ctx) {
       if (models) memory.model = '';
       else names = [memory.model];
     }
-    model.replaceChildren(el('option', { value: '' }, 'Все модели'), ...names.map((n) => el('option', { value: n }, n)));
+    model.replaceChildren(el('option', { value: '' }, tr("Все модели")), ...names.map((n) => el('option', { value: n }, n)));
     model.value = memory.model;
     model.hidden = !names.length;
   }
@@ -148,7 +149,7 @@ function mountScreen(view, ctx) {
       shown = '';
       more = false;
       paint();
-      status.textContent = 'Введите слова или выберите раздел, модель или период';
+      status.textContent = tr("Введите слова или выберите раздел, модель или период");
       results.dataset.state = 'idle';
       return;
     }
@@ -165,7 +166,7 @@ function mountScreen(view, ctx) {
       shown = key;
       more = out.more;
       paint();
-      status.textContent = items.length ? '' : 'Ничего не нашлось';
+      status.textContent = items.length ? '' : tr("Ничего не нашлось");
       results.dataset.state = 'ready';
     } catch (err) {
       if (mine !== asked) return;

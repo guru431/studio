@@ -108,6 +108,10 @@ minor для возможностей, major для несовместимых �
 Хранение: база SQLite `/var/lib/studio/studio.db` (локальный диск Docker-хоста), файлы — шара
 (`/media` внутри контейнера); токены подключений и ключи — шифром `STUDIO_DATA_KEY`, пароли и PIN — scrypt.
 
+Языки интерфейса — русский и английский: `static/en.js` (словарь), `static/i18n.js` (ранний запуск),
+`static/js/i18n.js` (`tr`, `message`, `locale`). Новые подписи — через `tr`, HTML — `data-i18n`;
+пользовательский текст не переводить. Выбор языка — на устройстве (`studio-language`), подробнее — [shell](docs/architecture/shell.md#язык-интерфейса).
+
 ## Хост и выкладка
 
 Основной запуск — Docker Compose на хосте `10.77.1.15`: контейнеры `web` и `ingress`, Python 3.13, Chromium,

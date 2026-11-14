@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
@@ -33,8 +34,8 @@ const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю з
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-const FORMATS = [['txt', 'Текст .txt'], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
-const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Кратко пересказать'], ['translate', 'Перевести']];
+const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
+const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Кратко пересказать")], ['translate', tr("Перевести")]];
 
 let screen = null;
 
@@ -49,13 +50,13 @@ function media(id) {
 /** Текст страницы без распознанного — как в выгрузке (exports._page_body). */
 function pageBody(p) {
   if (p.state === 'done' || p.state === 'layer') return p.text || '';
-  if (p.state === 'blank') return '[пустая страница]';
-  return p.detail ? `[не распознана: ${p.detail}]` : '[не распознана]';
+  if (p.state === 'blank') return tr("[пустая страница]");
+  return serverMessage(p.detail) ? tr("[не распознана: {0}]", serverMessage(p.detail)) : tr("[не распознана]");
 }
 
 /** Весь документ — как выгрузка .md (exports.pages_md). */
 export function asMarkdown(pages) {
-  return `${pages.map((p) => `## Страница ${p.n}\n\n${pageBody(p)}`).join('\n\n')}\n`;
+  return `${pages.map((p) => tr("## Страница {0}\n\n{1}", p.n, pageBody(p))).join('\n\n')}\n`;
 }
 
 function build(view, ctx) {
@@ -74,14 +75,14 @@ function build(view, ctx) {
   const { select, refresh } = docs;
 
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add' }, icon('plus'), 'Загрузить скан', input);
+  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add' }, icon('plus'), tr("Загрузить скан"), input);
   const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
-  const list = el('nav', { class: 'tr-list', 'aria-label': 'Документы' });
+  const list = el('nav', { class: 'tr-list', 'aria-label': tr("Документы") });
   const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': 'Документы',
-    'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), 'Документы');
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload' }, icon('plus'), 'Загрузить скан');
+  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Документы"),
+    'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Документы"));
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload' }, icon('plus'), tr("Загрузить скан"));
   upload.addEventListener('click', () => input.click());
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
   const title = el('h1', {}, NAMES.ocr);
@@ -99,9 +100,9 @@ function build(view, ctx) {
   }
 
   /* список */
-  const paintRows = pickerList(list, { cls: 'ocr-item', moreId: 'ocr-more', empty: 'Здесь появятся ваши документы',
+  const paintRows = pickerList(list, { cls: 'ocr-item', moreId: 'ocr-more', empty: tr("Здесь появятся ваши документы"),
     name: (item) => item.name,
-    state: (item) => [`${item.pages} стр.`, item.detail].filter(Boolean).join(' · '),
+    state: (item) => [tr("{0} стр.", item.pages), serverMessage(item.detail)].filter(Boolean).join(' · '),
     pick(id) {
       panel(false);
       picked = true;
@@ -119,9 +120,9 @@ function build(view, ctx) {
 
   function confirmDelete(item) {
     const fail = el('p', { class: 'error' });
-    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'ocr-delete-confirm' }, 'Удалить');
-    const dialog = openDialog(root, { id: 'ocr-delete-dialog', title: 'Удалить документ?', actions: [yes],
-      body: [el('p', {}, 'Удалятся текст, картинки страниц и исходный файл.'), fail] });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'ocr-delete-confirm' }, tr("Удалить"));
+    const dialog = openDialog(root, { id: 'ocr-delete-dialog', title: tr("Удалить документ?"), actions: [yes],
+      body: [el('p', {}, tr("Удалятся текст, картинки страниц и исходный файл.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -143,10 +144,10 @@ function build(view, ctx) {
   }
 
   function openViewer(page) {
-    const img = el('img', { src: media(page.media_id), alt: `Страница ${page.n}` });
+    const img = el('img', { src: media(page.media_id), alt: tr("Страница {0}", page.n) });
     const stage = el('div', { class: 'viewer-stage' }, img);
-    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': 'Закрыть' }, icon('x'));
-    const dialog = el('dialog', { id: 'ocr-viewer', class: 'viewer', 'aria-label': `Страница ${page.n}` },
+    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': tr("Закрыть") }, icon('x'));
+    const dialog = el('dialog', { id: 'ocr-viewer', class: 'viewer', 'aria-label': tr("Страница {0}", page.n) },
       el('div', { class: 'viewer-top' }, close), stage);
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => dialog.remove());
@@ -170,13 +171,13 @@ function build(view, ctx) {
 
   function scanNode(page) {
     if (page.media_id) {
-      const open = el('button', { type: 'button', class: 'ocr-scan-open', 'aria-label': `Страница ${page.n} во весь экран` },
-        el('img', { class: 'ocr-scan', src: media(page.media_id), alt: `Страница ${page.n}`, decoding: 'async' }));
+      const open = el('button', { type: 'button', class: 'ocr-scan-open', 'aria-label': tr("Страница {0} во весь экран", page.n) },
+        el('img', { class: 'ocr-scan', src: media(page.media_id), alt: tr("Страница {0}", page.n), decoding: 'async' }));
       open.addEventListener('click', () => openViewer(page));
       return open;
     }
     return el('p', { class: 'ocr-noscan muted small' },
-      page.state === 'layer' ? 'страница взята из текстового слоя' : 'картинка страницы ещё не готова');
+      page.state === 'layer' ? tr("страница взята из текстового слоя") : tr("картинка страницы ещё не готова"));
   }
 
   /* «Повторить страницу» (page) и «Распознать заново» (без page): документ снова в очереди — POST …/retry */
@@ -206,15 +207,15 @@ function build(view, ctx) {
       box.append(renderMarkdown(page.text || '', { html: true }));
       return box;
     }
-    if (page.state === 'blank') return el('p', { class: 'ocr-text muted' }, 'пустая страница');
+    if (page.state === 'blank') return el('p', { class: 'ocr-text muted' }, tr("пустая страница"));
     if (page.state === 'failed') {
       const box = el('div', { class: 'ocr-text' },
-        el('p', { class: 'error' }, `не распознана: ${page.detail || 'причина неизвестна'}`));
+        el('p', { class: 'error' }, tr("не распознана: {0}", serverMessage(page.detail) || tr("причина неизвестна"))));
       // документ кончился — эту страницу можно отправить на распознавание ещё раз, остальные остаются
-      if (!RUNNING.has(item.state)) box.append(retryButton(item, 'ocr-retry-page', 'Повторить страницу', page.n));
+      if (!RUNNING.has(item.state)) box.append(retryButton(item, 'ocr-retry-page', tr("Повторить страницу"), page.n));
       return box;
     }
-    return el('p', { class: 'ocr-text muted' }, RUNNING.has(item.state) ? 'ждёт распознавания' : 'не распознана');
+    return el('p', { class: 'ocr-text muted' }, RUNNING.has(item.state) ? tr("ждёт распознавания") : tr("не распознана"));
   }
 
   function pageView(item) {
@@ -228,14 +229,14 @@ function build(view, ctx) {
     const page = pages[at];
     const nodes = [];
     if (pages.length > 1) {
-      const prev = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-prev', 'aria-label': 'Предыдущая страница',
+      const prev = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-prev', 'aria-label': tr("Предыдущая страница"),
         disabled: at === 0 }, '‹');
-      const next = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next', 'aria-label': 'Следующая страница',
+      const next = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next', 'aria-label': tr("Следующая страница"),
         disabled: at === pages.length - 1 }, '›');
       prev.addEventListener('click', () => turn(-1));
       next.addEventListener('click', () => turn(1));
       nodes.push(el('div', { class: 'ocr-pager' }, prev,
-        el('span', { id: 'ocr-page', 'aria-live': 'polite' }, `страница ${at + 1} из ${pages.length}`), next));
+        el('span', { id: 'ocr-page', 'aria-live': 'polite' }, tr("страница {0} из {1}", at + 1, pages.length)), next));
     }
     nodes.push(el('div', { class: 'ocr-two', 'data-n': String(page.n) }, scanNode(page), textNode(page, item)));
     return nodes;
@@ -254,8 +255,8 @@ function build(view, ctx) {
     if (!item) {
       shownId = null;
       busy = null;
-      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите документ в списке.'
-        : 'Загрузите PDF-скан или фото страниц — студия распознает текст.'));
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? tr("Выберите документ в списке.")
+        : tr("Загрузите PDF-скан или фото страниц — студия распознает текст.")));
       return;
     }
     const nodes = [];
@@ -264,33 +265,33 @@ function build(view, ctx) {
     if (busy) {
       nodes.push(busy.box);
     } else if (item.state !== 'done') {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
+      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
     }
     const n = item.pages.length;
     nodes.push(el('p', { class: 'ocr-meta muted small' },
-      `${n} ${plural(n, ['страница', 'страницы', 'страниц'])} · ${when(item.created)}`));
+      `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`));
     const acts = el('div', { class: 'tr-acts' });
     if (item.state === 'done') {
-      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, 'Копировать');
+      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
       copy.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(asMarkdown(item.pages));
-          copy.textContent = 'Скопировано';
+          copy.textContent = tr("Скопировано");
         } catch {
-          error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
+          error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
         }
       });
       acts.append(copy,
-        menu('ocr-download', 'ocr-formats', 'Скачать ▾', FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
-        menu('ocr-chat', 'ocr-chat-menu', 'В чат ▾', ASKS.map(([ask, label]) => [ask, label, 'data-ask',
+        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
+        menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
     }
     if (item.state !== 'done' && !RUNNING.has(item.state)
         && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed')) {
-      acts.append(retryButton(item, 'ocr-retry', 'Распознать заново'));     // ошибка или отмена документа
+      acts.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // ошибка или отмена документа
     }
     if (!RUNNING.has(item.state)) {
-      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, 'Удалить');
+      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, tr("Удалить"));
       del.addEventListener('click', () => confirmDelete(item));
       acts.append(del);
     }
@@ -302,11 +303,11 @@ function build(view, ctx) {
   /* загрузка */
   function send(files) {
     if (files.length > FILES_MAX) {
-      error.textContent = `Больше ${FILES_MAX} файлов за раз`;
+      error.textContent = tr("Больше {0} файлов за раз", FILES_MAX);
       return;
     }
     if (files.reduce((sum, f) => sum + f.size, 0) > UPLOAD_MAX) {
-      error.textContent = 'Файлы вместе больше 20 МиБ';
+      error.textContent = tr("Файлы вместе больше 20 МиБ");
       return;
     }
     error.textContent = '';
@@ -318,7 +319,7 @@ function build(view, ctx) {
     xhr.open('POST', '/api/ocr');
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) progress.textContent = `Загружаю · ${Math.round(event.loaded * 100 / event.total)}%`;
+      if (event.lengthComputable) progress.textContent = tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total));
     });
     xhr.addEventListener('loadend', async () => {
       input.disabled = false;
@@ -344,7 +345,7 @@ function build(view, ctx) {
         send(files);
         return;
       }
-      error.textContent = words((detail && detail.message) || (xhr.status ? `Ошибка сервера (${xhr.status})` : 'Нет связи с сервером'));
+      error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
     });
     xhr.send(form);
   }

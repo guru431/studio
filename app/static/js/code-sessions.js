@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Сессии проекта Claude Code (спека 2026-10-29-studio-code-workspace-design, 6.5): «Новый чат» первой строкой, затем
  * сессии в порядке сервера (открытые, затем закрытые, новые первыми) — название (без него «Новый чат»), время, откуда
  * («студия» / «VS Code или терминал»), «закрыт», «идёт ход», «ждёт ответа».
@@ -15,7 +16,7 @@ import { ENGINE_NAMES, engineOrder } from './code-options.js';
 import { el } from './ui.js';
 import { worktreeView } from './code-worktrees.js';
 
-const UNTITLED = 'Новый чат';
+const UNTITLED = tr("Новый чат");
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -41,12 +42,12 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
 
   function row(chat) {
     const closed = chat.state === 'closed';
-    const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? 'студия' : 'VS Code или терминал')];
+    const marks = [el('span', { class: 'tag code-origin' }, chat.origin === 'studio' ? tr("студия") : tr("VS Code или терминал"))];
     marks.unshift(el('span', { class: 'tag code-engine' },
       ENGINE_NAMES[chat.engine || 'claude']));
-    if (closed) marks.push(el('span', { class: 'tag code-closed' }, 'закрыт'));
-    if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, 'ждёт ответа'));
-    else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, 'идёт ход'));
+    if (closed) marks.push(el('span', { class: 'tag code-closed' }, tr("закрыт")));
+    if (chat.asking) marks.push(el('span', { class: 'tag code-asking' }, tr("ждёт ответа")));
+    else if (chat.running) marks.push(el('span', { class: 'tag code-running' }, tr("идёт ход")));
     const link = el('button', { type: 'button', class: 'code-chat-link' },
       el('span', { class: 'code-chat-title', title: chat.title || UNTITLED }, chat.title || UNTITLED),
       typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
@@ -60,20 +61,20 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
 
   const list = el('ul', { id: 'code-chats', class: 'code-chats' });
   const search = el('input', { id: 'code-chat-search', class: 'input code-chat-search', type: 'search',
-    placeholder: 'Поиск по названиям чатов', 'aria-label': 'Поиск чатов', autocomplete: 'off', maxlength: '200' });
-  const scopeLabel = el('span', {}, 'По заголовкам');
+    placeholder: tr("Поиск по названиям чатов"), 'aria-label': tr("Поиск чатов"), autocomplete: 'off', maxlength: '200' });
+  const scopeLabel = el('span', {}, tr("По заголовкам"));
   const scope = el('button', { type: 'button', id: 'code-search-content', class: 'btn btn-sm code-search-scope',
-    role: 'switch', 'aria-checked': 'false', 'aria-label': 'Поиск по содержимому', hidden: !contentSearch },
+    role: 'switch', 'aria-checked': 'false', 'aria-label': tr("Поиск по содержимому"), hidden: !contentSearch },
     el('span', { class: 'code-search-switch', 'aria-hidden': 'true' }), scopeLabel);
   const searchRow = el('div', { class: 'code-session-search' }, search, scope);
   const note = el('p', { class: 'small muted', role: 'status', id: 'code-search-status' });
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
-  const startersRow = starts ? el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': 'Новый чат' }) : null;
+  const startersRow = starts ? el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': tr("Новый чат") }) : null;
   if (starts) {
     const starters = engineOrder(me?.code_defaults).filter((engine) => engine === 'claude'
       || (engine === 'codex' ? codex : opencode)).map((engine) => {
       const id = engine === 'claude' ? 'code-new-chat' : `code-new-${engine}`;
-      const label = `Новый чат ${ENGINE_NAMES[engine]}`;
+      const label = tr("Новый чат {0}", ENGINE_NAMES[engine]);
       const add = el('button', { type: 'button', id, class: 'code-chat-link code-new-chat', title: label,
         'aria-label': label }, engine === 'claude' ? 'Claude' : ENGINE_NAMES[engine]);
       add.addEventListener('click', () => busy(add, async () => {
@@ -89,12 +90,12 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
     const content = scope.getAttribute('aria-checked') === 'true' && search.value.trim();
     const matches = content ? remote || [] : (found || []).filter((c) => !exclude.has(c.chat)
       && terms.every((term) => normalize(c.title || UNTITLED).includes(term)));
-    const empty = loadError ? 'Не удалось загрузить чаты' : found === null ? 'Загружаю…'
-      : terms.length ? 'Ничего не найдено' : 'Прошлых чатов пока нет';
+    const empty = loadError ? tr("Не удалось загрузить чаты") : found === null ? tr("Загружаю…")
+      : terms.length ? tr("Ничего не найдено") : tr("Прошлых чатов пока нет");
     list.replaceChildren(...(matches.length ? matches.map((chat) => {
       const li = row({ ...(found || []).find((item) => item.chat === chat.chat), ...chat });
       for (const snippet of chat.snippets || []) li.querySelector('button').append(
-        el('span', { class: 'code-search-snippet' }, `${snippet.role === 'user' ? 'Вы' : 'Ответ'}: ${snippet.text}`));
+        el('span', { class: 'code-search-snippet' }, `${snippet.role === 'user' ? tr("Вы") : tr("Ответ")}: ${snippet.text}`));
       return li;
     })
       : [el('li', { class: 'code-chats-wait muted', role: 'status' }, empty)]));
@@ -107,7 +108,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
     remote = null;
     paint();
     if (scope.getAttribute('aria-checked') !== 'true' || !search.value.trim()) return;
-    note.textContent = 'Ищу на компьютере…';
+    note.textContent = tr("Ищу на компьютере…");
     timer = setTimeout(async () => {
       const own = new AbortController();
       request = own;
@@ -116,11 +117,11 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
           { query: search.value.trim() }, { signal: own.signal });
         if (!alive || own.signal.aborted || mine !== generation) return;
         remote = data.items || [];
-        note.textContent = data.complete === false ? 'Поиск ограничен: проверена часть истории или не все помощники доступны' : '';
+        note.textContent = data.complete === false ? tr("Поиск ограничен: проверена часть истории или не все помощники доступны") : '';
         paint();
       } catch (err) {
         if (!alive || own.signal.aborted || mine !== generation) return;
-        note.textContent = 'Не удалось выполнить поиск';
+        note.textContent = tr("Не удалось выполнить поиск");
         failed(err);
       }
     }, 350);
@@ -129,8 +130,8 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   scope.addEventListener('click', () => {
     const active = scope.getAttribute('aria-checked') !== 'true';
     scope.setAttribute('aria-checked', String(active));
-    scopeLabel.textContent = active ? 'По содержимому' : 'По заголовкам';
-    search.placeholder = active ? 'Слова из переписки на компьютере' : 'Поиск по названиям чатов';
+    scopeLabel.textContent = active ? tr("По содержимому") : tr("По заголовкам");
+    search.placeholder = active ? tr("Слова из переписки на компьютере") : tr("Поиск по названиям чатов");
     query();
   });
   paint();

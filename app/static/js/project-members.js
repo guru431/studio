@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Доступ к одному проекту по логину существующей учётки. */
 import { api } from './api.js';
 import { el, words } from './ui.js';
@@ -6,20 +7,20 @@ import { popupPanel } from './menu.js';
 export function projectMembers(host, trigger, aid, project) {
   const url = `/api/code/agents/${aid}/projects/${project.pid}/members`;
   const login = el('input', { class: 'input', type: 'text', autocomplete: 'off', autocapitalize: 'none',
-    spellcheck: 'false', maxlength: '100', required: true, 'aria-label': 'Логин пользователя Студии',
-    placeholder: 'Логин пользователя Студии' });
-  const add = el('button', { class: 'btn', type: 'submit' }, 'Дать доступ');
+    spellcheck: 'false', maxlength: '100', required: true, 'aria-label': tr("Логин пользователя Студии"),
+    placeholder: tr("Логин пользователя Студии") });
+  const add = el('button', { class: 'btn', type: 'submit' }, tr("Дать доступ"));
   const status = el('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
-  const list = el('ul', { class: 'project-members-list', 'aria-label': 'Участники проекта' });
-  const close = el('button', { class: 'btn', type: 'button' }, 'Закрыть');
+  const list = el('ul', { class: 'project-members-list', 'aria-label': tr("Участники проекта") });
+  const close = el('button', { class: 'btn', type: 'button' }, tr("Закрыть"));
   const form = el('form', {}, login, add);
   const panel = el('div', { class: 'project-members', id: `project-members-${aid}-${project.pid}` },
-    el('h3', {}, `Доступ · ${project.name}`),
-    el('p', { class: 'muted small' }, 'Участник видит все чаты и файлы этого проекта, может менять файлы и запускать агентов. Агенты работают с правами и подключениями владельца компьютера.'),
-    el('p', { class: 'muted small' }, 'Доступ привязан к имени папки. Все выданные доступы — «Настройки» → «Защита» → «Доступы и ссылки».'),
+    el('h3', {}, tr("Доступ · {0}", project.name)),
+    el('p', { class: 'muted small' }, tr("Участник видит все чаты и файлы этого проекта, может менять файлы и запускать агентов. Агенты работают с правами и подключениями владельца компьютера.")),
+    el('p', { class: 'muted small' }, tr("Доступ привязан к имени папки. Все выданные доступы — «Настройки» → «Защита» → «Доступы и ссылки».")),
     form, status, list, close);
   host.append(panel);
-  const popup = popupPanel(trigger, panel, { label: `Доступ к проекту ${project.name}`, autoFocus: false,
+  const popup = popupPanel(trigger, panel, { label: tr("Доступ к проекту {0}", project.name), autoFocus: false,
     followViewport: true, align: 'end' });
   let alive = true, busy = false;
   function pending(value) {
@@ -32,16 +33,16 @@ export function projectMembers(host, trigger, aid, project) {
     const data = await api('GET', url);
     if (!alive) return;
     list.replaceChildren(...data.items.map(user => {
-      const remove = el('button', { class: 'btn', type: 'button', 'aria-label': `Отозвать доступ · ${user.login}` }, 'Отозвать');
-      remove.addEventListener('click', () => change(() => api('DELETE', `${url}/${user.id}`), 'Доступ отозван'));
-      return el('li', {}, el('span', {}, user.login + (user.disabled ? ' · заблокирован' : '')), remove);
+      const remove = el('button', { class: 'btn', type: 'button', 'aria-label': tr("Отозвать доступ · {0}", user.login) }, tr("Отозвать"));
+      remove.addEventListener('click', () => change(() => api('DELETE', `${url}/${user.id}`), tr("Доступ отозван")));
+      return el('li', {}, el('span', {}, user.login + (user.disabled ? tr(" · заблокирован") : '')), remove);
     }));
-    if (!data.items.length) list.append(el('li', { class: 'muted' }, 'Доступ есть только у владельца'));
+    if (!data.items.length) list.append(el('li', { class: 'muted' }, tr("Доступ есть только у владельца")));
   }
   async function change(action, message) {
     if (busy || !alive) return;
     pending(true);
-    status.textContent = 'Сохраняю…';
+    status.textContent = tr("Сохраняю…");
     try {
       await action();
       login.value = '';
@@ -56,13 +57,13 @@ export function projectMembers(host, trigger, aid, project) {
   form.addEventListener('submit', event => {
     event.preventDefault();
     const value = login.value.trim();
-    if (value) change(() => api('POST', url, { login: value }), 'Доступ предоставлен');
+    if (value) change(() => api('POST', url, { login: value }), tr("Доступ предоставлен"));
   });
   close.addEventListener('click', () => popup.close(true));
   trigger.addEventListener('click', async () => {
     if (!popup.isOpen() || busy) return;
     pending(true);
-    status.textContent = 'Загружаю участников…';
+    status.textContent = tr("Загружаю участников…");
     try { await load(); if (alive) status.textContent = ''; }
     catch (err) { if (alive) status.textContent = words(err); }
     finally { if (alive) pending(false); }

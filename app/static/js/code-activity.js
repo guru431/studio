@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Число работающих сессий на значке «Агенты», в том числе вне раздела.
  * Снимки — только от доступных мостов с project_activity; PIN не открываем.
  * Фоновый fetch не вызывает экран отпирания защищённого раздела. Скрытая страница
@@ -26,8 +27,8 @@ function paint() {
   badge.dataset.asking = asking ? '1' : '';
   // Точка — завершённые и не прочитанные. Вся вкладка, включая метки, открывает рабочее место.
   dot.hidden = !unread;
-  const parts = [total ? `Запущенных сессий: ${total}` : '', asking ? `ждут ответа: ${asking}` : '',
-    unread ? `не прочитано: ${unread}` : ''].filter(Boolean);
+  const parts = [total ? tr("Запущенных сессий: {0}", total) : '', asking ? tr("ждут ответа: {0}", asking) : '',
+    unread ? tr("не прочитано: {0}", unread) : ''].filter(Boolean);
   const label = parts.length ? `${NAMES.code} · ${parts.join(' · ')}` : NAMES.code;
   tab.setAttribute('aria-label', label);
   tab.title = label;
@@ -52,7 +53,7 @@ export function allCodeActivity() {
 export function codeActivityState(item) {
   return item.asking ? 'asking' : item.running ? 'running' : 'unread';
 }
-export const CODE_ACTIVITY_LABELS = { running: 'Работает', asking: 'Требует вашего действия', unread: 'Завершена · не прочитана' };
+export const CODE_ACTIVITY_LABELS = { running: tr("Работает"), asking: tr("Требует вашего действия"), unread: tr("Завершена · не прочитана") };
 export function refreshCodeActivity() { refresh(); }
 function clearActivity() {
   for (const aid of activity.keys()) setCodeActivity(aid, []);
@@ -66,7 +67,7 @@ function active() {
 
 async function read(path) {
   const response = await fetch(path, { credentials: 'same-origin', signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error('Статус недоступен');
+  if (!response.ok) throw new Error(tr("Статус недоступен"));
   return response.json();
 }
 

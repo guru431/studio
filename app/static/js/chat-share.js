@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* One current snapshot per chat. Every creation rotates both the link and viewer access.
  * Окно владельца: PIN, срок ссылки (1/7/30 дней или бессрочно, по умолчанию 7), у обычного чата — показывать ли
  * рассуждение модели (по умолчанию нет); у созданной — срок, открытия, последний просмотр и неверные PIN. */
@@ -11,10 +12,10 @@ import { button, el, field, openDialog, plural, words } from './ui.js';
 
 /** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню. */
 export function shareMenu(host, { id, content = null, request = api, failed = () => {} }) {
-  const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': 'Поделиться и экспортировать чат',
-    title: 'Поделиться и экспортировать чат', 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
+  const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': tr("Поделиться и экспортировать чат"),
+    title: tr("Поделиться и экспортировать чат"), 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
   trigger.innerHTML = svg('share');   // константа icons.js
-  const menu = el('div', { id: `${id}-menu`, class: 'chat-share-menu', role: 'menu', 'aria-label': 'Поделиться чатом' });
+  const menu = el('div', { id: `${id}-menu`, class: 'chat-share-menu', role: 'menu', 'aria-label': tr("Поделиться чатом") });
   host.append(menu);
   let context = null;
   let controller = null;
@@ -30,8 +31,8 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
   const pointer = (event) => { if (!menu.contains(event.target)) capture(); };
   const clear = () => { selected = null; selectionItem.disabled = true; };
   const close = () => popup.close();
-  const items = [['link', 'Поделиться ссылкой'], ['pdf', 'Скачать PDF'],
-    ['selection', 'Скачать выделенное в PDF'], ['md', 'Скачать Markdown']].map(([key, label]) => {
+  const items = [['link', tr("Поделиться ссылкой")], ['pdf', tr("Скачать PDF")],
+    ['selection', tr("Скачать выделенное в PDF")], ['md', tr("Скачать Markdown")]].map(([key, label]) => {
     const item = menuItem(label, { attrs: { 'data-action': key } });
     item.addEventListener('click', async () => {
       const current = context;
@@ -51,8 +52,8 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
         const blob = await response.blob();
         if (context !== current || !trigger.isConnected) return;
         const href = URL.createObjectURL(blob);
-        const name = (current.title || 'Чат').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_').slice(0, 100);
-        const download = el('a', { href, download: `${name}${fragment ? ' — выделенное' : ''}.${format}` });
+        const name = (current.title || tr("Чат")).replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_').slice(0, 100);
+        const download = el('a', { href, download: `${name}${fragment ? tr(" — выделенное") : ''}.${format}` });
         document.body.append(download);
         download.click();
         download.remove();
@@ -70,7 +71,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
   });
   const selectionItem = items[2];
   selectionItem.disabled = true;
-  selectionItem.title = 'Выделите текст в ленте чата, затем откройте это меню';
+  selectionItem.title = tr("Выделите текст в ленте чата, затем откройте это меню");
   menu.append(...items);
   document.addEventListener('selectionchange', capture);
   document.addEventListener('pointerdown', pointer, true);
@@ -99,7 +100,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
 }
 
 /** Срок ссылки (chat_shares.DAYS): неделя по умолчанию, бессрочная — только явным выбором. */
-const LIFETIMES = [['1', '1 день'], ['7', '7 дней'], ['30', '30 дней'], ['', 'Бессрочно']];
+const LIFETIMES = [['1', tr("1 день")], ['7', tr("7 дней")], ['30', tr("30 дней")], ['', tr("Бессрочно")]];
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -107,47 +108,45 @@ function when(ts) {
 
 /** Сведения ссылки для владельца: срок, открытия по PIN и неверные PIN (их предел отключает ссылку). */
 function facts(out) {
-  return [out.expires ? `действует до ${when(out.expires)}` : 'бессрочная',
-    `открыта ${out.views || 0} ${plural(out.views || 0, ['раз', 'раза', 'раз'])}`
-      + (out.viewed ? `, последний — ${when(out.viewed)}` : ''),
-    `неверных PIN: ${out.fails || 0}`].join(' · ');
+  return [out.expires ? tr("действует до {0}", when(out.expires)) : tr("бессрочная"),
+    tr("открыта {0} {1}", out.views || 0, plural(out.views || 0, [tr("раз"), tr("раза"), tr("раз")]))
+      + (out.viewed ? tr(", последний — {0}", when(out.viewed)) : ''),
+    tr("неверных PIN: {0}", out.fails || 0)].join(' · ');
 }
 
-export function shareDialog(host, endpoint, title = 'Чат', request = api) {
+export function shareDialog(host, endpoint, title = tr("Чат"), request = api) {
   const pin = el('input', { id: 'chat-share-pin', class: 'input', type: 'password', inputmode: 'numeric',
     pattern: '[0-9]{4}', minlength: '4', maxlength: '4', autocomplete: 'off', required: true, disabled: true });
   const error = el('p', { class: 'error', role: 'alert' });
-  const link = el('input', { id: 'chat-share-link', class: 'input', readonly: true, 'aria-label': 'Ссылка на чат' });
-  const copy = button('Копировать ссылку', { id: 'chat-share-copy' });
+  const link = el('input', { id: 'chat-share-link', class: 'input', readonly: true, 'aria-label': tr("Ссылка на чат") });
+  const copy = button(tr("Копировать ссылку"), { id: 'chat-share-copy' });
   const info = el('p', { class: 'muted small', id: 'chat-share-facts' });
   const broken = el('p', { class: 'error', id: 'chat-share-broken', hidden: true },
-    'Ссылку больше не открыть: ключ данных студии сменили. Создайте новую или отключите эту.');
-  const linkBox = el('div', {}, field('Ссылка для чтения', link, 'share-link'), copy);
+    tr("Ссылку больше не открыть: ключ данных студии сменили. Создайте новую или отключите эту."));
+  const linkBox = el('div', {}, field(tr("Ссылка для чтения"), link, 'share-link'), copy);
   const output = el('div', { hidden: true }, linkBox, broken, info);
-  const save = button('Создать ссылку', { id: 'chat-share-create', type: 'submit', class: 'btn btn-accent', disabled: true });
-  const revoke = button('Отключить ссылку', { id: 'chat-share-revoke', class: 'btn btn-danger', hidden: true });
+  const save = button(tr("Создать ссылку"), { id: 'chat-share-create', type: 'submit', class: 'btn btn-accent', disabled: true });
+  const revoke = button(tr("Отключить ссылку"), { id: 'chat-share-revoke', class: 'btn btn-danger', hidden: true });
   const days = el('select', { id: 'chat-share-days', class: 'input', disabled: true },
     ...LIFETIMES.map(([value, label]) => el('option', { value, selected: value === '7' }, label)));
   // рассуждение модели есть только у обычного чата; в ссылку — лишь по явному выбору
   const regular = endpoint.startsWith('/api/chats/');
   const reasoning = el('input', { type: 'checkbox', id: 'chat-share-reasoning', disabled: true });
-  const form = el('form', {}, field('PIN доступа · 4 цифры', pin, 'share-pin'), field('Срок ссылки', days, 'share-days'),
-    regular ? el('label', { class: 'check' }, reasoning, 'Показать рассуждение модели') : null, save);
-  const dialog = openDialog(host, { id: 'chat-share-dialog', title: 'Поделиться чатом', cancelText: 'Закрыть',
-    body: [el('p', {}, 'Получатель увидит снимок всей переписки и вложения, только для чтения. '
-      + 'При каждом открытии нужен PIN этого чата. Передайте его отдельно от ссылки.'),
-    el('p', { class: 'muted small' }, 'Новая ссылка отключит прежнюю. Новые сообщения в снимок не добавляются. '
-      + 'Снимок хранится зашифрованным и удаляется по истечении срока; после 50 неверных PIN ссылка отключится сама.'),
+  const form = el('form', {}, field(tr("PIN доступа · 4 цифры"), pin, 'share-pin'), field(tr("Срок ссылки"), days, 'share-days'),
+    regular ? el('label', { class: 'check' }, reasoning, tr("Показать рассуждение модели")) : null, save);
+  const dialog = openDialog(host, { id: 'chat-share-dialog', title: tr("Поделиться чатом"), cancelText: tr("Закрыть"),
+    body: [el('p', {}, tr("Получатель увидит снимок всей переписки и вложения, только для чтения. При каждом открытии нужен PIN этого чата. Передайте его отдельно от ссылки.")),
+    el('p', { class: 'muted small' }, tr("Новая ссылка отключит прежнюю. Новые сообщения в снимок не добавляются. Снимок хранится зашифрованным и удаляется по истечении срока; после 50 неверных PIN ссылка отключится сама.")),
     form, output, error], actions: [revoke] });
   let busy = true;
   const state = (out) => {
-    copy.textContent = 'Копировать ссылку';
+    copy.textContent = tr("Копировать ссылку");
     output.hidden = revoke.hidden = !out.enabled;
     link.value = out.url || '';
     linkBox.hidden = out.enabled && !out.url;
     broken.hidden = !(out.enabled && !out.url);
     info.textContent = out.enabled ? facts(out) : '';
-    save.textContent = out.enabled ? 'Создать новую ссылку' : 'Создать ссылку';
+    save.textContent = out.enabled ? tr("Создать новую ссылку") : tr("Создать ссылку");
   };
   const pending = (value) => {
     busy = value;
@@ -195,8 +194,8 @@ export function shareDialog(host, endpoint, title = 'Чат', request = api) {
     } finally { if (dialog.isConnected) pending(false); }
   });
   copy.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(link.value); copy.textContent = 'Скопировано'; }
-    catch { link.focus(); link.select(); error.textContent = 'Скопируйте выделенную ссылку'; }
+    try { await navigator.clipboard.writeText(link.value); copy.textContent = tr("Скопировано"); }
+    catch { link.focus(); link.select(); error.textContent = tr("Скопируйте выделенную ссылку"); }
   });
   dialog.addEventListener('close', () => { pin.value = ''; link.value = ''; });
   return dialog;

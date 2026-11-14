@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Фото и видео: переходы по готовым файлам в порядке ленты, старые страницы — по требованию.
  * Снимок галереи передаётся следующему просмотру; действия и цепочка принадлежат его записи. */
 import { api } from './api.js';
@@ -9,11 +10,11 @@ const ready = (item) => !!item.media_id && item.state === 'done';
 
 export function viewerNavigation(dialog, { item, items, section, open, done, opener, gallery = null }) {
   const state = gallery || { items: items.slice(), done, opener };
-  const previous = iconButton('prev', 'Предыдущий файл', { class: 'icon-btn viewer-prev' });
-  const next = iconButton('next', 'Следующий файл', { class: 'icon-btn viewer-next' });
+  const previous = iconButton('prev', tr("Предыдущий файл"), { class: 'icon-btn viewer-prev' });
+  const next = iconButton('next', tr("Следующий файл"), { class: 'icon-btn viewer-next' });
   const position = el('span', { class: 'viewer-position', 'aria-live': 'polite', 'aria-atomic': 'true' });
   const error = el('p', { class: 'error small viewer-navigation-error', 'aria-live': 'polite' });
-  const controls = el('div', { class: 'viewer-navigation', 'aria-label': 'Перелистывание' }, previous, position, next);
+  const controls = el('div', { class: 'viewer-navigation', 'aria-label': tr("Перелистывание") }, previous, position, next);
   dialog.querySelector('.viewer-top').prepend(controls);
   dialog.querySelector('.viewer-bar').prepend(error);
   dialog.dataset.item = item.id;
@@ -30,7 +31,7 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
     if ((focused === previous && previous.disabled) || (focused === next && next.disabled)) {
       dialog.querySelector('.viewer-close').focus({ preventScroll: true });
     }
-    position.textContent = busy ? 'Загружаю…' : `${at < 0 ? '…' : at + 1} / ${list.length}${state.done ? '' : '+'}`;
+    position.textContent = busy ? tr("Загружаю…") : `${at < 0 ? '…' : at + 1} / ${list.length}${state.done ? '' : '+'}`;
   }
 
   async function more() {

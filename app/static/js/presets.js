@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Пресеты раздела «Фото» (спека 2026-10-21-studio-photo-presets-compare-series, раздел 5): чип «★»
  * с меню — пресеты учётки (нажатие — применить, «×» — удалить с подтверждением) и «Сохранить как
  * пресет…» (окно: имя, галочка «промпт»; имя уже есть — пресет заменится, окно это говорит). Seed
@@ -16,11 +17,11 @@ import { menuItem, popupMenu } from './menu.js';
 
 export function presetChip({ host, snapshot, apply, say }) {
   let items = [];
-  const chip = el('button', { type: 'button', class: 'chip', id: 'chip-preset', 'aria-label': 'Пресеты', title: 'Пресеты' },
+  const chip = el('button', { type: 'button', class: 'chip', id: 'chip-preset', 'aria-label': tr("Пресеты"), title: tr("Пресеты") },
     icon('star'));
   const list = el('div', { class: 'preset-list' });
-  const save = menuItem('Сохранить как пресет…', { attrs: { id: 'preset-save' } });
-  const menu = el('div', { class: 'chip-menu preset-menu', id: 'chip-preset-menu', role: 'menu', 'aria-label': 'Пресеты' },
+  const save = menuItem(tr("Сохранить как пресет…"), { attrs: { id: 'preset-save' } });
+  const menu = el('div', { class: 'chip-menu preset-menu', id: 'chip-preset-menu', role: 'menu', 'aria-label': tr("Пресеты") },
     list, save);
   const popup = popupMenu(chip, menu, { side: 'above' });
   const close = () => popup.close();
@@ -33,13 +34,13 @@ export function presetChip({ host, snapshot, apply, say }) {
         apply(p.params);
       });
       const drop = el('button', { type: 'button', class: 'icon-btn preset-delete', role: 'menuitem', tabindex: '-1',
-        'aria-label': `Удалить пресет «${p.name}»`, title: 'Удалить' }, icon('x'));
+        'aria-label': tr("Удалить пресет «{0}»", p.name), title: tr("Удалить") }, icon('x'));
       drop.addEventListener('click', () => {
         close();
         confirmDelete(p);
       });
       return el('div', { class: 'preset-row' }, use, drop);
-    }) : [el('p', { class: 'muted small preset-empty' }, 'Пресетов пока нет')]));
+    }) : [el('p', { class: 'muted small preset-empty' }, tr("Пресетов пока нет"))]));
   }
 
   async function load() {
@@ -53,9 +54,9 @@ export function presetChip({ host, snapshot, apply, say }) {
 
   function confirmDelete(p) {
     const fail = el('p', { class: 'error' });
-    const confirm = button('Удалить', { class: 'btn btn-danger solid', id: 'preset-delete-confirm' });
-    const dialog = openDialog(host(), { id: 'preset-delete-dialog', title: `Удалить пресет «${p.name}»?`,
-      body: [el('p', {}, 'Пресет удалится на всех устройствах учётки. История не изменится.'), fail], actions: [confirm] });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'preset-delete-confirm' });
+    const dialog = openDialog(host(), { id: 'preset-delete-dialog', title: tr("Удалить пресет «{0}»?", p.name),
+      body: [el('p', {}, tr("Пресет удалится на всех устройствах учётки. История не изменится.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -79,22 +80,22 @@ export function presetChip({ host, snapshot, apply, say }) {
     const withPrompt = el('input', { type: 'checkbox', id: 'preset-with-prompt', checked: !!now.prompt, disabled: !now.prompt });
     const note = el('p', { id: 'preset-replace-note', class: 'muted small', 'aria-live': 'polite' });
     const fail = el('p', { class: 'error', role: 'alert' });
-    const ok = button('Сохранить', { class: 'btn btn-accent', id: 'preset-save-confirm' });
-    const dialog = openDialog(host(), { id: 'preset-dialog', title: 'Сохранить как пресет', actions: [ok], body: [
-      field('Имя', name, 'name'),
-      el('label', { class: 'check' }, withPrompt, 'Промпт'),
-      el('p', { class: 'muted small' }, 'Ещё сохранятся модель, формат и сила изменения.'), note, fail] });
+    const ok = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'preset-save-confirm' });
+    const dialog = openDialog(host(), { id: 'preset-dialog', title: tr("Сохранить как пресет"), actions: [ok], body: [
+      field(tr("Имя"), name, 'name'),
+      el('label', { class: 'check' }, withPrompt, tr("Промпт")),
+      el('p', { class: 'muted small' }, tr("Ещё сохранятся модель, формат и сила изменения.")), note, fail] });
     const taken = () => items.find((p) => p.name === name.value.trim());
     const paintName = () => {
       const old = taken();
-      note.textContent = old ? `Пресет «${old.name}» уже есть — сохранение его заменит.` : '';
-      ok.textContent = old ? 'Заменить' : 'Сохранить';
+      note.textContent = old ? tr("Пресет «{0}» уже есть — сохранение его заменит.", old.name) : '';
+      ok.textContent = old ? tr("Заменить") : tr("Сохранить");
     };
     name.addEventListener('input', paintName);
     ok.addEventListener('click', async () => {
       const text = name.value.trim();
       if (!text) {
-        fail.textContent = 'Назовите пресет';
+        fail.textContent = tr("Назовите пресет");
         return;
       }
       const params = { ...now, prompt: withPrompt.checked ? now.prompt : null };
@@ -102,7 +103,7 @@ export function presetChip({ host, snapshot, apply, say }) {
       try {
         await api('POST', '/api/images/presets', { name: text, params });
         dialog.close();
-        say(`Пресет «${text}» сохранён`, false);
+        say(tr("Пресет «{0}» сохранён", text), false);
         load();
       } catch (err) {
         fail.textContent = words(err);

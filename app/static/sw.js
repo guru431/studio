@@ -14,6 +14,8 @@ const SHELL = [
   '/offline.html',
   `/static/css/app.css?v=${VERSION}`,
   `/static/theme.js?v=${VERSION}`,
+  `/static/en.js?v=${VERSION}`,
+  `/static/i18n.js?v=${VERSION}`,
   '/static/icons/icon.svg',
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',

@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Серия картинок (спека 2026-10-21-studio-photo-presets-compare-series, раздел 7): 1–4 варианта
  * одним запросом, меняется seed или сила. Общая для поля «Фото» (чип «×1», панель — в его меню) и
  * окна «Изменить» (панель в окне).
@@ -27,17 +28,17 @@ export function seriesControl({ prefix, canStrength, canSeed = () => true, from,
   const option = (text, attrs) => el('button', { type: 'button', class: 'chip-option', role: 'radio', ...attrs }, text);
   const counts = Array.from({ length: SERIES_MAX }, (_, i) => option(`×${i + 1}`, { 'data-count': String(i + 1) }));
   const bySeed = option('seed', { 'data-vary': 'seed' });
-  const byStrength = option('сила', { 'data-vary': 'strength' });
-  const varyName = el('span', { class: 'muted small', id: `${prefix}-vary-name` }, 'меняется:');
+  const byStrength = option(tr("сила"), { 'data-vary': 'strength' });
+  const varyName = el('span', { class: 'muted small', id: `${prefix}-vary-name` }, tr("меняется:"));
   const varyBox = el('div', { class: 'series-vary', id: `${prefix}-vary`, role: 'radiogroup', 'aria-labelledby': varyName.id },
     varyName, bySeed, byStrength);
   const to = el('input', { type: 'range', id: `${prefix}-to`, min: '0.05', max: '1', step: '0.05', value: '0.75',
-    'aria-label': 'Сила до' });
+    'aria-label': tr("Сила до") });
   const toValue = el('output', { for: `${prefix}-to` }, '0.75');
-  const toLabel = el('label', { class: 'strength', id: `${prefix}-to-label` }, 'до', to, toValue);
+  const toLabel = el('label', { class: 'strength', id: `${prefix}-to-label` }, tr("до"), to, toValue);
   const values = el('p', { class: 'series-values small', id: `${prefix}-values`, 'aria-live': 'polite' });
   const panel = el('div', { class: 'series-panel', id: `${prefix}-panel` },
-    el('div', { class: 'series-counts', role: 'radiogroup', 'aria-label': 'Сколько вариантов' }, ...counts), varyBox, toLabel, values);
+    el('div', { class: 'series-counts', role: 'radiogroup', 'aria-label': tr("Сколько вариантов") }, ...counts), varyBox, toLabel, values);
 
   const strengthWanted = () => count > 1 && vary === 'strength' && canStrength();
 
@@ -52,7 +53,7 @@ export function seriesControl({ prefix, canStrength, canSeed = () => true, from,
     for (const b of [...counts, bySeed, byStrength]) if (b.getAttribute('aria-checked') === 'true') b.tabIndex = 0;
     if (strengthWanted()) {
       const list = seriesStrengths(Number(from()), Number(to.value), count);
-      values.textContent = list ? list.map((v) => v.toFixed(2)).join(' · ') : `слишком узкий диапазон для ${count} вариантов`;
+      values.textContent = list ? list.map((v) => v.toFixed(2)).join(' · ') : tr("слишком узкий диапазон для {0} вариантов", count);
       values.classList.toggle('error', !list);
     }
   }
@@ -99,7 +100,7 @@ export function seriesControl({ prefix, canStrength, canSeed = () => true, from,
     refresh,
     label: () => {
       if (count < 2) return '×1';
-      if (strengthWanted()) return `×${count} · сила`;
+      if (strengthWanted()) return tr("×{0} · сила", count);
       return canSeed() ? `×${count} · seed` : `×${count}`;
     },
     value: () => {

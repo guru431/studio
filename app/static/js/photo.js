@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Фото» (#/photo): лента картинок по дням в одном из видов (превью, плитка, таблица —
  * views.js), поле промпта снизу (field.js: «очистить», «EN» — перевод промпта, микрофон) и строка чипов под
  * ним (исходное фото и сила, модель, размер, серия, пресеты) с «Создать» справа; seed студия выбирает сама
@@ -56,8 +57,8 @@ const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
 const PHOTO_MAX = 10 * 1024 * 1024;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
-const SIZES = [['portrait', 'Портрет 832×1216', '832x1216'], ['square', 'Квадрат 1024×1024', '1024x1024'],
-  ['landscape', 'Альбом 1216×832', '1216x832']];
+const SIZES = [['portrait', tr("Портрет 832×1216"), '832x1216'], ['square', tr("Квадрат 1024×1024"), '1024x1024'],
+  ['landscape', tr("Альбом 1216×832"), '1216x832']];
 const RUNNING = new Set(['working', 'cancelling', 'queued']);
 const CANCELLABLE = new Set(['working', 'queued']);
 
@@ -93,18 +94,18 @@ function build(view, ctx) {
   const status = el('p', { id: 'photo-status', class: 'status photo-status', 'aria-live': 'polite' });
   const describeFile = el('input', { type: 'file', id: 'describe-file', class: 'sr', accept: ACCEPT });
   // выбор файла — кнопкой меню: поле файла вне меню, закрытое меню его не прячет
-  const menuItems = [menuItem('Описать фото с устройства…', { attrs: { id: 'photo-describe-pick' },
+  const menuItems = [menuItem(tr("Описать фото с устройства…"), { attrs: { id: 'photo-describe-pick' },
     onSelect: () => { menuPopup.close(true); describeFile.click(); } })];
-  if (ctx.me.is_admin) menuItems.push(menuItem('Освободить карту', { attrs: { id: 'photo-release' }, onSelect: release }));
-  const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', 'aria-label': 'Ещё' }, ...menuItems);
-  const toggle = iconButton('more', 'Ещё', { id: 'photo-menu-toggle' });
+  if (ctx.me.is_admin) menuItems.push(menuItem(tr("Освободить карту"), { attrs: { id: 'photo-release' }, onSelect: release }));
+  const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', 'aria-label': tr("Ещё") }, ...menuItems);
+  const toggle = iconButton('more', tr("Ещё"), { id: 'photo-menu-toggle' });
   const menuPopup = popupMenu(toggle, menu, { align: 'end' });
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
-  const selection = createSelection({ section: 'photo', nouns: ['картинку', 'картинки', 'картинок'],
+  const selection = createSelection({ section: 'photo', nouns: [tr("картинку"), tr("картинки"), tr("картинок")],
     selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
     remove: (item) => remove(item),
     // ровно две отмеченные с файлом — сравнение; режим выделения остаётся
-    extraActions: [{ id: 'photo-select-compare', label: 'Сравнить',
+    extraActions: [{ id: 'photo-select-compare', label: tr("Сравнить"),
       shown: (items) => items.length === 2 && items.every((i) => i.state === 'done' && i.media_id),
       run: ([a, b]) => openCompare(root, { media_id: a.media_id, label: paramParts(a).filter(Boolean).join(' · ') },
         { media_id: b.media_id, label: paramParts(b).filter(Boolean).join(' · ') }) }] });
@@ -113,20 +114,20 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Фото'), selection.tools, el('span', { class: 'grow' }),
+  const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools, el('span', { class: 'grow' }),
     selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile));
 
-  const sourceImg = el('img', { alt: 'Исходное фото' });
+  const sourceImg = el('img', { alt: tr("Исходное фото") });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
   const strengthValue = el('output', { for: 'photo-strength' }, '0.25');
-  const strengthLabel = el('label', { id: 'photo-strength-label', class: 'strength' }, 'Сила изменения', strength, strengthValue);
-  const sourceClear = iconButton('x', 'Убрать фото', { id: 'photo-source-clear' });
+  const strengthLabel = el('label', { id: 'photo-strength-label', class: 'strength' }, tr("Сила изменения"), strength, strengthValue);
+  const sourceClear = iconButton('x', tr("Убрать фото"), { id: 'photo-source-clear' });
   const sourceBox = el('div', { id: 'photo-source', class: 'photo-source', hidden: true }, sourceImg, strengthLabel, sourceClear);
-  const prompt = el('textarea', { id: 'photo-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': 'Промпт',
-    placeholder: 'Опишите картинку: кто, где, свет, ракурс, стиль' });
+  const prompt = el('textarea', { id: 'photo-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': tr("Промпт"),
+    placeholder: tr("Опишите картинку: кто, где, свет, ракурс, стиль") });
   const file = el('input', { type: 'file', id: 'photo-file', class: 'sr', accept: ACCEPT });
-  const chipPhoto = el('label', { class: 'icon-btn attach', id: 'chip-photo', title: 'Исходное фото' }, icon('clip'),
-    el('span', { class: 'sr' }, 'Исходное фото'), file);
+  const chipPhoto = el('label', { class: 'icon-btn attach', id: 'chip-photo', title: tr("Исходное фото") }, icon('clip'),
+    el('span', { class: 'sr' }, tr("Исходное фото")), file);
   const chipModel = chipMenu('chip-model', [], () => choiceKey(choice), (value) => {
     choice = (choices.find((c) => c[0] === value) || [])[2] || null;
     paintSource();
@@ -135,7 +136,7 @@ function build(view, ctx) {
   const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; }, (label) => label.split(' ')[0]);
   const seriesName = el('span', { class: 'chip-name' }, '×1');
   const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series',
-    title: 'Серия: несколько вариантов подряд' }, seriesName);
+    title: tr("Серия: несколько вариантов подряд") }, seriesName);
   const series = seriesControl({ prefix: 'photo-series', canStrength: () => isLustify() && !!source,
     canSeed: () => !choice || choice.kind === 'srvllm', from: () => strength.value, onChange: () => {
       seriesName.textContent = series ? series.label() : '×1';
@@ -143,10 +144,10 @@ function build(view, ctx) {
     } });
   // серия — форма (число, что меняется, ползунок): не меню, а панель-диалог у чипа (menu.js popupPanel)
   const seriesMenu = el('div', { class: 'series-menu', id: 'chip-series-menu' }, series.panel);
-  popupPanel(chipSeries, seriesMenu, { label: 'Серия картинок', side: 'above' });
+  popupPanel(chipSeries, seriesMenu, { label: tr("Серия картинок"), side: 'above' });
   const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate', hidden: true }, 'EN');
-  const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, 'Создать');
+  const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
   const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, promptBox.box, promptBox.error,
@@ -164,8 +165,8 @@ function build(view, ctx) {
     render: card,
     quiet: ['elapsed', 'chain'],          // время идущей — таймер tick; цепочка — не в карточке
     load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
-    empty: ctx.hint ? 'Здесь появятся ваши картинки.' : 'Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать».',
-    head: tableHead(['', 'Промпт', 'Модель', 'Размер', 'Seed', 'Время', '']),
+    empty: ctx.hint ? tr("Здесь появятся ваши картинки.") : tr("Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать»."),
+    head: tableHead(['', tr("Промпт"), tr("Модель"), tr("Размер"), 'Seed', tr("Время"), '']),
     onChange: () => {
       selection.sync();
       focusCard();
@@ -211,7 +212,7 @@ function build(view, ctx) {
     const chipPopup = popupMenu(chip, list, { side: 'above' });
     let options = [];
     const paint = () => {
-      name.textContent = short((options.find((o) => o[0] === get()) || options[0] || [null, 'модель'])[1]);
+      name.textContent = short((options.find((o) => o[0] === get()) || options[0] || [null, tr("модель")])[1]);
       for (const b of list.children) b.setAttribute('aria-checked', String(b.dataset.value === get()));
     };
     const fill = (next) => {
@@ -290,7 +291,7 @@ function build(view, ctx) {
           chipModel.paint();
           say('', false);
         } else {
-          say(`модели «${modelLabel(p.model)}» нет в разделе — выбрана текущая`, false);
+          say(tr("модели «{0}» нет в разделе — выбрана текущая", modelLabel(p.model)), false);
         }
       }
       if (SIZES.some((s) => s[0] === p.size)) {
@@ -311,10 +312,10 @@ function build(view, ctx) {
       rest();
       return;
     }
-    const replace = button('Заменить', { class: 'btn btn-accent', id: 'preset-prompt-replace' });
-    const keep = button('Оставить свой', { class: 'btn', id: 'preset-prompt-keep' });
-    const dialog = openDialog(root, { id: 'preset-prompt-dialog', title: 'Заменить промпт пресетом?',
-      body: [el('p', { class: 'muted small' }, 'В поле уже есть промпт. Модель, формат и силу пресет поставит в любом случае.')],
+    const replace = button(tr("Заменить"), { class: 'btn btn-accent', id: 'preset-prompt-replace' });
+    const keep = button(tr("Оставить свой"), { class: 'btn', id: 'preset-prompt-keep' });
+    const dialog = openDialog(root, { id: 'preset-prompt-dialog', title: tr("Заменить промпт пресетом?"),
+      body: [el('p', { class: 'muted small' }, tr("В поле уже есть промпт. Модель, формат и силу пресет поставит в любом случае."))],
       actions: [keep, replace] });
     replace.addEventListener('click', () => {
       prompt.value = p.prompt;
@@ -333,12 +334,12 @@ function build(view, ctx) {
     const busy = submitting || describing || !!translating || running.size > 0;
     for (const b of [go, ...gated]) {
       b.disabled = busy;
-      b.title = busy ? 'Дождитесь конца текущего задания' : '';
+      b.title = busy ? tr("Дождитесь конца текущего задания") : '';
     }
     describeFile.disabled = busy;                    // «Описать фото с устройства…» меню раздела
     chipTranslate.disabled = busy && !translating;   // во время перевода «EN» его отменяет
-    chipTranslate.title = translating ? 'Отменить перевод'
-      : busy ? 'Дождитесь конца текущего задания' : 'Перевести промпт на английский (gemma-abl)';
+    chipTranslate.title = translating ? tr("Отменить перевод")
+      : busy ? tr("Дождитесь конца текущего задания") : tr("Перевести промпт на английский (gemma-abl)");
     chipTranslate.setAttribute('aria-label', chipTranslate.title);
   }
 
@@ -398,9 +399,9 @@ function build(view, ctx) {
 
   function busyText(entry) {
     const item = entry.item;
-    if (item.state === 'queued') return cap(item.detail);      // «в очереди серии · 2 из 3» — без таймера
+    if (item.state === 'queued') return cap(serverMessage(item.detail));      // «в очереди серии · 2 из 3» — без таймера
     const spent = clock(item.elapsed + (Date.now() - entry.at) / 1000);
-    return `${item.state === 'cancelling' ? 'Отменяю' : 'Генерирую'} · ${spent}`;
+    return `${item.state === 'cancelling' ? tr("Отменяю") : tr("Генерирую")} · ${spent}`;
   }
 
   /** Картинка карточки: миниатюра; в превью — и полный файл, если миниатюры мало (srcset). */
@@ -414,13 +415,13 @@ function build(view, ctx) {
   }
 
   function openButton(item, ...inside) {
-    const open = el('button', { type: 'button', class: 'card-open', 'aria-label': 'Открыть картинку' }, ...inside);
+    const open = el('button', { type: 'button', class: 'card-open', 'aria-label': tr("Открыть картинку") }, ...inside);
     open.addEventListener('click', (event) => openViewer(item, null, event.currentTarget));
     return open;
   }
 
   function saveButton(item) {
-    const save = el('button', { type: 'button', class: 'card-save', 'aria-label': 'Скачать', title: 'Скачать' }, icon('save'));
+    const save = el('button', { type: 'button', class: 'card-save', 'aria-label': tr("Скачать"), title: tr("Скачать") }, icon('save'));
     save.addEventListener('click', (event) => {
       event.stopPropagation();
       saveMedia(item.media_id, root);
@@ -429,7 +430,7 @@ function build(view, ctx) {
   }
 
   function cancelButton(item) {
-    return button('Отменить', { class: 'btn-link card-cancel' }, async (event) => {
+    return button(tr("Отменить"), { class: 'btn-link card-cancel' }, async (event) => {
       event.currentTarget.disabled = true;
       try {
         await api('POST', `/api/images/${item.id}/cancel`);
@@ -441,11 +442,11 @@ function build(view, ctx) {
   }
 
   function deleteButton(item) {
-    return button('Удалить', { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)));
+    return button(tr("Удалить"), { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)));
   }
 
   function noteText(item) {
-    return item.state === 'cancelled' ? cap(item.detail) || 'Отменено' : `Ошибка: ${item.detail || 'картинка не получена'}`;
+    return item.state === 'cancelled' ? cap(serverMessage(item.detail)) || tr("Отменено") : tr("Ошибка: {0}", serverMessage(item.detail) || tr("картинка не получена"));
   }
 
   /** Модель, размер и seed — столбцы таблицы (seed внешнего сервиса не показывается). */
@@ -481,7 +482,7 @@ function build(view, ctx) {
     } else if (RUNNING.has(item.state)) {
       node.append(el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
         el('b', { class: 'card-time' }, busyText(running.get(item.id))),
-        CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(item.detail))));
+        CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
         deleteButton(item)));
@@ -538,7 +539,7 @@ function build(view, ctx) {
     const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
     const many = withSource ? series.value() : null;
     if (!withSource || !source) return { prompt: text, size, ...picked, ...(many ? { series: many } : {}) };
-    if (source.file.size > PHOTO_MAX) throw new Error('Фото больше 10 МиБ');
+    if (source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 10 МиБ"));
     const body = new FormData();
     for (const [k, v] of Object.entries({ prompt: text, size, ...picked })) body.append(k, String(v));
     if (isLustify()) body.append('strength', strength.value);
@@ -550,7 +551,7 @@ function build(view, ctx) {
   function submit(withSource = true) {
     const text = prompt.value.trim();
     if (!text) {
-      error.textContent = 'Напишите промпт';
+      error.textContent = tr("Напишите промпт");
       return;
     }
     let body;
@@ -592,36 +593,36 @@ function build(view, ctx) {
 
   /* просмотр */
   function openViewer(item, gallery = null, opener = document.activeElement) {
-    const img = el('img', { src: media(item.media_id), alt: 'Картинка' });
+    const img = el('img', { src: media(item.media_id), alt: tr("Картинка") });
     const stage = el('div', { class: 'viewer-stage' }, img);
-    const close = iconButton('x', 'Закрыть', { class: 'icon-btn viewer-close' });
+    const close = iconButton('x', tr("Закрыть"), { class: 'icon-btn viewer-close' });
     const act = (text, cls, fn) => button(text, { class: `btn btn-sm ${cls}` }, fn);
-    const dialog = el('dialog', { id: 'viewer', class: 'viewer', 'aria-label': 'Просмотр картинки' });
+    const dialog = el('dialog', { id: 'viewer', class: 'viewer', 'aria-label': tr("Просмотр картинки") });
     const starts = [
-      act('Изменить', 'act-edit', () => {
+      act(tr("Изменить"), 'act-edit', () => {
         dialog.close();
         openEditor(item, choice, (created) => {
           adopt(created.ids || [created.id]);
           kick();
         });
       }),
-      act(isExternal(item.model) ? 'Повторить' : 'Повторить с тем же seed', 'act-repeat', () => {
+      act(isExternal(item.model) ? tr("Повторить") : tr("Повторить с тем же seed"), 'act-repeat', () => {
         dialog.close();
         create(repeatBody(item));
       }),
-      act('Описать', 'act-describe', () => {
+      act(tr("Описать"), 'act-describe', () => {
         dialog.close();
         describe({ mediaId: item.media_id });
       })];
     // без модели раздела «Изменить» и «Повторить» не начать — их нет; «Описать» решает шлюз раздела
     const actions = el('div', { class: 'viewer-actions' }, ctx.hint ? null : starts[0],
-      act('Создать видео', 'act-animate', () => {
+      act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
       ctx.hint ? null : starts[1], starts[2],
-      act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
-      act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)));
+      act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
+      act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
     syncBusy();
     const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
@@ -632,7 +633,7 @@ function build(view, ctx) {
         dialog.close();
         openViewer(step);
       } catch (err) {
-        missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err);
+        missing.textContent = err.code === 'gone' ? tr("Картинка удалена") : words(err);
       }
     };
     // цепочка — у записи из GET /api/images/<id>; у записи ленты её нет — догрузить
@@ -645,7 +646,7 @@ function build(view, ctx) {
       const at = steps.findIndex((s) => s.image_id === item.id);
       const before = at > 0 ? steps[at - 1] : null;
       if (before && before.media_id) {
-        actions.prepend(act('Сравнить с исходником', 'act-compare', () => openCompare(root,
+        actions.prepend(act(tr("Сравнить с исходником"), 'act-compare', () => openCompare(root,
           { media_id: before.media_id, label: stepLabel(before, at) }, { media_id: item.media_id, label: stepLabel(steps[at], at + 1) })));
       }
     };
@@ -653,7 +654,7 @@ function build(view, ctx) {
     else {
       api('GET', `/api/images/${encodeURIComponent(item.id)}`).then((full) => {
         if (dialog.open) showChain(full.chain);
-      }, (err) => { missing.textContent = err.code === 'gone' ? 'Картинка удалена' : words(err); });
+      }, (err) => { missing.textContent = err.code === 'gone' ? tr("Картинка удалена") : words(err); });
     }
     const variants = el('div', { class: 'viewer-variants', hidden: true });
     api('GET', `/api/images/${encodeURIComponent(item.id)}/variants`).then(({ siblings, children }) => {
@@ -661,7 +662,7 @@ function build(view, ctx) {
       const strip = (title, list, cls) => (list.length ? el('div', { class: `variants-row ${cls}` },
         el('p', { class: 'variants-title' }, title), el('div', { class: 'variants-list' }, ...list.map((v) => {
           const open = el('button', { type: 'button', class: 'variant-open', 'data-id': v.id,
-            'aria-label': 'Открыть вариант', title: paramParts(v).filter(Boolean).join(' · ') },
+            'aria-label': tr("Открыть вариант"), title: paramParts(v).filter(Boolean).join(' · ') },
           el('img', { src: media(v.media_id, '?thumb=1'), alt: '', loading: 'lazy', decoding: 'async' }));
           open.addEventListener('click', () => {
             dialog.close();
@@ -669,8 +670,8 @@ function build(view, ctx) {
           });
           return open;
         }))) : null);
-      variants.replaceChildren(strip('Из того же исходника', siblings, 'variants-siblings'),
-        strip('Сделаны из этой', children, 'variants-children'));
+      variants.replaceChildren(strip(tr("Из того же исходника"), siblings, 'variants-siblings'),
+        strip(tr("Сделаны из этой"), children, 'variants-children'));
       variants.hidden = false;
     }, () => {});                                       // варианты — подсказка: без них просмотр тот же
     dialog.append(el('div', { class: 'viewer-top' }, close), stage,
@@ -699,14 +700,14 @@ function build(view, ctx) {
   /** Подпись картинки в сравнении: номер шага цепочки и модель · seed · сила (загрузка — «фото с устройства»). */
   function stepLabel(step, n) {
     const parts = paramParts(step).filter(Boolean);
-    return `${n}. ${parts.length ? parts.join(' · ') : 'Фото с устройства'}`;
+    return `${n}. ${parts.length ? parts.join(' · ') : tr("Фото с устройства")}`;
   }
 
   function confirmDelete(item, viewer) {
     const fail = el('p', { class: 'error' });
-    const confirm = button('Удалить', { class: 'btn btn-danger solid', id: 'photo-delete-confirm' });
-    const dialog = openDialog(root, { id: 'photo-delete-dialog', title: 'Удалить картинку?',
-      body: [el('p', {}, 'Картинка удалится из истории вместе с файлом.'), fail], actions: [confirm] });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'photo-delete-confirm' });
+    const dialog = openDialog(root, { id: 'photo-delete-dialog', title: tr("Удалить картинку?"),
+      body: [el('p', {}, tr("Картинка удалится из истории вместе с файлом.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -720,31 +721,31 @@ function build(view, ctx) {
 
   /* «Описать»: gemma-abl, текст можно править, «Создать по описанию» — без исходного фото */
   function describe(from) {
-    const preview = el('img', { id: 'describe-photo', alt: 'Фото для описания' });
+    const preview = el('img', { id: 'describe-photo', alt: tr("Фото для описания") });
     const url = from.file ? URL.createObjectURL(from.file) : null;
     preview.src = url || media(from.mediaId, '?thumb=1');
-    const wait = el('p', { id: 'describe-status', class: 'muted small', 'aria-live': 'polite' }, 'gemma-abl описывает фото · 0:00');
+    const wait = el('p', { id: 'describe-status', class: 'muted small', 'aria-live': 'polite' }, tr("gemma-abl описывает фото · 0:00"));
     const text = el('textarea', { id: 'describe-text', class: 'input', rows: '10', maxlength: String(PROMPT_MAX), disabled: true });
     const extra = el('textarea', { id: 'describe-extra', class: 'input', rows: '2', maxlength: String(EXTRA_MAX),
-      placeholder: 'Например: другое освещение, цвет одежды или дополнительные детали' });
+      placeholder: tr("Например: другое освещение, цвет одежды или дополнительные детали") });
     const counter = el('p', { id: 'describe-counter', class: 'muted small' });
     const fail = el('p', { id: 'describe-error', class: 'error', role: 'alert' });
-    const make = button('Создать по описанию', { class: 'btn btn-accent', id: 'describe-create', disabled: true });
-    const dialog = openDialog(root, { id: 'describe-dialog', title: 'Описание картинки', actions: [make], body: [preview,
-      el('p', { class: 'muted small' }, 'gemma-abl описывает фото на карте студии. Описание на английском подготовлено как промпт для генерации; его можно править.'),
-      wait, field('Подробное описание', text, 'text'), field('Ваш дополнительный текст', extra, 'extra'), counter, fail] });
+    const make = button(tr("Создать по описанию"), { class: 'btn btn-accent', id: 'describe-create', disabled: true });
+    const dialog = openDialog(root, { id: 'describe-dialog', title: tr("Описание картинки"), actions: [make], body: [preview,
+      el('p', { class: 'muted small' }, tr("gemma-abl описывает фото на карте студии. Описание на английском подготовлено как промпт для генерации; его можно править.")),
+      wait, field(tr("Подробное описание"), text, 'text'), field(tr("Ваш дополнительный текст"), extra, 'extra'), counter, fail] });
     const started = Date.now();
     let jobId = null;
     let finished = false;
     let open = true;
     let timer = null;
-    const clockTick = setInterval(() => { wait.textContent = `gemma-abl описывает фото · ${clock((Date.now() - started) / 1000)}`; }, 1000);
+    const clockTick = setInterval(() => { wait.textContent = tr("gemma-abl описывает фото · {0}", clock((Date.now() - started) / 1000)); }, 1000);
     const combined = () => {
       const more = extra.value.trim();
       return text.value.trim() + (more ? `\n\nAdditional instructions:\n${more}` : '');
     };
     const count = () => {
-      counter.textContent = `${combined().length} / ${PROMPT_MAX} знаков. Генерация пойдёт по тексту, без исходного фото.`;
+      counter.textContent = tr("{0} / {1} знаков. Генерация пойдёт по тексту, без исходного фото.", combined().length, PROMPT_MAX);
     };
     const stop = () => {
       finished = true;
@@ -771,7 +772,7 @@ function build(view, ctx) {
     make.addEventListener('click', () => {
       const prompted = combined();
       if (!text.value.trim() || prompted.length > PROMPT_MAX) {
-        fail.textContent = `Нужно непустое описание; вместе с дополнением — не больше ${PROMPT_MAX} знаков.`;
+        fail.textContent = tr("Нужно непустое описание; вместе с дополнением — не больше {0} знаков.", PROMPT_MAX);
         return;
       }
       prompt.value = prompted;
@@ -791,14 +792,14 @@ function build(view, ctx) {
           api('DELETE', `/api/images/descriptions/${jobId}`).catch(() => {});    // получено — сервер стирает
           text.disabled = false;
           make.disabled = false;
-          if (r.truncated) fail.textContent = 'Достигнут лимит ответа модели; описание можно дополнить вручную.';
+          if (r.truncated) fail.textContent = tr("Достигнут лимит ответа модели; описание можно дополнить вручную.");
           count();
           text.focus();
           return;
         }
         if (r.state === 'error' || r.state === 'cancelled') {
           stop();
-          fail.textContent = r.state === 'error' ? `Ошибка: ${r.detail}` : cap(r.detail) || 'Отменено';
+          fail.textContent = r.state === 'error' ? tr("Ошибка: {0}", serverMessage(r.detail)) : cap(serverMessage(r.detail)) || tr("Отменено");
           return;
         }
       } catch (err) {
@@ -839,7 +840,7 @@ function build(view, ctx) {
     }
     const text = prompt.value.trim();
     if (!text) {
-      error.textContent = 'Напишите промпт';
+      error.textContent = tr("Напишите промпт");
       return;
     }
     error.textContent = '';
@@ -868,7 +869,7 @@ function build(view, ctx) {
           if (job.cancelled) break;                       // отменили, а ответа нет — отмена уже ушла
           if (++fails >= TRANSLATE_FAILS) {               // не связь мигнула, а отказ надолго — поле вернуть
             api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
-            throw new Error(`Перевод не получился: ${err.message}`);
+            throw new Error(tr("Перевод не получился: {0}", err.message));
           }
           continue;                                       // связь мигнула — спросить ещё раз
         }
@@ -881,7 +882,7 @@ function build(view, ctx) {
           api('DELETE', `/api/images/translations/${job.id}`).catch(() => {});   // получен — сервер стирает
           break;
         }
-        if (r.state === 'error') throw new Error(`Перевод не получился: ${r.detail}`);
+        if (r.state === 'error') throw new Error(tr("Перевод не получился: {0}", serverMessage(r.detail)));
         if (r.state === 'cancelled') break;
       }
     } catch (err) {
@@ -904,7 +905,7 @@ function build(view, ctx) {
     try {
       const { results } = await api('POST', '/api/images/release');
       const names = Object.keys(results);
-      say(names.map((k) => `${NAMES[k] || k} — ${results[k].message}`).join('; '),
+      say(names.map((k) => `${NAMES[k] || k} — ${serverMessage(results[k].message)}`).join('; '),
         names.some((k) => results[k].state === 'error'));
     } catch (err) {
       say(words(err), true);

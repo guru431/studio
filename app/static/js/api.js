@@ -1,3 +1,4 @@
+import { message as translateMessage, tr } from './i18n.js';
 /* Запросы к API студии.
  *
  * api(метод, путь, тело, { signal, headers }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
@@ -13,7 +14,7 @@
 
 export class ApiError extends Error {
   constructor(status, code, message, detail = null) {
-    super(message);
+    super(translateMessage(message));
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
@@ -66,11 +67,11 @@ export async function api(method, path, body, { signal, headers: extraHeaders } 
   } catch (err) {
     // обрыв и срок (AbortSignal.timeout отклоняет TimeoutError) — как есть: это не «нет связи»
     if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) throw err;
-    throw new ApiError(0, 'network', 'Нет связи с сервером');
+    throw new ApiError(0, 'network', tr("Нет связи с сервером"));
   }
   if (!response.ok) {
     let code = 'http';
-    let message = `Ошибка сервера (${response.status})`;
+    let message = tr("Ошибка сервера ({0})", response.status);
     let fields = null;
     try {
       const detail = (await response.json()).detail;

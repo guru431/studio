@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Режимы CLI: сервер и мост проверяют значения независимо от страницы. */
 export const ENGINE_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
 
@@ -8,16 +9,16 @@ export function engineOrder(choices = {}) {
 }
 
 export const ACCESS = {
-  claude: { default: 'Обычные права', auto: 'Автоматически', acceptEdits: 'Правка файлов',
-    plan: 'Только план', bypassPermissions: 'Полный доступ', dontAsk: 'Без запросов' },
-  codex: { 'read-only': 'Только чтение', 'workspace-write': 'Проект', 'danger-full-access': 'Полный доступ' },
-  opencode: { default: 'Правила OpenCode', auto: 'Автоматически' },
+  claude: { default: tr("Обычные права"), auto: tr("Автоматически"), acceptEdits: tr("Правка файлов"),
+    plan: tr("Только план"), bypassPermissions: tr("Полный доступ"), dontAsk: tr("Без запросов") },
+  codex: { 'read-only': tr("Только чтение"), 'workspace-write': tr("Проект"), 'danger-full-access': tr("Полный доступ") },
+  opencode: { default: tr("Правила OpenCode"), auto: tr("Автоматически") },
 };
 
 export function accessLabel(engine, value) {
-  return ACCESS[engine]?.[value] || (value ? String(value) : 'Не получено');
+  return ACCESS[engine]?.[value] || (value ? String(value) : tr("Не получено"));
 }
 
 export function effortLabel(value) {
-  return value === 'auto' ? 'auto' : value || 'Не получено';
+  return value === 'auto' ? 'auto' : value || tr("Не получено");
 }

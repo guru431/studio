@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Цепочка промптов картинки или ролика (item.chain, спека 2026-10-20, раздел 6.6): шаги по порядку,
  * текущий выделен. У шага — миниатюра (нажатие открывает картинку шага), вид, модель, размер, seed
  * или сила, дата, промпт и «Копировать». Удалённая картинка — «удалена», миниатюра не нажимается.
@@ -9,8 +10,8 @@
 import { el } from './ui.js';
 import { dateOnly } from './time.js';
 
-const KINDS = { generation: 'Генерация', upload: 'Фото с устройства', edit: 'Правка', brush: 'Правка кистью',
-  video: 'Ролик' };
+const KINDS = { generation: tr("Генерация"), upload: tr("Фото с устройства"), edit: tr("Правка"), brush: tr("Правка кистью"),
+  video: tr("Ролик") };
 export const NAMES = { lustify: 'Lustify', flux: 'FLUX' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
 
@@ -34,13 +35,13 @@ export function paramParts(step) {
   const seed = seedOf(step);
   const strength = strengthOf(step);
   return [step.model && (NAMES[step.model] || step.model), step.size && String(step.size).replace('x', '×'),
-    seed !== null ? `seed ${seed}` : '', strength !== null ? `сила ${strength}` : ''];
+    seed !== null ? `seed ${seed}` : '', strength !== null ? tr("сила {0}", strength) : ''];
 }
 
 function meta(step, n) {
   const date = step.created ? dateOnly(step.created, { day: 'numeric', month: 'short' }) : '';
   const parts = step.kind === 'video'
-    ? [`${step.seconds} с`, RESOLUTION[step.quality] || step.quality]
+    ? [tr("{0} с", step.seconds), RESOLUTION[step.quality] || step.quality]
     : paramParts(step);
   return [`${n}. ${KINDS[step.kind] || step.kind}`, ...parts, date].filter(Boolean).join(' · ');
 }
@@ -53,17 +54,17 @@ function thumb(step, isNow, onOpen) {
   const img = el('img', { class: 'chain-thumb', src: `/api/media/${encodeURIComponent(step.media_id)}?thumb=1`, alt: '',
     loading: 'lazy', decoding: 'async' });
   if (isNow || !step.image_id) return img;
-  const open = el('button', { type: 'button', class: 'chain-open', 'aria-label': 'Открыть картинку шага' }, img);
+  const open = el('button', { type: 'button', class: 'chain-open', 'aria-label': tr("Открыть картинку шага") }, img);
   open.addEventListener('click', () => onOpen(step.image_id));
   return open;
 }
 
 function copyButton(text) {
-  const copy = el('button', { type: 'button', class: 'btn btn-sm chain-copy' }, 'Копировать');
+  const copy = el('button', { type: 'button', class: 'btn btn-sm chain-copy' }, tr("Копировать"));
   copy.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(text.textContent);
-      copy.textContent = 'Скопировано';
+      copy.textContent = tr("Скопировано");
     } catch {
       getSelection().selectAllChildren(text);          // буфера нет — выделить, скопирует сам человек
     }
@@ -77,11 +78,11 @@ export function chainList(chain, { current, onOpen }) {
   return el('ol', { class: 'viewer-chain' }, ...chain.map((step, i) => {
     const isNow = current ? step.image_id === current : i === last;
     const body = el('div', { class: 'chain-body' }, el('p', { class: 'chain-meta' }, meta(step, i + 1)));
-    if (step.gone) body.append(el('p', { class: 'chain-gone' }, 'удалена'));
+    if (step.gone) body.append(el('p', { class: 'chain-gone' }, tr("удалена")));
     let copy = null;
     if (step.kind !== 'upload') {
       const text = el('p', { class: 'chain-prompt' },
-        step.prompt || (step.kind === 'video' ? 'придуман по фото' : ''));
+        step.prompt || (step.kind === 'video' ? tr("придуман по фото") : ''));
       body.append(text);
       if (step.prompt) copy = copyButton(text);
     }

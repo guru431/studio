@@ -72,7 +72,7 @@ def test_me_carries_csrf_and_profile(studio):
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
-                       "studio_version", "email", "email_codes"}
+                       "studio_version", "email", "email_codes", "code_quick_actions_default"}
     assert me["password_reset"] is None
 
 
@@ -142,11 +142,13 @@ def test_bad_code_defaults_do_not_change_the_profile(studio, value):
 def test_quick_actions_preserve_exact_text_order_and_user_isolation(studio, caplog):
     make_user(studio, "owner"); signin(studio, "owner")
     assert studio.c.get("/api/me").json()["code_quick_actions"] == code_actions.DEFAULTS
+    assert studio.c.get("/api/me").json()["code_quick_actions_default"] is True
     saved = [{"title": "Мой аудит", "text": "  Частный текст\n\nсо всеми пробелами.  "},
              {"title": "Другой", "text": "Следующее действие"}]
     with caplog.at_level(logging.DEBUG):
         response = studio.c.patch("/api/me", json={"code_quick_actions": saved})
     assert response.status_code == 200 and response.json()["code_quick_actions"] == saved
+    assert response.json()["code_quick_actions_default"] is False
     assert "Частный текст" not in caplog.text
     studio.c.patch("/api/me", json={"theme": "dark"})
     assert studio.c.get("/api/me").json()["code_quick_actions"] == saved

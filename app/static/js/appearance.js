@@ -1,3 +1,4 @@
+import { languagePicker, tr } from './i18n.js';
 /* Оформление. Тема (auto/light/dark) и акцент — в учётке, на всех устройствах (PATCH /api/me); размер текста,
  * масштаб и плотность — этого устройства (localStorage). Меню аватара (app.js) и «Настройки → Оформление»
  * (settings.js) — два вида одного состояния: выбор в одном сразу виден в другом (событие `studio-appearance`
@@ -10,8 +11,8 @@ import { api, loadMe, me } from './api.js';
 import { el } from './ui.js';
 
 /** Акцент учётки — как profile.ACCENTS; первый — умолчание (без data-accent на <html>). */
-export const ACCENTS = [['orange', 'Оранжевый'], ['blue', 'Синий'], ['violet', 'Фиолетовый'], ['rose', 'Малиновый']];
-export const THEME_NAMES = { auto: 'Как на устройстве', light: 'Бумага · светлая', dark: 'Графит · тёмная' };
+export const ACCENTS = [['orange', tr("Оранжевый")], ['blue', tr("Синий")], ['violet', tr("Фиолетовый")], ['rose', tr("Малиновый")]];
+export const THEME_NAMES = { auto: tr("Как на устройстве"), light: tr("Бумага · светлая"), dark: tr("Графит · тёмная") };
 const THEME_KEY = 'studio-theme';
 const ACCENT_KEY = 'studio-accent';
 const DENSITY_KEY = 'studio-density';
@@ -78,9 +79,9 @@ export function applyAccent(accent) {
 
 /** Состояние сохранения для строки под выбором: { text, error, retry }. */
 export function saveState() {
-  if (state === 'saving') return { text: 'Сохраняем оформление…', error: false, retry: false };
-  if (state === 'failed') return { text: 'Не удалось сохранить оформление. Выбор действует в этом окне.', error: true, retry: true };
-  if (state === 'saved') return { text: 'Оформление сохранено для учётки.', error: false, retry: false };
+  if (state === 'saving') return { text: tr("Сохраняем оформление…"), error: false, retry: false };
+  if (state === 'failed') return { text: tr("Не удалось сохранить оформление. Выбор действует в этом окне."), error: true, retry: true };
+  if (state === 'saved') return { text: tr("Оформление сохранено для учётки."), error: false, retry: false };
   return { text: '', error: false, retry: false };
 }
 
@@ -160,7 +161,7 @@ export function follow(node, paint) {
 /** Строка состояния сохранения с «Повторить сохранение» — для «Настроек» (у меню — свои узлы в index.html). */
 function saveLine(id) {
   const note = el('p', { class: 'status', id, role: 'status', 'aria-live': 'polite' });
-  const retry = el('button', { class: 'btn-link', type: 'button', id: `${id}-retry` }, 'Повторить сохранение');
+  const retry = el('button', { class: 'btn-link', type: 'button', id: `${id}-retry` }, tr("Повторить сохранение"));
   retry.addEventListener('click', retrySave);
   const box = el('div', { class: 'appearance-save' }, note, retry);
   follow(box, () => paintSave(note, retry));
@@ -179,13 +180,13 @@ export function paintSave(note, retry) {
 function sample() {
   // образец: своё сообщение, ответ, строка кода, главная и обычная кнопки — цвета берутся из токенов карточки
   const code = el('code', {}, el('span', { class: 'theme-sample-kw' }, 'const'), ' answer = ',
-    el('span', { class: 'theme-sample-str' }, "'да'"), ';');
+    el('span', { class: 'theme-sample-str' }, tr("'да'")), ';');
   return el('span', { class: 'theme-sample', 'aria-hidden': 'true' },
-    el('span', { class: 'theme-sample-own' }, 'Привет! Покажи пример'),
-    el('span', { class: 'theme-sample-reply' }, 'Вот так:'),
+    el('span', { class: 'theme-sample-own' }, tr("Привет! Покажи пример")),
+    el('span', { class: 'theme-sample-reply' }, tr("Вот так:")),
     el('span', { class: 'theme-sample-code' }, code),
-    el('span', { class: 'theme-sample-buttons' }, el('span', { class: 'theme-sample-primary' }, 'Отправить'),
-      el('span', { class: 'theme-sample-plain' }, 'Отмена')));
+    el('span', { class: 'theme-sample-buttons' }, el('span', { class: 'theme-sample-primary' }, tr("Отправить")),
+      el('span', { class: 'theme-sample-plain' }, tr("Отмена"))));
 }
 
 /** Тема и акцент учётки: карточки с образцом и образцы акцента — радиокнопки (стрелки переключают). */
@@ -207,11 +208,11 @@ export function accountLookBlock() {
         el('span', { class: 'accent-swatch', 'aria-hidden': 'true' }), el('span', {}, name));
     }));
   const block = el('section', { class: 'block appearance-account' },
-    el('h2', { id: 'appearance-theme-title' }, 'Тема'),
-    el('p', { class: 'muted small scope-note' }, 'Вся учётка — на всех ваших устройствах.'),
+    el('h2', { id: 'appearance-theme-title' }, tr("Тема")),
+    el('p', { class: 'muted small scope-note' }, tr("Вся учётка — на всех ваших устройствах.")),
     cards,
-    el('h3', { id: 'appearance-accent-title' }, 'Акцент'),
-    el('p', { class: 'muted small' }, 'Цвет главных кнопок, ссылок и выбранного; каждый вариант проверен на контраст в обеих темах.'),
+    el('h3', { id: 'appearance-accent-title' }, tr("Акцент")),
+    el('p', { class: 'muted small' }, tr("Цвет главных кнопок, ссылок и выбранного; каждый вариант проверен на контраст в обеих темах.")),
     accents, saveLine('appearance-save-status'));
   follow(block, () => {
     const { theme, accent } = current();
@@ -240,11 +241,11 @@ export function deviceSizeControls(prefix = 'appearance') {
   const scale = el('select', { id: `${prefix}-scale`, class: 'input' }, ...SCALES.map((n) =>
     el('option', { value: n, disabled: n < floor }, `${n}%`)));
   const fontValue = el('output', { for: font.id });
-  const reset = el('button', { type: 'button', class: 'btn-link', id: `${prefix}-reset` }, 'Сбросить шрифт и масштаб');
+  const reset = el('button', { type: 'button', class: 'btn-link', id: `${prefix}-reset` }, tr("Сбросить шрифт и масштаб"));
   const controls = el('div', { class: 'appearance-controls', id: `${prefix}-size-controls`,
-    role: 'group', 'aria-label': 'Шрифт и масштаб · это устройство' },
-    el('label', { for: font.id }, 'Размер шрифта', fontValue), font,
-    el('label', { for: scale.id }, 'Масштаб интерфейса'), scale, reset);
+    role: 'group', 'aria-label': tr("Шрифт и масштаб · это устройство") },
+    el('label', { for: font.id }, tr("Размер шрифта"), fontValue), font,
+    el('label', { for: scale.id }, tr("Масштаб интерфейса")), scale, reset);
   follow(controls, () => {
     // Применённые размеры главнее хранилища: закрытый localStorage не откатывает выбор в открытом окне.
     font.value = String(Math.max(85, Math.min(150, Number(root.style.getPropertyValue('--font-scale')) * 100
@@ -272,16 +273,16 @@ export function deviceSizeControls(prefix = 'appearance') {
 /** Размер текста, масштаб и плотность — только этого устройства; применяются без перезагрузки. */
 export function deviceLookBlock() {
   const root = document.documentElement;
-  const density = segment('appearance-density', 'Плотность', [['normal', 'Обычно'], ['compact', 'Компактно']],
+  const density = segment('appearance-density', tr("Плотность"), [['normal', tr("Обычно")], ['compact', tr("Компактно")]],
     read(DENSITY_KEY) === 'compact' ? 'compact' : 'normal', (value) => {
       if (value === 'compact') root.dataset.density = 'compact';
       else delete root.dataset.density;
       store(DENSITY_KEY, value === 'compact' ? 'compact' : null);
     });
-  return el('section', { class: 'block appearance-device' }, el('h2', {}, 'Вид на этом устройстве'),
-    el('p', { class: 'muted small scope-note' }, 'Это устройство — в других браузерах и на других устройствах свой выбор.'),
+  return el('section', { class: 'block appearance-device' }, el('h2', {}, tr("Вид на этом устройстве")),
+    el('p', { class: 'muted small scope-note' }, tr("Это устройство — в других браузерах и на других устройствах свой выбор.")),
+    languagePicker(),
     el('div', { id: 'appearance-controls' }, deviceSizeControls()),
     density,
-    el('p', { class: 'muted small' }, '«Компактно» — ниже кнопки и меньше просветы: больше строк в «Агентах» и лентах. '
-      + 'Цели касания на сенсорном экране не меньше 44 px.'));
+    el('p', { class: 'muted small' }, tr("«Компактно» — ниже кнопки и меньше просветы: больше строк в «Агентах» и лентах. Цели касания на сенсорном экране не меньше 44 px.")));
 }

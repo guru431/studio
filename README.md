@@ -30,7 +30,7 @@ The server runs on infrastructure you control. Connect local models through the 
 
 **Eight workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Agents.
 
-> The application interface is currently in Russian. This project overview is available in English and Russian. Screenshots show the actual application with fictional demonstration data; no personal conversations or production credentials are included.
+> The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**; the choice is saved on this device. Screenshots show the actual application with fictional demonstration data; no personal conversations or production credentials are included.
 
 ## Features
 

@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Раздел «Claude Code» (#/code) — спека 2026-10-29-studio-code-workspace-design (раскладка, панель, адреса, рабочее
  * место) поверх 2026-10-28-studio-claude-code-design (мост, PIN, чат, файлы).
  *
@@ -53,14 +54,14 @@ import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspa
 import { lazy } from './stale.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
 
-const OFFLINE = 'Компьютер не на связи — включите его и запустите мост';
-const NONE = 'Компьютеров пока нет.';
-const PICK = 'Выберите проект слева';
-const NO_AGENT = 'Нет такого компьютера';
+const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
+const NONE = tr("Компьютеров пока нет.");
+const PICK = tr("Выберите проект слева");
+const NO_AGENT = tr("Нет такого компьютера");
 const AID_RE = /^\d+$/;
 const PID_RE = /^[0-9a-f]{16}$/;
 const CHAT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const VIEWS = [['git', 'Git'], ['files', 'Файлы'], ['chat', 'Чат']];
+const VIEWS = [['git', 'Git'], ['files', tr("Файлы")], ['chat', tr("Чат")]];
 const IDLE_POLL_SEC = 20;        // метки вкладок: GET …/chats открытого проекта (тесты подменяют паузу setTimeout)
 const IDLE_POLL_FOR_SEC = 1800;  // ... не дольше этого после действия владельца в разделе (как опрос live чата)
 
@@ -210,8 +211,8 @@ function shortcut(event) {
 
 function layout() {
   const toggle = el('button', { type: 'button', id: 'code-panel-toggle', class: 'icon-btn code-panel-toggle',
-    'aria-controls': 'code-panel', 'aria-expanded': 'false', 'aria-label': 'Компьютеры и проекты',
-    title: 'Компьютеры и проекты' });
+    'aria-controls': 'code-panel', 'aria-expanded': 'false', 'aria-label': tr("Компьютеры и проекты"),
+    title: tr("Компьютеры и проекты") });
   toggle.innerHTML = svg('list');   // константа icons.js
   const placeAgent = el('span', { class: 'code-place-agent' });
   const placeProject = el('b', { class: 'code-place-project' });
@@ -223,7 +224,7 @@ function layout() {
     button.addEventListener('click', () => switchTo(key));
     return button;
   });
-  const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': 'Вид проекта', hidden: true }, ...switches);
+  const views = el('div', { class: 'code-views', role: 'tablist', 'aria-label': tr("Вид проекта"), hidden: true }, ...switches);
   const tabsHost = el('div', { class: 'code-tabs-host', hidden: true });
   const repoStatus = el('button', { type: 'button', id: 'code-repo-status', class: 'code-repo-status',
     'aria-haspopup': 'dialog', 'aria-controls': 'code-git-dialog', hidden: true });
@@ -305,7 +306,7 @@ function chatsOf(p, fresh = false, passive = false) {
         p.complete = out.complete !== false;
         p.info = new Map(p.items.map((c) => [c.chat, c]));
         if (proj === p) {
-          const partial = 'Не все сессии удалось обновить. Показаны последние известные сведения.';
+          const partial = tr("Не все сессии удалось обновить. Показаны последние известные сведения.");
           if (shownStatus?.isConnected) {
             if (!p.complete) shownStatus.textContent = partial;
             else if (shownStatus.textContent === partial) shownStatus.textContent = '';
@@ -418,7 +419,7 @@ function created(p, chat, engine = 'claude') {
 function enter(aid, pid) {
   const key = `${aid}/${pid}`;
   if (proj && proj.key === key) {
-    if (!ui.placeProject.textContent || ui.placeProject.textContent === 'Проект') plaque(proj);
+    if (!ui.placeProject.textContent || ui.placeProject.textContent === tr("Проект")) plaque(proj);
     return;
   }
   closeProject();
@@ -427,7 +428,7 @@ function enter(aid, pid) {
     repo: projectGit(aid, pid),
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true),
     accessButton: el('button', { type: 'button', id: 'code-project-access', class: 'chip',
-      title: 'Совместная работа', 'aria-label': 'Доступ к проекту', hidden: true }, 'Доступ') };
+      title: tr("Совместная работа"), 'aria-label': tr("Доступ к проекту"), hidden: true }, tr("Доступ")) };
   ui.views.insertBefore(p.accessButton, document.getElementById('code-tab-chat'));
   const cached = chatLists.get(cacheKey(p));
   if (cached) {
@@ -445,8 +446,8 @@ function enter(aid, pid) {
     ui.repoStatus.classList.toggle('unavailable', !!error);
     ui.repoStatus.hidden = !data && !error;
     if (!data) {
-      ui.repoStatus.textContent = error?.code === 'not_git' ? 'Без Git' : error ? 'Git недоступен' : '';
-      ui.repoStatus.title = error?.code === 'not_git' ? 'Не репозиторий git' : 'Действия Git и повторная проверка';
+      ui.repoStatus.textContent = error?.code === 'not_git' ? tr("Без Git") : error ? tr("Git недоступен") : '';
+      ui.repoStatus.title = error?.code === 'not_git' ? tr("Не репозиторий git") : tr("Действия Git и повторная проверка");
       ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
       return;
     }
@@ -459,9 +460,9 @@ function enter(aid, pid) {
     ui.repoStatus.replaceChildren(glyph, el('span', { class: 'code-repo-branch' }, `${branch}${files.length ? '*' : ''}`));
     if (behind) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↓${behind}`));
     if (ahead) ui.repoStatus.append(el('span', { class: 'code-repo-sync' }, `↑${ahead}`));
-    ui.repoStatus.title = [`Ветка ${branch}`, files.length ? `Незакоммиченных файлов: ${files.length}` : 'Изменений нет',
-      data.upstream || '', behind ? `Позади на ${behind}` : '', ahead ? `Не запушено: ${ahead}` : '',
-      'По локальным данным Git, без fetch', 'Действия Git'].filter(Boolean).join(' · ');
+    ui.repoStatus.title = [tr("Ветка {0}", branch), files.length ? tr("Незакоммиченных файлов: {0}", files.length) : tr("Изменений нет"),
+      data.upstream || '', behind ? tr("Позади на {0}", behind) : '', ahead ? tr("Не запушено: {0}", ahead) : '',
+      tr("По локальным данным Git, без fetch"), tr("Действия Git")].filter(Boolean).join(' · ');
     ui.repoStatus.setAttribute('aria-label', ui.repoStatus.title);
   });
   p.bar = tabBar(ui.tabsHost, {
@@ -494,9 +495,9 @@ function closeProject() {
 async function plaque(p) {
   const agent = await agentOf(p.aid);
   if (proj !== p) return;
-  ui.placeAgent.textContent = agent ? agent.name : 'Компьютер';
+  ui.placeAgent.textContent = agent ? agent.name : tr("Компьютер");
   if (!agent || !agent.online || !(await panel.ready(p.aid))) {
-    if (proj === p) ui.placeProject.textContent = 'Проект';
+    if (proj === p) ui.placeProject.textContent = tr("Проект");
     return;
   }
   let name = null;
@@ -506,9 +507,9 @@ async function plaque(p) {
     // отказ скажет правая часть
   }
   if (proj === p) {
-    ui.placeProject.textContent = name || 'Проект';
+    ui.placeProject.textContent = name || tr("Проект");
     if (name && !agent.shared && !p.members) {
-      p.accessButton.setAttribute('aria-label', `Доступ к проекту · ${name}`);
+      p.accessButton.setAttribute('aria-label', tr("Доступ к проекту · {0}", name));
       p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name });
       p.accessButton.hidden = false;
     }
@@ -604,7 +605,7 @@ async function lobby(mine, aid) {
 
 /** Экран новой вкладки: создание чата и сессии без открытых вкладок во всю рабочую область. */
 function sessions(mine, p, status) {
-  const picker = el('section', { id: 'code-tab-menu', class: 'code-session-picker', 'aria-label': 'Новая вкладка' });
+  const picker = el('section', { id: 'code-tab-menu', class: 'code-session-picker', 'aria-label': tr("Новая вкладка") });
   p.chatBox.replaceChildren(picker);
   const listing = chatsOf(p, true);
   view = sessionList(picker, { aid: p.aid, pid: p.pid, items: p.loaded ? p.items : listing,
@@ -636,14 +637,14 @@ async function chat(mine, p, id, agent, section, status) {
     if (mine !== gen) return;
     [name, row, { chatView }] = await Promise.all([projectName(p),
       cached || listing.then((items) => items.find((c) => c.chat === id) || p.info.get(id) || null),
-      lazy(() => import('./code-chat.js'), 'Чат не загрузился')]);
+      lazy(() => import('./code-chat.js'), tr("Чат не загрузился"))]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
   }
   if (mine !== gen) return;
   if (!row && p.complete === false) {
-    failed({ message: 'Не удалось проверить движок сессии. Обновите список и повторите открытие.' }, p.aid, status);
+    failed({ message: tr("Не удалось проверить движок сессии. Обновите список и повторите открытие.") }, p.aid, status);
     return;
   }
   ui.statusBox.replaceChildren();            // у чата своя строка #code-status
@@ -661,7 +662,7 @@ async function chat(mine, p, id, agent, section, status) {
           section.replaceChildren(); delete section.dataset.loaded;
           chat(mine, p, id, agent, section, status);
         }
-        throw new DOMException('Сведения о сессии изменились', 'AbortError');
+        throw new DOMException(tr("Сведения о сессии изменились"), 'AbortError');
       }
     }) : null,
     taskDone: () => { p.repo.refresh(true, true); panel.updateSummary(p.aid, p.pid); },
@@ -683,7 +684,7 @@ async function files(mine, p, path, status) {
   let filesView;
   try {
     [name, agent, { filesView }] = await Promise.all([projectName(p), agentOf(p.aid),
-      lazy(() => import('./code-files.js'), 'Файлы не загрузились')]);
+      lazy(() => import('./code-files.js'), tr("Файлы не загрузились"))]);
   } catch (err) {
     if (mine === gen) failed(err, p.aid, status);
     return;
@@ -702,9 +703,9 @@ function gitControls(p) {
   const busy = p.info.get(active)?.running || p.info.get(active)?.asking;
   const known = !active || p.info.has(active);
   return { enabled: p.canStart && known && !busy && !p.gitStarting,
-    message: p.gitStarting ? 'Подготавливаю действие Git…'
-      : !known ? 'Обновите список, чтобы проверить выбранную сессию'
-      : busy ? 'Дождитесь завершения задания в выбранном чате' : '' };
+    message: p.gitStarting ? tr("Подготавливаю действие Git…")
+      : !known ? tr("Обновите список, чтобы проверить выбранную сессию")
+      : busy ? tr("Дождитесь завершения задания в выбранном чате") : '' };
 }
 
 function openGitActions() {
@@ -729,9 +730,9 @@ function openGitActions() {
     });
     return button;
   });
-  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': 'Действия Git в чате проекта' }, ...buttons);
-  const dialog = openDialog(ui.root, { id: 'code-git-dialog', title: 'Действия Git',
-    body: [actions, hint, status], cancelText: 'Закрыть' });
+  const actions = el('div', { class: 'code-git-actions', role: 'group', 'aria-label': tr("Действия Git в чате проекта") }, ...buttons);
+  const dialog = openDialog(ui.root, { id: 'code-git-dialog', title: tr("Действия Git"),
+    body: [actions, hint, status], cancelText: tr("Закрыть") });
   function controls() {
     const allowed = gitControls(p);
     for (const button of buttons) button.disabled = !hasGit || !allowed.enabled;
@@ -741,7 +742,7 @@ function openGitActions() {
   const unsubscribe = p.repo.subscribe(({ data, error, loading }) => {
     hasGit = !!data;
     controls();
-    if (error && !loading) status.textContent = error.code === 'not_git' ? 'Не репозиторий git' : words(error);
+    if (error && !loading) status.textContent = error.code === 'not_git' ? tr("Не репозиторий git") : words(error);
   });
   function unmount() {
     unsubscribe();
@@ -794,7 +795,7 @@ async function runGitAction(p, prompt) {
 
 async function git(p) {
   try {
-    const { gitView } = await lazy(() => import('./code-files.js'), 'Не удалось загрузить Git');
+    const { gitView } = await lazy(() => import('./code-files.js'), tr("Не удалось загрузить Git"));
     if (proj !== p || shownKey !== 'git') return;
     if (p.git) p.git.unmount();
     p.git = gitView(p.gitBox, { git: p.repo,
@@ -803,7 +804,7 @@ async function git(p) {
       } });
   } catch (err) {
     if (proj === p) failed({ message: err?.code === 'updated' ? err.message
-      : 'Не удалось загрузить Git. Проверьте связь и обновите страницу.' }, p.aid, shownStatus);
+      : tr("Не удалось загрузить Git. Проверьте связь и обновите страницу.") }, p.aid, shownStatus);
   }
 }
 

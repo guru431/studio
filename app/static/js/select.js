@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Выделение нескольких записей ленты «Фото» и «Видео» (спека 2026-10-21-studio-feed-selection):
  * режим, отметки, групповые «Скачать» и «Удалить».
  *
@@ -44,16 +45,17 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
   let marked = false;            // в ленте могут быть отметки: вне режима paint() их снимает один раз
 
   const selectBtn = el('button', { type: 'button', class: 'btn btn-sm select-btn', id: `${section}-select`,
-    title: 'Выбрать', 'aria-label': 'Выбрать' });
-  selectBtn.innerHTML = `${svg('pick')}<span class="select-label">Выбрать</span>`;   // константы выше
+    title: tr("Выбрать"), 'aria-label': tr("Выбрать") });
+  selectBtn.innerHTML = svg('pick');
+  selectBtn.append(el('span', { class: 'select-label' }, tr("Выбрать")));
   const exitBtn = el('button', { type: 'button', class: 'icon-btn', id: `${section}-select-exit`,
-    'aria-label': 'Снять выделение', title: 'Снять выделение' });
+    'aria-label': tr("Снять выделение"), title: tr("Снять выделение") });
   exitBtn.innerHTML = svg('x');
   const count = el('span', { class: 'select-count', id: `${section}-select-count`, 'aria-live': 'polite' });
   const tools = el('div', { class: 'select-tools' }, exitBtn, count);
-  const allBtn = button('Все', { class: 'btn btn-sm', id: `${section}-select-all` });
-  const downloadBtn = button('Скачать', { class: 'btn btn-sm', id: `${section}-select-download` });
-  const deleteBtn = button('Удалить', { class: 'btn btn-sm btn-danger', id: `${section}-select-delete` });
+  const allBtn = button(tr("Все"), { class: 'btn btn-sm', id: `${section}-select-all` });
+  const downloadBtn = button(tr("Скачать"), { class: 'btn btn-sm', id: `${section}-select-download` });
+  const deleteBtn = button(tr("Удалить"), { class: 'btn btn-sm btn-danger', id: `${section}-select-delete` });
   const extras = extraActions.map((a) => {
     const b = button(a.label, { class: 'btn btn-sm', id: a.id, hidden: true });
     b.addEventListener('click', () => {
@@ -82,7 +84,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
 
   function decorate(node, item) {
     if (!selectable(item)) return node;
-    const box = el('button', { type: 'button', class: 'card-pick', role: 'checkbox', 'aria-label': 'Отметить' });
+    const box = el('button', { type: 'button', class: 'card-pick', role: 'checkbox', 'aria-label': tr("Отметить") });
     box.innerHTML = svg('check');
     node.append(box);
     node.dataset.pickable = '';
@@ -91,7 +93,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
   }
 
   function dayTools(day) {
-    const box = el('button', { type: 'button', class: 'day-pick', role: 'checkbox', 'aria-label': 'Отметить день',
+    const box = el('button', { type: 'button', class: 'day-pick', role: 'checkbox', 'aria-label': tr("Отметить день"),
       'data-day': day, 'aria-checked': 'false' });
     box.innerHTML = svg('check');
     return box;
@@ -102,8 +104,8 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     marked = selecting;
     const all = pickable();
     const full = all.length > 0 && all.every((i) => picked.has(idOf(i)));
-    count.textContent = note || `Выбрано ${picked.size}`;
-    allBtn.textContent = full ? 'Снять' : 'Все';
+    count.textContent = note || tr("Выбрано {0}", picked.size);
+    allBtn.textContent = full ? tr("Снять") : tr("Все");
     allBtn.disabled = busy || !all.length;
     deleteBtn.disabled = busy || !picked.size;
     for (const { action, node } of extras) node.hidden = busy || !action.shown(pickedItems());
@@ -127,9 +129,9 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
 
   function paintDownload() {
     const files = pickedFiles();
-    downloadBtn.textContent = files.length < picked.size ? `Скачать ${files.length}` : 'Скачать';
+    downloadBtn.textContent = files.length < picked.size ? tr("Скачать {0}", files.length) : tr("Скачать");
     downloadBtn.disabled = busy || !files.length || files.length > ARCHIVE_MAX;
-    downloadBtn.title = files.length > ARCHIVE_MAX ? `Не больше ${ARCHIVE_MAX} за раз` : '';
+    downloadBtn.title = files.length > ARCHIVE_MAX ? tr("Не больше {0} за раз", ARCHIVE_MAX) : '';
   }
 
   async function downloadPicked() {
@@ -141,7 +143,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     let saved = true;
     try {
       saved = await saveMany(files, ctx.root, (i, n) => {
-        note = `Готовлю ${i} из ${n}…`;
+        note = tr("Готовлю {0} из {1}…", i, n);
         count.textContent = note;
       });
     } catch (err) {
@@ -225,9 +227,9 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     const n = list.length;
     if (!n) return;
     const progress = el('p', { class: 'muted small', 'aria-live': 'polite' });
-    const confirm = button('Удалить', { class: 'btn btn-danger solid', id: `${section}-select-delete-confirm` });
-    const dialog = openDialog(ctx.root, { id: `${section}-select-delete-dialog`, title: `Удалить ${n} ${plural(n, nouns)}?`,
-      body: [el('p', {}, 'Удалятся из истории вместе с файлами.'), progress], actions: [confirm] });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: `${section}-select-delete-confirm` });
+    const dialog = openDialog(ctx.root, { id: `${section}-select-delete-dialog`, title: tr("Удалить {0} {1}?", n, plural(n, nouns)),
+      body: [el('p', {}, tr("Удалятся из истории вместе с файлами.")), progress], actions: [confirm] });
     let running = false;
     let stopped = false;
     dialog.addEventListener('close', () => { if (running) stopped = true; });
@@ -242,7 +244,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
       let last = null;
       for (const item of list) {
         if (stopped) break;
-        progress.textContent = `Удаляю ${done + failed + 1} из ${n}`;
+        progress.textContent = tr("Удаляю {0} из {1}", done + failed + 1, n);
         try {
           await remove(item);
           picked.delete(idOf(item));
@@ -257,8 +259,8 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
       if (dialog.open) dialog.close();
       if (!alive) return;
       busy = false;
-      if (failed) ctx.error.textContent = `Не удалось удалить ${failed} из ${n}: ${words(last)}`;
-      else if (done < n) ctx.error.textContent = `Удалено ${done} из ${n}, остальные не тронуты`;
+      if (failed) ctx.error.textContent = tr("Не удалось удалить {0} из {1}: {2}", failed, n, words(last));
+      else if (done < n) ctx.error.textContent = tr("Удалено {0} из {1}, остальные не тронуты", done, n);
       if (done === n) exit();
       else sync();
     });

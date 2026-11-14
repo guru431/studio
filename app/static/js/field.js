@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Поле ввода со значками (спека 2026-10-27-studio-ui-tidy, 4.4): чат, фото, «Изменить», видео, озвучка, поиск.
  *
  * fieldBox(field, { mic, clear, attach, tools, fit }) → { box, error }: box — `div.field-box`, в нём поле и справа значки
@@ -17,8 +18,8 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   const column = el('div', { class: 'field-tools' });
   const shown = [...tools];
   if (clear) {
-    const button = el('button', { type: 'button', class: 'icon-btn field-clear', 'aria-label': 'Очистить поле',
-      title: 'Очистить поле' });
+    const button = el('button', { type: 'button', class: 'icon-btn field-clear', 'aria-label': tr("Очистить поле"),
+      title: tr("Очистить поле") });
     button.append(icon('x'));
     button.addEventListener('click', () => {
       // поле только для чтения (идёт перевод «EN») — не трогать: пустое поле спрятало бы «EN» с отменой

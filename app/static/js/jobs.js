@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* «В работе» (спека 2026-10-21-studio-jobs-panel): значок, опрос GET /api/jobs и панель.
  *
  * Значок #jobs (полоса слева, на телефоне — вверху справа у темы): число идущих (`data-running`) и
@@ -36,12 +37,12 @@ const SEEN_KEY = 'studio-jobs-seen';
 const NOTIFY_KEY = 'studio-notify';
 /** Слова уведомления раздела: готово, не получилось. Без промпта, текста и имён — их видно на запертом экране. */
 const NOTICES = {
-  photo: ['картинка готова', 'картинка не получилась'],
-  video: ['ролик готов', 'ролик не получился'],
-  transcribe: ['расшифровка готова', 'расшифровка не получилась'],
-  ocr: ['распознавание готово', 'распознавание не получилось'],
-  translate: ['перевод готов', 'перевод не получился'],
-  speech: ['озвучка готова', 'озвучка не получилась'],
+  photo: [tr("картинка готова"), tr("картинка не получилась")],
+  video: [tr("ролик готов"), tr("ролик не получился")],
+  transcribe: [tr("расшифровка готова"), tr("расшифровка не получилась")],
+  ocr: [tr("распознавание готово"), tr("распознавание не получилось")],
+  translate: [tr("перевод готов"), tr("перевод не получился")],
+  speech: [tr("озвучка готова"), tr("озвучка не получилась")],
 };
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. Push Claude Code
  * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
@@ -120,8 +121,8 @@ function tick() {
  * закрытый раздел отвечает 423, как любой его запрос. Отказ — словами в строке до следующего опроса. */
 function cancelButton(item) {
   if (typeof item.cancel !== 'string' || !CANCEL.test(item.cancel)) return null;
-  const stop = el('button', { type: 'button', class: 'btn btn-sm jobs-cancel', 'aria-label': `Отменить: ${item.title}` },
-    'Отменить');
+  const stop = el('button', { type: 'button', class: 'btn btn-sm jobs-cancel', 'aria-label': tr("Отменить: {0}", item.title) },
+    tr("Отменить"));
   stop.addEventListener('click', async () => {
     stop.disabled = true;
     try {
@@ -140,7 +141,7 @@ function cancelButton(item) {
 }
 
 function row(item, fresh) {
-  const open = el('button', { type: 'button', class: 'btn btn-sm jobs-open' }, 'Открыть');
+  const open = el('button', { type: 'button', class: 'btn btn-sm jobs-open' }, tr("Открыть"));
   open.addEventListener('click', () => openHref(item.href));
   return el('li', { class: `jobs-row${fresh ? ' new' : ''}`, 'data-id': item.id, 'data-section': item.section,
     'data-state': item.state }, icon(item.section),
@@ -186,14 +187,14 @@ function renderPanel() {
   for (const kind of ['running', 'asking', 'unread']) {
     const group = document.getElementById(`jobs-code-${kind}`);
     const items = allCodeActivity().filter((item) => codeActivityState(item) === kind).map((item) => ({
-      ...item, id: `code-${item.aid}-${item.chat}`, section: 'code', state: kind, title: item.title || 'Сессия',
+      ...item, id: `code-${item.aid}-${item.chat}`, section: 'code', state: kind, title: item.title || tr("Сессия"),
       href: `code/${item.aid}/${item.project}/${item.chat}`,
     }));
     group.hidden = !items.length;
     fill(group.querySelector('ul'), items, () => kind === 'unread', '');
   }
-  fill(runningList, running, () => false, 'Сейчас ничего не идёт');
-  fill(finishedList, finished, (i) => i.finished > shownMark, 'За час ничего не закончилось');
+  fill(runningList, running, () => false, tr("Сейчас ничего не идёт"));
+  fill(finishedList, finished, (i) => i.finished > shownMark, tr("За час ничего не закончилось"));
 }
 
 function paint() {
@@ -206,7 +207,7 @@ function paint() {
   count.textContent = total ? String(total) : '';
   count.hidden = !total;
   dot.hidden = !fresh;
-  const label = `В работе${total ? `: ${total}` : ''}${agents.some((item) => item.asking) ? ', требуется ваше действие' : ''}${fresh ? ', есть готовое' : ''}`;
+  const label = tr("В работе{0}{1}{2}", total ? `: ${total}` : '', agents.some((item) => item.asking) ? tr(", требуется ваше действие") : '', fresh ? tr(", есть готовое") : '');
   badge.setAttribute('aria-label', label);
   badge.title = label;
   const bySection = new Map();
@@ -218,7 +219,7 @@ function paint() {
     const total = bySection.get(link.dataset.section) || 0;
     mark.hidden = !total;
     mark.textContent = total ? String(total) : '';
-    link.setAttribute('aria-label', sectionName(link.dataset.section) + (total ? ` · в работе: ${total}` : ''));
+    link.setAttribute('aria-label', sectionName(link.dataset.section) + (total ? tr(" · в работе: {0}", total) : ''));
   }
   const moreCount = document.getElementById('mobile-running-count');
   if (moreCount) {
@@ -227,8 +228,8 @@ function paint() {
     moreCount.hidden = !extra;
     moreCount.textContent = extra ? String(extra) : '';
     const name = document.getElementById('mobile-more-label').textContent;
-    moreCount.closest('button').setAttribute('aria-label', (name === 'Ещё' ? 'Ещё · все разделы' : name)
-      + (extra ? ` · в работе: ${extra}` : ''));
+    moreCount.closest('button').setAttribute('aria-label', (name === tr("Ещё") ? tr("Ещё · все разделы") : name)
+      + (extra ? tr(" · в работе: {0}", extra) : ''));
   }
   if (panel.open) renderPanel();
 }
@@ -348,7 +349,7 @@ async function notify(item) {
   if (!words || item.state === 'cancelled' || document.visibilityState === 'visible' || !notifyEnabled()) return;
   try {
     const registration = await navigator.serviceWorker.ready;
-    await registration.showNotification(`Студия: ${words[item.state === 'done' ? 0 : 1]}`,
+    await registration.showNotification(tr("Студия: {0}", words[item.state === 'done' ? 0 : 1]),
       { tag: item.id, icon: '/static/icons/icon-192.png', data: { href: item.href } });
   } catch {
     // браузер отказал — значок всё скажет при возвращении

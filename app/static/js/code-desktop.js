@@ -1,9 +1,10 @@
+import { tr } from './i18n.js';
 /* Экран и ввод живут только в открытом окне. Разрешение меняется исключительно локально в агенте. */
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { el, words } from './ui.js';
 
-const LOCAL = 'Рабочий стол отключён. Человек за компьютером должен включить его в настройках агента.';
+const LOCAL = tr("Рабочий стол отключён. Человек за компьютером должен включить его в настройках агента.");
 const FRAME_MS = 250;
 const button = (id, label) => el('button', { id: `code-desktop-${id}`, type: 'button', class: 'btn' }, label);
 
@@ -22,79 +23,78 @@ export function desktopView(host, { locked }) {
   let desktopSize = null;
   const title = el('h2', { id: 'code-desktop-title' });
   const status = el('p', { class: 'code-desktop-status muted', role: 'status' });
-  const connect = button('connect', 'Подключиться');
+  const connect = button('connect', tr("Подключиться"));
   connect.classList.add('btn-accent');
-  const refresh = button('refresh', 'Проверить доступ');
+  const refresh = button('refresh', tr("Проверить доступ"));
   const disconnect = button('disconnect', icon('power'));
-  disconnect.setAttribute('aria-label', 'Отключиться');
-  disconnect.title = 'Отключиться';
+  disconnect.setAttribute('aria-label', tr("Отключиться"));
+  disconnect.title = tr("Отключиться");
   const close = button('close', icon('x'));
-  close.setAttribute('aria-label', 'Закрыть');
-  close.title = 'Закрыть';
-  const monitor = el('select', { id: 'code-desktop-monitor', 'aria-label': 'Монитор' });
-  const resolution = el('select', { id: 'code-desktop-resolution', 'aria-label': 'Разрешение изображения',
-    title: 'Максимальная длинная сторона кадра. Разрешение монитора не меняется.' });
+  close.setAttribute('aria-label', tr("Закрыть"));
+  close.title = tr("Закрыть");
+  const monitor = el('select', { id: 'code-desktop-monitor', 'aria-label': tr("Монитор") });
+  const resolution = el('select', { id: 'code-desktop-resolution', 'aria-label': tr("Разрешение изображения"),
+    title: tr("Максимальная длинная сторона кадра. Разрешение монитора не меняется.") });
   const touchMode = button('touch', 'Touch');
-  const mouseMode = button('mouse', 'Мышь');
-  const modes = el('div', { class: 'code-desktop-modes', role: 'group', 'aria-label': 'Режим управления' },
+  const mouseMode = button('mouse', tr("Мышь"));
+  const modes = el('div', { class: 'code-desktop-modes', role: 'group', 'aria-label': tr("Режим управления") },
     touchMode, mouseMode);
   const zoomOut = button('zoom-out', '−');
-  zoomOut.setAttribute('aria-label', 'Уменьшить масштаб');
+  zoomOut.setAttribute('aria-label', tr("Уменьшить масштаб"));
   const zoomReset = button('zoom-reset', '100%');
-  zoomReset.title = 'Установить масштаб 100%';
+  zoomReset.title = tr("Установить масштаб 100%");
   const zoomIn = button('zoom-in', '+');
-  zoomIn.setAttribute('aria-label', 'Увеличить масштаб');
-  const fit = button('fit', 'Вписать');
-  fit.title = 'Показать весь рабочий стол';
-  const scaling = el('div', { class: 'code-desktop-scaling', role: 'group', 'aria-label': 'Масштаб экрана' },
+  zoomIn.setAttribute('aria-label', tr("Увеличить масштаб"));
+  const fit = button('fit', tr("Вписать"));
+  fit.title = tr("Показать весь рабочий стол");
+  const scaling = el('div', { class: 'code-desktop-scaling', role: 'group', 'aria-label': tr("Масштаб экрана") },
     zoomOut, zoomReset, zoomIn, fit);
-  const toolsToggle = button('tools-toggle', 'Ввод и буфер');
-  toolsToggle.title = 'Клавиатура, ввод текста и буфер обмена';
+  const toolsToggle = button('tools-toggle', tr("Ввод и буфер"));
+  toolsToggle.title = tr("Клавиатура, ввод текста и буфер обмена");
   toolsToggle.setAttribute('aria-expanded', 'false');
   toolsToggle.setAttribute('aria-controls', 'code-desktop-tools');
   const hint = el('p', { class: 'muted small code-desktop-hint', id: 'code-desktop-hint' });
   const screen = el('canvas', { id: 'code-desktop-screen', width: 1, height: 1, tabindex: '0',
-    'aria-label': 'Удалённый экран', 'aria-describedby': hint.id });
+    'aria-label': tr("Удалённый экран"), 'aria-describedby': hint.id });
   const cursor = el('span', { class: 'code-desktop-cursor', 'aria-hidden': 'true', hidden: true });
   const stage = el('div', { class: 'code-desktop-stage', hidden: true }, screen, cursor);
-  const left = button('left-click', 'ЛКМ');
-  left.title = 'Левая кнопка мыши';
-  const right = button('right-click', 'ПКМ');
-  right.title = 'Правая кнопка мыши';
-  const drag = button('drag', 'Тянуть');
-  drag.title = 'Удерживать левую кнопку для перетаскивания';
+  const left = button('left-click', tr("ЛКМ"));
+  left.title = tr("Левая кнопка мыши");
+  const right = button('right-click', tr("ПКМ"));
+  right.title = tr("Правая кнопка мыши");
+  const drag = button('drag', tr("Тянуть"));
+  drag.title = tr("Удерживать левую кнопку для перетаскивания");
   drag.setAttribute('aria-pressed', 'false');
   const scrollUp = button('scroll-up', '↥');
-  scrollUp.setAttribute('aria-label', 'Прокрутить вверх');
+  scrollUp.setAttribute('aria-label', tr("Прокрутить вверх"));
   const scrollDown = button('scroll-down', '↧');
-  scrollDown.setAttribute('aria-label', 'Прокрутить вниз');
+  scrollDown.setAttribute('aria-label', tr("Прокрутить вниз"));
   const mouseTools = el('div', { class: 'code-desktop-mouse-tools', hidden: true },
     left, right, drag, scrollUp, scrollDown);
   // Сохраняем фокус экрана; pointerdown не отменяем — WebKit потеряет click от касания.
   mouseTools.addEventListener('mousedown', (event) => event.preventDefault());
   const text = el('textarea', { id: 'code-desktop-text', rows: 2, maxlength: 4096,
-    autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Текст для ввода на компьютере',
-    placeholder: 'Текст, включая русский' });
-  const sendText = button('send-text', 'Ввести текст');
+    autocomplete: 'off', spellcheck: 'false', 'aria-label': tr("Текст для ввода на компьютере"),
+    placeholder: tr("Текст, включая русский") });
+  const sendText = button('send-text', tr("Ввести текст"));
   const clipboard = el('textarea', { id: 'code-desktop-clipboard', rows: 2, maxlength: 65536,
-    autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Текст буфера обмена',
-    placeholder: 'Вставьте текст для передачи или получите буфер компьютера' });
-  const clipboardSend = button('clipboard-send', 'Отправить буфер');
-  const clipboardGet = button('clipboard-get', 'Получить буфер');
-  const keys = el('div', { class: 'code-desktop-keys', 'aria-label': 'Клавиши и сочетания' });
+    autocomplete: 'off', spellcheck: 'false', 'aria-label': tr("Текст буфера обмена"),
+    placeholder: tr("Вставьте текст для передачи или получите буфер компьютера") });
+  const clipboardSend = button('clipboard-send', tr("Отправить буфер"));
+  const clipboardGet = button('clipboard-get', tr("Получить буфер"));
+  const keys = el('div', { class: 'code-desktop-keys', 'aria-label': tr("Клавиши и сочетания") });
   const modifierButtons = new Map();
   const tools = el('div', { id: 'code-desktop-tools', class: 'code-desktop-tools', hidden: true },
     hint, keys,
     el('div', { class: 'code-desktop-entry' }, text, sendText),
-    el('div', { class: 'code-desktop-clipboard' }, el('label', { for: clipboard.id }, 'Буфер обмена'),
+    el('div', { class: 'code-desktop-clipboard' }, el('label', { for: clipboard.id }, tr("Буфер обмена")),
       clipboard, el('div', { class: 'code-desktop-actions' }, clipboardSend, clipboardGet)),
-    el('p', { class: 'muted small' }, 'Обмен буфером выполняется только этими кнопками. '
-      + 'Полученный текст можно выделить и скопировать.'));
+    el('p', { class: 'muted small' }, tr("Обмен буфером выполняется только этими кнопками. Полученный текст можно выделить и скопировать.")));
   const body = el('div', { class: 'code-desktop-body', hidden: true }, stage);
   const connectActions = el('div', { class: 'code-desktop-actions' }, connect, refresh);
   const toolbar = el('div', { class: 'code-desktop-actions code-desktop-toolbar', hidden: true },
-    el('label', { class: 'code-desktop-monitor-label' }, 'Монитор', monitor),
-    el('label', { class: 'code-desktop-resolution-label' }, 'Качество', resolution), modes, scaling, toolsToggle);
+    el('label', { class: 'code-desktop-monitor-label' }, tr("Монитор"), monitor),
+    el('label', { class: 'code-desktop-resolution-label' }, tr("Качество"), resolution), modes, scaling, toolsToggle);
   const dialog = el('dialog', { id: 'code-desktop-dialog', class: 'dialog code-desktop-dialog',
     'aria-labelledby': title.id },
     el('div', { class: 'code-desktop-heading' }, title, disconnect, close), status,
@@ -140,7 +140,7 @@ export function desktopView(host, { locked }) {
     stage.style.width = `${desktopSize.width * scale}px`;
     stage.style.height = `${desktopSize.height * scale}px`;
     zoomReset.textContent = `${Math.round(scale * 100)}%`;
-    zoomReset.setAttribute('aria-label', `Масштаб ${Math.round(scale * 100)}%. Установить 100%`);
+    zoomReset.setAttribute('aria-label', tr("Масштаб {0}%. Установить 100%", Math.round(scale * 100)));
     fit.setAttribute('aria-pressed', String(zoom === null));
     zoomOut.disabled = scale <= .1;
     zoomIn.disabled = scale >= 3;
@@ -241,7 +241,7 @@ export function desktopView(host, { locked }) {
       else value.queue.push(event);
     }
     if (value.queue.length > 128) {
-      stop('Соединение не успевает передавать ввод. Подключитесь снова.', true);
+      stop(tr("Соединение не успевает передавать ввод. Подключитесь снова."), true);
       return;
     }
     if (!value.inputTimer && !value.sending) value.inputTimer = setTimeout(() => flush(value), 16);
@@ -273,14 +273,14 @@ export function desktopView(host, { locked }) {
       if (!data || !Number.isInteger(data.width) || !Number.isInteger(data.height)
         || data.width < 1 || data.height < 1 || data.width > 8192 || data.height > 8192
         || typeof data.image !== 'string' || data.image.length > 960000
-        || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.image)) throw new Error('Не удалось получить изображение экрана');
+        || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.image)) throw new Error(tr("Не удалось получить изображение экрана"));
       if (selected === Number(monitor.value) && edge === Number(resolution.value) && data.monitor === selected) {
         const image = new Image();
         image.src = `data:image/jpeg;base64,${data.image}`;
         await image.decode();
         if (!current(value) || selected !== Number(monitor.value) || edge !== Number(resolution.value)) return;
         if (image.naturalWidth !== data.width || image.naturalHeight !== data.height)
-          throw new Error('Размер изображения экрана не совпадает');
+          throw new Error(tr("Размер изображения экрана не совпадает"));
         screen.width = data.width;
         screen.height = data.height;
         screen.getContext('2d').drawImage(image, 0, 0);
@@ -302,14 +302,14 @@ export function desktopView(host, { locked }) {
     const target = agent;
     const mine = generation;
     if (!target.online || !target.desktop) {
-      say(!target.online ? 'Компьютер не на связи — включите его и запустите агент.'
-        : 'Обновите агент на компьютере для управления рабочим столом.');
+      say(!target.online ? tr("Компьютер не на связи — включите его и запустите агент.")
+        : tr("Обновите агент на компьютере для управления рабочим столом."));
       buttons();
       return;
     }
     request = new AbortController();
     const signal = request.signal;
-    say('Проверяю доступ к рабочему столу…');
+    say(tr("Проверяю доступ к рабочему столу…"));
     buttons();
     try {
       const data = await api('GET', path(target), undefined, { signal });
@@ -317,8 +317,8 @@ export function desktopView(host, { locked }) {
       enabled = data.enabled === true;
       resolution.replaceChildren(...data.resolutions.map((edge) => el('option', { value: edge }, `${edge} px`)));
       resolution.value = String(data.resolutions.includes(1600) ? 1600 : data.resolutions[0]);
-      say(!enabled ? LOCAL : data.active ? 'Рабочий стол уже занят другим подключением.'
-        : 'Доступ разрешён на компьютере. Нажмите «Подключиться», чтобы открыть экран.');
+      say(!enabled ? LOCAL : data.active ? tr("Рабочий стол уже занят другим подключением.")
+        : tr("Доступ разрешён на компьютере. Нажмите «Подключиться», чтобы открыть экран."));
       if (data.active) enabled = false;
     } catch (err) {
       if (mine === generation && dialog.open && !signal.aborted) failed(err, target);
@@ -334,7 +334,7 @@ export function desktopView(host, { locked }) {
     const pending = new AbortController();
     request = pending;
     buttons();
-    say('Подключаюсь…');
+    say(tr("Подключаюсь…"));
     try {
       // Не обрываем start при закрытии: поздно полученный токен сразу закрывается ниже.
       const data = await api('POST', path(target, '/start'), {}, { signal: AbortSignal.timeout(15000) });
@@ -343,19 +343,19 @@ export function desktopView(host, { locked }) {
         && data.monitors.every((item) => Number.isInteger(item.id) && Number.isInteger(item.width)
           && Number.isInteger(item.height) && item.width > 0 && item.height > 0)
         && data.monitors.some((item) => item.id === data.monitor);
-      if (!valid) throw new Error('Агент вернул неверные параметры рабочего стола');
+      if (!valid) throw new Error(tr("Агент вернул неверные параметры рабочего стола"));
       if (mine !== generation || !dialog.open || disposed || background()) {
         await api('POST', path(target, '/stop'), { control: data.control }, { signal: AbortSignal.timeout(3000) });
         return;
       }
       monitor.replaceChildren(...data.monitors.map((item, index) => el('option', { value: item.id },
-        `${index + 1}: ${item.width} × ${item.height}${item.primary ? ' · основной' : ''}`)));
+        `${index + 1}: ${item.width} × ${item.height}${item.primary ? tr(" · основной") : ''}`)));
       monitor.value = String(data.monitor);
       session = { control: data.control, agent: target, generation: mine, abort: new AbortController(),
         queue: [], keys: new Set(), buttons: new Set(), sending: false, frameTimer: null, inputTimer: null };
       setPointer({ x: .5, y: .5 });
       if (mode === 'mouse') enqueue(pointerEvent());
-      say('Подключено · уход с экрана завершит сеанс.');
+      say(tr("Подключено · уход с экрана завершит сеанс."));
       void frame(session);
     } catch (err) {
       if (mine === generation && dialog.open) failed(err, target);
@@ -391,8 +391,8 @@ export function desktopView(host, { locked }) {
     mouseTools.hidden = !session || mode !== 'mouse';
     stage.dataset.mode = mode;
     hint.textContent = mode === 'touch'
-      ? 'Касание — клик в этой точке, движение — перетаскивание. ПКМ — правый клик. Два пальца прокручивают пульт.'
-      : 'Экран как тачпад: двигайте палец, касайтесь для клика. «Тянуть» удерживает ЛКМ; ↥ ↧ прокручивают компьютер. Два пальца прокручивают пульт.';
+      ? tr("Касание — клик в этой точке, движение — перетаскивание. ПКМ — правый клик. Два пальца прокручивают пульт.")
+      : tr("Экран как тачпад: двигайте палец, касайтесь для клика. «Тянуть» удерживает ЛКМ; ↥ ↧ прокручивают компьютер. Два пальца прокручивают пульт.");
     if (current(session) && mode === 'mouse') enqueue(pointerEvent());
   }
   touchMode.addEventListener('click', () => changeMode('touch'));
@@ -526,8 +526,8 @@ export function desktopView(host, { locked }) {
   }
   left.addEventListener('click', () => clickPointer('left'));
   right.addEventListener('click', () => clickPointer('right'));
-  const touchRight = button('touch-right-click', 'ПКМ');
-  touchRight.title = 'Правая кнопка мыши';
+  const touchRight = button('touch-right-click', tr("ПКМ"));
+  touchRight.title = tr("Правая кнопка мыши");
   touchRight.addEventListener('click', () => clickPointer('right'));
   keys.append(touchRight);
   drag.addEventListener('click', () => {
@@ -562,10 +562,10 @@ export function desktopView(host, { locked }) {
         { control: value.control, text: read ? null : clipboard.value.slice(0, 65536) }, { signal: value.abort.signal });
       if (!current(value)) return;
       if (read) {
-        if (!data || typeof data.text !== 'string' || data.text.length > 65536) throw new Error('Не удалось получить буфер');
+        if (!data || typeof data.text !== 'string' || data.text.length > 65536) throw new Error(tr("Не удалось получить буфер"));
         clipboard.value = data.text;
-        say('Буфер компьютера получен. Выделите и скопируйте текст в поле.');
-      } else say('Текст передан в буфер компьютера.');
+        say(tr("Буфер компьютера получен. Выделите и скопируйте текст в поле."));
+      } else say(tr("Текст передан в буфер компьютера."));
     } catch (err) {
       if (current(value)) failed(err, value.agent);
     } finally {
@@ -576,14 +576,14 @@ export function desktopView(host, { locked }) {
   clipboardSend.addEventListener('click', () => exchange(false));
   connect.addEventListener('click', start);
   refresh.addEventListener('click', load);
-  disconnect.addEventListener('click', () => stop('Соединение закрыто. Для нового сеанса нажмите «Подключиться».'));
+  disconnect.addEventListener('click', () => stop(tr("Соединение закрыто. Для нового сеанса нажмите «Подключиться».")));
   close.addEventListener('click', () => { stop(); dialog.close(); });
   dialog.addEventListener('close', () => { if (!dialog.open) stop(); });
   const hidden = () => {
-    if (background() && dialog.open) stop('Управление остановлено при уходе с экрана. Подключитесь снова.');
+    if (background() && dialog.open) stop(tr("Управление остановлено при уходе с экрана. Подключитесь снова."));
     else if (dialog.open) buttons();
   };
-  const leave = () => { if (dialog.open) stop('Соединение закрыто.'); };
+  const leave = () => { if (dialog.open) stop(tr("Соединение закрыто.")); };
   const observer = new MutationObserver(hidden);
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   document.addEventListener('visibilitychange', hidden);
@@ -595,7 +595,7 @@ export function desktopView(host, { locked }) {
     show(value) {
       stop();
       agent = value;
-      title.textContent = `${value.name} · рабочий стол`;
+      title.textContent = tr("{0} · рабочий стол", value.name);
       if (!dialog.open) dialog.showModal();
       void load();
     },

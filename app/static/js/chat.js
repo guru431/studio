@@ -1,3 +1,4 @@
+import { locale, tr } from './i18n.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -99,15 +100,15 @@ const SCAN_ASKS = {              // вопрос в поле диалога из
 };
 const NOT_READY_MS = 3000;       // прямое подключение: опрос скана, затем ход заново
 const SCAN_RUNNING = ['queued', 'working', 'cancelling'];   // как ocr.RUNNING
-const NOT_READY = 'скан ещё распознаётся — отправлю, когда будет готов';
-const EXTERNAL_NOTE = 'Запись уйдёт во внешний сервис — выберите модель';
-const WEB_HINT = 'Задайте ключ Exa в Настройках → Ввод и интернет → Интернет';
+const NOT_READY = tr("скан ещё распознаётся — отправлю, когда будет готов");
+const EXTERNAL_NOTE = tr("Запись уйдёт во внешний сервис — выберите модель");
+const WEB_HINT = tr("Задайте ключ Exa в Настройках → Ввод и интернет → Интернет");
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
-const WEB_TITLE = 'Интернет: поиск, страницы и субтитры YouTube';
-const WEB_ASK = 'Запросы, составленные из расшифровки, могут уйти в Exa — отправить?';
-const TOOL_WORDS = { search: 'Ищу', page: 'Читаю', youtube: 'Субтитры' };   // строка хода по виду инструмента
-const THINK_TITLE = 'Рассуждение: модель думает перед ответом, ход мысли виден';
-const THINK_NOTE = 'С рассуждением модель реже ищет в интернете';   // замер 2026-10-22: 5 поисков из 10 против 10
+const WEB_TITLE = tr("Интернет: поиск, страницы и субтитры YouTube");
+const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
+const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры") };   // строка хода по виду инструмента
+const THINK_TITLE = tr("Рассуждение: модель думает перед ответом, ход мысли виден");
+const THINK_NOTE = tr("С рассуждением модель реже ищет в интернете");   // замер 2026-10-22: 5 поисков из 10 против 10
 
 const SAVE_DELAYS = [1000, 2000, 4000, 8000];   // повторы PUT ответа прямого подключения после обрыва связи
 
@@ -125,7 +126,7 @@ function elapsed(since) {
 
 function groupOf(updated) {
   const days = calendarDay(Date.now() / 1000).number - calendarDay(updated).number;
-  return days <= 0 ? 'Сегодня' : days === 1 ? 'Вчера' : 'Ранее';
+  return days <= 0 ? tr("Сегодня") : days === 1 ? tr("Вчера") : tr("Ранее");
 }
 
 /** Начало text не длиннее max единиц UTF-16 и без половины эмодзи на краю: одиночный старший
@@ -160,8 +161,8 @@ async function saveAnswer(chatId, message, body) {
       if (!unsaved.has(message.id)) unsaved.set(message.id, { chatId, message, body, error: message.error });
       unsaved.get(message.id).closed = closed;
       message.status = 'error';                     // готовый, но не сохранённый — иначе строка под ним пуста
-      message.error = closed ? 'Ответ не сохранился: сервер уже закрыл его — скопируйте текст'
-        : `Ответ не сохранился: ${words(err)}`;
+      message.error = closed ? tr("Ответ не сохранился: сервер уже закрыл его — скопируйте текст")
+        : tr("Ответ не сохранился: {0}", words(err));
       return false;
     }
   }
@@ -210,12 +211,12 @@ function append(job, text) {
 
 /* плашка скана: сервер шлёт `page` — страниц с итогом, а показываем ту, что распознаётся сейчас */
 function scanLine({ page, pages }) {
-  return `📄 Распознаю скан · стр. ${Math.min(page + 1, pages)} из ${pages}`;
+  return tr("📄 Распознаю скан · стр. {0} из {1}", Math.min(page + 1, pages), pages);
 }
 
 /* строка хода инструмента: «Ищу: запрос»; подпись YouTube сервер начинает словом «субтитры» */
 function toolLine({ kind, label }) {
-  const what = TOOL_WORDS[kind] || 'Инструмент';
+  const what = TOOL_WORDS[kind] || tr("Инструмент");
   let text = String(label || '');
   if (kind === 'youtube') text = text.replace(/^субтитры\s+/, '');
   return text ? `${what}: ${text}` : `${what}…`;
@@ -286,7 +287,7 @@ async function tokenFor(connId, url) {
   if (known && known.url === url) return known.token;
   tokens.delete(connId);
   const fresh = await api('GET', `/api/connections/${connId}/token`);
-  if (fresh.chat_url !== url) throw new Error('Адрес подключения сменился — отправьте сообщение ещё раз');
+  if (fresh.chat_url !== url) throw new Error(tr("Адрес подключения сменился — отправьте сообщение ещё раз"));
   tokens.set(connId, { token: fresh.token, url });
   return fresh.token;
 }
@@ -299,7 +300,7 @@ async function serviceRefusal(response) {
   } catch {
     // не JSON — без подробностей
   }
-  return `Сервис ответил ошибкой (${response.status})${detail ? `: ${detail}` : ''}`;
+  return tr("Сервис ответил ошибкой ({0}){1}", response.status, detail ? `: ${detail}` : '');
 }
 
 async function readBrowser(job, turn) {
@@ -335,7 +336,7 @@ async function readBrowser(job, turn) {
           break;
         }
         if (!data || typeof data !== 'object') continue;
-        if (data.error) throw new Error(`Модель прервала ответ: ${String(data.error.message || data.error).slice(0, 300)}`);
+        if (data.error) throw new Error(tr("Модель прервала ответ: {0}", String(data.error.message || data.error).slice(0, 300)));
         for (const choice of data.choices || []) {
           const text = choice && choice.delta && choice.delta.content;
           if (typeof text === 'string' && text) append(job, text);
@@ -343,16 +344,16 @@ async function readBrowser(job, turn) {
         }
         if (job.message.content.length > ANSWER_MAX) {     // как сервер: дальше не читать, прочитанное — ошибкой
           job.message.content = clip(job.message.content, ANSWER_MAX) + CUT_SIZE;
-          throw new Error('Ответ слишком длинный — обрезан');
+          throw new Error(tr("Ответ слишком длинный — обрезан"));
         }
       }
     } catch (err) {
-      throw err instanceof TypeError ? new Error('Связь с сервисом оборвалась') : err;
+      throw err instanceof TypeError ? new Error(tr("Связь с сервисом оборвалась")) : err;
     }
-    if (!ending) throw new Error('Модель оборвала ответ: поток кончился без признака конца');
+    if (!ending) throw new Error(tr("Модель оборвала ответ: поток кончился без признака конца"));
     if (ending === 'length') {
       job.message.content += CUT_LENGTH;
-      throw new Error('Ответ обрезан пределом длины модели');
+      throw new Error(tr("Ответ обрезан пределом длины модели"));
     }
   } catch (err) {
     if (err && err.name === 'AbortError') status = 'stopped';
@@ -412,17 +413,17 @@ function duration(sec) {
 function stepNode(s) {
   const li = el('li', { class: `web-step web-${s.kind}` });
   if (s.kind === 'search') {
-    li.append(s.query ? `Поиск: «${s.query}»` : 'Поиск');
+    li.append(s.query ? tr("Поиск: «{0}»", s.query) : tr("Поиск"));
     const results = Array.isArray(s.results) ? s.results : [];
     if (results.length) {
       li.append(el('ul', {}, ...results.map((x) => el('li', {}, sourceLink(x.url, x.title),
         x.published ? el('span', { class: 'muted' }, ` · ${x.published}`) : null))));
     }
-  } else if (s.kind === 'page') li.append('Страница: ', stepLink(s));
+  } else if (s.kind === 'page') li.append(tr("Страница: "), stepLink(s));
   else if (s.kind === 'youtube') {
     const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
-    li.append('Ролик: ', stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
-  } else li.append('Инструмент');
+    li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
+  } else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
   return li;
 }
@@ -434,18 +435,18 @@ const count = (n, forms) => `${n} ${plural(n, forms)}`;
 function badgeText(steps) {
   const of = (kind) => steps.filter((s) => s.kind === kind).length;
   const exa = [];
-  if (of('search')) exa.push(count(of('search'), ['поиск', 'поиска', 'поисков']));
-  if (of('page')) exa.push(count(of('page'), ['страница', 'страницы', 'страниц']));
-  const parts = exa.length ? [`🌐 Интернет (Exa): ${exa.join(', ')}`] : [];
-  if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), ['ролик', 'ролика', 'роликов'])}`);
+  if (of('search')) exa.push(count(of('search'), [tr("поиск"), tr("поиска"), tr("поисков")]));
+  if (of('page')) exa.push(count(of('page'), [tr("страница"), tr("страницы"), tr("страниц")]));
+  const parts = exa.length ? [tr("🌐 Интернет (Exa): {0}", exa.join(', '))] : [];
+  if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), [tr("ролик"), tr("ролика"), tr("роликов")])}`);
   const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind)).length;
-  if (wrong) parts.push(count(wrong, ['неверный вызов', 'неверных вызова', 'неверных вызовов']));
+  if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
-  return parts.join(' · ') + (errors ? ` — ${count(errors, ['ошибка', 'ошибки', 'ошибок'])}` : '');
+  return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
 }
 
 function sourcesNode(steps) {
-  return el('details', { class: 'web-steps' }, el('summary', {}, `Источники (${linkCount(steps)})`),
+  return el('details', { class: 'web-steps' }, el('summary', {}, tr("Источники ({0})", linkCount(steps))),
     el('ul', { class: 'web-list' }, ...steps.map(stepNode)));
 }
 
@@ -480,17 +481,17 @@ function build(view, ctx) {
   const unfolded = new Set();  // id ответов, чьё рассуждение человек раскрыл: лента перестраивается целиком
 
   /* разметка */
-  const list = el('nav', { class: 'chat-list', 'aria-label': 'Диалоги' });
-  const fresh = el('button', { type: 'button', class: 'btn chat-new', id: 'chat-new' }, icon('plus'), 'Новый чат');
+  const list = el('nav', { class: 'chat-list', 'aria-label': tr("Диалоги") });
+  const fresh = el('button', { type: 'button', class: 'btn chat-new', id: 'chat-new' }, icon('plus'), tr("Новый чат"));
   const aside = el('aside', { id: 'chats', class: 'chats' }, fresh, list);
   const backdrop = el('div', { class: 'chats-backdrop', hidden: true });
-  const toggle = iconButton('list', 'Диалоги', { id: 'chats-toggle', class: 'icon-btn chats-toggle', 'aria-controls': 'chats',
+  const toggle = iconButton('list', tr("Диалоги"), { id: 'chats-toggle', class: 'icon-btn chats-toggle', 'aria-controls': 'chats',
     'aria-expanded': 'false' });
   const chipName = el('span', { class: 'chip-name' });
   const chip = el('button', { type: 'button', id: 'model-chip', class: 'model-chip' },
     el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
   // меню моделей — общий компонент menu.js: группы по подключениям, выбранная — menuitemradio с ✓
-  const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', role: 'menu', 'aria-label': 'Модель' });
+  const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', role: 'menu', 'aria-label': tr("Модель") });
   const models = popupMenu(chip, modelMenu, { fill: fillModels });
   const connName = el('span', { class: 'chat-conn' });
   const head = el('header', { class: 'head chat-head' }, toggle,
@@ -500,21 +501,21 @@ function build(view, ctx) {
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
   const notice = el('p', { class: 'chat-error error', id: 'chat-error', 'aria-live': 'polite' });
   const chipsBox = el('div', { class: 'att-chips' });
-  const input = el('textarea', { id: 'chat-input', rows: '1', placeholder: 'Напишите сообщение…', 'aria-label': 'Сообщение',
+  const input = el('textarea', { id: 'chat-input', rows: '1', placeholder: tr("Напишите сообщение…"), 'aria-label': tr("Сообщение"),
     maxlength: '200000' });
   const file = el('input', { type: 'file', id: 'attach', class: 'sr', accept: ACCEPT, multiple: true });
-  const clip = el('label', { class: 'icon-btn attach', title: 'Прикрепить файл' }, icon('clip'),
-    el('span', { class: 'sr' }, 'Прикрепить файл'), file);
-  const send = el('button', { type: 'submit', id: 'send', class: 'send composer-go', 'aria-label': 'Отправить',
-    title: 'Отправить' }, icon('send'));
-  const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go composer-stop', 'aria-label': 'Остановить',
-    title: 'Остановить', hidden: true }, icon('stop'));
+  const clip = el('label', { class: 'icon-btn attach', title: tr("Прикрепить файл") }, icon('clip'),
+    el('span', { class: 'sr' }, tr("Прикрепить файл")), file);
+  const send = el('button', { type: 'submit', id: 'send', class: 'send composer-go', 'aria-label': tr("Отправить"),
+    title: tr("Отправить") }, icon('send'));
+  const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
+    title: tr("Остановить"), hidden: true }, icon('stop'));
   // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
   const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
-    'aria-label': 'Интернет', title: WEB_TITLE, hidden: true }, icon('globe'), el('span', { class: 'toggle-word' }, 'Интернет'));
+    'aria-label': tr("Интернет"), title: WEB_TITLE, hidden: true }, icon('globe'), el('span', { class: 'toggle-word' }, tr("Интернет")));
   const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip think-toggle', 'aria-pressed': 'false',
-    'aria-label': 'Рассуждение', title: THINK_TITLE, hidden: true }, icon('bulb'),
-  el('span', { class: 'toggle-word' }, 'Рассуждение'));
+    'aria-label': tr("Рассуждение"), title: THINK_TITLE, hidden: true }, icon('bulb'),
+  el('span', { class: 'toggle-word' }, tr("Рассуждение")));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
@@ -533,7 +534,7 @@ function build(view, ctx) {
 
   function shareContext() {
     share.hidden = !chatId;
-    sharing.set(chatId ? { title: chat?.chat.id === chatId ? chat.chat.title || 'Чат' : 'Чат', share: `/api/chats/${chatId}/share`,
+    sharing.set(chatId ? { title: chat?.chat.id === chatId ? chat.chat.title || tr("Чат") : tr("Чат"), share: `/api/chats/${chatId}/share`,
       export: `/api/chats/${chatId}/export` } : null);
   }
 
@@ -554,7 +555,7 @@ function build(view, ctx) {
       return;
     }
     if (!items.length) {
-      list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, 'Диалогов пока нет'));
+      list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Диалогов пока нет")));
       return;
     }
     const nodes = [];
@@ -572,20 +573,20 @@ function build(view, ctx) {
 
   function listItem(item) {
     const link = el('a', { href: `#/chat/${item.id}`, class: 'chat-link', 'aria-current': item.id === chatId ? 'page' : null },
-      item.title || 'Новый диалог');
-    const more = iconButton('more', 'Действия с диалогом', { class: 'icon-btn chat-more' });
+      item.title || tr("Новый диалог"));
+    const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
     const li = el('div', { class: 'chat-item', 'data-id': item.id }, link, more);
     link.addEventListener('click', () => panel(false));
     // меню строки — общий компонент menu.js; пункты собираются при открытии (название могло смениться)
-    const menu = el('div', { class: 'chat-menu', role: 'menu', 'aria-label': 'Действия с диалогом' });
+    const menu = el('div', { class: 'chat-menu', role: 'menu', 'aria-label': tr("Действия с диалогом") });
     li.append(menu);
     popupMenu(more, menu, { align: 'end', fill: (close) => {
       const items = [
-        menuItem('Поделиться чатом', { attrs: { class: 'chat-share' }, onSelect: () => {
+        menuItem(tr("Поделиться чатом"), { attrs: { class: 'chat-share' }, onSelect: () => {
           close(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`);
         } }),
-        menuItem('Переименовать', { attrs: { class: 'chat-rename' }, onSelect: () => { close(); renameDialog(item); } }),
-        menuItem('Удалить', { attrs: { class: 'chat-delete danger' }, onSelect: () => { close(); deleteDialog(item); } })];
+        menuItem(tr("Переименовать"), { attrs: { class: 'chat-rename' }, onSelect: () => { close(); renameDialog(item); } }),
+        menuItem(tr("Удалить"), { attrs: { class: 'chat-delete danger' }, onSelect: () => { close(); deleteDialog(item); } })];
       return [items, items];
     } });
     return li;
@@ -594,9 +595,9 @@ function build(view, ctx) {
   function renameDialog(item) {
     const title = el('input', { class: 'input', name: 'title', maxlength: '200', value: item.title || '' });
     const fail = el('p', { class: 'error' });
-    const save = button('Сохранить', { class: 'btn btn-accent', id: 'rename-save' });
-    const dialog = openDialog(root, { id: 'rename-dialog', title: 'Переименовать диалог',
-      body: [field('Название', title, 'title'), fail], actions: [save] });
+    const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'rename-save' });
+    const dialog = openDialog(root, { id: 'rename-dialog', title: tr("Переименовать диалог"),
+      body: [field(tr("Название"), title, 'title'), fail], actions: [save] });
     const submit = async () => {
       save.disabled = true;
       try {
@@ -623,9 +624,9 @@ function build(view, ctx) {
 
   function deleteDialog(item) {
     const fail = el('p', { class: 'error' });
-    const confirm = button('Удалить', { class: 'btn btn-danger solid', id: 'chat-delete-confirm' });
-    const dialog = openDialog(root, { id: 'chat-delete-dialog', title: 'Удалить диалог?',
-      body: [el('p', {}, `«${item.title || 'Новый диалог'}» удалится вместе с вложениями.`), fail], actions: [confirm] });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'chat-delete-confirm' });
+    const dialog = openDialog(root, { id: 'chat-delete-dialog', title: tr("Удалить диалог?"),
+      body: [el('p', {}, tr("«{0}» удалится вместе с вложениями.", item.title || tr("Новый диалог"))), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -660,7 +661,7 @@ function build(view, ctx) {
     const { connection_id: connId, model } = chosen();
     // ни подключения, ни модели (раздел без модели, подключение диалога удалено) — «по умолчанию» нечему
     const none = connId === null && !model;
-    chipName.textContent = none ? 'модель не выбрана' : model || 'модель по умолчанию';
+    chipName.textContent = none ? tr("модель не выбрана") : model || tr("модель по умолчанию");
     chip.classList.toggle('off', none);
     const link = links.find((l) => l.connection.id === connId);
     connName.textContent = link ? link.connection.name : '';
@@ -808,9 +809,9 @@ function build(view, ctx) {
   /* окна подтверждений — по очереди: сначала внешняя модель, затем Exa; каждое несёт уже данное другое */
   function askExternal(regenerate, webOk) {
     const link = links.find((l) => l.connection.id === chosen().connection_id);
-    const confirm = button('Отправить', { class: 'btn btn-accent', id: 'external-confirm' });
-    const dialog = openDialog(root, { id: 'external-dialog', title: 'Отправить расшифровку?', actions: [confirm],
-      body: [el('p', {}, `Расшифровка уйдёт во внешний сервис «${link ? link.connection.name : 'подключение диалога'}» — отправить?`)] });
+    const confirm = button(tr("Отправить"), { class: 'btn btn-accent', id: 'external-confirm' });
+    const dialog = openDialog(root, { id: 'external-dialog', title: tr("Отправить расшифровку?"), actions: [confirm],
+      body: [el('p', {}, tr("Расшифровка уйдёт во внешний сервис «{0}» — отправить?", link ? link.connection.name : tr("подключение диалога")))] });
     confirm.addEventListener('click', () => {
       dialog.close();
       submit(regenerate, true, webOk);
@@ -818,8 +819,8 @@ function build(view, ctx) {
   }
 
   function askWeb(regenerate, externalOk) {
-    const confirm = button('Отправить', { class: 'btn btn-accent', id: 'web-confirm' });
-    const dialog = openDialog(root, { id: 'web-dialog', title: 'Расшифровка и интернет', actions: [confirm],
+    const confirm = button(tr("Отправить"), { class: 'btn btn-accent', id: 'web-confirm' });
+    const dialog = openDialog(root, { id: 'web-dialog', title: tr("Расшифровка и интернет"), actions: [confirm],
       body: [el('p', {}, WEB_ASK)] });
     confirm.addEventListener('click', () => {
       dialog.close();
@@ -874,9 +875,9 @@ function build(view, ctx) {
   }
 
   function showText(a) {
-    const tokens = (a.meta.tokens / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
-    openDialog(root, { id: 'att-text-dialog', title: a.meta.name, cancelText: 'Закрыть',
-      body: [el('p', { class: 'muted small' }, `${a.meta.chars.toLocaleString('ru-RU')} зн. · ~${tokens} тыс. токенов`),
+    const tokens = (a.meta.tokens / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 });
+    openDialog(root, { id: 'att-text-dialog', title: a.meta.name, cancelText: tr("Закрыть"),
+      body: [el('p', { class: 'muted small' }, tr("{0} зн. · ~{1} тыс. токенов", a.meta.chars.toLocaleString(locale()), tokens)),
         el('pre', { class: 'att-text' }, a.meta.text)] });
   }
 
@@ -885,7 +886,7 @@ function build(view, ctx) {
     const now = chosen();
     const shown = links.filter((l) => l.models.length);
     if (!shown.length) {
-      return [[el('p', { class: 'muted small menu-note' }, 'Нет отмеченных моделей — выберите в настройках раздела «Чат»')], []];
+      return [[el('p', { class: 'muted small menu-note' }, tr("Нет отмеченных моделей — выберите в настройках раздела «Чат»"))], []];
     }
     const items = [];
     const nodes = shown.map(({ connection: conn, models: ids }) => {
@@ -941,11 +942,11 @@ function build(view, ctx) {
   function attLabel(a) {
     return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'photo' : 'doc'), el('b', {}, a.name),
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
-      a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, `${Number(a.chars || 0).toLocaleString('ru-RU')} зн.`) : null,
+      a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, tr("{0} зн.", Number(a.chars || 0).toLocaleString(locale()))) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
-        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, 'к записи') : null,
+        href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, tr("к записи")) : null,
       // скан вложения кончился с нераспознанными страницами: тот же документ — снова в очередь, текст — его итог
-      a.rescan ? button('Распознать заново', { class: 'btn btn-sm att-rescan' }, async (event) => {
+      a.rescan ? button(tr("Распознать заново"), { class: 'btn btn-sm att-rescan' }, async (event) => {
         event.currentTarget.disabled = true;
         try {
           await api('POST', `/api/attachments/${encodeURIComponent(a.id)}/ocr`);
@@ -978,7 +979,7 @@ function build(view, ctx) {
         behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     });
     // ответ ждёт карту (503 шлюза): «Не ждать» — один узел на сообщение, перерисовка счётчика его не пересоздаёт
-    const nowait = button('Не ждать', { class: 'btn btn-sm msg-nowait', hidden: true }, async () => {
+    const nowait = button(tr("Не ждать"), { class: 'btn btn-sm msg-nowait', hidden: true }, async () => {
       nowait.disabled = true;
       try {
         await api('POST', `/api/chats/${chatId}/nowait`);
@@ -1029,7 +1030,7 @@ function build(view, ctx) {
       p.badge.replaceChildren(badgeText(steps));
     }
     p.badge.disabled = !p.steps;
-    p.badge.setAttribute('aria-label', p.steps ? `${p.badge.textContent} — показать источники` : p.badge.textContent);
+    p.badge.setAttribute('aria-label', p.steps ? tr("{0} — показать источники", p.badge.textContent) : p.badge.textContent);
   }
 
   /* строка рассуждения под плашкой: модель думает — «Думает… N с» с крутилкой и бегущим текстом (если он виден),
@@ -1052,7 +1053,7 @@ function build(view, ctx) {
           const on = unfolded.has(m.id);
           run.classList.toggle('open', on);
           run.setAttribute('aria-expanded', String(on));
-          run.title = on ? 'Свернуть' : 'Показать целиком';
+          run.title = on ? tr("Свернуть") : tr("Показать целиком");
         };
         const flip = () => {
           unfold(!unfolded.has(m.id));
@@ -1088,8 +1089,8 @@ function build(view, ctx) {
     }
     if (busy) {
       const sec = job ? thinkSec(job) : m.reasoning_sec;
-      p.think.querySelector('.think-sec').textContent = `Думает… ${Math.max(0, Math.round(sec || 0))} с`;
-    } else p.think.querySelector('summary').textContent = `💭 Рассуждала ${Math.max(1, Math.round(m.reasoning_sec || 0))} с`;
+      p.think.querySelector('.think-sec').textContent = tr("Думает… {0} с", Math.max(0, Math.round(sec || 0)));
+    } else p.think.querySelector('summary').textContent = tr("💭 Рассуждала {0} с", Math.max(1, Math.round(m.reasoning_sec || 0)));
   }
 
   function paint(m) {
@@ -1115,15 +1116,15 @@ function build(view, ctx) {
     // карта занята (503 шлюза): своя вкладка — событие `wait`, ответ, который читает не она, — `wait` с сервера
     const waiting = m.status === 'streaming' && (job ? job.wait != null : Number.isFinite(m.wait));
     p.nowait.hidden = !waiting;
-    if (waiting) text = `жду карту · ${job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)}`;
+    if (waiting) text = tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000));
     else if (m.status === 'streaming') {
       // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке
-      if (job) text = job.tool || job.scan || job.first || job.thinkFrom ? '' : `загружаю модель · ${elapsed(job.started)}`;
-      else if (m.via === 'browser') text = m.live ? 'ответ идёт в другой вкладке…' : 'прервано';
-      else text = m.ocr ? '' : 'ответ ещё идёт…';
-    } else if (m.status === 'stopped') text = 'остановлено';
+      if (job) text = job.tool || job.scan || job.first || job.thinkFrom ? '' : tr("загружаю модель · {0}", elapsed(job.started));
+      else if (m.via === 'browser') text = m.live ? tr("ответ идёт в другой вкладке…") : tr("прервано");
+      else text = m.ocr ? '' : tr("ответ ещё идёт…");
+    } else if (m.status === 'stopped') text = tr("остановлено");
     else if (m.status === 'error') {
-      text = m.error || (m.content ? 'ответ оборвался' : 'ответ не получен');
+      text = m.error || (m.content ? tr("ответ оборвался") : tr("ответ не получен"));
       kind = ' error';
     }
     p.meta.textContent = text;
@@ -1131,20 +1132,20 @@ function build(view, ctx) {
     p.actions.replaceChildren();
     if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
     if (m.content) {
-      const copy = button('Копировать', { class: 'btn btn-sm msg-copy' }, async () => {
+      const copy = button(tr("Копировать"), { class: 'btn btn-sm msg-copy' }, async () => {
         try {
           await navigator.clipboard.writeText(displayed);
-          copy.textContent = 'Скопировано';
+          copy.textContent = tr("Скопировано");
         } catch {
-          copy.textContent = 'Не вышло';
+          copy.textContent = tr("Не вышло");
         }
-        setTimeout(() => { copy.textContent = 'Копировать'; }, COPIED_MS);
+        setTimeout(() => { copy.textContent = tr("Копировать"); }, COPIED_MS);
       });
       p.actions.append(copy);
     }
     const kept = unsaved.get(m.id);
     if (kept?.message === m && !kept.closed) {
-      const again = button('Сохранить ещё раз', { class: 'btn btn-sm msg-save' }, async () => {
+      const again = button(tr("Сохранить ещё раз"), { class: 'btn btn-sm msg-save' }, async () => {
         again.disabled = true;
         await saveAnswer(kept.chatId, m, kept.body);
         paint(m);
@@ -1152,26 +1153,26 @@ function build(view, ctx) {
       });
       p.actions.append(again);
     }
-    if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? 'Восстановленный ответ' : 'Ответ модели',
+    if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? tr("Восстановленный ответ") : tr("Ответ модели"),
       { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
-    if (chat?.chat.cleaner && m.content) p.actions.append(button('Очищенная копия',
+    if (chat?.chat.cleaner && m.content) p.actions.append(button(tr("Очищенная копия"),
       { class: 'btn btn-sm msg-cleaner-copy' }, async () => {
         try {
           const result = await api('POST', `/api/chats/${chatId}/cleaner-copy`, { message_id: m.id });
           const area = el('textarea', { class: 'input cleaner-copy-text', readonly: true, rows: '12' });
           area.value = result.text;
-          const copy = button('Копировать', { class: 'btn btn-accent' }, async () => {
+          const copy = button(tr("Копировать"), { class: 'btn btn-accent' }, async () => {
             try {
               await navigator.clipboard.writeText(result.text);
-              copy.textContent = 'Скопировано';
-            } catch { copy.textContent = 'Не вышло'; }
+              copy.textContent = tr("Скопировано");
+            } catch { copy.textContent = tr("Не вышло"); }
           });
-          openDialog(root, { id: 'cleaner-copy-dialog', title: 'Очищенная копия', body: [area,
-            el('p', { class: 'muted small' }, 'Проверьте текст: распознавание может пропустить чувствительные данные.')],
-          actions: [copy], cancelText: 'Закрыть' });
+          openDialog(root, { id: 'cleaner-copy-dialog', title: tr("Очищенная копия"), body: [area,
+            el('p', { class: 'muted small' }, tr("Проверьте текст: распознавание может пропустить чувствительные данные."))],
+          actions: [copy], cancelText: tr("Закрыть") });
         } catch (err) { notice.textContent = words(err); }
       }));
-    if (p.last) p.actions.append(button('Ответить заново', { class: 'btn btn-sm msg-retry' }, () => submit(true)));
+    if (p.last) p.actions.append(button(tr("Ответить заново"), { class: 'btn btn-sm msg-retry' }, () => submit(true)));
   }
 
   function renderFeed() {
@@ -1197,7 +1198,7 @@ function build(view, ctx) {
 
   function emptyNote() {
     return el('div', { class: 'empty chat-empty' }, el('span', { class: 'badge', 'aria-hidden': 'true' }, icon('chat')),
-      el('p', {}, 'Напишите сообщение или прикрепите документ — PDF, DOCX, TXT, MD или фото'));
+      el('p', {}, tr("Напишите сообщение или прикрепите документ — PDF, DOCX, TXT, MD или фото")));
   }
 
   function scrollDown(force) {
@@ -1345,7 +1346,7 @@ function build(view, ctx) {
       feed.replaceChildren(ctx.hint ? ctx.hint() : emptyNote());
       return;
     }
-    feed.replaceChildren(el('p', { class: 'muted feed-note' }, 'Загружаю диалог…'));
+    feed.replaceChildren(el('p', { class: 'muted feed-note' }, tr("Загружаю диалог…")));
     try {
       const data = await api('GET', `/api/chats/${encodeURIComponent(id)}`);
       if (mine !== opened) return;
@@ -1370,7 +1371,7 @@ function build(view, ctx) {
     chipsBox.replaceChildren(...atts.map((a) => {
       const name = a.file ? a.file.name : a.meta.name;
       const image = a.file ? a.file.type.startsWith('image/') : a.meta.kind === 'image';
-      const remove = iconButton('x', `Убрать ${name}`, { class: 'icon-btn att-remove' });
+      const remove = iconButton('x', tr("Убрать {0}", name), { class: 'icon-btn att-remove' });
       remove.addEventListener('click', () => {
         atts = atts.filter((x) => x !== a);
         dropWaiting();
@@ -1380,12 +1381,12 @@ function build(view, ctx) {
       });
       let label = el('span', { class: 'att-name' }, name);
       if (a.transcript || a.scan) {                  // весь передаваемый текст — по нажатию
-        label = el('button', { type: 'button', class: 'att-name att-open', title: 'Показать текст' }, name);
+        label = el('button', { type: 'button', class: 'att-name att-open', title: tr("Показать текст") }, name);
         label.addEventListener('click', () => showText(a));
       }
       return el('span', { class: `att-chip${a.error ? ' bad' : ''}` }, icon(image ? 'photo' : 'doc'), label,
-        a.transcript || a.scan ? el('span', { class: 'muted att-state' }, `${a.meta.chars.toLocaleString('ru-RU')} зн.`) : null,
-        a.busy ? el('span', { class: 'muted att-state' }, 'загружаю…') : null,
+        a.transcript || a.scan ? el('span', { class: 'muted att-state' }, tr("{0} зн.", a.meta.chars.toLocaleString(locale()))) : null,
+        a.busy ? el('span', { class: 'muted att-state' }, tr("загружаю…")) : null,
         a.error ? el('span', { class: 'error att-state' }, a.error) : null,
         sending ? null : remove);
     }));
@@ -1526,33 +1527,33 @@ function build(view, ctx) {
       const rules = [];
       do {
         retry = false;
-        notice.textContent = 'Проверяю данные в Cleaner…';
+        notice.textContent = tr("Проверяю данные в Cleaner…");
         const shown = await api('POST', `/api/chats/${id}/cleaner-preview`,
           { ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
             cleaner_rules: rules, cleaner_local: local });
         notice.textContent = '';
         if (chatId !== id) return;
         cleanerTicket = await new Promise((resolve) => {
-          const confirm = button(local ? 'Отправить оригиналы локальной модели' : 'Отправить проверенный текст', { class: 'btn btn-accent', id: 'cleaner-confirm',
+          const confirm = button(local ? tr("Отправить оригиналы локальной модели") : tr("Отправить проверенный текст"), { class: 'btn btn-accent', id: 'cleaner-confirm',
             disabled: !shown.deliverable });
           const content = el('div', { class: 'cleaner-preview-text' }, ...shown.messages.map((m) =>
-            m.role === 'system' ? el('details', {}, el('summary', {}, 'Инструкция модели'), el('pre', {}, m.content))
-              : el('section', {}, el('b', {}, m.role === 'user' ? 'Пользователь' : 'Помощник'), el('pre', {}, m.content))));
-          const typeNames = { PERSON: 'Люди', ORG: 'Организации', ADDRESS: 'Адреса', EMAIL: 'Почта', PHONE: 'Телефоны',
-            BIRTHDATE: 'Даты рождения', PASSPORT: 'Паспорта', INN: 'ИНН', SNILS: 'СНИЛС', OGRN: 'ОГРН', KPP: 'КПП',
-            OMS: 'Полисы', CARD: 'Карты', BANK_ACCOUNT: 'Счета', SECRET: 'Секреты', ACCOUNT: 'Учётные записи',
-            IP: 'IP', MAC: 'MAC', HOST: 'Узлы', DOMAIN: 'Домены', SID: 'SID', DN: 'LDAP', TERM: 'Термины' };
+            m.role === 'system' ? el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, m.content))
+              : el('section', {}, el('b', {}, m.role === 'user' ? tr("Пользователь") : tr("Помощник")), el('pre', {}, m.content))));
+          const typeNames = { PERSON: tr("Люди"), ORG: tr("Организации"), ADDRESS: tr("Адреса"), EMAIL: tr("Почта"), PHONE: tr("Телефоны"),
+            BIRTHDATE: tr("Даты рождения"), PASSPORT: tr("Паспорта"), INN: tr("ИНН"), SNILS: tr("СНИЛС"), OGRN: tr("ОГРН"), KPP: tr("КПП"),
+            OMS: tr("Полисы"), CARD: tr("Карты"), BANK_ACCOUNT: tr("Счета"), SECRET: tr("Секреты"), ACCOUNT: tr("Учётные записи"),
+            IP: 'IP', MAC: 'MAC', HOST: tr("Узлы"), DOMAIN: tr("Домены"), SID: 'SID', DN: 'LDAP', TERM: tr("Термины") };
           const counts = Object.entries(shown.counts || {}).map(([type, count]) => `${typeNames[type] || type}: ${count}`).join(' · ');
           const fragment = el('input', { class: 'input', id: 'cleaner-fragment', maxlength: '2000',
-            placeholder: 'Фрагмент исходного текста', autocomplete: 'off' });
+            placeholder: tr("Фрагмент исходного текста"), autocomplete: 'off' });
           const type = el('select', { class: 'input', id: 'cleaner-type' }, ...Object.entries({
-            TERM: 'Термин', PERSON: 'Человек', ORG: 'Организация', SECRET: 'Секрет', EMAIL: 'Почта',
-            PHONE: 'Телефон', ADDRESS: 'Адрес', HOST: 'Узел', ACCOUNT: 'Учётная запись',
+            TERM: tr("Термин"), PERSON: tr("Человек"), ORG: tr("Организация"), SECRET: tr("Секрет"), EMAIL: tr("Почта"),
+            PHONE: tr("Телефон"), ADDRESS: tr("Адрес"), HOST: tr("Узел"), ACCOUNT: tr("Учётная запись"),
           }).map(([value, name]) => el('option', { value }, name)));
-          const edit = el('details', { id: 'cleaner-edit' }, el('summary', {}, 'Исправить замены'),
-            field('Фрагмент', fragment, 'fragment'), field('Тип', type, 'type'));
+          const edit = el('details', { id: 'cleaner-edit' }, el('summary', {}, tr("Исправить замены")),
+            field(tr("Фрагмент"), fragment, 'fragment'), field(tr("Тип"), type, 'type'));
           let accepted = false;
-          for (const [action, label] of [['mask', 'Скрыть и перепроверить'], ['unmask', 'Показать и перепроверить']]) {
+          for (const [action, label] of [['mask', tr("Скрыть и перепроверить")], ['unmask', tr("Показать и перепроверить")]]) {
             edit.append(button(label, { class: 'btn btn-sm', id: `cleaner-${action}` }, () => {
               if (!fragment.value.trim()) { fragment.focus(); return; }
               rules.push({ action, value: fragment.value, type: type.value });
@@ -1560,18 +1561,17 @@ function build(view, ctx) {
               dialog.close();
             }));
           }
-          const switchRoute = button(local ? 'Вернуться к облачному предпросмотру' : 'Выбрать локальную модель', { class: 'btn', id: 'cleaner-local' }, () => {
+          const switchRoute = button(local ? tr("Вернуться к облачному предпросмотру") : tr("Выбрать локальную модель"), { class: 'btn', id: 'cleaner-local' }, () => {
             local = !local;
             retry = true;
             dialog.close();
           });
-          const dialog = openDialog(root, { id: 'cleaner-preview-dialog', title: local ? 'Оригиналы для локальной модели' : 'Что получит модель', body: [
-            local ? el('p', {}, `Оригиналы получит ${shown.destination.model} (${shown.destination.url}). Проверьте состав перед подтверждением.`)
-              : el('p', {}, counts ? `Замены: ${counts}` : 'Автоматических замен нет.'), content, local ? null : edit,
-            el('p', { class: 'muted small' }, 'Проверьте текст: распознавание может что-то пропустить. '
-              + 'Правки замен действуют только в этом диалоге. Изображения через Cleaner не передаются.'),
-            !shown.deliverable ? el('p', { class: 'error' }, 'Отправка заблокирована политикой Cleaner.') : null,
-          ].filter(Boolean), actions: [switchRoute, confirm], cancelText: 'Вернуться' });
+          const dialog = openDialog(root, { id: 'cleaner-preview-dialog', title: local ? tr("Оригиналы для локальной модели") : tr("Что получит модель"), body: [
+            local ? el('p', {}, tr("Оригиналы получит {0} ({1}). Проверьте состав перед подтверждением.", shown.destination.model, shown.destination.url))
+              : el('p', {}, counts ? tr("Замены: {0}", counts) : tr("Автоматических замен нет.")), content, local ? null : edit,
+            el('p', { class: 'muted small' }, tr("Проверьте текст: распознавание может что-то пропустить. Правки замен действуют только в этом диалоге. Изображения через Cleaner не передаются.")),
+            !shown.deliverable ? el('p', { class: 'error' }, tr("Отправка заблокирована политикой Cleaner.")) : null,
+          ].filter(Boolean), actions: [switchRoute, confirm], cancelText: tr("Вернуться") });
           confirm.addEventListener('click', () => { accepted = true; dialog.close(); });
           dialog.addEventListener('close', () => resolve(accepted ? shown.ticket : null), { once: true });
         });

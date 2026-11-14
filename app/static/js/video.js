@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Видео» (#/video): лента роликов по дням в одном из видов (views.js), поле промпта снизу
  * (field.js: «очистить», микрофон) с фото-источником над ним и строкой чипов под ним (модель — если в
  * разделе их больше одной, длительность, качество, «плавно») и «Оживить» справа; seed выбирает студия
@@ -36,11 +37,11 @@ const PAGE = 30;
 const PROMPT_MAX = 4000;
 const PHOTO_MAX = 20 * 1024 * 1024;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
-const QUALITIES = [['fast', 'Быстро 480p'], ['standard', 'Обычно 576p'], ['high', 'Высоко 720p']];
+const QUALITIES = [['fast', tr("Быстро 480p")], ['standard', tr("Обычно 576p")], ['high', tr("Высоко 720p")]];
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
-const SOURCES = { given: 'свой промпт', auto: 'придуман по фото', fallback: 'запасной промпт' };
+const SOURCES = { given: tr("свой промпт"), auto: tr("придуман по фото"), fallback: tr("запасной промпт") };
 const RUNNING = new Set(['queued', 'in_progress']);
-const MOTION_HINT = 'Опишите движение в кадре; пусто — движение придумает gemma-abl';
+const MOTION_HINT = tr("Опишите движение в кадре; пусто — движение придумает gemma-abl");
 
 let screen = null;
 
@@ -69,7 +70,7 @@ function build(view, ctx) {
 
   /* разметка */
   const feedBox = el('div', { id: 'video-feed', class: 'video-feed' });
-  const selection = createSelection({ section: 'video', nouns: ['ролик', 'ролика', 'роликов'],
+  const selection = createSelection({ section: 'video', nouns: [tr("ролик"), tr("ролика"), tr("роликов")],
     selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
     remove: (item) => remove(item) });
   const layout = viewSwitch('video', 'preview', (name) => {
@@ -77,32 +78,32 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, 'Видео'), selection.tools, el('span', { class: 'grow' }),
+  const head = el('header', { class: 'head' }, el('h1', {}, tr("Видео")), selection.tools, el('span', { class: 'grow' }),
     selection.button, layout.node);
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
-  const pick = el('label', { class: 'icon-btn attach', id: 'video-pick', title: 'Фото для ролика — выбрать с устройства' }, icon('clip'),
-    el('span', { class: 'sr' }, 'Фото для ролика — выбрать с устройства'), file);
-  const sourceImg = el('img', { alt: 'Фото для ролика' });
+  const pick = el('label', { class: 'icon-btn attach', id: 'video-pick', title: tr("Фото для ролика — выбрать с устройства") }, icon('clip'),
+    el('span', { class: 'sr' }, tr("Фото для ролика — выбрать с устройства")), file);
+  const sourceImg = el('img', { alt: tr("Фото для ролика") });
   const sourceName = el('span', { class: 'video-source-name' });
-  const sourceClear = el('button', { type: 'button', class: 'icon-btn', id: 'video-source-clear', 'aria-label': 'Убрать фото',
-    title: 'Убрать фото' }, icon('x'));
+  const sourceClear = el('button', { type: 'button', class: 'icon-btn', id: 'video-source-clear', 'aria-label': tr("Убрать фото"),
+    title: tr("Убрать фото") }, icon('x'));
   const chosen = el('div', { class: 'video-chosen', hidden: true }, sourceImg, sourceName, sourceClear);
   const sourceBox = el('div', { id: 'video-source', class: 'video-source', hidden: true }, chosen);
   const photoPrompt = el('textarea', { id: 'video-photo-prompt', class: 'input', rows: '3',
-    'aria-label': 'Описание исходного фото', maxlength: '24000' });
+    'aria-label': tr("Описание исходного фото"), maxlength: '24000' });
   const photoContext = el('details', { id: 'video-photo-context', hidden: true },
-    el('summary', { class: 'small muted' }, 'Описание исходного фото'),
-    el('p', { class: 'small muted' }, 'Передаётся вместе с описанием движения. Можно изменить или очистить.'), photoPrompt);
-  const prompt = el('textarea', { id: 'video-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': 'Промпт движения',
+    el('summary', { class: 'small muted' }, tr("Описание исходного фото")),
+    el('p', { class: 'small muted' }, tr("Передаётся вместе с описанием движения. Можно изменить или очистить.")), photoPrompt);
+  const prompt = el('textarea', { id: 'video-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': tr("Промпт движения"),
     placeholder: MOTION_HINT });
   const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: '2', value: '5',
-    'aria-label': 'Длительность, секунд: от 1 до 30', autocomplete: 'off' });
-  const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: 'Длительность: 1–30 с' }, seconds,
-    el('span', {}, 'с'));
+    'aria-label': tr("Длительность, секунд: от 1 до 30"), autocomplete: 'off' });
+  const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: tr("Длительность: 1–30 с") }, seconds,
+    el('span', {}, tr("с")));
   const qualityName = el('span', { class: 'chip-name' });
   const chipQuality = el('button', { type: 'button', class: 'chip', id: 'chip-quality' }, qualityName, icon('down', 'ico caret'));
-  const qualityMenu = el('div', { class: 'chip-menu', id: 'chip-quality-menu', role: 'menu', 'aria-label': 'Качество' },
+  const qualityMenu = el('div', { class: 'chip-menu', id: 'chip-quality-menu', role: 'menu', 'aria-label': tr("Качество") },
     ...QUALITIES.map(([value, label]) => menuItem(label, { radio: true, attrs: { 'data-value': value }, onSelect: () => {
       quality = value;
       paintQuality();
@@ -110,10 +111,10 @@ function build(view, ctx) {
     } })));
   const qualityPopup = popupMenu(chipQuality, qualityMenu, { side: 'above' });
   const chipSmooth = el('button', { type: 'button', class: 'chip', id: 'chip-smooth', 'aria-pressed': 'true',
-    title: 'Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с' }, 'плавно');
+    title: tr("Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с") }, tr("плавно"));
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
-  const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': 'Модель', hidden: true });
-  const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, 'Оживить');
+  const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': tr("Модель"), hidden: true });
+  const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
   const promptBox = fieldBox(prompt, { attach: pick });
   const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, photoContext, promptBox.box, promptBox.error,
@@ -131,8 +132,8 @@ function build(view, ctx) {
     render: card,
     quiet: ['elapsed', 'progress', 'detail', 'chain'],      // ход, слова и время — таймер tick; цепочка — не в карточке
     load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
-    empty: ctx.hint ? 'Здесь появятся ваши ролики.' : 'Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить».',
-    head: tableHead(['', 'Промпт', 'Ролик', 'Seed', 'Время', '']),
+    empty: ctx.hint ? tr("Здесь появятся ваши ролики.") : tr("Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить»."),
+    head: tableHead(['', tr("Промпт"), tr("Ролик"), 'Seed', tr("Время"), '']),
     onChange: () => {
       selection.sync();
       focusCard();
@@ -173,7 +174,7 @@ function build(view, ctx) {
   /* чип качества: в чипе — «576p», полные слова — в меню, в title и aria-label */
   function paintQuality() {
     qualityName.textContent = RESOLUTION[quality];
-    const named = `Качество: ${QUALITIES.find(([value]) => value === quality)[1]}`;   // «576p» без слова — непонятно, что это
+    const named = tr("Качество: {0}", QUALITIES.find(([value]) => value === quality)[1]);   // «576p» без слова — непонятно, что это
     chipQuality.setAttribute('aria-label', named);
     chipQuality.title = named;
     for (const b of qualityMenu.children) b.setAttribute('aria-checked', String(b.dataset.value === quality));
@@ -184,7 +185,7 @@ function build(view, ctx) {
     sourceVersion += 1;
     loadingSource = false;
     go.disabled = submitting;
-    go.textContent = 'Оживить';
+    go.textContent = tr("Оживить");
     error.textContent = '';
     if (source && source.file) URL.revokeObjectURL(source.url);
     source = next;
@@ -197,12 +198,12 @@ function build(view, ctx) {
     chosen.hidden = !source;
     if (source) {
       sourceImg.src = source.url;
-      sourceName.textContent = source.file ? 'Фото с устройства' : 'Фото из ленты';
+      sourceName.textContent = source.file ? tr("Фото с устройства") : tr("Фото из ленты");
     } else sourceImg.removeAttribute('src');
   }
 
   function paintPromptHint() {
-    prompt.placeholder = photoPrompt.value.trim() ? 'Опишите движение в кадре; описание фото уже добавлено' : MOTION_HINT;
+    prompt.placeholder = photoPrompt.value.trim() ? tr("Опишите движение в кадре; описание фото уже добавлено") : MOTION_HINT;
   }
 
   /** Перенос читает только свою запись через обычный API; тексты остаются в памяти страницы,
@@ -219,20 +220,20 @@ function build(view, ctx) {
     }
     loadingSource = true;
     go.disabled = true;
-    go.textContent = 'Перенос фото…';
+    go.textContent = tr("Перенос фото…");
     const version = sourceVersion;
     try {
       const item = await api('GET', `/api/images/${encodeURIComponent(photoId)}`);
       if (!alive || version !== sourceVersion) return;
-      if (item.state !== 'done' || !item.media_id) throw new Error('Фото ещё не готово для видео');
+      if (item.state !== 'done' || !item.media_id) throw new Error(tr("Фото ещё не готово для видео"));
       setSource({ mediaId: item.media_id, url: media(item.media_id, '?thumb=1'), photoPrompt: item.prompt });
     } catch (err) {
-      if (alive && version === sourceVersion) error.textContent = err.code === 'gone' ? 'Фото удалено или недоступно' : words(err);
+      if (alive && version === sourceVersion) error.textContent = err.code === 'gone' ? tr("Фото удалено или недоступно") : words(err);
     } finally {
       if (alive && version === sourceVersion) {
         loadingSource = false;
         go.disabled = submitting;
-        go.textContent = 'Оживить';
+        go.textContent = tr("Оживить");
       }
     }
   }
@@ -296,7 +297,7 @@ function build(view, ctx) {
   }
 
   function clipParams(item) {
-    return [`${item.seconds} с`, RESOLUTION[item.quality] || item.quality, item.smooth ? '32 к/с' : '16 к/с'].join(' · ');
+    return [tr("{0} с", item.seconds), RESOLUTION[item.quality] || item.quality, item.smooth ? tr("32 к/с") : tr("16 к/с")].join(' · ');
   }
 
   function seedText(item) {
@@ -317,7 +318,7 @@ function build(view, ctx) {
   }
 
   function failText(item) {
-    return item.state === 'failed' ? cap(item.detail) || 'Ролик не получился' : cap(item.detail) || 'Отменено';
+    return item.state === 'failed' ? cap(serverMessage(item.detail)) || tr("Ролик не получился") : cap(serverMessage(item.detail)) || tr("Отменено");
   }
 
   /** Ход идущего ролика или итог неудачного — поверх постера. */
@@ -327,8 +328,8 @@ function build(view, ctx) {
       const bar = el('span');
       bar.style.width = `${item.progress}%`;
       over.append(el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('p', { class: 'video-state' }, cap(item.detail) || 'В очереди'),
-        el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': 'Ход ролика', 'aria-valuemin': '0',
+        el('p', { class: 'video-state' }, cap(serverMessage(item.detail)) || tr("В очереди")),
+        el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': tr("Ход ролика"), 'aria-valuemin': '0',
           'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar),
         el('b', { class: 'card-time' }, busyText(running.get(item.id))));
     } else over.append(el('p', { class: item.state === 'failed' ? 'video-fail' : '' }, failText(item)));
@@ -337,18 +338,18 @@ function build(view, ctx) {
 
   /** Готовый ролик плитки и таблицы: постер со значком, нажатие — просмотр. */
   function openButton(item, ...inside) {
-    const open = el('button', { type: 'button', class: 'video-open', 'aria-label': 'Открыть ролик' }, still(item),
+    const open = el('button', { type: 'button', class: 'video-open', 'aria-label': tr("Открыть ролик") }, still(item),
       el('span', { class: 'video-play', 'aria-hidden': 'true' }, icon('play')), ...inside);
     open.addEventListener('click', (event) => openViewer(item, null, event.currentTarget));
     return open;
   }
 
   function cancelButton(item, cls) {
-    return button('Отменить', { class: `${cls} card-cancel` }, (event) => cancel(item, event.currentTarget));
+    return button(tr("Отменить"), { class: `${cls} card-cancel` }, (event) => cancel(item, event.currentTarget));
   }
 
   function deleteButton(item, cls) {
-    return button('Удалить', { class: `${cls} card-delete` }, () => remove(item).catch((err) => { error.textContent = words(err); }));
+    return button(tr("Удалить"), { class: `${cls} card-delete` }, () => remove(item).catch((err) => { error.textContent = words(err); }));
   }
 
   /* «Повторить» и «Ещё варианты»: тот же кадр, промпт, длительность и качество, seed — новый у каждого
@@ -361,7 +362,7 @@ function build(view, ctx) {
       kick();
       if (!alive) return;
       for (const made of out.items) feed.prepend(made);
-      if (out.message) error.textContent = `Сделано ${out.items.length} из ${count}: ${out.message}`;
+      if (serverMessage(out.message)) error.textContent = tr("Сделано {0} из {1}: {2}", out.items.length, count, serverMessage(out.message));
       after();
     } catch (err) {
       if (alive) error.textContent = words(err);
@@ -372,22 +373,22 @@ function build(view, ctx) {
   }
 
   function repeatButton(item, cls, after) {
-    return button('Повторить', { class: `${cls} card-repeat`, title: 'Тот же кадр, промпт и параметры, новый seed' },
+    return button(tr("Повторить"), { class: `${cls} card-repeat`, title: tr("Тот же кадр, промпт и параметры, новый seed") },
       (event) => repeat(item, 1, event.currentTarget, after).catch(() => {}));
   }
 
   function variantsButton(item, cls, after) {
-    return button('Ещё варианты', { class: `${cls} card-variants` }, () => chooseVariants(item, after));
+    return button(tr("Ещё варианты"), { class: `${cls} card-variants` }, () => chooseVariants(item, after));
   }
 
   function chooseVariants(item, after = () => {}) {
-    const count = el('select', { id: 'video-variants-count', 'aria-label': 'Сколько вариантов' },
+    const count = el('select', { id: 'video-variants-count', 'aria-label': tr("Сколько вариантов") },
       ...[2, 3, 4].map((n) => el('option', { value: String(n) }, String(n))));
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
-    const go = button('Сделать', { class: 'btn btn-accent', id: 'video-variants-go' });
-    const dialog = openDialog(root, { id: 'video-variants-dialog', title: 'Ещё варианты',
-      body: [el('p', {}, 'Тот же кадр, промпт, длительность и качество; seed у каждого ролика — новый.'),
-        el('label', {}, 'Роликов: ', count), fail], actions: [go] });
+    const go = button(tr("Сделать"), { class: 'btn btn-accent', id: 'video-variants-go' });
+    const dialog = openDialog(root, { id: 'video-variants-dialog', title: tr("Ещё варианты"),
+      body: [el('p', {}, tr("Тот же кадр, промпт, длительность и качество; seed у каждого ролика — новый.")),
+        el('label', {}, tr("Роликов: "), count), fail], actions: [go] });
     go.addEventListener('click', () => {
       fail.textContent = '';
       repeat(item, Number(count.value), go, () => {
@@ -399,12 +400,12 @@ function build(view, ctx) {
 
   /** «Промпты»: цепочки в записи ленты нет — она из GET /api/videos/<id>. */
   function chainButton(item) {
-    return button('Промпты', { class: 'btn btn-sm card-chain' }, async (event) => {
+    return button(tr("Промпты"), { class: 'btn btn-sm card-chain' }, async (event) => {
       const b = event.currentTarget;
       b.disabled = true;
       try {
         const full = await api('GET', `/api/videos/${encodeURIComponent(item.id)}`);
-        if (alive) openDialog(root, { id: 'chain-dialog', title: 'Как получен ролик', cancelText: 'Закрыть',
+        if (alive) openDialog(root, { id: 'chain-dialog', title: tr("Как получен ролик"), cancelText: tr("Закрыть"),
           body: [chainList(full.chain, { current: null, onOpen: () => ctx.navigate('photo') })] });
       } catch (err) {
         error.textContent = words(err);
@@ -421,11 +422,11 @@ function build(view, ctx) {
     if (item.state === 'done' && item.media_id) {
       node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata',
         poster: posterOf(item), src: media(item.media_id) }));
-      body.append(el('p', { class: 'video-line' }, `${cap(item.detail) || 'Готово'} · ${clock(item.elapsed)}`));
-      acts.append(button('Открыть', { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
-        button('Скачать', { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
+      body.append(el('p', { class: 'video-line' }, `${cap(serverMessage(item.detail)) || tr("Готово")} · ${clock(item.elapsed)}`));
+      acts.append(button(tr("Открыть"), { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
+        button(tr("Скачать"), { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
         repeatButton(item, 'btn btn-sm'), variantsButton(item, 'btn btn-sm'),
-        button('Удалить', { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
+        button(tr("Удалить"), { class: 'btn btn-sm btn-danger card-delete' }, () => confirmDelete(item)));
     } else if (RUNNING.has(item.state)) {
       acts.append(cancelButton(item, 'btn btn-sm'));
       node.append(el('div', { class: 'video-stage' }, still(item), overlay(item)));
@@ -444,7 +445,7 @@ function build(view, ctx) {
   /** Вид «Плитка»: только кадр; действия идущего и неудачного — ссылками поверх. */
   function tileCard(item, node) {
     if (item.state === 'done' && item.media_id) {
-      node.append(openButton(item, el('span', { class: 'card-cap' }, `${item.seconds} с`)));
+      node.append(openButton(item, el('span', { class: 'card-cap' }, tr("{0} с", item.seconds))));
       return node;
     }
     const over = overlay(item);
@@ -459,9 +460,9 @@ function build(view, ctx) {
     const done = item.state === 'done' && item.media_id;
     const busy = RUNNING.has(item.state);
     const when = done ? el('span', {}, `${timeOf(item.created)} · ${clock(item.elapsed)}`)
-      : busy ? el('b', { class: 'card-time', title: cap(item.detail) }, busyText(running.get(item.id)))
+      : busy ? el('b', { class: 'card-time', title: cap(serverMessage(item.detail)) }, busyText(running.get(item.id)))
         : el('span', { class: item.state === 'failed' ? 'error' : 'muted' }, failText(item));
-    const save = el('button', { type: 'button', class: 'icon-btn card-download', 'aria-label': 'Скачать', title: 'Скачать' },
+    const save = el('button', { type: 'button', class: 'icon-btn card-download', 'aria-label': tr("Скачать"), title: tr("Скачать") },
       icon('save'));
     save.addEventListener('click', () => saveMedia(item.media_id, root));
     node.append(done ? openButton(item)
@@ -484,20 +485,20 @@ function build(view, ctx) {
   /* просмотр ролика (плитка и таблица): плеер, параметры, цепочка, «Скачать», «Удалить» */
   function openViewer(item, gallery = null, opener = document.activeElement) {
     for (const player of feedBox.querySelectorAll('video')) player.pause();
-    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': 'Закрыть', title: 'Закрыть' },
+    const close = el('button', { type: 'button', class: 'icon-btn viewer-close', 'aria-label': tr("Закрыть"), title: tr("Закрыть") },
       icon('x'));
     const player = el('video', { class: 'viewer-video', controls: true, autoplay: true, playsinline: true, preload: 'metadata',
       poster: posterOf(item), src: media(item.media_id) });
-    const dialog = el('dialog', { id: 'video-viewer', class: 'viewer', 'aria-label': 'Просмотр ролика' });
+    const dialog = el('dialog', { id: 'video-viewer', class: 'viewer', 'aria-label': tr("Просмотр ролика") });
     const act = (text, cls, fn) => button(text, { class: `btn btn-sm ${cls}` }, fn);
     const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
     let chain = el('ol', { class: 'viewer-chain' });
     dialog.append(el('div', { class: 'viewer-top' }, close), el('div', { class: 'viewer-stage' }, player),
       el('div', { class: 'viewer-bar' }, el('p', { class: 'viewer-meta' }, metaText(item)), chain, missing,
-        el('div', { class: 'viewer-actions' }, act('Скачать', 'act-download', () => saveMedia(item.media_id, root)),
+        el('div', { class: 'viewer-actions' }, act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
           repeatButton(item, 'btn btn-sm act-repeat', () => dialog.close()),
           variantsButton(item, 'btn btn-sm act-variants', () => dialog.close()),
-          act('Удалить', 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
+          act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       player.pause();
@@ -511,7 +512,7 @@ function build(view, ctx) {
       } });
       chain.replaceWith(next);
       chain = next;
-    }, (err) => { missing.textContent = err.code === 'gone' ? 'Ролик удалён' : words(err); });
+    }, (err) => { missing.textContent = err.code === 'gone' ? tr("Ролик удалён") : words(err); });
     root.append(dialog);
     dialog.showModal();
     viewerNavigation(dialog, { item, items: feed.items(), section: 'videos', open: openViewer,
@@ -537,10 +538,10 @@ function build(view, ctx) {
       const time = card.querySelector('.card-time');
       if (time) {
         time.textContent = busyText(entry);
-        if (time.closest('.cell-when')) time.title = cap(item.detail);           // вид «Таблица»
+        if (time.closest('.cell-when')) time.title = cap(serverMessage(item.detail));           // вид «Таблица»
       }
       const state = card.querySelector('.video-state');
-      if (state) state.textContent = cap(item.detail) || 'В очереди';
+      if (state) state.textContent = cap(serverMessage(item.detail)) || tr("В очереди");
       const bar = card.querySelector('.video-bar');
       if (bar) {
         bar.setAttribute('aria-valuenow', String(item.progress));
@@ -578,9 +579,9 @@ function build(view, ctx) {
 
   function confirmDelete(item, viewer = null) {
     const fail = el('p', { class: 'error' });
-    const confirm = button('Удалить', { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
-    const dialog = openDialog(root, { id: 'video-delete-dialog', title: 'Удалить ролик?',
-      body: [el('p', {}, 'Ролик удалится из истории вместе с файлом.'), fail], actions: [confirm] });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
+    const dialog = openDialog(root, { id: 'video-delete-dialog', title: tr("Удалить ролик?"),
+      body: [el('p', {}, tr("Ролик удалится из истории вместе с файлом.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -594,17 +595,17 @@ function build(view, ctx) {
 
   /* ролик */
   function compose() {
-    if (!source) throw new Error('Выберите фото для ролика');
+    if (!source) throw new Error(tr("Выберите фото для ролика"));
     const sec = seconds.value.trim();
-    if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error('Длительность — целое число секунд от 1 до 30');
-    if (source.file && source.file.size > PHOTO_MAX) throw new Error('Фото больше 20 МиБ');
+    if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
+    if (source.file && source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
     const body = new FormData();
     if (source.file) body.append('image', source.file, source.file.name);
     else body.append('source_media_id', source.mediaId);
     const context = photoPrompt.value.trim();
     const motion = prompt.value.trim();
     const text = context ? `Описание исходного фото:\n${context}\n\nДвижение в видео:\n${motion || 'Естественное движение в кадре.'}` : motion;
-    if (text.length > PROMPT_MAX) throw new Error('Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото.');
+    if (text.length > PROMPT_MAX) throw new Error(tr("Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото."));
     body.append('prompt', text);
     body.append('seconds', String(Number(sec)));
     body.append('quality', quality);

@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Подключение: форма и окно правки — общие для настроек и панели администратора.
  *
  * connectionForm(initial?) → { el, value(), showError(err) }: название, вид (OpenAI-совместимый /
@@ -12,10 +13,10 @@ import { NAMES, sectionPairs } from './sections-meta.js';
 import { button, el, field, openDialog, showError } from './ui.js';
 
 const KINDS = {
-  openai: { label: 'OpenAI-совместимый', placeholder: 'адрес API, https, оканчивается на /v1' },
-  srvllm: { label: 'Шлюз srvllm', placeholder: 'адрес шлюза, http, IP и порт, без пути' },
-  s06: { label: 'Шлюз s06 · Qwen, WhisperX, PaddleOCR', placeholder: 'адрес шлюза, IP и порт, без пути /v1' },
-  cleaner: { label: 'Cleaner · очистка данных', placeholder: 'адрес Cleaner, HTTPS, IP и порт, без пути' },
+  openai: { label: tr("OpenAI-совместимый"), placeholder: tr("адрес API, https, оканчивается на /v1") },
+  srvllm: { label: tr("Шлюз srvllm"), placeholder: tr("адрес шлюза, http, IP и порт, без пути") },
+  s06: { label: tr("Шлюз s06 · Qwen, WhisperX, PaddleOCR"), placeholder: tr("адрес шлюза, IP и порт, без пути /v1") },
+  cleaner: { label: tr("Cleaner · очистка данных"), placeholder: tr("адрес Cleaner, HTTPS, IP и порт, без пути") },
 };
 /** Разделы подключений (все, кроме «Агентов» — им модели сообщает мост) в порядке рельса и голосовой ввод. */
 export const SECTION_NAMES = { ...Object.fromEntries(sectionPairs().filter(([id]) => id !== 'code')),
@@ -35,17 +36,14 @@ export function connectionForm(initial, { cleaner = false } = {}) {
     inputmode: 'url', spellcheck: 'false', autocapitalize: 'none' });
   const token = el('input', { class: 'input', name: 'token', type: 'password', maxlength: '512',
     autocomplete: 'new-password', spellcheck: 'false', autocapitalize: 'none',
-    placeholder: initial ? `не менять (${initial.token_hint})` : 'ключ API' });
-  const cleanerNote = el('p', { class: 'muted small', hidden: true }, 'Cleaner: только чат и перевод через сервер. '
-    + 'Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор.');
-  const s06Note = el('p', { class: 'muted small', hidden: true }, 's06: чат и перевод Qwen, разговоры WhisperX, '
-    + 'сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет.');
+    placeholder: initial ? tr("не менять ({0})", initial.token_hint) : tr("ключ API") });
+  const cleanerNote = el('p', { class: 'muted small', hidden: true }, tr("Cleaner: только чат и перевод через сервер. Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор."));
+  const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, разговоры WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
   const box = el('form', { class: 'conn-form', novalidate: true },
-    field('Название', name, 'name'), field('Вид', kind, 'kind'),
-    field('Адрес', url, 'base_url'),
-    el('p', { class: 'muted small' }, 'Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. '
-      + 'Фото, видео и речь — только через студию.'),
-    field('Токен', token, 'token'), cleanerNote, s06Note);
+    field(tr("Название"), name, 'name'), field(tr("Вид"), kind, 'kind'),
+    field(tr("Адрес"), url, 'base_url'),
+    el('p', { class: 'muted small' }, tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.")),
+    field(tr("Токен"), token, 'token'), cleanerNote, s06Note);
   box.addEventListener('submit', (event) => event.preventDefault());
 
   kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.s06 ? 's06' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
@@ -75,8 +73,8 @@ export function connectionForm(initial, { cleaner = false } = {}) {
 /** Окно правки: «Сохранить» (`#conn-save`) шлёт POST или PATCH, отказ — в форму, успех — onSaved(conn). */
 export function editConnection(host, base, initial, onSaved) {
   const form = connectionForm(initial);
-  const save = button('Сохранить', { class: 'btn btn-accent', id: 'conn-save' });
-  const dialog = openDialog(host, { id: 'conn-dialog', title: initial ? 'Подключение' : 'Новое подключение',
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'conn-save' });
+  const dialog = openDialog(host, { id: 'conn-dialog', title: initial ? tr("Подключение") : tr("Новое подключение"),
     body: [form.el], actions: [save] });
   form.el.querySelector('[name=name]').focus();
   async function submit() {

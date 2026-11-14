@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Активные Shell/Bash-команды текущего хода: счётчик и раскрываемые шаги в панели статуса. */
 import { el } from './ui.js';
 import { icon } from './icons.js';
@@ -6,13 +7,13 @@ import { popupPanel } from './menu.js';
 export function commandsView(host, { stepNode, repaint }) {
   const count = el('span', { class: 'code-active-count', 'aria-hidden': 'true' }, '0');
   const button = el('button', { type: 'button', id: 'code-active-commands', class: 'icon-btn',
-    'aria-label': 'Выполняемые команды: 0', title: 'Выполняемые команды: 0' }, icon('code'), count);
+    'aria-label': tr("Выполняемые команды: 0"), title: tr("Выполняемые команды: 0") }, icon('code'), count);
   const body = el('div', { class: 'code-command-list' });
-  const empty = el('p', { class: 'small muted', role: 'status' }, 'Нет выполняемых команд');
+  const empty = el('p', { class: 'small muted', role: 'status' }, tr("Нет выполняемых команд"));
   const panel = el('div', { id: 'code-command-menu', class: 'code-command-menu' },
-    el('p', { class: 'small muted' }, 'Выполняемые команды'), empty, body);
+    el('p', { class: 'small muted' }, tr("Выполняемые команды")), empty, body);
   host.append(panel);
-  const popup = popupPanel(button, panel, { label: 'Выполняемые команды', side: 'above', align: 'end' });
+  const popup = popupPanel(button, panel, { label: tr("Выполняемые команды"), side: 'above', align: 'end' });
   let models = [];
   const nodes = new Map();
   function render() {
@@ -41,7 +42,7 @@ export function commandsView(host, { stepNode, repaint }) {
     update(steps) {
       models = (steps || []).filter(step => step.status === 'running' && ['Shell', 'Bash'].includes(step.tool));
       count.textContent = String(models.length);
-      const label = `Выполняемые команды: ${models.length}`;
+      const label = tr("Выполняемые команды: {0}", models.length);
       button.title = label;
       button.setAttribute('aria-label', label);
       if (!models.length) { nodes.clear(); body.replaceChildren(); }

@@ -15,7 +15,7 @@ ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "
 
 def registry():
     text = (JS / "sections-meta.js").read_text(encoding="utf-8")
-    rows = re.findall(r"\{ id: '(\w+)', name: '([^']+)', group: (\d)", text)
+    rows = re.findall(r'''\{ id: '(\w+)', name: tr\(["']([^"']+)["']\), group: (\d)''', text)
     return [(sid, name, int(group)) for sid, name, group in rows]
 
 

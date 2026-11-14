@@ -3,6 +3,8 @@
 import json
 import re
 
+import profile
+
 from conftest import APP
 
 STATIC = APP / "static"
@@ -120,9 +122,8 @@ def test_stop_buttons_look_the_same_in_every_section():
 def test_accent_list_is_one_contract_for_server_page_css_and_early_theme():
     """Акцент учётки: profile.ACCENTS = appearance.js ACCENTS; у каждого, кроме умолчания, — правило [data-accent] с
     --accent/--accent-soft/--primary в light-dark() и строка раннего theme.js; умолчание — те же токены у :root."""
-    import profile
     js = (STATIC / "js" / "appearance.js").read_text(encoding="utf-8")
-    listed = re.findall(r"\['(\w+)', '[^']+'\]", js[js.index("export const ACCENTS"):js.index("export const THEME_NAMES")])
+    listed = re.findall(r"\['(\w+)', tr\(", js[js.index("export const ACCENTS"):js.index("export const THEME_NAMES")])
     assert listed == list(profile.ACCENTS)
     css = strip_comments(CSS["app.css"])
     early = (STATIC / "theme.js").read_text(encoding="utf-8")
