@@ -91,6 +91,7 @@ class FakeMachine:
         self.worktrees = False
         self.project_create = False
         self.subscription_usage = False
+        self.opencode_usage = False
         self.usage_data = None
         self.agent_version = None
         self.agent_update = False
@@ -114,7 +115,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
                    if getattr(self, name)},

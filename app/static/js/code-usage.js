@@ -8,10 +8,12 @@ import { ENGINE_NAMES } from './code-options.js';
 const number = (n) => Number.isFinite(n) ? n.toLocaleString(locale()) : '—';
 const date = (n) => Number.isFinite(n) ? dateTime(n) : tr("Не сообщается");
 
-export function usageView(host, { aid, engine, supported }) {
+export function usageView(host, { aid, engine, supported, model = () => '' }) {
   let alive = true;
   let controller = null;
   let loading = false;
+  let queuedLoad = null;
+  let paintedModel = null;
   const button = el('button', { type: 'button', id: 'code-usage', class: 'icon-btn code-usage',
     title: tr("Лимиты и статистика подписки"), 'aria-label': tr("Лимиты и статистика подписки"), 'aria-haspopup': 'dialog' });
   const remainingText = el('b', { id: 'code-usage-remaining' }, '—');
@@ -82,7 +84,17 @@ export function usageView(host, { aid, engine, supported }) {
   }
   /** passive — обновление после конца задания, не по действию владельца: срок PIN компьютера не продлевает. */
   async function load(fresh = false, passive = false) {
-    if (loading) return;
+    const selectedModel = engine === 'opencode' ? model() : '';
+    if (engine === 'opencode' && selectedModel !== paintedModel) {
+      remainingText.textContent = '—';
+      button.dataset.level = 'unknown';
+      button.title = tr("Лимиты и статистика подписки");
+      button.setAttribute('aria-label', button.title);
+    }
+    if (loading) {
+      queuedLoad = { fresh: fresh || !!queuedLoad?.fresh, passive: passive && (queuedLoad?.passive ?? true) };
+      return;
+    }
     if (!supported) {
       content.replaceChildren(el('p', {}, tr("Обновите мост на компьютере для просмотра лимитов и статистики.")));
       refresh.disabled = true;
@@ -93,11 +105,13 @@ export function usageView(host, { aid, engine, supported }) {
     controller = new AbortController();
     if (dialog.open) content.replaceChildren(el('p', { class: 'muted' }, tr("Получаю данные подписки…")));
     try {
-      const data = await api('GET', `/api/code/agents/${aid}/usage?engine=${engine}&refresh=${fresh}`, undefined,
+      const suffix = selectedModel ? `&model=${encodeURIComponent(selectedModel)}` : '';
+      const data = await api('GET', `/api/code/agents/${aid}/usage?engine=${engine}&refresh=${fresh}${suffix}`, undefined,
         { signal: controller.signal, ...(passive ? { headers: { 'x-studio-passive': '1' } } : {}) });
-      if (alive) paint(data);
+      if (alive && selectedModel === (engine === 'opencode' ? model() : '')) { paint(data); paintedModel = selectedModel; }
+      else if (alive) queuedLoad ??= { fresh: false, passive: true };
     } catch (err) {
-      if (alive && !controller.signal.aborted) {
+      if (alive && !controller.signal.aborted && selectedModel === (engine === 'opencode' ? model() : '')) {
         remainingText.textContent = '—';
         button.dataset.level = 'unknown';
         button.title = tr("Лимиты недоступны: {0}", words(err));
@@ -107,6 +121,9 @@ export function usageView(host, { aid, engine, supported }) {
     } finally {
       loading = false;
       if (alive) refresh.disabled = false;
+      const next = queuedLoad;
+      queuedLoad = null;
+      if (alive && next) load(next.fresh, next.passive);
     }
   }
   button.addEventListener('click', () => { dialog.showModal(); load(); });
