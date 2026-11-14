@@ -267,8 +267,8 @@ def test_unopened_computer_is_409_closed_and_screen_unlock_preserves_access(stud
     assert (r.status_code, detail(r)["code"]) == (409, "closed")
     assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
     r = studio.c.get(url(aid, "projects"))
-    assert r.status_code == 200 and r.json() == {"items": [{"pid": ALPHA, "name": "alpha"},
-                                                           {"pid": BETA, "name": "beta"}]}
+    assert r.status_code == 200 and r.json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": False},
+                                                           {"pid": BETA, "name": "beta", "shared": False}]}
     assert studio.c.post("/api/lock/now").status_code == 204
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
@@ -428,7 +428,7 @@ def test_odd_bridge_answers_are_502_and_long_words_are_cut(studio, monkeypatch):
     assert studio.c.get(url(aid, "projects")).json() == {"items": []}
     assert studio.c.get(url(aid, "projects", ALPHA, "chats")).json() == {"items": []}
     answer.update(ok=True, data={"items": [{"pid": "../x", "name": "x"}, "x", {"pid": ALPHA, "name": "alpha"}]})
-    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha"}]}
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": False}]}
     answer.update(ok=True, data={"items": [{"chat": 5}, "x", {"chat": A, "title": "t", "modified": "вчера"}]})
     [item] = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
     assert (item["chat"], item["origin"], item["state"], item["running"]) == (A, "other", "open", False)

@@ -39,7 +39,7 @@ def owner(request: Request, aid: int):
 
 
 class Member(BaseModel):
-    login: str = Field(min_length=1, max_length=100)
+    login: str = Field(min_length=1, max_length=254)
 
 
 async def _check(request: Request, aid: int, pid: str):
@@ -150,10 +150,11 @@ async def add_member(aid: int, pid: str, body: Member, request: Request):
     link = bridge.LINKS.get(aid)
     if link is None or not link.hello.get("project_sharing"):
         raise HTTPException(409, {"code": "unsupported", "message": "обновите агент для совместной работы"})
-    user = state.DB.execute("SELECT id FROM users WHERE login = ? AND disabled = 0",
-                            (body.login.strip().lower(),)).fetchone()
+    identity = body.login.strip().lower()
+    user = state.DB.execute("SELECT id FROM users WHERE (login = ? OR email = ?) AND disabled = 0",
+                            (identity, identity)).fetchone()
     if user is None or user["id"] == request.state.user.id:
-        raise HTTPException(422, {"code": "member", "message": "укажите логин другого активного пользователя Студии"})
+        raise HTTPException(422, {"code": "member", "message": "укажите логин или email другого активного пользователя Студии"})
     if state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)"
                         " ON CONFLICT DO NOTHING", (aid, pid, user["id"], clock.NOW())).rowcount:
         _journal(request, owner(request, aid), "add")

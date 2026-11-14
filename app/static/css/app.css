@@ -1401,6 +1401,10 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-project a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 2px; }
 .code-project[aria-current="page"] { background: var(--surface-1); font-weight: 600; }
 .code-project-heading { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.code-project-shared { align-self: flex-start; flex: none; border-radius: var(--r-control);
+  padding: 1px var(--space-2); font-size: var(--fs-2xs); font-weight: 500; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-1)); white-space: nowrap; }
+.code-head > .code-project-shared { align-self: center; }
 .project-members { width: 360px; padding: var(--space-4); overflow: auto; }
 .project-members h3 { margin-top: 0; overflow-wrap: anywhere; }
 .project-members form { display: grid; gap: var(--space-2); }

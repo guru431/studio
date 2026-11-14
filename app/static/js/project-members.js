@@ -1,14 +1,14 @@
 import { tr } from './i18n.js';
-/* Доступ к одному проекту по логину существующей учётки. */
+/* Доступ к одному проекту по логину или email существующей учётки. */
 import { api } from './api.js';
 import { el, words } from './ui.js';
 import { popupPanel } from './menu.js';
 
-export function projectMembers(host, trigger, aid, project) {
+export function projectMembers(host, trigger, aid, project, onChange) {
   const url = `/api/code/agents/${aid}/projects/${project.pid}/members`;
   const login = el('input', { class: 'input', type: 'text', autocomplete: 'off', autocapitalize: 'none',
-    spellcheck: 'false', maxlength: '100', required: true, 'aria-label': tr("Логин пользователя Студии"),
-    placeholder: tr("Логин пользователя Студии") });
+    spellcheck: 'false', maxlength: '254', required: true, 'aria-label': tr("Логин или email пользователя Студии"),
+    placeholder: tr("Логин или email пользователя Студии") });
   const add = el('button', { class: 'btn', type: 'submit' }, tr("Дать доступ"));
   const status = el('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
   const list = el('ul', { class: 'project-members-list', 'aria-label': tr("Участники проекта") });
@@ -38,6 +38,7 @@ export function projectMembers(host, trigger, aid, project) {
       return el('li', {}, el('span', {}, user.login + (user.disabled ? tr(" · заблокирован") : '')), remove);
     }));
     if (!data.items.length) list.append(el('li', { class: 'muted' }, tr("Доступ есть только у владельца")));
+    onChange(data.items.length > 0);
   }
   async function change(action, message) {
     if (busy || !alive) return;

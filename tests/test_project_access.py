@@ -21,6 +21,37 @@ def share(s):
     return aid, machine, link, member, base
 
 
+def test_grant_by_email_normalizes_long_addresses_and_keeps_account_rules(studio, caplog):
+    aid, _, _ = setup(studio)
+    member = make_user(studio, "friend")
+    email = "x" * 64 + "@" + "d" * 60 + ".example.com"
+    state.DB.execute("UPDATE users SET email = ? WHERE id = ?", (email, member))
+    base = url(aid, "projects", ALPHA, "members")
+    response = studio.c.post(base, json={"login": " " + email.upper() + " "})
+    assert response.status_code == 201, response.text
+    assert response.json() == {"id": member}
+    assert studio.c.post(base, json={"login": "friend"}).status_code == 201
+    assert studio.c.get(base).json()["items"] == [{"id": member, "login": "friend", "disabled": 0}]
+    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (member,))
+    for value in (email, "owner@example.com", "missing@example.com"):
+        response = studio.c.post(base, json={"login": value})
+        assert response.status_code == 422 and response.json()["detail"]["code"] == "member"
+    assert email not in caplog.text and "friend" not in caplog.text
+
+
+def test_project_shared_flag_tracks_grants_until_last_member_is_removed(studio):
+    aid, _, _, member, base = share(studio)
+    other = make_user(studio, "another")
+    assert studio.c.post(base, json={"login": "another"}).status_code == 201
+    assert studio.c.get(url(aid, "projects")).json()["items"] == [
+        {"pid": ALPHA, "name": "alpha", "shared": True},
+        {"pid": BETA, "name": "beta", "shared": False}]
+    assert studio.c.delete(base + f"/{member}").status_code == 204
+    assert studio.c.get(url(aid, "projects")).json()["items"][0]["shared"] is True
+    assert studio.c.delete(base + f"/{other}").status_code == 204
+    assert not any(item["shared"] for item in studio.c.get(url(aid, "projects")).json()["items"])
+
+
 def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     aid, machine, link, member, base = share(studio)
     machine.projects["alpha"]["files"]["a.txt"] = b"hello"
@@ -28,7 +59,7 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     agent = studio.c.get("/api/agents").json()["items"][0]
     assert agent["id"] == aid and agent["shared"] and not agent["projects_root"]
     assert not any(agent[k] for k in ("computer_info", "desktop", "agent_update", "subscription_usage"))
-    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha"}]}
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
     response = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a.txt"})
     assert response.status_code == 200 and response.json()["text"] == "hello"
     version = response.json()["version"]

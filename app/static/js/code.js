@@ -152,7 +152,11 @@ async function agentOf(aid) {
 /** Имя проекта (из списка проектов его компьютера) — один запрос на проект; отказ — повтор при следующем показе. */
 function projectName(p) {
   if (!p.naming) {
-    p.naming = projectsOf(p.aid).then((items) => (items.find((x) => x.pid === p.pid) || {}).name || null);
+    p.naming = projectsOf(p.aid).then((items) => {
+      const project = items.find((x) => x.pid === p.pid);
+      p.shared = !!project?.shared;
+      return project?.name || null;
+    });
     p.naming.catch(() => {
       p.naming = null;
     });
@@ -216,6 +220,7 @@ function layout() {
   toggle.innerHTML = svg('list');   // константа icons.js
   const placeAgent = el('span', { class: 'code-place-agent' });
   const placeProject = el('b', { class: 'code-place-project' });
+  const placeShared = el('span', { id: 'code-project-shared', class: 'code-project-shared', hidden: true }, tr("Общий доступ"));
   const place = el('span', { id: 'code-place', class: 'code-place', hidden: true }, placeAgent,
     el('span', { class: 'code-place-sep', 'aria-hidden': 'true' }, ' / '), placeProject);
   const switches = VIEWS.map(([key, text]) => {
@@ -230,7 +235,7 @@ function layout() {
     'aria-haspopup': 'dialog', 'aria-controls': 'code-git-dialog', hidden: true });
   repoStatus.addEventListener('click', openGitActions);
   const top = el('div', { class: 'code-top' },
-    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place),
+    el('div', { class: 'code-head' }, el('div', { class: 'code-location' }, toggle, place), placeShared,
       el('div', { class: 'code-project-tools' }, repoStatus, views)), tabsHost);
   const statusBox = el('div', { class: 'code-status-box' });
   const body = el('div', { class: 'code-body' });
@@ -243,7 +248,7 @@ function layout() {
   document.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   host.replaceChildren(root);
-  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, views, switches,
+  ui = { root, top, tabsHost, toggle, place, placeAgent, placeProject, placeShared, views, switches,
     repoStatus, statusBox, body, backdrop };
 }
 
@@ -480,6 +485,7 @@ function enter(aid, pid) {
 
 function closeProject() {
   if (!proj) return;
+  ui.placeShared.hidden = true;
   proj.members?.unmount();
   proj.accessButton.remove();
   proj.gitActions?.unmount();
@@ -508,9 +514,16 @@ async function plaque(p) {
   }
   if (proj === p) {
     ui.placeProject.textContent = name || tr("Проект");
+    ui.placeShared.hidden = !p.shared;
     if (name && !agent.shared && !p.members) {
       p.accessButton.setAttribute('aria-label', tr("Доступ к проекту · {0}", name));
-      p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name });
+      p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name }, (shared) => {
+        if (p.shared === shared) return;
+        p.shared = shared;
+        lists.delete(String(p.aid));
+        panel.sharing(p.aid, p.pid, shared);
+        if (proj === p) ui.placeShared.hidden = !shared;
+      });
       p.accessButton.hidden = false;
     }
   }
