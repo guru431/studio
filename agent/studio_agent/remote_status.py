@@ -43,7 +43,7 @@ def read(project: Path, branch: str | None, head: str | None, *, now=time.monoto
             count = run(["rev-list", "--left-right", "--count", f"{ref}...{head}", "--"])
             if count.returncode != 0:
                 continue
-            ahead, behind = map(int, count.stdout.split())
+            behind, ahead = map(int, count.stdout.split())
             if min(ahead, behind) < 0:
                 continue
             state = "diverged" if ahead and behind else "behind" if behind else "ahead" if ahead else "current"

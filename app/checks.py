@@ -18,6 +18,7 @@
 - Журнал — только id и итог одним словом: ни адреса, ни моделей, ни слов сервиса.
 """
 import logging
+import re
 from typing import Annotated, Literal
 
 import httpx
@@ -253,7 +254,13 @@ async def probe(conn, model: str) -> dict:
     start = clock.NOW()
     try:
         r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
-        if r.status_code == 400 and "max_tokens" in (upstream.message(r) or ""):
+        error = upstream.json_body(r).get('error')
+        error = error if isinstance(error, dict) else {}
+        reason = str(error.get('message') or '')
+        replace_parameter = (error.get('code') == 'unsupported_parameter' and error.get('param') == 'max_tokens'
+                             or re.search(r"unsupported parameter:\s*['\"]?max_tokens\b", reason, re.IGNORECASE)
+                             or 'max_tokens' in reason and 'max_completion_tokens' in reason)
+        if r.status_code == 400 and replace_parameter:
             # модели рассуждений OpenAI: max_tokens не принимают — один повтор
             body = {k: v for k, v in body.items() if k != "max_tokens"} | {"max_completion_tokens": PROBE_TOKENS}
             r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
@@ -352,7 +359,7 @@ def put_passport(conn, body: PassportIn) -> dict:
     if not connections.save_passport(snap, built):
         raise _changed()
     log.info("пользователь %d: подключение %d — проверка браузером %s", conn.user_id, conn.id,
-             outcome(built["routes"]) if body.routes is not None else "пробный-ответ")
+             outcome(built["routes"]) if body.routes is not None else "модели" if body.models is not None else "пробный-ответ")
     return {"passport": built, "found": found}
 
 

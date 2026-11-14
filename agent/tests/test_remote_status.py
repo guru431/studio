@@ -9,9 +9,9 @@ HEAD = "a" * 40
 
 @pytest.mark.parametrize("counts, expected", [
     (b"0\t0\n", {"state": "current", "behind": 0, "ahead": 0}),
-    (b"0\t3\n", {"state": "behind", "behind": 3, "ahead": 0}),
-    (b"2\t0\n", {"state": "ahead", "behind": 0, "ahead": 2}),
-    (b"2\t3\n", {"state": "diverged", "behind": 3, "ahead": 2}),
+    (b"0\t3\n", {"state": "ahead", "behind": 0, "ahead": 3}),
+    (b"2\t0\n", {"state": "behind", "behind": 2, "ahead": 0}),
+    (b"2\t3\n", {"state": "diverged", "behind": 2, "ahead": 3}),
 ])
 def test_configured_remote_names_and_local_comparison_without_network(tmp_path, monkeypatch, counts, expected):
     commands = []
@@ -64,7 +64,7 @@ def test_total_budget_keeps_remaining_names_visible(tmp_path, monkeypatch):
 
     monkeypatch.setattr(remote_status.gitinfo, "run", run)
     assert remote_status.read(tmp_path, "main", HEAD, now=lambda: next(stamps)) == [
-        {"name": "cld", "state": "behind", "behind": 2, "ahead": 0},
+        {"name": "cld", "state": "ahead", "behind": 0, "ahead": 2},
         {"name": "backup", **remote_status.UNKNOWN}]
     assert len(commands) == 3
 
@@ -90,6 +90,6 @@ def test_real_git_cld_tracking_refs_and_unfetched_remote_are_reported(tmp_path, 
     git("commit", "--allow-empty", "-qm", "second")
     result = remote_status.read(repo, "main", git("rev-parse", "HEAD"))
     assert result == [{"name": "backup", **remote_status.UNKNOWN},
-                      {"name": "cld", "state": "behind", "behind": 1, "ahead": 0}]
+                      {"name": "cld", "state": "ahead", "behind": 0, "ahead": 1}]
     git("update-ref", "refs/remotes/cld/main", "HEAD")
     assert remote_status.read(repo, "main", git("rev-parse", "HEAD"))[1]["state"] == "current"

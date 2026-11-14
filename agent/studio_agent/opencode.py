@@ -11,13 +11,13 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import diffs, events, history_images, limits, opencode_rpc, permissions, sessions, store, timeline
+from . import diffs, events, history_images, limits, opencode_events, opencode_rpc, sessions, store, timeline
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
 
 log = logging.getLogger(__name__)
-SESSION_ID = re.compile(r"ses_[A-Za-z0-9_-]{1,200}")
+SESSION_ID = opencode_events.SESSION_ID
 MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]/@+\-]{1,300}")
 EFFORT_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 NAMESPACE = uuid.UUID("9043b00c-91a9-485c-a679-91fa3607114e")
@@ -76,7 +76,10 @@ def values(option):
 
 def settings(data, access=None):
     return {"model": options(data, "model").get("currentValue"),
-            "effort": options(data, "effort").get("currentValue"), "access": access or "default"}
+            "effort": options(data, "effort").get("currentValue"), "access": access or "default",
+            **({"agent_mode": options(data, "mode")["currentValue"]} if options(data, "mode").get("currentValue") else {}),
+            **({'modes': [{"id": row['value'], "label": str(row.get('name') or row['value'])[:100]}
+                          for row in values(options(data, 'mode'))][:100]} if options(data, 'mode') else {})}
 
 
 def text_of(content):
@@ -118,7 +121,8 @@ def normalize(updates, *, image_blocks=None):
         if kind == "user_message_chunk":
             mid = update.get("messageId")
             if current is None or current["role"] != "user" or mid != user_id:
-                current = {"id": str(len(out)), "role": "user", "text": "", "steps": [], "time": None}
+                current = {"id": mid if isinstance(mid, str) and re.fullmatch(r'msg_[A-Za-z0-9_-]{1,200}', mid)
+                           else str(len(out)), "role": "user", "text": "", "steps": [], "time": None}
                 out.append(current)
             user_id = mid
             content = update.get("content")
@@ -130,12 +134,18 @@ def normalize(updates, *, image_blocks=None):
                         image_blocks.setdefault(current["id"], []).append(content)
             else:
                 current["text"] += text_of(content)
-        elif kind in ("agent_message_chunk", "tool_call", "tool_call_update"):
+        elif kind in ("agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"):
             if current is None or current["role"] != "assistant":
                 current = {"id": str(len(out)), "role": "assistant", "text": "", "steps": [], "time": None}
                 out.append(current)
             if kind == "agent_message_chunk":
                 timeline.append_text(current, text_of(update.get("content")))
+            elif kind == 'agent_thought_chunk':
+                old = next((s for s in current['steps'] if s['id'] == 'thought'), None)
+                if old is None:
+                    old = {'id': 'thought', 'tool': 'Рассуждения', 'input': {}, 'text': '', 'error': False}
+                    timeline.append_step(current, old)
+                old['text'] = events.clip(old['text'] + text_of(update.get('content')))
             elif isinstance(update.get("toolCallId"), str):
                 old = next((s for s in current["steps"] if s["id"] == update["toolCallId"]), None)
                 step = step_of(update, old)
@@ -166,6 +176,11 @@ class _TurnClient:
 
 
 class OpenCodeRunner(Runner):
+    def start(self, project, pid, chat, text, model, effort, *, agent_mode=None, additional_directories=None, **kwargs):
+        result = super().start(project, pid, chat, text, model, effort, **kwargs)
+        self._turns[chat].opencode_options = {'agent_mode': agent_mode, 'additional_directories': additional_directories}
+        return result
+
     async def _steer_input(self, t, text, images, message_id):
         return self._queue_input(t, text, images, message_id)
 
@@ -188,8 +203,9 @@ class OpenCodeRunner(Runner):
         await rpc.connect()
         return rpc
 
-    async def _temporary(self, rpc, project):
-        return await rpc.request("session/new", {"cwd": str(project), "mcpServers": []})
+    async def _temporary(self, rpc, project, directories=None):
+        return await rpc.request("session/new", {"cwd": str(project), "mcpServers": [],
+            **({'additionalDirectories': directories} if directories is not None else {})})
 
     async def _delete(self, rpc, target):
         # Только пустая сессия, которую создал этот вызов; пользовательские сессии не удаляются.
@@ -282,21 +298,46 @@ class OpenCodeRunner(Runner):
                 await self._catalog_rpc.disconnect()
                 self._catalog_rpc = None
 
-    async def _load(self, rpc, project, target):
+    async def _load(self, rpc, project, target, directories=None):
         try:
-            return await rpc.request("session/load", {"sessionId": target, "cwd": str(project), "mcpServers": []})
+            if directories is None:
+                cursor, seen = None, set()
+                for _ in range(100):
+                    page = await rpc.request('session/list', {'cwd': str(project), **({'cursor': cursor} if cursor else {})})
+                    row = next((row for row in page.get('sessions', []) if row.get('sessionId') == target
+                                and same_project(row.get('cwd'), project)), None)
+                    if row is not None:
+                        directories = row.get('additionalDirectories', [])
+                        if not isinstance(directories, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in directories):
+                            raise Refused('invalid')
+                        break
+                    cursor = page.get('nextCursor')
+                    if not cursor or cursor in seen:
+                        break
+                    seen.add(cursor)
+                else:
+                    raise Refused('too_large')
+            data = await rpc.request("session/load", {"sessionId": target, "cwd": str(project), "mcpServers": [],
+                **({'additionalDirectories': directories} if directories is not None else {})})
+            return {**data, '_studio_directories': directories}
         except opencode_rpc.RpcError as e:
             if e.not_found:
                 raise Refused("not_found", "нет такого чата") from None
             raise
 
     @staticmethod
-    def _updates(rpc, target):
+    def _updates(rpc, target, *, children=None):
         updates = []
+        known = children if children is not None else {}
         while not rpc.inbox.empty():
             frame = rpc.inbox.get_nowait()
             if frame and frame.get("method") == "session/update" and frame.get("params", {}).get("sessionId") == target:
-                updates.append(frame["params"].get("update", {}))
+                update = frame["params"].get("update", {})
+                child = opencode_events.child(update, target, known)
+                if child:
+                    known[child['id']] = {**known.get(child['id'], {}), **child}
+                elif child is None:
+                    updates.append(update)
         return updates
 
     async def history(self, project, chat, before, limit):
@@ -327,8 +368,8 @@ class OpenCodeRunner(Runner):
         finally:
             await rpc.disconnect()
 
-    async def _configure(self, rpc, target, data, model, effort):
-        for key, value in (("model", model), ("effort", effort)):
+    async def _configure(self, rpc, target, data, model, effort, agent_mode=None):
+        for key, value in (("model", model), ("effort", effort), ('mode', agent_mode)):
             if value is None or options(data, key).get("currentValue") == value:
                 continue
             if value not in {row["value"] for row in values(options(data, key))}:
@@ -336,30 +377,42 @@ class OpenCodeRunner(Runner):
             data = await rpc.request("session/set_config_option", {"sessionId": target, "configId": key, "value": value})
         return data
 
-    async def state(self, project, chat, model=None, effort=None, access=None):
+    async def state(self, project, chat, model=None, effort=None, access=None, *, agent_mode=None, additional_directories=None):
         saved = await asyncio.to_thread(self.choices.details, chat)
         model, effort, access = model or saved.get("model"), effort or saved.get("effort"), access or saved.get("access")
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         rpc, temporary = await self._connect(project), None
         current = saved.get("context")
+        agent_mode = agent_mode or saved.get('agent_mode')
+        directories = additional_directories if additional_directories is not None else saved.get('additional_directories')
+        commands = saved.get('commands', [])
         try:
             if target is not None:
                 data = await self._load(rpc, project, target)
+                if directories is None:
+                    directories = data.get('_studio_directories')
                 for update in self._updates(rpc, target):
                     if update.get("sessionUpdate") == "usage_update":
-                        current = permissions.context(update.get("used"), update.get("size")) or current
+                        current = opencode_events.context(update, current)
+                    elif update.get('sessionUpdate') == 'available_commands_update':
+                        commands = opencode_events.commands(update)
             else:
-                data = await self._temporary(rpc, project)
+                data = await self._temporary(rpc, project, directories)
                 temporary = data["sessionId"]
-            if model or effort:
+            if model or effort or agent_mode or additional_directories is not None:
                 if temporary is None:
                     # Предпросмотр выбора не меняет существующую сессию CLI.
                     previous = settings(data)
-                    data = await self._temporary(rpc, project)
+                    data = await self._temporary(rpc, project, directories)
                     temporary = data["sessionId"]
                     model, effort = model or previous["model"], effort or previous["effort"]
-                data = await self._configure(rpc, temporary, data, model, effort)
-            return {"settings": settings(data, access), "context": current}
+                    agent_mode = agent_mode or previous.get('agent_mode')
+                data = await self._configure(rpc, temporary, data, model, effort, agent_mode)
+            for update in self._updates(rpc, temporary or target):
+                if update.get('sessionUpdate') == 'available_commands_update':
+                    commands = opencode_events.commands(update)
+            return {"settings": {**settings(data, access), 'commands': commands,
+                    'additional_directories': directories or []}, "context": current}
         finally:
             try:
                 if temporary is not None:
@@ -373,6 +426,11 @@ class OpenCodeRunner(Runner):
             text = await self._attachment_text(t, text, t.attachments)
             t.attachments = []
             saved = await asyncio.to_thread(self.choices.details, t.chat)
+            extra = getattr(t, 'opencode_options', {})
+            agent_mode = extra.get('agent_mode') or saved.get('agent_mode')
+            directories = extra.get('additional_directories')
+            if directories is None:
+                directories = saved.get('additional_directories')
             model, effort = model or saved.get("model"), effort or saved.get("effort")
             t.access, t.context = t.access or saved.get("access"), saved.get("context")
             rpc = await self._connect(t.project)
@@ -381,19 +439,25 @@ class OpenCodeRunner(Runner):
             if t.stopped or t.closing:
                 return
             if target is None:
-                data = await self._temporary(rpc, t.project)
+                data = await self._temporary(rpc, t.project, directories)
                 target = data["sessionId"]
                 if not isinstance(target, str) or not SESSION_ID.fullmatch(target):
                     raise Refused("invalid")
                 await asyncio.to_thread(self.aliases.put, t.project, t.chat, target)
             else:
-                data = await self._load(rpc, t.project, target)
+                data = await self._load(rpc, t.project, target, directories)
+                if directories is None:
+                    directories = data.get('_studio_directories')
             client.session = target
-            self._updates(rpc, target)  # replay — уже показанная история, в текущий ход не входит
-            data = await self._configure(rpc, target, data, model, effort)
-            t.settings = settings(data, t.access)
+            replay = self._updates(rpc, target)
+            command_list = next((opencode_events.commands(u) for u in reversed(replay)
+                                 if u.get('sessionUpdate') == 'available_commands_update'), [])
+            data = await self._configure(rpc, target, data, model, effort, agent_mode)
+            t.settings = {**settings(data, t.access), 'commands': command_list}
             self._send(t, {"k": "settings", **t.settings})
-            await asyncio.to_thread(self.choices.update, t.chat, model=model, effort=effort, access=t.access)
+            await asyncio.to_thread(self.choices.update, t.chat, model=model, effort=effort, access=t.access,
+                                    agent_mode=t.settings.get('agent_mode'), additional_directories=directories,
+                                    commands=command_list)
             if t.stopped or t.closing:
                 return
             self._activity(t, "thinking")
@@ -409,6 +473,13 @@ class OpenCodeRunner(Runner):
                 frame = await rpc.inbox.get()
                 if frame is marker:
                     result = await prompt
+                    usage = opencode_events.usage(result.get('usage'))
+                    if usage:
+                        t.context = t.context or {}
+                        previous = t.context.get('usage', {})
+                        t.context['usage'] = {k: previous.get(k, 0) + v for k, v in usage.items()}
+                        self._send(t, {'k': 'context', **t.context})
+                    self._status(t, {'retry': None})
                     if result.get("stopReason") == "cancelled":
                         t.stopped = True
                     if not t.stopped:
@@ -429,6 +500,14 @@ class OpenCodeRunner(Runner):
                 if "id" in frame:
                     # Принадлежность сессии — на момент прихода запроса, а не когда до него дойдёт задача.
                     session = frame.get("params", {}).get("sessionId")
+                    params = frame.get('params', {})
+                    tool = params.get('toolCall') or {}
+                    meta = opencode_events.child(tool, target, t.opencode_children)
+                    if meta:
+                        self._child(t, meta)
+                        frame['child'] = meta['id']
+                    if meta is False:
+                        session = None
                     frame["family"] = session == target or session in t.subtasks
                     task = asyncio.create_task(self._request(t, frame))
                     requests.add(task)
@@ -458,6 +537,12 @@ class OpenCodeRunner(Runner):
             raise asyncio.CancelledError
 
     def _notification(self, t, update):
+        child = opencode_events.child(update, t.client.session, t.opencode_children)
+        if child is False:
+            return
+        if child:
+            self._child(t, child)
+            return
         kind = update.get("sessionUpdate")
         if kind == "agent_message_chunk":
             self._activity(t, "responding")
@@ -481,14 +566,102 @@ class OpenCodeRunner(Runner):
                 self._activity(t, "tool", step["tool"])
         elif kind == "agent_thought_chunk":
             self._activity(t, "thinking")
+            old = next((s for s in t.feed.steps if s['id'] == 'thought'), None)
+            if old is None:
+                old = {'id': 'thought', 'tool': 'Рассуждения', 'input': {}, 'text': '', 'error': False}
+                t.feed.steps.append(old)
+                self._send(t, {'k': 'step', **old})
+            old['text'] = events.clip(old['text'] + text_of(update.get('content')))
+            self._send(t, {'k': 'result', **old})
         elif kind == "usage_update":
-            current = permissions.context(update.get("used"), update.get("size"))
+            current = opencode_events.context(update, t.context)
             if current:
                 t.context = current
                 self._send(t, {"k": "context", **current})
         elif kind == "config_option_update":
-            t.settings = settings(update, t.access)
+            t.settings = {**(t.settings or {}), **settings(update, t.access)}
             self._send(t, {"k": "settings", **t.settings})
+        elif kind == 'available_commands_update':
+            t.settings = {**(t.settings or {}), 'commands': opencode_events.commands(update)}
+            self._send(t, {'k': 'settings', **t.settings})
+        else:
+            self._status(t, opencode_events.status(update))
+
+    def _status(self, t, data):
+        if data:
+            t.progress['opencode'] = {**t.progress.get('opencode', {}), **data}
+            self._send(t, {'k': 'progress', **t.progress})
+
+    def _child(self, t, child):
+        if t.opencode_children.get(child['id']) == child:
+            return
+        t.opencode_children[child['id']] = child
+        t.subtasks[child['id']] = child['title']
+        t.progress['agents'] = [{'id': row['id'], 'title': row['title'], 'status': 'running'}
+                                for row in t.opencode_children.values()]
+        self._send(t, {'k': 'progress', **t.progress})
+
+    async def fork_chat(self, project, chat, message_id=None):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        if target is None:
+            raise Refused('not_found')
+        draft = ''
+        if message_id is not None:
+            from .opencode_native import fork_at
+
+            rpc = await self._connect(project)
+            try:
+                await self._load(rpc, project, target)
+                items = await asyncio.to_thread(normalize, self._updates(rpc, target))
+            finally:
+                await rpc.disconnect()
+            point = next((row for row in items if row['id'] == message_id and row['role'] == 'user'), None)
+            if point is None:
+                raise Refused('invalid', 'Точка ветвления отсутствует в истории')
+            draft = point['text'][:100_000]
+            target_new = await fork_at(await asyncio.to_thread(self.find_opencode), project, target, message_id)
+        else:
+            rpc = await self._connect(project)
+            try:
+                loaded = await self._load(rpc, project, target)
+                directories = loaded.get('_studio_directories')
+                data = await rpc.request('session/fork', {'sessionId': target, 'cwd': str(project), 'mcpServers': [],
+                    **({'additionalDirectories': directories} if directories is not None else {})})
+                target_new = data.get('sessionId')
+            finally:
+                await rpc.disconnect()
+        if not isinstance(target_new, str) or not SESSION_ID.fullmatch(target_new) or target_new == target:
+            raise Refused('invalid', 'OpenCode не создал независимый чат')
+        new_chat = str(uuid.uuid4())
+        await asyncio.to_thread(self.aliases.put, project, new_chat, target_new)
+        return {'chat': new_chat, 'draft': draft}
+
+    async def subagents(self, project, chat):
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        if target is None:
+            return {'items': [], 'complete': True}
+        live = self._turns.get(chat)
+        from .opencode_native import children_of
+
+        listing = await children_of(await asyncio.to_thread(self.find_opencode), project, target)
+        if live is not None and live.project == project:
+            for row in listing['items']:
+                if row['id'] in live.opencode_children and row['status'] == 'unknown':
+                    row['status'] = 'running'
+        return listing
+
+    async def subagent_history(self, project, chat, request_id):
+        listing = await self.subagents(project, chat)
+        if request_id not in {row['id'] for row in listing['items']}:
+            raise Refused('not_found')
+        rpc = await self._connect(project)
+        try:
+            await self._load(rpc, project, request_id)
+            items = await asyncio.to_thread(normalize, self._updates(rpc, request_id))
+            page = await asyncio.to_thread(sessions.fit, items, budget=limits.HISTORY_BUDGET)
+            return {'items': page, 'complete': True}
+        finally:
+            await rpc.disconnect()
 
     @staticmethod
     def _adopt(t, update, step):
@@ -501,7 +674,7 @@ class OpenCodeRunner(Runner):
             child = source.get("sessionId") or source.get("sessionID")
             parent = source.get("parentSessionId") or source.get("parentSessionID")
             if (isinstance(child, str) and SESSION_ID.fullmatch(child) and child != t.client.session
-                    and parent in (None, t.client.session) and (child in t.subtasks or len(t.subtasks) < 50)):
+                    and parent == t.client.session and (child in t.subtasks or len(t.subtasks) < 50)):
                 data = step.get("input") if isinstance(step.get("input"), dict) else {}
                 name = next((v.strip()[:200] for v in (step.get("tool"), data.get("description"),
                              data.get("subagent_type")) if isinstance(v, str) and v.strip() and v != "Tool"), None)
@@ -524,7 +697,8 @@ class OpenCodeRunner(Runner):
                 not isinstance(session, str) or session not in t.subtasks):
             await t.client.rpc.send({"id": frame["id"], "error": {"code": -32601, "message": "Unsupported request"}})
             return
-        subtask = (t.subtasks.get(session) or "без имени") if session != t.client.session else None
+        child = frame.get('child') or (session if session != t.client.session else None)
+        subtask = (t.subtasks.get(child) or "без имени") if child else None
         rid = secrets.token_hex(8)
         if method == "session/request_permission":
             offered = p.get("options", [])

@@ -187,9 +187,13 @@ async def page(key: str, url: str) -> dict:
     if parts is None or parts.scheme.lower() not in ("http", "https") or not parts.netloc:
         raise ToolError("адрес страницы — только http или https")
     data = await _exa(key, "/contents", {"urls": [url], "text": {"maxCharacters": PAGE_MAX}})
-    status = (data.get("statuses") or [{}])[0]
+    statuses = data.get('statuses')
+    if statuses is not None and (not isinstance(statuses, list) or any(not isinstance(row, dict) for row in statuses)):
+        raise ToolError('страница не прочиталась')
+    status = (statuses or [{}])[0]
     if status.get("status") == "error":
-        tag = (status.get("error") or {}).get("tag") or "?"
+        error = status.get('error')
+        tag = (error.get('tag') if isinstance(error, dict) else None) or '?'
         raise ToolError("страница не найдена" if tag == "CRAWL_NOT_FOUND" else f"страница не прочиталась ({tag})")
     results = data.get("results") or []
     if not results:

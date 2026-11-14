@@ -135,9 +135,11 @@ def _file_name(row) -> str:
     return f"files/{row['id']}{media.EXT.get(row['mime'], '.bin')}"
 
 
-def _settings(user_id: int) -> dict:
+def _settings(user_id: int) -> dict | None:
     user = state.DB.execute("SELECT login, name, theme, views, screen_lock FROM users WHERE id = ?",
                             (user_id,)).fetchone()
+    if user is None:
+        return None
     return {
         "profile": {"login": user["login"], "name": user["name"], "theme": user["theme"],
                     "views": _maybe_json(user["views"]), "screen_lock": bool(user["screen_lock"])},
@@ -306,24 +308,41 @@ def _release(user_id: int, mark: object) -> None:
         del RUNNING[user_id]
 
 
-async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: object):
+class _Revoked(Exception):
+    """Сессия выгрузки отозвана; не выдавать данные переиспользованного user_id."""
+
+
+async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: object, *, session_digest: str | None = None):
     out, now = media.ZipWriter(), clock.NOW()
     files = {r["id"]: _file_name(r) for r in rows}
     entries, counts = [], {}
 
+    def check_session():
+        if session_digest is not None and state.DB.execute('SELECT 1 FROM sessions WHERE digest = ? AND user_id = ?',
+                                                           (session_digest, user_id)).fetchone() is None:
+            raise _Revoked()
+
     async def record(name: str, value, listed: bool = True):
         """Заголовок записи и её данные — разными кусками: склейка — ещё одна копия страницы."""
         data, crc, digest = await asyncio.to_thread(_pack, value)
+        check_session()
         if listed:
             entries.append({"path": name, "sha256": digest})
         yield out.entry(name, now, crc, len(data))
+        check_session()
         yield data
 
     try:
+        check_session()
+        settings = _settings(user_id)
+        if settings is None:
+            return
+        user = {key: settings['profile'][key] for key in ('login', 'name')}
         async for piece in record("README.txt", README.encode("utf-8")):
             yield piece
-        async for piece in record("settings.json", _settings(user_id)):
+        async for piece in record("settings.json", settings):
             yield piece
+        del settings
         if "chat" in sections:
             ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? ORDER BY created, id",
                                                      (user_id,))]
@@ -364,7 +383,9 @@ async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: obj
                     yield out.entry(files[row["id"]], row["created"], crc, size)
                     left = size
                     while left > 0:
+                        check_session()
                         block = await asyncio.to_thread(f.read, min(CHUNK, left))
+                        check_session()
                         if not block:
                             raise OSError("файл стал короче")
                         left -= len(block)
@@ -377,13 +398,14 @@ async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: obj
             log.warning("export: хранилище оборвало чтение")
             raise media.StorageError("хранилище оборвало чтение") from None
         counts["files"] = len(listed)
-        user = state.DB.execute("SELECT login, name FROM users WHERE id = ?", (user_id,)).fetchone()
         manifest = {"format": "studio-export", "version": 1, "created": now, "schema": db.VERSION,
-                    "user": {"login": user["login"], "name": user["name"]}, "sections": list(sections),
+                    "user": user, "sections": list(sections),
                     "counts": counts, "files": listed, "entries": entries, "missing": missing}
         async for piece in record("manifest.json", manifest, listed=False):
             yield piece
         yield out.end()
+    except _Revoked:
+        return
     finally:
         _release(user_id, mark)
 
@@ -430,7 +452,7 @@ async def get_export(token: str, request: Request):
         raise HTTPException(409, BUSY)
     mark = object()
     RUNNING[uid] = mark
-    body = _stream(uid, held[1], rows, mark)
+    body = _stream(uid, held[1], rows, mark, session_digest=request.state.digest)
     weakref.finalize(body, _release, uid, mark)            # ответ так и не начался — метку снимет уход из памяти
     log.info("export: %d файлов", len(rows))
     day = datetime.fromtimestamp(clock.NOW()).strftime("%Y-%m-%d")

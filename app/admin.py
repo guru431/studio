@@ -58,13 +58,18 @@ class Allowlist(BaseModel):
     entries: list[str]
 
 
+USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
+             " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections FROM users u")
+
+
 def _user_out(uid: int) -> dict:
-    row = state.DB.execute(
-        "SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
-        " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections"
-        " FROM users u WHERE u.id = ?", (uid,)).fetchone()
+    row = state.DB.execute(USERS_SQL + ' WHERE u.id = ?', (uid,)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого пользователя нет"})
+    return _user_doc(row)
+
+
+def _user_doc(row) -> dict:
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "email": row["email"],
             "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"]}
@@ -95,8 +100,7 @@ def _self(admin: auth.User, uid: int) -> None:
 
 @router.get("/users")
 async def list_users():
-    ids = [r["id"] for r in state.DB.execute("SELECT id FROM users ORDER BY id")]
-    return {"items": [_user_out(uid) for uid in ids]}
+    return {"items": [_user_doc(row) for row in state.DB.execute(USERS_SQL + ' ORDER BY u.id')]}
 
 
 @router.post("/users", status_code=201)

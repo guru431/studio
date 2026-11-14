@@ -376,7 +376,8 @@ def test_export_survives_broken_tools_json(studio):
 
 
 def as_user(uid):
-    return SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)))
+    row = state.DB.execute('SELECT digest FROM sessions WHERE user_id = ? LIMIT 1', (uid,)).fetchone()
+    return SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid), digest=row[0] if row else None))
 
 
 def drain(uid, token, on_piece=lambda piece: None) -> list:

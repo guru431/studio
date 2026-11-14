@@ -1,4 +1,5 @@
 import { locale, tr } from './i18n.js';
+import { opencodeView } from './code-opencode.js';
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
@@ -370,14 +371,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  if (agent?.chat_fork && engine !== 'opencode') {
+  const openCode = opencodeView(form, text, { enabled: engine === 'opencode' && agent?.opencode_features,
+    shared: agent?.shared, changed: () => loadState() });
+  if (agent?.chat_fork && (engine !== 'opencode' || agent?.opencode_features)) {
     const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
       'aria-label': tr("Создать ветку чата"), title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") });
     copy.append(icon('fork'));
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
-  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && engine !== 'opencode' });
+  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features) });
   const children = subtaskControl.button.disabled ? null : subtaskControl;
   const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
   statusFixed.prepend(subtaskControl.button, commands.button, changedFiles.button);
@@ -410,6 +413,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintSettings(data) {
+    openCode.settings(data);
     const previousModel = effectiveModel;
     effectiveModel = typeof data.model === 'string' ? data.model : '';
     if (engine === 'opencode' && previousModel !== effectiveModel) usage.refresh();
@@ -435,15 +439,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   async function loadState() {
+    stateRequest?.abort();
     const own = new AbortController();
     stateRequest = own;
     resolving = true;
     model.disabled = effort.disabled = access.disabled = true;
+    openCode.busy(true);
     paintPicks();
     send.disabled = true;
     try {
       const data = await api('POST', endpoint('/state'), { model: model.value || null, effort: effort.value || null,
-        access: access.value || null }, { signal: own.signal });
+        access: access.value || null, ...openCode.options() }, { signal: own.signal });
       if (!alive || own.signal.aborted) return;
       acceptSettings(data.settings || {});
       paintContext(data.context);
@@ -454,10 +460,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (err.code === 'closed') closed();
       else { stateError = words(err); showStatus(stateError); }
     } finally {
-      resolving = false;
-      stateRequest = null;
-      model.disabled = effort.disabled = access.disabled = false;
-      updateControls();
+      if (stateRequest === own) {
+        resolving = false;
+        stateRequest = null;
+        model.disabled = effort.disabled = access.disabled = false;
+        updateControls();
+      }
     }
   }
 
@@ -804,7 +812,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const notice = taskNotice(m.text);
         if (notice) return notice;
       }
-      const branch = agent?.chat_fork && engine !== 'opencode' && m.forkable !== false && typeof m.id === 'string'
+      const branch = agent?.chat_fork && (engine !== 'opencode' || agent?.opencode_features) && m.forkable !== false && typeof m.id === 'string'
         ? el('button', { type: 'button', class: 'btn btn-sm code-fork', disabled: running,
           title: tr("Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.") }, tr("Продолжить иначе")) : null;
       branch?.addEventListener('click', () => forkAt(m.id));
@@ -876,6 +884,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending || resolving || historyLoading || !settingsReady;
     paintQuickActions();
     model.disabled = effort.disabled = access.disabled = resolving || historyLoading || running;
+    openCode.busy(resolving || historyLoading || running);
     paintPicks();
     const label = running ? (engine === 'opencode' ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
     send.title = label;
@@ -1254,6 +1263,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const t = current();
         if (data.settings) acceptSettings(data.settings);
         paintContext(data.context);
+        openCode.progress(data.progress?.opencode);
         children?.update(data.progress?.agents, true);
         clearTimeout(paintTimer);
         paintTimer = null;
@@ -1347,6 +1357,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         return false;
       }
       case 'progress':
+        openCode.progress(data.opencode);
         children?.update(data.agents, true);
         grow(() => current().view.progress.update(data, current().models));
         return false;
@@ -1697,6 +1708,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       posted = true;
       response = await api('POST', endpoint('/turn'), { text: value, model: model.value || null,
         effort: effort.value || null,
+        ...openCode.options(),
         ...(access.value ? { access: access.value } : {}),
         ...(requestId ? { request_id: requestId } : {}),
         ...attachmentBody(sentImages) }, { signal: own.signal });

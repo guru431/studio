@@ -205,6 +205,7 @@ class Updater:
 
     async def _run(self, release: dict, gen: int) -> None:
         stage = None
+        launched = False
         try:
             stage = await asyncio.to_thread(self.prepare, self.h, release)
             if gen != self._gen:
@@ -217,11 +218,13 @@ class Updater:
             self.state = 'restarting'
             # Между последней проверкой ходов и запросом штатного выхода нет await.
             self.launch(stage, self.h)
+            launched = True
             self.quit()
         except Exception as error:
             if gen == self._gen:
                 self.state = 'failed'
             log.warning('обновление: %s', type(error).__name__)
         finally:
-            if stage is not None and gen != self._gen:  # отменено: подготовленная копия не нужна
+            if stage is not None and not launched and (gen != self._gen or self.state == 'failed'):
+                # Хелпер ещё не запущен: отменённая/неудачная подготовка больше никому не нужна.
                 await asyncio.to_thread(self.discard, stage)

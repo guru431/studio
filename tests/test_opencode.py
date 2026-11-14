@@ -23,6 +23,21 @@ def enable(machine, link):
     link.hello = bridge.parse_hello(machine.hello)
 
 
+def test_opencode_options_forward_only_to_new_bridge_and_own_engine(studio):
+    aid, machine, link = setup(studio)
+    enable(machine, link)
+    endpoint = chat_url(aid, 'state') + '?engine=opencode'
+    body = {'agent_mode': 'plan', 'additional_directories': ['C:\\Shared']}
+    before = len(machine.requests)
+    assert studio.c.post(endpoint, json=body).status_code == 409
+    assert len(machine.requests) == before
+    link.hello['opencode_features'] = True
+    assert studio.c.post(endpoint, json=body).status_code == 200
+    assert {key: sent(machine, 'state')[-1][key] for key in body} == body
+    assert studio.c.post(chat_url(aid, 'state'), json=body).status_code == 422
+    assert studio.c.post(endpoint, json={'additional_directories': ['C:\\*']}).status_code == 422
+
+
 def test_optional_opencode_catalog_and_old_bridge_rejection(studio):
     aid, machine, link = setup(studio)
     assert "opencode" not in studio.c.get("/api/agents").json()["items"][0]

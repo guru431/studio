@@ -8,6 +8,7 @@ const number = (value) => Number.isFinite(value) ? value.toLocaleString(locale()
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;
   let settings = {};
+  let cacheTimer = null;
   const hasCache = engine === 'codex' || engine === 'claude';
   const cacheText = el('b', { id: 'code-cache-text' }, '—');
   const cacheButton = el('button', { type: 'button', id: 'code-cache', class: 'code-cache',
@@ -21,7 +22,9 @@ export function contextView(host, { chat, engine, project, messages }) {
   const close = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const dialog = el('dialog', { id: 'code-context-dialog', class: 'dialog code-usage-dialog',
     'aria-labelledby': 'code-context-title' }, el('h2', { id: 'code-context-title' }, tr("Сессия и контекст")), content,
-  el('p', { class: 'muted small' }, tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
+  el('p', { class: 'muted small' }, engine === 'opencode'
+    ? tr('Контекст — текущая заполненность окна. Токены накапливаются по завершённым запросам из Студии; запросы из других приложений в эту сумму не входят. Стоимость всей сессии сообщает OpenCode.')
+    : tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
   const cacheRead = el('dd');
@@ -64,6 +67,12 @@ export function contextView(host, { chat, engine, project, messages }) {
     cacheDetail.textContent = value.text;
     cacheRead.textContent = number(context?.usage?.cached);
     cacheWrite.textContent = number(context?.usage?.cache_write);
+    if (value.state === 'estimated' && !document.hidden) {
+      cacheTimer ??= setInterval(paintCache, 1000);
+    } else {
+      clearInterval(cacheTimer);
+      cacheTimer = null;
+    }
   }
   function paint() {
     const usage = context?.usage || {};
@@ -74,10 +83,13 @@ export function contextView(host, { chat, engine, project, messages }) {
       [tr("Общий размер контекста, токенов"), number(context?.limit)],
       [tr("Занято токенов"), number(context?.used)],
       [tr("Свободно токенов"), number(context ? Math.max(0, context.limit - context.used) : null)],
-      [tr("Заполнено"), context ? `${number(context.percent)}%` : tr("Не сообщается")],
-      [tr("Потрачено токенов за сессию"), number(usage.total)],
+      [tr("Заполнено"), Number.isFinite(context?.percent) ? `${number(context.percent)}%` : tr("Не сообщается")],
+      [engine === 'opencode' ? tr('Токены завершённых ходов Студии') : tr("Потрачено токенов за сессию"), number(usage.total)],
       [tr("Входные токены"), number(usage.input)], [tr("Выходные токены"), number(usage.output)],
       [tr("Рассуждения, токенов"), number(usage.reasoning)],
+      ...(engine === 'opencode' ? [[tr('Стоимость сессии, USD'), Number.isFinite(context?.cost?.amount)
+        ? context.cost.amount.toLocaleString(locale(), { maximumFractionDigits: 6 }) : tr('Не сообщается')],
+        [tr('Основной агент'), settings.agent_mode || tr('Не сообщается')]] : []),
     ];
     content.replaceChildren(...entries.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)]));
   }
@@ -86,13 +98,16 @@ export function contextView(host, { chat, engine, project, messages }) {
   close.addEventListener('click', () => dialog.close());
   cacheClose.addEventListener('click', () => cacheDialog?.close());
   paintCache();
-  const cacheTimer = hasCache ? setInterval(paintCache, 1000) : null;
   if (hasCache) document.addEventListener('visibilitychange', paintCache);
   return {
     button, cacheButton,
     settings(data) { settings = { ...settings, ...data }; paintCache(); if (dialog.open) paint(); },
     update(data) {
-      if (!data || !Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) return;
+      if (!data) return;
+      if (!Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) {
+        if (data.usage || data.cost) { context = { ...context, ...data }; if (dialog.open) paint(); }
+        return;
+      }
       const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);
       context = { ...data, percent };
       paintCache();

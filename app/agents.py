@@ -164,6 +164,7 @@ async def list_agents(request: Request):
                       "project_create": hello.get("project_create", False),
                       "subscription_usage": hello.get("subscription_usage", False),
                       "opencode_usage": hello.get("opencode_usage", False),
+                      "opencode_features": hello.get("opencode_features", False),
                       **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:

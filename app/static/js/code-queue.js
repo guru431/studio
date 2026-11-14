@@ -49,8 +49,14 @@ export function queueView(host, { endpoint, failed, request = api }) {
       editing = null;
     } catch (err) {
       if (!alive || mine !== epoch) return;
-      if (err.code === 'gone') items = items.filter((row) => row.id !== item.id);
-      failed(err);
+      if (err.code === 'gone') {
+        items = items.filter((row) => row.id !== item.id);
+        if (editing?.id === item.id) editing = null;
+        if (paused) {
+          try { await resume(); } catch (resumeError) { if (alive && mine === epoch) failed(resumeError); }
+        }
+      }
+      if (alive && mine === epoch) failed(err);
     } finally {
       pending = false;
       if (alive && mine === epoch) paint();
@@ -58,7 +64,7 @@ export function queueView(host, { endpoint, failed, request = api }) {
   }
 
   function paint() {
-    box.hidden = !items.length;
+    box.hidden = !items.length && !paused;
     host.hidden = box.hidden;
     box.replaceChildren(el('div', { class: 'small muted' }, paused ? tr("Очередь на паузе") : tr("После текущей задачи")));
     if (paused && !editing) {
@@ -96,7 +102,11 @@ export function queueView(host, { endpoint, failed, request = api }) {
     }
   }
   return {
-    update(next, hold = false) { items = Array.isArray(next) ? next : []; paused = hold; paint(); },
+    update(next, hold = false) {
+      items = Array.isArray(next) ? next : []; paused = hold;
+      if (editing && !items.some(item => item.id === editing.id)) editing = null;
+      paint();
+    },
     clear() { epoch++; items = []; paused = false; editing = null; paint(); },
     paused() { return paused; },
     add(item) { if (!items.some((row) => row.id === item.id)) items.push(item); paint(); },

@@ -218,7 +218,8 @@ async def test_state_reads_original_but_configures_only_temporary(runner):
     runner.aliases.put(runner.project, CHAT, "ses_original")
     runner.fake.history = [{"sessionUpdate": "usage_update", "used": 25, "size": 100}]
     data = await runner.state(runner.project, CHAT, "gateway/gpt", "xhigh", "auto")
-    assert data == {"settings": {"model": "gateway/gpt", "effort": "xhigh", "access": "auto"},
+    assert data == {"settings": {"model": "gateway/gpt", "effort": "xhigh", "access": "auto",
+                                 'commands': [], 'additional_directories': []},
                     "context": {"used": 25, "limit": 100, "percent": 25}}
     assert all(p["sessionId"] == SESSION for m, p in runner.fake.calls if m == "session/set_config_option")
     assert runner.fake.deleted == [SESSION]

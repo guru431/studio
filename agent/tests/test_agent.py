@@ -247,7 +247,7 @@ def test_hello(agent):
                              "agent_version": VERSION, "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
-                             "subscription_usage": True, "opencode_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                             "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                              "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,

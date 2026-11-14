@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
@@ -137,7 +138,7 @@ class Agent:
                  "agent_version": agent_version, "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
-                 "subscription_usage": True, "opencode_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                 "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
@@ -295,6 +296,14 @@ class Agent:
                     raise Refused("invalid")
             elif not self._field(op, name, frame.get(name)):
                 raise Refused("invalid")
+        if op in ('state', 'turn'):
+            mode, directories = frame.get('agent_mode'), frame.get('additional_directories')
+            if (engine != 'opencode' and (mode is not None or directories is not None)
+                    or mode is not None and not (isinstance(mode, str) and 0 < len(mode) <= 100 and not any(ord(c) < 32 for c in mode))
+                    or directories is not None and (scope is not None or not isinstance(directories, list) or len(directories) > 8
+                        or any(not isinstance(p, str) or not 1 <= len(p) <= 1024 or any(ord(c) < 32 or c in '*?' for c in p)
+                               or not Path(p).is_absolute() for p in directories))):
+                raise Refused('invalid')
         if op.startswith("desktop_"):
             self._desktop_fields(op, frame)
         # Продлевает только принятая просьба владельца: неизвестные и отклонённые по виду — нет.
@@ -504,14 +513,12 @@ class Agent:
         if runner._turn(frame["project"], frame["chat"]) is not None:
             raise Refused("running", "Дождитесь завершения задания перед ветвлением")
         engine = frame.get("engine", "claude")
-        if engine == "opencode":
-            raise Refused("unsupported", "OpenCode ACP не предоставляет ветвление истории")
-        if engine == "codex":
+        if engine in ("codex", 'opencode'):
             result = await runner.fork_chat(project, frame["chat"], frame.get("message_id"))
         else:
             result = await asyncio.to_thread(branches.claude, project, frame["chat"], frame.get("message_id"))
         saved = await asyncio.to_thread(runner.choices.details, frame["chat"])
-        copied = {key: value for key, value in saved.items() if key in ("model", "effort", "access")}
+        copied = {key: value for key, value in saved.items() if key in ("model", "effort", "access", 'agent_mode', 'additional_directories')}
         if engine == "claude" and not copied.get("model"):
             copied["model"] = await asyncio.to_thread(sessions.last_model, project, frame["chat"])
         await asyncio.to_thread(runner.choices.update, result["chat"], **copied)
@@ -522,7 +529,7 @@ class Agent:
         if frame.get("engine") == "codex":
             return await self.codex.subagents(project, frame["chat"])
         if frame.get("engine") == "opencode":
-            raise Refused("unsupported", "OpenCode ACP не предоставляет историю дочерних агентов")
+            return await self.opencode.subagents(project, frame['chat'])
         return await asyncio.to_thread(subagents.list_children, project, frame["chat"], choices=self.runner.choices,
                                        live=self.runner.children(frame["project"], frame["chat"]))
 
@@ -531,7 +538,7 @@ class Agent:
         if frame.get("engine") == "codex":
             return await self.codex.subagent_history(project, frame["chat"], frame["request_id"])
         if frame.get("engine") == "opencode":
-            raise Refused("unsupported")
+            return await self.opencode.subagent_history(project, frame['chat'], frame['request_id'])
         return await asyncio.to_thread(subagents.history, project, frame["chat"], frame["request_id"])
 
     async def _op_chat_search(self, frame, after):
@@ -630,8 +637,34 @@ class Agent:
 
     async def _op_state(self, frame, after):
         project = await self._project(frame)
-        return await self._runner(frame).state(project, frame["chat"], frame.get("model"), frame.get("effort"),
-                                               frame.get("access"))
+        result = await self._runner(frame).state(project, frame["chat"], frame.get("model"), frame.get("effort"),
+                                                frame.get("access"), **await self._opencode_options(frame))
+        if frame.get('shared_projects') is not None:
+            result.get('settings', {}).pop('additional_directories', None)
+        return result
+
+    async def _opencode_options(self, frame):
+        if frame.get('engine') != 'opencode':
+            if frame.get('agent_mode') is not None or frame.get('additional_directories') is not None:
+                raise Refused('invalid')
+            return {}
+        mode, directories = frame.get('agent_mode'), frame.get('additional_directories')
+        if directories is not None:
+            def resolve():
+                result = []
+                for value in directories:
+                    try:
+                        path = Path(value).resolve(strict=True)
+                    except OSError:
+                        raise Refused('invalid', 'Дополнительный каталог недоступен') from None
+                    if not path.is_dir():
+                        raise Refused('invalid')
+                    if str(path) not in result:
+                        result.append(str(path))
+                return result
+            directories = await asyncio.to_thread(resolve)
+        return {key: value for key, value in {'agent_mode': mode, 'additional_directories': directories}.items()
+                if value is not None}
 
     async def _op_turn(self, frame, after):
         images = frame.get("images", [])
@@ -647,7 +680,7 @@ class Agent:
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
                                      frame.get("model"), frame.get("effort"), images=images,
                                      **({"attachments": items} if items else {}),
-                                     access=frame.get("access"), owner=frame.get("window"))}
+                                     access=frame.get("access"), owner=frame.get("window"), **await self._opencode_options(frame))}
 
     async def _op_steer(self, frame, after):
         images = frame.get("images", [])

@@ -1761,6 +1761,9 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   container-type: inline-size; padding-top: var(--space-2); }
 .code-compose-area > :not(.code-composer) { flex: none; }
 .code-compose-area > #code-status { margin: 0 0 var(--space-3); }
+#code-opencode-options { max-height: 30vh; overflow: auto; font-size: var(--fs-sm); }
+#code-opencode-options label { display: grid; gap: var(--space-2); margin-block: var(--space-2); }
+#code-opencode-options select, #code-opencode-options textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .code-session-notice { margin-bottom: var(--space-3); padding: var(--space-4) var(--space-5); border: 1px solid var(--line); border-radius: var(--r-control);
   background: var(--surface-2); font-size:var(--fs-sm); overflow-wrap: anywhere; }
 .code-session-notice p { margin: 0 0 var(--space-3); }
