@@ -28,12 +28,13 @@
   <img class="logo" src="/static/icons/icon.svg" alt="">
   <!-- вкладки разделов и значки кнопок (icons.js) ставит app.js из реестра sections-meta.js; значок «Стереть» PIN — lock.js -->
   <span class="spacer"></span>
+  <button id="refresh-app" class="refresh-toggle" type="button" aria-label="Обновить" title="Обновить" data-i18n-attrs="aria-label title"></button>
   <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск" data-i18n-attrs="aria-label title"></a>
   <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе" data-i18n-attrs="aria-label title"><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
   <button id="avatar" type="button" aria-expanded="false" aria-controls="menu" aria-label="Профиль, тема и выход" data-i18n-attrs="aria-label"></button>
 </nav>
 <div id="menu" class="menu" hidden>
-  <div class="menu-who"><b id="menu-name"></b><span id="menu-login"></span></div>
+  <div class="menu-who"><b id="menu-name"></b><span id="menu-login"></span><span id="menu-version" hidden></span></div>
   <fieldset id="menu-theme" class="segment menu-theme">
     <legend data-i18n>Тема · вся учётка</legend>
     <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="auto" id="menu-theme-auto"><span data-i18n>Авто</span></label>

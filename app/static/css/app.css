@@ -53,8 +53,8 @@
   /* вырез iPhone в ландшафте; тест подставляет сюда числа — Playwright выреза не эмулирует */
   --safe-left: env(safe-area-inset-left, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --rail-w: calc(84px + var(--safe-left)); --tabs-h: 0px;
-  /* телефон: три значка справа сверху (поиск, «В работе», профиль) — от края экрана до левого края поиска */
-  --fixed-icons-w: calc(96px + var(--h-icon));
+  /* телефон: четыре значка справа сверху — от края экрана до левого края обновления */
+  --fixed-icons-w: calc(138px + var(--h-icon));
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
 
@@ -218,11 +218,11 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .view-loading { margin: auto; color: var(--text-2); }
 /* фокус переходов оболочки (app.js announce) — на заголовке раздела, без рамки: это не элемент управления */
 #view:focus, #view h1[tabindex="-1"]:focus { outline: none; }
-#avatar, .jobs-toggle, .search-toggle { position: relative; width: var(--h-icon); height: var(--h-icon); border-radius: 50%; border: 1px solid var(--line); background: var(--surface-3);
+#avatar, .jobs-toggle, .search-toggle, .refresh-toggle { position: relative; width: var(--h-icon); height: var(--h-icon); border-radius: 50%; border: 1px solid var(--line); background: var(--surface-3);
   font-weight: 600; font-size:var(--fs-sm); display: grid; place-items: center; padding: 0; }
 #avatar[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* «В работе» (jobs.js): число идущих и точка готового, панель — выпадающая у полосы */
-.jobs-toggle, .search-toggle { color: var(--text-2); }
+.jobs-toggle, .search-toggle, .refresh-toggle { color: var(--text-2); }
 @media (hover: hover) { .jobs-toggle:hover { color: var(--text-1); } }
 .jobs-toggle svg.ico { width: 18px; height: 18px; }
 .jobs-count { position: absolute; top: -5px; right: -7px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-control);
@@ -256,8 +256,8 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .jobs-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* лупа «Поиска» (search.js) — над «В работе» */
 .search-toggle[aria-current="page"] { color: var(--text-1); border-color: var(--accent); }
-@media (hover: hover) { .search-toggle:hover { color: var(--text-1); } }
-.search-toggle svg.ico { width: 18px; height: 18px; }
+@media (hover: hover) { .search-toggle:hover, .refresh-toggle:hover { color: var(--text-1); } }
+.search-toggle svg.ico, .refresh-toggle svg.ico { width: 18px; height: 18px; }
 #view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; padding-bottom: var(--tabs-h);
   padding-right: var(--safe-right); }
 /* только экран: в печати (@media print) #view раскрывается во всю ленту */
@@ -339,16 +339,17 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
   #avatar { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; }
   .jobs-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
   .search-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
+  .refresh-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 138px; }
   .jobs-dot { border-color: var(--surface-3); }
   .jobs-panel { inset: auto 0 0 0; width: 100%; max-width: none; max-height: calc(80 * var(--dvh)); border-radius: var(--r-card) var(--r-card) 0 0;
     border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .jobs-panel::backdrop { background: var(--backdrop); }
   .menu { left: auto; right: 12px; bottom: auto; top: calc(52px + env(safe-area-inset-top, 0px)); }
-  /* справа сверху три значка (поиск, «В работе», профиль) и зазор 12 */
+  /* справа сверху четыре значка (обновление, поиск, «В работе», профиль) и зазор 12 */
   .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: calc(var(--fixed-icons-w) + var(--space-6)); }
-  /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от трёх значков — вторая строка */
+  /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от значков — вторая строка */
   [data-selecting] .head { flex-wrap: wrap; row-gap: var(--space-3); }
-  /* 320–360 px: «Фото», «Выбрать», вид и «⋯» — плотнее (зазор 6, кнопка вида без стрелки, резерв справа 138),
+  /* 320–360 px: «Фото», «Выбрать», вид и «⋯» — плотнее (зазор 6, кнопка вида без стрелки),
    * чтобы заголовок не срезался */
   @media (max-width: 360px) {
     .head { gap: var(--space-3); padding-right: calc(var(--fixed-icons-w) + var(--space-4)); }
@@ -1972,7 +1973,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
  * область касания расширяет прозрачный ::after; у .card-save его нет: в таблице она static и накрыла бы строку */
 @media (pointer: coarse) {
   :is(.btn-sm, .btn-link, .msg-actions .btn, .code-agent-update, .code-agent-info, .code-agent-desktop) { position: relative; }
-  :is(.icon-btn, .code-tab-close, .btn-sm, .btn-link, .msg-actions .btn, #avatar, .jobs-toggle, .search-toggle, .copy,
+  :is(.icon-btn, .code-tab-close, .btn-sm, .btn-link, .msg-actions .btn, #avatar, .jobs-toggle, .search-toggle, .refresh-toggle, .copy,
       .code-agent-update, .code-agent-info, .code-agent-desktop)::after {
     content: ''; position: absolute; inset: min(0px, calc(50% - var(--h-touch) / 2 / var(--ui-scale, 1))); }
 }
