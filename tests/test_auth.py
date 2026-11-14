@@ -400,16 +400,16 @@ def test_require_admin_refuses_plain_users():
 
 
 def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
-    stdin = "STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"
+    stdin = "STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=eight123\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"
     for _ in range(2):
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
         assert manage.main(["create-admin"]) == 0
     conn = db.connect(env.db_path)
     rows = conn.execute("SELECT login, is_admin, disabled, pw_hash FROM users").fetchall()
     assert len(rows) == 1 and rows[0]["login"] == "owner" and rows[0]["is_admin"] == 1 and rows[0]["disabled"] == 0
-    assert security.verify_password("very-long-pass", rows[0]["pw_hash"])
+    assert security.verify_password("eight123", rows[0]["pw_hash"])
     out = capsys.readouterr()
-    assert "very-long-pass" not in out.out + out.err
+    assert "eight123" not in out.out + out.err
 
 
 def test_first_admin_requires_email(env, monkeypatch):

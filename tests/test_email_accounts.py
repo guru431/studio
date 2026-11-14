@@ -59,14 +59,16 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
     response = studio.c.post("/account/invite/check", json={"token": secret})
     assert response.json() == {"email": "friend@example.com"}
     assert "Private admin note" not in response.text
-    response = studio.c.post("/account/invite/accept", json={"token": secret, "login": "Friend", "password": PASSWORD})
+    response = studio.c.post("/account/invite/accept", json={"token": secret, "login": "Friend", "password": "friend1"})
+    assert response.status_code == 422 and response.json()["detail"]["code"] == "short"
+    response = studio.c.post("/account/invite/accept", json={"token": secret, "login": "Friend", "password": "friend12"})
     assert response.status_code == 201
     assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "second", "password": PASSWORD}).status_code == 400
-    assert login(studio, "FRIEND@EXAMPLE.COM", PASSWORD).status_code == 303
+    assert login(studio, "FRIEND@EXAMPLE.COM", "friend12").status_code == 303
     me = studio.c.get("/api/me").json()
     assert me["login"] == "friend" and me["email"] == "friend@example.com" and me["email_codes"] is False
     assert studio.c.get("/api/admin/invitations").status_code == 403
-    for private in (secret, PASSWORD, "friend@example.com", "Private admin note"):
+    for private in (secret, PASSWORD, "friend1", "friend12", "friend@example.com", "Private admin note"):
         assert private not in caplog.text
 
 
@@ -260,12 +262,15 @@ def test_recovery_has_neutral_response_single_use_and_ends_sessions(studio, mail
     secret = token(mail)
     assert studio.c.post("/account/forgot", json={"login": "missing@example.com"}).json() == response.json()
     assert len(mail) == 1
-    response = studio.c.post("/account/reset", json={"token": secret, "password": "new-password-123"})
+    response = studio.c.post("/account/reset", json={"token": secret, "password": "reset12"})
+    assert response.status_code == 422 and response.json()["detail"]["code"] == "short"
+    assert auth.session_user(session) is not None
+    response = studio.c.post("/account/reset", json={"token": secret, "password": "reset123"})
     assert response.status_code == 200
     assert auth.session_user(session) is None
     assert studio.c.post("/account/reset", json={"token": secret, "password": "different-password"}).status_code == 400
     assert login(studio, "owner", PASSWORD).status_code == 401
-    assert login(studio, "owner@example.com", "new-password-123").status_code == 303
+    assert login(studio, "owner@example.com", "reset123").status_code == 303
     assert not state.DB.execute("SELECT 1 FROM email_tokens WHERE user_id=?", (uid,)).fetchone()
 
 

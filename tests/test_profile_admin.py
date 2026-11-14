@@ -233,15 +233,15 @@ def test_password_change_needs_current_and_ends_other_sessions(studio):
     other, _ = auth.create_session(uid)
     r = studio.c.post("/api/me/password", json={"current": "wrong-password", "new": "brand-new-pass"})
     assert r.status_code == 403 and code(r) == "password"
-    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "short"})
+    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "short12"})
     assert r.status_code == 422 and code(r) == "short"
     assert auth.session_user(other) is not None                          # отказы ничего не гасят
-    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
+    r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "new-pass"})
     assert r.status_code == 204
     assert auth.session_user(other) is None
     assert studio.c.get("/api/me").status_code == 200                    # текущая сессия жива
     assert login(studio, "owner", "password-123").status_code == 401
-    assert login(studio, "owner", "brand-new-pass").status_code == 303
+    assert login(studio, "owner", "new-pass").status_code == 303
 
 
 @pytest.mark.parametrize("target", ["verify_password", "hash_password"])
@@ -403,8 +403,11 @@ def test_rename_refuses_bad_or_taken_logins(studio):
 def test_reset_password_and_disable_end_sessions(studio):
     make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
     session, _ = auth.create_session(bob)
-    r = studio.c.patch(f"/api/admin/users/{bob}", json={"password": "reset-password"})
-    assert r.status_code == 200 and "reset-password" not in r.text
+    r = studio.c.patch(f"/api/admin/users/{bob}", json={"password": "reset12"})
+    assert r.status_code == 422 and code(r) == "short"
+    assert auth.session_user(session) is not None
+    r = studio.c.patch(f"/api/admin/users/{bob}", json={"password": "reset123"})
+    assert r.status_code == 200 and "reset123" not in r.text
     assert auth.session_user(session) is None
     session, _ = auth.create_session(bob)
     r = studio.c.patch(f"/api/admin/users/{bob}", json={"name": "Боб"})
@@ -413,9 +416,9 @@ def test_reset_password_and_disable_end_sessions(studio):
     assert r.status_code == 200 and r.json()["disabled"]
     assert auth.session_user(session) is None
     assert studio.c.patch("/api/admin/users/9999", json={"name": "x"}).status_code == 404
-    assert login(studio, "bob", "reset-password").status_code == 401        # отключён
+    assert login(studio, "bob", "reset123").status_code == 401        # отключён
     state.DB.execute("UPDATE users SET disabled = 0 WHERE id = ?", (bob,))
-    assert login(studio, "bob", "reset-password").status_code == 303
+    assert login(studio, "bob", "reset123").status_code == 303
 
 
 def test_admin_cannot_reset_own_password_from_the_panel(studio):
