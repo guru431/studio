@@ -805,6 +805,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           el('span', { class: 'code-project-state asking', hidden: true }),
           el('span', { class: 'code-project-state unread', hidden: true }),
           el('span', { class: 'code-project-count' })),
+        el('span', { class: 'code-project-shared', hidden: !p.shared }, tr("Общий доступ")),
         el('span', { class: 'code-project-summary' }));
       link.addEventListener('click', (event) => {
         if (shown && shown.aid === agent.id && shown.pid === p.pid && !event.ctrlKey && !event.metaKey
@@ -982,6 +983,13 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       paintHere();
     },
     refresh: paintCounts,
+    sharing(aid, pid, shared) {
+      if (selected !== Number(aid)) return;
+      const project = projectItems.find((p) => p.pid === pid);
+      if (project) project.shared = shared;
+      const badge = body.querySelector(`li[data-pid="${pid}"] .code-project-shared`);
+      if (badge) badge.hidden = !shared;
+    },
     agents: () => loaded,
     unmount() {
       alive = false;

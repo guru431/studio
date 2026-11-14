@@ -485,7 +485,9 @@ async def open_agent(aid: int, body: Open, request: Request):
 async def projects(aid: int, request: Request):
     own_agent(request, aid, shared=True)
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
-    return {"items": [{"pid": i["pid"], "name": i["name"]} for i in (items if isinstance(items, list) else [])
+    shared = {r[0] for r in state.DB.execute("SELECT DISTINCT project FROM project_members WHERE agent_id = ?", (aid,))}
+    return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared}
+                      for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
                       and isinstance(i.get("name"), str)]}
 

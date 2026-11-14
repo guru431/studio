@@ -1,6 +1,7 @@
 """Выдать доступ, открыть общий проект другой учёткой, отозвать: три движка и два экрана."""
 import httpx
 import pytest
+from playwright.sync_api import expect
 
 from fake_bridge import FakeMachine, pid
 from test_ui_browser import code_online, live
@@ -44,6 +45,9 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(live.url + '/#/code')
             page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').wait_for()
+            list_badge = page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-shared')
+            header_badge = page.locator('#code-project-shared')
+            expect(list_badge).to_have_attribute('hidden', '')
             assert page.locator('#code-projects button').count() == 0
             page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').click()
             button = page.locator('#code-project-access')
@@ -53,21 +57,29 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             button.tap() if width == 320 and engine != 'firefox' else button.click()
             popup = page.locator('.project-members:popover-open')
             popup.get_by_text('Доступ есть только у владельца').wait_for()
+            expect(header_badge).to_be_hidden()
             if width == 320:
-                assert page.evaluate('document.activeElement?.getAttribute("placeholder")') != 'Логин пользователя Студии'
+                assert page.evaluate('document.activeElement?.getAttribute("placeholder")') != 'Логин или email пользователя Студии'
             page.screenshot(path=str(tmp_path / f'access-{engine}-{width}.png'))
             box = popup.bounding_box()
             assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1
-            popup.get_by_label('Логин пользователя Студии').fill('missing-user')
+            popup.get_by_label('Логин или email пользователя Студии').fill('missing@example.com')
             popup.get_by_role('button', name='Дать доступ', exact=True).click()
-            popup.get_by_text('Укажите логин другого активного пользователя Студии', exact=True).wait_for()
-            popup.get_by_label('Логин пользователя Студии').fill(friend)
+            popup.get_by_text('Укажите логин или email другого активного пользователя Студии', exact=True).wait_for()
+            identity = ' ' + friend.upper() + '@EXAMPLE.COM ' if width == 320 else friend
+            popup.get_by_label('Логин или email пользователя Студии').fill(identity)
             popup.get_by_role('button', name='Дать доступ', exact=True).click()
             popup.get_by_text('Доступ предоставлен', exact=True).wait_for()
+            expect(header_badge).to_be_visible()
+            expect(list_badge).not_to_have_attribute('hidden', '')
+            expect(page.locator(f'li[data-pid="{pid("private")}"] .code-project-shared')).to_have_attribute('hidden', '')
             assert page.url == initial_hash
             popup.get_by_role('button', name=f'Отозвать доступ · {friend}').wait_for()
             page.keyboard.press('Escape')
             assert button.evaluate('(node) => node === document.activeElement')
+            page.reload()
+            expect(header_badge).to_be_visible()
+            expect(list_badge).not_to_have_attribute('hidden', '')
             button.press('Enter')
             popup.get_by_role('button', name=f'Отозвать доступ · {friend}').wait_for()
             page.evaluate("document.documentElement.dataset.theme = 'dark'; document.documentElement.style.setProperty('--font-scale', '1.5')")
@@ -77,6 +89,12 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 return buttons.every((box, index) => box.left >= 0 && box.right <= innerWidth
                     && (!index || box.left >= buttons[index - 1].right)) && buttons[0].width >= 28;
             }''')
+            assert page.evaluate('''() => {
+                const badge = document.querySelector('#code-project-shared').getBoundingClientRect();
+                const name = document.querySelector('.code-place-project').getBoundingClientRect();
+                return badge.left >= 0 && badge.right <= innerWidth && name.width > 0
+                    && document.documentElement.scrollWidth <= innerWidth;
+            }''')
             page.screenshot(path=str(tmp_path / f'access-dark-scaled-{engine}-{width}.png'))
             box = popup.bounding_box()
             assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1
@@ -84,6 +102,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 member_page = member_context.new_page()
                 member_page.goto(live.url + '/#/code')
                 member_page.locator(f'li[data-pid="{pid("alpha")}"]').wait_for()
+                expect(member_page.locator('#code-projects .code-project-shared')).to_have_text('Общий доступ')
                 assert member_page.locator('#code-projects > li').count() == 1
                 assert member_page.locator('#code-project-access').count() == 0
                 assert member_page.locator('.code-agent-info, .code-agent-desktop, .code-agent-update').count() == 0
@@ -93,9 +112,12 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 member_page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').click()
                 member_page.locator('#code-new-chat').click()
                 member_page.locator('#code-chat[data-loaded="1"]').wait_for()
+                expect(member_page.locator('#code-project-shared')).to_be_visible()
                 assert not member_page.locator('#code-project-access').is_visible()
                 popup.get_by_role('button', name=f'Отозвать доступ · {friend}').click()
                 popup.get_by_text('Доступ отозван', exact=True).wait_for()
+                expect(header_badge).to_be_hidden()
+                expect(list_badge).to_have_attribute('hidden', '')
                 member_page.reload()
                 member_page.locator('html[data-ready="1"]').wait_for(state='attached')
                 assert member_page.locator('#code-projects > li').count() == 0
