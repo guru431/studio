@@ -78,13 +78,30 @@ async def _form(request: Request):
 
 async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
     """Один и тот же WAV и предел длительности для ASR и сохранения образца."""
+    async def file_io(fn, *args, **kwargs):
+        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        finally:
+            # Отмена ожидания не останавливает поток; файлы можно убирать только после close.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    pass
+
     src, dst = audio.temp(media.EXT.get(mime, ".bin")), audio.temp(".wav")
+
+    def cleanup():
+        for f in (src, dst):
+            f.unlink(missing_ok=True)
+
     try:
-        await asyncio.to_thread(src.write_bytes, data)
+        await file_io(src.write_bytes, data)
         duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=SAMPLE_MAX), BUDGET_SEC)
         if duration < SAMPLE_MIN:
             raise _bad("short", "образец — 5–15 секунд речи")
-        wav = await asyncio.to_thread(dst.read_bytes)
+        wav = await file_io(dst.read_bytes)
     except audio.AudioError as e:
         raise _bad("audio", str(e)) from None
     except TimeoutError:
@@ -92,8 +109,7 @@ async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
         raise HTTPException(504, {"code": "timeout", "message": "образец обрабатывается слишком долго — "
                                   "попробуйте ещё раз"}) from None
     finally:
-        for f in (src, dst):
-            await asyncio.to_thread(f.unlink, missing_ok=True)
+        await file_io(cleanup)                 # оба файла одной операцией: отмена не пропустит второй
     return wav, duration
 
 
