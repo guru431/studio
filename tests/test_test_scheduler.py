@@ -21,7 +21,7 @@ def test_replacement_collection_and_another_crash_can_arrive_in_either_order():
     config = SimpleNamespace(getoption=lambda name: "loadgroup", getvalue=lambda name: ["2*popen"],
                              option=SimpleNamespace(loadscopereorder=True))
     scheduler = pytest_xdist_make_scheduler(config, None)
-    collection = [f"case.py::test_{n}" for n in range(8)]
+    collection = [f"case_{n // 2}.py::test_{n}" for n in range(8)]
     first, second, waiting, collected = [Worker() for _ in range(4)]
     for node in (first, second):
         scheduler.add_node(node)
@@ -42,3 +42,21 @@ def test_replacement_collection_and_another_crash_can_arrive_in_either_order():
     pending = {nid for unit in scheduler.workqueue.values() for nid, done in unit.items() if not done}
     assert scheduled | pending == set(collection) - crashed
     assert not scheduled & crashed
+
+
+def test_files_stay_together_and_explicit_groups_span_files():
+    config = SimpleNamespace(getoption=lambda name: "loadgroup", getvalue=lambda name: ["2*popen"],
+                             option=SimpleNamespace(loadscopereorder=True))
+    scheduler = pytest_xdist_make_scheduler(config, None)
+    collection = ["alpha.py::test_one", "alpha.py::test_two[email@example.com]",
+                  "beta.py::test_one", "beta.py::test_two",
+                  "ui_one.py::test_one@serial", "ui_two.py::test_two@serial",
+                  "docs_one.py::test_one@docs", "docs_two.py::test_two@docs"]
+    nodes = [Worker(), Worker()]
+    for node in nodes:
+        scheduler.add_node(node)
+        scheduler.add_node_collection(node, collection)
+    scheduler.schedule()
+    for group in ({0, 1}, {2, 3}, {4, 5}, {6, 7}):
+        assert any(group <= set(node.sent) for node in nodes)
+    assert scheduler._split_scope(collection[1]) == "alpha.py"
