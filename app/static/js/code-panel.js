@@ -1,4 +1,5 @@
 import { tr } from './i18n.js';
+import { refreshRequested } from './refresh.js';
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
  *
@@ -36,6 +37,7 @@ import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActiv
 const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
 const PIN_LOCKED = tr("PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере");
 const snapshots = new Map(); // Только метаданные, отдельно по учётке; переживают переход между разделами.
+const refreshedAgents = new Set(); // После полной перезагрузки — все проекты каждого открытого компьютера один раз.
 const SUMMARY_MS = 20000;
 document.addEventListener('studio-code-clear', () => {
   for (const scope of snapshots.values()) { scope.summaries.clear(); scope.checked.clear(); }
@@ -778,6 +780,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   async function projects(mine, agent, found = null, keep = false, force = false) {
+    if (refreshRequested && !refreshedAgents.has(agent.id)) {
+      force = true;
+      found = null;
+    }
     try {
       if (found === null) found = await list(agent.id, true, force);
     } catch (err) {
@@ -834,6 +840,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     sortProjects();
     refreshActivity();
     await refreshSummaries(mine, agent, force);
+    if (alive && mine === gen) refreshedAgents.add(agent.id);
   }
 
   function showPin(mine, agent) {

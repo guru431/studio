@@ -52,6 +52,7 @@ import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
 import { lazy } from './stale.js';
+import { refreshRequested } from './refresh.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
 
 const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
@@ -302,7 +303,8 @@ function toChat(p, chat, focus = true) {
 function chatsOf(p, fresh = false, passive = false) {
   if (!p.listing || (fresh && !p.listingPending)) {
     p.listingPending = true;
-    const headers = { ...(fresh ? { 'x-studio-refresh': 'true' } : {}), ...(passive ? { 'x-studio-passive': '1' } : {}) };
+    const refresh = fresh || (refreshRequested && !p.listing);
+    const headers = { ...(refresh ? { 'x-studio-refresh': 'true' } : {}), ...(passive ? { 'x-studio-passive': '1' } : {}) };
     const promise = api('GET', `${base(p.aid, p.pid)}/chats`, undefined, { headers }).then((out) => {
       if (p.listing === promise) {
         p.items = out.complete === false

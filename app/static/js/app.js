@@ -38,6 +38,7 @@ import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
+import { reloadStudio } from './refresh.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -230,6 +231,9 @@ function announce(section) {
  * (code-activity.js). Подпись остаётся видимой на узком экране и продублирована в aria-label. */
 function buildRail() {
   const rail = document.getElementById('rail');
+  const refresh = document.getElementById('refresh-app');
+  refresh.append(svgIcon('refresh'));
+  refresh.addEventListener('click', reloadStudio);
   const search = document.getElementById('search-open');
   search.append(svgIcon('search'));
   search.setAttribute('aria-keyshortcuts', `${HOTKEY}/`);
@@ -272,6 +276,11 @@ function sectionKey(event) {
 }
 
 function openMenu(open) {
+  if (open) {
+    const version = document.getElementById('menu-version');
+    version.textContent = me.studio_version ? `Studio ${me.studio_version}` : '';
+    version.hidden = !me.studio_version;
+  }
   menu.hidden = !open;
   avatar.setAttribute('aria-expanded', String(open));
 }
