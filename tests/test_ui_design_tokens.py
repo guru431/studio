@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import find_browser
+from browser import CHROMIUM_ARGS, find_browser
 from test_ui_browser import live
 from test_ui_webkit import pw
 
@@ -21,7 +21,7 @@ def engine(request):
             executable = find_browser()
             if not executable:
                 pytest.skip("нет Chromium/Edge/Chrome")
-            browser = driver.chromium.launch(executable_path=executable)
+            browser = driver.chromium.launch(executable_path=executable, args=CHROMIUM_ARGS)
         else:
             if not Path(driver.webkit.executable_path).is_file():
                 pytest.skip("нет WebKit: .venv/Scripts/python -m playwright install webkit")

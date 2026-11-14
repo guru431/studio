@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import find_browser
+from browser import CHROMIUM_ARGS, find_browser
 from fake_bridge import pid
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, code_free_machine, code_online,
                              code_session, live)
@@ -20,7 +20,7 @@ def focus_browser(request):
             executable = find_browser()
             if not executable:
                 pytest.skip("нет Chromium/Edge/Chrome")
-            browser = driver.chromium.launch(executable_path=executable)
+            browser = driver.chromium.launch(executable_path=executable, args=CHROMIUM_ARGS)
         else:
             browser_type = getattr(driver, request.param)
             if not Path(browser_type.executable_path).is_file():

@@ -7,7 +7,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from browser import find_browser
+from browser import CHROMIUM_ARGS, find_browser
 from fake_bridge import FakeMachine, Refused
 from test_ui_browser import READY, browser, code_online, enroll_live, go, live, problems, signin
 from test_ui_webkit import pw, webkit
@@ -102,7 +102,8 @@ def desktop_browser(request):
         executable = find_browser() if request.param == 'chromium' else kind.executable_path
         if not executable or not Path(executable).is_file():
             pytest.skip(f'нет {request.param}')
-        browser = kind.launch(executable_path=executable)
+        browser = kind.launch(executable_path=executable,
+                              args=CHROMIUM_ARGS if request.param == 'chromium' else [])
         yield browser
         browser.close()
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import find_browser
+from browser import CHROMIUM_ARGS, find_browser
 from fake_bridge import pid
 from test_ui_browser import CODE_CHAT_A, code_free_machine, code_online, code_session, live  # noqa: F401
 from test_ui_webkit import pw
@@ -29,7 +29,7 @@ def launch(driver, name):
         executable = find_browser()
         if not executable:
             pytest.skip("нет Chromium/Edge/Chrome")
-        return driver.chromium.launch(executable_path=executable)
+        return driver.chromium.launch(executable_path=executable, args=CHROMIUM_ARGS)
     if not Path(driver.webkit.executable_path).is_file():
         pytest.skip("нет WebKit")
     return driver.webkit.launch()
