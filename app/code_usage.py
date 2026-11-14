@@ -71,16 +71,19 @@ LINKS = {
 
 
 @router.get("/agents/{aid}/usage")
-async def usage(aid: int, request: Request, engine: str = "claude", refresh: bool = False):
+async def usage(aid: int, request: Request, engine: str = "claude", refresh: bool = False, model: str | None = None):
     claude_code.own_agent(request, aid)
     if engine not in LINKS:
         raise claude_code._refuse(422, "engine", "неверный помощник")
+    if model is not None and (engine != "opencode" or not bridge.OPENCODE_MODEL_ID.fullmatch(model)):
+        raise claude_code._refuse(422, "model", "неверная модель")
     link = bridge.LINKS.get(aid)
     if link is not None and not link.hello.get("subscription_usage"):
         raise claude_code._refuse(409, "unsupported", "обновите мост для просмотра лимитов")
     if engine != "claude":
         claude_code.require_engine(aid, engine)
-    raw = await claude_code.ask(request, aid, "usage", engine=engine, refresh=refresh)
+    extra = {"model": model} if model and link is not None and link.hello.get("opencode_usage") else {}
+    raw = await claude_code.ask(request, aid, "usage", engine=engine, refresh=refresh, **extra)
     try:
         value = Usage.model_validate(raw)
         if value.engine != engine:

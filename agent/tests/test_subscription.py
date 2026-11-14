@@ -140,7 +140,9 @@ def test_oauth_requests_never_follow_redirects():
     assert subscription._NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.test") is None
 
 
-async def test_cache_ttl_refresh_and_simultaneous_reads_share_one_request():
+async def test_cache_ttl_refresh_and_simultaneous_reads_share_one_request(monkeypatch):
+    from studio_agent import opencode_usage
+    monkeypatch.setattr(opencode_usage, "read", lambda now, **kw: subscription.empty("opencode", now, "unknown"))
     clock = [10]
     ready, release = asyncio.Event(), asyncio.Event()
 

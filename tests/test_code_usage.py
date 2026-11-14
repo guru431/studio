@@ -48,6 +48,17 @@ def test_usage_forwards_engine_refresh_and_preserves_unknown_monthly(studio):
     assert data["links"][0]["url"].startswith("https://chatgpt.com/")
 
 
+@pytest.mark.parametrize("modern", [True, False])
+def test_opencode_usage_forwards_selected_model_only_to_capable_bridge(studio, modern):
+    aid, machine, link = prepare(studio)
+    link.hello.update(opencode=CATALOG, opencode_usage=modern)
+    machine._op_usage = lambda req, events: {**copy.deepcopy(USAGE), "engine": "opencode"}
+    response = studio.c.get(url(aid, "usage") + "?engine=opencode&model=gateway%2Freview-full")
+    assert response.status_code == 200
+    assert machine.requests[-1].get("model") == ("gateway/review-full" if modern else None)
+    assert studio.c.get(url(aid, "usage") + "?engine=opencode&model=bad%20model").status_code == 422
+
+
 @pytest.mark.parametrize("count", [0, 2, None])
 def test_usage_preserves_codex_available_reset_count(studio, count):
     aid, machine, _ = prepare(studio)

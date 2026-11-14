@@ -30,7 +30,7 @@ OPS = {
     "agent_update": (),
     "agent_update_status": (),
     "agent_update_cancel": (),
-    "usage": ("refresh",),
+    "usage": ("refresh", "model"),
     "projects": ("refresh",),
     "project_roots": (),
     "project_create": ("root", "name"),
@@ -137,7 +137,7 @@ class Agent:
                  "agent_version": agent_version, "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
-                 "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                 "subscription_usage": True, "opencode_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                  "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
@@ -626,7 +626,7 @@ class Agent:
 
     async def _op_usage(self, frame, after):
         return await self._usage.read(frame.get("engine", "claude"), self.cfg.projects_root,
-                                      self._runner(frame), refresh=frame.get("refresh", False))
+                                      self._runner(frame), refresh=frame.get("refresh", False), model=frame.get("model"))
 
     async def _op_state(self, frame, after):
         project = await self._project(frame)

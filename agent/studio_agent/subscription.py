@@ -233,27 +233,31 @@ class UsageCache:
         self.now, self.wall = now, wall
         self.cached, self.pending = {}, {}
 
-    async def read(self, engine, root, backend=None, *, refresh=False):
-        cached = self.cached.get(engine)
+    async def read(self, engine, root, backend=None, *, refresh=False, model=None):
+        key = (engine, model if engine == "opencode" else None)
+        cached = self.cached.get(key)
         if not refresh and cached is not None and self.now() - cached[0] < TTL:
             return copy.deepcopy(cached[1])
-        task = self.pending.get(engine)
+        task = self.pending.get(key)
         if task is None:
-            task = self.pending[engine] = asyncio.create_task(self._load(engine, root, backend))
+            task = self.pending[key] = asyncio.create_task(self._load(engine, root, backend, model))
         try:
             value = await asyncio.shield(task)
-            if self.pending.get(engine) is task:
-                self.cached[engine] = self.now(), value
+            if self.pending.get(key) is task:
+                self.cached[key] = self.now(), value
+                if len(self.cached) > 64:
+                    self.cached.pop(next(iter(self.cached)))
             return copy.deepcopy(value)
         finally:
-            if task.done() and self.pending.get(engine) is task:
-                self.pending.pop(engine, None)
+            if task.done() and self.pending.get(key) is task:
+                self.pending.pop(key, None)
 
-    async def _load(self, engine, root, backend):
+    async def _load(self, engine, root, backend, model):
         now = self.wall()
         if engine == "claude":
             return await asyncio.to_thread(claude_usage, now)
         if engine == "codex":
             raw = await backend.subscription_usage(root)
             return codex_usage(raw, now)
-        return empty("opencode", now, "OpenCode не предоставляет общего API лимитов подписок; откройте кабинет провайдера")
+        from . import opencode_usage
+        return await asyncio.to_thread(opencode_usage.read, now, model=model)

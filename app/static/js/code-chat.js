@@ -231,7 +231,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const context = contextView(host, { chat, engine, project,
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
-  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage });
+  let effectiveModel = '';
+  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage,
+    model: () => model.value || effectiveModel || catalog?.defaults?.model || '' });
   const changedFiles = changesView(host, { openFile: (path) => {
     const relative = projectFilePath(path, agent, project);
     if (relative) openFile(relative);
@@ -408,6 +410,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintSettings(data) {
+    const previousModel = effectiveModel;
+    effectiveModel = typeof data.model === 'string' ? data.model : '';
+    if (engine === 'opencode' && previousModel !== effectiveModel) usage.refresh();
     context.settings(data);
     model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : tr("Не получено");
     model.title = typeof data.model === 'string' ? data.model : '';
@@ -1807,6 +1812,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   takeSession.addEventListener('click', () => claimSession(external));
 
   model.addEventListener('change', remember);
+  if (engine === 'opencode') model.addEventListener('change', () => usage.refresh());
   effort.addEventListener('change', remember);
   access.addEventListener('change', remember);
   text.addEventListener('input', () => {

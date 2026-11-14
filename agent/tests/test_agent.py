@@ -247,7 +247,7 @@ def test_hello(agent):
                              "agent_version": VERSION, "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
-                             "subscription_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                             "subscription_usage": True, "opencode_usage": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                              "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
@@ -318,7 +318,7 @@ async def test_subscription_usage_requires_open_session_and_valid_refresh(agent)
     await opened(agent)
     assert (await agent.handle(req("usage", refresh="true")))[0]["code"] == "invalid"
     assert (await agent.handle(req("usage", refresh=True)))[0]["data"] == {"available": False}
-    agent._usage.read.assert_awaited_once_with("claude", agent.cfg.projects_root, agent.runner, refresh=True)
+    agent._usage.read.assert_awaited_once_with("claude", agent.cfg.projects_root, agent.runner, refresh=True, model=None)
     agent.new_link()
     assert (await agent.handle(req("usage")))[0]["code"] == "closed"
 

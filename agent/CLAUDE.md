@@ -30,7 +30,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Claude Code | `cli` (`claude.exe`, версия, модели, окружение), `claude_sdk` (клиент SDK без окон консоли), `sessions` (чаты, история, `fit`), `turns` (`Runner`: ход, карточки, остановка), `branches`, `subagents` |
 | Codex, OpenCode | `codex`, `codex_rpc`, `codex_progress`, `opencode`, `opencode_rpc`, `chrome` (Chrome DevTools MCP), `permissions`, `jobs` (Job Object) |
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
-| Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` (лимиты), `visualizations` |
+| Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` |
 | Обновление | `updater`, `update_helper` (stdlib-хелпер), `install.ps1`, `install.cmd` |
 | Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `__main__` (консольные команды), `studio_agent.pyw` |

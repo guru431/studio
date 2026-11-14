@@ -49,6 +49,7 @@
 | 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
 | 0.22.0 | `hello.visualization_images` — PNG/JPEG/WebP/GIF проекта и `CODEX_HOME/generated_images` владельца через `visualization` | §4 |
 | 0.24.0 | `hello.project_create` — `project_roots`, `project_create`, создание пустой папки в выбранном корне | §19 |
+| 0.25.0 | `hello.opencode_usage` — окна Go; `usage.model` выбирает провайдера текущей модели | §9 |
 
 ## 0.20.0
 
@@ -330,7 +331,9 @@ Claude ветвится через SDK `fork_session`, Codex — `thread/fork.la
 потомка в finally; исходный writer не трогается. Подзадачи только читаются и сверяются с родителем.
 `worktrees.py` создаёт worktree из HEAD в подпапке настроенного корня; не переносит правки, не удаляет папки
 и не меняет ветку исходника. Реальная Git-проверка — `tests/test_worktrees_integration.py` (`integration`).
-OpenCode ACP не объявляет ветвление/историю детей; общие подсказки, поиск, очередь и диффы работают.
+Ветвление и отдельный просмотр подагентов OpenCode в мосте пока не подключены; общие подсказки,
+поиск, очередь и диффы работают. OpenCode 2.2.4 объявляет `session/fork` и события дочерних сессий;
+результат сверки остальных возможностей — [аудит OpenCode](../reports/2026-11-14-opencode-functions.md).
 
 (мост ≥ 0.7.4) `context.usage` необязательно несёт накопленные `total/input/output/cached/cache_write/reasoning`.
 Codex: `tokenUsage.total` и `total_token_usage` из rollout; `used` по-прежнему из `last`, не из total.
