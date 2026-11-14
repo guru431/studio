@@ -29,6 +29,10 @@ BROWSERS = (
     "/usr/bin/chromium",
 )
 
+# Fresh Chromium/Edge profiles otherwise probe the Windows account with a blank
+# password on every launch (MicrosoftEdge/WebView2Feedback#5722).
+CHROMIUM_ARGS = ["--disable-features=AutofillAiWalletPrivatePasses"]
+
 
 def find_browser() -> str | None:
     for path in BROWSERS:
@@ -104,7 +108,7 @@ def launch(profile: Path):
              "--disable-background-networking", "--disable-component-update", "--disable-sync",
              "--enable-logging=stderr",
              # Порт выбирает браузер и записывает в профиль: занятым он не окажется.
-             "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],
+             "--remote-debugging-port=0", f"--user-data-dir={profile}", *CHROMIUM_ARGS, "about:blank"],
             stdout=subprocess.DEVNULL, stderr=err)
     try:
         for _attempt in range(300):
