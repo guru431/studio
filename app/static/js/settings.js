@@ -22,7 +22,7 @@
  * подключений — passport.js; найденные проверкой модели встают в найденные. Только в своих настройках.
  *
  * В «Речи» своих настроек — ещё «Голоса» (образцы для озвучки srvllm): запись 5–15 с файлом или
- * с микрофона, её текст и имя (POST /api/voices), список с «Удалить».
+ * с микрофона, текст из ASR с возможностью правки и имя (POST /api/voices), список с «Удалить».
  *
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
@@ -1073,33 +1073,87 @@ function voicesBlock(host) {
   function add() {
     const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off' });
     const text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: '500',
-      placeholder: 'Что именно сказано в записи — дословно' });
+      placeholder: 'Определится автоматически после загрузки или записи' });
     const file = el('input', { type: 'file', name: 'audio', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm' });
     const rec = button('Записать с микрофона', { class: 'btn btn-sm', id: 'voice-record' });
     const recNote = el('p', { class: 'muted small', 'aria-live': 'polite' });
+    const recognizeNote = el('p', { class: 'muted small', 'aria-live': 'polite', id: 'voice-asr-status' });
+    const retry = button('Распознать ещё раз', { class: 'btn btn-sm', id: 'voice-transcribe', hidden: true });
     const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
     const save = button('Сохранить', { class: 'btn btn-accent', id: 'voice-save' });
     let recorded = null;
     let recording = null;
+    let recognizing = null;
     const dialog = openDialog(host, { id: 'voice-dialog', title: 'Новый голос', actions: [save], body: [
-      field('Имя голоса', name, 'name'), field('Текст образца', text, 'text'),
+      field('Имя голоса', name, 'name'), field('Текст образца (можно поправить)', text, 'text'),
       el('p', { class: 'muted small' }, 'Запись 5–15 секунд чистой речи: файлом или с микрофона.'),
-      el('div', { class: 'row' }, file, rec), recNote, fail] });
+      el('div', { class: 'row' }, file, rec), recNote, recognizeNote, retry, fail] });
+    dialog.addEventListener('close', () => { recognizing?.abort(); });
+
+    async function transcribe(sample) {
+      recognizing?.abort();
+      const controller = new AbortController();
+      recognizing = controller;
+      text.value = '';
+      fail.textContent = '';
+      recognizeNote.textContent = 'Распознаю текст образца…';
+      text.disabled = save.disabled = rec.disabled = true;
+      text.setAttribute('aria-busy', 'true');
+      retry.hidden = true;
+      const body = new FormData();
+      body.append('audio', sample, sample.name || recordingName(sample, 'sample'));
+      try {
+        const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
+        if (recognizing !== controller || !dialog.open || !dialog.isConnected) return;
+        text.value = result.text;
+        recognizeNote.textContent = 'Текст распознан. Проверьте его перед сохранением.';
+      } catch (err) {
+        if (controller.signal.aborted || recognizing !== controller || !dialog.open || !dialog.isConnected) return;
+        recognizeNote.textContent = 'Распознавание не удалось. Повторите или введите текст образца вручную.';
+        fail.textContent = words(err);
+      } finally {
+        if (recognizing === controller) {
+          recognizing = null;
+          text.disabled = save.disabled = rec.disabled = false;
+          text.setAttribute('aria-busy', 'false');
+          retry.hidden = false;
+        }
+      }
+    }
+    file.addEventListener('change', () => {
+      const sample = file.files[0];
+      if (!sample) return;
+      recorded = null;
+      recNote.textContent = '';
+      transcribe(sample);
+    });
+    retry.addEventListener('click', () => {
+      const sample = file.files[0] || recorded;
+      if (sample) transcribe(sample);
+    });
     rec.addEventListener('click', async () => {
       if (recording) {
         recording.stop();
         return;
       }
+      file.disabled = save.disabled = rec.disabled = true;
+      retry.hidden = true;
       try {
         recording = await startRecording(15, (sec) => { recNote.textContent = `Запись · ${clock(sec)} — нажмите ещё раз, чтобы остановить`; }, rec);
       } catch (err) {
         recNote.textContent = words(err);
+        file.disabled = save.disabled = rec.disabled = false;
         return;
       }
-      if (!recording) return;                        // окно закрыли, пока браузер спрашивал разрешение
+      rec.disabled = false;
+      if (!recording) {                              // окно закрыли, пока браузер спрашивал разрешение
+        file.disabled = save.disabled = false;
+        return;
+      }
       rec.textContent = 'Остановить';
       const sample = await recording.done;
       recording = null;
+      file.disabled = save.disabled = false;
       if (!sample) {                                 // отменена (окно закрыли, ушли из раздела)
         rec.textContent = recorded ? 'Записать заново' : 'Записать с микрофона';
         recNote.textContent = '';
@@ -1109,6 +1163,7 @@ function voicesBlock(host) {
       rec.textContent = 'Записать заново';
       recNote.textContent = 'Запись готова';
       file.value = '';
+      transcribe(sample);
     });
     save.addEventListener('click', async () => {
       const sample = file.files[0] || recorded;
@@ -1116,7 +1171,7 @@ function voicesBlock(host) {
         fail.textContent = 'Нужна запись образца: файл или с микрофона';
         return;
       }
-      save.disabled = true;
+      save.disabled = file.disabled = rec.disabled = retry.disabled = text.disabled = true;
       const body = new FormData();
       body.append('name', name.value.trim());
       body.append('text', text.value.trim());
@@ -1128,7 +1183,7 @@ function voicesBlock(host) {
       } catch (err) {
         showError(dialog, err, { name: 'name', text: 'text' }, 'form');
       } finally {
-        save.disabled = false;
+        save.disabled = file.disabled = rec.disabled = retry.disabled = text.disabled = false;
       }
     });
     name.focus();

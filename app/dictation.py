@@ -51,7 +51,6 @@ async def _recognize(conn, model: str, data: bytes, mime: str, name: str) -> str
 @router.post("")
 async def dictate(request: Request):
     uid = request.state.user.id
-    conn, model = sections.resolve(uid, "dictation", None, None)
     try:
         raw = await forms.read_body(request, MAX_AUDIO + FORM_SLACK)
         _fields, data, mime, name = await asyncio.to_thread(
@@ -59,6 +58,12 @@ async def dictate(request: Request):
     except UploadError as e:
         raise HTTPException(e.status, {"code": "format" if e.status == 415 else "audio", "message": str(e)}) from None
     del raw
+    return {"text": await recognize(uid, data, mime, name)}
+
+
+async def recognize(uid: int, data: bytes, mime: str, name: str) -> str:
+    """Распознать запись моделью голосового ввода, с теми же сроком и отказами для образца голоса."""
+    conn, model = sections.resolve(uid, "dictation", None, None)
     try:
         text = await asyncio.wait_for(_recognize(conn, model, data, mime, name), BUDGET_SEC)
     except TimeoutError:
@@ -76,4 +81,4 @@ async def dictate(request: Request):
         log.info("пользователь %d: голосовой ввод — отказ службы", uid)
         raise HTTPException(502, {"code": "speech", "message": str(e)}) from None
     log.info("пользователь %d: голосовой ввод", uid)
-    return {"text": text}
+    return text

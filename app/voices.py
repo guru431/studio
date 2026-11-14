@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 import audio
 import clock
+import dictation
 import documents
 import forms
 import media
@@ -29,6 +30,7 @@ SAMPLE_MIN, SAMPLE_MAX = 4.5, 15.5
 NAME_MAX = 64
 TEXT_MAX = 500
 BUDGET_SEC = 60                 # WAV и длительность образца (до 10 МиБ записи) — ffmpeg за секунды
+TRANSCRIBE_BUDGET_SEC = 120      # вся подготовка образца и ASR — раньше таймаута Apache
 PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
 #: пользователи, чья проба голоса идёт сейчас (одна за раз)
 PROBING: set = set()
@@ -64,20 +66,18 @@ async def reference(user_id: int, voice_id: str) -> tuple[bytes, str]:
         raise HTTPException(404, media.GONE) from None
 
 
-@router.post("", status_code=201)
-async def create(request: Request):
-    uid = request.state.user.id
+async def _form(request: Request):
     try:
         raw = await forms.read_body(request, AUDIO_MAX + 64 * 1024)
-        fields, data, mime, name = await asyncio.to_thread(
+        fields, data, mime, _name = await asyncio.to_thread(
             forms.audio_form, raw, request.headers.get("content-type", ""), max_bytes=AUDIO_MAX)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "format" if e.status == 415 else "audio", "message": str(e)}) from None
-    title, text = fields.get("name", "").strip(), fields.get("text", "").strip()
-    if not 1 <= len(title) <= NAME_MAX:
-        raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
-    if not 1 <= len(text) <= TEXT_MAX:
-        raise _bad("text", f"текст образца — от 1 до {TEXT_MAX} знаков: что именно сказано в записи")
+    return fields, data, mime
+
+
+async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
+    """Один и тот же WAV и предел длительности для ASR и сохранения образца."""
     src, dst = audio.temp(media.EXT.get(mime, ".bin")), audio.temp(".wav")
     try:
         await asyncio.to_thread(src.write_bytes, data)
@@ -94,6 +94,41 @@ async def create(request: Request):
     finally:
         for f in (src, dst):
             await asyncio.to_thread(f.unlink, missing_ok=True)
+    return wav, duration
+
+
+@router.post("/transcribe")
+async def transcribe(request: Request):
+    """Текст будущего образца до сохранения: только временный WAV, без истории и media."""
+    uid = request.state.user.id
+
+    async def run():
+        _fields, data, mime = await _form(request)
+        wav, _duration = await _sample(uid, data, mime)
+        return await dictation.recognize(uid, wav, "audio/wav", "sample.wav")
+
+    try:
+        text = await asyncio.wait_for(run(), TRANSCRIBE_BUDGET_SEC)
+    except TimeoutError:
+        raise HTTPException(504, {"code": "timeout", "message": "не успел распознать образец — попробуйте ещё раз "
+                                  "или введите текст вручную"}) from None
+    if not text:
+        raise _bad("text", "в образце не удалось распознать речь — запишите ещё раз или введите текст вручную")
+    if len(text) > TEXT_MAX:
+        raise _bad("text", f"распознанный текст длиннее {TEXT_MAX} знаков — выберите запись покороче")
+    return {"text": text}
+
+
+@router.post("", status_code=201)
+async def create(request: Request):
+    uid = request.state.user.id
+    fields, data, mime = await _form(request)
+    title, text = fields.get("name", "").strip(), fields.get("text", "").strip()
+    if not 1 <= len(title) <= NAME_MAX:
+        raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
+    if not 1 <= len(text) <= TEXT_MAX:
+        raise _bad("text", f"текст образца — от 1 до {TEXT_MAX} знаков: что именно сказано в записи")
+    wav, duration = await _sample(uid, data, mime)
     vid = uuid.uuid4().hex
     operations.check(uid)
     try:
