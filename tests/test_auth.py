@@ -14,7 +14,7 @@ import manage
 import release
 import security
 import state
-from conftest import T0, login, make_user
+from conftest import T0, login, make_user, signin
 from http_checks import on_http
 
 DAY = 86400
@@ -56,12 +56,14 @@ def test_login_page_sends_a_live_session_home(studio):
 
 
 def test_session_is_stored_as_a_digest_only(studio):
-    make_user(studio, "owner"); login(studio, "owner", "password-123")
+    make_user(studio, "owner")
+    csrf = signin(studio, "owner")
     value = cookie(studio)
     rows = [tuple(r) for r in state.DB.execute("SELECT * FROM sessions")]
     assert len(rows) == 1
     assert all(value not in str(field) for field in rows[0])
     assert rows[0][0] == security.digest(value)
+    assert studio.c.get("/api/me").json()["csrf"] == csrf == csrf_in_db(studio)
 
 
 def test_wrong_password_and_unknown_login_read_the_same(studio):
@@ -400,6 +402,8 @@ def test_require_admin_refuses_plain_users():
 
 
 def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
+    # The real scrypt parameters are covered by test_password_hash_roundtrip_and_salt.
+    monkeypatch.setattr(security, "_N", 16)
     stdin = "STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=eight123\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"
     for _ in range(2):
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
@@ -423,6 +427,7 @@ def test_first_admin_requires_email(env, monkeypatch):
 
 
 def test_create_admin_new_password_ends_sessions(env, monkeypatch, capsys):
+    monkeypatch.setattr(security, "_N", 16)
     monkeypatch.setattr(sys, "stdin", io.StringIO("STUDIO_ADMIN_LOGIN=owner\nSTUDIO_ADMIN_PASSWORD=very-long-pass\nSTUDIO_ADMIN_EMAIL=owner@example.com\n"))
     assert manage.main(["create-admin"]) == 0
     conn = db.connect(env.db_path)

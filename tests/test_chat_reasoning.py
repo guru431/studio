@@ -155,7 +155,7 @@ def test_model_without_switch_shows_its_reasoning(studio):
 def test_stray_reasoning_over_the_limit_stops_the_answer(studio, caplog):
     caplog.set_level(logging.INFO)
     cid = thinking_chat(studio, on=False)
-    studio.gw.chat_script = [{"reasoning": ["thought"] * 300, "text": ["не дойдёт"]}]   # 2 100 знаков
+    studio.gw.chat_script = [{"reasoning": ["thought" * 100] * 3, "text": ["не дойдёт"]}]   # 2 100 знаков
     events = sse(turn(studio, cid))
     assert events[-1] == ("error", {"message": "модель зациклилась — ответ остановлен"})
     answer = answer_of(studio, cid)
@@ -169,14 +169,14 @@ def test_stray_limit_counts_every_round(studio):
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
     cid = new_chat(studio)
     patch(studio, cid, web=True)
-    studio.gw.chat_script = [{"reasoning": ["thought"] * 200, "tool_calls": [call("web_search", query="q")]},
-                             {"reasoning": ["thought"] * 200, "text": ["не дойдёт"]}]
+    studio.gw.chat_script = [{"reasoning": ["thought" * 100] * 2, "tool_calls": [call("web_search", query="q")]},
+                             {"reasoning": ["thought" * 100] * 2, "text": ["не дойдёт"]}]
     assert sse(turn(studio, cid))[-1] == ("error", {"message": chat.LOOPED})
 
 
 def test_reasoning_over_the_limit_is_cut(studio):
     cid = thinking_chat(studio)
-    studio.gw.chat_script = [{"reasoning": ["x" * 1000] * (chat.REASONING_MAX // 1000) + ["y" * 10],
+    studio.gw.chat_script = [{"reasoning": ["x" * (chat.REASONING_MAX - 1), "x", "y" * 10],
                               "text": ["не дойдёт"]}]
     events = sse(turn(studio, cid))
     assert events[-1] == ("error", {"message": "рассуждение слишком длинное — ответ остановлен"})
@@ -193,7 +193,7 @@ def test_model_without_switch_reasoning_over_the_limit_is_cut_and_the_answer_goe
     studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
     cid = new_chat(studio, connection_id=gw, model="gemma4-abl")
     patch(studio, cid, web=True)
-    studio.gw.chat_script = [{"reasoning": ["x" * 1000] * (chat.REASONING_MAX // 1000) + ["y" * 10, "z" * 10],
+    studio.gw.chat_script = [{"reasoning": ["x" * (chat.REASONING_MAX - 1), "x", "y" * 10, "z" * 10],
                               "text": ["Ищу."], "tool_calls": [call("web_search", query="q")]},
                              {"reasoning": ["Второй круг."], "text": [" Готово."]}]
     events = sse(turn(studio, cid))
@@ -211,7 +211,7 @@ def test_reasoning_limit_counts_every_round(studio):
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
     cid = new_chat(studio)
     patch(studio, cid, web=True); patch(studio, cid, thinking=True)
-    half = ["x" * 1000] * (chat.REASONING_MAX // 2000 + 1)
+    half = ["x" * (chat.REASONING_MAX // 2), "x"]
     studio.gw.chat_script = [{"reasoning": half, "tool_calls": [call("web_search", query="q")]},
                              {"reasoning": half, "text": ["не дойдёт"]}]
     assert sse(turn(studio, cid))[-1] == ("error", {"message": chat.THINK_LONG})

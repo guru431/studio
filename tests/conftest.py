@@ -78,6 +78,11 @@ def pytest_xdist_make_scheduler(config, log):
     from xdist.scheduler import LoadGroupScheduling
 
     class Once(LoadGroupScheduling):
+        def _split_scope(self, nodeid):
+            scope = super()._split_scope(nodeid)
+            # Keep explicit groups (serial/docs); batch the other tests by file.
+            return nodeid.split("::", 1)[0] if scope == nodeid else scope
+
         def _reschedule(self, node):
             # Замена уже есть в assigned_work, но её коллекция может прийти после других событий.
             if node in self.registered_collections:
@@ -99,6 +104,7 @@ def pytest_xdist_make_scheduler(config, log):
 
 
 T0 = 1_800_000_000.0
+LOGIN_IP = "10.77.48.5"
 
 
 @pytest.fixture(scope="session")
@@ -258,7 +264,7 @@ def make_user(s, login, password="password-123", is_admin=False) -> int:
     return cur.lastrowid
 
 
-def login(s, login, password, ip="10.77.48.5", spoofed=None):
+def login(s, login, password, ip=LOGIN_IP, spoofed=None):
     """Apache дописывает настоящий адрес клиента В КОНЕЦ X-Forwarded-For; начало может прислать
     сам клиент (`spoofed`)."""
     forwarded = f"{spoofed}, {ip}" if spoofed else ip
@@ -269,8 +275,19 @@ def login(s, login, password, ip="10.77.48.5", spoofed=None):
 def signin(s, login_name) -> str:
     """Вход с паролем make_user и csrf из GET /api/me; клиент дальше шлёт заголовок CSRF сам."""
     import auth
-    assert login(s, login_name, "password-123").status_code == 303
-    csrf = s.c.get("/api/me").json()["csrf"]
+    from http_checks import on_http
+
+    async def enter(client):
+        response = await client.post("/login", data={"login": login_name, "password": "password-123"},
+                                     headers={"X-Forwarded-For": LOGIN_IP}, follow_redirects=False)
+        assert response.status_code == 303
+        me = await client.get("/api/me")
+        assert me.status_code == 200
+        return me.json()["csrf"], client.cookies.jar
+
+    csrf, cookies = on_http(s, enter)
+    # Transfer the stdlib jar across httpx and TestClient's HTTP client.
+    s.c.cookies.update(cookies)
     s.c.headers[auth.CSRF_HEADER] = csrf
     return csrf
 
@@ -299,12 +316,16 @@ def add_connection(s, kind="openai", base_url="https://cloud.test/v1", token="cl
     import connections
     import sections as sections_
     import state
+    from http_checks import on_http
     if auth.CSRF_HEADER not in s.c.headers:
         make_user(s, "owner", is_admin=True)
         signin(s, "owner")
     chosen = sections if sections is not None else connections.KINDS[kind] if kind == "srvllm" else ["chat"]
     body = {"name": name or kind, "kind": kind, "base_url": base_url, "token": token, "sections": sorted(chosen)}
-    r = s.c.post("/api/connections", json=body)
+    async def create(client):
+        return await client.post("/api/connections", json=body)
+
+    r = on_http(s, create)
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
     if kind == "openai" and "chat" in chosen and chat_models:
