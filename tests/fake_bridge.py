@@ -92,6 +92,7 @@ class FakeMachine:
         self.project_create = False
         self.subscription_usage = False
         self.opencode_usage = False
+        self.opencode_features = False
         self.usage_data = None
         self.agent_version = None
         self.agent_update = False
@@ -115,7 +116,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "opencode_features", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
                    if getattr(self, name)},
@@ -290,6 +291,10 @@ class FakeMachine:
         return {"chat": child, "engine": req.get("engine", "claude"), "draft": draft}
 
     def _op_subagents(self, req, events):
+        if req.get('engine') == 'opencode':
+            _, project = self._project(req)
+            if req['chat'] not in project.get('chats', {}):
+                return {'items': [], 'complete': True}
         row = self._chat(req)
         return {"items": [{"id": key, "title": value.get("title", key), "status": value.get("status", "completed"),
                            **{field: value[field] for field in ("started_at", "ended_at", "duration_ms", "total_tokens") if field in value}}

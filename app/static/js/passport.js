@@ -133,7 +133,9 @@ async function browserProbe(conn, model) {
     let response = await send(url, token, body);
     let answer = await jsonOf(response);
     const reason = () => String((answer && answer.error && answer.error.message) || '');
-    if (response.status === 400 && reason().includes('max_tokens')) {      // модели рассуждений OpenAI
+      if (response.status === 400 && (answer?.error?.code === 'unsupported_parameter' && answer?.error?.param === 'max_tokens'
+          || /unsupported parameter:\s*['"]?max_tokens\b/i.test(reason())
+          || reason().includes('max_tokens') && reason().includes('max_completion_tokens'))) { // явная замена параметра
       body = { model, messages: body.messages, max_completion_tokens: PROBE_TOKENS, stream: false };
       response = await send(url, token, body);
       answer = await jsonOf(response);

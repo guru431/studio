@@ -13,14 +13,20 @@ from studio_agent import update_helper, updater
 
 
 @pytest.fixture
-def releases(tmp_path, monkeypatch):
+def releases(tmp_path, monkeypatch, request):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     base = tmp_path / "local/Programs/studio-agent/releases"
+    physical = tmp_path / 'original-releases' if getattr(request, 'param', None) == 'junction' else base
     for name in ("release-current", "release-previous", "release-stale"):
-        folder = base / name
+        folder = physical / name
         folder.mkdir(parents=True)
         (folder / "studio_agent.pyw").write_text("source", encoding="utf-8")
         (folder / "_update_result").write_text("complete", encoding="ascii")
+    if physical != base:
+        import _winapi
+
+        base.parent.mkdir(parents=True)
+        _winapi.CreateJunction(str(physical), str(base))
     stage = base / "release-current"
     (stage / "_update_ready").touch()
     plan = {"old_repo": str(base / "release-previous")}
@@ -114,13 +120,11 @@ def test_root_and_nested_junctions_are_preserved_with_their_targets(releases, tm
         assert (base / 'release-stale').is_dir()
 
 
+@pytest.mark.parametrize('releases', ['junction'], indirect=True)
 def test_junction_managed_base_is_not_a_cleanup_boundary(releases):
-    import _winapi
-
     base, stage, plan = releases
-    moved = base.with_name('original-releases')
-    base.rename(moved)
-    _winapi.CreateJunction(str(moved), str(base))
+    moved = base.resolve()
+    assert base.is_junction() and moved != base
     assert update_helper.prune(stage, plan) == []
     assert (moved / 'release-stale').is_dir()
 

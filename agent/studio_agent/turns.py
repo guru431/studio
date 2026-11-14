@@ -111,6 +111,8 @@ class _Turn:
     subtasks: dict = field(default_factory=dict)  # id потока/сессии субагента этого хода → имя (или None)
     child_states: dict = field(default_factory=dict)  # lifecycle Claude; subtasks других движков хранит имена
     background_tasks: dict = field(default_factory=dict)  # фоновые агенты, Workflow и команды текущего клиента
+    opencode_options: dict = field(default_factory=dict)
+    opencode_children: dict = field(default_factory=dict)
 
 
 class Runner:

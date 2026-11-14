@@ -176,6 +176,8 @@ class TurnAttachment(BaseModel):
 class ChatSettings(BaseModel):
     model: str | None = Field(None, max_length=300)
     effort: str | None = Field(None, max_length=64)
+    agent_mode: str | None = Field(None, min_length=1, max_length=100, pattern=r'^[^\x00-\x1f]+$')
+    additional_directories: list[str] | None = Field(None, max_length=8)
     access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
                     "read-only", "workspace-write", "danger-full-access"] | None = None
 
@@ -288,7 +290,8 @@ def _turn_images(images: list[TurnImage]) -> list[dict]:
 def _turn_attachments(items: list[TurnAttachment], images: list[dict]) -> list[dict]:
     if len(items) + len(images) > 8:
         raise _refuse(422, "invalid", "можно прикрепить до 8 файлов")
-    total = sum(len(base64.b64decode(image["data"], validate=True)) for image in images)
+    # Изображения уже проверены _turn_images; размер вычисляется без повторного декодирования.
+    total = sum(len(image['data']) // 4 * 3 - image['data'][-2:].count('=') for image in images)
     result = []
     for item in items:
         name = item.name.replace("\\", "/").rsplit("/", 1)[-1]
@@ -691,6 +694,8 @@ async def subagents(aid: int, pid: str, chat: str, request: Request):
     check_pid(pid)
     check_chat(chat)
     require_capability(aid, "subagents")
+    if chat_engine(request, aid, chat) == 'opencode':
+        require_capability(aid, 'opencode_features')
     return _relay(await ask(request, aid, "subagents", project=pid, chat=chat))
 
 
@@ -700,6 +705,8 @@ async def subagent_history(aid: int, pid: str, chat: str, body: SubagentId, requ
     check_pid(pid)
     check_chat(chat)
     require_capability(aid, "subagents")
+    if chat_engine(request, aid, chat) == 'opencode':
+        require_capability(aid, 'opencode_features')
     return _relay(await ask(request, aid, "subagent_history", project=pid, chat=chat, request_id=body.request_id))
 
 
@@ -710,8 +717,8 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
     check_chat(chat)
     require_capability(aid, "chat_fork")
     engine = chat_engine(request, aid, chat)
-    if engine == "opencode":
-        raise _refuse(409, "unsupported", "OpenCode ACP не предоставляет ветвление истории")
+    if engine == 'opencode':
+        require_capability(aid, 'opencode_features')
     now = clock.NOW()
     recent = NEW_CHATS.setdefault(aid, deque())
     while recent and now - recent[0] >= 60:
@@ -749,8 +756,8 @@ async def chats(aid: int, pid: str, request: Request):
     data = await ask(request, aid, "chats", project=pid, refresh=refresh)
     found = data.get("items")
     marks = {r["session_id"]: r for r in state.DB.execute(
-        "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ?",
-        (aid, agent["user_id"])) if r["project"] == pid}
+        "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ? AND project = ?",
+        (aid, agent["user_id"], pid))}
     items, seen = [], set()
     for i in (found if isinstance(found, list) else []):
         # чат не UUID страница не откроет (422 на каждом маршруте), а кусок пути лёг бы в адрес её запроса
@@ -887,7 +894,19 @@ async def chat_state(aid: int, pid: str, chat: str, body: ChatSettings, request:
         raise _refuse(409, "unsupported", "обновите мост для чтения настроек и контекста")
     # Мост проверяет помощника, открытость компьютера и значения по собственному каталогу.
     return _relay(await ask(request, aid, "state", project=pid, chat=chat, model=body.model,
-                            effort=body.effort, access=body.access))
+                            effort=body.effort, access=body.access, **_opencode_settings(aid, engine, body)))
+
+
+def _opencode_settings(aid, engine, body):
+    extra = body.model_dump(include={'agent_mode', 'additional_directories'}, exclude_none=True)
+    if extra:
+        if engine != 'opencode':
+            raise _refuse(422, 'invalid', 'Эти настройки доступны только у OpenCode')
+        require_capability(aid, 'opencode_features')
+        directories = extra.get('additional_directories', [])
+        if any(not 1 <= len(path) <= 1024 or any(ord(c) < 32 or c in '*?' for c in path) for path in directories):
+            raise _refuse(422, 'invalid', 'Нужны полные пути каталогов без шаблонов')
+    return extra
 
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
@@ -1039,6 +1058,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     engine = chat_engine(request, aid, chat)
     if engine != "claude":
         require_engine(aid, engine)
+    opencode_settings = _opencode_settings(aid, engine, body)
     if body.access is not None and body.access not in ACCESS[engine]:
         raise _refuse(422, "access", "такого режима доступа нет у помощника")
     if link is not None:
@@ -1072,6 +1092,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     try:
         data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
                                          model=body.model, effort=body.effort,
+                                         **opencode_settings,
                                          **({"access": body.access} if body.access is not None else {}),
                                          **({"attachments": attachments} if attachments else {}),
                                          **({"images": images} if images else {})))

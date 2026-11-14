@@ -721,6 +721,7 @@ class CodexRunner(Runner):
             if model is not None:
                 params["model"] = model
             # Новая сессия студии не существует в Codex. Для внешней сессии ошибка чтения не создаёт новый чат.
+            data = None
             known = target != t.chat or t.chat in await asyncio.to_thread(self.aliases.load)
             if not known:
                 try:
@@ -729,9 +730,9 @@ class CodexRunner(Runner):
                 except codex_rpc.RpcError as e:
                     if not e.not_found:
                         raise
-                    data = None
             if known:
-                data = await rpc.request("thread/read", {"threadId": target})
+                if data is None:
+                    data = await rpc.request("thread/read", {"threadId": target})
                 if not same_project(data.get("thread", {}).get("cwd"), t.project):
                     raise Refused("not_found")
                 data = await rpc.request("thread/resume", {"threadId": target, "excludeTurns": True, **params})

@@ -1,5 +1,18 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Основной агент": "Primary agent",
+  "По настройкам OpenCode": "Use OpenCode settings",
+  "Дополнительные каталоги": "Additional directories",
+  "Полные пути, по одному на строку": "Absolute paths, one per line",
+  "Команды OpenCode": "OpenCode commands",
+  "Настройки OpenCode": "OpenCode settings",
+  "Повторная попытка {0}": "Retry attempt {0}",
+  "Сжимаю контекст…": "Compacting context…",
+  "Контекст сжат": "Context compacted",
+  "Не удалось сжать контекст": "Context compaction failed",
+  "Стоимость сессии, USD": "Session cost, USD",
+  "Токены завершённых ходов Студии": "Tokens in completed Studio turns",
+  "Контекст — текущая заполненность окна. Токены накапливаются по завершённым запросам из Студии; запросы из других приложений в эту сумму не входят. Стоимость всей сессии сообщает OpenCode.": "Context is the current window usage. Tokens accumulate for completed Studio requests; requests from other apps are not included. OpenCode reports the cost of the entire session.",
   "Телефон": "Phone",
   "Компьютер": "Computer",
   "почта изменена": "email changed",

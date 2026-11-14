@@ -28,7 +28,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Канал и просьбы | `link` (WebSocket, знакомство, переподключение), `agent` (просьбы, проверка полей, открытость сессий), `events` (урезка событий), `errors` (`Refused`), `limits` (все числа протокола и моста) |
 | Безопасность на машине | `dpapi`, `pin` (`PinStore`, `OpenSessions`), `store` (`config.json`, `key.bin`, `choices.json`), `journal` (`agent.log`), `single` (мьютекс), `enroll`, `setup`, `autostart` |
 | Claude Code | `cli` (`claude.exe`, версия, модели, окружение), `claude_sdk` (клиент SDK без окон консоли), `sessions` (чаты, история, `fit`), `turns` (`Runner`: ход, карточки, остановка), `branches`, `subagents` |
-| Codex, OpenCode | `codex`, `codex_rpc`, `codex_progress`, `opencode`, `opencode_rpc`, `chrome` (Chrome DevTools MCP), `permissions`, `jobs` (Job Object) |
+| Codex, OpenCode | `codex`, `codex_rpc`, `codex_progress`, `opencode`, `opencode_rpc`, `opencode_events` (метки детей и статусы), `opencode_native` (ветки перед сообщением и дети через защищённый loopback API), `chrome` (Chrome DevTools MCP), `permissions`, `jobs` (Job Object) |
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` |
