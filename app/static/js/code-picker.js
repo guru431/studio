@@ -1,18 +1,19 @@
+import { tr } from './i18n.js';
 /* Отдельный выбор модели, усилия, прав и доставки; select хранит значение и change.
  * Меню — общий компонент menu.js (popupMenu). */
 import { el } from './ui.js';
 import { popupMenu } from './menu.js';
 
-const EFFORT_NAMES = { minimal: 'Минимальное', low: 'Низкое', medium: 'Среднее', high: 'Высокое',
-  xhigh: 'Очень высокое', max: 'Максимальное', ultra: 'Предельное', auto: 'Автоматически', adaptive: 'Адаптивное' };
+const EFFORT_NAMES = { minimal: tr("Минимальное"), low: tr("Низкое"), medium: tr("Среднее"), high: tr("Высокое"),
+  xhigh: tr("Очень высокое"), max: tr("Максимальное"), ultra: tr("Предельное"), auto: tr("Автоматически"), adaptive: tr("Адаптивное") };
 
-const shown = (select) => select.selectedOptions[0]?.textContent || 'По умолчанию';
+const shown = (select) => select.selectedOptions[0]?.textContent || tr("По умолчанию");
 
 /** Пункты меню одного select: выбор пишет значение и шлёт change, как родной select. */
 function optionItems(select, close) {
   return [...select.options].map(option => {
     const namedEffort = select.id === 'code-effort' && EFFORT_NAMES[option.value];
-    const title = option.value === '' ? 'По умолчанию' : namedEffort || option.textContent;
+    const title = option.value === '' ? tr("По умолчанию") : namedEffort || option.textContent;
     const detail = option.value === '' ? option.textContent : namedEffort ? option.value : '';
     const item = el('button', { type: 'button', class: 'code-pick-option', role: 'menuitemradio',
       'aria-checked': String(option.selected), tabindex: '-1', disabled: option.disabled },

@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Расшифровка» (#/transcribe) — раскладка Б спеки 2026-10-20 (раздел 6.3).
  *
  * Слева — «+ Загрузить запись» и записи по дням (имя, длительность, состояние), справа — выбранная:
@@ -38,8 +39,8 @@ const PAGE = 60;
 const UPLOAD_MAX = 200 * 1024 * 1024;
 const ACCEPT = 'audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-const FORMATS = [['txt', 'Текст .txt'], ['docx', 'Word .docx'], ['srt', 'Субтитры .srt']];
-const ASKS = [['discuss', 'Обсудить в чате'], ['summary', 'Составить итоги'], ['tasks', 'Выделить решения и задачи']];
+const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx'], ['srt', tr("Субтитры .srt")]];
+const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Составить итоги")], ['tasks', tr("Выделить решения и задачи")]];
 
 let screen = null;
 
@@ -78,15 +79,15 @@ function build(view, ctx) {
   const { select, refresh } = records;
 
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), 'Загрузить запись', input);
+  const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), tr("Загрузить запись"), input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
-  const list = el('nav', { class: 'tr-list', 'aria-label': 'Записи' });
+  const list = el('nav', { class: 'tr-list', 'aria-label': tr("Записи") });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
   const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
-  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': 'Записи',
-    'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), 'Записи');
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload' }, icon('plus'), 'Загрузить запись');
+  const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Записи"),
+    'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload' }, icon('plus'), tr("Загрузить запись"));
   upload.addEventListener('click', () => input.click());
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
   const title = el('h1', {}, NAMES.transcribe);
@@ -104,10 +105,10 @@ function build(view, ctx) {
   }
 
   /* список */
-  const paintRows = pickerList(list, { cls: '', moreId: 'tr-more', empty: 'Здесь появятся ваши записи',
+  const paintRows = pickerList(list, { cls: '', moreId: 'tr-more', empty: tr("Здесь появятся ваши записи"),
     name: (item) => item.name,
     state: (item) => (item.state === 'done' ? clock(item.duration)
-      : RUNNING.has(item.state) ? item.detail : item.state === 'cancelled' ? 'отменено' : 'ошибка'),
+      : RUNNING.has(item.state) ? serverMessage(item.detail) : item.state === 'cancelled' ? tr("отменено") : tr("ошибка")),
     pick(id) {
       panel(false);
       picked = true;
@@ -125,9 +126,9 @@ function build(view, ctx) {
 
   function confirmDelete(item) {
     const fail = el('p', { class: 'error' });
-    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-delete-confirm' }, 'Удалить');
-    const dialog = openDialog(root, { id: 'tr-delete-dialog', title: 'Удалить расшифровку?', actions: [yes],
-      body: [el('p', {}, 'Удалятся текст и исходная запись.'), fail] });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-delete-confirm' }, tr("Удалить"));
+    const dialog = openDialog(root, { id: 'tr-delete-dialog', title: tr("Удалить расшифровку?"), actions: [yes],
+      body: [el('p', {}, tr("Удалятся текст и исходная запись.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -152,9 +153,9 @@ function build(view, ctx) {
 
   function confirmReset(item) {
     const fail = el('p', { class: 'error' });
-    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-reset-confirm' }, 'Сбросить');
-    const dialog = openDialog(root, { id: 'tr-reset-dialog', title: 'Сбросить правки?', actions: [yes],
-      body: [el('p', {}, 'Тексты реплик и имена вернутся к исходному распознаванию.'), fail] });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-reset-confirm' }, tr("Сбросить"));
+    const dialog = openDialog(root, { id: 'tr-reset-dialog', title: tr("Сбросить правки?"), actions: [yes],
+      body: [el('p', {}, tr("Тексты реплик и имена вернутся к исходному распознаванию.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -172,10 +173,10 @@ function build(view, ctx) {
   function namesDialog(item) {
     const labels = [...new Set(item.segments.map((s) => s.label).filter(Boolean))];
     const inputs = labels.map((label) => el('input', { class: 'input', 'data-label': label, maxlength: '60',
-      placeholder: label, 'aria-label': `Имя: ${label}`, value: item.names[label] || '' }));
+      placeholder: label, 'aria-label': tr("Имя: {0}", label), value: item.names[label] || '' }));
     const fail = el('p', { class: 'error' });
-    const save = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-names-save' }, 'Сохранить');
-    const dialog = openDialog(root, { id: 'tr-names-dialog', title: 'Имена собеседников', actions: [save],
+    const save = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-names-save' }, tr("Сохранить"));
+    const dialog = openDialog(root, { id: 'tr-names-dialog', title: tr("Имена собеседников"), actions: [save],
       body: [...labels.map((label, i) => el('label', { class: 'tr-name-row' }, el('span', {}, `${label} →`), inputs[i])), fail] });
     save.addEventListener('click', async () => {
       save.disabled = true;
@@ -221,22 +222,22 @@ function build(view, ctx) {
     const original = s.edited ? s.original : s.text;
     if (!editing) {
       // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике
-      const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': `Слушать с ${clock(s.start)}` },
+      const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },
         clock(s.start));
       time.addEventListener('click', (event) => {
         event.stopPropagation();
         seek(s.start);
       });
       const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, el('p', { class: 'tr-who' }, speaker, time),
-        el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, 'изменено') : null);
+        el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, tr("изменено")) : null);
       node.addEventListener('click', () => seek(s.start));
       return node;
     }
     const who = el('p', { class: 'tr-who' }, `${speaker}${clock(s.start)}`);
-    const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': `Реплика ${i + 1}` });
+    const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': tr("Реплика {0}", i + 1) });
     area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
-    const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, 'вернуть');
-    const mark = el('p', { class: 'tr-mark' }, 'изменено', revert);
+    const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, tr("вернуть"));
+    const mark = el('p', { class: 'tr-mark' }, tr("изменено"), revert);
     const paintMark = () => { mark.hidden = area.value === original; };
     area.addEventListener('input', () => {
       editing.drafts.set(i, area.value);
@@ -280,18 +281,18 @@ function build(view, ctx) {
   }
 
   function chatMenu(item) {
-    return actionMenu('В чат ▾', { id: 'tr-chat', cls: 'tr-chat-menu', entries: ASKS.map(([ask, label]) => [label,
+    return actionMenu(tr("В чат ▾"), { id: 'tr-chat', cls: 'tr-chat-menu', entries: ASKS.map(([ask, label]) => [label,
       { 'data-ask': ask }, () => ctx.navigate(`chat?transcript=${encodeURIComponent(item.id)}&ask=${ask}`)]) });
   }
 
   function paintView() {
     const item = records.current;
-    title.textContent = item ? item.name : 'Расшифровка';
+    title.textContent = item ? item.name : tr("Расшифровка");
     if (!item) {
       editing = null;
       busy = null;
-      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? 'Выберите запись в списке.'
-        : 'Загрузите запись разговора — студия расшифрует её по собеседникам.'));
+      body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? tr("Выберите запись в списке.")
+        : tr("Загрузите запись разговора — студия расшифрует её по собеседникам.")));
       return;
     }
     const nodes = [];
@@ -300,30 +301,30 @@ function build(view, ctx) {
     if (busy) {
       nodes.push(busy.box);
     } else if (item.state !== 'done') {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, item.detail));
+      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
     }
-    const speakers = item.speakers ? `собеседников: ${item.speakers}` : 'собеседники не разделены';
+    const speakers = item.speakers ? tr("собеседников: {0}", item.speakers) : tr("собеседники не разделены");
     nodes.push(el('p', { class: 'tr-meta muted small' },
-      [item.duration ? `длительность ${clock(item.duration)}` : '', item.state === 'done' ? speakers : '', when(item.created)]
+      [item.duration ? tr("длительность {0}", clock(item.duration)) : '', item.state === 'done' ? speakers : '', when(item.created)]
         .filter(Boolean).join(' · ')));
     const acts = el('div', { class: 'tr-acts' });
     if (item.state === 'done') {
-      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-copy' }, 'Копировать');
+      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-copy' }, tr("Копировать"));
       copy.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(asText(item.segments));
-          copy.textContent = 'Скопировано';
+          copy.textContent = tr("Скопировано");
         } catch {
-          error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
+          error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
         }
       });
-      const formats = actionMenu('Скачать ▾', { id: 'tr-download', entries: FORMATS.map(([format, label]) => [label,
+      const formats = actionMenu(tr("Скачать ▾"), { id: 'tr-download', entries: FORMATS.map(([format, label]) => [label,
         { 'data-format': format }, () => download(format)]) });
       // во время правки «Копировать», «Скачать» и «В чат» взяли бы сохранённый текст, а не черновик,
       // и «В чат» молча увёл бы от него — их нет до «Сохранить» или «Отмена»
       if (!editing) acts.append(copy, formats);
       if (item.segments && !editing) {
-        const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, 'Править');
+        const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, tr("Править"));
         edit.addEventListener('click', () => {
           editing = { id: item.id, drafts: new Map() };
           paintView();
@@ -331,19 +332,19 @@ function build(view, ctx) {
         acts.append(edit);
       }
       if (item.segments && item.segments.some((s) => s.label)) {
-        const names = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-names' }, 'Имена');
+        const names = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-names' }, tr("Имена"));
         names.addEventListener('click', () => namesDialog(item));
         acts.append(names);
       }
       if (item.edited) {
-        const reset = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-reset' }, 'Сбросить правки');
+        const reset = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-reset' }, tr("Сбросить правки"));
         reset.addEventListener('click', () => confirmReset(item));
         acts.append(reset);
       }
       if (!editing) acts.append(chatMenu(item));
     }
     if (!RUNNING.has(item.state)) {
-      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, 'Удалить');
+      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, tr("Удалить"));
       del.addEventListener('click', () => confirmDelete(item));
       acts.append(del);
     }
@@ -352,8 +353,8 @@ function build(view, ctx) {
     if (item.segments) {
       nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map(turnNode)));
       if (editing) {
-        const save = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'tr-save' }, 'Сохранить');
-        const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit-cancel' }, 'Отмена');
+        const save = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'tr-save' }, tr("Сохранить"));
+        const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit-cancel' }, tr("Отмена"));
         save.addEventListener('click', () => saveEdits(item, save));
         cancel.addEventListener('click', () => {
           editing = null;
@@ -370,7 +371,7 @@ function build(view, ctx) {
   /* загрузка */
   function send(file) {
     if (file.size > UPLOAD_MAX) {
-      error.textContent = 'Запись больше 200 МиБ';
+      error.textContent = tr("Запись больше 200 МиБ");
       return;
     }
     error.textContent = '';
@@ -382,7 +383,7 @@ function build(view, ctx) {
     xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) progress.textContent = `Загружаю запись · ${Math.round(event.loaded * 100 / event.total)}%`;
+      if (event.lengthComputable) progress.textContent = tr("Загружаю запись · {0}%", Math.round(event.loaded * 100 / event.total));
     });
     xhr.addEventListener('loadend', async () => {
       input.disabled = false;
@@ -408,7 +409,7 @@ function build(view, ctx) {
         send(file);
         return;
       }
-      error.textContent = words((detail && detail.message) || (xhr.status ? `Ошибка сервера (${xhr.status})` : 'Нет связи с сервером'));
+      error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
     });
     xhr.send(file);
   }

@@ -1,3 +1,4 @@
+import { message as serverMessage, tr } from './i18n.js';
 import { el } from './ui.js';
 
 const form = document.getElementById('share-unlock');
@@ -18,7 +19,7 @@ async function request(path, body) {
   if (!response.ok) {
     let detail;
     try { detail = (await response.json()).detail; } catch { /* generic HTTP error below */ }
-    const err = new Error(detail?.message || `Ошибка сервера (${response.status})`);
+    const err = new Error(serverMessage(detail?.message) || tr("Ошибка сервера ({0})", response.status));
     err.status = response.status;
     throw err;
   }
@@ -33,7 +34,7 @@ function clear(message = '') {
   pin.value = '';
   feed.replaceChildren();
   document.getElementById('shared-title').textContent = '';
-  document.title = 'Студия — просмотр чата';
+  document.title = tr("Студия — просмотр чата");
   for (const blob of blobs) URL.revokeObjectURL(blob);
   blobs.clear();
   chat.hidden = true;
@@ -64,7 +65,7 @@ async function download(file, button) {
   } catch (err) {
     if (access !== current) return;
     if (err.status === 404) clear(err.message);
-    else status.textContent = err.message || 'Не удалось скачать файл';
+    else status.textContent = err.message || tr("Не удалось скачать файл");
   } finally { button.disabled = false; }
 }
 
@@ -77,7 +78,7 @@ async function check() {
   } catch (err) {
     if (access !== current) return;
     if (err.status === 404) { clear(err.message); return; }
-    status.textContent = 'Нет связи: доступ будет проверен после восстановления сети';
+    status.textContent = tr("Нет связи: доступ будет проверен после восстановления сети");
   }
   if (access === current) timer = setTimeout(check, 30000);
 }
@@ -86,7 +87,7 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (open.disabled || !form.reportValidity()) return;
   const token = location.hash.slice(1);
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) { error.textContent = 'Ссылка недействительна'; return; }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) { error.textContent = tr("Ссылка недействительна"); return; }
   const version = ++generation;
   open.disabled = true;
   error.textContent = '';
@@ -99,25 +100,25 @@ form.addEventListener('submit', async (event) => {
     try { markdown = await import('./markdown.js'); } catch { /* safely show plain text if libraries are unavailable */ }
     if (version !== generation) return;
     access = snapshot.access;
-    document.getElementById('shared-title').textContent = snapshot.title || 'Чат';
+    document.getElementById('shared-title').textContent = snapshot.title || tr("Чат");
     for (const message of snapshot.messages) {
       const body = el('div', { class: message.role === 'user' ? 'shared-user' : 'md shared-body' });
       const text = typeof message.text === 'string' ? message.text : '';
       if (markdown && message.role === 'assistant') body.append(markdown.renderMarkdown(text));
       else body.textContent = text;
       const node = el('article', { class: 'msg shared-message' },
-        el('p', { class: 'shared-role' }, message.role === 'user' ? 'Пользователь' : 'Помощник'), body);
+        el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")), body);
       for (const step of message.steps || []) {
-        node.append(el('details', {}, el('summary', {}, partText(step.name || step.tool || 'Команда')),
+        node.append(el('details', {}, el('summary', {}, partText(step.name || step.tool || tr("Команда"))),
           el('pre', {}, partText(step.input)), el('pre', {}, partText(step.text))));
       }
-      if (message.reasoning) node.append(el('details', {}, el('summary', {}, 'Рассуждение'), el('pre', {}, message.reasoning)));
+      if (message.reasoning) node.append(el('details', {}, el('summary', {}, tr("Рассуждение")), el('pre', {}, message.reasoning)));
       for (const image of message.images || []) {
         if (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(image.mime)
             && typeof image.data === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(image.data)) {
-          node.append(el('img', { class: 'shared-image', src: `data:${image.mime};base64,${image.data}`, alt: image.name || 'Вложение' }));
+          node.append(el('img', { class: 'shared-image', src: `data:${image.mime};base64,${image.data}`, alt: image.name || tr("Вложение") }));
         } else if (typeof image.data === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(image.data)) {
-          const button = el('button', { type: 'button', class: 'btn btn-sm' }, image.name || 'Скачать вложение');
+          const button = el('button', { type: 'button', class: 'btn btn-sm' }, image.name || tr("Скачать вложение"));
           button.addEventListener('click', () => {
             try {
               const raw = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0));
@@ -128,10 +129,10 @@ form.addEventListener('submit', async (event) => {
               link.click();
               link.remove();
               setTimeout(() => { URL.revokeObjectURL(href); blobs.delete(href); }, 60000);
-            } catch { status.textContent = 'Не удалось прочитать вложение'; }
+            } catch { status.textContent = tr("Не удалось прочитать вложение"); }
           });
           node.append(button);
-        } else node.append(el('span', { class: 'muted' }, image.name || 'Вложение'));
+        } else node.append(el('span', { class: 'muted' }, image.name || tr("Вложение")));
       }
       const files = el('div', { class: 'shared-files' });
       for (const file of message.attachments || []) {
@@ -142,12 +143,12 @@ form.addEventListener('submit', async (event) => {
       node.append(files);
       feed.append(node);
     }
-    if (!snapshot.messages.length) feed.append(el('p', { class: 'muted' }, 'В этом чате пока нет сообщений'));
+    if (!snapshot.messages.length) feed.append(el('p', { class: 'muted' }, tr("В этом чате пока нет сообщений")));
     form.hidden = true;
     chat.hidden = false;
     check();
   } catch (err) {
-    if (version === generation) { clear(err.message || 'Нет связи с сервером'); }
+    if (version === generation) { clear(err.message || tr("Нет связи с сервером")); }
   } finally { open.disabled = false; }
 });
 

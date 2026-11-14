@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* История хранит ссылки на картинки; бинарные данные загружаются только рядом с экраном.
  * Blob остаётся в памяти открытого чата и освобождается при прокрутке и уходе. */
 import { el } from './ui.js';
@@ -37,7 +38,7 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
     loading += 1;
     const own = entry.controller = new AbortController();
     entry.retry.hidden = true;
-    entry.note.textContent = 'Загрузка изображения…';
+    entry.note.textContent = tr("Загрузка изображения…");
     try {
       const response = await api('POST', endpoint('/image'),
         { message_id: entry.message, index: entry.index }, { signal: own.signal,
@@ -63,7 +64,7 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
       if (!alive || own.signal.aborted || !entry.node.isConnected) return;
       if (error.code === 'closed') { closed(); return; }
       entry.failed = true;
-      entry.note.textContent = 'Изображение недоступно';
+      entry.note.textContent = tr("Изображение недоступно");
       entry.retry.hidden = false;
     } finally {
       if (entry.controller === own) entry.controller = null;
@@ -99,9 +100,9 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
 
   return {
     node(message, picture) {
-      const image = el('img', { class: 'code-sent-image', alt: picture.name || 'Изображение', hidden: true });
-      const note = el('span', { class: 'muted small' }, 'Загрузка изображения…');
-      const retry = el('button', { class: 'btn btn-sm', type: 'button', hidden: true }, 'Повторить загрузку');
+      const image = el('img', { class: 'code-sent-image', alt: picture.name || tr("Изображение"), hidden: true });
+      const note = el('span', { class: 'muted small' }, tr("Загрузка изображения…"));
+      const retry = el('button', { class: 'btn btn-sm', type: 'button', hidden: true }, tr("Повторить загрузку"));
       const node = el('div', { class: 'code-history-image' }, image, note, retry);
       const entry = { node, image, note, retry, message, index: picture.index,
         url: null, size: 0, controller: null, failed: false, suspended: false, near: false };
@@ -110,7 +111,7 @@ export function historyImages(scroller, feed, { api, endpoint, closed }) {
         if (!entry.url) return;
         release(entry);
         entry.failed = true;
-        note.textContent = 'Изображение недоступно';
+        note.textContent = tr("Изображение недоступно");
         retry.hidden = false;
       });
       entries.add(entry);

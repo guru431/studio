@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Сравнение двух картинок (спека 2026-10-21-studio-photo-presets-compare-series, раздел 6): окно
  * `#compare` во весь экран, как просмотр (`<dialog>` через showModal — поверх просмотра). Две
  * картинки-оригинала в одной рамке (object-fit: contain, одинаковая область), правая обрезана по
@@ -18,18 +19,18 @@ function original(id) {
 export function openCompare(host, left, right) {
   let sides = [left, right];
   let at = 50;
-  const leftImg = el('img', { class: 'compare-img compare-left', alt: 'Слева', draggable: 'false' });
-  const rightImg = el('img', { class: 'compare-img compare-right', alt: 'Справа', draggable: 'false' });
+  const leftImg = el('img', { class: 'compare-img compare-left', alt: tr("Слева"), draggable: 'false' });
+  const rightImg = el('img', { class: 'compare-img compare-right', alt: tr("Справа"), draggable: 'false' });
   const line = el('span', { class: 'compare-line', 'aria-hidden': 'true' });
   const frame = el('div', { class: 'compare-frame' }, leftImg, rightImg, line);
   const leftLabel = el('span', { class: 'compare-label compare-label-left' });
   const rightLabel = el('span', { class: 'compare-label compare-label-right' });
   const range = el('input', { type: 'range', id: 'compare-range', min: '0', max: '100', step: '1', value: '50',
-    'aria-label': 'Граница сравнения' });
-  const swap = button('Поменять местами', { class: 'btn btn-sm', id: 'compare-swap' });
-  const close = el('button', { type: 'button', class: 'icon-btn viewer-close', id: 'compare-close', 'aria-label': 'Закрыть',
-    title: 'Закрыть' }, icon('x'));
-  const dialog = el('dialog', { id: 'compare', class: 'viewer compare', 'aria-label': 'Сравнение картинок' },
+    'aria-label': tr("Граница сравнения") });
+  const swap = button(tr("Поменять местами"), { class: 'btn btn-sm', id: 'compare-swap' });
+  const close = el('button', { type: 'button', class: 'icon-btn viewer-close', id: 'compare-close', 'aria-label': tr("Закрыть"),
+    title: tr("Закрыть") }, icon('x'));
+  const dialog = el('dialog', { id: 'compare', class: 'viewer compare', 'aria-label': tr("Сравнение картинок") },
     el('div', { class: 'viewer-top' }, close), el('div', { class: 'compare-stage' }, frame),
     el('div', { class: 'viewer-bar compare-bar' }, el('div', { class: 'compare-labels' }, leftLabel, rightLabel), range,
       el('div', { class: 'viewer-actions' }, swap)));

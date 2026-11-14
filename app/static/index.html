@@ -6,8 +6,8 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
-<meta name="apple-mobile-web-app-title" content="Студия">
-<title>Студия</title>
+<meta name="apple-mobile-web-app-title" content="Студия" data-i18n-attrs="content">
+<title data-i18n>Студия</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
@@ -17,53 +17,55 @@
 <link rel="stylesheet" id="hl-paper" href="/static/vendor/hl-paper.css?v={{v}}" media="(prefers-color-scheme: light)">
 <link rel="stylesheet" id="hl-graphite" href="/static/vendor/hl-graphite.css?v={{v}}" media="(prefers-color-scheme: dark)">
 <script type="importmap">{{imports}}</script>
+<script src="/static/en.js?v={{v}}"></script>
+<script src="/static/i18n.js?v={{v}}"></script>
 <script id="theme-start" src="/static/theme.js?v={{v}}" data-module-preloads="{{preloads}}"></script>
 <script type="module" src="/static/v/{{v}}/js/lock-start.js"></script>
 <script type="module" src="/static/v/{{v}}/js/app.js"></script>
 </head>
 <body class="shell">
-<nav id="rail" aria-label="Разделы">
+<nav id="rail" aria-label="Разделы" data-i18n-attrs="aria-label">
   <img class="logo" src="/static/icons/icon.svg" alt="">
   <!-- вкладки разделов и значки кнопок (icons.js) ставит app.js из реестра sections-meta.js; значок «Стереть» PIN — lock.js -->
   <span class="spacer"></span>
-  <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск"></a>
-  <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе"><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
-  <button id="avatar" type="button" aria-expanded="false" aria-controls="menu" aria-label="Профиль, тема и выход"></button>
+  <a id="search-open" class="search-toggle" href="#/search" data-section="search" aria-label="Поиск" title="Поиск" data-i18n-attrs="aria-label title"></a>
+  <button id="jobs" class="jobs-toggle" type="button" aria-haspopup="dialog" aria-controls="jobs-panel" aria-label="В работе" title="В работе" data-i18n-attrs="aria-label title"><span class="jobs-count" hidden></span><span class="jobs-dot" hidden></span></button>
+  <button id="avatar" type="button" aria-expanded="false" aria-controls="menu" aria-label="Профиль, тема и выход" data-i18n-attrs="aria-label"></button>
 </nav>
 <div id="menu" class="menu" hidden>
   <div class="menu-who"><b id="menu-name"></b><span id="menu-login"></span></div>
   <fieldset id="menu-theme" class="segment menu-theme">
-    <legend>Тема · вся учётка</legend>
-    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="auto" id="menu-theme-auto"><span>Авто</span></label>
-    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="light" id="menu-theme-light"><span>Светлая</span></label>
-    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="dark" id="menu-theme-dark"><span>Тёмная</span></label>
+    <legend data-i18n>Тема · вся учётка</legend>
+    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="auto" id="menu-theme-auto"><span data-i18n>Авто</span></label>
+    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="light" id="menu-theme-light"><span data-i18n>Светлая</span></label>
+    <label class="segment-option"><input class="sr" type="radio" name="menu-theme" value="dark" id="menu-theme-dark"><span data-i18n>Тёмная</span></label>
   </fieldset>
   <p id="theme-save-status" class="menu-status" role="status" aria-live="polite"></p>
-  <button id="theme-save-retry" class="btn-link" type="button" hidden>Повторить сохранение</button>
+  <button id="theme-save-retry" class="btn-link" type="button" hidden data-i18n>Повторить сохранение</button>
   <div id="menu-device-controls"></div>
-  <a class="menu-item" href="#/settings">Настройки</a>
-  <a class="menu-item" href="#/admin" id="menu-admin" hidden>Администрирование</a>
+  <a class="menu-item" href="#/settings" data-i18n>Настройки</a>
+  <a class="menu-item" href="#/admin" id="menu-admin" hidden data-i18n>Администрирование</a>
   <hr class="menu-sep">
-  <form method="post" action="/logout"><button class="menu-item" id="menu-logout" type="submit">Выйти</button></form>
+  <form method="post" action="/logout"><button class="menu-item" id="menu-logout" type="submit" data-i18n>Выйти</button></form>
 </div>
-<main id="view"><p class="view-loading" role="status">Загрузка…</p></main>
+<main id="view"><p class="view-loading" role="status" data-i18n>Загрузка…</p></main>
 <dialog id="jobs-panel" class="jobs-panel" aria-labelledby="jobs-title">
   <div class="jobs-sheet">
-    <div class="jobs-head"><h2 id="jobs-title">В работе</h2><button id="jobs-close" class="btn-link" type="button">Закрыть</button></div>
-    <section id="jobs-code-asking" hidden><h3>Агенты · требуют вашего действия</h3><ul class="jobs-list"></ul></section>
-    <section id="jobs-code-running" hidden><h3>Агенты · работают</h3><ul class="jobs-list"></ul></section>
-    <section id="jobs-code-unread" hidden><h3>Агенты · завершены, не прочитаны</h3><ul class="jobs-list"></ul></section>
-    <h3>Идёт</h3>
+    <div class="jobs-head"><h2 id="jobs-title" data-i18n>В работе</h2><button id="jobs-close" class="btn-link" type="button" data-i18n>Закрыть</button></div>
+    <section id="jobs-code-asking" hidden><h3 data-i18n>Агенты · требуют вашего действия</h3><ul class="jobs-list"></ul></section>
+    <section id="jobs-code-running" hidden><h3 data-i18n>Агенты · работают</h3><ul class="jobs-list"></ul></section>
+    <section id="jobs-code-unread" hidden><h3 data-i18n>Агенты · завершены, не прочитаны</h3><ul class="jobs-list"></ul></section>
+    <h3 data-i18n>Идёт</h3>
     <ul id="jobs-running" class="jobs-list"></ul>
-    <h3>Готово за час</h3>
+    <h3 data-i18n>Готово за час</h3>
     <ul id="jobs-finished" class="jobs-list"></ul>
   </div>
 </dialog>
-<dialog id="curtain" class="curtain" closedby="none" aria-label="Студия скрыта"><img class="lock-logo" src="/static/icons/icon.svg" alt=""></dialog>
+<dialog id="curtain" class="curtain" closedby="none" aria-label="Студия скрыта" data-i18n-attrs="aria-label"><img class="lock-logo" src="/static/icons/icon.svg" alt=""></dialog>
 <dialog id="lock" class="lock" closedby="none" aria-labelledby="lock-title" data-lock-state="{{lock_state}}">
   <img class="lock-logo" src="/static/icons/icon.svg" alt="">
-  <h1 id="lock-title">Студия заперта</h1>
-  <button id="lock-open" class="btn btn-accent" type="button">Открыть</button>
+  <h1 id="lock-title" data-i18n>Студия заперта</h1>
+  <button id="lock-open" class="btn btn-accent" type="button" data-i18n>Открыть</button>
   <div id="lock-pin" class="lock-pin" hidden>
     <div id="lock-pin-dots" class="lock-pin-dots" aria-hidden="true"></div>
     <p id="lock-pin-count" class="sr" role="status" aria-live="polite"></p>
@@ -71,17 +73,17 @@
       <button type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
       <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
       <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
-      <button id="lock-pin-back" type="button" aria-label="Стереть" title="Стереть"></button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
+      <button id="lock-pin-back" type="button" aria-label="Стереть" title="Стереть" data-i18n-attrs="aria-label title"></button><button type="button" data-digit="0">0</button><button id="lock-pin-ok" type="button" disabled>OK</button>
     </div>
   </div>
-  <button id="lock-use-password" class="btn-link" type="button">Открыть паролем</button>
+  <button id="lock-use-password" class="btn-link" type="button" data-i18n>Открыть паролем</button>
   <form id="lock-password-form" class="lock-password" hidden>
-    <input id="lock-password" class="input" type="password" autocomplete="current-password" maxlength="1024" aria-label="Пароль учётки" placeholder="Пароль учётки">
-    <button id="lock-password-go" class="btn" type="submit">Открыть</button>
+    <input id="lock-password" class="input" type="password" autocomplete="current-password" maxlength="1024" aria-label="Пароль учётки" placeholder="Пароль учётки" data-i18n-attrs="aria-label placeholder">
+    <button id="lock-password-go" class="btn" type="submit" data-i18n>Открыть</button>
   </form>
-  <button id="lock-use-pin" class="btn-link" type="button" hidden>Открыть PIN-кодом</button>
+  <button id="lock-use-pin" class="btn-link" type="button" hidden data-i18n>Открыть PIN-кодом</button>
   <p id="lock-status" class="status" aria-live="polite"></p>
-  <form method="post" action="/logout"><button id="lock-logout" class="btn-link" type="submit">Выйти</button></form>
+  <form method="post" action="/logout"><button id="lock-logout" class="btn-link" type="submit" data-i18n>Выйти</button></form>
 </dialog>
 </body>
 </html>

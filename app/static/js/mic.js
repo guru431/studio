@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Голосовой ввод в поле (спека 2026-10-20-studio-sections-voice-design, 6.5).
  *
  * attachMic(field, host) → кнопка микрофона: нажал — запись MediaRecorder (iPhone — audio/mp4,
@@ -37,7 +38,7 @@ export function cancelRecording() {
  * Отказ — Error со словами. */
 export async function startRecording(maxSec, onTick, owner = null) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
-    throw new Error('Браузер не умеет записывать звук');
+    throw new Error(tr("Браузер не умеет записывать звук"));
   }
   cancelRecording();
   let cancelled = false;
@@ -50,7 +51,7 @@ export async function startRecording(maxSec, onTick, owner = null) {
   } catch (err) {
     release();
     throw new Error(err && err.name === 'NotAllowedError'
-      ? 'Нет разрешения на микрофон — разрешите его в настройках браузера' : 'Микрофон недоступен');
+      ? tr("Нет разрешения на микрофон — разрешите его в настройках браузера") : tr("Микрофон недоступен"));
   }
   if (cancelled || (owner && !owner.isConnected)) {
     for (const track of stream.getTracks()) track.stop();
@@ -105,7 +106,7 @@ function insertAt(field, text, [start, end]) {
 }
 
 export function attachMic(field, host) {
-  const button = el('button', { type: 'button', class: 'icon-btn mic', 'aria-label': 'Голосовой ввод', title: 'Голосовой ввод' });
+  const button = el('button', { type: 'button', class: 'icon-btn mic', 'aria-label': tr("Голосовой ввод"), title: tr("Голосовой ввод") });
   const error = el('p', { class: 'mic-error error small', 'aria-live': 'polite' });
   host.append(error);
   let recording = null;
@@ -115,7 +116,7 @@ export function attachMic(field, host) {
   function paint(sec) {
     button.classList.toggle('on', !!recording);
     button.classList.toggle('busy', sending || starting);
-    button.setAttribute('aria-label', recording ? 'Остановить запись' : 'Голосовой ввод');
+    button.setAttribute('aria-label', recording ? tr("Остановить запись") : tr("Голосовой ввод"));
     button.innerHTML = ICON;                           // константа выше
     if (recording) button.append(el('span', { class: 'mic-time' }, clock(sec || 0)));
   }
@@ -156,7 +157,7 @@ export function attachMic(field, host) {
       const at = field.value === value ? caret
         : [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
       if (text) insertAt(field, text, at);
-      else error.textContent = 'Ничего не распознано — скажите ещё раз';
+      else error.textContent = tr("Ничего не распознано — скажите ещё раз");
     } catch (err) {
       error.textContent = words(err);
     } finally {

@@ -1,3 +1,4 @@
+import { language, locale, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Перевод» (#/translate) — спека 2026-10-28-studio-translator-design, 6.1–6.4.
  *
  * Шапка — «Перевод» и выбор модели #tl-model («подключение · модель» из отмеченных раздела, GET /api/sections;
@@ -53,10 +54,11 @@ const PAGE = 30;
 const TEXT_MAX = 300000;                 // translate_text.TEXT_MAX
 const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX
 const AUTO = 'auto';
+const LANGUAGE_NAMES = language() === 'en' ? new Intl.DisplayNames([locale()], { type: 'language' }) : null;
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FILE_ACCEPT = '.pdf,.docx,.txt,.md';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
-const FORMATS = [['txt', 'Текст .txt'], ['docx', 'Word .docx']];
+const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx']];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
 
 let screen = null;
@@ -75,10 +77,10 @@ function timeOf(ts) {
 }
 
 function kindLabel(item) {
-  if (item.kind === 'text') return 'текст';
-  if (item.kind === 'photo') return 'фото';
+  if (item.kind === 'text') return tr("текст");
+  if (item.kind === 'photo') return tr("фото");
   const ext = String(item.name || '').split('.').pop().toLowerCase();
-  return FILE_KINDS[ext] || 'файл';
+  return FILE_KINDS[ext] || tr("файл");
 }
 
 /** «EN → RU»: исходник — определённый или выбранный («auto» без определённого — «?»), справа — куда переведено. */
@@ -137,32 +139,32 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
 
   /* шапка и языки */
-  const model = el('select', { id: 'tl-model', class: 'chip tl-model', 'aria-label': 'Модель перевода', hidden: true });
-  const head = el('header', { class: 'head tl-head' }, el('h1', {}, 'Перевод'), model);
-  const source = el('select', { id: 'tl-source', class: 'input tl-lang', 'aria-label': 'Язык исходника' });
-  const target = el('select', { id: 'tl-target', class: 'input tl-lang', 'aria-label': 'Язык перевода' });
-  const swap = el('button', { type: 'button', id: 'tl-swap', class: 'icon-btn', 'aria-label': 'Поменять языки местами',
-    title: 'Поменять языки местами', disabled: true }, icon('swap'));
+  const model = el('select', { id: 'tl-model', class: 'chip tl-model', 'aria-label': tr("Модель перевода"), hidden: true });
+  const head = el('header', { class: 'head tl-head' }, el('h1', {}, tr("Перевод")), model);
+  const source = el('select', { id: 'tl-source', class: 'input tl-lang', 'aria-label': tr("Язык исходника") });
+  const target = el('select', { id: 'tl-target', class: 'input tl-lang', 'aria-label': tr("Язык перевода") });
+  const swap = el('button', { type: 'button', id: 'tl-swap', class: 'icon-btn', 'aria-label': tr("Поменять языки местами"),
+    title: tr("Поменять языки местами"), disabled: true }, icon('swap'));
   const langRow = el('div', { class: 'tl-langs' }, source, swap, target);
 
   /* левое окно */
-  const input = el('textarea', { id: 'tl-input', rows: '1', 'aria-label': 'Текст для перевода',
-    placeholder: 'Введите или вставьте текст' });
+  const input = el('textarea', { id: 'tl-input', rows: '1', 'aria-label': tr("Текст для перевода"),
+    placeholder: tr("Введите или вставьте текст") });
   const chip = el('div', { id: 'tl-chip', class: 'att-chip tl-chip', hidden: true });
   const sourceText = el('div', { class: 'tl-source-text', hidden: true });
   const fileInput = el('input', { type: 'file', id: 'tl-file-input', class: 'sr', accept: FILE_ACCEPT });
   const photoInput = el('input', { type: 'file', id: 'tl-photo-input', class: 'sr', accept: PHOTO_ACCEPT });
   const attach = el('button', { type: 'button', class: 'icon-btn attach', id: 'tl-attach',
-    'aria-label': 'Прикрепить файл или фото', title: 'Прикрепить файл или фото', hidden: !!ctx.hint }, icon('clip'));
-  const attachMenu = el('div', { class: 'tr-formats', id: 'tl-attach-menu', role: 'menu', 'aria-label': 'Прикрепить' });
+    'aria-label': tr("Прикрепить файл или фото"), title: tr("Прикрепить файл или фото"), hidden: !!ctx.hint }, icon('clip'));
+  const attachMenu = el('div', { class: 'tr-formats', id: 'tl-attach-menu', role: 'menu', 'aria-label': tr("Прикрепить") });
   const attachPopup = popupMenu(attach, attachMenu, { side: 'above' });
-  attachMenu.append(menuItem('Файл', { onSelect: () => { attachPopup.close(true); fileInput.click(); } }),
-    menuItem('Фото', { onSelect: () => { attachPopup.close(true); photoInput.click(); } }));
+  attachMenu.append(menuItem(tr("Файл"), { onSelect: () => { attachPopup.close(true); fileInput.click(); } }),
+    menuItem(tr("Фото"), { onSelect: () => { attachPopup.close(true); photoInput.click(); } }));
   const textBox = fieldBox(input, { attach, fit: true });
   const sourceContent = el('div', { class: 'tl-source-content', hidden: true }, chip, sourceText);
   textBox.box.prepend(sourceContent);
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
-  const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go' }, 'Перевести');
+  const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go' }, tr("Перевести"));
   const bar = el('div', { class: 'composer-bar' },
     el('div', { class: 'composer-opts' }, count), ctx.hint ? null : goBtn);
   const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
@@ -170,12 +172,12 @@ function build(view, ctx) {
 
   /* правое окно */
   const status = el('p', { id: 'tl-status', class: 'tl-status small', 'aria-live': 'polite' });
-  const stop = el('button', { type: 'button', id: 'tl-stop', class: 'btn btn-sm', hidden: true }, 'Остановить');
-  const cont = el('button', { type: 'button', id: 'tl-continue', class: 'btn btn-sm', hidden: true }, 'Продолжить');
+  const stop = el('button', { type: 'button', id: 'tl-stop', class: 'btn btn-sm', hidden: true }, tr("Остановить"));
+  const cont = el('button', { type: 'button', id: 'tl-continue', class: 'btn btn-sm', hidden: true }, tr("Продолжить"));
   const outText = document.createTextNode('');   // перевод одним текстовым узлом: растёт — дописывается
-  const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': 'Перевод' }, outText);
-  const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, 'Копировать');
-  const formats = actionMenu('Скачать ▾', { id: 'tl-export', cls: 'tl-formats', entries: FORMATS.map(([key, label]) => [label,
+  const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': tr("Перевод") }, outText);
+  const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, tr("Копировать"));
+  const formats = actionMenu(tr("Скачать ▾"), { id: 'tl-export', cls: 'tl-formats', entries: FORMATS.map(([key, label]) => [label,
     { 'data-format': key }, () => download(key)]) });
   const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, formats);
   const exportBtn = formats.querySelector('#tl-export');
@@ -183,11 +185,11 @@ function build(view, ctx) {
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
-  const empty = el('p', { class: 'muted small' }, 'Здесь появятся ваши переводы');
-  const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, 'Показать ещё');
+  const empty = el('p', { class: 'muted small' }, tr("Здесь появятся ваши переводы"));
+  const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, tr("Показать ещё"));
   more.addEventListener('click', () => docs.more());
   const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, right, error,
-    el('section', { class: 'tl-past', 'aria-label': 'История переводов' }, el('h2', {}, 'История'), list));
+    el('section', { class: 'tl-past', 'aria-label': tr("История переводов") }, el('h2', {}, tr("История")), list));
   view.append(el('div', { class: 'translate' }, head, body, left));
   const draft = sectionDraft('translate', input);  // запись по ?id — позже, её исходник встанет вместо черновика
 
@@ -204,7 +206,7 @@ function build(view, ctx) {
       const section = sections.find((s) => s.id === 'translate');
       links = section ? section.links : [];
       model.replaceChildren(...links.flatMap(({ connection: c, models, local_models: local }) => models.map((m) =>
-        el('option', { value: `${c.id}:${m}` }, `${c.name} · ${m}${(local || []).includes(m) ? '' : ' · облако'}`))));
+        el('option', { value: `${c.id}:${m}` }, `${c.name} · ${m}${(local || []).includes(m) ? '' : tr(" · облако")}`))));
       if (section && section.default) model.value = `${section.default.connection_id}:${section.default.model}`;
       model.hidden = !model.options.length;
     } catch (err) {
@@ -213,6 +215,7 @@ function build(view, ctx) {
   }
 
   function langName(code) {
+    if (LANGUAGE_NAMES) return LANGUAGE_NAMES.of(code);
     const found = languages.find((l) => l.code === code);
     return found ? found.name : code;
   }
@@ -226,8 +229,8 @@ function build(view, ctx) {
       return;
     }
     languages = answer.items;
-    const options = () => languages.map((l) => el('option', { value: l.code }, capital(l.name)));
-    source.replaceChildren(el('option', { value: AUTO }, 'Определить язык'), ...options());
+    const options = () => languages.map((l) => el('option', { value: l.code }, capital(langName(l.code))));
+    source.replaceChildren(el('option', { value: AUTO }, tr("Определить язык")), ...options());
     target.replaceChildren(...options());
     source.value = AUTO;
     target.value = answer.default_target;
@@ -243,7 +246,7 @@ function build(view, ctx) {
     const auto = source.options[0];
     if (!auto) return;
     const found = rec && rec.source_lang === AUTO && rec.detected_lang;
-    const label = found ? `Определить язык · ${langName(rec.detected_lang)}` : 'Определить язык';
+    const label = found ? tr("Определить язык · {0}", langName(rec.detected_lang)) : tr("Определить язык");
     if (auto.textContent !== label) auto.textContent = label;   // опрос раскрытый список не трогает
     swap.disabled = !languages.length || (source.value === AUTO && !(rec && rec.detected_lang));
   }
@@ -269,7 +272,7 @@ function build(view, ctx) {
       : shown ? `record:${shown.id}:${shown.kind}:${shown.media_id}:${shown.name}` : '';
     if (key !== chipKey) {               // опрос той же записи плашку не пересобирает: нажатие и фокус — на месте
       chipKey = key;
-      const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': 'Убрать' }, icon('x'));
+      const x = el('button', { type: 'button', id: 'tl-chip-x', class: 'icon-btn', 'aria-label': tr("Убрать") }, icon('x'));
       x.addEventListener('click', clearLeft);
       if (pending) {
         chip.replaceChildren(icon(pending.photo ? 'camera' : 'doc'), el('span', { class: 'att-name' }, pending.file.name), x);
@@ -282,7 +285,7 @@ function build(view, ctx) {
       }
     }
     if (shown) {
-      const text = shown.source || (RUNNING.has(shown.state) ? 'исходник ещё готовится…' : '');
+      const text = shown.source || (RUNNING.has(shown.state) ? tr("исходник ещё готовится…") : '');
       if (sourceText.textContent !== text) sourceText.textContent = text;
     }
     paintGo();
@@ -330,13 +333,13 @@ function build(view, ctx) {
     if (text !== was) {
       if (was && text.startsWith(was)) outText.appendData(text.slice(was.length));
       else outText.data = text;
-      copy.textContent = 'Копировать';
+      copy.textContent = tr("Копировать");
     }
     const running = !!rec && RUNNING.has(rec.state);
     if (!rec) setStatus('', '');
-    else if (running) setStatus('', rec.detail || '', true);
-    else if (rec.state === 'error') setStatus('error', rec.detail || 'ошибка');
-    else if (rec.state === 'cancelled' || !text) setStatus('muted', rec.detail || '');
+    else if (running) setStatus('', serverMessage(rec.detail) || '', true);
+    else if (rec.state === 'error') setStatus('error', serverMessage(rec.detail) || tr("ошибка"));
+    else if (rec.state === 'cancelled' || !text) setStatus('muted', serverMessage(rec.detail) || '');
     else setStatus('', '');
     stop.hidden = !running || rec.state === 'cancelling';
     cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
@@ -365,7 +368,7 @@ function build(view, ctx) {
       }
       error.textContent = '';
       pollWords = '';
-      copy.textContent = 'Копировать';
+      copy.textContent = tr("Копировать");
     } else {
       if (pollWords && error.textContent === pollWords) error.textContent = '';   // свежая копия — связь есть
       pollWords = '';
@@ -451,11 +454,11 @@ function build(view, ctx) {
     } catch {
       sending = false;
       paintGo();
-      error.textContent = 'Имя модели нельзя передать заголовком — выберите другую';
+      error.textContent = tr("Имя модели нельзя передать заголовком — выберите другую");
       return;
     }
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) setStatus('', `Загружаю · ${Math.round(event.loaded * 100 / event.total)}%`);
+      if (event.lengthComputable) setStatus('', tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total)));
     });
     xhr.addEventListener('loadend', async () => {
       let answer = null;
@@ -486,7 +489,7 @@ function build(view, ctx) {
         upload(file, langs, pick);
         return;
       }
-      error.textContent = words((detail && detail.message) || (xhr.status ? `Ошибка сервера (${xhr.status})` : 'Нет связи с сервером'));
+      error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
     });
     xhr.send(form);
   }
@@ -514,7 +517,7 @@ function build(view, ctx) {
     } else if (rec && rec.kind !== 'text') {
       send('POST', `/api/translate/${encodeURIComponent(rec.id)}/repeat`, { ...langs, ...pick });
     } else if (!input.value.trim()) {
-      error.textContent = 'Введите текст';
+      error.textContent = tr("Введите текст");
       input.focus();
     } else {
       send('POST', '/api/translate', { text: input.value, ...langs, ...pick });
@@ -526,7 +529,7 @@ function build(view, ctx) {
     inputNode.value = '';
     if (!file) return;
     if (file.size > UPLOAD_MAX) {
-      error.textContent = 'Файл больше 20 МиБ';
+      error.textContent = tr("Файл больше 20 МиБ");
       return;
     }
     error.textContent = '';
@@ -537,13 +540,13 @@ function build(view, ctx) {
   /* история */
   function confirmDelete(item) {
     const fail = el('p', { class: 'error' });
-    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, 'Удалить');
-    const dialog = openDialog(body, { id: 'tl-delete-dialog', title: 'Удалить перевод?', actions: [yes],
-      body: [el('p', {}, item.kind === 'text' || item.scan_id ? 'Удалятся исходник и перевод.'
-          : 'Удалятся исходник и перевод, а исходный файл — если его не использует повтор этого перевода.'),
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, tr("Удалить"));
+    const dialog = openDialog(body, { id: 'tl-delete-dialog', title: tr("Удалить перевод?"), actions: [yes],
+      body: [el('p', {}, item.kind === 'text' || item.scan_id ? tr("Удалятся исходник и перевод.")
+          : tr("Удалятся исходник и перевод, а исходный файл — если его не использует повтор этого перевода.")),
         item.scan_id ? el('p', {}, item.scan_shared
-          ? 'Распознанный документ останется в «Сканах»: его использует повтор этого перевода.'
-          : 'Распознанный документ в «Сканах» удалится вместе с переводом.') : null, fail] });
+          ? tr("Распознанный документ останется в «Сканах»: его использует повтор этого перевода.")
+          : tr("Распознанный документ в «Сканах» удалится вместе с переводом.")) : null, fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -569,7 +572,7 @@ function build(view, ctx) {
   /** Строка под парой языков: время, вид, состояние словами (у идущей — «жду карту · м:сс», каждую секунду новое). */
   function metaText(item) {
     const running = RUNNING.has(item.state);
-    const state = running ? item.detail : item.state === 'error' ? 'ошибка' : item.state === 'cancelled' ? 'остановлено' : '';
+    const state = running ? serverMessage(item.detail) : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("остановлено") : '';
     return [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · ');
   }
 
@@ -588,8 +591,8 @@ function build(view, ctx) {
     });
     const node = el('div', { class: 'tl-row', 'data-id': item.id, 'data-state': item.state }, opener);   // aria-current — paintHistory
     if (!running) {
-      const del = el('button', { type: 'button', class: 'icon-btn tl-delete', 'aria-label': 'Удалить перевод',
-        title: 'Удалить' }, icon('x'));
+      const del = el('button', { type: 'button', class: 'icon-btn tl-delete', 'aria-label': tr("Удалить перевод"),
+        title: tr("Удалить") }, icon('x'));
       del.addEventListener('click', () => confirmDelete(item));
       node.append(del);
     }
@@ -626,7 +629,7 @@ function build(view, ctx) {
     }
     if (!items.length && listed) nodes.push(empty);
     if (items.length && !docs.done) {
-      const label = docs.paging ? 'Загружаю…' : 'Показать ещё';
+      const label = docs.paging ? tr("Загружаю…") : tr("Показать ещё");
       more.disabled = docs.paging;
       if (more.textContent !== label) more.textContent = label;
       nodes.push(more);
@@ -712,9 +715,9 @@ function build(view, ctx) {
   copy.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(output.textContent);
-      copy.textContent = 'Скопировано';
+      copy.textContent = tr("Скопировано");
     } catch {
-      error.textContent = 'Буфер обмена недоступен — выделите текст вручную';
+      error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
     }
   });
 

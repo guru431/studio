@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Статусу — 40% строки; кнопки сохраняют размер и по одной уходят в «⋯». */
 import { el } from './ui.js';
 import { icon } from './icons.js';
@@ -5,7 +6,7 @@ import { popupPanel } from './menu.js';
 
 export function statusActions(host, bar, activity, actions, fixed) {
   const more = el('button', { type: 'button', id: 'code-status-more', class: 'icon-btn',
-    'aria-label': 'Другие действия чата', title: 'Другие действия чата', hidden: true }, icon('more'));
+    'aria-label': tr("Другие действия чата"), title: tr("Другие действия чата"), hidden: true }, icon('more'));
   const overflow = el('div', { class: 'code-chat-actions' });
   const panel = el('div', { id: 'code-status-menu', class: 'code-status-menu' }, overflow);
   const controls = el('div', { class: 'code-status-controls' }, actions, more, fixed);
@@ -18,7 +19,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
   });
   bar.replaceChildren(activity, controls);
   host.append(panel);
-  const popup = popupPanel(more, panel, { label: 'Действия чата', side: 'above', align: 'end' });
+  const popup = popupPanel(more, panel, { label: tr("Действия чата"), side: 'above', align: 'end' });
   let frame = null;
 
   // Отдельное измерение обычного ряда не меняет фокус и состояние открытых popover.

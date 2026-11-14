@@ -1,3 +1,4 @@
+import { locale, tr } from './i18n.js';
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
@@ -55,14 +56,13 @@ import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
 
-const WAITING = 'Компьютер пропал со связи — жду его';
-const SHARED = 'Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу'
-  + ' — ответы перемешаются.';
-const STOPPED = 'Ход прерван';
-const INSTEAD = 'Что сделать вместо этого (необязательно)';
-const OWN = 'Свой ответ';
+const WAITING = tr("Компьютер пропал со связи — жду его");
+const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
+const STOPPED = tr("Ход прерван");
+const INSTEAD = tr("Что сделать вместо этого (необязательно)");
+const OWN = tr("Свой ответ");
 const OWN_MAX = 2000;            // claude_code.ANSWER_MAX
-const DEFAULT = 'Загрузка…';
+const DEFAULT = tr("Загрузка…");
 const RETRY_MS = 5000;           // повтор live, пока компьютера нет
 const AGAIN_MS = 1000;           // поток кончился без конца хода (предел прокси, сеть) — снова live
 const IDLE_POLL_SEC = 20;        // опрос live на простое (тесты подменяют паузу setTimeout)
@@ -145,7 +145,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const historyKey = `${me.id}/${aid}/${pid}/${engine}/${chat}`;
   const workspace = document.getElementById('view');
   const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
-    role: 'region', 'aria-label': 'Лента чата' });
+    role: 'region', 'aria-label': tr("Лента чата") });
   const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations, images: agent.visualization_images });
   const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile,
     visualization: visualizations.open };
@@ -197,23 +197,23 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     status.textContent = message;
   }
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
-    'Показать раньше');
+    tr("Показать раньше"));
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
   const pictures = historyImages(scroller, feed, { api, endpoint, closed: () => closed() });
   const previous = el('button', { type: 'button', id: 'code-message-up', class: 'icon-btn',
-    'aria-label': 'Предыдущее моё сообщение', title: 'Предыдущее моё сообщение', disabled: true });
+    'aria-label': tr("Предыдущее моё сообщение"), title: tr("Предыдущее моё сообщение"), disabled: true });
   const next = el('button', { type: 'button', id: 'code-message-down', class: 'icon-btn',
-    'aria-label': 'Следующее моё сообщение', title: 'Следующее моё сообщение', disabled: true });
+    'aria-label': tr("Следующее моё сообщение"), title: tr("Следующее моё сообщение"), disabled: true });
   const allSteps = el('button', { type: 'button', id: 'code-toggle-steps', class: 'icon-btn',
-    'aria-label': 'Развернуть все команды', title: 'Развернуть все команды', 'aria-pressed': 'false', disabled: true });
+    'aria-label': tr("Развернуть все команды"), title: tr("Развернуть все команды"), 'aria-pressed': 'false', disabled: true });
   previous.append(icon('upward'));
   next.append(icon('downward'));
   allSteps.append(icon('expand'));
-  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': 'Навигация по чату', hidden: true }, previous, allSteps, next);
+  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': tr("Навигация по чату"), hidden: true }, previous, allSteps, next);
   let messageTarget = null;
   let messageScrollTop = 0;
-  const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': 'Задание',
-    placeholder: 'Задание…', maxlength: '100000' });
+  const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': tr("Задание"),
+    placeholder: tr("Задание…"), maxlength: '100000' });
   const catalog = engine === 'claude' ? agent : agent?.[engine];
   const models = Array.isArray(catalog?.models) ? catalog.models : [];
   const efforts = Array.isArray(catalog?.efforts) ? catalog.efforts : [];
@@ -221,12 +221,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     ...models.map((m) => el('option', { value: String(m.id) }, String(m.label || m.id))));
   const effort = el('select', { id: 'code-effort', class: 'chip' }, el('option', { value: '' }, DEFAULT),
     ...efforts.map((e) => el('option', { value: String(e) }, String(e))));
-  const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': 'Права доступа' },
+  const access = el('select', { id: 'code-access', class: 'chip', 'aria-label': tr("Права доступа") },
     el('option', { value: '' }, DEFAULT), ...Object.entries(ACCESS[engine]).map(([value, label]) =>
       el('option', { value }, label)));
   const delivery = el('select', { id: 'code-delivery', class: 'chip code-delivery',
-    'aria-label': 'Когда передать сообщение' },
-    el('option', { value: 'steer' }, 'Уточнить сейчас'), el('option', { value: 'queue' }, 'После текущей задачи'));
+    'aria-label': tr("Когда передать сообщение") },
+    el('option', { value: 'steer' }, tr("Уточнить сейчас")), el('option', { value: 'queue' }, tr("После текущей задачи")));
   const picks = new Map();
   const context = contextView(host, { chat, engine, project,
     messages: () => feed.querySelectorAll('.code-msg').length });
@@ -253,25 +253,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
     if (ACCESS[engine][saved.access]) access.value = saved.access;
     if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
-      showStatus('Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате');
+      showStatus(tr("Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате"));
     }
     paintPicks();
   }
 
   if (fresh) applyDefaults();
   const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go',
-    'aria-label': 'Отправить', title: 'Отправить' }, el('span', { class: 'code-go-label' }, 'Отправить'));
+    'aria-label': tr("Отправить"), title: tr("Отправить") }, el('span', { class: 'code-go-label' }, tr("Отправить")));
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go composer-stop', hidden: true,
-    'aria-label': 'Остановить', title: 'Остановить' }, el('span', { class: 'code-go-label' }, 'Остановить'));
+    'aria-label': tr("Остановить"), title: tr("Остановить") }, el('span', { class: 'code-go-label' }, tr("Остановить")));
   send.prepend(icon('send', 'ico code-go-icon'));
   stop.prepend(icon('stop', 'ico code-go-icon'));
-  const activityText = el('span', {}, 'Нет активной задачи');
+  const activityText = el('span', {}, tr("Нет активной задачи"));
   const activity = el('div', { id: 'code-activity', class: 'code-activity', role: 'status',
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
     el('span', { class: 'code-activity-dot', 'aria-hidden': 'true' }), activityText);
   const activeTools = new Map();
   const reloadButton = el('button', { type: 'button', id: 'code-reload', class: 'btn btn-sm code-reload', hidden: true,
-    'data-keep': '', title: 'Загрузить чат заново', 'aria-label': 'Повторить' }, el('span', { class: 'code-reload-label' }, 'Повторить'));
+    'data-keep': '', title: tr("Загрузить чат заново"), 'aria-label': tr("Повторить") }, el('span', { class: 'code-reload-label' }, tr("Повторить")));
   reloadButton.prepend(icon('refresh'));
   reloadButton.addEventListener('click', () => reload());
   const actions = el('div', { class: 'code-chat-actions' });
@@ -279,16 +279,17 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  sharing.set({ title: typeof title === 'string' ? title : 'Чат', share: agent?.shared ? null : endpoint('/share'),
+  sharing.set({ title: typeof title === 'string' ? title : tr("Чат"), share: agent?.shared ? null : endpoint('/share'),
     export: endpoint('/export') });
   actions.append(sharing.button);
   actions.append(reloadButton);
   const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);
   const statusBar = el('div', { class: 'code-status-bar' });
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
-    'aria-label': 'Быстрые действия' }, el('h2', {}, 'Быстрые действия'));
+    'aria-label': tr("Быстрые действия") }, el('h2', {}, tr("Быстрые действия")));
   for (const action of me?.code_quick_actions || []) {
-    const button = el('button', { type: 'button', class: 'btn code-quick-action', title: action.title }, action.title);
+    const label = me.code_quick_actions_default ? tr(action.title) : action.title;
+    const button = el('button', { type: 'button', class: 'btn code-quick-action', title: label }, label);
     button.addEventListener('click', () => {
       if (quickActions.hidden || send.disabled) return;
       text.value = action.text;
@@ -300,15 +301,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const field = fieldBox(text);
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input',
-    multiple: true, hidden: true, 'aria-label': 'Вложения' });
-  const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': 'Добавить вложение',
-    title: agent?.attachments ? 'Прикрепить файлы любого типа · до 8 файлов, 10 МиБ на файл, 30 МиБ на сообщение'
-      : 'Изображения · обновите мост для файлов любого типа', disabled: !agent?.images && !agent?.attachments });
+    multiple: true, hidden: true, 'aria-label': tr("Вложения") });
+  const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': tr("Добавить вложение"),
+    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, 10 МиБ на файл, 30 МиБ на сообщение")
+      : tr("Изображения · обновите мост для файлов любого типа"), disabled: !agent?.images && !agent?.attachments });
   attach.append(icon('clip'));
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
   const sessionText = el('p');
-  const waitSession = el('button', { type: 'button', id: 'code-wait-session', class: 'btn btn-sm' }, 'Дождаться завершения');
-  const takeSession = el('button', { type: 'button', id: 'code-take-session', class: 'btn btn-sm' }, 'Продолжить здесь');
+  const waitSession = el('button', { type: 'button', id: 'code-wait-session', class: 'btn btn-sm' }, tr("Дождаться завершения"));
+  const takeSession = el('button', { type: 'button', id: 'code-take-session', class: 'btn btn-sm' }, tr("Продолжить здесь"));
   const sessionNotice = el('div', { id: 'code-session-notice', class: 'code-session-notice', hidden: true, role: 'status' },
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   const pick = (label, select) => {
@@ -319,7 +320,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
       el('div', { class: 'composer-opts' },
-        pick('Модель', model), pick('Усилие', effort), pick('Права', access)),
+        pick(tr("Модель"), model), pick(tr("Усилие"), effort), pick(tr("Права"), access)),
       stop, send));
   host.dataset.engine = engine;
   scroller.append(
@@ -328,10 +329,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   // Плашка ожидающего вопроса над полем (D2): на узком экране карточка .code-ask часто вне ленты на экране.
   // Кнопки нажимают кнопки самой карточки — тот же ответ, те же блокировки (чужое окно, отправка).
   const askText = el('span', { class: 'code-ask-pin-text' });
-  const askAllow = el('button', { type: 'button', id: 'code-ask-pin-allow', class: 'btn btn-sm btn-accent' }, 'Разрешить');
-  const askDeny = el('button', { type: 'button', id: 'code-ask-pin-deny', class: 'btn btn-sm' }, 'Отклонить');
-  const askShow = el('button', { type: 'button', id: 'code-ask-pin-show', class: 'btn btn-sm' }, 'Показать');
-  const askPin = el('div', { id: 'code-ask-pin', class: 'code-ask-pin', role: 'region', 'aria-label': 'Ждёт вашего ответа',
+  const askAllow = el('button', { type: 'button', id: 'code-ask-pin-allow', class: 'btn btn-sm btn-accent' }, tr("Разрешить"));
+  const askDeny = el('button', { type: 'button', id: 'code-ask-pin-deny', class: 'btn btn-sm' }, tr("Отклонить"));
+  const askShow = el('button', { type: 'button', id: 'code-ask-pin-show', class: 'btn btn-sm' }, tr("Показать"));
+  const askPin = el('div', { id: 'code-ask-pin', class: 'code-ask-pin', role: 'region', 'aria-label': tr("Ждёт вашего ответа"),
     hidden: true }, askText, el('div', { class: 'code-ask-pin-actions' }, askAllow, askDeny, askShow));
   const firstAsk = () => feed.querySelector('.code-ask');
   function paintAskPin() {
@@ -342,8 +343,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const yes = card.querySelector('.code-ask-yes');
     const no = card.querySelector('.code-ask-no');
     const tool = card.querySelector('.code-ask-tool')?.textContent;
-    askText.textContent = (yes ? `${assistant} просит разрешения${tool ? `: ${tool}` : ''}` : `${assistant} задаёт вопрос`)
-      + (cards.length > 1 ? ` · ещё ${cards.length - 1}` : '');
+    askText.textContent = (yes ? tr("{0} просит разрешения{1}", assistant, tool ? `: ${tool}` : '') : tr("{0} задаёт вопрос", assistant))
+      + (cards.length > 1 ? tr(" · ещё {0}", cards.length - 1) : '');
     askAllow.hidden = !yes;
     askDeny.hidden = !no;
     askAllow.disabled = !!yes?.disabled;
@@ -369,7 +370,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   } });
   if (agent?.chat_fork && engine !== 'opencode') {
     const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
-      'aria-label': 'Создать ветку чата', title: 'Создать ветку чата · копия переписки, файлы в текущем состоянии' });
+      'aria-label': tr("Создать ветку чата"), title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") });
     copy.append(icon('fork'));
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
@@ -381,12 +382,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   if (context.cacheButton.hidden) {
     context.cacheButton.hidden = false;
     context.cacheButton.disabled = true;
-    context.cacheButton.title = 'Помощник не сообщает сведения о кэше';
+    context.cacheButton.title = tr("Помощник не сообщает сведения о кэше");
     context.cacheButton.setAttribute('aria-label', context.cacheButton.title);
     context.cacheButton.removeAttribute('aria-haspopup');
   }
   const statusControls = statusActions(host, statusBar, activity, actions, statusFixed);
-  const deliveryPick = pick('Когда передать сообщение', delivery);
+  const deliveryPick = pick(tr("Когда передать сообщение"), delivery);
   deliveryPick.hidden = true;
   access.closest('.code-pick').after(deliveryPick);
   delivery.addEventListener('change', paintPicks);
@@ -408,7 +409,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function paintSettings(data) {
     context.settings(data);
-    model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : 'Не получено';
+    model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : tr("Не получено");
     model.title = typeof data.model === 'string' ? data.model : '';
     effort.options[0].textContent = effortLabel(data.effort);
     access.options[0].textContent = accessLabel(engine, data.access);
@@ -458,7 +459,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function paintImages() {
     attachments.replaceChildren(...images.map((image) => {
       const remove = el('button', { type: 'button', class: 'icon-btn code-image-remove',
-        'aria-label': `Убрать ${image.name}`, title: 'Убрать', disabled: sending }, icon('x'));
+        'aria-label': tr("Убрать {0}", image.name), title: tr("Убрать"), disabled: sending }, icon('x'));
       remove.addEventListener('click', () => {
         images = images.filter((i) => i !== image);
         keepImages();
@@ -479,7 +480,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function addImages(files) {
     if (!files.length || sending || adding) return;
     if (!agent?.images && !agent?.attachments) {
-      showStatus('Обновите мост на компьютере для отправки изображений');
+      showStatus(tr("Обновите мост на компьютере для отправки изображений"));
       return;
     }
     adding = true;
@@ -487,22 +488,22 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     attach.disabled = true;
     showStatus('');
     try {
-      if (images.length + files.length > IMAGE_COUNT) throw new Error('Можно прикрепить до 8 файлов');
+      if (images.length + files.length > IMAGE_COUNT) throw new Error(tr("Можно прикрепить до 8 файлов"));
       if (!agent?.attachments && files.some((f) => !IMAGE_TYPES.has(f.type))) {
-        throw new Error('Обновите мост на компьютере для отправки файлов любого типа');
+        throw new Error(tr("Обновите мост на компьютере для отправки файлов любого типа"));
       }
-      if (files.some((f) => f.size > IMAGE_MAX)) throw new Error('Размер файла — до 10 МиБ');
+      if (files.some((f) => f.size > IMAGE_MAX)) throw new Error(tr("Размер файла — до 10 МиБ"));
       if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
-        throw new Error('Можно прикрепить до 4 изображений за один раз');
+        throw new Error(tr("Можно прикрепить до 4 изображений за один раз"));
       }
       if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
-        throw new Error('Общий размер вложений — до 30 МиБ');
+        throw new Error(tr("Общий размер вложений — до 30 МиБ"));
       }
       const selected = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve({ mime: file.type || 'application/octet-stream', data: String(reader.result).split(',')[1] || '',
-          name: file.name || 'Вложение', size: file.size });
-        reader.onerror = () => reject(new Error('Не получилось прочитать изображение'));
+          name: file.name || tr("Вложение"), size: file.size });
+        reader.onerror = () => reject(new Error(tr("Не получилось прочитать изображение")));
         reader.readAsDataURL(file);
       })));
       // Даже после ухода к PIN черновик остаётся у своего чата.
@@ -576,7 +577,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const { before, after } = messageNeighbours();
     const steps = [...feed.querySelectorAll('details.code-step')];
     const expanded = steps.length > 0 && steps.every((step) => step.open);
-    const stepsLabel = expanded ? 'Свернуть все команды' : 'Развернуть все команды';
+    const stepsLabel = expanded ? tr("Свернуть все команды") : tr("Развернуть все команды");
     allSteps.disabled = steps.length === 0;
     allSteps.setAttribute('aria-label', stepsLabel);
     allSteps.setAttribute('aria-pressed', String(expanded));
@@ -585,7 +586,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     navigation.hidden = !feed.querySelector('.code-msg.user') && !steps.length && start <= 0;
     previous.disabled = more.disabled || (!before && start <= 0);
     next.disabled = !after && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
-    const nextLabel = after ? 'Следующее моё сообщение' : 'В конец чата';
+    const nextLabel = after ? tr("Следующее моё сообщение") : tr("В конец чата");
     next.setAttribute('aria-label', nextLabel);
     next.title = nextLabel;
   }
@@ -680,7 +681,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const changes = Array.isArray(s.changes) && s.changes.length ? s.changes : Array.isArray(input?.changes) ? input.changes : [];
       const changedPaths = changes.map((change) => change?.path).filter((path) => typeof path === 'string');
       const paths = [...new Set(changedPaths.length ? changedPaths : typeof input?.file_path === 'string' ? [input.file_path] : [])];
-      head.textContent = paths.length > 1 ? `Файлов: ${paths.length}` : paths[0] || preview(input);
+      head.textContent = paths.length > 1 ? tr("Файлов: {0}", paths.length) : paths[0] || preview(input);
       const pathsKey = JSON.stringify(paths);
       if (filesSerial !== pathsKey) {
         filesSerial = pathsKey;
@@ -691,8 +692,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
             if (paths.length > 1) links.append(el('span', {}, path));
             continue;
           }
-          const link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file', title: `Открыть файл: ${path}` },
-            paths.length > 1 ? path : 'Открыть файл');
+          const link = el('a', { href: `#/code/${aid}/${pid}`, class: 'code-step-file', title: tr("Открыть файл: {0}", path) },
+            paths.length > 1 ? path : tr("Открыть файл"));
           link.addEventListener('click', (event) => {
             event.preventDefault();               // и заголовок шага не раскрывается
             openFile(tail);
@@ -702,13 +703,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       }
       details.classList.toggle('error', !!s.error);
       details.dataset.state = s.error ? 'failed' : s.status || 'completed';
-      state.textContent = s.error ? 'Ошибка' : ({ running: 'Выполняется', completed: 'Готово', failed: 'Ошибка',
-        stopped: 'Остановлено', unknown: 'Статус не сообщается' }[s.status] || 'Готово');
+      state.textContent = s.error ? tr("Ошибка") : ({ running: tr("Выполняется"), completed: tr("Готово"), failed: tr("Ошибка"),
+        stopped: tr("Остановлено"), unknown: tr("Статус не сообщается") }[s.status] || tr("Готово"));
       timing.textContent = Number.isFinite(s.duration_ms) && s.duration_ms >= 0
-        ? `${(s.duration_ms / 1000).toLocaleString('ru', { maximumFractionDigits: 2 })} с` : '';
-      if (Number.isInteger(s.exit_code)) timing.textContent += `${timing.textContent ? ' · ' : ''}код ${s.exit_code}`;
+        ? tr("{0} с", (s.duration_ms / 1000).toLocaleString(locale(), { maximumFractionDigits: 2 })) : '';
+      if (Number.isInteger(s.exit_code)) timing.textContent += tr("{0}код {1}", timing.textContent ? ' · ' : '', s.exit_code);
       progress.hidden = !s.progress_message && !s.output_truncated;
-      progress.textContent = [s.progress_message, s.output_truncated ? 'Показана часть вывода' : ''].filter(Boolean).join(' · ');
+      progress.textContent = [s.progress_message, s.output_truncated ? tr("Показана часть вывода") : ''].filter(Boolean).join(' · ');
       if (filled) {
         const followOutput = result.scrollHeight - result.scrollTop - result.clientHeight < 24;
         result.textContent = typeof s.text === 'string' ? s.text : '';
@@ -729,8 +730,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       paintNavigation();
       if (!details.open || filled) return;
       filled = true;
-      result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': 'Вывод инструмента' });
-      inputNode = el('pre', { class: 'code-step-input', tabindex: '0', 'aria-label': 'Ввод инструмента' });
+      result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': tr("Вывод инструмента") });
+      inputNode = el('pre', { class: 'code-step-input', tabindex: '0', 'aria-label': tr("Ввод инструмента") });
       paintInput();
       details.append(inputNode, result, progress);
       paint();
@@ -800,7 +801,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       }
       const branch = agent?.chat_fork && engine !== 'opencode' && m.forkable !== false && typeof m.id === 'string'
         ? el('button', { type: 'button', class: 'btn btn-sm code-fork', disabled: running,
-          title: 'Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.' }, 'Продолжить иначе') : null;
+          title: tr("Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.") }, tr("Продолжить иначе")) : null;
       branch?.addEventListener('click', () => forkAt(m.id));
       return el('div', { class: 'code-msg user' },
       ...(Array.isArray(m.images) ? m.images : []).map((i) => IMAGE_TYPES.has(i.mime)
@@ -871,24 +872,24 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     paintQuickActions();
     model.disabled = effort.disabled = access.disabled = resolving || historyLoading || running;
     paintPicks();
-    const label = running ? (engine === 'opencode' ? 'Отправить после ответа' : 'Отправить уточнение') : 'Отправить';
+    const label = running ? (engine === 'opencode' ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
     send.title = label;
     send.setAttribute('aria-label', label);
     send.querySelector('.code-go-label').textContent = label;
-    text.placeholder = running ? 'Уточнение…' : 'Задание…';
+    text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
     for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
     sessionNotice.hidden = !foreign && !external;
     if (external) {
       sessionText.textContent = waitingForRelease
-        ? 'Жду освобождения сессии в Codex Desktop или другом приложении. Текст и вложения сохранены.'
-        : 'Сессия занята в Codex Desktop или другом приложении. Дождитесь её освобождения или продолжите копию с той же историей. Копия и исходная сессия смогут работать независимо.';
-      takeSession.textContent = 'Продолжить копией';
-      waitSession.textContent = 'Дождаться освобождения';
+        ? tr("Жду освобождения сессии в Codex Desktop или другом приложении. Текст и вложения сохранены.")
+        : tr("Сессия занята в Codex Desktop или другом приложении. Дождитесь её освобождения или продолжите копию с той же историей. Копия и исходная сессия смогут работать независимо.");
+      takeSession.textContent = tr("Продолжить копией");
+      waitSession.textContent = tr("Дождаться освобождения");
     } else if (foreign) {
-      sessionText.textContent = waitingForRelease ? 'Жду завершения задания в другом окне. Результат появится здесь.'
-        : 'Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.';
-      takeSession.textContent = 'Продолжить здесь';
-      waitSession.textContent = 'Дождаться завершения';
+      sessionText.textContent = waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
+        : tr("Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.");
+      takeSession.textContent = tr("Продолжить здесь");
+      waitSession.textContent = tr("Дождаться завершения");
     }
     waitSession.disabled = waitingForRelease || claiming;
     takeSession.disabled = claiming;
@@ -941,13 +942,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
    * возвращается в поле с той же квитанцией (повтор без правки второй ход не запустит); live покажет ход,
    * если он всё же идёт. */
   async function checkSent() {
-    showStatus('Связь прервалась — проверяю, принято ли задание…', false);
+    showStatus(tr("Связь прервалась — проверяю, принято ли задание…"), false);
     await loadHistory(false, true);
     if (!alive) return;
     if (pendingInputs.has(draftKey)) {
       restoreInput();
-      showStatus('Связь прервалась. Задание возвращено в поле — повторная отправка не запустит его второй раз');
-    } else if (status.textContent.startsWith('Связь прервалась')) showStatus('');
+      showStatus(tr("Связь прервалась. Задание возвращено в поле — повторная отправка не запустит его второй раз"));
+    } else if (status.textContent.startsWith(tr("Связь прервалась"))) showStatus('');
     openLive();
   }
 
@@ -1008,8 +1009,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         foreign = external = waitingForRelease = false;
         clearTimeout(claimTimer);
         if (wasExternal) {
-          showStatus(result.forked ? 'Открыта копия с историей сессии. Задание можно отправить.'
-            : 'Сессия свободна. Задание можно отправить.', false);
+          showStatus(result.forked ? tr("Открыта копия с историей сессии. Задание можно отправить.")
+            : tr("Сессия свободна. Задание можно отправить."), false);
           await loadHistory(true);
         }
       }
@@ -1042,10 +1043,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintActivity(state, tool, completed = null) {
-    const labels = { idle: 'Нет активной задачи', thinking: 'Думает…', responding: 'Пишет ответ…',
-      waiting: 'Ждёт вашего ответа', done: 'Задача завершена', stopped: 'Ход остановлен',
-      error: 'Ошибка выполнения', offline: 'Нет связи с компьютером' };
-    const text = state === 'tool' ? `Выполняет: ${String(tool || 'действие')}` : labels[state];
+    const labels = { idle: tr("Нет активной задачи"), thinking: tr("Думает…"), responding: tr("Пишет ответ…"),
+      waiting: tr("Ждёт вашего ответа"), done: tr("Задача завершена"), stopped: tr("Ход остановлен"),
+      error: tr("Ошибка выполнения"), offline: tr("Нет связи с компьютером") };
+    const text = state === 'tool' ? tr("Выполняет: {0}", String(tool || tr("действие"))) : labels[state];
     if (!text) return;
     activity.dataset.state = state;
     activityText.textContent = text;
@@ -1077,7 +1078,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const buttons = [];
     // Запрос субагента хода (Codex, OpenCode): ответ уходит ему же; без поля — запрос самого хода
     if (typeof a.subtask === 'string' && a.subtask) {
-      card.append(el('p', { class: 'code-ask-subtask muted small' }, `Подзадача · ${a.subtask}`));
+      card.append(el('p', { class: 'code-ask-subtask muted small' }, tr("Подзадача · {0}", a.subtask)));
     }
 
     async function reply(body) {
@@ -1119,7 +1120,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           q.header ? el('legend', {}, String(q.header)) : null, el('p', {}, String(q.question ?? '')), ...options,
           own) };
       });
-      const go = el('button', { type: 'button', class: 'btn btn-accent code-ask-answer' }, 'Ответить');
+      const go = el('button', { type: 'button', class: 'btn btn-accent code-ask-answer' }, tr("Ответить"));
       go.addEventListener('click', () => {
         const answers = Object.create(null);
         for (const { q, own, identities, box } of groups) {
@@ -1141,13 +1142,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
     const instead = el('textarea', { class: 'input code-ask-instead', rows: '2', maxlength: '2000',
       placeholder: INSTEAD, 'aria-label': INSTEAD });
-    card.append(el('p', { class: 'code-ask-title' }, `${assistant} просит разрешения`),
+    card.append(el('p', { class: 'code-ask-title' }, tr("{0} просит разрешения", assistant)),
       el('b', { class: 'code-ask-tool' }, String(a.tool ?? '')),
       el('pre', { class: 'code-ask-input' }, JSON.stringify(a.input && typeof a.input === 'object' ? a.input : {}, null, 2)),
       el('div', { class: 'code-ask-actions' },
-        action('code-ask-yes', 'Да', () => ({ decision: 'allow' }), true),
-        a.always ? action('code-ask-always', engine === 'codex' ? 'Да, для этой сессии' : 'Да, больше не спрашивать', () => ({ decision: 'always' })) : null,
-        action('code-ask-no', 'Нет', () => ({ decision: 'deny', message: instead.value.trim() || null }))),
+        action('code-ask-yes', tr("Да"), () => ({ decision: 'allow' }), true),
+        a.always ? action('code-ask-always', engine === 'codex' ? tr("Да, для этой сессии") : tr("Да, больше не спрашивать"), () => ({ decision: 'always' })) : null,
+        action('code-ask-no', tr("Нет"), () => ({ decision: 'deny', message: instead.value.trim() || null }))),
       instead, error);
     return card;
   }
@@ -1174,7 +1175,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (text.value) drafts.set(draftKey, text.value);
       keepImages();
       autosize();
-      showStatus('Очередь не выполнена — уточнения возвращены в поле', false);
+      showStatus(tr("Очередь не выполнена — уточнения возвращены в поле"), false);
     }
     if (data.not_started) restoreInput();
     else acknowledgeInput();
@@ -1195,7 +1196,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
-      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? `Ошибка: ${data.message}` : 'Ошибка';
+      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", data.message) : tr("Ошибка");
       if (end) {
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
@@ -1612,16 +1613,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   async function submit(quick = null) {
     if (resolving || historyLoading || !settingsReady) return;
-    if (queue.paused()) { showStatus('Сначала завершите редактирование очереди'); return; }
+    if (queue.paused()) { showStatus(tr("Сначала завершите редактирование очереди")); return; }
     const value = quick ?? text.value;
     if (quick && (!hasGit || running)) {
-      showStatus(running ? 'Дождитесь завершения задания в чате' : 'Git недоступен — обновите статус проекта');
+      showStatus(running ? tr("Дождитесь завершения задания в чате") : tr("Git недоступен — обновите статус проекта"));
       return;
     }
     if ((!value.trim() && !images.length) || sending || adding || resolving || foreign || external) return;
     if (running) {
       if (!agent?.chat_control) {
-        showStatus('Обновите мост для отправки уточнений во время работы');
+        showStatus(tr("Обновите мост для отправки уточнений во время работы"));
         return;
       }
       const sentImages = images;
@@ -1637,7 +1638,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
           images = images.filter((i) => !sentImages.includes(i));
           keepImages();
-          if (alive) showStatus('Это задание уже принято', false);
+          if (alive) showStatus(tr("Это задание уже принято"), false);
           return;
         }
         if (unsentFollowups.has(result.id)) return;
@@ -1648,8 +1649,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
         images = images.filter((i) => !sentImages.includes(i));
         keepImages();
-        if (alive) showStatus(result.mode === 'queue' ? 'Уточнение принято — будет выполнено после текущего ответа'
-          : 'Уточнение отправлено в текущее задание', false);
+        if (alive) showStatus(result.mode === 'queue' ? tr("Уточнение принято — будет выполнено после текущего ответа")
+          : tr("Уточнение отправлено в текущее задание"), false);
       } catch (err) {
         if (!unknownOutcome(err)) sendIds.delete(draftKey);
         if (alive) {
@@ -1724,7 +1725,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       acknowledgeInput();
       if (controller === own) controller = null;
       if (!alive) return;
-      showStatus('Это задание уже принято', false);
+      showStatus(tr("Это задание уже принято"), false);
       if (!(await loadHistory(false, true))) openLive();
       return;
     }

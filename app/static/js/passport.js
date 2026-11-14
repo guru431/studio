@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Паспорт подключения (спека 2026-10-21-studio-connection-check-design, раздел 8): «Проверить» и «Пробный
  * ответ» в карточке подключения настроек раздела.
  *
@@ -14,26 +15,26 @@ import { api } from './api.js';
 import { dateTime } from './time.js';
 import { el } from './ui.js';
 
-export const NO_ANSWER = 'нет ответа: сервис недоступен или не разрешает запросы из браузера (CORS)';
-export const PROBE_WARNING = 'Отправит одно короткое сообщение; у платного сервиса это расход.';
+export const NO_ANSWER = tr("нет ответа: сервис недоступен или не разрешает запросы из браузера (CORS)");
+export const PROBE_WARNING = tr("Отправит одно короткое сообщение; у платного сервиса это расход.");
 const PROBE_TEXT = 'Ответь одним словом: ok';
 const PROBE_TOKENS = 16;
 const MODELS_MAX = 500;
 const ID_MAX = 200;
 const WORDS_MAX = 300;
 
-const CAPS = { generate: 'генерация', edit: 'правка', mask: 'кисть', strength: 'сила', seed: 'seed',
-  video: 'ролик из картинки', diarize: 'расшифровка с собеседниками', transcribe: 'расшифровка без собеседников',
-  dictation: 'голосовой ввод', dictation_ru: 'голосовой ввод (только русский)', voices: 'озвучка своими образцами',
-  tts: 'озвучка голосом по имени', describe: '«Описать»', translate: '«EN»', vision: 'смотрит фото',
-  chat: 'отвечает' };
-const SOURCES = { catalog: 'встроенный перечень srvllm', metadata: 'по описанию модели у сервиса',
-  name: 'по названию, не проверено', probe: 'пробный ответ', probe_browser: 'пробный ответ, по словам браузера' };
-const PROFILES = { srvllm: 'шлюз srvllm', s06: 'шлюз s06', openai: 'OpenAI', openrouter: 'OpenRouter', compatible: 'OpenAI-совместимый' };
-const NOT_GATEWAY = 'нет кисти, силы, seed, «Описать», «EN», роликов и образцов голоса; расшифровка — без собеседников';
+const CAPS = { generate: tr("генерация"), edit: tr("правка"), mask: tr("кисть"), strength: tr("сила"), seed: 'seed',
+  video: tr("ролик из картинки"), diarize: tr("расшифровка с собеседниками"), transcribe: tr("расшифровка без собеседников"),
+  dictation: tr("голосовой ввод"), dictation_ru: tr("голосовой ввод (только русский)"), voices: tr("озвучка своими образцами"),
+  tts: tr("озвучка голосом по имени"), describe: tr("«Описать»"), translate: '«EN»', vision: tr("смотрит фото"),
+  chat: tr("отвечает") };
+const SOURCES = { catalog: tr("встроенный перечень srvllm"), metadata: tr("по описанию модели у сервиса"),
+  name: tr("по названию, не проверено"), probe: tr("пробный ответ"), probe_browser: tr("пробный ответ, по словам браузера") };
+const PROFILES = { srvllm: tr("шлюз srvllm"), s06: tr("шлюз s06"), openai: 'OpenAI', openrouter: 'OpenRouter', compatible: tr("OpenAI-совместимый") };
+const NOT_GATEWAY = tr("нет кисти, силы, seed, «Описать», «EN», роликов и образцов голоса; расшифровка — без собеседников");
 const KEY_ORDER = ['refused', 'accepted', 'limited', 'unverified', 'unknown'];
 const UNVERIFIED = { state: 'unverified', code: 200,
-  words: 'сервис отдаёт список без ключа — ключ проверит первый запрос или «Пробный ответ»' };
+  words: tr("сервис отдаёт список без ключа — ключ проверит первый запрос или «Пробный ответ»") };
 
 /* ---- проверка ------------------------------------------------------------------------ */
 
@@ -41,16 +42,16 @@ async function tokenOf(conn) {
   try {
     return await api('GET', `/api/connections/${conn.id}/token`);
   } catch (err) {
-    if (err.status === 403 || err.status === 404) throw new Error('Токен этого подключения браузеру не выдаётся');
+    if (err.status === 403 || err.status === 404) throw new Error(tr("Токен этого подключения браузеру не выдаётся"));
     throw err;
   }
 }
 
 function keyWords(code) {
-  if (code === 200) return { state: 'accepted', code, words: 'принят' };
-  if (code === 401) return { state: 'refused', code, words: 'не принят (401): введите токен заново' };
-  if (code === 403) return { state: 'limited', code, words: 'принят, маршрут закрыт (403)' };
-  return { state: 'unknown', code, words: `неясно: сервис ответил ${code}` };
+  if (code === 200) return { state: 'accepted', code, words: tr("принят") };
+  if (code === 401) return { state: 'refused', code, words: tr("не принят (401): введите токен заново") };
+  if (code === 403) return { state: 'limited', code, words: tr("принят, маршрут закрыт (403)") };
+  return { state: 'unknown', code, words: tr("неясно: сервис ответил {0}", code) };
 }
 
 async function send(url, token, body) {
@@ -79,7 +80,7 @@ async function route(url, token) {
     return { row: { ...row, reach: { ok: false, words: NO_ANSWER } }, body: null };
   }
   return { row: { ...row, ms: Math.round(performance.now() - start), status: response.status,
-    reach: { ok: true, words: 'отвечает' }, key: keyWords(response.status) }, body: await jsonOf(response) };
+    reach: { ok: true, words: tr("отвечает") }, key: keyWords(response.status) }, body: await jsonOf(response) };
 }
 
 function modality(list) {
@@ -138,8 +139,8 @@ async function browserProbe(conn, model) {
       answer = await jsonOf(response);
     }
     const ms = Math.round(performance.now() - start);
-    result = response.status === 200 ? { ok: true, ms, words: `ответила за ${ms} мс` }
-      : { ok: false, ms, words: `не ответила: код ${response.status}${reason() ? ` — ${reason()}` : ''}`.slice(0, WORDS_MAX) };
+    result = response.status === 200 ? { ok: true, ms, words: tr("ответила за {0} мс", ms) }
+      : { ok: false, ms, words: tr("не ответила: код {0}{1}", response.status, reason() ? ` — ${reason()}` : '').slice(0, WORDS_MAX) };
   } catch {
     result = { ok: false, ms: null, words: NO_ANSWER };
   }
@@ -175,12 +176,12 @@ function keyOf(routes) {
 }
 
 function capsText(model) {
-  if (model.absent) return 'нет у шлюза';
+  if (model.absent) return tr("нет у шлюза");
   const bySource = new Map();
   for (const c of model.caps) bySource.set(c.source, [...(bySource.get(c.source) || []), CAPS[c.name] || c.name]);
   const parts = [...bySource].map(([source, names]) => `${names.join(', ')} — ${SOURCES[source] || source}`);
-  if (model.context_length) parts.push(`контекст ${model.context_length}`);
-  return parts.length ? parts.join('; ') : 'возможности не известны';
+  if (model.context_length) parts.push(tr("контекст {0}", model.context_length));
+  return parts.length ? parts.join('; ') : tr("возможности не известны");
 }
 
 function line(cls, ...text) {
@@ -192,28 +193,28 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
   const passport = conn.passport;
   const routes = passport ? routesOf(passport, conn, section) : null;
   const parts = [];
-  if (busy) parts.push('Проверяю…');
-  else parts.push(passport && passport.checked ? `Проверено ${stamp(passport.checked)}` : 'Не проверено');
+  if (busy) parts.push(tr("Проверяю…"));
+  else parts.push(passport && passport.checked ? tr("Проверено {0}", stamp(passport.checked)) : tr("Не проверено"));
   if (passport && passport.checked && routes) {
     const down = routes.find((r) => !r.reach.ok);
-    parts.push(down ? `адрес: ${down.reach.words}` : 'адрес отвечает');
+    parts.push(down ? tr("адрес: {0}", down.reach.words) : tr("адрес отвечает"));
     const key = keyOf(routes);
-    if (key) parts.push(`ключ ${key.words}`);
-  } else if (passport && passport.checked) parts.push('не проверяется: проба занимала бы карту');
-  if (passport && passport.source === 'browser') parts.push('по словам браузера');
+    if (key) parts.push(tr("ключ {0}", key.words));
+  } else if (passport && passport.checked) parts.push(tr("не проверяется: проба занимала бы карту"));
+  if (passport && passport.source === 'browser') parts.push(tr("по словам браузера"));
   const lines = [];
   if (passport && passport.checked) {
     if (routes) {
       for (const r of routes) {
-        const where = routes.length > 1 ? `Адрес ${r.path}` : 'Адрес';
-        lines.push(line('passport-reach', `${where} — ${r.reach.words}${r.ms !== null ? `, ${r.ms} мс` : ''}`));
+        const where = routes.length > 1 ? tr("Адрес {0}", r.path) : tr("Адрес");
+        lines.push(line('passport-reach', `${where} — ${r.reach.words}${r.ms !== null ? tr(", {0} мс", r.ms) : ''}`));
       }
       const key = keyOf(routes);
-      if (key) lines.push(line('passport-key', `Ключ — ${key.words}`));
+      if (key) lines.push(line('passport-key', tr("Ключ — {0}", key.words)));
       const counted = routes.find((r) => r.count !== null);
-      if (counted) lines.push(line('passport-count', `Модели — ${counted.count}`));
-    } else lines.push(line('passport-reach', 'Адрес — не проверяется: проба занимала бы карту'));
-    lines.push(line('passport-profile', `Профиль — ${PROFILES[passport.profile] || passport.profile}`
+      if (counted) lines.push(line('passport-count', tr("Модели — {0}", counted.count)));
+    } else lines.push(line('passport-reach', tr("Адрес — не проверяется: проба занимала бы карту")));
+    lines.push(line('passport-profile', tr("Профиль — {0}", PROFILES[passport.profile] || passport.profile)
       + (passport.profile === 'srvllm' ? '' : `: ${NOT_GATEWAY}`)));
   }
   if (passport) {
@@ -227,8 +228,8 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
       if (model) lines.push(line('passport-model', `${label(id)}: ${capsText(model)}`));
       const tried = (passport.probes || {})[id];
       if (tried) {
-        lines.push(line(`passport-probe${tried.ok ? '' : ' error'}`, `${label(id)}: пробный ответ — ${tried.words}`
-          + ` (${stamp(tried.at)}${tried.source === 'browser' ? ', по словам браузера' : ''})`));
+        lines.push(line(`passport-probe${tried.ok ? '' : ' error'}`, tr("{0}: пробный ответ — {1}", label(id), tried.words)
+          + ` (${stamp(tried.at)}${tried.source === 'browser' ? tr(", по словам браузера") : ''})`));
       }
     }
   }

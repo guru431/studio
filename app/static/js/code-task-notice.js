@@ -1,7 +1,8 @@
+import { tr } from './i18n.js';
 /* Служебное уведомление Claude остаётся текстом: разметка из вывода задач не исполняется. */
 import { el } from './ui.js';
 
-const LABELS = { completed: 'Завершена', failed: 'Ошибка', stopped: 'Остановлена', running: 'Выполняется' };
+const LABELS = { completed: tr("Завершена"), failed: tr("Ошибка"), stopped: tr("Остановлена"), running: tr("Выполняется") };
 const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" };
 
 export function taskNotice(text) {
@@ -19,12 +20,12 @@ export function taskNotice(text) {
   const status = fields.get('status')?.[0];
   const state = Object.hasOwn(LABELS, status) ? status : 'update';
   const root = el('article', { class: 'code-msg code-task-notice', 'data-state': state },
-    el('div', { class: 'code-task-heading' }, el('strong', {}, ids.length > 1 ? 'Фоновые задачи' : 'Фоновая задача'),
-      el('span', { class: 'code-task-state' }, LABELS[state] || 'Обновление')),
+    el('div', { class: 'code-task-heading' }, el('strong', {}, ids.length > 1 ? tr("Фоновые задачи") : tr("Фоновая задача")),
+      el('span', { class: 'code-task-state' }, LABELS[state] || tr("Обновление"))),
     el('p', { class: 'code-task-summary' }, summary));
   const output = [...(fields.get('event') || []), ...(fields.get('output') || [])].join('\n\n');
   if (output) root.append(el('details', { open: true, class: 'code-task-details' },
-    el('summary', {}, 'Вывод задачи'), el('pre', {}, output)));
+    el('summary', {}, tr("Вывод задачи")), el('pre', {}, output)));
   root.append(el('small', { class: 'code-task-id' }, ids.join(' · ')));
   return root;
 }

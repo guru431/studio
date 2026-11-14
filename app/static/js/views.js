@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Вид ленты разделов «Фото» и «Видео»: превью (крупно, с промптом), плитка (сетка миниатюр) и
  * таблица (строка на запись). Кнопка с меню — в шапке раздела; выбор живёт в учётке (me.views, PATCH
  * /api/me) и одинаков на всех её устройствах. Вид ставится атрибутом data-view ленты, по нему и
@@ -8,7 +9,7 @@ import { el } from './ui.js';
 import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 
-const VIEWS = [['preview', 'Превью'], ['tiles', 'Плитка'], ['table', 'Таблица']];   // значки — icons.js по имени вида
+const VIEWS = [['preview', tr("Превью")], ['tiles', tr("Плитка")], ['table', tr("Таблица")]];   // значки — icons.js по имени вида
 
 /** Кнопка вида раздела `section` с меню из трёх видов → { node, value }; onChange(вид) — после смены.
  * Меню — общий компонент menu.js: выбор, Escape (фокус — на кнопку) и нажатие вне закрывают его. */
@@ -28,7 +29,7 @@ export function viewSwitch(section, fallback, onChange) {
       paint();
       onChange(name);
     } }));
-  const menu = el('div', { class: 'view-menu', id: `${section}-view-menu`, role: 'menu', 'aria-label': 'Вид ленты' },
+  const menu = el('div', { class: 'view-menu', id: `${section}-view-menu`, role: 'menu', 'aria-label': tr("Вид ленты") },
     ...items);
   const node = el('div', { class: 'view-pick' }, toggle, menu);
   const popup = popupMenu(toggle, menu, { align: 'end' });
@@ -36,8 +37,8 @@ export function viewSwitch(section, fallback, onChange) {
   function paint() {
     const [, label] = VIEWS.find((v) => v[0] === value);
     toggle.replaceChildren(icon(value), icon('down', 'ico caret'));
-    toggle.setAttribute('aria-label', `Вид ленты: ${label}`);
-    toggle.title = `Вид ленты: ${label}`;
+    toggle.setAttribute('aria-label', tr("Вид ленты: {0}", label));
+    toggle.title = tr("Вид ленты: {0}", label);
     for (const b of items) b.setAttribute('aria-checked', String(b.dataset.view === value));
   }
   paint();

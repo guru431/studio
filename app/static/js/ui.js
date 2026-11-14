@@ -1,3 +1,4 @@
+import { language, message, tr } from './i18n.js';
 /* Мелочи разметки для разделов: элемент, поле с местом под отказ, своё окно <dialog>.
  *
  * Текст сервера — только через textContent (el() добавляет строки текстовыми узлами), innerHTML
@@ -37,7 +38,7 @@ export function field(label, input, key) {
 
 /** Слова отказа с заглавной буквы. */
 export function words(err) {
-  const text = String((err && err.message) || err || 'Не получилось');
+  const text = message((err && err.message) || err || tr("Не получилось"));
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -50,6 +51,7 @@ export function showError(box, err, codes, fallback) {
 
 /** Форма слова для числа: forms — [1 картинку, 2 картинки, 5 картинок]; 11–14 — третья. */
 export function plural(n, [one, few, many]) {
+  if (language() === 'en') return n === 1 ? one : many;
   const tens = n % 100;
   const units = n % 10;
   if (tens >= 11 && tens <= 14) return many;
@@ -69,17 +71,16 @@ export function button(text, attrs = {}, onClick) {
 export function agentDownload() {
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
-      'Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.'),
+      tr("Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.")),
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: 'studio-agent-setup.exe' },
-      'Скачать агент для Windows (.exe)'),
-    el('p', { class: 'muted small agent-download-needs' }, 'Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode'),
-    el('p', { class: 'agent-download-steps' }, 'Запустите studio-agent-setup.exe. В окне моста войдите логином'
-      + ' и паролем студии — компьютер появится в разделе «Агенты».'));
+      tr("Скачать агент для Windows (.exe)")),
+    el('p', { class: 'muted small agent-download-needs' }, tr("Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode")),
+    el('p', { class: 'agent-download-steps' }, tr("Запустите studio-agent-setup.exe. В окне моста войдите логином и паролем студии — компьютер появится в разделе «Агенты».")));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.
  * Закрылось (Escape, «Отмена», close()) — убирается со страницы. */
-export function openDialog(host, { id, title, body = [], actions = [], cancelText = 'Отмена' }) {
+export function openDialog(host, { id, title, body = [], actions = [], cancelText = tr("Отмена") }) {
   const close = button(cancelText, { class: 'btn dialog-close' });
   const dialog = el('dialog', { class: 'dialog', id, 'aria-labelledby': `${id}-title` },
     el('h2', { id: `${id}-title` }, title), ...body, el('div', { class: 'actions' }, close, ...actions));

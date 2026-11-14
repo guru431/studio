@@ -1,3 +1,4 @@
+import { locale, tr } from './i18n.js';
 /* Вкладки «Файлы» и «Git» проекта Claude Code (#/code/<aid>/<pid>) — спека 2026-10-28-studio-claude-code-design
  * 6.7, протокол канала §4 (files, read, raw, save, git) и §6 (пути).
  *
@@ -34,12 +35,12 @@ import { fileMark } from './code-git.js';
 import { renderMarkdown } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
-const SAVED = 'Сохранено';
-const CONFLICT = 'Файл изменился на компьютере — откройте его заново, чтобы не затереть правки';
-const TOO_LARGE = 'Файл больше 2 МиБ — не открывается';
-const BINARY = 'Двоичный файл — не открывается';
-const NO_CHANGES = 'Изменений нет';
-const NOT_GIT = 'Не репозиторий git';
+const SAVED = tr("Сохранено");
+const CONFLICT = tr("Файл изменился на компьютере — откройте его заново, чтобы не затереть правки");
+const TOO_LARGE = tr("Файл больше 2 МиБ — не открывается");
+const BINARY = tr("Двоичный файл — не открывается");
+const NO_CHANGES = tr("Изменений нет");
+const NOT_GIT = tr("Не репозиторий git");
 
 function icon(name) {
   return el('span', { class: 'code-file-icon', 'aria-hidden': 'true' }, svgIcon(name));
@@ -64,8 +65,8 @@ function fileDate(value) {
 }
 
 const FILE_COLUMNS = [
-  ['name', 'Имя'], ['ext', 'Расш.'], ['size', 'Размер'], ['files', 'Файлы'], ['folders', 'Папки'],
-  ['created', 'Создан'], ['modified', 'Изменён'],
+  ['name', tr("Имя")], ['ext', tr("Расш.")], ['size', tr("Размер")], ['files', tr("Файлы")], ['folders', tr("Папки")],
+  ['created', tr("Создан")], ['modified', tr("Изменён")],
 ];
 
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
@@ -89,21 +90,21 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   let statsGen = 0;
   let operating = false;
 
-  const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': 'Путь файла' });
-  const calculate = button('Просчитать все подпапки', { id: 'code-files-calculate', class: 'btn btn-sm',
-    title: 'Размеры и количество файлов и папок во всём проекте, включая вложенные папки' });
+  const crumbs = el('nav', { id: 'code-path', class: 'code-crumbs code-path', 'aria-label': tr("Путь файла") });
+  const calculate = button(tr("Просчитать все подпапки"), { id: 'code-files-calculate', class: 'btn btn-sm',
+    title: tr("Размеры и количество файлов и папок во всём проекте, включая вложенные папки") });
   const statsStatus = el('p', { id: 'code-files-stats', class: 'muted small', 'aria-live': 'polite' });
-  const list = el('ul', { id: 'code-files', class: 'code-files', role: 'tree', 'aria-label': 'Файлы проекта' });
-  const table = el('div', { class: 'code-file-table', tabindex: '0', role: 'region', 'aria-label': 'Сведения о файлах' },
+  const list = el('ul', { id: 'code-files', class: 'code-files', role: 'tree', 'aria-label': tr("Файлы проекта") });
+  const table = el('div', { class: 'code-file-table', tabindex: '0', role: 'region', 'aria-label': tr("Сведения о файлах") },
     el('div', { class: 'code-file-columns', 'aria-hidden': 'true' },
       ...FILE_COLUMNS.map(([key, label]) => el('span', { class: `code-file-${key}-column` }, label))), list);
   directories.set('', { group: list, loaded: false, pending: null });
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', tabindex: '0',
-    'aria-label': 'Открытый файл', hidden: true });
+    'aria-label': tr("Открытый файл"), hidden: true });
   const create = el('div', { class: 'code-files-create', hidden: !operations },
-    button('Новый файл', { id: 'code-new-file', class: 'btn btn-sm' }, () => operationDialog('create_file', dir)),
-    button('Новая папка', { id: 'code-new-folder', class: 'btn btn-sm' }, () => operationDialog('create_dir', dir)));
+    button(tr("Новый файл"), { id: 'code-new-file', class: 'btn btn-sm' }, () => operationDialog('create_file', dir)),
+    button(tr("Новая папка"), { id: 'code-new-folder', class: 'btn btn-sm' }, () => operationDialog('create_dir', dir)));
   const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, create, calculate),
     statsStatus, listError, el('div', { class: 'code-files-workspace' }, table, file));
   host.replaceChildren(view);
@@ -150,19 +151,19 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const creating = action.startsWith('create_');
     const moving = action === 'rename' || action === 'move';
     const deleting = action === 'delete';
-    const title = { create_file: 'Новый файл', create_dir: 'Новая папка', rename: 'Переименовать',
-      move: 'Переместить', delete: 'Удалить' }[action];
+    const title = { create_file: tr("Новый файл"), create_dir: tr("Новая папка"), rename: tr("Переименовать"),
+      move: tr("Переместить"), delete: tr("Удалить") }[action];
     const input = el('input', { id: 'code-file-operation-path', class: 'input', maxlength: '1024',
       autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
     input.value = action === 'rename' ? nameOf(path) : moving ? path : '';
     const error = el('p', { id: 'code-file-operation-error', class: 'error', 'aria-live': 'polite' });
     const submit = button(title, { id: 'code-file-operation-submit', class: `btn ${deleting ? 'btn-danger' : 'btn-accent'}` });
-    const body = [el('p', { class: 'code-operation-source' }, creating ? `Папка: ${path || name || 'Проект'}` : path)];
-    if (deleting) body.push(el('p', {}, isDir ? 'Папка и всё её содержимое будут удалены без возможности отмены.'
-      : 'Файл будет удалён без возможности отмены.'));
-    else body.push(field(moving && action !== 'rename' ? 'Новый путь от корня проекта, включая имя' : 'Имя', input),
-      el('p', { class: 'muted small' }, action === 'rename' ? 'Введите имя без пути.'
-        : 'Разделитель папок — /. Родительская папка должна существовать.'));
+    const body = [el('p', { class: 'code-operation-source' }, creating ? tr("Папка: {0}", path || name || tr("Проект")) : path)];
+    if (deleting) body.push(el('p', {}, isDir ? tr("Папка и всё её содержимое будут удалены без возможности отмены.")
+      : tr("Файл будет удалён без возможности отмены.")));
+    else body.push(field(moving && action !== 'rename' ? tr("Новый путь от корня проекта, включая имя") : tr("Имя"), input),
+      el('p', { class: 'muted small' }, action === 'rename' ? tr("Введите имя без пути.")
+        : tr("Разделитель папок — /. Родительская папка должна существовать.")));
     body.push(error);
     const dialog = openDialog(host, { id: 'code-file-operation', title, body, actions: [submit] });
     if (!deleting) { input.focus(); if (action === 'rename') input.select(); }
@@ -173,11 +174,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       if (operating || !alive) return;
       const value = input.value;
       if (!deleting && (!value || action === 'rename' && value.includes('/'))) {
-        error.textContent = 'Введите корректное имя или путь';
+        error.textContent = tr("Введите корректное имя или путь");
         return;
       }
       if (!creating && contains(path, selected) && dirty()) {
-        error.textContent = 'Сначала сохраните изменения открытого файла';
+        error.textContent = tr("Сначала сохраните изменения открытого файла");
         return;
       }
       const operation = action === 'rename' ? 'move' : action;
@@ -212,10 +213,10 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
 
   function actionsMenu(path, isDir) {
     if (!operations || operating) return;
-    const actions = [['rename', 'Переименовать'], ['move', 'Переместить'], ['delete', 'Удалить']];
-    if (isDir) actions.unshift(['create_file', 'Новый файл'], ['create_dir', 'Новая папка']);
+    const actions = [['rename', tr("Переименовать")], ['move', tr("Переместить")], ['delete', tr("Удалить")]];
+    if (isDir) actions.unshift(['create_file', tr("Новый файл")], ['create_dir', tr("Новая папка")]);
     const choices = el('div', { class: 'code-file-actions' });
-    const dialog = openDialog(host, { id: 'code-file-actions', title: nameOf(path), body: [choices], cancelText: 'Закрыть' });
+    const dialog = openDialog(host, { id: 'code-file-actions', title: nameOf(path), body: [choices], cancelText: tr("Закрыть") });
     for (const [action, label] of actions) choices.append(button(label, { class: `btn${action === 'delete' ? ' btn-danger' : ''}`,
       'data-action': action }, () => { dialog.close(); operationDialog(action, path, isDir); }));
   }
@@ -231,8 +232,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     if (calculate.disabled) return;
     const mine = ++statsGen;
     calculate.disabled = true;
-    calculate.textContent = 'Считаю…';
-    statsStatus.textContent = 'Подсчёт файлов и папок во всём проекте…';
+    calculate.textContent = tr("Считаю…");
+    statsStatus.textContent = tr("Подсчёт файлов и папок во всём проекте…");
     try {
       const result = await api('POST', `${url}/files/stats`, { path: '' });
       if (!alive || mine !== statsGen) return;
@@ -240,13 +241,13 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       for (const item of result.items) statistics.set(item.path, item);
       for (const node of nodes.values()) decorate(node);
       const total = statistics.get('');
-      const prefix = result.complete ? 'Всего:' : 'Подсчёт неполный — не менее';
-      statsStatus.textContent = `${prefix} ${total.size.toLocaleString('ru-RU')} Б · ${total.files.toLocaleString('ru-RU')} `
-        + `${plural(total.files, ['файл', 'файла', 'файлов'])} · ${total.folders.toLocaleString('ru-RU')} `
-        + `${plural(total.folders, ['папка', 'папки', 'папок'])}. С учётом вложенных папок.`
-        + ` Подсчитано: ${fileDate(result.checked_at)}.`
-        + (result.skipped_links ? ` Ссылок пропущено: ${result.skipped_links}.` : '')
-        + (!result.complete ? ' Достигнут предел обхода или часть записей недоступна.' : '');
+      const prefix = result.complete ? tr("Всего:") : tr("Подсчёт неполный — не менее");
+      statsStatus.textContent = tr("{0} {1} Б · {2} ", prefix, total.size.toLocaleString(locale()), total.files.toLocaleString(locale()))
+        + `${plural(total.files, [tr("файл"), tr("файла"), tr("файлов")])} · ${total.folders.toLocaleString(locale())} `
+        + tr("{0}. С учётом вложенных папок.", plural(total.folders, [tr("папка"), tr("папки"), tr("папок")]))
+        + tr(" Подсчитано: {0}.", fileDate(result.checked_at))
+        + (result.skipped_links ? tr(" Ссылок пропущено: {0}.", result.skipped_links) : '')
+        + (!result.complete ? tr(" Достигнут предел обхода или часть записей недоступна.") : '');
     } catch (err) {
       if (alive && mine === statsGen) {
         statsStatus.textContent = words(err);
@@ -255,7 +256,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     } finally {
       if (alive) {
         calculate.disabled = false;
-        calculate.textContent = 'Просчитать все подпапки';
+        calculate.textContent = tr("Просчитать все подпапки");
       }
     }
   });
@@ -299,9 +300,9 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       go();
       return;
     }
-    const yes = button('Уйти без сохранения', { class: 'btn btn-danger', id: 'code-unsaved-leave' });
-    const dialog = openDialog(host, { id: 'code-unsaved', title: 'Изменения не сохранены', actions: [yes],
-      cancelText: 'Остаться' });
+    const yes = button(tr("Уйти без сохранения"), { class: 'btn btn-danger', id: 'code-unsaved-leave' });
+    const dialog = openDialog(host, { id: 'code-unsaved', title: tr("Изменения не сохранены"), actions: [yes],
+      cancelText: tr("Остаться") });
     yes.addEventListener('click', () => {
       dialog.close();
       if (!alive) return;
@@ -312,7 +313,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
 
   function showPath(path, isFile) {
     const parts = path ? path.split('/') : [];
-    const items = [[name || 'Проект', '']];
+    const items = [[name || tr("Проект"), '']];
     parts.forEach((part, i) => items.push([part, parts.slice(0, i + 1).join('/')]));
     crumbs.replaceChildren();
     items.forEach(([text, target], i) => {
@@ -336,22 +337,22 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const mark = changes.length ? fileMark(changes.find((f) => fileMark(f.status).kind === 'conflict')?.status || changes[0].status) : null;
     row.dataset.git = mark?.kind || '';
     badge.textContent = mark ? item.dir ? '•' : mark.label : '';
-    badge.title = mark ? item.dir ? `Изменений в папке: ${changes.length}` : mark.title : '';
+    badge.title = mark ? item.dir ? tr("Изменений в папке: {0}", changes.length) : mark.title : '';
     const ext = item.dir || item.name.lastIndexOf('.') <= 0 ? '' : item.name.slice(item.name.lastIndexOf('.') + 1);
     const recursive = item.dir && statistics.get(path);
     const counts = recursive || node.counts;
     const lowerBound = recursive ? !recursive.complete : counts?.truncated;
-    const count = (key) => counts ? `${lowerBound ? '≥' : ''}${counts[key].toLocaleString('ru-RU')}` : '—';
-    const values = { ext: ext || '—', size: item.dir ? recursive ? count('size') : 'Папка'
-      : Number.isFinite(item.size) ? item.size.toLocaleString('ru-RU') : '—',
+    const count = (key) => counts ? `${lowerBound ? '≥' : ''}${counts[key].toLocaleString(locale())}` : '—';
+    const values = { ext: ext || '—', size: item.dir ? recursive ? count('size') : tr("Папка")
+      : Number.isFinite(item.size) ? item.size.toLocaleString(locale()) : '—',
       files: item.dir ? count('files') : '—', folders: item.dir ? count('folders') : '—',
       created: fileDate(item.created), modified: fileDate(item.modified) };
     for (const [key, cell] of Object.entries(node.cells)) {
       cell.textContent = values[key];
       const label = FILE_COLUMNS.find(([column]) => column === key)[1];
-      cell.title = `${label}: ${values[key]}${key === 'size' && (!item.dir || recursive) ? ' Б' : ''}`;
+      cell.title = `${label}: ${values[key]}${key === 'size' && (!item.dir || recursive) ? tr(" Б") : ''}`;
       if (key === 'files' || key === 'folders' || key === 'size' && recursive) cell.title += recursive
-        ? ' — включая все вложенные папки' : ' — непосредственно в папке, без вложенных папок; после раскрытия';
+        ? tr(" — включая все вложенные папки") : tr(" — непосредственно в папке, без вложенных папок; после раскрытия");
     }
     row.title = [path, ...Object.values(node.cells).map((cell) => cell.title), badge.title].filter(Boolean).join('\n');
     li.setAttribute('aria-label', `${item.name}\n${row.title}`);
@@ -400,8 +401,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const node = { path, item, row, badge, li, cells };
     nodes.set(path, node);
     if (operations) {
-      const menu = button(svgIcon('more'), { class: 'code-file-menu', 'aria-label': `Действия: ${item.name}`,
-        title: 'Действия с файлом или папкой', 'aria-haspopup': 'dialog' }, () => actionsMenu(path, node.item.dir));
+      const menu = button(svgIcon('more'), { class: 'code-file-menu', 'aria-label': tr("Действия: {0}", item.name),
+        title: tr("Действия с файлом или папкой"), 'aria-haspopup': 'dialog' }, () => actionsMenu(path, node.item.dir));
       li.classList.add('has-actions');
       li.append(menu);
       row.addEventListener('contextmenu', (event) => { event.preventDefault(); actionsMenu(path, node.item.dir); });
@@ -481,8 +482,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
           decorate(parent);
         }
         if (active?.isConnected) active.focus({ preventScroll: true });
-        if (truncated) group.append(el('li', { class: 'muted code-tree-note' }, 'Показаны первые 5000 записей'));
-        if (!items.length) group.append(el('li', { class: 'muted code-tree-note' }, 'Папка пуста'));
+        if (truncated) group.append(el('li', { class: 'muted code-tree-note' }, tr("Показаны первые 5000 записей")));
+        if (!items.length) group.append(el('li', { class: 'muted code-tree-note' }, tr("Папка пуста")));
         directory.loaded = true;
         return true;
       } catch (err) {
@@ -545,7 +546,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const status = el('p', { id: 'code-file-status', class: 'code-file-status', 'aria-live': 'polite' });
     const bar = el('div', { class: 'code-file-bar' });
     if (operations) bar.append(button(svgIcon('more'), { class: 'btn btn-sm', id: 'code-open-file-actions',
-      'aria-label': 'Действия с открытым файлом', title: 'Действия с открытым файлом' }, () => actionsMenu(path, false)));
+      'aria-label': tr("Действия с открытым файлом"), title: tr("Действия с открытым файлом") }, () => actionsMenu(path, false)));
     file.replaceChildren(bar, status);
     file.hidden = false;
     view.classList.add('has-file');
@@ -593,7 +594,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
     } };
     editing = mark;
-    const save = el('button', { type: 'button', id: 'code-save', class: 'btn btn-accent btn-sm' }, 'Сохранить');
+    const save = el('button', { type: 'button', id: 'code-save', class: 'btn btn-accent btn-sm' }, tr("Сохранить"));
     editor.addEventListener('input', () => say(status, '', false));
     save.addEventListener('click', async () => {
       if (save.disabled) return;
@@ -628,8 +629,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     if (/\.md$/i.test(path)) {
       editor.hidden = true;
       shown = el('div', { id: 'code-md', class: 'md code-md' }, renderMarkdown(editor.value));
-      const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': 'Показ' });
-      for (const [mode, text] of [['view', 'Разметка'], ['text', 'Исходный']]) {
+      const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': tr("Показ") });
+      for (const [mode, text] of [['view', tr("Разметка")], ['text', tr("Исходный")]]) {
         const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'view') }, text);
         b.addEventListener('click', () => {
           for (const other of modes.children) other.setAttribute('aria-pressed', String(other === b));
@@ -648,8 +649,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   function openPdf(path) {
     const { mine, bar, status } = fileFrame(path);
     const img = el('img', { alt: nameOf(path) });
-    const prev = el('button', { type: 'button', id: 'code-pdf-prev', class: 'btn btn-sm', 'aria-label': 'Предыдущая страница', disabled: true }, '‹');
-    const next = el('button', { type: 'button', id: 'code-pdf-next', class: 'btn btn-sm', 'aria-label': 'Следующая страница', disabled: true }, '›');
+    const prev = el('button', { type: 'button', id: 'code-pdf-prev', class: 'btn btn-sm', 'aria-label': tr("Предыдущая страница"), disabled: true }, '‹');
+    const next = el('button', { type: 'button', id: 'code-pdf-next', class: 'btn btn-sm', 'aria-label': tr("Следующая страница"), disabled: true }, '›');
     const label = el('span', { id: 'code-pdf-page', class: 'code-pdf-page' });
     bar.append(el('div', { class: 'code-pdf-nav' }, prev, label, next));
     file.append(el('div', { id: 'code-pdf', class: 'code-pdf' }, img));
@@ -670,7 +671,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         img.src = blobUrl;
         page = n;
         pages = Number.isInteger(total) && total > 0 ? total : n;
-        label.textContent = `Страница ${page} из ${pages}`;
+        label.textContent = tr("Страница {0} из {1}", page, pages);
       } catch (err) {
         if (!alive || mine !== fileGen) return;
         say(status, '', true);
@@ -704,7 +705,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       blobUrl = URL.createObjectURL(blob);
       const image = el('img', { id: 'code-file-image', src: blobUrl, alt: nameOf(path) });
       image.addEventListener('error', () => {
-        if (alive && mine === fileGen) say(status, 'Не удалось показать изображение', true);
+        if (alive && mine === fileGen) say(status, tr("Не удалось показать изображение"), true);
       });
       file.append(el('div', { class: 'code-pdf' }, image));
     } catch (err) {
@@ -755,14 +756,14 @@ export function gitView(host, { git, failed }) {
       }
       return;
     }
-    const head = el('p', { class: 'code-git-head' }, 'Ветка ',
+    const head = el('p', { class: 'code-git-head' }, tr("Ветка "),
       el('b', { class: 'code-git-branch' }, typeof git.branch === 'string' && git.branch ? git.branch : '—'));
     if (typeof git.upstream === 'string' && git.upstream) {
       const ahead = Number(git.ahead) || 0;
       const behind = Number(git.behind) || 0;
       head.append(el('span', { class: 'muted code-git-upstream' }, git.upstream));
-      if (ahead) head.append(el('span', { class: 'tag code-git-ahead' }, `впереди на ${ahead}`));
-      if (behind) head.append(el('span', { class: 'tag code-git-behind' }, `позади на ${behind}`));
+      if (ahead) head.append(el('span', { class: 'tag code-git-ahead' }, tr("впереди на {0}", ahead)));
+      if (behind) head.append(el('span', { class: 'tag code-git-behind' }, tr("позади на {0}", behind)));
     }
     const files = Array.isArray(git.files) ? git.files : [];
     box.replaceChildren(head, files.length

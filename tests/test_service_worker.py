@@ -7,6 +7,7 @@ import pytest
 from browser import find_node
 
 
+@pytest.mark.integration
 def test_notification_click_navigates_to_its_project():
     node = find_node()
     if node is None:

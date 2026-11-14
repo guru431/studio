@@ -250,4 +250,4 @@ def test_photo_preview_knows_the_thumbnail_side():
 
 def test_profile_module_is_gone_and_the_menu_opens_settings():
     assert not (STATIC / "js" / "profile.js").exists()
-    assert 'href="#/settings">Настройки</a>' in (STATIC / "index.html").read_text(encoding="utf-8")
+    assert re.search(r'href="#/settings"[^>]*>Настройки</a>', (STATIC / "index.html").read_text(encoding="utf-8"))

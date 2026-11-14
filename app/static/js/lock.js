@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Блокировка приложения или выбранных разделов: шторка, экран блокировки, отметки
  * «на экране» и помощники passkey.
  *
@@ -44,11 +45,11 @@ export const FRESH_SEC = 100;
 const PIN_MIN = 4;
 const PIN_MAX = 8;
 const PIN_WARN = 5;                    // с этого остатка подпись называет число попыток
-const EXHAUSTED = 'PIN не принимается после 10 ошибок — откройте паролем учётки';     // = screenlock pin_exhausted
+const EXHAUSTED = tr("PIN не принимается после 10 ошибок — откройте паролем учётки");     // = screenlock pin_exhausted
 
 /** «осталась 1 попытка», «осталось 3 попытки», «осталось 5 попыток». */
 export function attemptsLeft(n) {
-  return `${plural(n, ['осталась', 'осталось', 'осталось'])} ${n} ${plural(n, ['попытка', 'попытки', 'попыток'])}`;
+  return `${plural(n, [tr("осталась"), tr("осталось"), tr("осталось")])} ${n} ${plural(n, [tr("попытка"), tr("попытки"), tr("попыток")])}`;
 }
 
 /** Основной указатель — палец: телефон или планшет (не User-Agent: его меняет «версия для ПК»). */
@@ -62,7 +63,7 @@ export function deviceName() {
   if (/iPhone/.test(ua)) return 'iPhone';
   if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
   if (/Android/.test(ua)) return 'Android';
-  return 'Устройство';
+  return tr("Устройство");
 }
 
 export function b64u(bytes) {
@@ -303,7 +304,7 @@ function fresh() {
 /** «Открыть»: «Готовлю…» и выключена, пока готовятся варианты или идёт вызов; data-ready — варианты готовы. */
 function paintOpen() {
   openButton.disabled = checking || !!preparing || calling;
-  openButton.textContent = preparing ? 'Готовлю…' : 'Открыть';
+  openButton.textContent = preparing ? tr("Готовлю…") : tr("Открыть");
   if (options && !preparing && !calling) openButton.dataset.ready = '1';
   else delete openButton.dataset.ready;
 }
@@ -340,7 +341,7 @@ async function load() {
  * цифр; пока идёт запрос — панель выключена. */
 function paintPin() {
   pinDots.replaceChildren(...Array.from(digits, () => document.createElement('span')));
-  pinCount.textContent = digits.length ? `Набрано ${digits.length} из ${PIN_MIN}–${PIN_MAX}` : '';
+  pinCount.textContent = digits.length ? tr("Набрано {0} из {1}–{2}", digits.length, PIN_MIN, PIN_MAX) : '';
   for (const key of pinPad.querySelectorAll('button')) key.disabled = pinGoing;
   pinOk.disabled = checking || pinGoing || digits.length < PIN_MIN;
 }
@@ -530,7 +531,7 @@ async function openWithPasskey() {
     await api('POST', '/api/lock/open', { credential: credentialJSON(credential) });
   } catch (err) {
     calling = false;
-    say(credential ? words(err) : 'Устройство не подтвердило — нажмите «Открыть» ещё раз', 'error');
+    say(credential ? words(err) : tr("Устройство не подтвердило — нажмите «Открыть» ещё раз"), 'error');
     prepare();
     return;
   }
@@ -585,7 +586,7 @@ async function openWithPin() {
     const left = err.detail ? err.detail.left : undefined;
     if (err.code === 'pin_exhausted' || (err.code === 'pin' && left === 0)) pinGone(EXHAUSTED);
     else if (err.code === 'no_pin') pinGone('');                // PIN убрали на другом устройстве
-    else if (err.code === 'pin') say(left <= PIN_WARN ? `Неверный PIN — ${attemptsLeft(left)}` : 'Неверный PIN', 'error');
+    else if (err.code === 'pin') say(left <= PIN_WARN ? tr("Неверный PIN — {0}", attemptsLeft(left)) : tr("Неверный PIN"), 'error');
     else say(words(err), 'error');
     return;
   }
@@ -683,7 +684,7 @@ export function installLock() {
   elsewhere.type = 'button';
   elsewhere.className = 'btn-link';
   elsewhere.id = 'lock-elsewhere';
-  elsewhere.textContent = 'Открыть другой раздел';
+  elsewhere.textContent = tr("Открыть другой раздел");
   elsewhere.hidden = true;
   screen.append(elsewhere);
   elsewhere.addEventListener('click', () => {

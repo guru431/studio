@@ -1,8 +1,9 @@
+import { locale, tr } from './i18n.js';
 /* Подробности сессии: числа CLI и параметры чата, только память страницы. */
 import { el } from './ui.js';
 import { accessLabel, effortLabel, ENGINE_NAMES } from './code-options.js';
 
-const number = (value) => Number.isFinite(value) ? value.toLocaleString('ru-RU') : 'Не сообщается';
+const number = (value) => Number.isFinite(value) ? value.toLocaleString(locale()) : tr("Не сообщается");
 
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;
@@ -10,30 +11,30 @@ export function contextView(host, { chat, engine, project, messages }) {
   const hasCache = engine === 'codex' || engine === 'claude';
   const cacheText = el('b', { id: 'code-cache-text' }, '—');
   const cacheButton = el('button', { type: 'button', id: 'code-cache', class: 'code-cache',
-    hidden: !hasCache, 'aria-haspopup': 'dialog' }, el('span', {}, 'Кэш'), cacheText);
+    hidden: !hasCache, 'aria-haspopup': 'dialog' }, el('span', {}, tr("Кэш")), cacheText);
   const text = el('span', { id: 'code-context-text' }, '—');
   const meter = el('meter', { id: 'code-context-meter', class: 'sr', min: '0', max: '100', value: '0', hidden: true });
   const button = el('button', { type: 'button', id: 'code-context', class: 'code-context',
-    'aria-label': 'Контекст: нет данных. Подробности сессии', 'aria-haspopup': 'dialog',
-    title: 'Подробности сессии и контекста' }, meter, text);
+    'aria-label': tr("Контекст: нет данных. Подробности сессии"), 'aria-haspopup': 'dialog',
+    title: tr("Подробности сессии и контекста") }, meter, text);
   const content = el('dl', { class: 'code-usage-summary code-session-summary', 'aria-live': 'polite' });
-  const close = el('button', { type: 'button', class: 'btn' }, 'Закрыть');
+  const close = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const dialog = el('dialog', { id: 'code-context-dialog', class: 'dialog code-usage-dialog',
-    'aria-labelledby': 'code-context-title' }, el('h2', { id: 'code-context-title' }, 'Сессия и контекст'), content,
-  el('p', { class: 'muted small' }, 'Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.'),
+    'aria-labelledby': 'code-context-title' }, el('h2', { id: 'code-context-title' }, tr("Сессия и контекст")), content,
+  el('p', { class: 'muted small' }, tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
   const cacheRead = el('dd');
   const cacheWrite = el('dd');
   const cacheDetail = el('dd', { 'aria-live': 'off' });
-  const cacheClose = el('button', { type: 'button', class: 'btn' }, 'Закрыть');
+  const cacheClose = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const cacheDialog = hasCache ? el('dialog', { id: 'code-cache-dialog', class: 'dialog code-usage-dialog',
-    'aria-labelledby': 'code-cache-title' }, el('h2', { id: 'code-cache-title' }, 'Кэш'),
-    el('dl', { class: 'code-usage-summary' }, el('dt', {}, 'Из кэша'), cacheRead,
-      el('dt', {}, 'Запись в кэш'), cacheWrite, el('dt', {}, 'Кэш: оценка оставшегося времени'), cacheDetail),
+    'aria-labelledby': 'code-cache-title' }, el('h2', { id: 'code-cache-title' }, tr("Кэш")),
+    el('dl', { class: 'code-usage-summary' }, el('dt', {}, tr("Из кэша")), cacheRead,
+      el('dt', {}, tr("Запись в кэш")), cacheWrite, el('dt', {}, tr("Кэш: оценка оставшегося времени")), cacheDetail),
     el('p', { class: 'muted small' }, engine === 'codex'
-      ? 'Таймер кэша — оценка 30 минут от последней обработки контекста современной моделью Codex. Сервер не сообщает точное время хранения и не гарантирует попадание в кэш. Открытие чата отсчёт не продлевает.'
-      : 'Таймер кэша — оценка по отчёту Claude: 5 минут или час, при смешанных сроках — короткий. Если срок или время обработки неизвестны, показано «—». Открытие чата отсчёт не продлевает.'),
+      ? tr("Таймер кэша — оценка 30 минут от последней обработки контекста современной моделью Codex. Сервер не сообщает точное время хранения и не гарантирует попадание в кэш. Открытие чата отсчёт не продлевает.")
+      : tr("Таймер кэша — оценка по отчёту Claude: 5 минут или час, при смешанных сроках — короткий. Если срок или время обработки неизвестны, показано «—». Открытие чата отсчёт не продлевает.")),
     el('div', { class: 'dialog-actions' }, cacheClose)) : null;
   if (cacheDialog) host.append(cacheDialog);
   function cacheStatus() {
@@ -45,13 +46,13 @@ export function contextView(host, { chat, engine, project, messages }) {
     const now = Date.now() / 1000;
     if (!ttl || cache?.model !== settings.model || !Number.isFinite(cache?.updated_at)
         || cache.updated_at <= 0 || cache.updated_at > now) {
-      return { state: 'unknown', text: '—', title: 'Кэш: время не сообщается. Сведения о кэше' };
+      return { state: 'unknown', text: '—', title: tr("Кэш: время не сообщается. Сведения о кэше") };
     }
     const seconds = Math.max(0, Math.ceil(ttl - (now - cache.updated_at)));
     return { state: seconds ? 'estimated' : 'elapsed',
       text: `≈${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
-      title: seconds ? `Кэш: ориентировочно осталось ${Math.floor(seconds / 60)} мин ${seconds % 60} с`
-        : `Кэш: расчётные ${ttl / 60} минут прошли; состояние серверного кэша неизвестно` };
+      title: seconds ? tr("Кэш: ориентировочно осталось {0} мин {1} с", Math.floor(seconds / 60), seconds % 60)
+        : tr("Кэш: расчётные {0} минут прошли; состояние серверного кэша неизвестно", ttl / 60) };
   }
   function paintCache() {
     if (!hasCache) return;
@@ -67,16 +68,16 @@ export function contextView(host, { chat, engine, project, messages }) {
   function paint() {
     const usage = context?.usage || {};
     const entries = [
-      ['Помощник', ENGINE_NAMES[engine]], ['Проект', project?.name || '—'], ['Сессия', chat],
-      ['Модель', settings.model || 'Не сообщается'], ['Усилие', effortLabel(settings.effort)],
-      ['Права', accessLabel(engine, settings.access)], ['Сообщений в ленте', number(messages())],
-      ['Общий размер контекста, токенов', number(context?.limit)],
-      ['Занято токенов', number(context?.used)],
-      ['Свободно токенов', number(context ? Math.max(0, context.limit - context.used) : null)],
-      ['Заполнено', context ? `${number(context.percent)}%` : 'Не сообщается'],
-      ['Потрачено токенов за сессию', number(usage.total)],
-      ['Входные токены', number(usage.input)], ['Выходные токены', number(usage.output)],
-      ['Рассуждения, токенов', number(usage.reasoning)],
+      [tr("Помощник"), ENGINE_NAMES[engine]], [tr("Проект"), project?.name || '—'], [tr("Сессия"), chat],
+      [tr("Модель"), settings.model || tr("Не сообщается")], [tr("Усилие"), effortLabel(settings.effort)],
+      [tr("Права"), accessLabel(engine, settings.access)], [tr("Сообщений в ленте"), number(messages())],
+      [tr("Общий размер контекста, токенов"), number(context?.limit)],
+      [tr("Занято токенов"), number(context?.used)],
+      [tr("Свободно токенов"), number(context ? Math.max(0, context.limit - context.used) : null)],
+      [tr("Заполнено"), context ? `${number(context.percent)}%` : tr("Не сообщается")],
+      [tr("Потрачено токенов за сессию"), number(usage.total)],
+      [tr("Входные токены"), number(usage.input)], [tr("Выходные токены"), number(usage.output)],
+      [tr("Рассуждения, токенов"), number(usage.reasoning)],
     ];
     content.replaceChildren(...entries.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)]));
   }
@@ -100,8 +101,8 @@ export function contextView(host, { chat, engine, project, messages }) {
       text.textContent = `${Math.round(percent)}%`;
       button.style.setProperty('--context-percent', `${percent}%`);
       button.dataset.level = percent < 50 ? 'green' : percent < 70 ? 'yellow' : percent < 90 ? 'orange' : 'red';
-      button.setAttribute('aria-label', `Контекст заполнен на ${percent}%. Подробности сессии`);
-      button.title = `${number(data.used)} / ${number(data.limit)} токенов · Подробности сессии`;
+      button.setAttribute('aria-label', tr("Контекст заполнен на {0}%. Подробности сессии", percent));
+      button.title = tr("{0} / {1} токенов · Подробности сессии", number(data.used), number(data.limit));
       button.dataset.used = String(data.used);
       button.dataset.limit = String(data.limit);
       if (dialog.open) paint();

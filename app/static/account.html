@@ -4,19 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<title>Студия — учётная запись</title>
+<title data-i18n>Студия — учётная запись</title>
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
+<script src="/static/en.js?v={{v}}"></script>
+<script src="/static/i18n.js?v={{v}}"></script>
 <script src="/static/theme.js?v={{v}}"></script>
 <script src="/static/account.js?v={{v}}" defer></script>
 </head>
 <body class="solo">
 <main class="solo-card">
-  <div class="brand"><img src="/static/icons/icon.svg" alt=""><h1 id="title">Студия</h1></div>
+  <div class="brand"><img src="/static/icons/icon.svg" alt=""><h1 id="title" data-i18n>Студия</h1></div>
   <p id="description"></p>
   <form id="account-form"></form>
   <p id="account-status" role="status" aria-live="polite"></p>
-  <a class="btn" href="/login" id="account-back">К входу</a>
+  <a class="btn" href="/login" id="account-back" data-i18n>К входу</a>
 </main>
 </body>
 </html>

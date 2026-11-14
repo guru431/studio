@@ -4,6 +4,11 @@
 столбца «Название». В коде имена, значки и порядок разделов — один реестр `app/static/js/sections-meta.js`
 (значки — `app/static/js/icons.js`); сервер (`sections.NAMES`, `push.TITLE`) сверяет `tests/test_sections_meta.py`.
 
+Интерфейс поддерживает русский и английский; английские соответствия — `app/static/en.js`.
+Русские названия ниже остаются исходными ключами, id и адреса разделов одинаковы для обоих языков.
+В английском интерфейсе: Chat · Photos · Video · Speech · Transcription · Scans · Translation · Agents;
+служебные экраны — Search · Settings · Administration.
+
 ## Приложение
 
 | Где | Сейчас | Файл |

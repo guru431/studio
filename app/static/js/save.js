@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* «Скачать» картинку или ролик истории (превью ленты, просмотр, карточка ролика) и несколько разом
  * (выделение в ленте, select.js).
  *
@@ -46,10 +47,10 @@ async function offer(files, host) {
     if (err.name === 'AbortError') return true;
     if (err.name !== 'NotAllowedError') throw err;
     const many = files.length > 1;
-    const again = button('Сохранить', { id: 'save-again', class: 'btn btn-accent' });
-    const dialog = openDialog(host, { id: 'save-dialog', title: many ? 'Файлы готовы' : 'Файл готов', actions: [again],
-      body: [el('p', {}, many ? 'Нажмите «Сохранить» и выберите в меню «Сохранить изображения» или «Сохранить видео».'
-        : 'Нажмите «Сохранить» и выберите в меню «Сохранить изображение» или «Сохранить видео».')] });
+    const again = button(tr("Сохранить"), { id: 'save-again', class: 'btn btn-accent' });
+    const dialog = openDialog(host, { id: 'save-dialog', title: many ? tr("Файлы готовы") : tr("Файл готов"), actions: [again],
+      body: [el('p', {}, many ? tr("Нажмите «Сохранить» и выберите в меню «Сохранить изображения» или «Сохранить видео».")
+        : tr("Нажмите «Сохранить» и выберите в меню «Сохранить изображение» или «Сохранить видео»."))] });
     return new Promise((resolve) => {
       again.addEventListener('click', () => {
         navigator.share({ files }).catch(() => {});

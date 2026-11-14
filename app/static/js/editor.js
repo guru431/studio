@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Правка картинки ленты: инструкция, сила для Lustify, кисть по маске (перенос окна правки
  * прежней страницы app/index.html).
  *
@@ -19,12 +20,12 @@ const PROMPT_MAX = 24000;
 
 export function openEditor(item, choice, onCreated) {
   const host = document.getElementById('view');
-  const photo = el('img', { id: 'edit-photo', alt: 'Фото для изменения' });
+  const photo = el('img', { id: 'edit-photo', alt: tr("Фото для изменения") });
   photo.src = `/api/media/${encodeURIComponent(item.media_id)}`;
   photo.decode().then(() => show(host, item, choice, photo, onCreated), () => {
     const status = document.getElementById('photo-status');
     if (status) {
-      status.textContent = 'Не удалось открыть фото для изменения';
+      status.textContent = tr("Не удалось открыть фото для изменения");
       status.className = 'status error';
     }
   });
@@ -36,21 +37,21 @@ function show(host, item, choice, photo, onCreated) {
   const mask = el('canvas', { id: 'edit-mask', hidden: true });
   const selection = document.createElement('canvas');           // белое — выделено, чёрное — нет
   const prompt = el('textarea', { id: 'edit-prompt', class: 'input', rows: '3', maxlength: String(PROMPT_MAX),
-    placeholder: 'Например: замени цвет куртки на синий, остальное оставь как есть' });
+    placeholder: tr("Например: замени цвет куртки на синий, остальное оставь как есть") });
   const strength = el('input', { id: 'edit-strength', type: 'number', class: 'input', min: '0.05', max: '1', step: '0.05',
     value: STRENGTH });
   const strengthLabel = el('label', { id: 'edit-strength-label', class: 'field', hidden: !lustify },
-    el('span', {}, 'Сила перерисовки'), strength);
+    el('span', {}, tr("Сила перерисовки")), strength);
   const series = seriesControl({ prefix: 'edit-series', canStrength: () => lustify, canSeed: () => gateway,
     from: () => strength.value });
-  const seriesBox = el('div', { id: 'edit-series', class: 'field' }, el('span', {}, 'Серия'), series.panel);
+  const seriesBox = el('div', { id: 'edit-series', class: 'field' }, el('span', {}, tr("Серия")), series.panel);
   strength.addEventListener('input', () => series.refresh());
   const local = el('input', { id: 'edit-local', type: 'checkbox' });
   const brush = el('input', { id: 'edit-brush', type: 'range', min: '8', max: '120', value: '40' });
-  const clear = button('Очистить выделение', { class: 'btn btn-sm', id: 'edit-clear-mask' });
+  const clear = button(tr("Очистить выделение"), { class: 'btn btn-sm', id: 'edit-clear-mask' });
   const tools = el('div', { id: 'edit-brush-tools', class: 'edit-tools', hidden: true },
-    el('label', { class: 'edit-brush' }, 'Размер кисти', brush), clear,
-    el('p', { class: 'muted small' }, 'Закрасьте нужную часть фото пальцем или мышью. Пиксели вне выделения будут взяты из исходника без изменений.'));
+    el('label', { class: 'edit-brush' }, tr("Размер кисти"), brush), clear,
+    el('p', { class: 'muted small' }, tr("Закрасьте нужную часть фото пальцем или мышью. Пиксели вне выделения будут взяты из исходника без изменений.")));
   const error = el('p', { id: 'edit-error', class: 'error', role: 'alert' });
   // как image_upload.normalize_image (рамка) и Image.thumbnail Pillow (сторона по соотношению): правка идёт
   // по копии не больше 2048 по стороне и 2 Мп
@@ -61,20 +62,20 @@ function show(host, item, choice, photo, onCreated) {
   if (x / y >= aspect) x = near(y * aspect, (n) => Math.abs(aspect - n / y));
   else y = near(x / aspect, (n) => (n === 0 ? 0 : Math.abs(aspect - x / n)));
   const sizeTip = el('p', { id: 'edit-size-tip', class: 'muted small', hidden: scale >= 1 },
-    `Фото будет уменьшено до ${x}×${y}.`);
+    tr("Фото будет уменьшено до {0}×{1}.", x, y));
   const promptBox = fieldBox(prompt);
-  const submit = button('Применить изменения', { class: 'btn btn-accent', id: 'edit-submit' });
-  const dialog = openDialog(host, { id: 'editor', title: 'Изменить фотографию', actions: [submit], body: [
+  const submit = button(tr("Применить изменения"), { class: 'btn btn-accent', id: 'edit-submit' });
+  const dialog = openDialog(host, { id: 'editor', title: tr("Изменить фотографию"), actions: [submit], body: [
     el('div', { class: 'edit-layout' }, el('div', { id: 'edit-stage' }, photo, mask), el('div', { class: 'edit-controls' },
-    el('div', { class: 'field' }, el('label', { for: 'edit-prompt' }, 'Что изменить'), promptBox.box, promptBox.error),
-    el('p', { id: 'edit-model-label', class: 'small' }, `Модель: ${choice ? modelLabel(choice.model) : 'по умолчанию раздела'} (выбрана в разделе)`),
+    el('div', { class: 'field' }, el('label', { for: 'edit-prompt' }, tr("Что изменить")), promptBox.box, promptBox.error),
+    el('p', { id: 'edit-model-label', class: 'small' }, tr("Модель: {0} (выбрана в разделе)", choice ? modelLabel(choice.model) : tr("по умолчанию раздела"))),
     el('p', { id: 'edit-mode-tip', class: 'muted small' }, !gateway
-      ? 'Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.'
+      ? tr("Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.")
       : lustify
-        ? 'Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.'
-        : 'FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.'),
+        ? tr("Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.")
+        : tr("FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.")),
     sizeTip, strengthLabel, seriesBox,
-    el('label', { class: 'check', hidden: !gateway }, local, 'Изменить только выделенную область'),
+    el('label', { class: 'check', hidden: !gateway }, local, tr("Изменить только выделенную область")),
     tools, error))] });
 
   selection.width = mask.width = photo.naturalWidth;
@@ -134,16 +135,16 @@ function show(host, item, choice, photo, onCreated) {
     error.textContent = '';
     const text = prompt.value.trim();
     if (!text) {
-      error.textContent = 'Опишите необходимые изменения';
+      error.textContent = tr("Опишите необходимые изменения");
       return;
     }
     if (local.checked && !selected) {
-      error.textContent = 'Выделите кистью область для изменения';
+      error.textContent = tr("Выделите кистью область для изменения");
       return;
     }
     const force = Number(strength.value);         // пусто или не число — тоже отказ
     if (lustify && !(force >= 0.05 && force <= 1)) {
-      error.textContent = 'Сила перерисовки — число от 0.05 до 1';
+      error.textContent = tr("Сила перерисовки — число от 0.05 до 1");
       return;
     }
     const body = new FormData();
@@ -169,7 +170,7 @@ function show(host, item, choice, photo, onCreated) {
     try {
       if (snapshot) {
         const png = await new Promise((resolve) => snapshot.toBlob(resolve, 'image/png'));
-        if (!png) throw new Error('Не удалось подготовить выделение');
+        if (!png) throw new Error(tr("Не удалось подготовить выделение"));
         body.append('mask', png, 'mask.png');
       }
       const created = await api('POST', '/api/images', body);

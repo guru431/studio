@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Ряд вкладок сессий открытого проекта Claude Code (спека 2026-10-29-studio-code-workspace-design, 6.4–6.5).
  *
  * tabBar(host, { pick, close, add, move }) → { show({ tabs, active, info, loaded, choosing, drafts, offline }), unmount() }:
@@ -17,16 +18,16 @@ import { ENGINE_NAMES } from './code-options.js';
 import { icon } from './icons.js';
 import { el } from './ui.js';
 
-const UNTITLED = 'Новый чат';
-const SESSION = 'Сессия';
+const UNTITLED = tr("Новый чат");
+const SESSION = tr("Сессия");
 const LONG_PRESS_MS = 400;
 const DRAG_MOUSE_PX = 6;
 const DRAG_TOUCH_SLOP_PX = 8;
 
 export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
-  const bar = el('div', { id: 'code-tabbar', class: 'code-tabbar', role: 'tablist', 'aria-label': 'Сессии проекта' });
-  const add = el('button', { type: 'button', id: 'code-tab-add', class: 'code-tab-add', 'aria-label': 'Сессии проекта',
-    title: 'Сессии проекта', 'aria-expanded': 'false', 'aria-controls': 'code-tab-menu' }, '+');
+  const bar = el('div', { id: 'code-tabbar', class: 'code-tabbar', role: 'tablist', 'aria-label': tr("Сессии проекта") });
+  const add = el('button', { type: 'button', id: 'code-tab-add', class: 'code-tab-add', 'aria-label': tr("Сессии проекта"),
+    title: tr("Сессии проекта"), 'aria-expanded': 'false', 'aria-controls': 'code-tab-menu' }, '+');
   bar.append(add);
   const root = el('div', { class: 'code-tabs-row' }, bar);
   host.append(root);
@@ -45,14 +46,14 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     const title = known ? known.title || UNTITLED : state.loaded ? SESSION : '';
     const engine = known ? el('span', { class: 'tag code-tab-engine' }, ENGINE_NAMES[known.engine || 'claude']) : null;
     let mark = null;
-    if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: 'ждёт ответа' }, el('span', { class: 'sr' }, 'ждёт ответа'));
-    else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: 'идёт ход' }, el('span', { class: 'sr' }, 'идёт ход'));
-    const shut = el('button', { type: 'button', tabindex: '-1', class: 'code-tab-close', 'aria-label': 'Закрыть вкладку', title: 'Закрыть вкладку' }, icon('x'));
+    if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: tr("ждёт ответа") }, el('span', { class: 'sr' }, tr("ждёт ответа")));
+    else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: tr("идёт ход") }, el('span', { class: 'sr' }, tr("идёт ход")));
+    const shut = el('button', { type: 'button', tabindex: '-1', class: 'code-tab-close', 'aria-label': tr("Закрыть вкладку"), title: tr("Закрыть вкладку") }, icon('x'));
     const draft = state.drafts?.has(chat)
-      ? el('span', { class: 'code-tab-draft', title: 'Есть неотправленный черновик' }, el('span', { 'aria-hidden': 'true' }, '✎'),
-        el('span', { class: 'sr' }, 'есть черновик')) : null;
+      ? el('span', { class: 'code-tab-draft', title: tr("Есть неотправленный черновик") }, el('span', { 'aria-hidden': 'true' }, '✎'),
+        el('span', { class: 'sr' }, tr("есть черновик"))) : null;
     const offline = state.offline
-      ? el('span', { class: 'code-tab-offline', title: 'Компьютер не на связи' }, el('span', { class: 'sr' }, 'не на связи')) : null;
+      ? el('span', { class: 'code-tab-offline', title: tr("Компьютер не на связи") }, el('span', { class: 'sr' }, tr("не на связи"))) : null;
     const selected = chat === state.active;
     const stop = state.active || state.tabs[0];
     const node = el('div', { class: 'code-tab', role: 'tab', tabindex: chat === stop ? '0' : '-1', 'data-chat': chat,

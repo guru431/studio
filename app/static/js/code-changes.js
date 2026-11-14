@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Правки последнего ответа помощника. Только предоставленные CLI данные, без чтения диска. */
 import { icon } from './icons.js';
 import { el, openDialog } from './ui.js';
@@ -23,20 +24,20 @@ export function changesView(host, { openFile }) {
         entry.addEventListener('click', () => { selected = file.path; render(true); });
         list.append(entry);
       }
-      body.replaceChildren(el('p', { class: 'muted small' }, 'Правки последнего ответа помощника'), list);
-      if (!state.files.length) list.append(el('p', { class: 'muted' }, 'Изменённых файлов нет'));
-      if (state.truncated) list.append(el('p', { class: 'muted small' }, 'Показана часть изменений'));
+      body.replaceChildren(el('p', { class: 'muted small' }, tr("Правки последнего ответа помощника")), list);
+      if (!state.files.length) list.append(el('p', { class: 'muted' }, tr("Изменённых файлов нет")));
+      if (state.truncated) list.append(el('p', { class: 'muted small' }, tr("Показана часть изменений")));
       if (focus) list.querySelector('button')?.focus();
       return;
     }
-    const back = el('button', { type: 'button', class: 'btn btn-sm code-changed-back' }, 'К списку файлов');
+    const back = el('button', { type: 'button', class: 'btn btn-sm code-changed-back' }, tr("К списку файлов"));
     back.addEventListener('click', () => { selected = null; render(true); });
-    const full = el('button', { type: 'button', class: 'btn btn-sm code-changed-open' }, 'Открыть файл');
+    const full = el('button', { type: 'button', class: 'btn btn-sm code-changed-open' }, tr("Открыть файл"));
     full.addEventListener('click', () => { dialog.close(); openFile(row.path); });
     const diff = changeView(state.changes.filter((change) => change.path === row.path));
     body.replaceChildren(el('div', { class: 'code-changed-actions' }, back, full),
       el('h3', { class: 'code-changed-path' }, row.path),
-      diff || el('p', { class: 'muted' }, 'Помощник не передал изменения этого файла'));
+      diff || el('p', { class: 'muted' }, tr("Помощник не передал изменения этого файла")));
     if (focus) back.focus();
   }
 
@@ -46,7 +47,7 @@ export function changesView(host, { openFile }) {
     serial = value;
     state = next;
     count.textContent = `${state.truncated ? '≥' : ''}${state.files.length}`;
-    const label = `Изменённые файлы последнего ответа: ${count.textContent}`;
+    const label = tr("Изменённые файлы последнего ответа: {0}", count.textContent);
     button.setAttribute('aria-label', label);
     button.title = label;
     if (dialog?.open) render();
@@ -55,7 +56,7 @@ export function changesView(host, { openFile }) {
   button.addEventListener('click', () => {
     selected = null;
     render();
-    dialog = openDialog(host, { id: 'code-changed-dialog', title: 'Изменённые файлы', body: [body], cancelText: 'Закрыть' });
+    dialog = openDialog(host, { id: 'code-changed-dialog', title: tr("Изменённые файлы"), body: [body], cancelText: tr("Закрыть") });
     dialog.classList.add('code-changed-dialog');
     button.setAttribute('aria-expanded', 'true');
     dialog.addEventListener('close', () => { dialog = null; button.setAttribute('aria-expanded', 'false'); });

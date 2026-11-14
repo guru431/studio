@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* На телефоне — все разделы либо 3–4 личных и «Ещё». На компьютере остаётся исходный рельс.
  * Порядок и имена — из реестра sections-meta.js (вкладки рельса строит app.js); по умолчанию — Чат, Фото, Агенты.
  * Сохранённый выбор — набор разделов, не порядок: смена порядка рельса его не ломает. Подписи видны на узком экране. */
@@ -26,26 +27,26 @@ export function setupMobileNavigation(me) {
     if (localStorage.getItem(modeKey) === 'all') mode = 'all';
   } catch { /* Закрытое или повреждённое хранилище — стандартные разделы. */ }
 
-  const label = el('span', { id: 'mobile-more-label' }, 'Ещё');
+  const label = el('span', { id: 'mobile-more-label' }, tr("Ещё"));
   const more = el('button', { id: 'mobile-more', class: 'mobile-more', type: 'button',
     'aria-haspopup': 'dialog', 'aria-controls': 'mobile-sections', 'aria-expanded': 'false' },
     el('span', { class: 'tab-icon' }, icon('more', 'ico mobile-more-icon'),
       el('span', { id: 'mobile-running-count', class: 'tab-count', 'aria-hidden': 'true', hidden: true })), label);
   rail.insertBefore(more, rail.querySelector('.spacer'));
-  const close = el('button', { id: 'mobile-sections-close', class: 'btn-link', type: 'button' }, 'Закрыть');
-  const links = el('nav', { id: 'mobile-section-links', 'aria-label': 'Остальные разделы' });
-  const edit = el('button', { id: 'mobile-nav-edit', class: 'btn', type: 'button' }, 'Настроить нижнюю панель');
+  const close = el('button', { id: 'mobile-sections-close', class: 'btn-link', type: 'button' }, tr("Закрыть"));
+  const links = el('nav', { id: 'mobile-section-links', 'aria-label': tr("Остальные разделы") });
+  const edit = el('button', { id: 'mobile-nav-edit', class: 'btn', type: 'button' }, tr("Настроить нижнюю панель"));
   const editor = el('form', { id: 'mobile-nav-editor', hidden: true });
   const compact = el('input', { id: 'mobile-nav-mode-compact', type: 'radio', name: 'mobile-nav-mode', value: 'compact' });
   const all = el('input', { id: 'mobile-nav-mode-all', type: 'radio', name: 'mobile-nav-mode', value: 'all' });
-  const modes = el('fieldset', {}, el('legend', {}, 'Нижняя панель'),
-    el('label', {}, compact, '3–4 раздела и «Ещё»'),
-    el('label', {}, all, 'Все разделы · 8 иконок'));
-  const choices = el('fieldset', {}, el('legend', {}, 'Выберите 3–4 основных раздела'));
+  const modes = el('fieldset', {}, el('legend', {}, tr("Нижняя панель")),
+    el('label', {}, compact, tr("3–4 раздела и «Ещё»")),
+    el('label', {}, all, tr("Все разделы · 8 иконок")));
+  const choices = el('fieldset', {}, el('legend', {}, tr("Выберите 3–4 основных раздела")));
   const count = el('p', { class: 'muted', role: 'status', 'aria-live': 'polite' });
-  const save = el('button', { id: 'mobile-nav-save', class: 'btn btn-accent', type: 'submit' }, 'Сохранить');
-  const cancel = el('button', { class: 'btn', type: 'button' }, 'Отмена');
-  const reset = el('button', { id: 'mobile-nav-reset', class: 'btn-link', type: 'button' }, 'Стандартный порядок');
+  const save = el('button', { id: 'mobile-nav-save', class: 'btn btn-accent', type: 'submit' }, tr("Сохранить"));
+  const cancel = el('button', { class: 'btn', type: 'button' }, tr("Отмена"));
+  const reset = el('button', { id: 'mobile-nav-reset', class: 'btn-link', type: 'button' }, tr("Стандартный порядок"));
   const inputs = tabs.map(tab => {
     const section = tab.dataset.section;
     const input = el('input', { type: 'checkbox', value: section, 'data-nav-section': section });
@@ -53,7 +54,7 @@ export function setupMobileNavigation(me) {
     return input;
   });
   editor.append(modes, choices, count, el('div', { class: 'actions' }, save, cancel), reset);
-  const heading = el('h2', { id: 'mobile-sections-title' }, 'Ещё');
+  const heading = el('h2', { id: 'mobile-sections-title' }, tr("Ещё"));
   const dialog = el('dialog', { id: 'mobile-sections', class: 'dialog mobile-sections',
     'aria-labelledby': 'mobile-sections-title' },
     el('div', { class: 'mobile-sections-head' }, heading, close), links, edit, editor);
@@ -63,8 +64,8 @@ export function setupMobileNavigation(me) {
   function setActive(section) {
     active = section;
     const secondary = mode !== 'all' && names.has(active) && !primary.includes(active);
-    label.textContent = secondary ? `Ещё: ${names.get(active)}` : 'Ещё';
-    more.setAttribute('aria-label', secondary ? `Ещё: ${names.get(active)}` : 'Ещё · все разделы');
+    label.textContent = secondary ? tr("Ещё: {0}", names.get(active)) : tr("Ещё");
+    more.setAttribute('aria-label', secondary ? tr("Ещё: {0}", names.get(active)) : tr("Ещё · все разделы"));
     if (secondary) more.setAttribute('aria-current', 'page');
     else more.removeAttribute('aria-current');
     for (const link of links.children) {
@@ -89,7 +90,7 @@ export function setupMobileNavigation(me) {
   }
 
   function showEditor(show) {
-    heading.textContent = show ? 'Нижняя панель' : 'Ещё';
+    heading.textContent = show ? tr("Нижняя панель") : tr("Ещё");
     editor.hidden = !show;
     links.hidden = edit.hidden = show;
     if (show) {
@@ -106,8 +107,8 @@ export function setupMobileNavigation(me) {
   function updateCount() {
     const selected = inputs.filter(input => input.checked).length;
     choices.hidden = all.checked;
-    count.textContent = (all.checked ? 'Все разделы видны в нижней панели.' : `Выбрано ${selected} из 3–4.`)
-      + ' Настройка только этого браузера и учётки.';
+    count.textContent = (all.checked ? tr("Все разделы видны в нижней панели.") : tr("Выбрано {0} из 3–4.", selected))
+      + tr(" Настройка только этого браузера и учётки.");
     save.disabled = !all.checked && (selected < 3 || selected > 4);
     for (const input of inputs) input.disabled = all.checked || selected === 4 && !input.checked;
   }

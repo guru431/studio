@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
@@ -95,7 +96,7 @@ function notice(iconName, text, kind, link) {
 function hintOf(section) {
   if (!(section in HINTS) || me.capabilities[section]) return null;
   return (cls = '') => notice(section, HINTS[section], `hint ${cls}`.trim(),
-    { href: `#/settings/${section}`, text: 'Открыть настройки' });
+    { href: `#/settings/${section}`, text: tr("Открыть настройки") });
 }
 
 function navigate(path) {
@@ -168,7 +169,7 @@ async function render() {
     if (mine !== renders) return;
     if (current) current.module.unmount();
     current = null;
-    const retry = el('button', { type: 'button', class: 'btn', id: 'section-unlock-retry' }, 'Повторить');
+    const retry = el('button', { type: 'button', class: 'btn', id: 'section-unlock-retry' }, tr("Повторить"));
     retry.addEventListener('click', render);
     view.replaceChildren(head(SECTIONS[route.section].title), notice('wait', err.message, 'empty'), retry);
     revealView();
@@ -212,7 +213,7 @@ async function render() {
  * (WCAG 2.4.2, 2.4.3). Фокус — кадром позже и только если раздел не взял его сам (поле ввода на компьютере,
  * ui.js focusDesktop) и он не внутри раздела; первая отрисовка страницы фокус не трогает. */
 function announce(section) {
-  document.title = `${SECTIONS[section].title} — Студия`;
+  document.title = tr("{0} — Студия", SECTIONS[section].title);
   if (!announced) { announced = true; return; }
   const mine = renders;
   requestAnimationFrame(() => {
@@ -232,7 +233,7 @@ function buildRail() {
   const search = document.getElementById('search-open');
   search.append(svgIcon('search'));
   search.setAttribute('aria-keyshortcuts', `${HOTKEY}/`);
-  search.title = `Поиск · ${HOTKEY}/`;
+  search.title = tr("Поиск · {0}/", HOTKEY);
   document.getElementById('jobs').prepend(svgIcon('jobs'));
   const spacer = rail.querySelector('.spacer');
   let group = null;
@@ -336,8 +337,8 @@ async function start() {
 function retryLater(first, worker) {
   let asking = false;
   const say = (err) => {
-    const box = notice('wait', `Студия не открылась: ${err.message}.`, 'empty');
-    const again = el('button', { type: 'button', class: 'btn btn-accent', id: 'start-retry' }, 'Повторить');
+    const box = notice('wait', tr("Студия не открылась: {0}.", err.message), 'empty');
+    const again = el('button', { type: 'button', class: 'btn btn-accent', id: 'start-retry' }, tr("Повторить"));
     again.addEventListener('click', retry);
     box.append(again);
     view.replaceChildren(box);
