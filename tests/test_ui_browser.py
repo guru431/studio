@@ -4798,20 +4798,27 @@ def test_chat_retry_waits_for_a_scan_from_the_history(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-def test_voice_is_added_in_settings(browser, live):
-    live.add_user("voicer")
+@pytest.mark.parametrize("width", [320, 1280])
+def test_voice_is_added_in_settings(browser, live, width):
+    login = f"voicer{width}"
+    live.add_user(login, theme="dark" if width == 320 else "light")
     dialog = "#voice-dialog"
-    r = browser.drive(live.url + "/", [*signin("voicer"), ("wait", READY), add_gateway(),
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
         *go("settings/speech"), ("wait", "document.querySelector('#voice-add')"),
         ("click", "#voice-add"), ("wait", is_open(dialog)),
         ("type", f"{dialog} [name=name]", "Мой голос"),
-        ("type", f"{dialog} [name=text]", "Привет, это образец моего голоса."),
         put_audio(f"{dialog} input[type=file]", wav_of(6.0), "sample.wav"),
+        ("wait", f"document.querySelector('{dialog} [name=text]').value === 'распознано' && "
+                 "!document.querySelector('#voice-save').disabled"),
+        ("type", f"{dialog} [name=text]", "Привет, это образец моего голоса."),
+        ("eval", "fits", NO_OVERFLOW),
         ("click", "#voice-save"), ("wait", f"!{is_open(dialog)} && document.querySelector('.voice')"),
         ("eval", "voice", "document.querySelector('.voice').textContent"),
-        ("click", ".voice .voice-delete"), ("wait", "!document.querySelector('.voice')")])
+        ("click", ".voice .voice-delete"), ("wait", "!document.querySelector('.voice')")],
+        width=width, mobile=width == 320)
     assert not r.get("failed"), r
     assert "Мой голос" in r["values"]["voice"] and "0:06" in r["values"]["voice"]
+    assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
 

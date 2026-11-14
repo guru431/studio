@@ -67,7 +67,7 @@ The server runs on infrastructure you control. Connect local models through the 
 ### Text to speech and voice input
 
 - Turn text into speech with local Qwen3-TTS through the gateway or a compatible external speech service.
-- Create voices from a short reference recording and its transcript, or choose a provider's built-in voice.
+- Create voices from a short recording with an automatic, editable ASR transcript, or choose a provider's built-in voice.
 - Preview reference voices, listen to completed phrases while synthesis continues and download the final MP3.
 - Dictate into chat, media prompts, translation and search. Recognized text is inserted at the cursor for review before sending.
 - Voice input audio is processed without being saved as a recording in Studio history.
