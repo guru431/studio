@@ -8,7 +8,7 @@ from cryptography.fernet import Fernet
 
 import state
 
-PASSWORD_MIN = 10
+PASSWORD_MIN = 8
 _N, _R, _P, _DKLEN = 16384, 8, 1, 32
 
 

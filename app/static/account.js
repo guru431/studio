@@ -97,8 +97,8 @@
       description.textContent = tr("Почта: {0}. Придумайте логин и пароль.", invite.email);
       const login = field('login', tr("Логин"), 'text', 'username', 32);
       login.pattern = '[a-zA-Z0-9._-]{2,32}';
-      const password = field('password', tr("Пароль (не короче 10 знаков)"), 'password', 'new-password');
-      password.minLength = 10;
+      const password = field('password', tr("Пароль (не короче 8 знаков)"), 'password', 'new-password');
+      password.minLength = 8;
       const repeat = field('repeat', tr("Повтор пароля"), 'password', 'new-password');
       action = async () => {
         if (password.value !== repeat.value) throw new Error(tr("Пароли не совпадают"));
@@ -113,8 +113,8 @@
     } else if (screen === 'reset') {
       title.textContent = tr("Новый пароль");
       description.textContent = tr("После сохранения все прежние сеансы Студии закроются.");
-      const password = field('password', tr("Пароль (не короче 10 знаков)"), 'password', 'new-password');
-      password.minLength = 10;
+      const password = field('password', tr("Пароль (не короче 8 знаков)"), 'password', 'new-password');
+      password.minLength = 8;
       const repeat = field('repeat', tr("Повтор пароля"), 'password', 'new-password');
       action = async () => {
         if (password.value !== repeat.value) throw new Error(tr("Пароли не совпадают"));

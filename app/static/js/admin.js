@@ -72,7 +72,7 @@ function usersBlock(host) {
 
   function resetPassword(user) {
     const password = el('input', { class: 'input', name: 'password', type: 'password', maxlength: '1024',
-      autocomplete: 'new-password', placeholder: tr("не короче 10 знаков") });
+      autocomplete: 'new-password', placeholder: tr("не короче 8 знаков") });
     const save = button(tr("Сменить"), { class: 'btn btn-accent', id: 'reset-save' });
     const form = el('div', {}, el('p', { class: 'muted small' }, tr("Все сессии пользователя закроются.")),
       field(tr("Новый пароль"), password, 'password'));
