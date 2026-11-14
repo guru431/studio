@@ -2,6 +2,9 @@
 только свой; имя и текст — не в журнал."""
 import asyncio
 import logging
+import threading
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +18,25 @@ SAMPLE = {"audio": ("sample.m4a", b"\x00" * 2048, "audio/mp4")}
 
 def create(s, name="Мой голос", text="Привет, это мой голос для озвучки."):
     return s.c.post("/api/voices", data={"name": name, "text": text}, files=SAMPLE)
+
+
+def expire_budget_at_event(monkeypatch, seconds):
+    """Настоящий wait_for истекает после сигнала выбранного этапа, без гонки на 50 мс."""
+    reached = asyncio.Event()
+
+    async def wait_for(work, timeout):
+        if timeout != seconds:
+            return await asyncio.wait_for(work, timeout)
+        task = asyncio.create_task(work)
+        try:
+            await asyncio.wait_for(reached.wait(), 5)
+            return await asyncio.wait_for(task, 0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    monkeypatch.setattr(voices, "asyncio", SimpleNamespace(**{**vars(asyncio), "wait_for": wait_for}))
+    return reached
 
 
 def test_sample_is_transcribed_before_saving_and_can_be_corrected(studio, fake_audio, caplog):
@@ -69,14 +91,66 @@ def test_sample_asr_failure_and_timeout_keep_no_files(studio, fake_audio, monkey
     studio.gw.asr_replies = [(503, {"error": "занято"})]
     assert studio.c.post("/api/voices/transcribe", files=SAMPLE).status_code == 503
 
-    async def slow(*args, **kwargs):
-        await asyncio.sleep(5)
-        return "поздний текст"
+    reached = expire_budget_at_event(monkeypatch, voices.TRANSCRIBE_BUDGET_SEC)
 
-    monkeypatch.setattr(voices, "TRANSCRIBE_BUDGET_SEC", 0.05)
+    async def slow(*args, **kwargs):
+        reached.set()
+        await asyncio.Future()
+
     monkeypatch.setattr(speech, "dictate", slow)
     r = studio.c.post("/api/voices/transcribe", files=SAMPLE)
     assert r.status_code == 504 and r.json()["detail"]["code"] == "timeout"
+    assert list(state.CFG.tmp_dir.iterdir()) == []
+    assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("phase", ["write", "read", "cleanup"])
+def test_sample_cancellation_waits_for_file_io_and_cleanup(studio, fake_audio, monkeypatch, phase):
+    """Отмена не оставляет работающий с временным файлом поток; повторная — тоже."""
+    uid = make_user(studio, "owner")
+    fake_audio.duration = 8.0
+    go = threading.Event()
+    operation = {"write": "write_bytes", "read": "read_bytes", "cleanup": "unlink"}[phase]
+    real = getattr(Path, operation)
+
+    async def scenario():
+        reached, finished = asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+        held = False
+
+        def blocked(path, *args, **kwargs):
+            nonlocal held
+            if path.parent == state.CFG.tmp_dir and not held and (phase != "read" or path.suffix == ".wav"):
+                held = True
+                loop.call_soon_threadsafe(reached.set)
+                go.wait()
+                try:
+                    return real(path, *args, **kwargs)
+                finally:
+                    loop.call_soon_threadsafe(finished.set)
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, operation, blocked)
+        task = asyncio.create_task(voices._sample(uid, SAMPLE["audio"][1], "audio/mp4"))
+        try:
+            await asyncio.wait_for(reached.wait(), 5)
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done(), "образец завершился раньше файловой операции и уборки"
+        finally:
+            go.set()
+            await asyncio.gather(task, return_exceptions=True)
+            if held:
+                await asyncio.wait_for(finished.wait(), 5)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        studio.c.portal.call(scenario)
+    finally:
+        go.set()
     assert list(state.CFG.tmp_dir.iterdir()) == []
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
@@ -117,12 +191,12 @@ def test_sample_that_outlasts_its_budget_is_refused_by_the_studio(studio, monkey
     (сверяет test_deploy); голоса и файла нет, временные файлы убраны."""
     import audio
     add_gateway(studio)
+    reached = expire_budget_at_event(monkeypatch, voices.BUDGET_SEC)
 
     async def slow(src, dst, *, max_sec):
-        await asyncio.sleep(5)
-        return 8.0
+        reached.set()
+        await asyncio.Future()
 
-    monkeypatch.setattr(voices, "BUDGET_SEC", 0.05)
     monkeypatch.setattr(audio, "to_wav", slow)
     r = create(studio)
     assert r.status_code == 504 and r.json()["detail"]["code"] == "timeout"
