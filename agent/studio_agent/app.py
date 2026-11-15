@@ -74,7 +74,7 @@ class Controller:
         self._opencode_factory = opencode_factory
         self.codex = None
         self.opencode = None
-        self.state = "connecting" if _configured(store.load_config(h), store.load_key(h)) else "setup"
+        self.state = "connecting" if _configured(store.migrate_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
         self._login_subscribers = []
         self._backend_subscribers = []

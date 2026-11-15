@@ -45,14 +45,28 @@ def test_theme_roundtrip_and_legacy_config(home):
     assert (restored.theme, restored.agent_id, restored.name) == ("light", 7, "PC")
 
 
-def test_turn_limit_defaults_to_eight_for_new_and_legacy_configs(home):
-    assert store.load_config(home).max_turns == 8
+def test_turn_limit_defaults_to_twelve_for_new_and_legacy_configs(home):
+    assert store.load_config(home).max_turns == 12
     (home / store.CONFIG).write_text('{"agent_id": 7, "name": "PC"}', encoding="utf-8")
     cfg = store.load_config(home)
-    assert cfg.max_turns == 8 and cfg.agent_id == 7
-    cfg.max_turns = 12
+    assert cfg.max_turns == 12 and cfg.agent_id == 7
+    cfg.max_turns = 8
     store.save_config(home, cfg)
     assert store.load_config(home) == cfg
+
+
+@pytest.mark.parametrize("previous", [None, 2, 8, 24])
+def test_installed_config_moves_to_twelve_once_and_preserves_later_choices(home, previous):
+    raw = {"agent_id": 7, "name": "PC", "theme": "dark"}
+    if previous is not None:
+        raw["max_turns"] = previous
+    (home / store.CONFIG).write_text(json.dumps(raw), encoding="utf-8")
+    cfg = store.migrate_config(home)
+    assert (cfg.max_turns, cfg.max_turns_revision, cfg.agent_id, cfg.name, cfg.theme) == (12, 1, 7, "PC", "dark")
+    assert store.load_config(home) == cfg
+    cfg.max_turns = 8
+    store.save_config(home, cfg)
+    assert store.migrate_config(home) == cfg
 
 
 def test_home_comes_from_the_environment_and_is_created(tmp_path, monkeypatch):
@@ -123,7 +137,8 @@ def test_journal_setup_twice_keeps_one_file_handler(home):
 
 
 @pytest.mark.parametrize("text", ["{", "[1]", '{"projects_root": 5}', '{"agent_id": "7"}', '{"autostart": "да"}',
-                                  '{"max_turns": 0}', '{"max_turns": true}', '{"max_turns": "8"}'])
+                                  '{"max_turns": 0}', '{"max_turns": true}', '{"max_turns": "8"}',
+                                  '{"max_turns_revision": true}', '{"max_turns_revision": -1}'])
 def test_a_broken_config_reads_as_defaults_and_is_left_alone(home, caplog, text):
     (home / "config.json").write_text(text, encoding="utf-8")
     assert store.load_config(home) == store.Config()
