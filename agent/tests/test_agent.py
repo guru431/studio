@@ -181,23 +181,23 @@ async def test_turn_limit_counts_all_backends_and_changes_without_stopping_jobs(
                                        model=None, effort=None, engine=engine)))[0]
 
     try:
-        assert agent.cfg.max_turns == 8
-        for number in range(8):
-            assert (await start(number))["ok"]
-        assert (await start(8, "opencode"))["code"] == "busy"
-        agent.set_max_turns(10)
-        assert [backend.max_turns for backend in backends] == [10, 10, 10]
-        assert (await start(8, "opencode"))["ok"]
-        assert (await start(9, "codex"))["ok"]
-        assert (await start(10))["code"] == "busy"
-        # Понижение предела не прерывает десять идущих заданий и не разрешает новые.
+        assert agent.cfg.max_turns == 12
+        for number in range(12):
+            assert (await start(number, ("claude", "codex", "opencode")[number % 3]))["ok"]
+        assert (await start(12, "opencode"))["code"] == "busy"
+        agent.set_max_turns(14)
+        assert [backend.max_turns for backend in backends] == [14, 14, 14]
+        assert (await start(12, "opencode"))["ok"]
+        assert (await start(13, "codex"))["ok"]
+        assert (await start(14))["code"] == "busy"
+        # Понижение предела не прерывает четырнадцать идущих заданий и не разрешает новые.
         before = [dict(backend._turns) for backend in backends]
         agent.set_max_turns(1)
         assert [dict(backend._turns) for backend in backends] == before
-        assert (await start(10))["code"] == "busy"
+        assert (await start(14))["code"] == "busy"
         assert (await start(0))["code"] == "running"
         await asyncio.gather(*(backend.close() for backend in backends))
-        assert (await start(10))["ok"]
+        assert (await start(14))["ok"]
     finally:
         await asyncio.gather(*(backend.close(final=True) for backend in backends))
 

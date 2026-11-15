@@ -30,6 +30,7 @@ class Config:
     login: str = ""  # логин учётки студии: из ответа привязки и `welcome`; только для окна и трея
     theme: str = "auto"  # прежние настройки следуют Windows, явный выбор окна — light или dark
     max_turns: int = limits.MAX_TURNS  # общий предел одновременных заданий всех помощников
+    max_turns_revision: int = 1  # переход установленных мостов на новый общий предел
     desktop_enabled: bool = False  # меняется только в локальном окне; сохраняется между запусками
 
     def __post_init__(self) -> None:
@@ -92,7 +93,19 @@ def load_config(h: Path) -> Config:
     except (OSError, ValueError) as e:  # и без прав на чтение: окно настройки, а не молчаливый незапуск
         log.warning("config.json не читается: %s", type(e).__name__)
         return Config()
-    return Config(**{k: v for k, v in raw.items() if k in _KINDS})
+    values = {k: v for k, v in raw.items() if k in _KINDS}
+    values.setdefault("max_turns_revision", 0)
+    return Config(**values)
+
+
+def migrate_config(h: Path) -> Config:
+    """При запуске один раз перевести прежние настройки на 12, сохранив последующие ручные изменения."""
+    cfg = load_config(h)
+    if cfg.max_turns_revision < 1:
+        cfg.max_turns = limits.MAX_TURNS
+        cfg.max_turns_revision = 1
+        save_config(h, cfg)
+    return cfg
 
 
 _KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, str),
@@ -102,6 +115,7 @@ _KINDS = {"url": lambda v: isinstance(v, str), "name": lambda v: isinstance(v, s
           "login": lambda v: isinstance(v, str),
           "theme": lambda v: isinstance(v, str) and v in ("auto", "light", "dark"),
           "max_turns": lambda v: type(v) is int and v >= 1,
+          "max_turns_revision": lambda v: type(v) is int and v >= 0,
           "desktop_enabled": lambda v: type(v) is bool,
           "agent_id": lambda v: v is None or (type(v) is int)}
 

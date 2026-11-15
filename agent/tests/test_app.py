@@ -2,6 +2,7 @@
 
 import asyncio
 import http.client
+import json
 import pathlib
 import threading
 import time
@@ -133,6 +134,19 @@ def make(home):
     yield build
     for ctrl in made:
         ctrl.quit()
+
+
+def test_installed_turn_limit_is_migrated_before_startup(make, configured, home):
+    path = home / store.CONFIG
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("max_turns_revision")
+    raw["max_turns"] = 8
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    ctrl = make()
+    assert store.load_config(home).max_turns == 12
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.agent.cfg.max_turns == ctrl.runner.max_turns == 12
 
 
 def test_studio_version_follows_current_channel_and_is_not_saved(make, configured, home):
