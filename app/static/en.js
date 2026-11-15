@@ -500,7 +500,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Можно прикрепить до 8 файлов": "You can attach up to 8 files",
   "Обновите мост на компьютере для отправки файлов любого типа": "Update the bridge on your computer to send any file type",
   "Размер файла — до 10 МиБ": "Maximum file size: 10 MiB",
-  "Можно прикрепить до 4 изображений за один раз": "You can attach up to 4 images at once",
+  "Можно прикрепить до 4 изображений к сообщению": "You can attach up to 4 images per message",
   "Общий размер вложений — до 30 МиБ": "Maximum total attachment size: 30 MiB",
   "Вложение": "Attachment",
   "Не получилось прочитать изображение": "Could not read image",

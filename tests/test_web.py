@@ -429,6 +429,22 @@ def test_run_without_yt_dlp_on_the_host_is_words(studio, monkeypatch):
     assert e.value.args[0] == "чтение YouTube на сервере недоступно"
 
 
+@pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
+def test_run_preserves_cancellation_when_process_exits_before_kill(studio, monkeypatch, error):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    import web
+
+    process = SimpleNamespace(communicate=AsyncMock(side_effect=error),
+                              kill=Mock(side_effect=ProcessLookupError), wait=AsyncMock())
+    monkeypatch.setattr(web.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    async def check():
+        with pytest.raises(error):
+            await web._run(["yt-dlp"], 1)
+    run(studio, check)
+    process.wait.assert_awaited_once()
+
+
 @pytest.mark.integration  # настоящий процесс и настоящий срок: > 1 с под нагрузкой Windows
 def test_run_kills_the_process_after_the_deadline(studio):
     import web

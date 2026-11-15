@@ -311,6 +311,22 @@ def test_new_chat_writes_a_row_and_an_event_but_not_the_bridge(studio):
     assert len(m.requests) == before
 
 
+def test_failed_new_chat_does_not_spend_the_rate_limit(studio, monkeypatch):
+    import sqlite3
+
+    aid, _, _ = setup(studio)
+    monkeypatch.setattr(claude_code, "NEW_CHATS_PER_MIN", 1)
+    state.DB.execute("CREATE TEMP TRIGGER reject_chat BEFORE INSERT ON code_chats"
+                     " BEGIN SELECT RAISE(ABORT, 'test insert failure'); END")
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="test insert failure"):
+            studio.c.post(url(aid, "projects", ALPHA, "chats"))
+        assert not claude_code.NEW_CHATS[aid]
+    finally:
+        state.DB.execute("DROP TRIGGER reject_chat")
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+
+
 def test_new_chats_per_computer_are_limited(studio):
     """«Новый чат» моста не зовёт — открытость компьютера его не сдерживает; поэтому строк `code_chats` и
     событий `session_start` в неудаляемой истории — не больше NEW_CHATS_PER_MIN на компьютер в минуту."""

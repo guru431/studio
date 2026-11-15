@@ -68,6 +68,46 @@ async def settle(a: Agent) -> None:
         await asyncio.wait({t.task for t in a.runner._turns.values()})
 
 
+@pytest.mark.parametrize("engine", ["codex", "opencode"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_fork_reserves_source_chat_until_it_finishes(agent, root, monkeypatch, engine, cancel):
+    from studio_agent.errors import Refused
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def fork(*_):
+        entered.set()
+        await release.wait()
+        return {"chat": "11111111-2222-4333-8444-555555555555", "draft": ""}
+
+    backend = SimpleNamespace(_turn=lambda *_: None, live=lambda: {}, start=Mock(return_value="turn"),
+                              fork_chat=fork, choices=agent.runner.choices)
+    setattr(agent, engine, backend)
+    monkeypatch.setattr(agent, "_project", AsyncMock(return_value=root / "demo"))
+    frame = {"project": projects.pid("demo"), "chat": CHAT, "engine": engine, "text": "hello"}
+    task = asyncio.create_task(agent._op_chat_fork(frame, []))
+    try:
+        await entered.wait()
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        with pytest.raises(Refused, match="running"):
+            await agent._op_turn(frame, [])
+        with pytest.raises(Refused, match="running"):
+            await agent._op_chat_fork(frame, [])
+        backend.start.assert_not_called()
+    finally:
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        await asyncio.gather(*agent._forking.values())
+        await asyncio.sleep(0)
+    assert (await agent._op_turn(frame, []))["turn"] == "turn"
+
+
 async def test_configurable_pin_timeout_is_checked_on_open_and_each_request(agent_with_pin):
     agent = agent_with_pin
     assert (await agent.handle(req("open", pin="2468", idle_sec=600)))[0]["ok"]

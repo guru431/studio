@@ -126,6 +126,7 @@ def test_video_form_allows_twenty_megabytes_but_images_keep_ten(monkeypatch):
     assert VIDEO_UPLOAD == 20 * 1024 * 1024
 
 
+@pytest.mark.integration  # Настоящие 24 Мп: создание и декодирование превышают 1 с под xdist.
 def test_large_phone_jpeg_is_decoded_reduced_for_video_only():
     raw = io.BytesIO()
     Image.new("RGB", (6000, 4000), "green").save(raw, "JPEG", quality=50)

@@ -267,6 +267,7 @@ class Runner:
                 t.followups.remove(item)
                 t.queue_meta.pop(message_id, None)
                 if not t.queued:
+                    t.queue_paused = False
                     t.queue_wake.set()
                 self._send(t, {"k": "followup_removed", "id": message_id})
             else:

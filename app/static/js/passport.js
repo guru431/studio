@@ -193,7 +193,8 @@ function line(cls, ...text) {
 /** <details class="passport"> карточки: models — модели раздела (их возможности), label — подпись модели. */
 export function passportBlock({ conn, section, models, label, error = '', busy = false, open = false, onToggle }) {
   const passport = conn.passport;
-  const routes = passport ? routesOf(passport, conn, section) : null;
+  const found = passport ? routesOf(passport, conn, section) : null;
+  const routes = found?.length ? found : null;
   const parts = [];
   if (busy) parts.push(tr("Проверяю…"));
   else parts.push(passport && passport.checked ? tr("Проверено {0}", stamp(passport.checked)) : tr("Не проверено"));

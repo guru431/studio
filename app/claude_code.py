@@ -802,9 +802,9 @@ async def new_chat(aid: int, pid: str, request: Request):
         recent.popleft()
     if len(recent) >= NEW_CHATS_PER_MIN:
         raise _refuse(429, "too_many", TOO_MANY)
-    recent.append(now)
     state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
                      " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (agent["user_id"], aid, pid, chat, now, now, engine))
+    recent.append(now)  # Между проверкой лимита и INSERT нет await; отказ БД не расходует лимит.
     _event(request, agent, "session_start")
     return JSONResponse({"chat": chat, "engine": engine}, status_code=201)
 

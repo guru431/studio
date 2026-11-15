@@ -105,7 +105,11 @@ export function contextView(host, { chat, engine, project, messages }) {
     update(data) {
       if (!data) return;
       if (!Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) {
-        if (data.usage || data.cost) { context = { ...context, ...data }; if (dialog.open) paint(); }
+        if (data.usage || data.cost) {
+          context = { ...context, ...(data.usage ? { usage: data.usage } : {}), ...(data.cost ? { cost: data.cost } : {}) };
+          paintCache();
+          if (dialog.open) paint();
+        }
         return;
       }
       const percent = Math.min(100, Math.round(1000 * data.used / data.limit) / 10);

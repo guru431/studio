@@ -8,6 +8,33 @@ from test_ui_browser import (CODE_CHAT_A, READY, browser, code_chat, code_free_m
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
+def test_partial_context_and_empty_passport_routes_keep_truthful_status(browser, live):
+    result = browser.drive(live.url + '/login', [('eval', 'status', """(async () => {
+        const {contextView} = await import('/static/js/code-context.js');
+        const {passportBlock} = await import('/static/js/passport.js');
+        const host = document.createElement('div'); document.body.append(host);
+        const view = contextView(host, {engine: 'opencode', chat: 'test', project: 'demo', messages: () => 0});
+        try {
+            view.update({used: 25, limit: 100, usage: {total: 50}});
+            view.button.click();
+            view.update({used: null, limit: -1, percent: null, usage: {total: 60}, cost: {amount: 0.5}});
+            const values = Object.fromEntries([...host.querySelectorAll('#code-context-dialog dt')]
+                .map(dt => [dt.textContent, dt.nextElementSibling.textContent]));
+            const passport = passportBlock({conn: {kind: 'srvllm', passport: {checked: 1,
+                routes: [], models: [], profile: 'srvllm'}}, section: 'chat', models: [], label: x => x});
+            return {values, passport: passport.textContent, used: view.button.dataset.used};
+        } finally { view.unmount(); host.remove(); }
+    })()""")])
+    assert not result.get('failed'), result
+    status = result['values']['status']
+    assert status['used'] == '25'
+    assert status['values']['Общий размер контекста, токенов'] == '100'
+    assert status['values']['Заполнено'] == '25%'
+    assert status['values']['Токены завершённых ходов Студии'] == '60'
+    assert 'адрес отвечает' not in status['passport']
+    assert 'не проверяется: проба занимала бы карту' in status['passport']
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_suggestions_diffs_content_search_and_editable_queue(browser, live, width, tmp_path):
     login = f"workspace-tools-{width}"

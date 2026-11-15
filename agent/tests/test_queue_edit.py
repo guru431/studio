@@ -21,8 +21,11 @@ async def test_queue_edit_keeps_attachments_and_serializes_versions(home, tmp_pa
         await r.edit_queue(PID, CHAT, item["id"], 1, "stale", owner="owner")
     with pytest.raises(Refused, match="owned"):
         await r.edit_queue(PID, CHAT, item["id"], 2, None, owner="other")
-    await r.edit_queue(PID, CHAT, item["id"], 2, None, owner="owner")
+    await r.pause_queue(PID, CHAT, True, owner="owner")
+    removed = await r.edit_queue(PID, CHAT, item["id"], 2, None, owner="owner")
     assert not t.queued and not t.followups
+    assert removed == {"items": [], "paused": False}
+    await r.steer(PID, CHAT, "next", [], owner="owner", mode="queue")
     with pytest.raises(Refused, match="gone"):
         await r.edit_queue(PID, CHAT, item["id"], 2, "late", owner="owner")
 
