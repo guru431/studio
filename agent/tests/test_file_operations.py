@@ -1,6 +1,10 @@
 """Изменения файлов: границы проекта, отсутствие перезаписи и настоящий Windows junction."""
 
 import _winapi
+import ctypes
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -8,6 +12,113 @@ import pytest
 from studio_agent import files, projects
 from studio_agent.errors import Refused
 from test_agent import agent, opened, req, root
+
+
+@pytest.fixture
+def delete_workspace(tmp_path):
+    # TemporaryDirectory также убирает read-only файлы после неудачной проверки.
+    with tempfile.TemporaryDirectory(dir=tmp_path) as directory:
+        yield Path(directory)
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_delete_readonly_file_and_nested_tree_preserves_other_files(delete_workspace, directory):
+    root = delete_workspace
+    target = root / "folder/nested/object" if directory else root / "object"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"remove")
+    os.chmod(target, stat.S_IREAD)
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(target), stat.FILE_ATTRIBUTE_READONLY | stat.FILE_ATTRIBUTE_HIDDEN)
+    if directory:
+        assert ctypes.windll.kernel32.SetFileAttributesW(str(root / "folder"), stat.FILE_ATTRIBUTE_HIDDEN)
+    keep = root / "keep"
+    keep.write_bytes(b"keep")
+    os.chmod(keep, stat.S_IREAD)
+    files.operate(root, "delete", "folder" if directory else "object")
+    assert not target.exists()
+    assert not directory or not (root / "folder").exists()
+    assert keep.read_bytes() == b"keep" and keep.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+def test_locked_file_reports_busy_without_changing_readonly(delete_workspace, readonly):
+    root = delete_workspace
+    target = root / "locked"
+    target.write_bytes(b"keep")
+    if readonly:
+        os.chmod(target, stat.S_IREAD)
+    with target.open("rb"):
+        with pytest.raises(Refused) as caught:
+            files.operate(root, "delete", "locked")
+    assert caught.value.code == "busy" and "занят другой программой" in caught.value.message
+    assert target.read_bytes() == b"keep"
+    assert bool(target.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY) == readonly
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+def test_delete_access_denied_does_not_change_attributes_or_retry_indefinitely(delete_workspace, monkeypatch, readonly):
+    root = delete_workspace
+    target = root / "denied"
+    target.write_bytes(b"keep")
+    if readonly:
+        os.chmod(target, stat.S_IREAD)
+    before = target.stat().st_file_attributes
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(target), before | stat.FILE_ATTRIBUTE_HIDDEN)
+    before = target.stat().st_file_attributes
+    calls = []
+
+    def denied(path, **kwargs):
+        calls.append(path)
+        raise PermissionError(13, "fixture access denied", str(path), 5)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(files.os, "unlink", denied)
+        with pytest.raises(Refused) as caught:
+            files.operate(root, "delete", "denied")
+    assert caught.value.code == "read_only" and "нет прав" in caught.value.message
+    assert target.read_bytes() == b"keep" and target.stat().st_file_attributes == before
+    assert len(calls) == (2 if readonly else 1)
+
+
+def test_delete_does_not_clear_attributes_when_directory_scan_is_denied(delete_workspace, monkeypatch):
+    root = delete_workspace
+    folder = root / "folder"
+    folder.mkdir()
+    (folder / "keep").write_bytes(b"keep")
+    os.chmod(folder, stat.S_IREAD)
+    before = folder.stat().st_file_attributes
+
+    def denied(path):
+        raise PermissionError(13, "fixture access denied", str(path), 5)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(files.os, "scandir", denied)
+        with pytest.raises(Refused, match="read_only"):
+            files.operate(root, "delete", "folder")
+    assert folder.stat().st_file_attributes == before
+    assert (folder / "keep").read_bytes() == b"keep"
+
+
+def test_readonly_retry_rechecks_parent_junction_before_changing_attributes(delete_workspace, monkeypatch):
+    project, outside = delete_workspace / "project", delete_workspace / "outside"
+    (project / "folder").mkdir(parents=True)
+    outside.mkdir()
+    for parent in (project / "folder", outside):
+        (parent / "keep").write_bytes(b"keep")
+        os.chmod(parent / "keep", stat.S_IREAD)
+
+    def replaced(path, **kwargs):
+        (project / "folder").rename(project / "original")
+        _winapi.CreateJunction(str(outside), str(project / "folder"))
+        raise PermissionError(13, "fixture access denied", str(path), 5)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(files.os, "unlink", replaced)
+        with pytest.raises(Refused, match="outside"):
+            files.operate(project, "delete", "folder/keep")
+    assert (outside / "keep").read_bytes() == b"keep"
+    assert (outside / "keep").stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert (project / "original/keep").stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
 
 
 def test_create_rename_move_and_recursive_delete(tmp_path):

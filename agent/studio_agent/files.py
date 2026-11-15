@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 from pathlib import Path
 
 from . import limits, store
@@ -26,6 +27,8 @@ TOO_BIG_RAW = "файл больше 10 МиБ"
 NO_FILE = "нет такого файла"
 NO_DIR = "нет такой папки"
 READ_ONLY = "файл только для чтения"
+NO_ACCESS = "нет прав на изменение файла или папки"
+FILE_BUSY = "файл занят другой программой — закройте его и повторите операцию"
 # Атрибуты, что `SetFileAttributesW` умеет ставить (без READONLY: такой файл не правится).
 KEEP_ATTRIBUTES = (stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM | stat.FILE_ATTRIBUTE_ARCHIVE
                    | stat.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED | stat.FILE_ATTRIBUTE_OFFLINE
@@ -92,6 +95,44 @@ def _mutation_path(project: Path, path: str) -> Path:
     return target
 
 
+def _delete(project: Path, source: Path) -> None:
+    """Подтверждённое удаление: один повтор для ReadOnly, без изменения ACL и переходов через ссылки."""
+    root = Path(os.path.realpath(project))
+
+    def retry(function, path, error):
+        if (not isinstance(error, PermissionError) or getattr(error, "winerror", None) != 5
+                or function not in (os.unlink, os.rmdir)):
+            raise error
+        target = _mutation_path(root, Path(path).relative_to(root).as_posix())
+        before = target.lstat()
+        if not before.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+            raise error
+        os.chmod(target, stat.S_IWRITE)  # Windows меняет только ReadOnly, остальные атрибуты сохраняются.
+        try:
+            target = _mutation_path(root, target.relative_to(root).as_posix())
+            function(target)
+        except (OSError, Refused):
+            try:
+                current = _mutation_path(root, target.relative_to(root).as_posix())
+                if os.path.samestat(before, current.lstat()):
+                    os.chmod(current, stat.S_IREAD)
+            except (OSError, Refused):
+                log.warning("удаление: не удалось восстановить атрибут только чтения")
+            raise
+
+    if source.is_dir():
+        # Python на Windows не обходит вложенные junction при rmtree.
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(source, onexc=retry)
+        else:
+            shutil.rmtree(source, onerror=lambda function, path, error: retry(function, path, error[1]))
+    else:
+        try:
+            os.unlink(source)
+        except OSError as error:
+            retry(os.unlink, source, error)
+
+
 def operate(project: Path, operation: str, path: str, destination: str | None = None) -> dict:
     """Создание, перенос/переименование и удаление; существующее назначение не затирается."""
     if operation not in ("create_file", "create_dir", "move", "delete"):
@@ -116,18 +157,17 @@ def operate(project: Path, operation: str, path: str, destination: str | None = 
                 raise Refused("exists", "файл или папка с таким именем уже существует")
             # На Windows rename атомарно отказывает, если назначение появилось после проверки.
             source.rename(target)
-        elif source.is_dir():
-            # Python на Windows не обходит вложенные junction при rmtree.
-            shutil.rmtree(source)
         else:
-            source.unlink()
+            _delete(project, source)
     except FileExistsError:
         raise Refused("exists", "файл или папка с таким именем уже существует") from None
     except (FileNotFoundError, NotADirectoryError):
         raise Refused("not_found", "файл или папка не найдены") from None
-    except PermissionError:
-        raise Refused("read_only", "нет доступа: файл занят или доступен только для чтения") from None
-    except OSError:
+    except OSError as error:
+        if getattr(error, "winerror", None) in (32, 33):
+            raise Refused("busy", FILE_BUSY) from None
+        if isinstance(error, PermissionError):
+            raise Refused("read_only", NO_ACCESS) from None
         raise Refused("busy", "операция не завершена — проверьте доступ к файлам и обновите дерево") from None
     return {}
 

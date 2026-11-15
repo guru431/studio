@@ -1,5 +1,7 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "нет прав на изменение файла или папки": "permission denied when modifying the file or folder",
+  "файл занят другой программой — закройте его и повторите операцию": "the file is in use by another program — close it and try again",
   "Основной агент": "Primary agent",
   "По настройкам OpenCode": "Use OpenCode settings",
   "Дополнительные каталоги": "Additional directories",
