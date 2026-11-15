@@ -92,6 +92,7 @@ def test_state_and_media_paths_are_writable_in_the_sandbox():
         assert directives(unit, "ReadWritePaths") == ["-/mnt/storage/SharedData/studio"]
     assert "MemoryMax=2G" in UNIT
     assert "MEDIA=/mnt/storage/SharedData/studio" in INSTALL
+    assert directives(UNIT, "RequiresMountsFor") == ["/mnt/storage/SharedData/studio"]
 
 
 def test_install_checks_the_share_by_a_real_write():

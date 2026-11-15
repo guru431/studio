@@ -647,6 +647,18 @@ async def test_manual_refresh_reconciles_the_session_index_with_a_background_ful
     assert [row["title"] for row in await runner.chats(runner.project)] == ["Новая"]
 
 
+async def test_subagent_cache_reuses_equivalent_project_paths(runner):
+    runner.fake.exists = True
+    runner.aliases.put(runner.project, CHAT, THREAD)
+    equivalent = runner.project / ".." / runner.project.name
+    try:
+        await runner.subagents(runner.project, CHAT)
+        await runner.subagents(equivalent, CHAT)
+        assert len([call for call in runner.fake.calls if call[0] == "thread/read"]) == 1
+    finally:
+        await runner.close(final=True)
+
+
 async def test_expected_not_found_keeps_the_shared_metadata_process(runner):
     """Новый чат без thread: `history` и `state` получают штатный not_found живого сервера — общий
     metadata-процесс остаётся; закрывает его только обрыв канала."""

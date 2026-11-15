@@ -507,7 +507,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       }
       if (files.some((f) => f.size > IMAGE_MAX)) throw new Error(tr("Размер файла — до 10 МиБ"));
       if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
-        throw new Error(tr("Можно прикрепить до 4 изображений за один раз"));
+        throw new Error(tr("Можно прикрепить до 4 изображений к сообщению"));
       }
       if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
         throw new Error(tr("Общий размер вложений — до 30 МиБ"));

@@ -2,6 +2,7 @@
 Description=studio-web — студия https://studio.example.com (учётки, чат, фото, видео)
 After=network-online.target remote-fs.target
 Wants=network-online.target
+RequiresMountsFor=/mnt/storage/SharedData/studio
 
 [Service]
 Type=simple
@@ -23,9 +24,9 @@ Environment=STUDIO_DB=/var/lib/studio/studio.db
 # Файлы истории — шара storage \\storage\dd$\SharedData\studio (//10.77.1.5/dd$ смонтирован в
 # /mnt/storage, /etc/fstab). На локальный диск запись не ложится из-за ProtectSystem=strict: без
 # шары каталога SharedData/studio на диске debian нет, а завести его в /mnt, открытом только для
-# чтения, служба не может — запись падает ошибкой «не удалось сохранить». «-» лишь даёт службе
-# стартовать без этого каталога. Локальный каталог с тем же путём это обошёл бы — поэтому
-# install.sh проверяет, что путь лежит на cifs, и пробует запись от studio.
+# чтения, служба не может. RequiresMountsFor не даёт стартовать при отказе монтирования.
+# Локальный каталог с тем же путём это обошёл бы — поэтому install.sh проверяет,
+# что путь лежит на cifs, и пробует запись от studio.
 Environment=STUDIO_MEDIA_DIR=/mnt/storage/SharedData/studio
 ReadWritePaths=-/mnt/storage/SharedData/studio
 # Origin для проверки изменяющих запросов

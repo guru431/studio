@@ -20,6 +20,7 @@ YouTube — yt-dlp образа Docker (`/usr/local/bin/yt-dlp`, версия з
 убираются в finally. stderr yt-dlp — только для выбора слов ошибки, в журнал не идёт. Шаг —
 `{"kind": "youtube", "id", "url", "title", "channel", "duration", "lang", "text"}`."""
 import asyncio
+import contextlib
 import html
 import json
 import os
@@ -222,7 +223,8 @@ async def _run(argv: list[str], timeout: float) -> "tuple[int, bytes, bytes]":
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException:                        # срок, «Стоп», остановка службы
-        proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
         await proc.wait()
         raise
     return proc.returncode, out, err

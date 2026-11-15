@@ -489,7 +489,8 @@ class CodexRunner(Runner):
 
     async def history(self, project, chat, before, limit):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
-        key = (str(project.resolve()), target)
+        root = await asyncio.to_thread(project.resolve)
+        key = (str(root).casefold(), target)
         path = self._history_paths.get(key)
         def revision(path):
             if not isinstance(path, str):
@@ -594,7 +595,8 @@ class CodexRunner(Runner):
 
     async def subagents(self, project, chat):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
-        key = (str(project), target)
+        root = await asyncio.to_thread(project.resolve)
+        key = (str(root).casefold(), target)
         async with self._children_lock:
             cached = self._children_cache.get(key)
             if cached is None or not 0 <= self.now() - cached[0] < CHILDREN_CACHE_SEC:

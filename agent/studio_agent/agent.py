@@ -113,6 +113,7 @@ class Agent:
         self._file_stats_lock = asyncio.Lock()
         self._files_lock = asyncio.Lock()
         self._search_lock = asyncio.Lock()
+        self._forking = {}
         self._file_index = discovery.FileIndex()
         self._catalog = projects.Catalog(now=now)
         self._metadata = metadata.Cache(now=now)
@@ -510,19 +511,41 @@ class Agent:
     async def _op_chat_fork(self, frame, after):
         project = await self._project(frame)
         runner = self._runner(frame)
-        if runner._turn(frame["project"], frame["chat"]) is not None:
+        key = (frame.get("engine", "claude"), frame["chat"])
+        if key in self._forking or runner._turn(frame["project"], frame["chat"]) is not None:
             raise Refused("running", "Дождитесь завершения задания перед ветвлением")
-        engine = frame.get("engine", "claude")
-        if engine in ("codex", 'opencode'):
-            result = await runner.fork_chat(project, frame["chat"], frame.get("message_id"))
-        else:
-            result = await asyncio.to_thread(branches.claude, project, frame["chat"], frame.get("message_id"))
-        saved = await asyncio.to_thread(runner.choices.details, frame["chat"])
-        copied = {key: value for key, value in saved.items() if key in ("model", "effort", "access", 'agent_mode', 'additional_directories')}
-        if engine == "claude" and not copied.get("model"):
-            copied["model"] = await asyncio.to_thread(sessions.last_model, project, frame["chat"])
-        await asyncio.to_thread(runner.choices.update, result["chat"], **copied)
-        return {**result, "engine": engine}
+        async def fork():
+            engine = frame.get("engine", "claude")
+            if engine in ("codex", 'opencode'):
+                result = await runner.fork_chat(project, frame["chat"], frame.get("message_id"))
+            else:
+                result = await asyncio.to_thread(branches.claude, project, frame["chat"], frame.get("message_id"))
+            saved = await asyncio.to_thread(runner.choices.details, frame["chat"])
+            copied = {key: value for key, value in saved.items() if key in ("model", "effort", "access", 'agent_mode', 'additional_directories')}
+            if engine == "claude" and not copied.get("model"):
+                copied["model"] = await asyncio.to_thread(sessions.last_model, project, frame["chat"])
+            await asyncio.to_thread(runner.choices.update, result["chat"], **copied)
+            return {**result, "engine": engine}
+        # Отмена HTTP-запроса не отменяет копирование в потоке и не освобождает исходный чат раньше времени.
+        task = asyncio.create_task(fork())
+        self._forking[key] = task
+        def finished(done):
+            self._forking.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Просьба остаётся активной для штатного ожидания простоя/обновления, пока копирование не кончится.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    break
+            raise
 
     async def _op_subagents(self, frame, after):
         project = await self._project(frame)
@@ -674,13 +697,17 @@ class Agent:
             raise Refused("invalid", "задание пустое")
         project = await self._project(frame)
         runner = self._runner(frame)
+        options = await self._opencode_options(frame)
+        # Между проверками и start нет await: ветвление резервирует исходный чат на всё копирование.
+        if (frame.get("engine", "claude"), frame["chat"]) in self._forking:
+            raise Refused("running", "Дождитесь завершения ветвления чата")
         total = sum(len(backend.live()) for backend in (self.runner, self.codex, self.opencode) if backend is not None)
         if frame["chat"] not in runner.live() and total >= self.cfg.max_turns:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],
                                      frame.get("model"), frame.get("effort"), images=images,
                                      **({"attachments": items} if items else {}),
-                                     access=frame.get("access"), owner=frame.get("window"), **await self._opencode_options(frame))}
+                                     access=frame.get("access"), owner=frame.get("window"), **options)}
 
     async def _op_steer(self, frame, after):
         images = frame.get("images", [])
