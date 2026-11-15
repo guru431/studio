@@ -479,6 +479,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Изображения · обновите мост для файлов любого типа": "Images · update the bridge to attach any file type",
   "Дождаться завершения": "Wait for completion",
   "Продолжить здесь": "Continue here",
+  "Не все активные сессии удалось перенести сюда. Нажмите «Обновить», чтобы повторить.": "Some active sessions could not be transferred here. Press Refresh to retry.",
   "Усилие": "Effort",
   "Права": "Permissions",
   "Разрешить": "Allow",

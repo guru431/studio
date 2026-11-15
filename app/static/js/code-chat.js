@@ -56,6 +56,7 @@ import { shareMenu } from './chat-share.js';
 import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
+import { WINDOW } from './code-window.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -116,7 +117,6 @@ document.addEventListener('studio-locked', () => {
   for (const key of [...imageDrafts.keys()]) imageDrafts.delete(key);
 });
 const queuedInputs = new Map(); // принятые OpenCode уточнения до передачи в CLI
-const WINDOW = crypto.randomUUID().replaceAll('-', '');
 
 function attachmentBody(items) {
   const images = items.filter((i) => IMAGE_TYPES.has(i.mime)).map(({ mime, data }) => ({ mime, data }));

@@ -38,7 +38,7 @@ import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
-import { reloadStudio } from './refresh.js';
+import { claimActiveSessions, refreshRequested, reloadStudio } from './refresh.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -380,6 +380,13 @@ async function enter(worker) {
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', sectionKey);
   await render();
+  if (refreshRequested) {
+    let failed;
+    try { failed = await claimActiveSessions(); }
+    catch { failed = true; }
+    if (failed) view.prepend(el('p', { id: 'refresh-status', class: 'status error', role: 'status' },
+      tr("Не все активные сессии удалось перенести сюда. Нажмите «Обновить», чтобы повторить.")));
+  }
   setupCodeActivity();
   await worker;
   setupPushSync();           // подписка push, которую служебный работник не смог отправить запертым (sw.js)
