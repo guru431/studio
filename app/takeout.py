@@ -66,7 +66,8 @@ REFS = {
     "translate": ("translations", ("source_media_id",), ""),
 }
 #: вторые таблицы раздела с файлами — так же, со своим user_id (картинки и фото страниц распознавания)
-MORE_REFS = {"ocr": (("scan_pages", ("media_id",), ""),)}
+MORE_REFS = {"ocr": (("scan_pages", ("media_id",), ""),),
+             "voices": (("voice_samples", ("media_id",), ""),)}
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
 BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
 
@@ -243,7 +244,15 @@ def _speeches(user_id: int, rows: list, files: dict) -> list:
 
 
 def _voices(user_id: int, rows: list, files: dict) -> list:
+    samples: dict[str, list] = {}
+    if rows:
+        marks = ", ".join("?" * len(rows))
+        for sample in state.DB.execute(f"SELECT * FROM voice_samples WHERE user_id = ? AND voice_id IN ({marks})"
+                                        " ORDER BY created, id", (user_id, *(r["id"] for r in rows))):
+            samples.setdefault(sample["voice_id"], []).append(
+                _pick(sample, "id", "ref_text", "duration", "created") | {"file": files.get(sample["media_id"])})
     return [_pick(r, "id", "name", "ref_text", "duration", "created") | {"file": files.get(r["media_id"])}
+            | {"samples": samples.get(r["id"], [])}
             for r in rows]
 
 

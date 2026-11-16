@@ -84,7 +84,8 @@ def test_each_reference_keeps_its_file_and_its_removal_lets_the_sweep_take_it(lo
     insert_referencing(table, column, uid, mid)
     assert media.referenced(uid, mid) and not media.referenced(bob, mid)
     assert sweep(studio) == 0 and alive(mid)
-    for t in ("chat_share_files", "chat_shares", table):
+    # This fixture disables foreign keys, so remove the voice's sample references explicitly.
+    for t in ("chat_share_files", "chat_shares", "voice_samples", table):
         state.DB.execute(f"DELETE FROM {t}")
     assert not media.referenced(uid, mid)
     assert sweep(studio) == 1 and not alive(mid)

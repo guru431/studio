@@ -1,0 +1,255 @@
+/* A voice owns up to ten independent references. The selected one is used for synthesis. */
+import { api } from './api.js';
+import { tr } from './i18n.js';
+import { cancelRecording, recordingName, startRecording } from './mic.js';
+import { button, el, field, openDialog, words } from './ui.js';
+
+const MAX_SAMPLES = 10;
+const MAX_SECONDS = 60;
+const TEXT_MAX = 2000;
+
+function clock(sec) {
+  return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+}
+
+export async function editVoice(host, voice, onSaved) {
+  if (host.querySelector('#voice-dialog')) return;
+  const original = voice ? await api('GET', `/api/voices/${voice.id}`) : null;
+  if (!host.isConnected || host.querySelector('#voice-dialog')) return;
+  let voiceId = original?.id;
+  let entries = [];
+  let selected = null;
+  let recording = null;
+  let starting = false;
+  let saving = false;
+  const removed = [];
+  const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: original?.name || '' });
+  const list = el('div', { class: 'voice-samples' });
+  const file = el('input', { type: 'file', id: 'voice-files', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm', multiple: true });
+  const rec = button(tr("Записать с микрофона"), { class: 'btn btn-sm', id: 'voice-record' });
+  const recNote = el('p', { class: 'muted small', 'aria-live': 'polite' });
+  const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'voice-save' });
+  const dialog = openDialog(host, { id: 'voice-dialog', title: voice ? tr("Изменить голос") : tr("Новый голос"),
+    actions: [save], body: [field(tr("Имя голоса"), name, 'name'),
+      el('p', { class: 'muted small' }, tr("Запись 5–60 секунд чистой речи. Можно выбрать несколько файлов, до 10 образцов на голос.")),
+      field(tr("Добавить образцы"), file, 'audio'), rec, recNote,
+      el('p', { class: 'muted small' }, tr("Для озвучки используется выбранный образец.")), list, fail] });
+
+  function busy() {
+    const pending = entries.some(e => e.pending);
+    save.disabled = saving || starting || !!recording || pending;
+    file.disabled = saving || starting || !!recording || pending;
+    rec.disabled = saving || starting || pending;
+    name.disabled = saving;
+    for (const entry of entries) {
+      entry.text.disabled = saving || entry.pending;
+      entry.radio.disabled = saving;
+      entry.remove.disabled = saving || !!recording || starting;
+      entry.replace.disabled = saving || !!recording || starting;
+      entry.retry.disabled = saving || entry.pending || !!recording || starting;
+    }
+  }
+
+  function choose(entry) {
+    selected = entry;
+    for (const e of entries) e.radio.checked = e === entry;
+  }
+
+  function makeEntry(sample = {}) {
+    const entry = { id: sample.id, duration: sample.duration, originalText: sample.text || '', file: null, pending: false };
+    entry.text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: String(TEXT_MAX),
+      placeholder: tr("Определится автоматически после загрузки или записи") }, entry.originalText);
+    entry.note = el('p', { class: 'muted small', 'aria-live': 'polite', ...(!entries.length ? { id: 'voice-asr-status' } : {}) });
+    entry.error = el('p', { class: 'error', 'aria-live': 'polite' });
+    entry.radio = el('input', { type: 'radio', name: 'voice-reference' });
+    entry.radio.addEventListener('change', () => choose(entry));
+    entry.retry = button(tr("Распознать ещё раз"), { class: 'btn btn-sm', hidden: true,
+      ...(!entries.length ? { id: 'voice-transcribe' } : {}) }, () => transcribe(entry));
+    entry.replace = el('input', { type: 'file', accept: file.accept });
+    entry.replace.addEventListener('change', () => {
+      if (!entry.replace.files[0]) return;
+      entry.file = entry.replace.files[0];
+      transcribe(entry);
+    });
+    entry.remove = button(tr("Удалить образец"), { class: 'btn btn-sm btn-danger' }, () => {
+      if (entries.length === 1) {
+        fail.textContent = tr("Нужен хотя бы один образец голоса");
+        return;
+      }
+      entry.controller?.abort();
+      entry.discarded = true;
+      if (entry.id) removed.push(entry.id);
+      entries = entries.filter(e => e !== entry);
+      entry.node.remove();
+      if (selected === entry) choose(entries[0]);
+      busy();
+    });
+    entry.node = el('section', { class: 'voice-sample' },
+      el('label', { class: 'row' }, entry.radio, tr("Для озвучки"),
+        sample.duration ? ` · ${clock(sample.duration)}` : ''),
+      field(tr("Текст образца (можно поправить)"), entry.text, 'text'),
+      field(tr("Заменить запись"), entry.replace, 'replacement'), entry.note, entry.error,
+      el('div', { class: 'row' }, entry.retry, entry.remove));
+    entries.push(entry);
+    list.append(entry.node);
+    if (sample.active || !selected) choose(entry);
+    return entry;
+  }
+
+  async function transcribe(entry) {
+    if (!entry.file || entry.discarded || !dialog.open || !dialog.isConnected) return;
+    entry.controller?.abort();
+    const controller = new AbortController();
+    entry.controller = controller;
+    entry.pending = true;
+    entry.text.value = '';
+    entry.error.textContent = '';
+    entry.note.textContent = tr("Распознаю текст образца…");
+    entry.text.setAttribute('aria-busy', 'true');
+    entry.retry.hidden = true;
+    busy();
+    const body = new FormData();
+    body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
+    try {
+      const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
+      if (entry.controller !== controller || entry.discarded || !dialog.open || !dialog.isConnected) return;
+      entry.text.value = result.text;
+      entry.note.textContent = tr("Текст распознан. Проверьте его перед сохранением.");
+    } catch (err) {
+      if (controller.signal.aborted || entry.controller !== controller || !dialog.open || !dialog.isConnected) return;
+      entry.note.textContent = tr("Распознавание не удалось. Повторите или введите текст образца вручную.");
+      entry.error.textContent = words(err);
+    } finally {
+      if (entry.controller === controller) {
+        entry.controller = null;
+        entry.pending = false;
+        entry.text.setAttribute('aria-busy', 'false');
+        entry.retry.hidden = false;
+        busy();
+      }
+    }
+  }
+
+  async function addFiles(files) {
+    const kept = entries.filter(e => e.id || e.file);
+    if (kept.length + files.length > MAX_SAMPLES) {
+      fail.textContent = tr("У голоса не больше 10 образцов");
+      return;
+    }
+    for (const entry of entries.filter(e => !kept.includes(e))) {
+      entry.controller?.abort();
+      entry.discarded = true;
+      entry.node.remove();
+    }
+    entries = kept;
+    if (!entries.includes(selected)) selected = null;
+    fail.textContent = '';
+    const added = files.map(blob => {
+      const entry = makeEntry();
+      entry.file = blob;
+      entry.pending = true;
+      return entry;
+    });
+    busy();
+    // Recognize the batch in order; every transcript stays with its own recording.
+    for (const entry of added) await transcribe(entry);
+  }
+
+  file.addEventListener('change', () => {
+    if (file.files.length) addFiles([...file.files]);
+  });
+  rec.addEventListener('click', async () => {
+    if (recording) { recording.stop(); return; }
+    starting = true;
+    busy();
+    try {
+      recording = await startRecording(MAX_SECONDS, sec => {
+        recNote.textContent = tr("Запись · {0} — нажмите ещё раз, чтобы остановить", clock(sec));
+      }, rec);
+    } catch (err) {
+      recNote.textContent = words(err);
+    } finally {
+      starting = false;
+      busy();
+    }
+    if (!recording) return;
+    rec.textContent = tr("Остановить");
+    const blob = await recording.done;
+    recording = null;
+    rec.textContent = tr("Записать с микрофона");
+    busy();
+    if (!blob || !dialog.open || !dialog.isConnected) return;
+    recNote.textContent = tr("Запись готова");
+    file.value = '';
+    await addFiles([blob]);
+  });
+
+  save.addEventListener('click', async () => {
+    if (save.disabled) return;
+    fail.textContent = '';
+    if (!name.value.trim()) {
+      fail.textContent = tr("Имя голоса не должно быть пустым");
+      name.focus();
+      return;
+    }
+    if (!entries.length || entries.some(e => !e.id && !e.file)) {
+      fail.textContent = tr("Нужна запись образца: файл или с микрофона");
+      return;
+    }
+    if (entries.some(e => !e.text.value.trim())) {
+      fail.textContent = tr("Введите текст каждого образца");
+      return;
+    }
+    saving = true;
+    busy();
+    try {
+      // Free occupied slots first, retaining one stored reference until a new one is saved.
+      while (removed.length && (removed.length > 1 || entries.some(e => e.id))) {
+        await api('DELETE', `/api/voices/${voiceId}/samples/${removed[0]}`);
+        removed.shift();
+        onSaved();
+        if (!dialog.open || !dialog.isConnected) return;
+      }
+      for (const entry of entries) {
+        if (entry.file) {
+          const body = new FormData();
+          body.append('name', name.value.trim());
+          body.append('text', entry.text.value.trim());
+          body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
+          const url = !voiceId ? '/api/voices' : `/api/voices/${voiceId}/samples${entry.id ? '/' + entry.id : ''}`;
+          const result = await api(entry.id ? 'PUT' : 'POST', url, body);
+          if (!voiceId) voiceId = result.id;
+          entry.id = result.id;
+          entry.file = null;
+          entry.originalText = entry.text.value.trim();
+        } else if (entry.text.value.trim() !== entry.originalText) {
+          await api('PATCH', `/api/voices/${voiceId}/samples/${entry.id}`, { text: entry.text.value.trim() });
+          entry.originalText = entry.text.value.trim();
+        }
+        onSaved();
+        if (!dialog.open || !dialog.isConnected) return;
+      }
+      await api('PATCH', `/api/voices/${voiceId}`, { name: name.value.trim() });
+      await api('PATCH', `/api/voices/${voiceId}/samples/${selected.id}`, { active: true });
+      while (removed.length) {
+        await api('DELETE', `/api/voices/${voiceId}/samples/${removed[0]}`);
+        removed.shift();
+      }
+      dialog.close();
+    } catch (err) {
+      fail.textContent = words(err);
+    } finally {
+      saving = false;
+      busy();
+      onSaved();
+    }
+  });
+  dialog.addEventListener('close', () => {
+    for (const entry of entries) entry.controller?.abort();
+    if (recording || starting) cancelRecording();
+  });
+  for (const sample of original?.samples || [{}]) makeEntry(sample);
+  busy();
+  name.focus();
+}

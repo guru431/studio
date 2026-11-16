@@ -1,4 +1,4 @@
-"""Голоса озвучки по образцу (app/voices.py): запись 5–15 с, её текст и имя; образец — WAV в media,
+"""Голоса озвучки по образцу (app/voices.py): запись 5–60 с, её текст и имя; образец — WAV в media,
 только свой; имя и текст — не в журнал."""
 import asyncio
 import logging
@@ -60,7 +60,7 @@ def test_sample_is_transcribed_before_saving_and_can_be_corrected(studio, fake_a
     assert len(studio.gw.asr_requests) == 1
 
 
-@pytest.mark.parametrize("text", ["", "x" * 501])
+@pytest.mark.parametrize("text", ["", "x" * (voices.TEXT_MAX + 1)])
 def test_unusable_asr_text_is_refused_without_saving(studio, fake_audio, text):
     add_gateway(studio)
     fake_audio.duration = 8.0
@@ -181,7 +181,7 @@ def test_short_sample_and_bad_fields_are_refused(studio, fake_audio):
     assert r.status_code == 422 and r.json()["detail"]["code"] == "short"
     fake_audio.duration = 8.0
     assert create(studio, name="").json()["detail"]["code"] == "name"
-    assert create(studio, text="x" * 501).json()["detail"]["code"] == "text"
+    assert create(studio, text="x" * (voices.TEXT_MAX + 1)).json()["detail"]["code"] == "text"
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 
