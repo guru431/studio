@@ -1,17 +1,26 @@
 """MCP: изоляция учёток, SSRF, шифрование и настоящий цикл инструментов чата через HTTP transport."""
 import json
+import subprocess
+import sys
 
 import httpx
 import pytest
 
 import db
 import state
-from conftest import add_gateway, make_user, signin
+from conftest import APP, add_gateway, make_user, signin
 from test_chat import messages, new_chat, sse, turn
 from test_chat_web import call
 
 URL = "http://10.77.1.15:4000/mcp"
 TOKEN = "private-mcp-token"
+
+
+@pytest.mark.integration
+def test_mcp_module_can_be_loaded_by_the_service_console_before_main():
+    result = subprocess.run([sys.executable, '-c', 'import mcp_client'], cwd=APP,
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
 
 
 def add(studio):
