@@ -200,6 +200,18 @@ async def test_auto_explicitly_selects_once_and_images_use_embedded_data(runner)
     assert prompt["prompt"] == [{"type": "image", "mimeType": "image/png", "data": "cG5n"}]
 
 
+async def test_project_mcp_is_sent_on_session_new_and_load(runner, home):
+    from studio_agent import mcp
+    config = {'mcpServers': {'tools': {'command': 'python', 'args': ['-m', 'example'], 'env': {'KEY': 'private'}}}}
+    mcp.save(home, runner.project, 'opencode', config)
+    for _ in range(2):
+        runner.start(runner.project, runner.pid, CHAT, 'Hello', None, None, access='auto')
+        await runner._turns[CHAT].task
+    starts = [p for method, p in runner.fake.calls if method in ('session/new', 'session/load')]
+    assert len(starts) == 2
+    assert all(p['mcpServers'] == mcp.opencode(config, {}) for p in starts)
+
+
 async def test_stop_rejects_cards_cancels_prompt_and_close_prevents_new_work(runner):
     runner.start(runner.project, runner.pid, CHAT, "привет", None, None)
     task = runner._turns[CHAT].task

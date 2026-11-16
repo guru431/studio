@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, mcp, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .software import Software
 from .pin import OpenSessions, PinStore
@@ -38,6 +38,8 @@ OPS = {
     "usage": ("refresh", "model"),
     "projects": ("refresh",),
     "project_roots": (),
+    "mcp_get": ("project",),
+    "mcp_save": ("project",),
     "project_create": ("root", "name"),
     "project_summary": ("project", "refresh", "remote"),
     "activity": (),
@@ -144,7 +146,7 @@ class Agent:
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
                  "agent_version": agent_version, "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
-                 "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True,
+                 "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                  "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
@@ -289,10 +291,10 @@ class Agent:
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
-                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start"):
+                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start", "mcp_save"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if self.local_exit_pending and op in (
-                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start"):
+                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start", "mcp_save"):
             raise Refused("busy", "Агент завершает работу по выбору на компьютере")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
@@ -324,6 +326,8 @@ class Agent:
                 raise Refused('invalid')
         if op.startswith("desktop_"):
             self._desktop_fields(op, frame)
+        if op == "mcp_save":
+            mcp.validate(frame.get("config"), engine)
         # Продлевает только принятая просьба владельца: неизвестные и отклонённые по виду — нет.
         if not passive and scope is None:
             self.open.touch(session, idle_sec)
@@ -496,6 +500,15 @@ class Agent:
 
     async def _op_project_roots(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
+
+    async def _op_mcp_get(self, frame, after):
+        project = await self._project(frame)
+        return await asyncio.to_thread(lambda: mcp.load(store.home(), project, frame.get("engine", "claude")))
+
+    async def _op_mcp_save(self, frame, after):
+        project = await self._project(frame)
+        await asyncio.to_thread(lambda: mcp.save(store.home(), project, frame.get("engine", "claude"), frame["config"]))
+        return {}
 
     async def _op_project_create(self, frame, after):
         return await asyncio.to_thread(self._catalog.create, self.cfg, frame["root"], frame["name"])

@@ -135,6 +135,26 @@ async def test_question_ids_distinguish_identical_text(runner):
             await task
 
 
+async def test_project_mcp_is_sent_on_thread_start_and_resume(runner, home):
+    from studio_agent import mcp
+    config = {'mcpServers': {'remote': {'type': 'http', 'url': 'https://mcp.example.com/mcp',
+                                      'headers': {'Authorization': 'Bearer private'}}}}
+    mcp.save(home, runner.project, 'codex', config)
+    for _ in range(2):
+        runner.start(runner.project, 'project', CHAT, 'Hello', None, None)
+        task = runner._turns[CHAT].task
+        try:
+            rid = await asking(runner)
+            runner.answer('project', CHAT, rid, 'allow', None, None)
+            await task
+        finally:
+            if not task.done():
+                await runner.stop('project', CHAT); await task
+    starts = [p for method, p in runner.fake.calls if method in ('thread/start', 'thread/resume')]
+    assert len(starts) == 2
+    assert all(p['config'] == mcp.codex(config) for p in starts)
+
+
 @pytest.mark.parametrize("questions", [
     [{"question": "missing"}], [{"id": 1, "question": "numeric"}],
     [{"id": "same", "question": "A"}, {"id": "same", "question": "B"}]])

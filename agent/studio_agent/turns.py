@@ -20,7 +20,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundE
                               SystemMessage, UserMessage)
 
 from . import attachments as attachment_input
-from . import cli, events, history_images, image_input, limits, permissions, sessions, store, task_metrics, timeline
+from . import cli, events, history_images, image_input, limits, mcp, permissions, sessions, store, task_metrics, timeline
 from .claude_sdk import ClaudeSDKClient
 from .errors import Refused
 
@@ -47,7 +47,7 @@ async def _keep_alive(_input, _tool_use_id, _context) -> dict:
 
 
 def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, model: str | None,
-                effort: str | None, can_use_tool, access: str | None = None, *, subagent_hook=None) -> ClaudeAgentOptions:
+                effort: str | None, can_use_tool, access: str | None = None, *, subagent_hook=None, mcp_servers=None) -> ClaudeAgentOptions:
     """Опции клиента хода: новая сессия — `session_id=chat`, существующая — `resume=chat`."""
     limits = cli.subagent_limits(project)
     hooks = {"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]}
@@ -57,7 +57,7 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
     return ClaudeAgentOptions(
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
         model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
-        hooks=hooks,
+        hooks=hooks, mcp_servers=mcp_servers or {},
         setting_sources=list(cli.SETTINGS), system_prompt=cli.coding_prompt(limits),
         env={**limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
         stderr=cli._drop, extra_args={"chrome": None})
@@ -117,6 +117,7 @@ class _Turn:
     cli_state: str | None = None  # подтверждённое состояние CLI; idle завершает уже поглощённые уведомления
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
+    mcp_config: object | None = None
 
     @property
     def waiting(self) -> bool:
@@ -316,9 +317,11 @@ class Runner:
         async def deny(*_):
             return PermissionResultDeny(message="Чтение состояния")
 
-        client = self.factory(options=options_for(project, path, chat, new,
-            model, effort, deny, access))
+        config = await mcp.claude_config(project)
+        client = None
         try:
+            client = self.factory(options=options_for(project, path, chat, new,
+                model, effort, deny, access, mcp_servers=config.path))
             await asyncio.wait_for(client.connect(), cli.PROBE_SEC)
             info = await client.get_server_info() or {}
             raw = await client.get_context_usage()
@@ -329,8 +332,12 @@ class Runner:
                 context["cache"] = cache
             return {"settings": current, "context": context}
         finally:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(client.disconnect(), DISCONNECT_SEC)
+            try:
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(client.disconnect(), DISCONNECT_SEC)
+            finally:
+                await asyncio.to_thread(config.cleanup)
 
     def _turn(self, pid: str, chat: str) -> _Turn | None:
         """Ход чата — только того же проекта: `pid` просьбы не совпал — хода как будто нет."""
@@ -507,9 +514,11 @@ class Runner:
             if t.access is not None:
                 await asyncio.to_thread(self.choices.update, t.chat, access=t.access)
             if not (t.stopped or t.closing):
+                t.mcp_config = await mcp.claude_config(t.project)
                 options = await asyncio.to_thread(options_for, t.project, self.cli_path, t.chat, new, model, effort,
                                                   lambda tool, data, ctx: self._ask(t, tool, data, ctx), t.access,
-                                                  subagent_hook=lambda data, _id, _ctx: self._child_hook(t, data))
+                                                  subagent_hook=lambda data, _id, _ctx: self._child_hook(t, data),
+                                                  mcp_servers=t.mcp_config.path)
                 t.client = self.factory(options=options)
                 await t.client.connect()
                 await self._usage(t, model, effort)
@@ -755,7 +764,11 @@ class Runner:
                                            subagent_metrics={key: task_metrics.numeric(row) for key, row in t.child_states.items()})
         finally:  # и при отмене посреди конца: чат не остаётся занятым
             try:
-                await asyncio.to_thread(t.files.cleanup)
+                try:
+                    await asyncio.to_thread(t.files.cleanup)
+                finally:
+                    if t.mcp_config is not None:
+                        await asyncio.to_thread(t.mcp_config.cleanup)
             except OSError as e:
                 log.warning("ход %s: очистка вложений: %s", t.turn, type(e).__name__)
             finally:

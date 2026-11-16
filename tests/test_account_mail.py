@@ -46,6 +46,7 @@ def test_delivery_failure_never_discloses_smtp_exception_or_message(monkeypatch,
         raise OSError("recipient@example.com secret-link password")
 
     monkeypatch.setattr(account_mail, "_send", failed)
+    monkeypatch.setattr(account_mail, "settings", lambda: {})
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as caught:
         asyncio.run(account_mail.send("recipient@example.com", "Subject", "secret-link"))
@@ -88,3 +89,27 @@ def test_explicit_connect_ip_keeps_the_tls_hostname_and_certificate_checks(monke
         monkeypatch.setenv(key,value)
     account_mail._send("recipient@example.com", "Subject", "Body")
     assert connections == [("10.77.1.20", 587, "smtp.example.com")]
+
+
+def test_smtp_settings_are_admin_only_encrypted_and_used_without_restart(studio, monkeypatch):
+    from conftest import make_user, signin
+    import security
+    import state
+    uid = make_user(studio, 'owner', is_admin=True); signin(studio, 'owner')
+    body = {'host': 'smtp.example.com', 'port': 465, 'tls': 'ssl', 'username': 'studio',
+            'password': 'private-smtp-password', 'sender': 'Studio <studio@example.com>', 'connect_ip': '10.77.1.20'}
+    response = studio.c.put('/api/admin/smtp', json=body)
+    assert response.status_code == 200 and response.json()['password_set']
+    assert 'private-smtp-password' not in response.text + studio.c.get('/api/admin/smtp').text
+    raw = state.DB.execute("SELECT value FROM settings WHERE key='smtp'").fetchone()[0]
+    assert b'private-smtp-password' not in raw
+    assert 'private-smtp-password' in security.decrypt(raw)
+    del body['password']; body['port'] = 587; body['tls'] = 'starttls'
+    assert studio.c.put('/api/admin/smtp', json=body).status_code == 200
+    calls = []
+    monkeypatch.setattr(account_mail, '_send', lambda *args: calls.append(args))
+    studio.c.portal.call(account_mail.send, 'recipient@example.com', 'Subject', 'Body')
+    assert calls[0][3]['port'] == 587 and calls[0][3]['password'] == 'private-smtp-password'
+    make_user(studio, 'other'); signin(studio, 'other')
+    for method, endpoint, value in [('GET', '/api/admin/smtp', None), ('PUT', '/api/admin/smtp', body), ('POST', '/api/admin/smtp/check', None)]:
+        assert studio.c.request(method, endpoint, json=value).status_code == 403

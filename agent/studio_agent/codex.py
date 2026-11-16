@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import codex_progress, codex_rpc, diffs, events, history_images, limits, metadata, permissions, sessions, store, task_metrics, timeline
+from . import codex_progress, codex_rpc, diffs, events, history_images, limits, mcp, metadata, permissions, sessions, store, task_metrics, timeline
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -720,6 +720,9 @@ class CodexRunner(Runner):
             if t.stopped or t.closing:
                 return
             params = {"cwd": str(t.project), **permissions.codex_start(t.access)}
+            config = await asyncio.to_thread(lambda: mcp.codex(mcp.load(store.home(), t.project, "codex")))
+            if config:
+                params["config"] = config
             if model is not None:
                 params["model"] = model
             # Новая сессия студии не существует в Codex. Для внешней сессии ошибка чтения не создаёт новый чат.

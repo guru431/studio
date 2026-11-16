@@ -34,6 +34,9 @@ The server runs on infrastructure you control. Connect local models through the 
 
 ## Features
 
+- Configure MCP tools for regular chats and coding agents through Settings; select connected servers per chat.
+- Administrators can change SMTP settings and test the connection without restarting Studio.
+
 ### Chat
 
 - Multiple conversations, model switching and persistent history grouped by day.

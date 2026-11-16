@@ -585,6 +585,29 @@ def require_capability(aid: int, capability: str):
         raise _refuse(409, "unsupported", "Обновите мост на компьютере для этой возможности")
 
 
+class McpSettings(BaseModel):
+    config: dict
+
+
+@router.get("/agents/{aid}/projects/{pid}/mcp")
+async def mcp_settings(aid: int, pid: str, request: Request, engine: Literal["claude", "codex", "opencode"] = "claude"):
+    project_access.owner(request, aid)
+    check_pid(pid)
+    require_capability(aid, "mcp")
+    return _relay(await ask(request, aid, "mcp_get", project=pid, engine=engine))
+
+
+@router.put("/agents/{aid}/projects/{pid}/mcp")
+async def save_mcp_settings(aid: int, pid: str, body: McpSettings, request: Request,
+                            engine: Literal["claude", "codex", "opencode"] = "claude"):
+    project_access.owner(request, aid)
+    check_pid(pid)
+    require_capability(aid, "mcp")
+    if len(json.dumps(body.config, ensure_ascii=True)) > 65536:
+        raise _refuse(413, "too_large", "Настройки MCP больше 64 КиБ")
+    return _relay(await ask(request, aid, "mcp_save", project=pid, engine=engine, config=body.config))
+
+
 @router.get("/agents/{aid}/info")
 async def computer_info(aid: int, request: Request):
     from computer_info import clean

@@ -172,8 +172,8 @@ async def request(conn, method: str, url: str, *, keyless: bool = False, **kw) -
 
 
 @asynccontextmanager
-async def stream(conn, method: str, url: str, **kw):
-    parsed, kw = await _prepare(conn, url, kw)
+async def stream(conn, method: str, url: str, *, keyless: bool = False, **kw):
+    parsed, kw = await _prepare(conn, url, kw, keyless)
     client = state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
     async with client.stream(method, parsed, **kw) as response:
         yield response
