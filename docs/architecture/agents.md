@@ -72,7 +72,9 @@
   `agent_events` без FK, память службы и адреса push), `agent_events` (история подключений, только добавляется —
   `bridge.record`: `enroll`, `revoke`, `online`, `offline`, `open`, `pin_ok`, `pin_fail`, `session_start`; id и имя
   компьютера без FK, `device` — `bridge.device`), `code_chats` (отметки студии поверх сессий машины: какие чаты
-  завела и `open`/`closed`; текста нет), `push_subs` (подписка устройства, каскад от `sessions`). `agents` —
+  завела и `open`/`closed`; текста нет). При создании и ветвлении чата `code_chats.origin` сразу получает `studio`:
+  первый незавершённый ход не зависит от запаздывающей метки моста. Закрытие внешней сессии эту отметку не ставит;
+  прежние сессии по-прежнему распознаются по метке моста. `push_subs` — подписка устройства, каскад от `sessions`. `agents` —
   привязка `POST /api/agent/enroll` без сессии (`auth.OPEN_API`; `auth.check_password` — паузы и общий счёт неудач
   `/login`), ключ — в ответе один раз (с ним `login` учётки — `strip().lower()` введённого), смена пароля его не
   гасит; отзыв — `DELETE /api/agents/<id>` (`bridge.drop`, 4401) или самим мостом `DELETE /api/agent/enroll` (тоже

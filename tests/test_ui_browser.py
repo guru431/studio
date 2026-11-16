@@ -8746,13 +8746,19 @@ def test_code_account_defaults_apply_only_to_new_chats(browser, live):
 
 
 def test_code_foreign_session_warns_about_two_writers(browser, live):
-    """Чат из VS Code или терминала — предупреждение над лентой; чат студии — без него."""
+    """Внешний чат — с предупреждением; чат Studio без метки первого хода — без него."""
+    from contextlib import closing
+    import db
     from fake_bridge import pid
     login = "code-shared"
     live.add_user(login)
-    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A"), CODE_CHAT_B: code_session("Чат B", tag=None)})
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A", tag=None), CODE_CHAT_B: code_session("Чат B", tag=None)})
     aid, sb = code_online(live, login, machine)
     try:
+        with closing(db.connect(live.db_path)) as conn:
+            conn.execute("INSERT INTO code_chats(user_id,agent_id,project,session_id,state,created,updated,origin)"
+                         " SELECT user_id,id,?,?,'open',0,0,'studio' FROM agents WHERE id=?",
+                         (pid('alpha'), CODE_CHAT_A, aid))
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_B),
             ("eval", "noteB", "document.querySelector('#code-shared-note')?.textContent ?? null"),
             ("eval", "here", CODE_PLACE),
