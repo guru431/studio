@@ -1008,7 +1008,8 @@ def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_r
         config.parent.mkdir(parents=True)
         config.write_text(f'STUDIO_IMAGE={image}\n')
     orphan = 'studio:0.18.2-' + 'f' * 40  # нет каталога релиза: prepare-only или неудачная выкладка
-    inventory = '\n'.join([*images, orphan, 'studio:development', 'other:latest'])
+    legacy = ['studio:development', 'studio:migration-preflight']
+    inventory = '\n'.join([*images, orphan, *legacy, 'other:latest'])
     (root / 'images').write_text(inventory, newline='\n')
     (root / 'releases' / 'unmanaged').mkdir()
     for target, name in ((names[7], "current"), (names[0], "previous")):
@@ -1028,7 +1029,7 @@ def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_r
     assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], names[-1], 'unmanaged'])
     assert (root / "calls").read_text().splitlines() == [
         "image ls --filter reference=studio:* --format {{.Repository}}:{{.Tag}}",
-        *[f'image rm {image}' for image in [*images[1:-1], orphan]],
+        *[f'image rm {image}' for image in [*images[1:-1], orphan, *legacy]],
         "image prune -f --filter label=org.opencontainers.image.title=Studio",
         "builder prune -f --filter until=168h"]
     assert ("cleanup of old releases or images failed" in r.stderr) is bool(cleanup_failure)

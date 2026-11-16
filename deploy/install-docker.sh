@@ -133,7 +133,7 @@ prune_releases() {
         if rm -rf -- "$dir"; then removed=$((removed + 1)); else status=1; fi
     done
     while IFS= read -r image; do
-        [[ $image =~ ^studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] || continue
+        [[ $image =~ ^studio:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || continue
         if printf '%s\n' "${kept[@]}" | grep -Fxq -- "$image"; then continue; fi
         # No --force: Docker protects images referenced by any other container.
         docker image rm "$image" >/dev/null || status=1
