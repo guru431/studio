@@ -8,6 +8,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 import pytest
@@ -337,6 +338,46 @@ def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
     assert 'NEW=$(readlink -f "$(dirname "$(readlink -f "$0")")/..")' in native
     check = native.index('case "$NEW" in "$R"/.incoming-*) ;;')
     assert check < native.index('exec 9>"$R/.deploy.lock"') < native.index("flock -n 9") < native.index("getent passwd")
+
+
+@pytest.mark.integration                   # настоящий bash и операции с каталогами
+@pytest.mark.parametrize("outcome", ["success", "upload-failed", "mkdir-failed"])
+def test_deploy_cleanup_removes_only_the_folder_it_created(tmp_path, outcome):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as directory:
+        root = Path(directory) / "remote"
+        root.mkdir()
+        for name in (".incoming-old", ".incoming-active", ".incoming-collision"):
+            folder = root / name
+            folder.mkdir()
+            (folder / "payload").write_bytes(b"another deployment")
+        os.utime(root / ".incoming-old", (1, 1))
+        package = Path(directory) / "package"
+        package.mkdir()
+        setup = DEPLOY_SH[DEPLOY_SH.index("IN=$R/"):
+                          DEPLOY_SH.index('git -C "$D" -c core.autocrlf=false archive --format=zip')]
+        create = DEPLOY_SH[DEPLOY_SH.index('echo "==> код '):
+                           DEPLOY_SH.index('git -C "$D" -c core.autocrlf=false archive --format=tar')]
+        script = ("set -euo pipefail\n"
+                  f"R={shlex.quote(root.as_posix())}\npackage={shlex.quote(package.as_posix())}\n"
+                  f"REV={'a' * 40}\nHOST=fixture\nSSH=(ssh)\n"
+                  # Функции сильнее PATH: никакого настоящего SSH или sudo.
+                  # POSIX-права на Windows не моделируем, создание и удаление — настоящие.
+                  'sudo() { case "$1" in install) mkdir -p -- "${*: -1}" ;; '
+                  'mkdir) mkdir -- "${*: -1}" ;; *) "$@" ;; esac; }\n'
+                  'ssh() { eval "${*: -1}"; }\n' + setup)
+        if outcome == "mkdir-failed":
+            script += 'IN=$R/.incoming-collision\n'
+        script += create + ("exit 7\n" if outcome == "upload-failed" else "exit 0\n")
+        result = subprocess.run([bash, "-c", script], capture_output=True, text=True,
+                                encoding="utf-8", timeout=20)
+        for name in (".incoming-old", ".incoming-active", ".incoming-collision"):
+            assert (root / name / "payload").read_bytes() == b"another deployment", result.stderr
+        assert {p.name for p in root.iterdir()} == {".incoming-old", ".incoming-active", ".incoming-collision"}, result.stderr
+        assert not package.exists()
+        assert result.returncode == {"success": 0, "upload-failed": 7, "mkdir-failed": 1}[outcome], result.stderr
 
 
 def test_install_swaps_the_bridge_archive_with_the_code():
