@@ -163,14 +163,16 @@ async def create(request: Request):
 async def list_voices(request: Request):
     rows = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
                            " FROM voices v WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
-    return {"items": [_out(r) for r in rows]}
+    # SQLite NOCASE only folds ASCII. Keep Cyrillic names and Ё in alphabetical order too.
+    ordered = sorted(rows, key=lambda r: documents.nfc(r["name"]).casefold().replace("ё", "е"))
+    return {"items": [_out(r) for r in ordered]}
 
 
 @router.get("/{voice_id}")
 async def get_voice(voice_id: str, request: Request):
     row = _row(request.state.user.id, voice_id)
     return _out(row, with_text=True) | {"samples": [
-        {"id": s["id"], "text": s["ref_text"], "duration": s["duration"], "created": s["created"],
+        {"id": s["id"], "media_id": s["media_id"], "text": s["ref_text"], "duration": s["duration"], "created": s["created"],
          "active": s["media_id"] == row["media_id"]}
         for s in state.DB.execute("SELECT * FROM voice_samples WHERE voice_id = ? AND user_id = ? ORDER BY created, id",
                                   (voice_id, request.state.user.id))]}

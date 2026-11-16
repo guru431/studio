@@ -4862,6 +4862,29 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
 
 # ---- списки расшифровки и озвучки: страницы и выбор --------------------------------
 
+@pytest.mark.parametrize("width", [320, 390, 1280])
+def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser, live, width):
+    login = f"sp-new-{width}"
+    uid = live.add_user(login)
+    ids = seed_list(live, "speech", uid, 1)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), add_voice(),
+        *go(f"speech?id={ids[0]}"), ("wait", "document.querySelector('.sp-text') && document.querySelector('#chip-voice option')"),
+        ("type", "#speech-text", "Черновик"),
+        ("eval", "newVisible", "(() => { const b = document.querySelector('#sp-new'), r = b.getBoundingClientRect(); return b.contains(document.elementFromPoint(r.right - 2, r.top + r.height / 2)); })()"),
+        ("eval", "choices", "[document.querySelector('#chip-model').value, document.querySelector('#chip-voice').value]"),
+        ("click", "#sp-new"),
+        ("wait", "!document.querySelector('.sp-text') && !document.querySelector('.sp-item[aria-current]')"),
+        ("eval", "fresh", "({text: document.querySelector('#speech-text').value, count: document.querySelector('#speech-count').textContent, focused: document.activeElement.id, choices: [document.querySelector('#chip-model').value, document.querySelector('#chip-voice').value]})"),
+        ("type", "#speech-text", "Новая озвучка"), ("click", "#speech-go"),
+        ("wait", "document.querySelector('.sp-item[data-state=done][aria-current=true]')"),
+        ("eval", "rows", "document.querySelectorAll('.sp-item').length"),
+        ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["fresh"] == {"text": "", "count": "0 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    assert v["rows"] == 2 and v["newVisible"] and v["fits"]
+    assert not problems(r), problems(r)
+
 #: раздел → (приставка id кнопок, таблица, строка: id, user_id, имя или текст, состояние, created)
 LISTS = {
     "transcribe": ("tr", "transcripts", "INSERT INTO transcripts(id, user_id, model, name, source_media_id, state,"
@@ -6555,6 +6578,29 @@ def test_translate_text_goes_right_and_into_history(browser, live, translator, w
     assert v["fits"] is True
     sent = [b for b in translator.chat_requests if b.get("stream")][-1]
     assert sent["model"] == "local-gemma-abl" and sent["messages"][-1]["content"] == "Hello"
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_new_translation_clears_an_open_record_and_keeps_languages(browser, live, translator, width):
+    login = f"tl-new-{width}"
+    live.add_user(login)
+    translator.chat_script = [["Привет"], ["Второй перевод"]]
+    r = browser.drive(live.url + "/", [*translating(login),
+        ("type", "#tl-input", "Hello"), ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Привет'"),
+        ("eval", "langs", TL_LANGS),
+        ("eval", "model", "document.querySelector('#tl-model').value"),
+        ("click", "#tl-new"),
+        ("eval", "fresh", f"[document.querySelector('#tl-input').value, {TL_OUTPUT}, !!document.querySelector('.tl-row[aria-current=true]'), document.activeElement.id]"),
+        ("eval", "kept", f"[...{TL_LANGS}, document.querySelector('#tl-model').value]"),
+        ("type", "#tl-input", "Another text"), ("click", "#tl-go"),
+        ("wait", f"document.querySelectorAll('.tl-row[data-state=done]').length === 2 && {TL_OUTPUT} === 'Второй перевод'"),
+        ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["fresh"] == ["", "", False, "tl-input"]
+    assert v["kept"] == [*v["langs"], v["model"]] and v["fits"]
     assert not problems(r), problems(r)
 
 

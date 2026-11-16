@@ -1,6 +1,8 @@
 """Автотекст образца: файл, микрофон, отказ ASR и запоздалые ответы в трёх движках."""
+import base64
 import hashlib
 import io
+import sys
 import wave
 from email import policy
 from email.parser import BytesParser
@@ -64,9 +66,33 @@ def upload(page, name="sample.wav", seconds=6.0):
     page.evaluate(put_audio("#voice-dialog input[type=file]", wav_of(seconds), name)[2])
 
 
+def assert_audio_durations(page, expected):
+    players = page.locator(".voice-sample audio")
+    assert players.count() == len(expected)
+    assert players.evaluate_all("as => as.every(a => a.controls && !a.hidden && a.src)")
+    if sys.platform == "win32" and page.context.browser.browser_type.name == "webkit":
+        # Probe independently: Windows WebKit can advertise WAV but lack the actual decoder.
+        supported = page.evaluate("""async encoded => {
+          const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], {type: 'audio/wav'}));
+          const audio = new Audio(url);
+          try { await audio.play(); return true; }
+          catch (e) { if (e.name === 'NotSupportedError') return false; throw e; }
+          finally { audio.pause(); audio.removeAttribute('src'); audio.load(); URL.revokeObjectURL(url); }
+        }""", base64.b64encode(wav_of(0.1)).decode())
+        if not supported:
+            return  # Editor/persistence still run; Chromium and Firefox exercise native playback.
+    page.wait_for_function("() => [...document.querySelectorAll('.voice-sample audio')].every(a => a.readyState >= 1)")
+    assert sorted(round(n) for n in players.evaluate_all("as => as.map(a => a.duration)")) == sorted(expected)
+    players.first.evaluate("a => a.play()")
+    page.wait_for_function("() => document.querySelector('.voice-sample audio').currentTime > 0")
+    players.first.evaluate("a => a.pause()")
+
+
 def test_file_is_transcribed_corrected_and_saved(page, live):
     page.locator("#voice-dialog [name=name]").fill("Голос с ASR")
     upload(page, seconds=20.0)
+    assert_audio_durations(page, [20])
     page.wait_for_function("() => document.querySelector('#voice-dialog [name=text]').value === 'распознано'")
     page.locator("#voice-dialog [name=text]").fill("Исправленный текст")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -168,6 +194,7 @@ def test_multiple_samples_can_be_edited_replaced_and_selected(page):
     assert saved["sample_count"] == 2 and abs(saved["duration"] - 60) < 0.05
     activate(page, ".voice-edit")
     page.locator("#voice-dialog[open]").wait_for()
+    assert_audio_durations(page, [6, 60])
     page.locator("#voice-dialog [name=name]").fill("Исправленный голос")
     page.locator(".voice-sample [name=text]").nth(1).fill("Исправленный второй")
     page.locator(".voice-sample input[type=radio]").nth(1).check()
@@ -207,3 +234,50 @@ def test_partial_batch_failure_can_be_retried_without_duplicate_samples(page):
     activate(page, "#voice-save")
     page.locator("#voice-dialog").wait_for(state="detached")
     assert read_voice(page)["sample_count"] == 2
+
+
+def test_preview_sources_are_released_when_replaced_removed_or_closed(page):
+    page.evaluate("""() => {
+      const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+      window.previewUrls = new Set();
+      URL.createObjectURL = blob => { const url = create(blob); window.previewUrls.add(url); return url; };
+      URL.revokeObjectURL = url => { window.previewUrls.delete(url); revoke(url); };
+    }""")
+    upload(page)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    first = page.locator(".voice-sample audio").get_attribute("src")
+    page.locator(".voice-sample input[type=file]").set_input_files(
+        {"name": "replacement.wav", "mimeType": "audio/wav", "buffer": wav_of(8)})
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    assert page.locator(".voice-sample audio").get_attribute("src") != first
+    assert page.evaluate("url => !window.previewUrls.has(url)", first)
+    # Re-selecting the same filename adds an independent reference too.
+    upload(page)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    assert page.locator(".voice-sample audio").count() == 2
+    page.locator(".voice-sample .btn-danger").last.click()
+    assert page.evaluate("window.previewUrls.size") == 1
+    page.keyboard.press("Escape")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    assert page.evaluate("window.previewUrls.size") == 0
+
+
+def test_voice_order_matches_in_settings_and_speech(page):
+    page.evaluate("""async encoded => {
+      const {api} = await import('/static/js/api.js');
+      const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], {type: 'audio/wav'});
+      for (const name of ['Яна', 'Анна', 'борис']) {
+        const body = new FormData();
+        body.append('name', name); body.append('text', 'Образец'); body.append('audio', blob, 'sample.wav');
+        await api('POST', '/api/voices', body);
+      }
+    }""", base64.b64encode(wav_of(6)).decode())
+    page.keyboard.press("Escape")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    page.reload()
+    page.wait_for_function("() => document.querySelectorAll('.voice').length === 3")
+    assert page.locator(".voice b").all_text_contents() == ["Анна", "борис", "Яна"]
+    page.evaluate("location.hash = '#/speech'")
+    page.wait_for_function("() => document.querySelectorAll('#chip-voice option').length === 3")
+    assert page.locator("#chip-voice option").all_text_contents() == ["Анна", "борис", "Яна"]
