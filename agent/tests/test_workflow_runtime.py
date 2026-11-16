@@ -3,6 +3,7 @@
 import asyncio
 import json
 import itertools
+import os
 import threading
 import tempfile
 import sys
@@ -43,6 +44,7 @@ def project(home, marked):
 @pytest.fixture
 def provider(project):
     release = threading.Event()
+    background_finished = threading.Event()
     main_calls = []
     requests = itertools.count()
     source = project / 'probe.txt'
@@ -66,20 +68,37 @@ def provider(project):
                 block.get('text', '') for block in content if block.get('type') == 'text') for content in prompts)
             child = 'workflow-probe-child' in words
             shell = 'shell-probe-main' in words
-            main = shell or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
+            monitor = 'monitor-probe-main' in words or 'monitor-finished-probe-main' in words
+            main = shell or monitor or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
             if child:
                 if not release.wait(30):
                     self.send_error(504)
                     return
             elif main:
                 main_calls.append(1)
-            tool = main and len(main_calls) == 1 or child and 'toolu_child_probe_' not in last
-            identifier = 'toolu_child_probe_' + ('one' if 'one' in words else 'two') if child else 'toolu_workflow_probe'
-            block = ({'type': 'tool_use', 'id': identifier, 'name': 'Read' if child else 'Bash' if shell else 'Workflow', 'input': {}}
+                if 'monitor-finished-probe-main' in words and len(main_calls) == 2:
+                    if not background_finished.wait(10):
+                        self.send_error(504)
+                        return
+            followup = monitor and len(main_calls) == 3
+            tool = main and len(main_calls) == 1 or child and 'toolu_child_probe_' not in last or followup
+            identifier = ('toolu_child_probe_' + ('one' if 'one' in words else 'two') if child else
+                          'toolu_monitor_followup' if followup else 'toolu_workflow_probe')
+            if child:
+                name, arguments = 'Read', {'file_path': str(source)}
+            elif followup:
+                name, arguments = 'Bash', {'command': 'echo monitor-followup-finished', 'description': 'Inspect monitor result'}
+            elif shell or monitor:
+                name = 'Monitor' if monitor else 'Bash'
+                arguments = {'command': f'"{Path(sys.executable).as_posix()}" "{(project / "shell_probe.py").as_posix()}"',
+                             'description': 'Studio shell probe'}
+                if shell:
+                    arguments['run_in_background'] = True
+            else:
+                name, arguments = 'Workflow', {'script': SCRIPT}
+            block = ({'type': 'tool_use', 'id': identifier, 'name': name, 'input': {}}
                      if tool else {'type': 'text', 'text': ''})
-            delta = ({'type': 'input_json_delta', 'partial_json': json.dumps(
-                {'file_path': str(source)} if child else {'command': f'"{Path(sys.executable).as_posix()}" "{(project / "shell_probe.py").as_posix()}"',
-                    'description': 'Studio shell probe', 'run_in_background': True} if shell else {'script': SCRIPT})}
+            delta = ({'type': 'input_json_delta', 'partial_json': json.dumps(arguments)}
                      if tool else {'type': 'text_delta', 'text': 'child finished' if child else 'parent finished'})
             usage = {'input_tokens': 1, 'output_tokens': 1}
             frames = [
@@ -104,22 +123,25 @@ def provider(project):
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        yield f'http://127.0.0.1:{server.server_port}', release, main_calls
+        yield f'http://127.0.0.1:{server.server_port}', release, main_calls, background_finished
     finally:
         release.set()
+        background_finished.set()
         server.shutdown()
         server.server_close()
         worker.join(timeout=3)
 
 
-@pytest.mark.parametrize('mode', ['workflow', 'shell'])
+@pytest.mark.parametrize('mode', ['workflow', 'shell', 'monitor', 'monitor-finished'])
 async def test_native_background_work_keeps_its_children_alive_after_parent_result(home, project, provider, monkeypatch, mode):
-    address, release, main_calls = provider
+    address, release, main_calls, background_finished = provider
     config = home / 'claude'
     config.mkdir()
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.delenv('CLAUDECODE', raising=False)
     (project / 'shell_probe.py').write_text('import pathlib, time\ndeadline = time.monotonic() + 30\nwhile not pathlib.Path(__file__).with_name("release").exists() and time.monotonic() < deadline:\n time.sleep(0.05)\nprint("shell finished")\n', encoding='utf-8')
+    if mode == 'monitor-finished':
+        (project / 'release').touch()
     parent_result = asyncio.Event()
     children_started = asyncio.Event()
     sent = []
@@ -127,7 +149,7 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
     class Client(ClaudeSDKClient):
         def __init__(self, *, options):
             options.setting_sources = []
-            options.allowed_tools = ['Workflow', 'Read', 'Bash']
+            options.allowed_tools = ['Workflow', 'Read', 'Bash', 'Monitor']
             options.can_use_tool = None
             options.env.update(ANTHROPIC_BASE_URL=address, ANTHROPIC_API_KEY='local-test-key',
                                ANTHROPIC_AUTH_TOKEN='', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
@@ -137,6 +159,9 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
 
         async def receive_response(self):
             async for message in super().receive_response():
+                if getattr(message, 'subtype', '').startswith('task_'):
+                    if message.data.get('status') in ('completed', 'failed', 'stopped') or message.data.get('patch', {}).get('status') in ('completed', 'failed', 'stopped'):
+                        background_finished.set()
                 yield message
                 if isinstance(message, ResultMessage):
                     parent_result.set()
@@ -146,19 +171,23 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
         if len([r for r in frame['e'].get('agents', []) if r['status'] == 'running']) == 2:
             children_started.set()
 
-    runner = Runner(emit, choices=store.Choices(home), cli_path=None, factory=Client)
+    cli_path = os.environ.get('STUDIO_TEST_CLAUDE_CLI')
+    runner = Runner(emit, choices=store.Choices(home), cli_path=Path(cli_path) if cli_path else None, factory=Client)
     runner.start(project, PID, CHAT, f'{mode}-probe-main', 'claude-sonnet-5-5', None)
     turn = runner._turns[CHAT]
     try:
         await asyncio.wait_for(parent_result.wait(), 20)
         if mode == 'workflow':
             await asyncio.wait_for(children_started.wait(), 10)
-        assert CHAT in runner.live() and turn.background_tasks
+        assert CHAT in runner.live() and turn.waiting and not turn.finishing
         assert not any(f['e']['k'] == 'done' for f in sent)
         release.set()
         (project / 'release').touch()
         await asyncio.wait_for(asyncio.shield(turn.task), 20)
         assert sent[-1]['e']['status'] == 'done' and len(main_calls) >= 3
+        if mode.startswith('monitor'):
+            assert any(f['e']['k'] == 'result' and f['e']['id'] == 'toolu_monitor_followup' and not f['e']['error']
+                       and 'monitor-followup-finished' in f['e']['text'] for f in sent)
         files = list((config / 'projects').glob('*/' + CHAT + '.jsonl'))
         assert len(files) == 1
         records = [json.loads(line) for line in files[0].read_text(encoding='utf-8').splitlines()]
@@ -174,6 +203,6 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
     finally:
         release.set()
         (project / 'release').touch()
-        if not turn.task.done():
+        if not turn.task.done() and not turn.finishing:
             turn.task.cancel()
         await asyncio.gather(turn.task, return_exceptions=True)

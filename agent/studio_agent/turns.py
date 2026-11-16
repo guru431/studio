@@ -17,7 +17,7 @@ from pathlib import Path
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, CLINotFoundError, HookMatcher,
                               PermissionResultAllow, PermissionResultDeny, ResultError, ResultMessage, StreamEvent,
-                              SystemMessage)
+                              SystemMessage, UserMessage)
 
 from . import attachments as attachment_input
 from . import cli, events, history_images, image_input, limits, permissions, sessions, store, task_metrics, timeline
@@ -111,8 +111,14 @@ class _Turn:
     subtasks: dict = field(default_factory=dict)  # id потока/сессии субагента этого хода → имя (или None)
     child_states: dict = field(default_factory=dict)  # lifecycle Claude; subtasks других движков хранит имена
     background_tasks: dict = field(default_factory=dict)  # фоновые агенты, Workflow и команды текущего клиента
+    background_notices: set[str] = field(default_factory=set)  # завершились; CLI ещё должен обработать уведомления
+    background_reply: set[str] = field(default_factory=set)  # уведомления текущего автоматического ответа
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
+
+    @property
+    def waiting(self) -> bool:
+        return bool(self.pending or self.background_tasks or self.background_notices or self.background_reply)
 
 
 class Runner:
@@ -510,7 +516,7 @@ class Runner:
                 t.start_attempted = True
                 await t.client.query(image_input.prompt(text, images) if images else text)
                 self._accepted(t)
-                while t.pending or t.background_tasks:
+                while t.waiting:
                     received_result = False
                     async for message in t.client.receive_response():
                         self._subtask(t, message)
@@ -520,25 +526,33 @@ class Runner:
                         if isinstance(message, ResultMessage):
                             received_result = True
                             async with t.input_lock:
-                                # Завершение фоновой работы тоже будит родителя и даёт ResultMessage.
-                                t.pending = max(0, t.pending - 1)
+                                # Ответ на уведомление не подтверждает отправленный пользователем ввод.
+                                # У старого CLI без origin фоновый ответ идёт после всего явного ввода.
+                                origin = getattr(message, "origin", None)
+                                if (origin or {}).get("kind") == "task-notification" or (origin is None and not t.pending):
+                                    if t.background_reply:
+                                        t.background_reply.clear()
+                                    else:
+                                        t.background_notices.clear()
+                                else:
+                                    t.pending = max(0, t.pending - 1)
                                 if message.is_error:
                                     failure = _words(message.errors, message.result, message.subtype)
                                     t.pending = 0
-                            if not t.pending and not t.background_tasks and failure is None:
+                            if not t.waiting and failure is None:
                                 await self._wait_queue(t)
                             async with t.input_lock:
-                                if not t.pending and not t.background_tasks and t.queued and failure is None and not (t.stopped or t.closing):
+                                if not t.waiting and t.queued and failure is None and not (t.stopped or t.closing):
                                     message_id, extra_text, extra_images = t.queued[0]
                                     await self._steer_input(t, extra_text, extra_images, message_id)
                                     self._queued_sent(t, message_id)
-                                if not t.pending and not t.background_tasks:
+                                if not t.waiting:
                                     t.finishing = True
                             await self._usage(t, model, effort)
                     if failure is not None or t.stopped or t.closing:
                         break
                     if not received_result:
-                        if t.background_tasks and not (t.stopped or t.closing):
+                        if (t.background_tasks or t.background_notices or t.background_reply) and not (t.stopped or t.closing):
                             failure = "Claude Code завершил поток до окончания фоновых задач"
                         break
         except asyncio.CancelledError:
@@ -581,6 +595,11 @@ class Runner:
 
     def _subtask(self, t, message):
         """Штатные lifecycle-события SDK; фоновые Bash-задачи в счётчик агентов не попадают."""
+        if isinstance(message, UserMessage) and message.parent_tool_use_id is None and (message.origin or {}).get("kind") == "task-notification":
+            # Несколько завершений CLI может объединить в один ввод и один ResultMessage.
+            t.background_reply.update(t.background_notices)
+            t.background_notices.clear()
+            return
         if not isinstance(message, SystemMessage) or message.subtype not in (
                 "task_started", "task_progress", "task_notification", "task_updated"):
             return
@@ -597,6 +616,8 @@ class Runner:
             t.background_tasks[child] = kind
         if status in ("completed", "failed", "stopped", "killed"):
             t.background_tasks.pop(child, None)
+            if message.subtype == "task_notification":
+                t.background_notices.add(child)
         if task_kind == "local_workflow":
             return  # Workflow — контейнер; счётчик и история относятся к его дочерним агентам.
         if previous is None and (message.subtype != "task_started" or kind not in ("local_agent", "remote_agent", "agent", "subagent")):
@@ -746,7 +767,7 @@ class Runner:
         t.queue_wake.set()
         if t.client is None:
             return True  # клиента ещё нет: ход сверит `stopped` до запуска
-        waiting_background = not t.pending and bool(t.background_tasks)
+        waiting_background = not t.pending and t.waiting
         try:
             if t.background_tasks and hasattr(t.client, "stop_task"):
                 await asyncio.wait_for(asyncio.gather(*(t.client.stop_task(child)
