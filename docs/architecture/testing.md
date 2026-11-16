@@ -49,6 +49,19 @@ Chrome уже подключён через расширение; дополни
 Движок Safari проверяется отдельно в `tests/test_ui_webkit.py` (Playwright WebKit, касания, 393×852 и
 852×393, также 320 px). Установка движка: `.venv/Scripts/python -m playwright install webkit`;
 точечно — `.venv/Scripts/python -m pytest tests/test_ui_webkit.py -q -m integration -n0`.
+Голосовые образцы — `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_ui_voice_asr.py`:
+редактор, ASR и сохранение проверяются в Chromium, Firefox и WebKit. Отдельный сценарий
+`test_wav_samples_play_before_and_after_saving` проверяет длительность и продвижение воспроизведения
+WAV до сохранения и после перезагрузки страницы. Если Windows WebKit не воспроизводит
+независимый PCM WAV Blob, только этот сценарий явно пропускается; тесты редактора выполняются полностью.
+Для проверки воспроизведения WebKit нужен Linux или macOS: после установки зависимостей и движка
+команда на Linux — `.venv/bin/python -m pytest -q -n0 -m integration tests/test_ui_voice_asr.py -k 'webkit and wav_samples'`.
+Без звукового устройства GStreamer можно направить в штатный приёмник тестовых стендов:
+`GST_PLUGIN_FEATURE_RANK=fakeaudiosink:512`; декодирование WAV и медиачасы остаются настоящими.
+В WSL каталоги `TMPDIR`, `--basetemp` и профили браузера должны находиться на POSIX ФС внутри
+каталога задачи: DrvFs не поддерживает truncate открытого удалённого временного файла.
+Медиавозможности WebKit зависят от ОС ([Playwright](https://playwright.dev/python/docs/browsers#webkit));
+результат Windows не доказывает неисправность Safari или файла Studio.
 Замер синтетической истории 100 сообщений/1000 шагов и Markdown на CPU ×4 — отдельно от тестов:
 `.venv/Scripts/python tools/benchmark_history.py --output <report.json>`; три тёплых открытия,
 393×852, без настоящих переписок, квоты и изменений работающего моста.
