@@ -141,6 +141,56 @@ async def test_monitor_completion_before_parent_result_keeps_its_notification_re
     assert any(f["e"].get("text") == "Журнал проверен" for f in sent)
 
 
+@pytest.mark.parametrize("idle_before_result", [False, True])
+async def test_consumed_background_notification_finishes_when_cli_reports_idle(background, idle_before_result):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", "shell", task_type="local_bash", description="Команда"))
+    client.items.put_nowait(lifecycle("task_notification", "shell", status="completed", output_file="private", summary="finished"))
+    idle = lifecycle("session_state_changed", state="idle")
+    if idle_before_result:
+        client.items.put_nowait(idle)
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    if not idle_before_result:
+        client.items.put_nowait(idle)
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert CHAT not in runner.live() and client.disconnected
+    assert not turn.background_notices and not turn.background_reply
+    assert sent[-1]["e"]["status"] == "done"
+
+
+async def test_cli_idle_does_not_finish_live_background_work_or_new_explicit_input(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", "shell", task_type="local_bash", description="Команда"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await client.results.get()
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(lifecycle("task_notification", "shell", status="completed", output_file="private", summary="finished"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "task-notification"}))
+    await client.results.get()
+    assert turn.pending == 1 and CHAT in runner.live() and not turn.finishing
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await turn.task
+    assert sent[-1]["e"]["status"] == "done"
+
+
+async def test_cli_idle_sends_queued_input_after_consuming_a_notification(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", "shell", task_type="local_bash", description="Команда"))
+    client.items.put_nowait(lifecycle("task_notification", "shell", status="completed", output_file="private", summary="finished"))
+    queued = await runner.steer(PID, CHAT, "Следующее задание", [], mode="queue")
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await client.results.get()
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    assert await client.queried.get() == "Следующее задание"
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await turn.task
+    assert sent[-1]["e"]["status"] == "done"
+    assert any(f["e"] == {"k": "followup_sent", "id": queued["id"]} for f in sent)
+
+
 async def test_batched_background_replies_preserve_later_notices_and_explicit_input(background):
     runner, client, turn, sent = background
     for child in ("one", "two", "three"):

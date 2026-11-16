@@ -47,7 +47,8 @@ def test_turn_keeps_cli_prompt_and_merged_subagent_limits_without_overwriting_se
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     monkeypatch.setenv(cli.SUBAGENT_LIMITS[0], "9")
     options = options_for(project, tmp_path / "claude.exe", "chat", True, None, None, lambda *a: None)
-    assert options.env == {**cli.ENV, cli.SUBAGENT_LIMITS[0]: "2", cli.SUBAGENT_LIMITS[1]: "1"}
+    assert options.env == {**cli.ENV, cli.SUBAGENT_LIMITS[0]: "2", cli.SUBAGENT_LIMITS[1]: "1",
+                           "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"}
     assert options.system_prompt["preset"] == "claude_code"
     assert "at most 2 subagents" in options.system_prompt["append"]
     assert "spawn depth is 1" in options.system_prompt["append"]
