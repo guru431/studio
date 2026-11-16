@@ -90,6 +90,9 @@ BODIES = {
     ("GET", "/api/code/agents/1/projects/1/git"): None,
     ("POST", "/api/code/agents/1/update"): None,
     ("GET", "/api/code/agents/1/update"): None,
+    ('GET', '/api/code/agents/1/software'): None,
+    ('POST', '/api/code/agents/1/software/1/update'): None,
+    ('POST', '/api/code/agents/1/software/cancel'): None,
     ("DELETE", "/api/code/agents/1/update"): None,
 }
 
@@ -187,7 +190,7 @@ def test_someone_elses_agent_is_404_before_the_bridge(studio):
             for i in range(1, len(parts)):
                 if parts[i] == "1":
                     parts[i] = {"agents": str(aid), "projects": ALPHA, "chats": A,
-                                "visualization": "0" * 32, "members": "1"}[parts[i - 1]]
+                                "visualization": "0" * 32, "members": "1", "software": "codex"}[parts[i - 1]]
             body = BODIES[(method, path)]
             r = await client.request(method, "/".join(parts), **({} if body is None else {"json": body}))
             assert (r.status_code, detail(r)["code"]) == (404, "not_found"), (method, path, r.text)

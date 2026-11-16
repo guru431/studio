@@ -219,7 +219,7 @@ def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(
     backends = [turns.Runner(lambda event: None, choices=store.Choices(home), cli_path=None) for _ in range(3)]
     ctrl.runner, ctrl.codex, ctrl.opencode = backends
     desktop = {"active": True, "enabled": True}
-    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop)))
+    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop)), software=SimpleNamespace(busy=False))
     exits, snapshots = [], []
     ctrl.on_idle_quit = lambda: exits.append(True)
     ctrl.on_activity(snapshots.append)
@@ -246,6 +246,10 @@ def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(
     ctrl._refresh_activity()
     assert ctrl.activity_status()["desktop_active"] is False and not exits
     pending.set_result(None)
+    ctrl.agent.software.busy = True
+    ctrl._refresh_activity()
+    assert not exits
+    ctrl.agent.software.busy = False
     ctrl._refresh_activity()
     ctrl._refresh_activity()
     assert exits == [True]

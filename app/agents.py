@@ -152,6 +152,7 @@ async def list_agents(request: Request):
                       "visualization_images": hello.get("visualization_images", False),
                       "history_images": hello.get("history_images", False),
                       "computer_info": hello.get("computer_info", False),
+                      "software_versions": hello.get("software_versions", False),
                       "desktop": hello.get("desktop", False),
                       "file_stats": hello.get("file_stats", False),
                       "file_operations": hello.get("file_operations", False),
@@ -169,7 +170,7 @@ async def list_agents(request: Request):
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
-                             computer_info=False, desktop=False, subscription_usage=False, opencode_usage=False, worktrees=False, project_create=False)
+                             computer_info=False, software_versions=False, desktop=False, subscription_usage=False, opencode_usage=False, worktrees=False, project_create=False)
     return {"items": items}
 
 

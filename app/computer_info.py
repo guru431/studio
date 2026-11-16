@@ -2,6 +2,31 @@
 
 import ipaddress
 import math
+import re
+
+
+def software(data):
+    """Фиксированные программы, версии и коды; без путей и вывода установщиков."""
+    def version(value):
+        return value if isinstance(value, str) and re.fullmatch(
+            r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,48})?', value) else None
+
+    items, seen = [], set()
+    for item in data.get('items', [])[:3] if isinstance(data.get('items'), list) else []:
+        if not isinstance(item, dict) or item.get('id') not in ('codex', 'claude', 'opencode') or item['id'] in seen:
+            continue
+        seen.add(item['id'])
+        items.append({'id': item['id'], 'installed': item.get('installed') is True,
+            'version': version(item.get('version')), 'cli_version': version(item.get('cli_version')),
+            'latest': version(item.get('latest')),
+            'source': item.get('source') if item.get('source') in ('npm', 'vscode', 'native', 'sdk') else None,
+            'update_available': item.get('update_available') is True, 'can_update': item.get('can_update') is True,
+            'reason': item.get('reason') if item.get('reason') in ('not_installed', 'bridge', 'manager', 'manual', 'check') else None})
+    update = data.get('update') if isinstance(data.get('update'), dict) else {}
+    return {'items': items, 'update': {
+        'tool': update.get('tool') if update.get('tool') in ('claude', 'codex', 'opencode') else None,
+        'state': update.get('state') if update.get('state') in (
+            'idle', 'waiting', 'updating', 'done', 'error', 'cancelled') else 'error'}}
 
 
 def _text(value, maximum=512):

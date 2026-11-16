@@ -1385,6 +1385,10 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-computer-details dt { color: var(--text-2); margin-top: var(--space-6); font-size: var(--fs-xs); }
 .code-computer-details dd { margin: 3px 0 0; white-space: pre-wrap; }
 .code-computer-details dd > div + div { margin-top: var(--space-2); }
+.code-software { margin-bottom: var(--space-7); }
+.code-software-row { display: flex; align-items: start; gap: var(--space-4); margin-top: var(--space-5); }
+.code-software-versions { display: grid; gap: var(--space-2); flex: 1; min-width: 0; }
+.code-software-row > button { flex-shrink: 0; }
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
 .code-agent-version { flex: none; color: var(--text-2); font-size: var(--fs-2xs); font-weight: 400; }

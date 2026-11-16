@@ -1,3 +1,3 @@
 """Мост studio-agent: локальные Claude Code, Codex и OpenCode владельца для студии."""
 
-VERSION = "0.26.3"
+VERSION = "0.27.0"
