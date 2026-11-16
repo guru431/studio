@@ -5,6 +5,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,6 +16,12 @@ from studio_agent import VERSION, store, update_helper, updater
 from studio_agent.errors import Refused
 
 FUTURE = {'version': '99.0.0', 'sha256': 'a' * 64, 'size': 100}
+
+
+@pytest.fixture
+def install_root(tmp_path_factory):
+    with tempfile.TemporaryDirectory(prefix='install-', dir=tmp_path_factory.getbasetemp()) as folder:
+        yield updater.Path(folder)
 
 
 def bundle(path, version='99.0.0', extra=None, prefix=''):
@@ -100,8 +107,13 @@ def test_prepare_checks_checksum_and_builds_a_separate_venv(home, tmp_path, monk
     stage = updater.prepare(home, release)
     assert stage.parent == tmp_path / 'local/Programs/studio-agent/releases'
     assert (stage / 'studio_agent.pyw').is_file() and (stage / '_update_helper.py').is_file()
-    assert len(run.call_args_list) == 3
+    assert len(run.call_args_list) == 4
     assert '.venv' in str(run.call_args_list[0])
+    assert '--without-pip' in run.call_args_list[0].args[0]
+    for call in run.call_args_list[1:]:
+        assert call.args[0][0] == str(stage / '.venv/Scripts/pythonw.exe')
+        assert call.kwargs['creationflags'] == subprocess.CREATE_NO_WINDOW
+    assert run.call_args_list[1].args[0][1:] == ['-m', 'ensurepip', '--upgrade', '--default-pip']
     assert key not in str(run.call_args_list)
     assert request.open.call_args.args[0].get_header('Authorization') == 'Bearer ' + key
     with pytest.raises(ValueError, match='checksum'):
@@ -330,9 +342,41 @@ def test_real_windows_process_handle_waits_for_natural_exit():
 
 @pytest.mark.integration
 @pytest.mark.timeout(90)
-def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tmp_path, tmp_path_factory, monkeypatch):
+def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tmp_path, install_root, monkeypatch):
     """Настоящие venv/pip и смена процессов, без запущенного рабочего моста, сети и квоты CLI."""
     trace = tmp_path / 'trace.txt'
+    consoles = tmp_path / 'consoles.jsonl'
+    probe = tmp_path / 'console_probe.py'
+    # Проверяем и потомков venv/ensurepip: CREATE_NO_WINDOW родителя не наследуется.
+    probe.write_text('''import ctypes, json, os, runpy, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, os.getcwd())
+probe, report = str(Path(__file__).resolve()), sys.argv[1]
+args = json.loads(sys.argv[2])
+with open(report, 'a') as out:
+    out.write(json.dumps([args[:2], bool(ctypes.windll.kernel32.GetConsoleWindow())]) + '\\n')
+class ProbedProcess(subprocess.Popen):
+    def __init__(self, command, *positional, **kwargs):
+        if isinstance(command, (list, tuple)) and Path(command[0]).name.lower() in ('python.exe', 'pythonw.exe'):
+            for index, value in enumerate(command):
+                if value in ('-c', '-m'):
+                    command = [*command[:index], probe, report, json.dumps(command[index:])]
+                    break
+        super().__init__(command, *positional, **kwargs)
+subprocess.Popen = ProbedProcess
+sys.argv = args[1:]
+if args[0] == '-m':
+    runpy.run_module(args[1], run_name='__main__', alter_sys=True)
+else:
+    exec(args[1], {'__name__': '__main__'})
+''', encoding='utf-8')
+    real_run = subprocess.run
+
+    def probed_run(command, **kwargs):
+        return real_run([command[0], str(probe), str(consoles), json.dumps(command[1:])], **kwargs)
+
+    monkeypatch.setattr(updater.subprocess, 'run', probed_run)
+    monkeypatch.setattr(sys, '_base_executable', str(updater.Path(sys._base_executable).with_name('pythonw.exe')))
     archive = tmp_path / 'package.zip'
     with zipfile.ZipFile(archive, 'w') as source:
         source.writestr('studio-agent/', '')
@@ -349,11 +393,14 @@ def test_real_preparation_and_helper_handover_keep_the_previous_install(home, tm
     store.save_config(home, store.Config(url='https://studio.example'))
     monkeypatch.setattr(store, 'load_key', lambda h: 'test-device-key')
     # Имя теста + releases/.venv + licenses pip превышали Windows MAX_PATH.
-    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path_factory.mktemp('install')))
+    monkeypatch.setenv('LOCALAPPDATA', str(install_root))
     opener = Mock()
     opener.open.side_effect = lambda *a, **kw: io.BytesIO(data)
     monkeypatch.setattr(updater.urllib.request, 'build_opener', lambda *a: opener)
     stage = updater.prepare(home, {**FUTURE, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+    observations = [json.loads(line) for line in consoles.read_text().splitlines()]
+    assert len(observations) >= 4
+    assert not any(visible for _, visible in observations), observations
     assert (stage / '.venv/Scripts/pythonw.exe').is_file()
     old_repo = tmp_path / 'previous'
     old_repo.mkdir()
@@ -394,3 +441,4 @@ def test_helper_plan_contains_no_device_key_or_pin(home, tmp_path, monkeypatch):
     plan = json.loads((tmp_path / '_update_plan.json').read_text())
     assert set(plan) == {'pid', 'old_repo', 'old_python', 'home'}
     assert popen.call_args.kwargs['creationflags'] & subprocess.DETACHED_PROCESS
+    assert popen.call_args.args[0][0] == str(updater.Path(sys.executable).with_name('pythonw.exe'))

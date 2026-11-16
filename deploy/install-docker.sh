@@ -58,10 +58,12 @@ probe="$STUDIO_MEDIA_DIR/.studio-deploy-$$"
 setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
 [ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
-image="studio:$REVISION"
+version=$(sed -nE 's/^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$NEW/app/release.py")
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'studio: invalid application version' >&2; exit 1; }
+image="studio:$version-$REVISION"
 # --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
 # first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
-build=(docker build --pull --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
+build=(docker build --pull --build-arg "STUDIO_VERSION=$version" --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
 if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
 "${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
@@ -112,32 +114,34 @@ if [ "$CREATE_ADMIN" = 1 ]; then
 fi
 
 prune_releases() {
-    # Keep the five newest releases and the targets of current and previous. An image goes with its
-    # release unless a kept release has the same revision. Failures only warn: the release is healthy.
-    local dir name rev count=0 status=0 kept=() removed=()
-    while read -r _ dir; do
-        count=$((count + 1))
-        if [ "$count" -le 5 ] || [ "$dir" -ef "$R/current" ] || [ "$dir" -ef "$R/previous" ]; then
-            kept+=("${dir##*/}")
-        elif rm -rf -- "$dir"; then
-            removed+=("${dir##*/}")
-        else
-            status=1
-        fi
-    done < <(for dir in "$R"/releases/*-*T*; do
-                 if [ -d "$dir" ]; then printf '%s %s\n' "${dir##*-}" "$dir"; fi
-             done | sort -r)
-    for name in "${removed[@]}"; do
-        rev=${name%-*}
-        if printf '%s\n' "${kept[@]}" | grep -q "^$rev-"; then continue; fi
-        if docker image inspect "studio:$rev" >/dev/null 2>&1; then
-            docker image rm "studio:$rev" >/dev/null || status=1
-        fi
+    # Keep current and previous for rollback. Read their actual tags first; an unreadable config
+    # forbids cleanup. Enumerating images also finds leftovers of prepare-only/failed deployments.
+    local dir name image images status=0 removed=0 kept=()
+    for name in current previous; do
+        dir="$R/$name"
+        if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then continue; fi
+        image=$(sed -n 's/^STUDIO_IMAGE=//p' "$dir/deploy/docker/host.conf") || return 1
+        [[ $image =~ ^studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] || return 1
+        kept+=("$image")
     done
-    # Untagged images: earlier builds of a redeployed revision and replaced base images (--pull).
-    docker image prune -f >/dev/null || status=1
+    [ "${#kept[@]}" -gt 0 ] || return 1
+    images=$(docker image ls --filter 'reference=studio:*' --format '{{.Repository}}:{{.Tag}}') || return 1
+    for dir in "$R"/releases/*; do
+        name=${dir##*/}
+        [[ $name =~ ^[a-f0-9]{40}-[0-9]{8}T[0-9]{6}$ ]] || continue
+        if [ ! -d "$dir" ] || [ -L "$dir" ] || [ "$dir" -ef "$R/current" ] || [ "$dir" -ef "$R/previous" ]; then continue; fi
+        if rm -rf -- "$dir"; then removed=$((removed + 1)); else status=1; fi
+    done
+    while IFS= read -r image; do
+        [[ $image =~ ^studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] || continue
+        if printf '%s\n' "${kept[@]}" | grep -Fxq -- "$image"; then continue; fi
+        # No --force: Docker protects images referenced by any other container.
+        docker image rm "$image" >/dev/null || status=1
+    done <<< "$images"
+    # Only Studio's untagged builds; do not prune unrelated application images.
+    docker image prune -f --filter label=org.opencontainers.image.title=Studio >/dev/null || status=1
     docker builder prune -f --filter until=168h >/dev/null || status=1
-    printf 'studio: removed %d old releases\n' "${#removed[@]}"
+    printf 'studio: removed %d old releases\n' "$removed"
     return "$status"
 }
 prune_releases || echo 'studio: cleanup of old releases or images failed; the new release is healthy' >&2
