@@ -1380,17 +1380,45 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-agent-state { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--line); }
 .code-agent-state.on { background: var(--success); }
 .code-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.code-computer-dialog { overflow-wrap: anywhere; }
-.code-computer-details { margin: 0 0 var(--space-7); }
-.code-computer-details dt { color: var(--text-2); margin-top: var(--space-6); font-size: var(--fs-xs); }
-.code-computer-details dd { margin: 3px 0 0; white-space: pre-wrap; }
-.code-computer-details dd > div + div { margin-top: var(--space-2); }
-.code-software { margin-bottom: var(--space-7); }
-.code-software-row { display: flex; align-items: start; gap: var(--space-4); margin-top: var(--space-5); }
-.code-software-versions { display: grid; gap: var(--space-2); flex: 1; min-width: 0; }
+.code-computer-dialog { width: min(720px, calc(100 * var(--vw) - 32px)); padding: 0; overflow: hidden; overflow-wrap: anywhere; }
+.code-computer-dialog[open] { display: flex; flex-direction: column; }
+.code-computer-heading { display: flex; align-items: center; gap: var(--space-5); flex: none;
+  padding: var(--space-7) var(--space-8); border-bottom: 1px solid var(--line); }
+.code-computer-heading > .ico { color: var(--accent); }
+.code-computer-heading h2 { min-width: 0; margin: 0; }
+.code-computer-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--space-4) var(--space-8) var(--space-7); }
+.code-computer-details { margin: 0 0 var(--space-7); font-size: var(--fs-sm); }
+.code-computer-details > div { display: grid; grid-template-columns: minmax(110px, 27%) minmax(0, 1fr); gap: var(--space-6);
+  padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
+.code-computer-details dt { color: var(--text-2); font-size: var(--fs-xs); }
+.code-computer-details dd { min-width: 0; margin: 0; white-space: pre-wrap; font-variant-numeric: tabular-nums; }
+.code-computer-details dd > div + div { margin-top: var(--space-1); }
+.code-computer-footer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-6); flex: none;
+  padding: var(--space-6) var(--space-8); border-top: 1px solid var(--line); background: var(--surface-0); }
+.code-computer-updated { flex: 1 1 160px; min-width: 0; }
+.code-computer-footer .actions { margin: 0 0 0 auto; }
+.code-computer-footer .btn { font-size: var(--fs-sm); padding-inline: var(--space-5); }
+.code-software h3 { margin: 0 0 var(--space-5); font-size: var(--fs-md); }
+.code-software-row { padding: var(--space-5) var(--space-6); margin-top: var(--space-4);
+  border: 1px solid var(--line); border-radius: var(--r-menu); background: var(--surface-0); }
+.code-software-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); font-size: var(--fs-sm); }
+.code-software-heading > button { flex-shrink: 0; min-height: var(--h-sm); padding: var(--space-2) var(--space-5); }
+.code-software-versions { display: grid; gap: var(--space-1); margin-top: var(--space-2); font-size: var(--fs-xs); }
+.code-software-numbers, .code-software-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-6); }
 .code-software-version[data-state="current"] { color: var(--success); }
 .code-software-version[data-state="outdated"] { color: var(--danger); }
-.code-software-row > button { flex-shrink: 0; }
+@media (pointer: coarse) { .code-computer-dialog button { min-height: var(--h-touch); } }
+@media (max-width: 400px) {
+  .code-computer-heading, .code-computer-footer { padding-inline: var(--space-6); }
+  .code-computer-content { padding-inline: var(--space-6); }
+  .code-computer-details > div { grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-4); }
+}
+@media (max-height: 480px) {
+  .code-computer-heading { padding-block: var(--space-5); }
+  .code-computer-heading h2 { font-size: var(--fs-md); }
+  .code-computer-footer { padding-block: var(--space-4); }
+  .code-computer-updated { font-size: var(--fs-xs); }
+}
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }
 .code-agent-version { flex: none; color: var(--text-2); font-size: var(--fs-2xs); font-weight: 400; }

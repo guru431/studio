@@ -2,6 +2,7 @@ import { locale, tr } from './i18n.js';
 /* Сведения компьютера живут только в открытом окне; PIN проверяет обычный маршрут моста. */
 import { api } from './api.js';
 import { dateTime } from './time.js';
+import { icon } from './icons.js';
 import { el, words } from './ui.js';
 import { softwareView } from './code-software.js';
 
@@ -15,10 +16,13 @@ export function computerView(host, { locked }) {
   let generation = 0;
   const title = el('h2', { id: 'code-computer-title' });
   const content = el('div', { class: 'code-computer-content', 'aria-live': 'polite' });
+  const updated = el('span', { class: 'code-computer-updated muted small' });
   const refresh = el('button', { type: 'button', class: 'btn', id: 'code-computer-refresh' }, tr("Обновить"));
   const close = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const dialog = el('dialog', { id: 'code-computer-dialog', class: 'dialog code-computer-dialog',
-    'aria-labelledby': 'code-computer-title' }, title, content, el('div', { class: 'actions' }, refresh, close));
+    'aria-labelledby': 'code-computer-title' },
+    el('header', { class: 'code-computer-heading' }, icon('info'), title), content,
+    el('footer', { class: 'code-computer-footer' }, updated, el('div', { class: 'actions' }, refresh, close)));
   host.append(dialog);
   const software = softwareView({ locked(id) { dialog.close(); locked(id); } });
   close.addEventListener('click', () => dialog.close());
@@ -27,14 +31,15 @@ export function computerView(host, { locked }) {
     controller?.abort();
     software.clear();
     content.replaceChildren();
+    updated.textContent = '';
     content.removeAttribute('aria-busy');
   }
   dialog.addEventListener('close', clear);
 
   function paint(data) {
     const details = el('dl', { class: 'code-computer-details' });
-    const row = (label, ...values) => details.append(el('dt', {}, label),
-      el('dd', {}, ...values.map((value) => el('div', {}, value || tr("Нет данных")))));
+    const row = (label, ...values) => details.append(el('div', {}, el('dt', {}, label),
+      el('dd', {}, ...values.map((value) => el('div', {}, value || tr("Нет данных"))))));
     row(tr("Имя компьютера"), data.hostname);
     row(tr("Имя пользователя"), data.username);
     row(tr("Внешний IP-адрес"), data.external_ip);
@@ -42,19 +47,21 @@ export function computerView(host, { locked }) {
     row(tr("Операционная система"), data.os);
     const memory = data.memory;
     row(tr("Оперативная память"), memory
-      ? tr("Используется {0} из {1} ({2}%)", bytes(memory.used), bytes(memory.total), Math.round(memory.used / memory.total * 100))
+      ? tr("{0} из {1} ({2}%) · свободно {3}", bytes(memory.used), bytes(memory.total),
+        Math.round(memory.used / memory.total * 100), bytes(memory.available))
       : null);
-    if (memory) row(tr("Доступно памяти"), tr("{0} из {1}", bytes(memory.available), bytes(memory.total)));
     row(tr("Свободное место на дисках"), ...(data.disks.length ? data.disks.map((disk) =>
       disk.total === null ? tr("{0} — нет данных", disk.path)
         : tr("{0} — {1} из {2}", disk.path, disk.free === null ? tr("нет данных о свободном месте") : tr("свободно {0}", bytes(disk.free)), bytes(disk.total))) : [null]));
     row(tr("Папки с проектами"), ...(data.projects_roots.length ? data.projects_roots : [tr("Не настроены")]));
-    content.replaceChildren(details, software.host, el('p', { class: 'muted small' }, tr("Обновлено: {0}", date(data.checked_at))));
+    content.replaceChildren(details, software.host);
+    updated.textContent = tr("Обновлено: {0}", date(data.checked_at));
   }
 
   async function load(force = false) {
     controller?.abort();
     software.clear();
+    updated.textContent = '';
     const mine = ++generation;
     const target = agent;
     refresh.disabled = !target.online || !target.computer_info;
