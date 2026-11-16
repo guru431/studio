@@ -48,6 +48,9 @@ def test_fork_creates_a_separate_owned_record_without_persisting_draft(studio):
     record = state.DB.execute("SELECT * FROM code_chats WHERE session_id = ?", (data["chat"],)).fetchone()
     assert record["engine"] == "claude" and record["project"] == ALPHA
     assert "draft" not in record.keys()
+    machine.projects["alpha"]["chats"][data["chat"]]["tag"] = None
+    items = studio.c.get(f"/api/code/agents/{aid}/projects/{ALPHA}/chats?refresh=true").json()["items"]
+    assert next(item for item in items if item["chat"] == data["chat"])["origin"] == "studio"
 
 
 def test_worktree_and_subagent_routes_follow_capability_and_child_ownership(studio):

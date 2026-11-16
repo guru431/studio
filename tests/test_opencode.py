@@ -127,7 +127,7 @@ def test_opencode_profile_defaults_preserve_legacy_models_and_efforts(studio):
 
 def test_step_23_preserves_old_chat_ids_engines_constraints_and_cascades(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
+    conn.executescript(db.SCHEMA.removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25).removesuffix(db.LOCK_24).removesuffix(db.CODE_23)
                        + "\nPRAGMA user_version = 22;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'h1', 0)")
@@ -136,7 +136,8 @@ def test_step_23_preserves_old_chat_ids_engines_constraints_and_cascades(env):
                      " VALUES (?, 1, 1, 'project', ?, ?, 10, 20, ?)", (cid, f"s{cid}", status, engine))
     before = [tuple(row) for row in conn.execute("SELECT * FROM code_chats ORDER BY id")]
     db.migrate(conn); db.migrate(conn)
-    assert [tuple(row) for row in conn.execute("SELECT * FROM code_chats ORDER BY id")] == before
+    assert [tuple(row) for row in conn.execute(
+        "SELECT id,user_id,agent_id,project,session_id,state,created,updated,engine FROM code_chats ORDER BY id")] == before
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'code_chats_user'").fetchone() is not None
     conn.execute("UPDATE code_chats SET engine = 'opencode' WHERE id = 9")

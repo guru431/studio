@@ -5,7 +5,12 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 40
+VERSION = 41
+
+# Происхождение нового чата известно до первой метки моста. Прежние строки используют метку сессии.
+CODE_41 = """ALTER TABLE code_chats ADD COLUMN origin TEXT NOT NULL DEFAULT 'other'
+    CHECK (origin IN ('studio', 'other'));
+"""
 
 # NULL — только у прежних учёток до обязательного подтверждения почты.
 EMAIL_40 = """ALTER TABLE users ADD COLUMN email TEXT COLLATE NOCASE;
@@ -539,7 +544,7 @@ CREATE INDEX videos_user_created ON videos(user_id, created);
 CREATE INDEX chats_user_updated ON chats(user_id, updated);
 CREATE INDEX messages_chat_created ON messages(chat_id, created);
 INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
-""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37 + PROJECTS_38 + AGENT_EVENTS_39 + EMAIL_40
+""" + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37 + PROJECTS_38 + AGENT_EVENTS_39 + EMAIL_40 + CODE_41
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -634,6 +639,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # история подключений: выдача и отзыв доступа к проекту
     39: AGENT_EVENTS_39,
     40: EMAIL_40,
+    41: CODE_41,
 }
 
 

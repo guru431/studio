@@ -734,8 +734,8 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
         check_chat(child)
         operations.check(request.state.user.id)
         operations.check(agent["user_id"])
-        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
-                         " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (agent["user_id"], aid, pid, child, now, now, engine))
+        state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine, origin)"
+                         " VALUES (?, ?, ?, ?, 'open', ?, ?, ?, 'studio')", (agent["user_id"], aid, pid, child, now, now, engine))
     except BaseException:
         # Резерв занят до await для параллельных просьб; неудачная попытка его возвращает.
         if now in recent:
@@ -756,7 +756,7 @@ async def chats(aid: int, pid: str, request: Request):
     data = await ask(request, aid, "chats", project=pid, refresh=refresh)
     found = data.get("items")
     marks = {r["session_id"]: r for r in state.DB.execute(
-        "SELECT project, session_id, state, created, updated, engine FROM code_chats WHERE agent_id = ? AND user_id = ? AND project = ?",
+        "SELECT project, session_id, state, created, updated, engine, origin FROM code_chats WHERE agent_id = ? AND user_id = ? AND project = ?",
         (aid, agent["user_id"], pid))}
     items, seen = [], set()
     for i in (found if isinstance(found, list) else []):
@@ -773,7 +773,7 @@ async def chats(aid: int, pid: str, request: Request):
         items.append({"chat": i["chat"], "engine": mark["engine"] if mark is not None else engine,
                       "title": title if isinstance(title, str) else None,
                       "created": _time(i.get("created")), "modified": _time(i.get("modified")),
-                      "origin": "studio" if i.get("tag") == "studio" else "other",
+                      "origin": "studio" if i.get("tag") == "studio" or (mark is not None and mark["origin"] == "studio") else "other",
                       "state": mark["state"] if mark is not None else "open", "running": bool(i.get("running")),
                       "asking": bool(i.get("asking"))})
     for chat, mark in marks.items():
@@ -802,8 +802,8 @@ async def new_chat(aid: int, pid: str, request: Request):
         recent.popleft()
     if len(recent) >= NEW_CHATS_PER_MIN:
         raise _refuse(429, "too_many", TOO_MANY)
-    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine)"
-                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?)", (agent["user_id"], aid, pid, chat, now, now, engine))
+    state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine, origin)"
+                     " VALUES (?, ?, ?, ?, 'open', ?, ?, ?, 'studio')", (agent["user_id"], aid, pid, chat, now, now, engine))
     recent.append(now)  # Между проверкой лимита и INSERT нет await; отказ БД не расходует лимит.
     _event(request, agent, "session_start")
     return JSONResponse({"chat": chat, "engine": engine}, status_code=201)

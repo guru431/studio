@@ -311,6 +311,28 @@ def test_new_chat_writes_a_row_and_an_event_but_not_the_bridge(studio):
     assert len(m.requests) == before
 
 
+@pytest.mark.parametrize("engine", ["claude", "codex", "opencode"])
+def test_new_chat_keeps_studio_origin_before_the_bridge_tag(studio, engine):
+    """Первый ход ещё не записал метку: происхождение сохраняется после обновления и закрытия чата."""
+    aid, machine, link = setup(studio)
+    if engine != "claude":
+        link.hello[engine] = {"version": "test", "models": [{"id": "test", "label": "Test"}], "efforts": []}
+    endpoint = project_url(aid, "chats")
+    response = studio.c.post(endpoint + f"?engine={engine}")
+    assert response.status_code == 201
+    chat = response.json()["chat"]
+    machine.projects["alpha"]["chats"][chat] = {
+        "engine": engine, "tag": None, "created": 50, "modified": 50, "messages": []}
+    machine.running[chat] = {"asks": {}}
+    for status in (None, "closed", "open"):
+        if status is not None:
+            assert studio.c.patch(endpoint + f"/{chat}", json={"state": status}).status_code == 200
+        items = studio.c.get(endpoint + "?refresh=true").json()["items"]
+        row = next(item for item in items if item["chat"] == chat)
+        assert row["origin"] == "studio" and row["running"] is True
+        assert next(item for item in items if item["chat"] == B)["origin"] == "other"
+
+
 def test_failed_new_chat_does_not_spend_the_rate_limit(studio, monkeypatch):
     import sqlite3
 
