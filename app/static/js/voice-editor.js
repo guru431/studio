@@ -56,8 +56,27 @@ export async function editVoice(host, voice, onSaved) {
     for (const e of entries) e.radio.checked = e === entry;
   }
 
+  function stopPreview(entry) {
+    entry.player.pause();
+    entry.player.removeAttribute('src');
+    entry.player.load();
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    entry.url = null;
+  }
+
+  function preview(entry) {
+    stopPreview(entry);
+    if (entry.file) entry.url = URL.createObjectURL(entry.file);
+    const src = entry.url || (entry.mediaId ? `/api/media/${encodeURIComponent(entry.mediaId)}` : '');
+    entry.player.hidden = !src;
+    if (src) entry.player.src = src;
+  }
+
   function makeEntry(sample = {}) {
-    const entry = { id: sample.id, duration: sample.duration, originalText: sample.text || '', file: null, pending: false };
+    const entry = { id: sample.id, mediaId: sample.media_id, duration: sample.duration,
+      originalText: sample.text || '', file: null, pending: false };
+    entry.player = el('audio', { class: 'voice-sample-audio', controls: true, preload: 'metadata', hidden: true,
+      'aria-label': tr("Прослушать образец") });
     entry.text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: String(TEXT_MAX),
       placeholder: tr("Определится автоматически после загрузки или записи") }, entry.originalText);
     entry.note = el('p', { class: 'muted small', 'aria-live': 'polite', ...(!entries.length ? { id: 'voice-asr-status' } : {}) });
@@ -70,6 +89,8 @@ export async function editVoice(host, voice, onSaved) {
     entry.replace.addEventListener('change', () => {
       if (!entry.replace.files[0]) return;
       entry.file = entry.replace.files[0];
+      entry.replace.value = '';
+      preview(entry);
       transcribe(entry);
     });
     entry.remove = button(tr("Удалить образец"), { class: 'btn btn-sm btn-danger' }, () => {
@@ -79,6 +100,7 @@ export async function editVoice(host, voice, onSaved) {
       }
       entry.controller?.abort();
       entry.discarded = true;
+      stopPreview(entry);
       if (entry.id) removed.push(entry.id);
       entries = entries.filter(e => e !== entry);
       entry.node.remove();
@@ -88,11 +110,13 @@ export async function editVoice(host, voice, onSaved) {
     entry.node = el('section', { class: 'voice-sample' },
       el('label', { class: 'row' }, entry.radio, tr("Для озвучки"),
         sample.duration ? ` · ${clock(sample.duration)}` : ''),
+      entry.player,
       field(tr("Текст образца (можно поправить)"), entry.text, 'text'),
       field(tr("Заменить запись"), entry.replace, 'replacement'), entry.note, entry.error,
       el('div', { class: 'row' }, entry.retry, entry.remove));
     entries.push(entry);
     list.append(entry.node);
+    preview(entry);
     if (sample.active || !selected) choose(entry);
     return entry;
   }
@@ -140,6 +164,7 @@ export async function editVoice(host, voice, onSaved) {
     for (const entry of entries.filter(e => !kept.includes(e))) {
       entry.controller?.abort();
       entry.discarded = true;
+      stopPreview(entry);
       entry.node.remove();
     }
     entries = kept;
@@ -148,6 +173,7 @@ export async function editVoice(host, voice, onSaved) {
     const added = files.map(blob => {
       const entry = makeEntry();
       entry.file = blob;
+      preview(entry);
       entry.pending = true;
       return entry;
     });
@@ -157,7 +183,9 @@ export async function editVoice(host, voice, onSaved) {
   }
 
   file.addEventListener('change', () => {
-    if (file.files.length) addFiles([...file.files]);
+    const files = [...file.files];
+    file.value = '';
+    if (files.length) addFiles(files);
   });
   rec.addEventListener('click', async () => {
     if (recording) { recording.stop(); return; }
@@ -246,7 +274,10 @@ export async function editVoice(host, voice, onSaved) {
     }
   });
   dialog.addEventListener('close', () => {
-    for (const entry of entries) entry.controller?.abort();
+    for (const entry of entries) {
+      entry.controller?.abort();
+      stopPreview(entry);
+    }
     if (recording || starting) cancelRecording();
   });
   for (const sample of original?.samples || [{}]) makeEntry(sample);

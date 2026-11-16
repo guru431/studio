@@ -1,5 +1,7 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Прослушать образец": "Listen to sample",
+  "Новый перевод": "New translation",
   "эта модель не поддерживает инструменты — отключите MCP или выберите другую модель": "This model does not support tools. Disable MCP or choose another model.",
   "Включено": "Enabled",
   "Выключено": "Disabled",

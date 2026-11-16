@@ -14,6 +14,33 @@ def add(studio, vid, text="Второй образец"):
     return studio.c.post(f"/api/voices/{vid}/samples", data={"text": text}, files=SAMPLE)
 
 
+def test_voice_list_is_alphabetical_and_rename_updates_its_position(studio, fake_audio):
+    add_gateway(studio)
+    fake_audio.duration = 8
+    names = ["Яна", "ёж", "Ева", "борис", "Анна", "Anna"]
+    ids = {name: create(studio, name=name).json()["id"] for name in names}
+    assert [v["name"] for v in studio.c.get("/api/voices").json()["items"]] == [
+        "Anna", "Анна", "борис", "Ева", "ёж", "Яна"]
+    studio.c.patch(f"/api/voices/{ids['Яна']}", json={"name": "Ада"})
+    assert [v["name"] for v in studio.c.get("/api/voices").json()["items"]] == [
+        "Anna", "Ада", "Анна", "борис", "Ева", "ёж"]
+
+
+def test_every_saved_sample_has_private_playable_media(studio, fake_audio):
+    add_gateway(studio)
+    fake_audio.duration = 8
+    vid = create(studio).json()["id"]
+    add(studio, vid)
+    samples = studio.c.get(f"/api/voices/{vid}").json()["samples"]
+    assert len({s["media_id"] for s in samples}) == 2
+    for sample in samples:
+        response = studio.c.get(f"/api/media/{sample['media_id']}")
+        assert response.status_code == 200 and response.headers["content-type"] == "audio/wav"
+    make_user(studio, "bob"); signin(studio, "bob")
+    for sample in samples:
+        assert studio.c.get(f"/api/media/{sample['media_id']}").status_code == 404
+
+
 def test_minute_sample_and_long_transcript_are_kept(studio, fake_audio):
     add_gateway(studio)
     fake_audio.duration = 75

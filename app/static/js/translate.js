@@ -140,7 +140,10 @@ function build(view, ctx) {
 
   /* шапка и языки */
   const model = el('select', { id: 'tl-model', class: 'chip tl-model', 'aria-label': tr("Модель перевода"), hidden: true });
-  const head = el('header', { class: 'head tl-head' }, el('h1', {}, tr("Перевод")), model);
+  const fresh = el('button', { type: 'button', id: 'tl-new', class: 'btn btn-sm', hidden: !!ctx.hint },
+    icon('plus'), tr("Новый перевод"));
+  const head = el('header', { class: 'head tl-head' }, el('h1', {}, tr("Перевод")), model,
+    el('span', { class: 'grow' }), fresh);
   const source = el('select', { id: 'tl-source', class: 'input tl-lang', 'aria-label': tr("Язык исходника") });
   const target = el('select', { id: 'tl-target', class: 'input tl-lang', 'aria-label': tr("Язык перевода") });
   const swap = el('button', { type: 'button', id: 'tl-swap', class: 'icon-btn', 'aria-label': tr("Поменять языки местами"),
@@ -293,6 +296,7 @@ function build(view, ctx) {
 
   function paintGo() {
     goBtn.disabled = sending || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
+    fresh.disabled = sending;
   }
 
   /** Вид записи-снимка над правым окном: новый — на новую запись, та же — новые переводы блоков на слой. */
@@ -644,6 +648,16 @@ function build(view, ctx) {
   }
 
   /* события */
+  fresh.addEventListener('click', () => {
+    if (sending) return;
+    picked = true;
+    touched = true;
+    pending = null;
+    error.textContent = '';
+    clearLeft();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    draft.save();
+  });
   input.addEventListener('input', () => {
     paintCount();
     paintGo();

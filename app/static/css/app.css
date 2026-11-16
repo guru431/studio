@@ -519,6 +519,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 @media (hover: hover) { .tr-seek:hover { color: var(--accent); } }
 .sp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .sp-audio { width: 100%; }
+.sp-toolbar { display: flex; flex: none; gap: var(--space-4); padding: var(--space-4) var(--space-7); }
 .speech .split-main { overflow: hidden; }
 .speech .sp-view { flex: 1; min-height: 0; overflow: auto; }
 .sp-voice { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
@@ -540,6 +541,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 }
 /* «Перевод» (translate.js): результат и история прокручиваются над полем ввода */
 .translate { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tl-head { flex-wrap: wrap; }
 .tl-head h1 { flex: none; }   /* узко сжимается выбор модели, а не заголовок */
 .head > .tl-model { flex: 0 1 auto; min-width: 0; max-width: 360px; margin-left: auto; text-overflow: ellipsis; }
 .tl-view { flex: 1; min-height: 0; overflow: auto; width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-7);
@@ -673,6 +675,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .voice-samples { display: grid; gap: var(--space-4); min-width: 0; }
 .voice-sample { border-top: 1px solid var(--border); padding-top: var(--space-4); min-width: 0; }
 .voice-sample input[type="file"], #voice-files { max-width: 100%; min-width: 0; }
+.voice-sample-audio { display: block; width: 100%; min-width: 0; margin-block: var(--space-3); }
 .lock-block > .check { margin-bottom: var(--space-6); }
 .lock-block > .checks { margin-bottom: var(--space-6); }
 .lock-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5) var(--space-7); margin: var(--space-6) 0; }

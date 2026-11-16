@@ -51,7 +51,9 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': tr("Озвучки"),
     'aria-controls': 'sp-aside', 'aria-expanded': 'false' }, icon('list'));
-  const head = el('header', { class: 'head' }, toggle, el('h1', {}, NAMES.speech));
+  const fresh = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-new' }, icon('plus'), tr("Новый чат"));
+  const head = el('header', { class: 'head' }, el('h1', {}, NAMES.speech));
+  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
@@ -65,7 +67,7 @@ function build(view, ctx) {
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer' }, textBox.box, textBox.error, hint,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, voiceBox, count), go));
-  const main = el('section', { class: 'split-main' }, head, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
+  const main = el('section', { class: 'split-main' }, head, toolbar, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
   const draft = sectionDraft('speech', text);
@@ -229,6 +231,17 @@ function build(view, ctx) {
   }
 
   /* озвучить */
+  fresh.addEventListener('click', () => {
+    records.deselect();
+    panel(false);
+    error.textContent = '';
+    text.value = '';
+    text.dispatchEvent(new Event('input', { bubbles: true }));
+    draft.save();
+    paintList();
+    paintView();
+    text.focus();
+  });
   text.addEventListener('input', () => { count.textContent = `${text.value.length} / ${TEXT_MAX}`; });
   modelPick.addEventListener('change', paintVoice);
   form.addEventListener('submit', async (event) => {
@@ -246,6 +259,7 @@ function build(view, ctx) {
     }
     error.textContent = '';
     go.disabled = true;
+    fresh.disabled = true;
     const raw = text.value;
     try {
       const { connection_id: connectionId, model } = chosen();
@@ -261,6 +275,7 @@ function build(view, ctx) {
       error.textContent = words(err);
     } finally {
       go.disabled = false;
+      fresh.disabled = false;
     }
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
