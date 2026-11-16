@@ -6,8 +6,8 @@ import json
 import pytest
 from claude_agent_sdk._internal.message_parser import parse_message
 
-from fake_sdk import FakeClient, FakeFactory, assistant, result, result_ok, text
-from claude_agent_sdk import ResultMessage
+from fake_sdk import FakeClient, FakeFactory, assistant, result, result_ok, text, tool_result, tool_use, user
+from claude_agent_sdk import ResultMessage, UserMessage
 from studio_agent import sessions, store, subagents
 from studio_agent.turns import Runner, _Turn
 
@@ -35,7 +35,8 @@ async def test_claude_subagent_lifecycle_streams_terminal_status_and_persists_on
     factory = FakeFactory([
         lifecycle("task_started", description="Проверка приватного запроса", task_type="local_agent"),
         lifecycle("task_started", "shell", description="Команда", task_type="local_bash"),
-        lifecycle(ending, **fields), lifecycle("task_updated", "shell", patch={"status": "completed"}), result_ok()])
+        lifecycle(ending, **fields), lifecycle("task_updated", "shell", patch={"status": "completed"}), result_ok(),
+        *([result(result="готово", origin={"kind": "task-notification"})] if ending == "task_notification" else [])])
     runner = Runner(sent.append, choices=store.Choices(home), cli_path=None, factory=factory)
     runner.start(project, PID, CHAT, "Задание", None, None)
     await settle(runner)
@@ -118,6 +119,62 @@ async def test_background_work_survives_parent_result_until_its_final_response(b
     assert client.disconnected and turn.pending == 0
     assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
     assert any(f["e"].get("text") == "Итог фоновой проверки" for f in sent)
+
+
+async def test_monitor_completion_before_parent_result_keeps_its_notification_response_alive(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", "monitor", task_type="local_bash", description="Монитор"))
+    client.items.put_nowait(lifecycle("task_updated", "monitor", patch={"status": "completed"}))
+    client.items.put_nowait(lifecycle("task_notification", "monitor", status="completed", output_file="private", summary="stream ended"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await client.results.get()
+    assert CHAT in runner.live() and not turn.finishing and not client.disconnected
+    client.items.put_nowait(UserMessage(content="<task-notification>monitor finished</task-notification>",
+                                       origin={"kind": "task-notification"}))
+    client.items.put_nowait(assistant(tool_use("inspect", "Bash", {"command": "inspect log"})))
+    client.items.put_nowait(user(tool_result("inspect", "build succeeded")))
+    client.items.put_nowait(assistant(text("Журнал проверен")))
+    client.items.put_nowait(result(result="готово", origin={"kind": "task-notification"}))
+    await turn.task
+    assert client.disconnected and sent[-1]["e"]["status"] == "done"
+    assert any(f["e"].get("id") == "inspect" and f["e"]["k"] == "result" and not f["e"]["error"] for f in sent)
+    assert any(f["e"].get("text") == "Журнал проверен" for f in sent)
+
+
+async def test_batched_background_replies_preserve_later_notices_and_explicit_input(background):
+    runner, client, turn, sent = background
+    for child in ("one", "two", "three"):
+        client.items.put_nowait(lifecycle("task_started", child, task_type="local_bash", description="Монитор"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await client.results.get()
+    for child in ("one", "two"):
+        client.items.put_nowait(lifecycle("task_notification", child, status="completed", output_file="private", summary="finished"))
+    client.items.put_nowait(UserMessage(content="two notifications", origin={"kind": "task-notification"}))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(lifecycle("task_notification", "three", status="completed", output_file="private", summary="finished"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "task-notification"}))
+    await client.results.get()
+    assert turn.pending == 1 and turn.background_notices == {"three"} and not turn.finishing
+    client.items.put_nowait(UserMessage(content="third notification", origin={"kind": "task-notification"}))
+    client.items.put_nowait(result(result="готово", origin={"kind": "task-notification"}))
+    await client.results.get()
+    assert turn.pending == 1 and not turn.finishing
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await turn.task
+    assert client.disconnected and sent[-1]["e"]["status"] == "done"
+
+
+async def test_stop_while_waiting_for_a_completed_tasks_notification_releases_the_client(background):
+    runner, client, turn, sent = background
+    client.items.put_nowait(lifecycle("task_started", task_type="local_bash", description="Монитор"))
+    client.items.put_nowait(lifecycle("task_notification", status="completed", output_file="private", summary="finished"))
+    client.items.put_nowait(result(result="готово", origin={"kind": "human"}))
+    await client.results.get()
+    await runner.stop(PID, CHAT)
+    await asyncio.gather(turn.task, return_exceptions=True)
+    assert client.disconnected and not client.stopped_tasks
+    assert sent[-1]["e"]["status"] == "stopped"
 
 
 async def test_workflow_children_stream_through_hooks_and_queue_waits_for_the_workflow(background):
