@@ -984,34 +984,99 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     assert calls[-1].endswith("stop --timeout 20") is first
 
 
+@pytest.fixture
+def docker_release_root(tmp_path):
+    with tempfile.TemporaryDirectory(dir=tmp_path) as folder:
+        yield Path(folder)
+
+
 @pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
-@pytest.mark.parametrize("builder_fails", [False, True], ids=["clean", "docker-error"])
-def test_docker_install_keeps_five_releases_and_their_images(tmp_path, builder_fails):
-    """Каждая выкладка добавляла releases/<rev>-<время> и образ studio:<rev>, ничего не удалялось. Остаются
-    пять новейших и цели current/previous; образ удалённого релиза уходит, если ревизию не держит оставшийся.
-    Ошибка уборки выкладку не валит."""
-    bash, env = _symlink_bash(tmp_path)
-    root = tmp_path / "r"
+@pytest.mark.parametrize('cleanup_failure', ['', 'builder prune', 'image rm'])
+def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_release_root, cleanup_failure):
+    """Сохраняем теги из current/previous, в том числе legacy; старые и бесхозные образы удаляются.
+    Ошибка уборки не отменяет здоровую выкладку, остальные приложения не затрагиваются."""
+    bash = _bash()
+    if not bash:
+        pytest.skip('нет bash')
+    root = docker_release_root
     revs = [f"{n:x}" * 40 for n in range(1, 9)]
-    revs[1] = revs[6]                                   # повтор выкладки той же ревизии — релиз 7 её держит
     names = [f"{rev}-2026110{n}T120000" for n, rev in enumerate(revs, start=1)]
-    for name in names:
-        (root / "releases" / name).mkdir(parents=True)
-    link = 'ln -s "$1/releases/$2" "$1/$3"'
+    images = [f'studio:{rev}' for rev in revs]
+    images[-1] = f'studio:0.18.3-{revs[-1]}'
+    for name, image in zip(names, images):
+        config = root / 'releases' / name / 'deploy/docker/host.conf'
+        config.parent.mkdir(parents=True)
+        config.write_text(f'STUDIO_IMAGE={image}\n')
+    orphan = 'studio:0.18.2-' + 'f' * 40  # нет каталога релиза: prepare-only или неудачная выкладка
+    inventory = '\n'.join([*images, orphan, 'studio:development', 'other:latest'])
+    (root / 'images').write_text(inventory, newline='\n')
+    (root / 'releases' / 'unmanaged').mkdir()
     for target, name in ((names[7], "current"), (names[0], "previous")):
-        subprocess.run([bash, "-c", link, "x", root.as_posix(), target, name], env=env, check=True, timeout=20)
+        if os.name == 'nt':
+            import _winapi
+            _winapi.CreateJunction(str(root / 'releases' / target), str(root / name))
+        else:
+            (root / name).symlink_to(root / 'releases' / target, target_is_directory=True)
     start = INSTALL_DOCKER.index("prune_releases() {")
     block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("\nprintf 'studio: Docker release", start) + 1]
     stubs = (f"set -euo pipefail\nR={root.as_posix()}\n"
-             'docker() { echo "$*" >> "$R/calls"; [ "$1 $2" != "builder prune" ] || [ -z "$FAIL" ]; }\n')
-    r = subprocess.run([bash, "-c", stubs + block + "echo deployed\n"], env={**env, "FAIL": "1" if builder_fails else ""},
+             'docker() { echo "$*" >> "$R/calls"; if [ "$1 $2" = "image ls" ]; then cat "$R/images"; fi; '
+             '[ "$1 $2" != "$FAIL" ]; }\n')
+    r = subprocess.run([bash, "-c", stubs + block + "echo deployed\n"], env={**os.environ, 'FAIL': cleanup_failure},
                        capture_output=True, text=True, timeout=20)
-    assert r.returncode == 0 and "deployed" in r.stdout and "removed 2 old releases" in r.stdout, r
-    assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], *names[3:]])
+    assert r.returncode == 0 and "deployed" in r.stdout and "removed 6 old releases" in r.stdout, r
+    assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], names[-1], 'unmanaged'])
     assert (root / "calls").read_text().splitlines() == [
-        f"image inspect studio:{revs[2]}", f"image rm studio:{revs[2]}",
-        "image prune -f", "builder prune -f --filter until=168h"]
-    assert ("cleanup of old releases or images failed" in r.stderr) is builder_fails
+        "image ls --filter reference=studio:* --format {{.Repository}}:{{.Tag}}",
+        *[f'image rm {image}' for image in [*images[1:-1], orphan]],
+        "image prune -f --filter label=org.opencontainers.image.title=Studio",
+        "builder prune -f --filter until=168h"]
+    assert ("cleanup of old releases or images failed" in r.stderr) is bool(cleanup_failure)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('invalid', ['missing', 'studio:invalid'])
+def test_docker_cleanup_preserves_everything_if_rollback_image_is_unknown(docker_release_root, invalid):
+    bash = _bash()
+    if not bash:
+        pytest.skip('нет bash')
+    root = docker_release_root
+    config = root / 'current/deploy/docker/host.conf'
+    config.parent.mkdir(parents=True)
+    if invalid != 'missing':
+        config.write_text(f'STUDIO_IMAGE={invalid}\n')
+    old = root / 'releases' / ('a' * 40 + '-20261101T120000')
+    old.mkdir(parents=True)
+    start = INSTALL_DOCKER.index('prune_releases() {')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("\nprintf 'studio: Docker release", start)]
+    stubs = f'R={root.as_posix()}\ndocker() {{ echo unsafe; }}\n'
+    result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0 and 'cleanup of old releases or images failed' in result.stderr
+    assert 'unsafe' not in result.stdout and old.is_dir()
+
+
+@pytest.mark.integration
+def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
+    bash = _bash()
+    if not bash:
+        pytest.skip('нет bash')
+    app = tmp_path / 'app'
+    app.mkdir()
+    version_file = app / 'release.py'
+    start = INSTALL_DOCKER.index('version=$(sed')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index('\ndocker compose', start)]
+    stubs = f'NEW={tmp_path.as_posix()}; REVISION={"a" * 40}; REFRESH_BASE=0\ndocker() {{ printf "%s\\n" "$*"; }}\n'
+    (tmp_path / 'deploy/docker').mkdir(parents=True)
+    version_file.write_text('VERSION = "0.18.3"\n')
+    result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    image = 'studio:0.18.3-' + 'a' * 40
+    assert '--build-arg STUDIO_VERSION=0.18.3' in result.stdout and f'-t {image}' in result.stdout
+    assert (tmp_path / 'deploy/docker/host.conf').read_text().strip() == f'STUDIO_IMAGE={image}'
+    version_file.write_text('VERSION = "invalid"\n')
+    result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 1 and 'invalid application version' in result.stderr
+    assert 'build --pull' not in result.stdout
 
 
 def test_install_brings_ffmpeg_before_the_code_swap():

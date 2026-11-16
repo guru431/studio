@@ -19,7 +19,9 @@ RUN cd deploy && echo "$(cat md2pdf.sha256)  md2pdf.py" | sha256sum --check --st
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY agent/studio-agent.zip agent/studio-agent-setup.exe ./agent/
 ARG STUDIO_REVISION=development
+ARG STUDIO_VERSION=development
 LABEL org.opencontainers.image.title="Studio" \
+      org.opencontainers.image.version=$STUDIO_VERSION \
       org.opencontainers.image.revision=$STUDIO_REVISION
 USER 10001:10001
 ENTRYPOINT ["/bin/sh", "/opt/studio/deploy/docker/entrypoint.sh"]

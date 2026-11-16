@@ -125,11 +125,15 @@ def prepare(h: Path, release: dict) -> Path:
         env = os.environ.copy()
         env.pop('PYTHONPATH', None)
         env.pop('PYTHONHOME', None)
+        pythonw = str(stage / '.venv/Scripts/pythonw.exe')
+        # venv из pythonw запускает консольный ensurepip без CREATE_NO_WINDOW. Разделяем шаги:
+        # ensurepip и его дочерний pip теперь работают через pythonw и не создают консоль.
         commands = [
-            [sys._base_executable, '-m', 'venv', str(stage / '.venv')],
-            [str(stage / '.venv/Scripts/python.exe'), '-m', 'pip', 'install', '--disable-pip-version-check',
+            [sys._base_executable, '-m', 'venv', '--without-pip', str(stage / '.venv')],
+            [pythonw, '-m', 'ensurepip', '--upgrade', '--default-pip'],
+            [pythonw, '-m', 'pip', 'install', '--disable-pip-version-check',
              '-q', '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
-            [str(stage / '.venv/Scripts/python.exe'), '-c', 'import studio_agent.app'],
+            [pythonw, '-c', 'import studio_agent.app'],
         ]
         for command in commands:
             subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -152,7 +156,8 @@ def launch(stage: Path, h: Path) -> None:
     """Отдельный процесс ждёт завершения старого моста; ключей/PIN в аргументах и файле плана нет."""
     plan = {'pid': os.getpid(), 'old_repo': str(REPO), 'old_python': sys.executable, 'home': str(h)}
     (stage / '_update_plan.json').write_text(json.dumps(plan), encoding='utf-8')
-    subprocess.Popen([sys.executable, str(stage / '_update_helper.py')], cwd=stage,
+    pythonw = str(Path(sys.executable).with_name('pythonw.exe'))
+    subprocess.Popen([pythonw, str(stage / '_update_helper.py')], cwd=stage,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
 
