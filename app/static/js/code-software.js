@@ -33,8 +33,10 @@ export function softwareView({ locked }) {
       const label = names[item.id];
       const current = item.reason === 'check' ? tr('Нет данных')
         : item.installed ? item.version || tr('Нет данных') : tr('Не установлено');
+      const versionState = item.installed && item.version && item.latest && item.reason !== 'check'
+        ? item.update_available ? 'outdated' : 'current' : 'unknown';
       const details = el('div', { class: 'code-software-versions' },
-        el('strong', {}, label), el('span', {}, tr('Установлено: {0}', current)),
+        el('strong', {}, label), el('span', { class: 'code-software-version', 'data-state': versionState }, tr('Установлено: {0}', current)),
         el('span', {}, tr('Актуальная версия: {0}', item.latest || tr('Не удалось проверить'))));
       if (item.source === 'vscode') details.append(el('span', { class: 'muted small' }, tr('Расширение VS Code')));
       if (item.cli_version && item.cli_version !== item.version) {

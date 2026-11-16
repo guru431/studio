@@ -1388,6 +1388,8 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-software { margin-bottom: var(--space-7); }
 .code-software-row { display: flex; align-items: start; gap: var(--space-4); margin-top: var(--space-5); }
 .code-software-versions { display: grid; gap: var(--space-2); flex: 1; min-width: 0; }
+.code-software-version[data-state="current"] { color: var(--success); }
+.code-software-version[data-state="outdated"] { color: var(--danger); }
 .code-software-row > button { flex-shrink: 0; }
 .code-agent-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .code-agent-row .code-agent { flex: 1; width: auto; gap: 5px; }

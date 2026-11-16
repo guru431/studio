@@ -39,8 +39,8 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
     machine = computer()
     machine.software_versions = True
     machine.software_data = {'items': [
-        {'id': tool, 'installed': tool != 'opencode', 'version': '1.2.3' if tool != 'opencode' else None,
-         'cli_version': '1.2.3' if tool != 'opencode' else None, 'latest': '1.2.10',
+        {'id': tool, 'installed': tool != 'opencode', 'version': '1.2.10' if tool == 'claude' else '1.2.3' if tool == 'codex' else None,
+         'cli_version': '1.2.10' if tool == 'claude' else '1.2.3' if tool == 'codex' else None, 'latest': '1.2.10',
          'source': 'vscode' if tool == 'claude' else 'npm', 'update_available': tool == 'codex',
          'can_update': tool == 'codex', 'reason': 'not_installed' if tool == 'opencode' else None}
         for tool in ('codex', 'claude', 'opencode')], 'update': {'tool': None, 'state': 'idle'}}
@@ -61,6 +61,7 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
             ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('wait', 'document.querySelectorAll("[data-software-update]").length === 3'),
             ('eval', 'versions', 'document.querySelector(".code-software").textContent'),
+            ('eval', 'initialColors', '[...document.querySelectorAll(".code-software-version")].map(e => [e.dataset.state,getComputedStyle(e).color])'),
             ('eval', 'missing', 'document.querySelector("[data-software-update=opencode]").disabled'),
             ('eval', 'fits', FITS),
             ('eval', 'softwareScroll', 'document.querySelector(".code-software").scrollIntoView({block:"start"});true'),
@@ -69,6 +70,7 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
             ('wait', 'document.querySelector("[data-software-cancel]")'),
             ('wait', 'document.querySelector(".code-software").textContent.includes("версия проверена")'),
             ('eval', 'result', 'document.querySelector(".code-software").textContent'),
+            ('eval', 'updatedColor', 'getComputedStyle(document.querySelector(".code-software-version")).color'),
             ('eval', 'disabled', 'document.querySelector("[data-software-update=codex]").disabled'),
             ('eval', 'close', 'document.querySelector("#code-computer-dialog").close();true'),
             ('wait', '!document.querySelector(".code-software-row")')], width=width, mobile=width == 320)
@@ -76,6 +78,10 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
         server.stop()
     assert not result.get('failed'), result
     assert result['values']['missing'] and result['values']['fits'] and result['values']['disabled']
+    colors = result['values']['initialColors']
+    assert [entry[0] for entry in colors] == ['outdated', 'current', 'unknown']
+    assert len({entry[1] for entry in colors}) == 3
+    assert result['values']['updatedColor'] == colors[1][1]
     for text in ('Codex', 'Claude Code', 'OpenCode', 'Установлено: 1.2.3', 'Актуальная версия: 1.2.10',
                  'Расширение VS Code', 'Не установлено'):
         assert text in result['values']['versions']
