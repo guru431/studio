@@ -68,8 +68,9 @@ def provider(project):
                 block.get('text', '') for block in content if block.get('type') == 'text') for content in prompts)
             child = 'workflow-probe-child' in words
             shell = 'shell-probe-main' in words
+            consumed = 'shell-consumed-probe-main' in words
             monitor = 'monitor-probe-main' in words or 'monitor-finished-probe-main' in words
-            main = shell or monitor or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
+            main = shell or consumed or monitor or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
             if child:
                 if not release.wait(30):
                     self.send_error(504)
@@ -88,7 +89,7 @@ def provider(project):
                 name, arguments = 'Read', {'file_path': str(source)}
             elif followup:
                 name, arguments = 'Bash', {'command': 'echo monitor-followup-finished', 'description': 'Inspect monitor result'}
-            elif shell or monitor:
+            elif shell or consumed or monitor:
                 name = 'Monitor' if monitor else 'Bash'
                 arguments = {'command': f'"{Path(sys.executable).as_posix()}" "{(project / "shell_probe.py").as_posix()}"',
                              'description': 'Studio shell probe'}
@@ -132,14 +133,16 @@ def provider(project):
         worker.join(timeout=3)
 
 
-@pytest.mark.parametrize('mode', ['workflow', 'shell', 'monitor', 'monitor-finished'])
+@pytest.mark.parametrize('mode', ['workflow', 'shell', 'shell-consumed', 'monitor', 'monitor-finished'])
 async def test_native_background_work_keeps_its_children_alive_after_parent_result(home, project, provider, monkeypatch, mode):
     address, release, main_calls, background_finished = provider
     config = home / 'claude'
     config.mkdir()
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.delenv('CLAUDECODE', raising=False)
-    (project / 'shell_probe.py').write_text('import pathlib, time\ndeadline = time.monotonic() + 30\nwhile not pathlib.Path(__file__).with_name("release").exists() and time.monotonic() < deadline:\n time.sleep(0.05)\nprint("shell finished")\n', encoding='utf-8')
+    script = ('import time\ntime.sleep(3)\nprint("shell finished")\n' if mode == 'shell-consumed' else
+              'import pathlib, time\ndeadline = time.monotonic() + 30\nwhile not pathlib.Path(__file__).with_name("release").exists() and time.monotonic() < deadline:\n time.sleep(0.05)\nprint("shell finished")\n')
+    (project / 'shell_probe.py').write_text(script, encoding='utf-8')
     if mode == 'monitor-finished':
         (project / 'release').touch()
     parent_result = asyncio.Event()
@@ -177,6 +180,11 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
     turn = runner._turns[CHAT]
     try:
         await asyncio.wait_for(parent_result.wait(), 20)
+        if mode == 'shell-consumed':
+            await asyncio.wait_for(asyncio.shield(turn.task), 20)
+            assert sent[-1]['e']['status'] == 'done' and len(main_calls) == 2
+            assert background_finished.is_set() and not turn.background_notices
+            return
         if mode == 'workflow':
             await asyncio.wait_for(children_started.wait(), 10)
         assert CHAT in runner.live() and turn.waiting and not turn.finishing

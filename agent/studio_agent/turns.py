@@ -59,7 +59,8 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
         model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks=hooks,
         setting_sources=list(cli.SETTINGS), system_prompt=cli.coding_prompt(limits),
-        env={**limits, **cli.ENV}, stderr=cli._drop, extra_args={"chrome": None})
+        env={**limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
+        stderr=cli._drop, extra_args={"chrome": None})
 
 
 def _words(errors: list | None, result: str | None, subtype: str | None) -> str:
@@ -113,6 +114,7 @@ class _Turn:
     background_tasks: dict = field(default_factory=dict)  # фоновые агенты, Workflow и команды текущего клиента
     background_notices: set[str] = field(default_factory=set)  # завершились; CLI ещё должен обработать уведомления
     background_reply: set[str] = field(default_factory=set)  # уведомления текущего автоматического ответа
+    cli_state: str | None = None  # подтверждённое состояние CLI; idle завершает уже поглощённые уведомления
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
 
@@ -523,22 +525,30 @@ class Runner:
                         self._cache_usage(t, message)
                         for e in t.feed.events(message):
                             self._send(t, e)
-                        if isinstance(message, ResultMessage):
-                            received_result = True
+                        result_message = isinstance(message, ResultMessage)
+                        idle_message = (isinstance(message, SystemMessage)
+                                        and message.subtype == "session_state_changed" and t.cli_state == "idle")
+                        if result_message or idle_message:
+                            received_result = received_result or result_message
                             async with t.input_lock:
                                 # Ответ на уведомление не подтверждает отправленный пользователем ввод.
                                 # У старого CLI без origin фоновый ответ идёт после всего явного ввода.
-                                origin = getattr(message, "origin", None)
-                                if (origin or {}).get("kind") == "task-notification" or (origin is None and not t.pending):
-                                    if t.background_reply:
-                                        t.background_reply.clear()
+                                if result_message:
+                                    origin = getattr(message, "origin", None)
+                                    if (origin or {}).get("kind") == "task-notification" or (origin is None and not t.pending):
+                                        if t.background_reply:
+                                            t.background_reply.clear()
+                                        else:
+                                            t.background_notices.clear()
                                     else:
-                                        t.background_notices.clear()
-                                else:
-                                    t.pending = max(0, t.pending - 1)
-                                if message.is_error:
-                                    failure = _words(message.errors, message.result, message.subtype)
-                                    t.pending = 0
+                                        t.pending = max(0, t.pending - 1)
+                                    if message.is_error:
+                                        failure = _words(message.errors, message.result, message.subtype)
+                                        t.pending = 0
+                                if t.cli_state == "idle" and not (t.pending or t.background_tasks):
+                                    # CLI мог поглотить уведомление текущим ответом без отдельного ResultMessage.
+                                    t.background_notices.clear()
+                                    t.background_reply.clear()
                             if not t.waiting and failure is None:
                                 await self._wait_queue(t)
                             async with t.input_lock:
@@ -548,7 +558,10 @@ class Runner:
                                     self._queued_sent(t, message_id)
                                 if not t.waiting:
                                     t.finishing = True
-                            await self._usage(t, model, effort)
+                            if result_message:
+                                await self._usage(t, model, effort)
+                            elif not t.waiting:
+                                break
                     if failure is not None or t.stopped or t.closing:
                         break
                     if not received_result:
@@ -599,6 +612,12 @@ class Runner:
             # Несколько завершений CLI может объединить в один ввод и один ResultMessage.
             t.background_reply.update(t.background_notices)
             t.background_notices.clear()
+            t.cli_state = None
+            return
+        if isinstance(message, SystemMessage) and message.subtype == "session_state_changed":
+            state = message.data.get("state") if isinstance(message.data, dict) else None
+            if state in ("idle", "running", "requires_action"):
+                t.cli_state = state
             return
         if not isinstance(message, SystemMessage) or message.subtype not in (
                 "task_started", "task_progress", "task_notification", "task_updated"):
@@ -618,6 +637,7 @@ class Runner:
             t.background_tasks.pop(child, None)
             if message.subtype == "task_notification":
                 t.background_notices.add(child)
+                t.cli_state = None
         if task_kind == "local_workflow":
             return  # Workflow — контейнер; счётчик и история относятся к его дочерним агентам.
         if previous is None and (message.subtype != "task_started" or kind not in ("local_agent", "remote_agent", "agent", "subagent")):
